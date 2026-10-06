@@ -18,7 +18,7 @@
   box-sizing: border-box;
   min-height: 76px;
   padding: 10px 28px 0 20px;
-  border-bottom: none;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l3);
 }
 
 /* Blank Sessions retain navigation controls without conversation title or tabs. */
@@ -61,14 +61,6 @@
   min-width: 0;
 }
 
-.titleCluster > strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 14px;
-  font-weight: 500;
-}
-
 /* Leading seat before the breadcrumbs; laid out only while its occupant
    renders something, and the occupant owns its own trailing gap (a CSS-hidden
    occupant keeps the seat non-empty, so a seat-owned margin would push the
@@ -108,6 +100,7 @@
 }
 
 .crumb {
+  display: inline-block;
   max-width: 220px;
   overflow: hidden;
   padding: 4px 8px;
@@ -172,7 +165,27 @@
   display: none;
 }
 
-/* Generous tab targets; keep the label spacing and text-width active rule. */
+/* Icon-only header controls share Harness's compact More/Expand geometry:
+   the 28px compact Button, secondary ink and a 15px glyph. */
+.iconButton {
+  flex: none;
+  width: 28px;
+  padding: 0;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.iconButton svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* The left sidebar's panel icon, mirrored: the divider moves to the right side. */
+.mirrored {
+  transform: scaleX(-1);
+}
+
+/* figma Tab_Group 34:11441: 35px strip, gap 36, pad-left 8, tabs bottom-aligned.
+   Positioned above the header's own paint, so the active bar covers the rule. */
 .tabs {
   position: relative;
   z-index: 1;
@@ -535,3 +548,5 @@
 .embeddedBody[data-content-phase='settling'] .composerSeat {
   visibility: hidden;
 }
+
+.tab:hover { background: var(--dsw-alias-interactive-bg-hover); }

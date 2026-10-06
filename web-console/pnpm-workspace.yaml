@@ -1,0 +1,6 @@
+# The pinned pnpm stays the reference toolchain (CI installs it exactly); a
+# different local pnpm, e.g. one Corepack resolves, only warns instead of failing.
+pmOnFail: warn
+
+minimumReleaseAgeExclude:
+  - pdfjs-dist@6.4.299

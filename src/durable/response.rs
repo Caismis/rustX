@@ -36,6 +36,10 @@ pub struct CompletedResponseProvenance {
     pub usage: Option<ModelUsage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timing: Option<CompletedResponseTiming>,
+    /// Distinct provider-facing models of the Attempt's actual requests, in
+    /// first-request order; never substituted from current configuration.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<String>,
 }
 
 /// Historical product timing derived from native lifecycle and generation evidence.
@@ -60,6 +64,30 @@ pub struct CompletedResponseTiming {
     pub output_tokens_per_second: Option<f64>,
 }
 
+/// Whole-conversation work time. Unlike a completed response's exact
+/// aggregate, each figure sums only the requests or Tool executions that
+/// measured it, and is absent until the first one did.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationTiming {
+    /// Summed dispatch-to-provider-terminal time of measured requests.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
+    pub model_ms: Option<u64>,
+    /// Summed start-to-terminal time of settled foreground Tool executions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
+    pub tool_ms: Option<u64>,
+    /// Mean dispatch-to-first-output time over requests that produced output.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
+    pub mean_ttft_ms: Option<u64>,
+    /// Output tokens over decode time, summed over requests that report
+    /// usage and a positive decode span.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_tokens_per_second: Option<f64>,
+}
+
 pub(crate) mod timing;
 
 use crate::model::types::UsageDetails;
@@ -73,9 +101,22 @@ pub(crate) struct AttemptEvidence {
     pub(crate) closing: Option<MessageId>,
     pub(crate) members: BTreeSet<MessageId>,
     pub(crate) last_request: Option<RequestId>,
+    pub(crate) models: Vec<String>,
     pub(crate) requests: u64,
     pub(crate) reports: u64,
     pub(crate) usage: Option<ModelUsage>,
+}
+
+impl AttemptEvidence {
+    /// Records one actual request start of this Attempt.
+    pub(crate) fn request_started(&mut self, request_id: RequestId, model: String) {
+        self.timing.start(request_id.clone());
+        self.last_request = Some(request_id);
+        if !self.models.contains(&model) {
+            self.models.push(model);
+        }
+        self.requests += 1;
+    }
 }
 
 pub(crate) fn add_usage(total: &mut Option<ModelUsage>, usage: &ModelUsage) {

@@ -7,7 +7,7 @@ import { NavigationEpoch } from '../src/client/navigation';
 import { RpcFailure } from '../src/client/app-server';
 import { sameEndpoint } from '../src/workspaces/endpoint';
 import { WorkspaceHostError, type WorkspaceCatalog, type ProductHostWorkspaces } from '../src/workspaces/host';
-import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v34';
+import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v35';
 import { cfg3Source } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
 import { modelPreferences, NewSessionModelPreference } from '../src/app/model-preference';
@@ -206,7 +206,7 @@ it('a draft model the native catalog stops publishing blocks Send instead of rea
   projection = workspaceSource({ kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: [nativeModel('fixture/native', ['low', 'high'], 'high')] } });
   await act(async () => { server.socket.deliver({ jsonrpc: '2.0', method: 'configuration/changed', params: { application: {
     scope: 'source:workspace:/workspace', sources: [{ kind: 'workspace', directory: '/workspace' }], version: '2',
-    desired: { input_revision: 'input-2', attempt: '2' }, units: {}, candidate: null, eligibility: { status: 'unavailable' } } } }); });
+    desired: { input_revision: 'input-2', attempt: '2' }, units: {}, candidate: null } } }); });
   await waitFor(() => expect(host.configureWorkspace.mock.calls.length).toBeGreaterThan(reads));
   await waitFor(() => expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true));
   expect(screen.getByText(/not in this Workspace's native model catalog/)).toBeTruthy();

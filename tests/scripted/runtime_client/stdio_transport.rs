@@ -479,7 +479,7 @@ async fn run_session(
 
 /// One `initialize` record.
 fn initialize_record(id: u64) -> Vec<u8> {
-    format!("{{\"method\":\"initialize\",\"id\":{id},\"protocol_version\":57}}\n").into_bytes()
+    format!("{{\"method\":\"initialize\",\"id\":{id},\"protocol_version\":58}}\n").into_bytes()
 }
 
 /// Parses one captured record as a response.
@@ -555,7 +555,7 @@ async fn crlf_records_are_accepted() {
     let outcome = run_session(
         host.endpoint(),
         &[
-            b"{\"method\":\"initialize\",\"id\":1,\"protocol_version\":57}\r\n",
+            b"{\"method\":\"initialize\",\"id\":1,\"protocol_version\":58}\r\n",
             b"{\"method\":\"snapshot_get\",\"id\":2}\r\n",
         ],
         PIPE_BYTES,
@@ -659,7 +659,7 @@ async fn invalid_records_are_fatal_and_write_nothing() {
         ),
         (
             "wrong-type",
-            br#"{"method":"initialize","id":"two","protocol_version":57}"#,
+            br#"{"method":"initialize","id":"two","protocol_version":58}"#,
         ),
     ];
     for (name, record) in cases {
@@ -778,9 +778,11 @@ async fn a_partly_read_record_survives_an_event_winning_the_select() {
         async move { serve_stdio_jsonl_with_io(endpoint, input, sink).await }
     });
 
-    // 1. Attach and subscribe, so the session selects over both arms.
+    // 1. Attach and subscribe after the initialized cursor (activation's
+    //    eligibility publication is cursor 1), so the session selects over
+    //    both arms and nothing is pending on the subscription yet.
     let mut fed = input.push(&initialize_record(1));
-    fed += input.push(b"{\"method\":\"subscribe_events\",\"id\":2,\"after_cursor\":0}\n");
+    fed += input.push(b"{\"method\":\"subscribe_events\",\"id\":2,\"after_cursor\":1}\n");
     sink.await_record(|record| !is_event(record) && as_response(record).id.get() == 2)
         .await;
 
@@ -797,20 +799,26 @@ async fn a_partly_read_record_survives_an_event_winning_the_select() {
         fixture.host.shutdown().await,
         Ok(RuntimeClientResult::ShutdownCompleted)
     );
+    // Drain publishes `RuntimeShutdown` and then, before its exit
+    // boundary, the runtime's `unavailable` eligibility: the last event.
     sink.await_record(|record| {
-        is_event(record) && matches!(as_event(record).event, RuntimeClientEvent::RuntimeShutdown)
+        is_event(record)
+            && matches!(
+                as_event(record).event,
+                RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged { .. }
+            )
     })
     .await;
     let written = sink.complete_records();
     assert_eq!(
         written.len(),
-        3,
-        "exactly the two responses and the event: the partial record was \
-         not answered, fabricated, or split, got {written:?}"
+        4,
+        "exactly the two responses and the shutdown events: the partial \
+         record was not answered, fabricated, or split, got {written:?}"
     );
     assert!(
-        is_event(&written[2]),
-        "the event overtook a record the transport had already partly read"
+        is_event(&written[2]) && is_event(&written[3]),
+        "the events overtook a record the transport had already partly read"
     );
 
     // 6/7. Release the suffix. The request the reader was midway through
@@ -828,10 +836,10 @@ async fn a_partly_read_record_survives_an_event_winning_the_select() {
     let records = sink.records();
     assert_eq!(
         records.len(),
-        4,
+        5,
         "the interrupted record produced exactly one response: {records:?}"
     );
-    let response = as_response(&records[3]);
+    let response = as_response(&records[4]);
     assert_eq!(response.id.get(), 7, "the prefix's id survived the drop");
     assert!(
         matches!(response.result, Some(RuntimeClientResult::Snapshot { .. })),
@@ -1444,14 +1452,16 @@ async fn a_blocked_consumer_stalls_the_transport_not_the_runtime() {
         .write_all(&initialize_record(1))
         .await
         .expect("write initialize");
+    // Subscribe after the initialized cursor: activation's eligibility
+    // publication is cursor 1, so nothing is pending on the subscription.
     client
-        .write_all(b"{\"method\":\"subscribe_events\",\"id\":2,\"after_cursor\":0}\n")
+        .write_all(b"{\"method\":\"subscribe_events\",\"id\":2,\"after_cursor\":1}\n")
         .await
         .expect("write subscribe");
     sink.await_records(2).await;
 
     // 2. Block the consumer, then send one more request. Nothing has been
-    //    published yet, so the input arm is the only ready one: the
+    //    published since, so the input arm is the only ready one: the
     //    transport handles the request semantically and then parks on the
     //    blocked write of its response.
     sink.close();

@@ -11,7 +11,7 @@ import { modelPreferences, NewSessionModelPreference, selectSessionModel } from 
 import { inputTrigger } from '../src/app/composer/input-trigger';
 import { cfg3Source } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
-import type { CatalogModelView, RuntimeClientEvent, RuntimeClientSnapshot, SessionModelConfig, SourceSettings } from '../../protocol/app-server/v34';
+import type { CatalogModelView, RuntimeClientEvent, RuntimeClientSnapshot, SessionModelConfig, SourceSettings } from '../../protocol/app-server/v35';
 
 // These spies execute the actual functions, including their hooks. Calls count
 // render invocations, not merely DOM mutation or wrapper/parent renders.
@@ -174,7 +174,7 @@ it.each([false, true])('a confirmed native model selection seeds the next Sessio
   localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A', 'B'] }));
   await act(async () => { render(<App client={server.client} workspaceHost={host()}/>); });
   fireEvent.click(screen.getByRole('button', { name: 'Model and reasoning' }));
-  await waitFor(() => expect(screen.queryByText('Loading models…')).toBeNull());
+  await waitFor(() => expect(screen.queryByText('Reading native models…')).toBeNull());
   fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
   if (navigate) server.held.add('session/setModel');
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'fixture/chosen' })));

@@ -1,0 +1,5 @@
+# Preserve real format bytes, including fixed-width PDF cross-reference records.
+*.pdf binary
+*.docx binary
+*.pptx binary
+*.xlsx binary

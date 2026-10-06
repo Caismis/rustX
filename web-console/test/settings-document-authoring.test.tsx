@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { Model, Request1, SourceSettings } from '../../protocol/app-server/v34';
+import type { Model, Request1, SourceSettings } from '../../protocol/app-server/v35';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { findOnAdvanced, openResourceRow, SettingsSurface } from './settings-harness';
 import { cfg3Client, cfg3Host } from './cfg3-fixture';
@@ -80,9 +80,9 @@ it.each(['user', 'workspace'] as const)('DA-02 a malformed %s rustx.toml exposes
   await screen.findByText(/Revision: saved-2/);
   expect(screen.queryByRole('form', { name: 'Repair malformed source' })).toBeNull();
   open('Tools & Permissions');
-  const tools = within(screen.getByRole('form', { name: 'Built-in tools' }));
+  const tools = within(screen.getByRole('form', { name: 'Native Tools' }));
   fireEvent.click(tools.getByLabelText('read'));
-  fireEvent.click(tools.getByRole('button', { name: 'Save Built-in tools' }));
+  fireEvent.click(tools.getByRole('button', { name: 'Save Native Tools' }));
   await waitFor(() => expect(writes(s)).toHaveLength(2));
   expect(writes(s)[1].params).toMatchObject({ expected_revision: 'saved-2', mutation: { kind: 'config', mutation: { unit: 'native_tools', authored: ['read'] } } });
   expect(sourcesReads(s).length).toBeGreaterThanOrEqual(2);
@@ -131,9 +131,9 @@ it('DA-04 a malformed MCP document admits no MCP mutation and leaves rustx.toml 
   expect(screen.queryByLabelText('New MCP identity')).toBeNull();
   expect(forms()).toEqual([]);
   open('Tools & Permissions');
-  const tools = within(screen.getByRole('form', { name: 'Built-in tools' }));
+  const tools = within(screen.getByRole('form', { name: 'Native Tools' }));
   fireEvent.click(tools.getByLabelText('read'));
-  fireEvent.click(tools.getByRole('button', { name: 'Save Built-in tools' }));
+  fireEvent.click(tools.getByRole('button', { name: 'Save Native Tools' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0].params).toMatchObject({ expected_revision: 'user-1', mutation: { kind: 'config' } });
 });

@@ -145,7 +145,8 @@ Agent references; the real-server suite runs the same production entry path.
 | Streaming/native canonical identity, reasoning/Tool order | `chat.test.tsx`, `presentation.test.tsx`, `agent.test.tsx` |
 | One Tool lifecycle, cross-page results, native status and unknown fallback | native `agent_transcript_tools_resolve_native_results_across_page_boundaries`; `agent.test.tsx` |
 | Approval absent-browser recovery, one response, acknowledgement is not settlement | `agent.test.tsx`, existing `client.test.ts` uncertainty contracts |
-| Questionnaire pages and exact schema values | `presentation.test.tsx`, `questionnaire.test.ts`, `agent.spec.ts` |
+| Questionnaire pages and exact schema values | `presentation.test.tsx`, `questionnaire.test.tsx`, `diagnostics.test.ts`, `agent.spec.ts` |
+| Harness question flow (implicit recommended draft, single-choice advance, custom row, skip, dismiss-as-decline) and the `ask_user` verdict row | `questionnaire.test.tsx`, `agent.spec.ts` |
 | One Stop request; native terminal phase; disconnect inert | `agent.test.tsx`, `client.test.ts` |
 | Queue/Steer native mailbox semantics, IME/uploads/typed commands | `composer-context.test.tsx`, `commands.test.tsx`, real `composer.spec.ts` |
 | Native model/catalog/profile, no inferred options, uncertain mutation Send fence | `agent.test.tsx`, `commands.test.tsx` |

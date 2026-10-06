@@ -100,6 +100,15 @@ pub struct RuntimeClientSnapshot {
     pub shutting_down: bool,
     /// The authoritative mode used by the current attempt boundary.
     pub effective_approval_mode: ApprovalMode,
+    /// Whether this live runtime could adopt a prepared Session configuration
+    /// now. Runtime-domain advisory state published by the runtime with its
+    /// adoption gate's idle rule over in-memory owners, and changed only by the
+    /// `configuration_adoption_eligibility_changed` event; it describes no
+    /// candidate and is never configuration application state. `unavailable` until the runtime runs, after it stops, and for a
+    /// durable inspection projection. `session/adoptConfiguration` revalidates
+    /// the real gate at its commit boundary.
+    pub configuration_adoption_eligibility:
+        crate::local_runtime::configuration::application::AdoptionEligibility,
     /// The runtime's durable-authority failure, when it has entered the
     /// explicit degraded state. While set, no new durable admission/execution
     /// work may begin.
@@ -1366,11 +1375,7 @@ impl RuntimeClientSnapshot {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationWindow {
-    pub cut: crate::durable::reading::ConversationReadCut,
     pub page: RuntimeClientTranscriptPage,
-    pub newer_cursor: Option<RuntimeClientTranscriptCursor>,
-    pub target: Option<crate::durable::reading::ConversationTurnId>,
-    pub target_cursor: Option<RuntimeClientTranscriptCursor>,
 }
 
 /// Bounded read evidence for the most recently admitted manual compaction.

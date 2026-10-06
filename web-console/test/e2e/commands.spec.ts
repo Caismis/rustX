@@ -53,25 +53,26 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await expect(page.getByText('Uploaded', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect(page.getByText('Original native answer', { exact: true })).toBeVisible(); await settled();
-    await page.getByRole('button', { name: 'Usage 120 tokens', exact: true }).click();
-    const usageDetail = page.getByRole('dialog', { name: 'Usage', exact: true });
+    const usageButton = page.getByRole('button', { name: 'Usage 120 tok', exact: true });
+    // The inherited response keeps its exact native usage across every lineage.
+    const usageDetails = async () => {
+      await usageButton.click();
+      const detail = page.getByRole('dialog', { name: 'Turn usage', exact: true });
+      const text = await detail.locator('[data-turn-usage-details]').innerText();
+      await page.keyboard.press('Escape'); await expect(detail).toHaveCount(0);
+      return text;
+    };
+    await usageButton.click();
+    const usageDetail = page.getByRole('dialog', { name: 'Turn usage', exact: true });
     await expect(usageDetail.getByText('Output', { exact: true })).toBeVisible();
-    await expect(usageDetail.getByText('20', { exact: true })).toBeVisible();
-    await expect(usageDetail.getByText('Cache read', { exact: true })).toHaveCount(0);
-    await page.getByRole('button', { name: 'Close usage' }).click();
-    const timingButton = page.getByRole('button', { name: /^Ran for / });
-    await expect(timingButton).toHaveCount(1);
-    const originalRuntime = await timingButton.getAttribute('aria-label');
-    await timingButton.focus(); await timingButton.press('Enter');
-    const timingDetail = page.getByRole('dialog', { name: 'Response timing' });
-    await expect(timingDetail.getByText('Total runtime', { exact: true })).toBeVisible();
-    await expect(timingDetail.getByText('First request TTFT (from dispatch)', { exact: true })).toBeVisible();
-    await expect(timingDetail.getByText('Model generation work', { exact: true })).toBeVisible();
-    const originalTiming = await timingDetail.locator('dl').innerText();
-    await page.getByRole('button', { name: 'Close timing' }).click();
-    phase = 'selecting exact historical Retry boundary';
-    await page.getByRole('button', { name: 'Retry / Regenerate', exact: true }).click();
-    await page.getByRole('dialog', { name: 'Retry / Regenerate', exact: true }).getByRole('option', { name: /Replay the original input once/ }).click();
+    await expect(usageDetail.getByText('20 tok', { exact: true })).toBeVisible();
+    await expect(usageDetail.getByText('Cached input', { exact: true })).toHaveCount(0);
+    await page.keyboard.press('Escape'); await expect(usageDetail).toHaveCount(0);
+    const originalUsage = await usageDetails();
+    phase = 'regenerating the completed response';
+    // A completed response names its exact boundary: Regenerate runs on the click.
+    await page.getByRole('button', { name: 'Regenerate', exact: true }).click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
     phase = 'awaiting validated retry provider request (branch → switchNode → attach → turn/start)';
     await test.step('native retry reaches the provider with validated editor content', async () => {
       // The gate is reached only after the real provider validates model, native
@@ -99,21 +100,21 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await page.getByRole('dialog', { name: 'Session tree', exact: true }).getByRole('option').filter({ hasText: originalConversation }).click();
     await expect(transcript.getByText('Original native answer', { exact: true })).toBeVisible();
     await expect(transcript.getByText('Regenerated native answer', { exact: true })).toHaveCount(0);
-    await page.getByRole('button', { name: 'Fork to new Session', exact: true }).click();
-    await page.getByRole('dialog', { name: '/fork', exact: true }).getByRole('option', { name: /Continue after this response/ }).click();
-    await expect(page.getByRole('dialog', { name: '/fork', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Branch into a new Session', exact: true }).click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    // The Fork runs on the click; the attached Fork replaces the selected Session.
+    await expect.poll(async () => JSON.parse(await facts.innerText()).SessionId).not.toBe(originalId);
     await expect(message).toHaveValue('');
     const forkId = JSON.parse(await facts.innerText()).SessionId as string;
-    expect(forkId).not.toBe(originalId);
     const forkConversation = JSON.parse(await facts.innerText()).ConversationId as string;
     await expect(transcript.getByText('Original native answer', { exact: true })).toBeVisible();
     await expect(page.getByText(/Native restored upload batch/)).toHaveCount(0);
     await expect(page.getByLabel('Completed Turn', { exact: true })).toHaveCount(1);
-    await expect(page.getByRole('button', { name: 'Usage 120 tokens', exact: true })).toHaveCount(1);
-    await expect(page.getByRole('button', { name: originalRuntime!, exact: true })).toHaveCount(1);
-    await page.getByRole('button', { name: originalRuntime!, exact: true }).click();
-    expect(await page.getByRole('dialog', { name: 'Response timing' }).locator('dl').innerText()).toBe(originalTiming);
-    await page.getByRole('button', { name: 'Close timing' }).click();
+    await expect(usageButton).toHaveCount(1);
+    expect(await usageDetails()).toBe(originalUsage);
+    // As a Harness fork folds its copied prefix, the composer's session totals
+    // include the inherited turn rather than starting empty.
+    await expect(page.getByLabel('Session statistics', { exact: true }).getByRole('button', { name: '120 tok', exact: true })).toBeVisible();
     // Native #319 copies uploads in the inherited post-response prefix before publishing the child.
     const root = join(fixture.workspaceA, '.agents/uploads', forkId);
     const batches = readdirSync(root);
@@ -128,26 +129,10 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await expect(facts).toContainText('policy');
     // A reopened inherited Assistant remains a valid native continuation anchor.
     await expect(page.getByLabel('Completed Turn', { exact: true })).toHaveCount(1);
-    await expect(page.getByRole('button', { name: 'Usage 120 tokens', exact: true })).toHaveCount(1);
-    await expect(page.getByRole('button', { name: originalRuntime!, exact: true })).toHaveCount(1);
-    await page.getByRole('button', { name: originalRuntime!, exact: true }).click();
-    expect(await page.getByRole('dialog', { name: 'Response timing' }).locator('dl').innerText()).toBe(originalTiming);
-    await page.getByRole('button', { name: 'Close timing' }).click();
-    await expect(page.getByRole('button', { name: 'Retry / Regenerate', exact: true })).toBeEnabled();
-    await page.getByRole('button', { name: 'Branch in this Session', exact: true }).click();
-    await page.getByRole('dialog', { name: '/branch', exact: true }).getByRole('option', { name: /Continue after this response/ }).click();
-    await expect(page.getByRole('dialog', { name: '/branch', exact: true })).toHaveCount(0);
-    await expect(message).toHaveValue('');
-    await expect(transcript.getByText('Original native answer', { exact: true })).toBeVisible();
-    await expect(page.getByLabel('Completed Turn', { exact: true })).toHaveCount(1);
-    await expect(page.getByRole('button', { name: 'Usage 120 tokens', exact: true })).toHaveCount(1);
-    await expect(page.getByRole('button', { name: originalRuntime!, exact: true })).toHaveCount(1);
-    await page.getByRole('button', { name: originalRuntime!, exact: true }).click();
-    expect(await page.getByRole('dialog', { name: 'Response timing' }).locator('dl').innerText()).toBe(originalTiming);
-    await page.getByRole('button', { name: 'Close timing' }).click();
-    await expect(page.getByLabel('Conversation statistics')).toContainText('0 Turns · 0 Steps');
-    await page.getByRole('button', { name: 'Retry / Regenerate', exact: true }).click();
-    await page.getByRole('dialog', { name: 'Retry / Regenerate', exact: true }).getByRole('option', { name: /Replay the original input once/ }).click();
+    await expect(usageButton).toHaveCount(1);
+    expect(await usageDetails()).toBe(originalUsage);
+    await page.getByRole('button', { name: 'Regenerate', exact: true }).click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
     expect(await fixture.gate('inherited-retry-reached')).toMatchObject({ kind: 'gate_reached', requestIndex: 2 });
     await fixture.release('inherited-retry-reached');
     await expect(transcript.getByText('Inherited replay answer', { exact: true })).toBeVisible();
@@ -160,11 +145,10 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await expect(transcript.getByText('Inherited replay answer', { exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Close Inspector' }).click();
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.getByRole('button', { name: originalRuntime!, exact: true }).click();
-    await expect(page.getByRole('dialog', { name: 'Response timing' })).toBeVisible();
-    expect(await page.getByRole('dialog', { name: 'Response timing' }).locator('dl').innerText()).toBe(originalTiming);
-    await page.screenshot({ path: 'test-results/response-timing-mobile.png' });
-    await page.getByRole('button', { name: 'Close timing' }).click();
+    await usageButton.click();
+    await expect(page.getByRole('dialog', { name: 'Turn usage', exact: true })).toBeVisible();
+    await page.screenshot({ path: 'test-results/turn-usage-mobile.png' });
+    await page.keyboard.press('Escape');
     popup = await command('model'); await expect(popup.getByRole('option', { name: /fixture\/second-model/ })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: 'test-results/commands-selector-mobile.png' });

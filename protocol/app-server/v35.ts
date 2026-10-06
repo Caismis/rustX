@@ -74,7 +74,6 @@ export type Request1 =
       method: 'session/turns';
       params: {
         target: AttachmentTarget;
-        cut?: ConversationReadCut | null;
         /**
          * Absent selects the newest native outline page.
          */
@@ -465,7 +464,8 @@ export type SessionNodeId = string;
  */
 export type TraceCursor = string;
 /**
- * A single transcript read vocabulary; every selector replaces a finite window.
+ * One contiguous transcript read vocabulary: the newest page, or the page
+ * before an already-read boundary, each at the current cut.
  */
 export type ConversationWindowAt =
   | {
@@ -473,18 +473,7 @@ export type ConversationWindowAt =
     }
   | {
       before: TranscriptCursor;
-      cut?: ConversationReadCut | null;
       type: 'older';
-    }
-  | {
-      after: TranscriptCursor;
-      cut: ConversationReadCut;
-      type: 'newer';
-    }
-  | {
-      id: ConversationTurnId;
-      cut: ConversationReadCut;
-      type: 'turn';
     };
 /**
  * A durable transcript cursor.
@@ -494,10 +483,6 @@ export type ConversationWindowAt =
  * sequence, and the inbound mailbox sequence.
  */
 export type TranscriptCursor = string;
-/**
- * Identifies one attempt to execute an agent manifest.
- */
-export type AttemptId = string;
 /**
  * The identity of one reasoning profile declared by a model.
  *
@@ -1312,6 +1297,10 @@ export type ModelErrorKind =
 export type TraceToolOutcome =
   'success' | 'failed' | 'denied' | 'cancelled' | 'timed_out' | 'outcome_unknown';
 /**
+ * Identifies one attempt to execute an agent manifest.
+ */
+export type AttemptId = string;
+/**
  * Identifies one turn within an attempt.
  */
 export type TurnId = string;
@@ -2056,19 +2045,6 @@ export type UnitApplication =
       status: 'process_restart';
     };
 export type CacheImpact = 'preserved' | 'prefix_changed' | 'cache_namespace_changed' | 'unproven';
-/**
- * Advisory only; adoption always revalidates the native admission gate.
- */
-export type AdoptionEligibility =
-  | {
-      status: 'eligible';
-    }
-  | {
-      status: 'busy';
-    }
-  | {
-      status: 'unavailable';
-    };
 /**
  * Which native evidence is available for the canonical settings sections.
  */
@@ -2848,6 +2824,10 @@ export type RuntimeClientEvent =
       type: 'trace_changed';
     }
   | {
+      eligibility: AdoptionEligibility;
+      type: 'configuration_adoption_eligibility_changed';
+    }
+  | {
       view: GoalView;
       type: 'goal_changed';
     }
@@ -3540,6 +3520,23 @@ export type RuntimeClientEvent =
       diagnostic: string;
       type: 'runtime_durability_failed';
     };
+/**
+ * Whether a live runtime could adopt a prepared configuration now.
+ *
+ * Runtime-domain advisory state, published by the runtime through its Runtime
+ * Client projection; it is never part of a `ConfigurationApplication`.
+ * Adoption always revalidates the native admission gate.
+ */
+export type AdoptionEligibility =
+  | {
+      status: 'eligible';
+    }
+  | {
+      status: 'busy';
+    }
+  | {
+      status: 'unavailable';
+    };
 
 /**
  * Every attached operation addresses all routing domains explicitly.
@@ -3553,25 +3550,6 @@ export interface AttachmentTarget {
 export interface UploadMetadata {
   name: string;
   size: number;
-}
-/**
- * Frozen inclusive Journal/transcript upper bounds plus a semantic mutation epoch.
- */
-export interface ConversationReadCut {
-  conversation_id: ConversationId;
-  journal: string;
-  transcript: string;
-  /**
-   * Edits/removals of mutable transcript bodies retire unreconstructible cuts.
-   */
-  mutation_revision: string;
-}
-/**
- * Origin survives lineage copying; ordinal never participates in identity.
- */
-export interface ConversationTurnId {
-  conversation_id: ConversationId;
-  attempt_id: AttemptId;
 }
 /**
  * The authoritative mutable model configuration of one conversation
@@ -3731,7 +3709,7 @@ export interface WorkflowRunId {
    */
   conversation_id: string;
   /**
-   * Identifies one attempt to execute an agent manifest.
+   * Native admitted attempt, unique across process recovery.
    */
   attempt_id: string;
   /**
@@ -4969,6 +4947,15 @@ export interface ContextOccupancy {
    * Provider-facing historical model, never substituted from current config.
    */
   model: string;
+  breakdown: ContextBreakdown;
+}
+/**
+ * Heuristic composition of the same request's input.
+ */
+export interface ContextBreakdown {
+  system_tokens: number;
+  tool_tokens: number;
+  message_tokens: number;
 }
 /**
  * Public metadata for one committed compaction.
@@ -6040,7 +6027,8 @@ export interface RuntimeClientTranscriptPage {
 }
 /**
  * Whole-conversation execution totals, independent of any transcript window.
- * Forked Conversations start a fresh execution epoch, as native lineage does.
+ * A lineage child includes its inherited turns' recorded execution, as a
+ * `DeepSeek` Harness fork folds its copied prefix; it owns none of it.
  */
 export interface ConversationStatistics {
   /**
@@ -6053,9 +6041,9 @@ export interface ConversationStatistics {
    */
   latest_turn?: ConversationTurnClock | null;
   /**
-   * Complete measured request timing, separate from usage coverage.
+   * Summed measured work time, separate from usage coverage.
    */
-  timing?: CompletedResponseTiming | null;
+  timing?: ConversationTiming | null;
   completed_responses: string;
   model_requests: string;
   /**
@@ -6070,24 +6058,26 @@ export interface ConversationTurnClock {
   ended_at?: string | null;
 }
 /**
- * Historical product timing derived from native lifecycle and generation evidence.
- * Missing evidence stays absent; these are not destination execution facts.
+ * Whole-conversation work time. Unlike a completed response's exact
+ * aggregate, each figure sums only the requests or Tool executions that
+ * measured it, and is absent until the first one did.
  */
-export interface CompletedResponseTiming {
+export interface ConversationTiming {
   /**
-   * Authoritative successful Attempt completion minus its start timestamp.
+   * Summed dispatch-to-provider-terminal time of measured requests.
    */
-  total_duration_ms?: number | null;
+  model_ms?: number | null;
   /**
-   * First actual request's adapter-dispatch-to-first-output duration.
+   * Summed start-to-terminal time of settled foreground Tool executions.
    */
-  ttft_ms?: number | null;
+  tool_ms?: number | null;
   /**
-   * Sum of output-producing requests' first-output-to-provider-terminal spans.
+   * Mean dispatch-to-first-output time over requests that produced output.
    */
-  generation_ms?: number | null;
+  mean_ttft_ms?: number | null;
   /**
-   * Fully covered output usage divided by fully covered positive generation work.
+   * Output tokens over decode time, summed over requests that report
+   * usage and a positive decode span.
    */
   output_tokens_per_second?: number | null;
 }
@@ -6337,6 +6327,10 @@ export interface CompletedResponseView {
    */
   usage?: ModelUsage | null;
   timing?: CompletedResponseTiming | null;
+  /**
+   * Distinct provider-facing models of the Attempt's actual requests.
+   */
+  models?: string[];
 }
 /**
  * Original execution owner, including for inherited historical responses.
@@ -6348,6 +6342,28 @@ export interface ResponseOrigin {
    * Identifies a committed canonical message block.
    */
   closing_message_id: string;
+}
+/**
+ * Historical product timing derived from native lifecycle and generation evidence.
+ * Missing evidence stays absent; these are not destination execution facts.
+ */
+export interface CompletedResponseTiming {
+  /**
+   * Authoritative successful Attempt completion minus its start timestamp.
+   */
+  total_duration_ms?: number | null;
+  /**
+   * First actual request's adapter-dispatch-to-first-output duration.
+   */
+  ttft_ms?: number | null;
+  /**
+   * Sum of output-producing requests' first-output-to-provider-terminal spans.
+   */
+  generation_ms?: number | null;
+  /**
+   * Fully covered output usage divided by fully covered positive generation work.
+   */
+  output_tokens_per_second?: number | null;
 }
 /**
  * The foreground tool execution read model of one logical tool call.
@@ -7078,11 +7094,7 @@ export interface QuestionnaireSubmission1 {
   answers: QuestionnaireAnswerEntry[];
 }
 export interface ConversationWindow {
-  cut: ConversationReadCut;
   page: RuntimeClientTranscriptPage;
-  newer_cursor?: RuntimeClientTranscriptCursor | null;
-  target?: ConversationTurnId | null;
-  target_cursor?: RuntimeClientTranscriptCursor | null;
 }
 export interface ConversationTurnPage {
   cut: ConversationReadCut;
@@ -7092,6 +7104,18 @@ export interface ConversationTurnPage {
    * @maxItems 64
    */
   turns: ConversationTurn[];
+}
+/**
+ * Inclusive Journal/transcript bounds a read was captured at, plus its semantic mutation epoch.
+ */
+export interface ConversationReadCut {
+  conversation_id: ConversationId;
+  journal: string;
+  transcript: string;
+  /**
+   * Advances on every edit/removal of a mutable pending transcript body.
+   */
+  mutation_revision: string;
 }
 export interface ConversationTurn {
   id: ConversationTurnId;
@@ -7108,6 +7132,13 @@ export interface ConversationTurn {
    * The turn's final text-bearing response; empty until the turn settles.
    */
   response: string;
+}
+/**
+ * Origin survives lineage copying; ordinal never participates in identity.
+ */
+export interface ConversationTurnId {
+  conversation_id: ConversationId;
+  attempt_id: AttemptId;
 }
 /**
  * The current read model; observing it never starts or authorizes work.
@@ -7816,7 +7847,6 @@ export interface ConfigurationApplication {
     shared_capacity?: UnitApplication;
   };
   candidate?: AvailableConfiguration | null;
-  eligibility: AdoptionEligibility;
 }
 export interface AvailableConfiguration {
   identity: ApplicationIdentity;
@@ -7876,6 +7906,25 @@ export interface RuntimeClientSnapshot {
    * or tool authority.
    */
   effective_approval_mode: 'policy' | 'full_access';
+  /**
+   * Whether this live runtime could adopt a prepared Session configuration
+   * now. Runtime-domain advisory state published by the runtime with its
+   * adoption gate's idle rule over in-memory owners, and changed only by the
+   * `configuration_adoption_eligibility_changed` event; it describes no
+   * candidate and is never configuration application state. `unavailable` until the runtime runs, after it stops, and for a
+   * durable inspection projection. `session/adoptConfiguration` revalidates
+   * the real gate at its commit boundary.
+   */
+  configuration_adoption_eligibility:
+    | {
+        status: 'eligible';
+      }
+    | {
+        status: 'busy';
+      }
+    | {
+        status: 'unavailable';
+      };
   /**
    * The runtime's durable-authority failure, when it has entered the
    * explicit degraded state. While set, no new durable admission/execution

@@ -1,6 +1,7 @@
 # Open workspace on the Host desktop
 
-The current Session header provides **Open workspace** and an application menu.
+The current Session header provides **Open workspace** as a compact split button:
+the folder icon opens the workspace and the chevron opens the application menu.
 The primary action uses the first available application in this fixed order:
 file manager, terminal, Visual Studio Code. The menu offers only discovered apps.
 No Agent starts and no model or Tool request is issued by this action. Drafts,

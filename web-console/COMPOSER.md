@@ -206,16 +206,16 @@ Acknowledgment locks, disabled/submission gates, unresolved uploads (including
 failed/uncertain), first-submission retention and exact draft consumption are unchanged.
 There is no browser queue, replay or text-only fallback.
 
-The compact keyboard-accessible **Enter while running** menu below the card edits
-`app/composer/preferences.ts`, one shared origin/device browser presentation owner.
+The **Send behavior while busy** row on the General Settings page edits
+`app/composer/preferences.ts`, one shared origin/device browser presentation owner,
+matching DeepSeek Harness's General `composer-enter` row; the Composer renders no
+selector of its own and only reads the preference.
 The closed union is `queue | steer`, default `queue`, stored as a raw value under
 `rustx-composer-busy-enter-v1`. Valid values survive remount and browser reload;
 missing, corrupt or unreadable storage defaults to Queue. Denied writes leave the
 live page preference usable. No Session, Workspace or native configuration changes,
 migrations or cross-device synchronization are involved. Labels and modifier help
 are localized in English/Chinese and the primary action names its actual delivery.
-The closed preference trigger's visible text also supplies its accessible name,
-including the current Queue/Steer value.
 
 ### Scoped double Escape
 
@@ -329,7 +329,7 @@ and reconnect diagnostics remain visible.
 
 ## Uploads
 
-User uploads are native Session-owned files under App Server v34. The dedicated
+User uploads are native Session-owned files under App Server v35. The dedicated
 intake owner normalizes picker/drop/paste, preserves duplicate selections through
 local identities, and keeps per-file accepted/rejected outcomes. Raw over-count
 selections are atomically rejected with one summary. Directory entries are detected
@@ -438,9 +438,13 @@ snapshot. Settings presents native context adoption, failures and restart state.
 
 Native pending interactions take over the composer seat, preserving the hidden
 local draft. Approval uses native Allow/Deny; Questionnaire supports schema-defined
-choice/multichoice/boolean/text/numeric/custom values and page navigation. Only
-`interaction/respond` or permitted `interaction/cancel` sends a response. Escape,
-dismissal, navigation and unmount never settle anything. Successful acknowledgements
+choice/multichoice/boolean/text/numeric/custom values and page navigation in
+Harness's question flow: a recommended first choice is the implicit draft, a
+single choice advances to the next question, the custom answer row is always
+visible, Skip omits a question from the submission and the card's dismiss action
+sends the native decline. Only `interaction/respond` or permitted
+`interaction/cancel` sends a response. Escape, collapsing the card, navigation and
+unmount never settle anything. Successful acknowledgements
 keep the pending surface until snapshot absence proves settlement. Lost replies
 stay uncertain, cannot be resent and repair through native reconnect/reread.
 

@@ -1,793 +1,102 @@
 [
   {
-    "reference": "composer-running-draft-light-390-linux.png",
-    "evidence": "2026-10-04 pinned Playwright 1.63.0 noble browser (sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7), strict run 81220 and independent run 51580. First stable capture has these pixels; independent run matches the baseline exactly. RGBA baseline sha256 128a732929f166ebfd26e8627495c1ef5ab9116ce5266dccf628c3a9eaebdbad; measured sha256 75431e61443c1b61f0d804b62ac052824869a4069cb4f453cffc6790bb3234ed. Only the focused composer top-left rounded shadow differs.",
+    "reference": "session-idle-light-linux.png",
+    "evidence": "Pinned-container investigation (PR #395 branch, 4/4 reproductions): the New Session button corner arc rasterizes 1-2 grey levels apart while a float-identical DOM probe against the base revision (button [14,74,252x38], radius 12px, identical stacking, styles and children) proves geometry exact; AA coverage only",
     "regions": [
       {
-        "label": "focused composer top-left rounded shadow",
-        "x": 30,
-        "y": 117,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 3
-      },
-      {
-        "label": "focused composer top-left rounded shadow",
-        "x": 31,
-        "y": 117,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 4
-      },
-      {
-        "label": "focused composer top-left rounded shadow",
-        "x": 32,
-        "y": 117,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 12
-      },
-      {
-        "label": "focused composer top-left rounded shadow",
-        "x": 33,
-        "y": 117,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 9
-      },
-      {
-        "label": "focused composer top-left rounded shadow",
-        "x": 26,
-        "y": 118,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 13
-      },
-      {
-        "label": "focused composer top-left rounded shadow",
-        "x": 27,
-        "y": 118,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 5
-      },
-      {
-        "label": "focused composer top-left rounded shadow",
-        "x": 28,
-        "y": 118,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 6
-      },
-      {
-        "label": "focused composer top-left rounded shadow",
-        "x": 29,
-        "y": 118,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 10
-      },
-      {
-        "label": "focused composer top-left rounded shadow",
-        "x": 30,
-        "y": 118,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 12
-      },
-      {
-        "label": "focused composer top-left rounded shadow",
-        "x": 32,
-        "y": 118,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 8
-      },
-      {
-        "label": "focused composer top-left rounded shadow",
-        "x": 33,
-        "y": 118,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 9
-      },
-      {
-        "label": "focused composer top-left rounded shadow",
-        "x": 24,
-        "y": 119,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 1
-      },
-      {
-        "label": "focused composer top-left rounded shadow",
-        "x": 25,
-        "y": 119,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 10
-      },
-      {
-        "label": "focused composer top-left rounded shadow",
-        "x": 26,
-        "y": 119,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 10
-      },
-      {
-        "label": "focused composer top-left rounded shadow",
-        "x": 24,
-        "y": 120,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 12
+        "label": "New Session button bottom-right corner arc",
+        "x": 262,
+        "y": 103,
+        "width": 5,
+        "height": 7,
+        "maxChangedPixels": 10,
+        "maxChannelDelta": 2
       }
     ],
     "pixels": [
-      [
-        30,
-        117,
-        [
-          212,
-          223,
-          247,
-          255
-        ],
-        [
-          209,
-          221,
-          247,
-          255
-        ]
-      ],
-      [
-        31,
-        117,
-        [
-          188,
-          206,
-          244,
-          255
-        ],
-        [
-          192,
-          209,
-          244,
-          255
-        ]
-      ],
-      [
-        32,
-        117,
-        [
-          167,
-          191,
-          241,
-          255
-        ],
-        [
-          179,
-          199,
-          242,
-          255
-        ]
-      ],
-      [
-        33,
-        117,
-        [
-          157,
-          184,
-          240,
-          255
-        ],
-        [
-          166,
-          190,
-          241,
-          255
-        ]
-      ],
-      [
-        26,
-        118,
-        [
-          192,
-          209,
-          245,
-          255
-        ],
-        [
-          205,
-          219,
-          246,
-          255
-        ]
-      ],
-      [
-        27,
-        118,
-        [
-          148,
-          177,
-          239,
-          255
-        ],
-        [
-          153,
-          180,
-          239,
-          255
-        ]
-      ],
-      [
-        28,
-        118,
-        [
-          141,
-          172,
-          238,
-          255
-        ],
-        [
-          147,
-          177,
-          240,
-          255
-        ]
-      ],
-      [
-        29,
-        118,
-        [
-          150,
-          179,
-          241,
-          255
-        ],
-        [
-          160,
-          187,
-          243,
-          255
-        ]
-      ],
-      [
-        30,
-        118,
-        [
-          191,
-          209,
-          247,
-          255
-        ],
-        [
-          203,
-          217,
-          248,
-          255
-        ]
-      ],
-      [
-        32,
-        118,
-        [
-          241,
-          245,
-          254,
-          255
-        ],
-        [
-          233,
-          239,
-          252,
-          255
-        ]
-      ],
-      [
-        33,
-        118,
-        [
-          255,
-          255,
-          255,
-          255
-        ],
-        [
-          246,
-          248,
-          254,
-          255
-        ]
-      ],
-      [
-        24,
-        119,
-        [
-          168,
-          192,
-          242,
-          255
-        ],
-        [
-          169,
-          193,
-          242,
-          255
-        ]
-      ],
-      [
-        25,
-        119,
-        [
-          136,
-          169,
-          239,
-          255
-        ],
-        [
-          126,
-          162,
-          237,
-          255
-        ]
-      ],
-      [
-        26,
-        119,
-        [
-          205,
-          219,
-          249,
-          255
-        ],
-        [
-          195,
-          212,
-          247,
-          255
-        ]
-      ],
-      [
-        24,
-        120,
-        [
-          217,
-          227,
-          250,
-          255
-        ],
-        [
-          205,
-          219,
-          249,
-          255
-        ]
-      ]
+        [265,104,[232,232,233,255],[231,231,232,255]],
+        [264,105,[236,236,236,255],[235,235,235,255]],
+        [265,105,[237,237,238,255],[236,236,237,255]],
+        [263,106,[254,254,254,255],[253,253,253,255]],
+        [265,106,[245,246,246,255],[243,244,244,255]],
+        [263,107,[237,237,237,255],[235,235,235,255]],
+        [263,108,[225,225,225,255],[224,225,225,255]],
+        [264,108,[245,246,247,255],[244,245,246,255]]
     ]
   },
   {
-    "reference": "composer-running-draft-dark-390-linux.png",
-    "evidence": "2026-10-04 pinned Playwright 1.63.0 noble browser (sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7), strict run 81220 and independent run 51580. Both stable actual captures are identical. RGBA baseline sha256 15beaa46beebca41190fca5bc6e7b82bcc7f91380200adcd06955fdf80b81ed0; measured sha256 ac05e4b1f27bc57c362db3b65d12b6a4e8489997b55f996f34f16f3bc55ec989. Only the focused composer top-left rounded shadow differs.",
+    "reference": "sidebar-other-uncertain-light-linux.png",
+    "evidence": "Pinned-container investigation (PR #395 branch, 4/4 reproductions): the New Session button corner arc rasterizes 1-2 grey levels apart while a float-identical DOM probe against the base revision (button [14,74,252x38], radius 12px, identical stacking, styles and children) proves geometry exact; AA coverage only",
     "regions": [
       {
-        "label": "focused composer top-left rounded shadow",
-        "x": 30,
-        "y": 117,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 4
-      },
-      {
-        "label": "focused composer top-left rounded shadow",
-        "x": 31,
-        "y": 117,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 5
-      },
-      {
-        "label": "focused composer top-left rounded shadow",
-        "x": 32,
-        "y": 117,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 14
-      },
-      {
-        "label": "focused composer top-left rounded shadow",
-        "x": 33,
-        "y": 117,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 11
-      },
-      {
-        "label": "focused composer top-left rounded shadow",
-        "x": 26,
-        "y": 118,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 18
-      },
-      {
-        "label": "focused composer top-left rounded shadow",
-        "x": 27,
-        "y": 118,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 6
-      },
-      {
-        "label": "focused composer top-left rounded shadow",
-        "x": 28,
-        "y": 118,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 5
-      },
-      {
-        "label": "focused composer top-left rounded shadow",
-        "x": 29,
-        "y": 118,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 10
-      },
-      {
-        "label": "focused composer top-left rounded shadow",
-        "x": 30,
-        "y": 118,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 12
-      },
-      {
-        "label": "focused composer top-left rounded shadow",
-        "x": 31,
-        "y": 118,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 1
-      },
-      {
-        "label": "focused composer top-left rounded shadow",
-        "x": 32,
-        "y": 118,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 9
-      },
-      {
-        "label": "focused composer top-left rounded shadow",
-        "x": 33,
-        "y": 118,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 9
-      },
-      {
-        "label": "focused composer top-left rounded shadow",
-        "x": 24,
-        "y": 119,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 1
-      },
-      {
-        "label": "focused composer top-left rounded shadow",
-        "x": 25,
-        "y": 119,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 9
-      },
-      {
-        "label": "focused composer top-left rounded shadow",
-        "x": 26,
-        "y": 119,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 11
-      },
-      {
-        "label": "focused composer top-left rounded shadow",
-        "x": 24,
-        "y": 120,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 13
+        "label": "New Session button bottom-right corner arc",
+        "x": 262,
+        "y": 103,
+        "width": 5,
+        "height": 7,
+        "maxChangedPixels": 10,
+        "maxChannelDelta": 2
       }
     ],
     "pixels": [
-      [
-        30,
-        117,
-        [
-          36,
-          48,
-          69,
-          255
-        ],
-        [
-          37,
-          49,
-          73,
-          255
-        ]
-      ],
-      [
-        31,
-        117,
-        [
-          47,
-          65,
-          99,
-          255
-        ],
-        [
-          45,
-          62,
-          94,
-          255
-        ]
-      ],
-      [
-        32,
-        117,
-        [
-          55,
-          80,
-          124,
-          255
-        ],
-        [
-          50,
-          72,
-          110,
-          255
-        ]
-      ],
-      [
-        33,
-        117,
-        [
-          60,
-          88,
-          137,
-          255
-        ],
-        [
-          56,
-          81,
-          126,
-          255
-        ]
-      ],
-      [
-        26,
-        118,
-        [
-          44,
-          62,
-          95,
-          255
-        ],
-        [
-          39,
-          52,
-          77,
-          255
-        ]
-      ],
-      [
-        27,
-        118,
-        [
-          65,
-          95,
-          149,
-          255
-        ],
-        [
-          63,
-          92,
-          143,
-          255
-        ]
-      ],
-      [
-        28,
-        118,
-        [
-          74,
-          106,
-          163,
-          255
-        ],
-        [
-          73,
-          103,
-          158,
-          255
-        ]
-      ],
-      [
-        29,
-        118,
-        [
-          76,
-          106,
-          160,
-          255
-        ],
-        [
-          73,
-          101,
-          150,
-          255
-        ]
-      ],
-      [
-        30,
-        118,
-        [
-          63,
-          82,
-          115,
-          255
-        ],
-        [
-          59,
-          74,
-          103,
-          255
-        ]
-      ],
-      [
-        31,
-        118,
-        [
-          54,
-          65,
-          83,
-          255
-        ],
-        [
-          54,
-          64,
-          84,
-          255
-        ]
-      ],
-      [
-        32,
-        118,
-        [
-          47,
-          51,
-          60,
-          255
-        ],
-        [
-          51,
-          57,
-          69,
-          255
-        ]
-      ],
-      [
-        33,
-        118,
-        [
-          44,
-          44,
-          46,
-          255
-        ],
-        [
-          46,
-          49,
-          55,
-          255
-        ]
-      ],
-      [
-        24,
-        119,
-        [
-          55,
-          80,
-          124,
-          255
-        ],
-        [
-          55,
-          79,
-          123,
-          255
-        ]
-      ],
-      [
-        25,
-        119,
-        [
-          77,
-          111,
-          173,
-          255
-        ],
-        [
-          79,
-          116,
-          182,
-          255
-        ]
-      ],
-      [
-        26,
-        119,
-        [
-          59,
-          73,
-          100,
-          255
-        ],
-        [
-          62,
-          79,
-          111,
-          255
-        ]
-      ],
-      [
-        24,
-        120,
-        [
-          55,
-          67,
-          87,
-          255
-        ],
-        [
-          59,
-          73,
-          100,
-          255
-        ]
-      ]
+        [265,104,[232,232,233,255],[231,231,232,255]],
+        [264,105,[236,236,236,255],[235,235,235,255]],
+        [265,105,[237,237,238,255],[236,236,237,255]],
+        [263,106,[254,254,254,255],[253,253,253,255]],
+        [265,106,[245,246,246,255],[243,244,244,255]],
+        [263,107,[237,237,237,255],[235,235,235,255]],
+        [263,108,[225,225,225,255],[224,225,225,255]],
+        [264,108,[245,246,247,255],[244,245,246,255]]
+    ]
+  },
+  {
+    "reference": "session-queued-light-linux.png",
+    "evidence": "Pinned-container investigation (PR #395 branch): the New Session button corner arc rasterizes 1-2 grey levels apart while a float-identical DOM probe against the base revision (button [14,74,252x38], radius 12px, identical stacking, styles and children) proves geometry exact; AA coverage only, identical to the recorded session-idle noise",
+    "regions": [
+      {
+        "label": "New Session button bottom-right corner arc",
+        "x": 262,
+        "y": 103,
+        "width": 5,
+        "height": 7,
+        "maxChangedPixels": 10,
+        "maxChannelDelta": 2
+      }
+    ],
+    "pixels": [
+        [265,104,[232,232,233,255],[231,231,232,255]],
+        [264,105,[236,236,236,255],[235,235,235,255]],
+        [265,105,[237,237,238,255],[236,236,237,255]],
+        [263,106,[254,254,254,255],[253,253,253,255]],
+        [265,106,[245,246,246,255],[243,244,244,255]],
+        [263,107,[237,237,237,255],[235,235,235,255]],
+        [263,108,[225,225,225,255],[224,225,225,255]],
+        [264,108,[245,246,247,255],[244,245,246,255]]
+    ]
+  },
+  {
+    "reference": "session-stopping-light-linux.png",
+    "evidence": "Pinned-container investigation (PR #395 branch): the New Session button corner arc rasterizes 1-2 grey levels apart while a float-identical DOM probe against the base revision (button [14,74,252x38], radius 12px, identical stacking, styles and children) proves geometry exact; AA coverage only, identical to the recorded session-idle noise",
+    "regions": [
+      {
+        "label": "New Session button bottom-right corner arc",
+        "x": 262,
+        "y": 103,
+        "width": 5,
+        "height": 7,
+        "maxChangedPixels": 10,
+        "maxChannelDelta": 2
+      }
+    ],
+    "pixels": [
+        [265,104,[232,232,233,255],[231,231,232,255]],
+        [264,105,[236,236,236,255],[235,235,235,255]],
+        [265,105,[237,237,238,255],[236,236,237,255]],
+        [263,106,[254,254,254,255],[253,253,253,255]],
+        [265,106,[245,246,246,255],[243,244,244,255]],
+        [263,107,[237,237,237,255],[235,235,235,255]],
+        [263,108,[225,225,225,255],[224,225,225,255]],
+        [264,108,[245,246,247,255],[244,245,246,255]]
     ]
   }
 ]

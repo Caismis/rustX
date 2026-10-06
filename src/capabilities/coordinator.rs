@@ -2437,7 +2437,7 @@ impl CapabilityCoordinator {
 
     /// Returns the number of retired generations still tracked by the
     /// coordinator's close registry.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "mcp-fixture"))]
     pub(crate) fn pending_mcp_retirements(&self) -> usize {
         self.inner.mcp_retirements.pending_count()
     }

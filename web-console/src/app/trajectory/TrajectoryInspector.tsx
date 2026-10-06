@@ -28,7 +28,7 @@ import type {
   TraceSystemPromptPresentation,
   TraceText,
   TraceToolDefinition,
-} from '../../../../protocol/app-server/v34';
+} from '../../../../protocol/app-server/v35';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { Button } from '../../presentation/primitives/Button';
 import { JsonTree, type JsonTreeLabels } from '../../presentation/primitives/JsonTree';
@@ -36,7 +36,7 @@ import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { CodeBlock } from '../../presentation/markdown/CodeBlock';
 import { Tabs, TabList, Tab, TabPanel } from 'react-aria-components';
 import { diffLines } from 'diff';
-import { contextKindLabel, facetLabel, type StructuralDisplayItem, type TrajectoryFacet, type TrajectorySelection } from './layout';
+import { contextKindLabel, facetLabel, type TurnStructure, type TrajectoryFacet, type TrajectorySelection } from './layout';
 import { Artifact } from '../components/Artifact';
 import { formatDuration, formatInstant } from './timeline';
 import css from './Trajectory.module.css';
@@ -435,6 +435,8 @@ export interface TrajectoryInspectorProps {
   /** Request the heavy detail of this record; the owner fences the reply. */
   onLoadDetail: (id: string) => void;
   onClose: () => void;
+  /** Turn and group of the selected cell in the loaded ledger, e.g. "Turn 2 · Step 1". */
+  location?: string | undefined;
 }
 
 /**
@@ -451,6 +453,7 @@ export function TrajectoryInspector({
   error,
   onLoadDetail,
   onClose,
+  location,
 }: TrajectoryInspectorProps) {
   const tx = useTranslation();
   const section = selection.facet;
@@ -464,20 +467,15 @@ export function TrajectoryInspector({
   const toolState = toolDetailState(detail, loading, error);
   const toolFactFacet = record.kind === 'tool' && ['Input', 'Result', 'Schema'].includes(active);
   const messages = detail?.messages ?? [];
-  const title = selection.cell_type === 'SystemPromptCell' ? tx('trajectory:copy.system-prompt') : selection.cell_type === 'ContextRow' ? tx('trajectory:copy.context') :
-    record.kind === 'request' && record.request
-      ? tx('trajectory:copy.request-value', { p0: record.request.model })
-      : record.kind === 'tool' && record.tool
-        ? tx('trajectory:copy.tool-value', { p0: record.tool.name ?? record.tool.tool_id })
-        : cellLabel(tx)[record.kind];
+  const kind = selection.cell_type === 'SystemPromptCell' ? 'system' : selection.cell_type === 'ContextRow' ? 'context' : record.kind;
+  const tag = selection.cell_type === 'SystemPromptCell' ? tx('trajectory:trajectory.system') : selection.cell_type === 'ContextRow' ? tx('trajectory:trajectory.context') : cellLabel(tx)[record.kind];
+  const subject = selection.cell_type === 'SystemPromptCell' ? tx('trajectory:copy.system-prompt')
+    : record.kind === 'request' && record.request ? record.request.model
+      : record.kind === 'tool' && record.tool ? record.tool.name ?? record.tool.tool_id : undefined;
 
   return (
-    <aside className={css.inspector} data-kind={selection.cell_type === 'SystemPromptCell' ? 'system' : selection.cell_type === 'ContextRow' ? 'context' : record.kind} aria-label={tx('trajectory:trajectory-inspector.trace-record-inspector')}>
-      <header>
-        <strong>{title}</strong>
-        <Button size="sm" onClick={onClose}>
-          {tx('trajectory:trajectory-inspector.close-record')}</Button>
-      </header>
+    <aside className={css.inspector} data-kind={kind} aria-label={tx('trajectory:trajectory-inspector.trace-record-inspector')}>
+      <InspectorHeader kind={kind} tag={tag} location={[location, subject].filter(Boolean).join(' · ')} closeLabel={tx('trajectory:trajectory-inspector.close-record')} onClose={onClose} />
       <Tabs className={css.inspectorTabs} selectedKey={active} onSelectionChange={key => onFacet(key as TrajectoryFacet)}>
       <TabList aria-label={tx('trajectory:trajectory-inspector.record-sections')} className={css.tabs}>
         {sections.map(name => <Tab key={name} id={name}>{facetLabel(tx, name)}</Tab>)}
@@ -914,24 +912,32 @@ export function TrajectoryInspector({
   );
 }
 
+/** Harness detail header: role tag, code-face location and an icon close. */
+function InspectorHeader({ kind, tag, location, closeLabel, onClose }: { kind: string; tag: string; location: string; closeLabel: string; onClose: () => void }) {
+  return <header className={css.inspectorHeader}>
+    <div className={css.inspectorTitle}>
+      <span className={css.kindTag} data-kind={kind}>{tag}</span>
+      {location && <span className={css.inspectorLocation} title={location}>{location}</span>}
+    </div>
+    <button type="button" className={css.close} aria-label={closeLabel} onClick={onClose}><span aria-hidden="true">×</span></button>
+  </header>;
+}
+
 /**
- * Bounded evidence of one Turn or Step header.
+ * Bounded evidence of one Turn header.
  *
  * A header is presentation structure, not a detail owner: this reads only the
- * exact native Attempt/Step summary record the projection already attached to
- * it, and issues no detail read. Without that exact record it says so rather
- * than borrowing identity, lifecycle or timing from a member record.
+ * exact native Attempt summary record the projection already attached to it,
+ * and issues no detail read. Without that exact record it says so rather than
+ * borrowing identity, lifecycle or timing from a member record.
  */
-export function TrajectoryStructureInspector({ item, onClose }: { item: StructuralDisplayItem; onClose: () => void }) {
+export function TrajectoryStructureInspector({ item, onClose }: { item: TurnStructure; onClose: () => void }) {
   const tx = useTranslation();
   const record = item.native_record;
-  const native = item.type === 'TurnHeader' ? tx('trajectory:trajectory-inspector.attempt') : item.kind === 'step' ? tx('trajectory:copy.step') : undefined;
+  const native = tx('trajectory:trajectory-inspector.attempt');
   return (
     <aside className={css.inspector} aria-label={tx('trajectory:copy.trace-structure-inspector')}>
-      <header>
-        <strong>{item.label}{native ? ' ' + tx('trajectory:copy.native-value', { p0: native }) : ''}</strong>
-        <Button size="sm" onClick={onClose}>{tx('trajectory:copy.close-structure')}</Button>
-      </header>
+      <InspectorHeader kind="attempt" tag={native} location={item.label} closeLabel={tx('trajectory:copy.close-structure')} onClose={onClose} />
       <div className={css.inspectorBody}>
         <p className={css.note}>“{item.label}{tx('trajectory:copy.is-a-loaded-window-ordinal-not-an-identity')}</p>
         {record ? (
@@ -945,12 +951,6 @@ export function TrajectoryStructureInspector({ item, onClose }: { item: Structur
               <dd className={css.machine}>{record.id}</dd>
               <dt>{tx('trajectory:trajectory-inspector.attempt')}</dt>
               <dd className={css.machine}>{record.location.attempt_id ?? <Unavailable />}</dd>
-              {record.kind === 'step' && (
-                <>
-                  <dt>{tx('trajectory:trajectory-inspector.logical-step')}</dt>
-                  <dd className={css.machine}>{record.location.step_id ?? <Unavailable />}</dd>
-                </>
-              )}
               {record.native_id && (
                 <>
                   <dt>{tx('trajectory:trajectory-inspector.native-identity')}</dt>
@@ -974,9 +974,7 @@ export function TrajectoryStructureInspector({ item, onClose }: { item: Structur
           </>
         ) : (
           <p className={css.unavailable}>
-            {native
-              ? tx('trajectory:copy.the-exact-native-value-record-is-not-loaded-at-this-read-cut-so-its-structural-evidence-is', { p0: native })
-              : tx('trajectory:copy.message-groups-attempt-owned-records-with-no-logical-step-it-has-no-native-structural-reco')}
+            {tx('trajectory:copy.the-exact-native-value-record-is-not-loaded-at-this-read-cut-so-its-structural-evidence-is', { p0: native })}
           </p>
         )}
       </div>

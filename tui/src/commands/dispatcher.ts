@@ -177,7 +177,7 @@ export class CommandDispatcher {
   // A retained command is one submission until its response is classified.
   // Other controls and commands (including on a replacement attachment) remain usable.
   readonly #agentMessageSubmissions = new WeakSet<AppServerSession>();
-  #inspected = new Map<string, import('../../../protocol/app-server/v34.ts').AvailableConfiguration>();
+  #inspected = new Map<string, import('../../../protocol/app-server/v35.ts').AvailableConfiguration>();
 
   constructor(context: DispatcherContext) {
     this.#context = context;
@@ -498,7 +498,7 @@ export class CommandDispatcher {
   async #settings(argument: string): Promise<CommandOutcome> {
     const words = argument.match(/"(?:[^"\\]|\\.)*"|\S+/g)?.map(word => word.startsWith('"') ? JSON.parse(word) as string : word) ?? [];
     const owner = words.shift() ?? "user";
-    let target: import("../../../protocol/app-server/v34.ts").SourceTarget;
+    let target: import("../../../protocol/app-server/v35.ts").SourceTarget;
     if (owner === "user") target = { kind: "user" };
     else if (owner === "workspace" && words[0]) target = { kind: "workspace", directory: words.shift()! };
     else return transient("error", 'usage: /settings [user | workspace "<canonical absolute path>"] [rescan | approval policy|full_access|inherit]');
@@ -534,6 +534,9 @@ export class CommandDispatcher {
     return inspect("Session settings", [
       renderSettings(session.state, await session.configuration()),
       JSON.stringify(application, null, 2),
+      // Eligibility is the runtime's own advisory publication, not part of
+      // the configuration application; native adoption revalidates it.
+      `Runtime adoption eligibility: ${session.state.adoptionEligibility} (advisory; native adoption revalidates).`,
       application?.candidate ? "Inspect the exact candidate above; /session adopt explicitly adopts it." : "No pending candidate reported by native authority.",
     ].join("\n"));
   }

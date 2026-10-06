@@ -33,7 +33,8 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
         await page.getByRole('button', { name: '关闭设置' }).click();
       }
       const input = page.getByRole('textbox', { name: copy('Message', '消息'), exact: true });
-      await expect(page.getByText(copy('Last request context unavailable', '上次请求上下文用量不可用'), { exact: true })).toBeVisible();
+      // An idle Context seat renders nothing; no request occupancy is disclosed.
+      await expect(page.locator('[data-context-seat]')).toHaveCount(0);
       await input.fill('/compact'); await input.press('Enter');
       await expect(page.getByText(copy('Compaction failed', '上下文压缩失败'), { exact: true })).toBeVisible();
       const diagnostic = page.getByText(copy('Compaction details', '上下文压缩详情'), { exact: true });
@@ -46,10 +47,8 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
       await input.press('Enter');
       await expect(page.getByText('Original context ready.', { exact: true })).toBeVisible();
       await expect(page.getByRole('button', { name: copy('Send', '发送'), exact: true })).toBeVisible();
-      await expect(page.getByText(copy('Last request context 25%', '上次请求上下文用量 25%'), { exact: true })).toBeVisible();
-      const meter = page.locator('summary').filter({ hasText: copy('Last request context 25%', '上次请求上下文用量 25%') });
-      await meter.focus(); await meter.press('Enter');
-      await expect(page.getByText(copy('32000 / 128000 input tokens · console-model', '输入词元 32000 / 128000 · console-model'), { exact: true })).toBeVisible();
+      // A measured request still discloses no occupancy in the Web.
+      await expect(page.locator('meter')).toHaveCount(0);
       const message = page.getByRole('textbox', { name: locale === 'zh' ? '消息' : 'Message', exact: true });
       holdCompact = true;
       await message.fill('/compact'); await message.press('Enter');
@@ -71,7 +70,6 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
       await fixture.release('manual-summary');
       await expect(page.getByText(locale === 'zh' ? '上下文已压缩' : 'Context compacted', { exact: true })).toBeVisible();
       await expect(message).toHaveValue('Draft survives native maintenance');
-      await expect(page.getByText(locale === 'zh' ? '上次请求上下文用量不可用' : 'Last request context unavailable', { exact: true })).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       passed = true;
     } finally { await fixture.stop(passed); }

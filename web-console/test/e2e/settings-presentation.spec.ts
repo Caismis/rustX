@@ -788,6 +788,28 @@ test('Session configuration banner: preparing, ready, blocked and failed, compac
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
 });
 
+test('Session configuration banner neither flickers nor rereads configuration while an answer streams', async ({ page }) => {
+  const errors = await start(page, '?session=ready');
+  const ready = banner(page).locator('[data-state="ready"]');
+  await expect(ready).toContainText('Prepared configuration is waiting for this Session.');
+  // Record every DOM mutation that ever shows the unavailable line, so a single
+  // painted frame of it fails the test.
+  await page.evaluate(() => {
+    const record = window as unknown as { rustxUnavailableFrames: number };
+    record.rustxUnavailableFrames = 0;
+    new MutationObserver(() => {
+      if (document.querySelector('[aria-label="Session configuration"] [data-state="unavailable"]')) record.rustxUnavailableFrames++;
+    }).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
+  });
+  const reads = async () => (await nativeRequests(page)).filter(request => request.method === 'session/configuration').length;
+  const before = await reads();
+  await page.evaluate(() => (window as unknown as { rustxStream: (deltas: number) => Promise<void> }).rustxStream(200));
+  expect(await page.evaluate(() => (window as unknown as { rustxUnavailableFrames: number }).rustxUnavailableFrames)).toBe(0);
+  expect(await reads()).toBe(before);
+  await expect(ready.getByRole('button', { name: 'Adopt configuration' })).toBeEnabled();
+  expect(errors).toEqual([]);
+});
+
 test('Provider card Delete preserves exact unit CAS and returns focus to the surviving landing page', async ({ page }) => {
   const errors = await start(page, '?write=held');
   await openUserSettings(page); await openSettingsPage(page, 'Models');

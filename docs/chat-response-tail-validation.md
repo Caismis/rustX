@@ -70,11 +70,19 @@ message and immutable append revision validation. Stale revisions are not refres
 or replayed. `Before` Retry cuts before the remapped User and replays once, preserving
 old history. Upload ownership and uncertain-response fences remain native.
 
-Inherited historical tails retain usage/timing. Whole-Conversation statistics count
-only destination-local execution, starting from zero in a new lineage. Paging and
+Inherited historical tails retain usage/timing. As a DeepSeek Harness fork folds
+its copied event prefix, each inherited turn carries its origin Attempt's additive
+execution (`TurnExecution`: steps, requests, usage coverage, generation/Tool work
+and the reading after its last request), captured in the same lineage snapshot
+(R, C). Whole-Conversation statistics are those inherited totals plus local
+execution; the destination owns no inherited clock (`latest_turn` stays local).
+A prefix Fork or Retry inherits only its retained turns' totals. Paging and
 compaction do not change totals. Context occupancy remains latest applicable request
 provider input usage divided by frozen RequestSnapshot capacity; compaction or a
-newer unmeasured request invalidates it. No browser tokenization or Trace authority.
+newer unmeasured request invalidates it. Before its first own request a lineage
+child reads its newest inherited request's occupancy, unless its retained Surface
+compacted after that turn. Seeds without this evidence contribute no totals. No
+browser tokenization or Trace authority.
 
 ## Presentation and provenance
 
@@ -105,7 +113,8 @@ framework. Bounded incremental optimization remains a separate follow-up.
   requests yield one tail, first-request TTFT and summed generation/throughput.
 - `response::tests::lineage`: source → child → reopened child → grandchild preserves
   exact timing/usage/origin; content/Retry IDs remap, no fake execution events,
-  bootstrap is immutable, subsequent local execution alone adds statistics.
+  bootstrap is immutable, every generation reads the origin's totals and context,
+  and subsequent local execution adds to them.
 - Scripted App Server Branch/Fork/Retry test: independent Session ownership,
   inherited timing, repeat continuation anchors, empty composer, destination Retry,
   stale destination revision refusal and reopen.

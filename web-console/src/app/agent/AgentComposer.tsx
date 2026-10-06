@@ -6,7 +6,7 @@ import { useTranslation, useNotice } from '../../locale/react';
 // Native textarea replaces Lexical. Commands are client grammar; effects are typed.
 import { useEffect, useLayoutEffect, useState, useRef, useSyncExternalStore, type ReactNode } from 'react';
 import { AttachmentIntake, transferInputs, pasteText, type IntakeInput, type IntakeFile, type UploadPort } from '../../client/uploads';
-import type { UploadPolicy, UploadReceipt, UploadedFile, UserInputBlock } from '../../../../protocol/app-server/v34';
+import type { UploadPolicy, UploadReceipt, UploadedFile, UserInputBlock } from '../../../../protocol/app-server/v35';
 import { commands, available, parseCommand, type CommandId } from '../commands/registry';
 import { matchCommands } from '../commands/matching';
 import { CommandMenu, type ComposerAction, type ComposerActionRow } from '../commands/CommandMenu';
@@ -90,7 +90,8 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
   const query = trigger.state?.query;
   const menu = !!trigger.state && !disabled && !busy && (onCommand || trigger.state.source === 'launcher');
   const rows: ComposerActionRow[] = [
-    ...(trigger.state?.source === 'launcher' ? [{ id: 'attach' as const, labelKey: 'agent:agent-composer.add-attachments' as const }] : []),
+    ...(trigger.state?.source === 'launcher' ? [{ id: 'attach' as const, labelKey: 'agent:agent-composer.add-attachments' as const,
+      description: uploadPolicy ? tx('agent:upload.limits', { count: uploadPolicy.max_uploads_per_user_input, file: uploadPolicy.max_file_bytes, batch: uploadPolicy.max_upload_bytes_per_user_input }) : tx('agent:upload.policy') }] : []),
     ...matchCommands(query ?? '', commands.filter(command => (trigger.state?.source !== 'launcher' || !['new', 'model'].includes(command.id)) && onCommand && available(command, active, hasGoal, lineageSwitchSafe) && (commandAvailable?.(command.id) ?? true))),
   ];
   const parsed = parseCommand(draft);

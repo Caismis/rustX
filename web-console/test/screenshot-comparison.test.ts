@@ -1,5 +1,4 @@
 // @vitest-environment node
-import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { expect, it } from 'vitest';
 import {
@@ -76,7 +75,7 @@ it.each([
   ['live', noisePolicy, reference],
   ['frozen comparator', comparatorPolicy, fixture],
 ] as const)('the %s noise manifest is measured evidence bound to bounded, disjoint regions', (_label, policy, image_) => {
-  if (_label === 'frozen comparator') expect(policy.length).toBeGreaterThan(0);
+  expect(policy.length).toBeGreaterThan(0);
   for (const entry of policy) {
     expect(entry.evidence).toBeTruthy();
     expect(entry.regions.length).toBeGreaterThan(0);
@@ -394,117 +393,19 @@ it('K: a dimension change fails, for strict and noise-policy references alike', 
   expect(heightResult.report).toContain(`dimensions: expected 390x844, actual 390x843`);
 });
 
-it.each([['idle-empty', 'light', 12, 2, 51], ['idle-empty', 'dark', 12, 2, 51]] as const)('measured Composer corner noise stays restricted: %s %s', (state, theme, sites, bound, cornerY) => {
-  const name = `composer-${state}-${theme}-390-linux.png`;
-  const expected = fixture(name);
-  const entry = comparatorPolicy.find(entry => entry.reference === name)!;
-  const measured = entry.pixels as MeasuredNoisePixel[];
-  expect(entry.regions.flatMap(cells)).toEqual(measured.map(([x, y]) => [x, y]));
-  expect(measured).toHaveLength(sites);
-  const observed = copy(expected);
-  for (const [x, y, before, after] of measured) {
-    expect(pixel(expected, x, y)).toEqual(before);
-    paint(observed, x, y, after);
-  }
-  expect(compare(observed, name, expected, comparatorPolicy).ok).toBe(true);
-  expect(compare(observed, name, expected, []).ok).toBe(false);
-  expect(compare(observed, `composer-idle-draft-${theme}-390-linux.png`, expected, comparatorPolicy).ok).toBe(false);
-  for (const region of entry.regions) {
-    expect(region.maxChannelDelta).toBeLessThanOrEqual(bound);
-    const excessive = copy(expected);
-    nudge(excessive, region.x, region.y, region.maxChannelDelta + 1);
-    expect(compare(excessive, name, expected, comparatorPolicy).ok).toBe(false);
-  }
-  // Adjacent corner, text, and control pixels retain exact comparison.
-  for (const [x, y] of [[34, cornerY], [33, cornerY + 2], [24, cornerY + 4], [50, 76], [300, 126]]) {
-    const changed = copy(observed); nudge(changed, x, y, 1);
-    const result = compare(changed, name, expected, comparatorPolicy);
-    expect(result.ok).toBe(false); expect(result.changedOutsideRegions).toBe(1);
-  }
-  const shifted = copy(observed);
-  for (let y = 0; y < shifted.height; y++)
-    for (let x = shifted.width - 1; x > 0; x--) paint(shifted, x, y, pixel(observed, x - 1, y));
-  expect(compare(shifted, name, expected, comparatorPolicy).ok).toBe(false);
-  expect(compare({ ...observed, height: observed.height - 1 }, name, expected, comparatorPolicy).ok).toBe(false);
-});
-
-it.each(['light', 'dark'])('integrated running Composer accepts only measured corner sites: %s', theme => {
-  const name = `composer-running-draft-${theme}-390-linux.png`;
-  const entry = noisePolicy.find(entry => entry.reference === name)!;
+// The Composer card and send circle rasterize on their own layers, so no
+// reference that draws them carries measured noise: one changed pixel fails.
+it.each([
+  ...['idle-empty', 'idle-draft', 'running-empty', 'running-draft', 'attachment', 'context']
+    .flatMap(state => ['light', 'dark'].map(theme => `composer-${state}-${theme}-390-linux.png`)),
+  'mobile-expanded-dark-linux.png',
+])('%s is strict', name => {
+  expect(noisePolicy.some(entry => entry.reference === name)).toBe(false);
   const expected = reference(name);
-  const observed = copy(expected);
-  expect(entry.pixels).toHaveLength(theme === 'light' ? 15 : 16);
-  expect(entry.regions.flatMap(cells)).toEqual(entry.pixels!.map(([x, y]) => [x, y]));
-  for (const [x, y, before, after] of entry.pixels!) {
-    expect(pixel(expected, x, y)).toEqual(before);
-    paint(observed, x, y, after);
-  }
-  expect(compare(observed, name, expected, noisePolicy).ok).toBe(true);
-  expect(compare(observed, name, expected, []).ok).toBe(false);
-  for (const region of entry.regions) {
-    expect([region.width, region.height, region.maxChangedPixels]).toEqual([1, 1, 1]);
-    const changed = copy(expected); nudge(changed, region.x, region.y, region.maxChannelDelta + 1);
-    expect(compare(changed, name, expected, noisePolicy).ok).toBe(false);
-  }
-  for (const [x, y] of [[24, 117], [33, 120], [34, 117], [50, 76], [300, 126]]) {
+  expect(compare(copy(expected), name, expected, noisePolicy).ok).toBe(true);
+  for (const [x, y] of [[24, 4], [expected.width >> 1, expected.height >> 1], [expected.width - 24, expected.height - 4]]) {
     const changed = copy(expected); nudge(changed, x, y, 1);
-    expect(compare(changed, name, expected, noisePolicy).ok).toBe(false);
-  }
-  expect(compare({ ...expected, height: expected.height - 1 }, name, expected, noisePolicy).ok).toBe(false);
-});
-
-const MOBILE_EXPANDED = 'mobile-expanded-dark-linux.png';
-it('mobile expanded measured variants are exact-reference-local evidence', () => {
-  const expected = fixture(MOBILE_EXPANDED);
-  const entry = comparatorPolicy.find(entry => entry.reference === MOBILE_EXPANDED)!;
-  expect(compare(expected, MOBILE_EXPANDED, expected, comparatorPolicy).ok).toBe(true);
-  const sites = entry.regions.flatMap(cells);
-  expect(sites).toEqual(entry.pixels!.map(([x, y]) => [x, y]));
-  expect(new Set(sites.map(([x, y]) => `${x},${y}`)).size).toBe(sites.length);
-  for (const region of entry.regions) {
-    expect([region.width, region.height, region.maxChangedPixels]).toEqual([1, 1, 1]);
-  }
-  // Independent glyph-edge and rounded-card variants, and their combination.
-  const variants = [
-    { select: (x: number) => x === 303, hash: 'c35466f1b179ca625beca2eac7202a454b38789a0265cced9a6d2d12c8c2db6e' },
-    { select: (x: number) => x !== 303, hash: 'f1dc128c4037bc992ee4813e80e1b23b8c30e7e80976150157ae932b29e574c5' },
-    { select: () => true, hash: 'f23070483875d43834555c8fae6848a8f874293b463bd4e47ec2007f37c378b6' },
-  ];
-  for (const { select, hash } of variants) {
-    const actual = copy(expected);
-    for (const [x, y, , after] of entry.pixels!) if (select(x)) paint(actual, x, y, after);
-    expect(createHash('sha256').update(actual.data).digest('hex')).toBe(hash);
-    expect(compare(actual, MOBILE_EXPANDED, expected, comparatorPolicy).ok).toBe(true);
-    expect(compare(actual, MOBILE_EXPANDED, expected, []).ok).toBe(false);
-    expect(compare(actual, 'mobile-rail-dark-linux.png', expected, comparatorPolicy).ok).toBe(false);
-  }
-});
-
-it('mobile expanded evidence cannot conceal neighboring glyphs, gaps, contrast or layout changes', () => {
-  const expected = fixture(MOBILE_EXPANDED);
-  const entry = comparatorPolicy.find(entry => entry.reference === MOBILE_EXPANDED)!;
-  for (const region of entry.regions) {
-    const beyond = copy(expected);
-    nudge(beyond, region.x, region.y, region.maxChannelDelta + 1);
-    expect(compare(beyond, MOBILE_EXPANDED, expected, comparatorPolicy).ok).toBe(false);
-  }
-  const glyphRows = new Set(entry.pixels!.filter(([x]) => x === 303).map(([, y]) => y));
-  const neighbors = [...glyphRows].flatMap(y => [[302, y], [304, y]]);
-  for (let y = Math.min(...glyphRows); y <= Math.max(...glyphRows); y++) {
-    if (!glyphRows.has(y)) neighbors.push([303, y]);
-  }
-  neighbors.push([320, 250]); // A separate transcript content pixel.
-  for (const [x, y] of neighbors) {
-    const actual = copy(expected); nudge(actual, x, y, 1);
-    expect(compare(actual, MOBILE_EXPANDED, expected, comparatorPolicy).ok).toBe(false);
-  }
-  const shifted = copy(expected);
-  const theme = copy(expected);
-  for (let y = 0; y < expected.height; y++) {
-    for (let x = expected.width - 1; x > 0; x--) paint(shifted, x, y, pixel(expected, x - 1, y));
-    for (let x = 0; x < expected.width; x++) nudge(theme, x, y, 1);
-  }
-  for (const actual of [shifted, theme, { ...expected, width: expected.width - 1 }, { ...expected, height: expected.height - 1 }]) {
-    expect(compare(actual, MOBILE_EXPANDED, expected, comparatorPolicy).ok).toBe(false);
+    const result = compare(changed, name, expected, noisePolicy);
+    expect(result.ok).toBe(false); expect(result.report).toContain('no noise regions are registered');
   }
 });

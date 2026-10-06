@@ -64,11 +64,13 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await oldTail.hover();
     await expect(oldActions).toHaveCSS('opacity', '1');
     await page.setViewportSize({ width: 390, height: 844 });
-    await oldTail.getByRole('button', { name: 'Branch in this Session', exact: true }).focus();
-    await expect(oldTail.getByRole('button', { name: 'Branch in this Session', exact: true })).toBeVisible();
+    await oldTail.getByRole('button', { name: 'Branch into a new Session', exact: true }).focus();
+    await expect(oldTail.getByRole('button', { name: 'Branch into a new Session', exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: 'test-results/response-tail-mobile.png' });
-    await page.setViewportSize({ width: 1440, height: 1000 });
+    // The Harness ledger seats a Request on its output row, so two finite
+    // pages need a shorter pane to overflow by a real scrolling extent.
+    await page.setViewportSize({ width: 1440, height: 800 });
     // WEB-03 uses this same native Session, transcript and provider scenario.
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
     const trajectory = page.getByRole('region', { name: 'Trajectory', exact: true });
@@ -141,9 +143,14 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await ledger.evaluate(el => { el.scrollTop = el.scrollHeight; el.dispatchEvent(new Event('scroll')); });
     await expect(trajectory.locator('[data-request-owner][data-status="running"]').first()).toBeVisible();
     await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
-    const beforeSettlement = Number(await ledger.getAttribute('aria-rowcount'));
+    // Settlement appends the running Request's Assistant output, which then
+    // hosts its marker in place of the Request's own seat.
+    const running = trajectory.locator('[data-request-owner][data-status="running"]');
+    await expect(running).toHaveCount(1);
+    const settling = trajectory.locator(`[data-request-owner="${await running.getAttribute('data-request-owner')}"]`);
     await fixture.release('settle-chat');
-    await expect.poll(async () => Number(await ledger.getAttribute('aria-rowcount'))).toBeGreaterThan(beforeSettlement);
+    await expect(settling).toHaveAttribute('data-status', 'completed');
+    await expect(settling.locator('xpath=ancestor::*[@role="row"]')).toHaveAttribute('data-kind', 'assistant');
     expect(await ledger.evaluate(el => el.scrollTop)).toBe(0);
     await closeSettings(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
     await expect(page.getByText('Settled', { exact: true })).toHaveCount(1);
@@ -176,7 +183,11 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     const expandImage = async () => {
       const process = canonical.locator('[data-turn-process]').last();
       if (await process.getAttribute('aria-expanded') === 'false') await process.click();
-      const disclosure = canonical.locator('[data-tool-call-id="chat-image"]').getByRole('button', { expanded: false });
+      // The tool row sits in its step group, collapsed once the Turn settles.
+      const tool = canonical.locator('[data-tool-call-id="chat-image"]').last();
+      const step = canonical.locator('[data-step-process]').filter({ has: page.locator('[data-tool-call-id="chat-image"]') }).last().locator(':scope > button');
+      if (await step.getAttribute('aria-expanded') === 'false') await step.click();
+      const disclosure = tool.getByRole('button', { expanded: false });
       if (await disclosure.count()) await disclosure.click();
     };
     await expandImage();
@@ -202,13 +213,13 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await decode();
     expect(await urlCount()).toBe(1);
     await canonical.getByRole('button', { name: /^Preview / }).click();
-    const preview = page.getByRole('complementary', { name: 'Artifact preview', exact: true });
+    const preview = page.getByRole('complementary', { name: 'Previews', exact: true });
     await expect(preview.getByRole('img')).toBeVisible();
     await expect.poll(() => preview.getByRole('img').evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
     expect(await urlCount()).toBe(2);
     expect(await preview.evaluate(el => el.getBoundingClientRect().right <= innerWidth && el.getBoundingClientRect().left >= 0)).toBe(true);
     await page.screenshot({ path: 'test-results/native-artifact-preview.png' });
-    await preview.getByRole('button', { name: 'Close Artifact preview' }).click();
+    await preview.getByRole('button', { name: /^Close preview / }).first().click();
     await expect.poll(urlCount).toBe(1);
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
     await expect.poll(urlCount).toBe(0);
@@ -227,22 +238,14 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await closeSettings(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
     expect((await fixture.control('requests')).requests).toHaveLength(38);
     await page.screenshot({ path: 'test-results/chat-history.png', fullPage: true });
-    // Every native lineage control preserves independently readable managed images.
+    // A Fork preserves independently readable managed images.
     const copiedImage = async () => {
-      const process = canonical.locator('[data-turn-process]').last();
-      if (await process.getAttribute('aria-expanded') === 'false') await process.click();
-      const disclosure = canonical.locator('[data-tool-call-id]').last().getByRole('button', { expanded: false });
-      if (await disclosure.count()) await disclosure.click();
+      await expandImage();
       await expect(load).toHaveCount(1);
       await decode();
     };
-    await page.getByRole('button', { name: 'Fork to new Session', exact: true }).last().click();
-    await page.getByRole('dialog', { name: '/fork', exact: true }).getByRole('option', { name: /Continue after this response/ }).click();
-    await expect(page.getByRole('dialog', { name: '/fork', exact: true })).toHaveCount(0);
-    await copiedImage();
-    await page.getByRole('button', { name: 'Branch in this Session', exact: true }).last().click();
-    await page.getByRole('dialog', { name: '/branch', exact: true }).getByRole('option', { name: /Continue after this response/ }).click();
-    await expect(page.getByRole('dialog', { name: '/branch', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Branch into a new Session', exact: true }).last().click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
     await copiedImage();
     expect(errors).toEqual([]); passed = true;
   } catch (error) {

@@ -62,6 +62,12 @@
   border-radius: 22px;
   background: var(--dsw-specific-input-major);
   box-shadow: var(--dsw-elevation-soft);
+  /* Its own layer: the 22px stroke ring is rasterized whole, never split by
+     a page raster tile or a neighbouring partial repaint (focus, caret,
+     draft), either of which antialiases its corners differently. Opacity,
+     not transform, so the card never becomes the containing block of a
+     position:fixed descendant. */
+  will-change: opacity;
   /* The draft text follows the Settings font-size preference (the textarea,
      mirror, and backdrop all inherit from here, so the three layers stay in
      step); the line height keeps the default 10px leading via the shared px
@@ -297,7 +303,6 @@
   flex: none;
   width: 28px;
   height: 28px;
-  padding: 0;
   border: none;
   border-radius: 999px;
   corner-shape: round;
@@ -305,45 +310,12 @@
   color: var(--dsw-alias-label-primary);
   cursor: pointer;
 }
-.add > span { display: flex; align-items: center; justify-content: center; }
 
 .add:hover:not(:disabled) {
   background: var(--dsw-alias-interactive-bg-hover-solid);
 }
 
 .add:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-/* Plan / Read-only / model — native <select>, chip-like closed chrome
-   (figma ToggleButton: 13/20 medium secondary, 12px chevron). */
-.select {
-  max-width: 220px;
-  height: 28px;
-  padding: 0 20px 0 8px;
-  border: none;
-  border-radius: 8px;
-  outline: none;
-  background-color: transparent;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%2381858C' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 4px center;
-  background-size: 12px 12px;
-  color: var(--dsw-alias-label-secondary);
-  font-size: 13px;
-  line-height: 20px;
-  font-weight: 500;
-  white-space: nowrap;
-  cursor: pointer;
-  appearance: none;
-}
-
-.select:hover:not(:disabled) {
-  background-color: var(--dsw-alias-interactive-bg-hover);
-}
-
-.select:disabled {
   opacity: 0.5;
   cursor: default;
 }
@@ -370,13 +342,15 @@
      keeps its original seat while the smaller chips sit lower. Transform, not
      margin, so flex centering math is untouched. */
   transform: translateY(-2px);
+  /* Its own layer, as the card's: a partial repaint of the row (a removed
+     attachment, a docked stack above) never re-rasterizes only part of the
+     circle's antialiased edge. */
+  will-change: transform;
 }
 
 .primary:hover:not(:disabled) {
   background: var(--dsw-alias-button-info-hover);
 }
-
-.primary > span { display: flex; }
 
 .primary:disabled {
   opacity: 0.4;
@@ -394,6 +368,21 @@
   cursor: pointer;
 }
 
+/* File intake is a quiet accessory; + remains the command launcher. */
+.attachment {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+}
+.attachment:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
+.attachment:disabled { opacity: .5; cursor: default; }
 /* Native control popovers use fixed positioning; do not add a size container. */
 .row { container-type: normal; }
 .dock { color: var(--dsw-alias-label-tertiary); font-size: 12px; }
@@ -406,9 +395,13 @@
 .attachments { display: flex; gap: 10px; overflow-x: auto; padding: 6px 14px; }
 .attachments:empty { display: none; }
 
+/* Quiet input preference, outside the operation toolbar. */
+
+.primary > span, .add > span { display: flex; }
 /* Input preference shares the toolbar with permission and model controls. */
 .busyEnter { display: flex; align-items: center; }
-.busyEnter .select { display: flex; align-items: center; gap: 4px; }
+.busyEnter .select { display: flex; align-items: center; gap: 4px; border: 0; padding: 4px 8px; background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer; }
+.busyEnter .select:hover { background: var(--dsw-alias-interactive-bg-hover); }
 .busyEnter .select > span { display: flex; }
 .busyEnter .select { border-radius: 24px; font-family: var(--dsw-font-family); font-size: 13px; line-height: 20px; font-weight: 500; }
 .busyEnter .select:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }

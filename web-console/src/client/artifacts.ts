@@ -1,4 +1,3 @@
-import { validateRaster } from './raster';
 import type { AppServerClient } from './app-server';
 import { sameTarget } from './app-server';
 export const ARTIFACT_MAX_BYTES = 256 * 1024;
@@ -10,15 +9,17 @@ export class ArtifactResources {
   private active = 0;
   private disposed = false;
   constructor(private client: AppServerClient, private sessionId: string) {}
-  private async transfer<T>(id: string, consume: (bytes: Uint8Array<ArrayBuffer>) => T): Promise<T> {
+  private async transfer<T>(id: string, consume: (bytes: Uint8Array<ArrayBuffer>) => T, signal?: AbortSignal): Promise<T> {
     if (this.disposed) throw new Error('Obsolete artifact view');
     if (this.active >= ARTIFACT_MAX_TRANSFERS || this.urls.size + this.active >= ARTIFACT_MAX_URLS) throw new Error('Artifact capacity reached; close a preview and retry.');
     const target = this.client.target(this.sessionId);
     const revision = this.client.getSnapshot().authorityRevision;
     this.active++;
     try {
-      const result = await this.client.request({ method: 'artifact/read', params: { target, artifact_id: id } }, 'artifact_bytes');
-      if (this.disposed || revision !== this.client.getSnapshot().authorityRevision || !sameTarget(this.client.getSnapshot().views[this.sessionId]?.target, target)) throw new Error('Obsolete artifact response');
+      const result = await this.client.request({ method: 'artifact/read', params: { target, artifact_id: id } }, 'artifact_bytes', undefined,
+        () => !this.disposed && !signal?.aborted && revision === this.client.getSnapshot().authorityRevision
+          && sameTarget(this.client.getSnapshot().views[this.sessionId]?.target, target));
+      if (this.disposed || signal?.aborted || revision !== this.client.getSnapshot().authorityRevision || !sameTarget(this.client.getSnapshot().views[this.sessionId]?.target, target)) throw new Error('Obsolete artifact response');
       if (result.data.length > Math.ceil(ARTIFACT_MAX_BYTES / 3) * 4) throw new Error('Artifact exceeds 256 KiB');
       const decoded = atob(result.data);
       if (decoded.length > ARTIFACT_MAX_BYTES) throw new Error('Artifact exceeds 256 KiB');
@@ -33,19 +34,10 @@ export class ArtifactResources {
       return url;
     });
   }
-  /** Rendering and Download share one authorized original byte source. */
-  load(id: string, mimeType?: string, image = false, signal?: AbortSignal): Promise<{ url: string; text?: string; error?: string }> {
-    return this.transfer(id, bytes => {
-      signal?.throwIfAborted();
-      const url = URL.createObjectURL(new Blob([bytes], { type: safeArtifactMime(mimeType) }));
-      this.urls.add(url);
-      if (isTextMime(mimeType)) {
-        try { return { url, text: new TextDecoder('utf-8', { fatal: true }).decode(bytes) }; }
-        catch { return { url, error: 'File is not valid UTF-8' }; }
-      }
-      if (image) { try { validateRaster(bytes); } catch (cause) { return { url, error: String(cause) }; } }
-      return { url };
-    });
+  /** Original bytes for an occurrence lease; that lease owns its URL separately. */
+  readBytes(id: string, signal: AbortSignal): Promise<Uint8Array<ArrayBuffer>> {
+    signal.throwIfAborted();
+    return this.transfer(id, bytes => { signal.throwIfAborted(); return bytes; }, signal);
   }
   release(url: string) { if (this.urls.delete(url)) URL.revokeObjectURL(url); }
   dispose() { this.disposed = true; for (const url of this.urls) URL.revokeObjectURL(url); this.urls.clear(); }

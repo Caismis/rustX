@@ -15,16 +15,20 @@ import { WorkspaceAuthority } from '../workspaces/authority';
 import { WorkspaceAssociations } from '../workspaces/associations';
 import { WorkspaceNavigation } from '../workspaces/WorkspaceNavigation';
 import { WorkspaceSessionNavigation } from '../workspaces/navigation';
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useActorRef } from '@xstate/react';
 import type { AppServerClient } from '../client/app-server';
-import type { SourceTarget, UserInputBlock } from '../../../protocol/app-server/v34';
+import type { CompletedResponseView, SourceTarget, UserInputBlock } from '../../../protocol/app-server/v35';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
+import { CommandSession, type ResponseAction } from './commands/native';
 import { available, commands } from './commands/registry';
 import { activeAttempt, lineageSwitchSafe, json } from '../bindings/projection';
 import { goalDock } from '../bindings/composer-context';
-import { FilePreviewResources } from '../client/session-files';
-import { ArtifactPreview, PreviewContext, type PreviewArtifact } from './components/ArtifactPreview';
+
+import { PreviewContext } from './components/ArtifactPreview';
+import { PreviewWorkspaceOwner } from './preview-workspace';
+import { PreviewWorkspace } from './components/PreviewWorkspace';
+import { ArtifactResources } from '../client/artifacts';
 import { ArtifactContext } from './components/Artifact';
 import { AppFrame } from '../presentation/layout/AppFrame';
 import { SidebarRoot } from '../presentation/sidebar/SidebarRoot';
@@ -33,6 +37,7 @@ import { ConnectionController } from '../connection/controller';
 import { RightPanel } from '../presentation/right-panel/RightPanel';
 import agentCss from '../presentation/agent/Conversation.module.css';
 import { Button } from '../presentation/primitives/Button';
+import { IconPanelLeftOutline16 } from '../presentation/primitives/icons';
 import { sessionDisplayTitle } from '../bindings/session-title';
 import { sessionDeletionNotice } from '../bindings/session-deletion';
 import { LiveInspector } from './Inspector';
@@ -70,8 +75,18 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   const navigationActor = useActorRef(settingsNavigationMachine, { input: { lookup: createOwnerLookup(workspaceHost, client) } });
   const openSettings = (target: SettingsTarget) => navigationActor.send({ type: 'OPEN', target });
   const openConnectionSettings = () => navigationActor.send({ type: 'OPEN.CONNECTION' });
-  const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [artifactPreview, setArtifactPreview] = useState<{ artifact: PreviewArtifact; resources: FilePreviewResources }>();
+  const previewOwner = useMemo(() => new PreviewWorkspaceOwner(client, workspaceHost, workspaceAuthority), [client, workspaceHost, workspaceAuthority]);
+  const previews = useSyncExternalStore(previewOwner.subscribe, previewOwner.getSnapshot);
+  useEffect(() => previewOwner.start(), [previewOwner]);
+  const [previewFocus, setPreviewFocus] = useState(0);
+  const previewOpener = useRef<HTMLElement | null>(null);
+  const inspectorOpen = previews.mode === 'inspector';
+  const returnPreviewFocus = () => {
+    const opener = previewOpener.current;
+    const target = opener?.isConnected && !opener.closest('[inert]') && opener.checkVisibility() ? opener : document.querySelector<HTMLElement>('[data-preview-toggle]') ?? document.querySelector<HTMLElement>('#conversation-view');
+    target?.focus({ preventScroll: true });
+  };
+  const collapsePanel = () => { previewOwner.collapse(); returnPreviewFocus(); };
   const [theme, setTheme] = useState(readTheme);
   useEffect(() => applyTheme(theme), [theme]);
   const [conversationMode, setConversationMode] = useState<'chat' | 'trajectory'>('chat');
@@ -92,6 +107,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   const [command, setCommand] = useState<{ request: CommandRequest; current: () => boolean; generation: number; sessionId: string; conversationId?: string }>();
   const [restored, setRestored] = useState<{ conversation: string; content: UserInputBlock[] }>();
   const [consumed, setConsumed] = useState<{ id: string; sequence: number }>();
+  const [transitioning, setTransitioning] = useState<string>();
   const workspaceNavigation = useMemo(() => new WorkspaceSessionNavigation(workspaceAuthority, client, navigation), [workspaceAuthority, client, navigation]);
   useEffect(() => client.setAttachmentAdmission(workspaceNavigation.admit), [client, workspaceNavigation]);
   // Existing navigation hints may restore wanted views, never a released claim.
@@ -107,7 +123,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     navigation.invalidate(); setOpenViews([]); setFocus({}); setCommand(undefined); setRestored(undefined);
     setDeletingSession(undefined); setError(''); setConsumed(undefined);
     setDraftBinding(value => value + 1);
-    setCenter({ kind: 'new-conversation' }); setArtifactPreview(undefined);
+    setCenter({ kind: 'new-conversation' });
   }
 
   // The client owns authority retirement; this retires the browser navigation
@@ -116,16 +132,23 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
 
   const selectedView = selected ? state.views[selected] : undefined;
   const view = selectedView?.deleting && !selectedView.target ? undefined : selectedView;
-  const artifacts = useMemo(() => selected && view?.target ? new FilePreviewResources(client, selected, workspaceHost, workspaceAuthority) : undefined, [client, selected, view?.target, state.generation, state.authorityRevision, workspaceHost, workspaceAuthority, fileAuthority]);
+  useLayoutEffect(() => previewOwner.selectSession(selected), [previewOwner, selected]);
+  const artifacts = useMemo(() => selected && view?.target ? new ArtifactResources(client, selected) : undefined, [client, selected, view?.target, state.generation, state.authorityRevision, fileAuthority]);
   useEffect(() => () => artifacts?.dispose(), [artifacts]);
   const connected = state.connection === 'connected';
   const attached = !view?.deleting && connected && view?.attachmentIntent === 'wanted' && view.attachment === 'attached';
   const commandOpen = !!command && command.sessionId === selected && command.generation === state.generation && command.current();
-  const invokeCommand = (request: CommandRequest | { id: 'new' } | { id: 'compact' }) => {
+  /** The selected view when it can take a Session command right now. */
+  const commandable = () => {
     const currentState = client.getSnapshot();
     const view = selected ? currentState.views[selected] : undefined;
     if (view && client.firstSubmissions.session(view.id) && !['admitted', 'discarded'].includes(client.firstSubmissions.session(view.id)!.phase)) return;
     if (!view || currentState.connection !== 'connected' || view.attachment !== 'attached' || view.attachmentIntent !== 'wanted' || view.modelMutation || view.snapshot?.shutting_down || view.snapshot?.durability_failure) return;
+    return view;
+  };
+  const invokeCommand = (request: CommandRequest | { id: 'new' } | { id: 'compact' }) => {
+    const view = commandable();
+    if (!view) return;
     const definition = commands.find(item => item.id === request.id);
     if (definition && !available(definition, activeAttempt(view.snapshot), !!goalDock(view.snapshot), lineageSwitchSafe(view))) return;
     if (request.id === 'new') { createInWorkspace(workspace); return; }
@@ -141,6 +164,25 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     }
     navigation.invalidate();
     setCommand({ request, current: navigation.capture(), generation: state.generation, sessionId: view.id, conversationId: view.target?.conversation_id });
+  };
+  // A completed response already names its exact boundary, so its Fork and
+  // Retry run on the click, as Harness forkAt does: no confirming chooser.
+  const transitionResponse = (action: ResponseAction, response: CompletedResponseView) => {
+    const view = commandable();
+    if (!view || transitioning) return;
+    navigation.invalidate(); setCommand(undefined);
+    const current = navigation.capture(), generation = client.getSnapshot().generation;
+    const valid = () => current() && client.getSnapshot().generation === generation;
+    const scope = new CommandSession(client, view.id, valid);
+    setTransitioning(view.id);
+    runGlobal(async () => {
+      try {
+        const result = await scope.transition(action, await scope.responseSelection(response));
+        if (!result || !valid()) return;
+        focusSession(result.session.id, { ready: () => setRestored({ conversation: result.session.active_conversation_id, content: result.content }) });
+        setOpenViews(open => open.includes(result.session.id) ? open : [...open, result.session.id]);
+      } finally { setTransitioning(undefined); }
+    });
   };
   const runGlobal = (action: () => Promise<unknown>) => {
     const generation = client.getSnapshot().generation; setError('');
@@ -233,7 +275,10 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
         setCommand({ request: { id: 'fork' }, current: navigation.capture(), generation: client.getSnapshot().generation, sessionId: id, conversationId: client.getSnapshot().views[id]?.target?.conversation_id });
       })} />}
     settings={wide => <SettingsTrigger wide={wide} onClick={() => openSettings(userSettingsTarget)} />} />}
-    rightOpen={inspectorOpen || !!(artifactPreview && artifactPreview.resources === artifacts)} rightPanel={geometry => <RightPanel closeLabel={artifactPreview && artifactPreview.resources === artifacts ? tx('artifacts:preview.close') : tx('common:right-panel.close-inspector')} {...geometry} open={inspectorOpen || !!(artifactPreview && artifactPreview.resources === artifacts)} close={() => { setInspectorOpen(false); setArtifactPreview(undefined); }} title={artifactPreview && artifactPreview.resources === artifacts ? tx('common:app.artifact-preview') : tx('common:app.developer-inspector')}>{artifactPreview && artifactPreview.resources === artifacts ? <ArtifactPreview key={JSON.stringify(artifactPreview.artifact.source)} artifact={artifactPreview.artifact} resources={artifacts!} /> : <LiveInspector client={client} sessionId={view?.id} />}</RightPanel>}
+    rightOpen={previews.mode !== 'collapsed'} rightPanel={geometry => <RightPanel closeLabel={previews.mode === 'preview' ? tx('artifacts:workspace.collapse') : tx('common:right-panel.close-inspector')} {...geometry} fullscreen={previews.mode === 'preview' && previews.workspace?.fullscreen} open={previews.mode !== 'collapsed'} close={collapsePanel} title={previews.mode === 'preview' ? tx('artifacts:workspace.title') : tx('common:app.developer-inspector')}>
+      <PreviewWorkspace owner={previewOwner} snapshot={previews} focusRequest={previewFocus} returnFocus={returnPreviewFocus}/>
+      {inspectorOpen && <LiveInspector client={client} sessionId={view?.id} />}
+    </RightPanel>}
     overlay={<>
       {/* Settings renders the navigation machine's state and nothing else: which
           target, page and detail are open is decided there, including whether
@@ -252,6 +297,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
       })}>{item.recoveringDeletion ? tx('common:app.recovering-deletion') : tx('common:app.retry-deletion-recovery')}</Button>
     </section>)}
     <DetachedFirstSubmissions client={client} binding={String(draftBinding)} active={!!selected}/>
+    {(previews.problem || previews.downloadError) && <div className="notice error" role="alert">{previews.problem ? tx(`artifacts:workspace.limit-${previews.problem}`) : previews.downloadError}<Button size="sm" onClick={() => previewOwner.dismissProblem()}>{tx('common:app.dismiss-notice')}</Button></div>}
     {error && <div className="notice error" role="alert">{error}<Button size="sm" onClick={() => setError('')}>{tx('common:app.dismiss-notice')}</Button></div>}
     {state.uncertain.some(item => !item.sessionId) && <div className="notice" role="status">{tx('common:app.a-global-operation-needs-verification-inspect-global-other-sessi')}</div>}
     {deletingSession && <SessionDeletion key={JSON.stringify([state.authorityRevision, deletingSession])} client={client} sessionId={deletingSession} title={sessionDisplayTitle(tx, state.sessions.find(session => session.id === deletingSession) ?? state.views[deletingSession]?.summary)} close={() => setDeletingSession(undefined)} deleted={() => {
@@ -265,7 +311,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     <section className={`session-panel ${agentCss.root}`} data-phase={view ? 'active' : 'hero'} id="session-view" role="region" aria-labelledby="session-title">
       <ConversationHeader host={workspaceHost} authority={workspaceAuthority} client={client} view={view && { ...view, summary: state.sessions.find(session => session.id === view.id) ?? view.summary }} authorityRevision={state.authorityRevision}
         connected={connected} attached={attached} commandOpen={commandOpen} inspectorOpen={inspectorOpen}
-        toggleInspector={() => { setArtifactPreview(undefined); setInspectorOpen(value => !value); }} invokeCommand={invokeCommand}
+        toggleInspector={() => previewOwner.toggleInspector()} previewToggle={previews.workspace && <Button size="sm" className={agentCss.iconButton} data-preview-toggle aria-label={tx('artifacts:workspace.reopen')} title={tx('artifacts:workspace.title')} aria-expanded={previews.mode === 'preview'} onClick={() => { if (previews.mode === 'preview') collapsePanel(); else { previewOwner.reveal(); setPreviewFocus(value => value + 1); } }}><IconPanelLeftOutline16 className={agentCss.mirrored} /></Button>} invokeCommand={invokeCommand}
         settingsFeedback={<SettingsNavigationFeedback navigation={navigationActor}/>} openOwningSettings={openOwningSettings} conversationMode={conversationMode} setConversationMode={setConversationMode}/>
 
       {view && <ConversationStatus client={client} sessionId={view.id} recover={action => {
@@ -277,7 +323,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
 
       <section className={`conversation-panel ${agentCss.body}`} id="conversation-view" role={view ? 'tabpanel' : undefined} aria-labelledby={view ? `view-tab-${conversationMode}` : undefined} tabIndex={0}>
       <ConversationWidthControls active={!!view && conversationMode === 'chat'}/>
-      <PreviewContext value={artifact => { if (artifacts) { setArtifactPreview({ artifact, resources: artifacts }); setInspectorOpen(false); } }}><ArtifactContext.Provider value={artifacts?.artifacts}><ConversationLive client={client} sessionId={view?.id} mode={conversationMode} disabled={commandOpen} onHistorical={(id, response) => invokeCommand({ id, response })}/></ArtifactContext.Provider></PreviewContext>
+      <PreviewContext value={{ openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><ArtifactContext.Provider value={artifacts}><ConversationLive client={client} sessionId={view?.id} mode={conversationMode} disabled={commandOpen || transitioning === view?.id} onHistorical={transitionResponse}/></ArtifactContext.Provider></PreviewContext>
       <ConversationSeat client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} sessionId={view?.id}
         initialWorkspace={workspace ?? (center.kind === 'new-conversation' ? center.workspaceId : undefined)}
         binding={String(draftBinding)} current={newConversationCurrent} consumed={consumed} restored={restored}

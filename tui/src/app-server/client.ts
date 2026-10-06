@@ -71,7 +71,7 @@ import {
 } from "./transport.ts";
 
 /** The protocol version this client speaks. Independent of every other version. */
-export const APP_SERVER_PROTOCOL_VERSION = 34;
+export const APP_SERVER_PROTOCOL_VERSION = 35;
 
 /** How this client identifies itself in `initialize`. */
 export const CLIENT_IDENTITY: ClientIdentity = {
@@ -379,7 +379,7 @@ export class AppServerClient {
 
     const record = decodeProtocolMessage(untrusted);
     if (record === undefined) {
-      this.#fail("invalid App Server v34 protocol message");
+      this.#fail("invalid App Server v35 protocol message");
       return;
     }
 

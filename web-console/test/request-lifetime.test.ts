@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import type { MethodResult, Request1 } from '../../protocol/app-server/v34';
+import type { MethodResult, Request1 } from '../../protocol/app-server/v35';
 import { OutcomeUncertain } from '../src/client/app-server';
 import { Server, snapshot } from './fixture';
 const servers: Server[] = [];

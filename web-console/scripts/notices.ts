@@ -14,6 +14,7 @@ const packages = new Map<string, string>();
  * is pinned to one exact version and one declared license, so an upgrade or a
  * license change fails closed instead of inheriting this record. */
 const declaredOnly: Record<string, { license: string; notice: string }> = {
+  'saxes 6.0.0': { license: 'ISC', notice: readFileSync(join(root, 'licenses/saxes-6.0.0.txt'), 'utf8') },
   'client-only 0.0.1': {
     license: 'MIT',
     notice: 'License: MIT, as declared in the package manifest; the published package contains no license file.\n'

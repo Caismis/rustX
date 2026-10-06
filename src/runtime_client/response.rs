@@ -41,6 +41,9 @@ pub struct CompletedResponseView {
     pub usage: Option<ModelUsage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timing: Option<crate::durable::response::CompletedResponseTiming>,
+    /// Distinct provider-facing models of the Attempt's actual requests.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<String>,
 }
 
 /// One native process owner shared by live, successful and unsuccessful Turns.
@@ -95,7 +98,8 @@ pub(crate) fn terminal_turn(
 }
 
 /// Whole-conversation execution totals, independent of any transcript window.
-/// Forked Conversations start a fresh execution epoch, as native lineage does.
+/// A lineage child includes its inherited turns' recorded execution, as a
+/// `DeepSeek` Harness fork folds its copied prefix; it owns none of it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationStatistics {
@@ -105,9 +109,9 @@ pub struct ConversationStatistics {
     /// Latest native Turn clock; never a browser receipt timestamp.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_turn: Option<ConversationTurnClock>,
-    /// Complete measured request timing, separate from usage coverage.
+    /// Summed measured work time, separate from usage coverage.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub timing: Option<crate::durable::response::CompletedResponseTiming>,
+    pub timing: Option<crate::durable::response::ConversationTiming>,
     pub completed_responses: u64,
     pub model_requests: u64,
     /// Known reported usage. Coverage is explicit; missing reports are not zero.
@@ -268,6 +272,7 @@ fn decorate_projection(
                 retry_message_id: response.retry_message_id,
                 usage: response.usage,
                 timing: response.timing,
+                models: response.models,
             });
         }
     }
@@ -337,7 +342,25 @@ fn project(
         }
     }
     let mut statistics = ConversationStatistics::default();
-    let mut timings = timing::TimingFold::default();
+    let mut activity = timing::ActivityFold::default();
+    // As a DeepSeek Harness fork folds its copied event prefix, whole-conversation
+    // totals begin with the inherited turns' own recorded execution.
+    if selected.is_none() {
+        for turn in store.load_inherited_turns()? {
+            statistics.turns += 1;
+            let Some(execution) = turn.execution else {
+                continue;
+            };
+            statistics.steps += execution.steps;
+            statistics.model_requests += execution.model_requests;
+            statistics.requests_with_usage += execution.requests_with_usage;
+            if let Some(usage) = &execution.reported_usage {
+                add_usage(&mut statistics.reported_usage, usage);
+            }
+            statistics.completed_responses += u64::from(execution.completed_response);
+            activity.absorb(&execution);
+        }
+    }
     let scopes = selected.map_or_else(
         || vec![FactScope::All],
         |selected| selected.iter().cloned().map(FactScope::Attempt).collect(),
@@ -359,6 +382,9 @@ fn project(
                     "attempt_failed",
                     "attempt_timed_out",
                     "attempt_limit_exceeded",
+                    "tool_execution_started",
+                    "tool_execution_completed",
+                    "tool_execution_failed",
                 ],
                 before: None,
                 after,
@@ -374,6 +400,18 @@ fn project(
                 let Some(id) = event.attempt_id.clone() else {
                     continue;
                 };
+                match &event.event {
+                    RuntimeEvent::ToolExecutionStarted { tool_call_id, .. } => {
+                        activity.tool_started(id, tool_call_id.clone(), event.timestamp);
+                        continue;
+                    }
+                    RuntimeEvent::ToolExecutionCompleted { tool_call_id, .. }
+                    | RuntimeEvent::ToolExecutionFailed { tool_call_id, .. } => {
+                        activity.tool_settled(id, tool_call_id.clone(), event.timestamp);
+                        continue;
+                    }
+                    _ => {}
+                }
                 let evidence = attempts.entry(id.clone()).or_default();
                 match event.event {
                     RuntimeEvent::AttemptStarted { .. } => {
@@ -386,11 +424,8 @@ fn project(
                         });
                     }
                     RuntimeEvent::TurnStarted => statistics.steps += 1,
-                    RuntimeEvent::ModelRequestStarted { request_id, .. } => {
-                        timings.start(request_id.clone());
-                        evidence.timing.start(request_id.clone());
-                        evidence.last_request = Some(request_id);
-                        evidence.requests += 1;
+                    RuntimeEvent::ModelRequestStarted { request_id, model } => {
+                        evidence.request_started(request_id, model);
                         statistics.model_requests += 1;
                     }
                     RuntimeEvent::ModelRequestCompleted {
@@ -405,7 +440,7 @@ fn project(
                         generation,
                         ..
                     } => {
-                        timings.terminal(&request_id, generation, usage.as_ref());
+                        activity.request(generation.as_ref(), usage.as_ref());
                         evidence
                             .timing
                             .terminal(&request_id, generation, usage.as_ref());
@@ -493,6 +528,7 @@ fn project(
                                             && evidence.requests == evidence.reports)
                                             .then(|| evidence.usage.take())
                                             .flatten(),
+                                        models: std::mem::take(&mut evidence.models),
                                     },
                                 );
                             }
@@ -589,7 +625,7 @@ fn project(
             }
         }
     }
-    statistics.timing = timings.summary(None, chrono::DateTime::UNIX_EPOCH);
+    statistics.timing = activity.summary();
     let pending: BTreeSet<_> = attempts
         .values()
         .flat_map(|evidence| evidence.members.iter().cloned())

@@ -1,4 +1,5 @@
 /** Local trusted Product Host. This module runs in Node, never in the browser. */
+import { OfficeSettlementError } from './documents/office-cgroup.ts';
 import { readFileSync, writeFileSync, renameSync, realpathSync, statSync, existsSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -10,7 +11,10 @@ import { WebSocketTransport } from '../../tui/src/app-server/websocket-transport
 import { DesktopAdapter } from './desktop.ts';
 import { readDesktopSession } from './desktop-session.ts';
 import type { DesktopAppId, DesktopTarget, DesktopCatalog } from '../src/workspaces/desktop.ts';
-import { readNativeDelivery } from './file-read.ts';
+import { NativeFileReadError, readNativeDelivery, readNativeSource } from './file-read.ts';
+
+import { deriveDocument } from './documents/operation.ts';
+import type { DocumentRequest, DocumentResult } from '../shared/documents.ts';
 
 export interface LocalHostConfig {
   /** Operator attests native runtime and Host share the same filesystem namespace. */
@@ -26,6 +30,7 @@ export interface LocalHostConfig {
 }
 type Registration = { id: string; location: string; displayName: string };
 export class LocalWorkspaceHost implements ProductHostWorkspaces {
+  private documentReads = new Set<AbortController>();
   private fileReads = new Set<AbortController>();
   private closed = false;
   private readonly authorityId = randomUUID();
@@ -55,7 +60,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     const previous = new Set(this.registrations.map(row => row.location));
     this.registrations = rows;
     if (previous.size !== new Set(rows.map(row => row.location)).size || rows.some(row => !previous.has(row.location))) {
-      for (const read of this.fileReads) read.abort();
+      for (const read of [...this.fileReads, ...this.documentReads]) read.abort();
     }
   }
   private registered(id: string) {
@@ -82,7 +87,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       throw new WorkspaceHostError('Workspace Host authority replaced', 'authority_replaced');
     }
   }
-  close() { this.closed = true; for (const read of this.fileReads) read.abort(); }
+  close() { this.closed = true; for (const read of [...this.fileReads, ...this.documentReads]) read.abort(); }
   /** Only currently registered Workspaces authorize bytes. Configured picker
    * locations alone authorize neither an initial nor a historical file read. */
   async readDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, signal?: AbortSignal): Promise<import('../src/workspaces/host.ts').DeliveryBytes> {
@@ -95,6 +100,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     if (this.fileReads.size >= 2) throw new Error('Session file read capacity reached');
     const operation = new AbortController();
     this.fileReads.add(operation);
+    let settled = true;
     const abort = () => operation.abort();
     signal?.addEventListener('abort', abort, { once: true });
     try {
@@ -107,7 +113,53 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       // Recheck root availability after asynchronous native work too.
       for (const row of this.registrations) this.cwd(row.location);
       return bytes;
-    } finally { signal?.removeEventListener('abort', abort); this.fileReads.delete(operation); }
+    } catch (cause) {
+      if (cause instanceof WorkspaceHostError && cause.kind === 'file_settlement_unknown') settled = false;
+      throw cause;
+    } finally { signal?.removeEventListener('abort', abort); if (settled) this.fileReads.delete(operation); }
+  }
+  async previewDocument(scope: WorkspaceAuthorityScope, request: DocumentRequest, signal?: AbortSignal): Promise<DocumentResult> {
+    this.mutationScope(scope);
+    if (!request || !['docx', 'pptx', 'xlsx'].includes(request.extension) || !/^[a-f0-9]{64}$/.test(request.digest)
+      || Object.keys(request).some(key => !['target', 'source', 'extension', 'digest'].includes(key))
+      || !request.target || typeof request.target.session_id !== 'string' || typeof request.target.attachment_id !== 'string'
+      || !request.source || !['session_file', 'artifact'].includes(request.source.kind)) throw new Error('Invalid document coordinates');
+    const source = request.source;
+    if (source.kind === 'artifact') {
+      if (typeof source.artifact_id !== 'string' || source.artifact_id.length > 256
+        || Object.keys(source).some(key => !['kind', 'artifact_id'].includes(key))) throw new Error('Invalid document coordinates');
+    } else if (typeof source.message_id !== 'string' || source.message_id.length > 256 || !Number.isInteger(source.delivery_index)
+      || source.delivery_index < 0 || source.delivery_index > 7
+      || Object.keys(source).some(key => !['kind', 'message_id', 'delivery_index'].includes(key))) throw new Error('Invalid document coordinates');
+    if (!this.config.productHostToken) throw new Error('preview_unavailable');
+    if (this.documentReads.size) throw new Error('capacity');
+    const operation = new AbortController(); this.documentReads.add(operation);
+    let settled = true;
+    const abort = () => operation.abort(); signal?.addEventListener('abort', abort, { once: true });
+    try {
+      signal?.throwIfAborted();
+      return await deriveDocument(request, async () => {
+        this.mutationScope(scope); operation.signal.throwIfAborted();
+        if (source.kind === 'session_file') return this.readDelivery(scope, { target: request.target, message_id: source.message_id, delivery_index: source.delivery_index }, operation.signal);
+        const result = await readNativeSource(this.config.endpoint, this.config.productHostToken!, request.target, source, [], operation.signal);
+        this.mutationScope(scope); operation.signal.throwIfAborted(); return result;
+      }, operation.signal);
+    } catch (cause) {
+      if (cause instanceof OfficeSettlementError) {
+        settled = false;
+        throw new WorkspaceHostError('converter_unavailable', 'converter_settlement_unknown');
+      }
+      if (cause instanceof WorkspaceHostError && cause.kind === 'file_settlement_unknown') {
+        settled = false;
+        throw cause;
+      }
+      if (cause instanceof NativeFileReadError && cause.error.data?.kind === 'session_file_read') {
+        const reason = cause.error.data.reason;
+        throw new Error(({ missing: 'source_missing', unauthorized: 'authorization_revoked', unavailable: 'source_unavailable',
+          not_regular: 'source_unavailable', replaced: 'source_changed', too_large: 'too_large', capacity: 'capacity', read_failed: 'failure' } as const)[reason]);
+      }
+      throw cause;
+    } finally { signal?.removeEventListener('abort', abort); if (settled) this.documentReads.delete(operation); }
   }
   async desktopCatalog(scope: WorkspaceAuthorityScope, refresh = false): Promise<DesktopCatalog> {
     this.mutationScope(scope);

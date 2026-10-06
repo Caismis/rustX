@@ -6,7 +6,7 @@ use super::{
 use crate::durable::reading::{
     ConversationReadCut, ConversationTurn, ConversationTurnId, ConversationTurnPage,
     ConversationWindowAt, DurableConversationWindow, InheritedTurnOutcome, TURN_PAGE_MAX,
-    TURN_PROMPT_PREVIEW_MAX, TURN_RESPONSE_PREVIEW_MAX, TurnReadingProvenance,
+    TURN_PROMPT_PREVIEW_MAX, TURN_RESPONSE_PREVIEW_MAX, TurnExecution, TurnReadingProvenance,
 };
 use crate::runtime::identity::{AttemptId, ConversationId, MessageId};
 
@@ -24,18 +24,6 @@ pub(super) fn cut(
         transcript: nonnegative(transcript, "read transcript")?,
         mutation_revision: nonnegative(mutation_revision, "read mutation")?,
     })
-}
-
-fn require_cut(
-    actual: &ConversationReadCut,
-    expected: Option<&ConversationReadCut>,
-) -> Result<(), ConversationStoreError> {
-    if expected.is_some_and(|expected| !expected.reconstructible_from(actual)) {
-        return Err(ConversationStoreError::InvalidReference(
-            "stale conversation read cut; reload the turn outline".into(),
-        ));
-    }
-    Ok(())
 }
 
 // Bootstrap order is immutable native provenance order. Local Attempt starts
@@ -244,16 +232,13 @@ fn inherited_previews(
 pub(super) fn turns(
     connection: &Connection,
     conversation: &ConversationId,
-    expected: Option<&ConversationReadCut>,
     offset: usize,
     limit: usize,
 ) -> Result<ConversationTurnPage, ConversationStoreError> {
     if limit == 0 || limit > TURN_PAGE_MAX {
         return Err(storage("turn page limit must be between 1 and 64"));
     }
-    let actual = cut(connection, conversation)?;
-    require_cut(&actual, expected)?;
-    let cut = expected.cloned().unwrap_or(actual);
+    let cut = cut(connection, conversation)?;
     let total: usize = connection
         .query_row(
             &format!("{OWNERS}SELECT COUNT(*) FROM owners"),
@@ -316,74 +301,14 @@ pub(super) fn window(
             "conversation window limit must be between 1 and 64",
         ));
     }
-    let actual = cut(connection, conversation)?;
-    let expected = match at {
-        ConversationWindowAt::Latest => None,
-        ConversationWindowAt::Older { cut, .. } => cut.as_ref(),
-        ConversationWindowAt::Newer { cut, .. } | ConversationWindowAt::Turn { cut, .. } => {
-            Some(cut)
-        }
-    };
-    require_cut(&actual, expected)?;
-    let cut = expected.cloned().unwrap_or(actual);
-    let mut target = None;
-    let mut target_cursor = None;
-    let before = match at {
-        ConversationWindowAt::Latest => None,
-        ConversationWindowAt::Older { before, .. } => Some(*before),
-        ConversationWindowAt::Newer { after, .. } => {
-            let last: Option<i64> = connection.query_row(
-                "SELECT MAX(position) FROM (SELECT position FROM transcript_order WHERE position>?1 AND position<=?3 ORDER BY position LIMIT ?2)",
-                params![seq_to_i64(after.get())?,limit,seq_to_i64(cut.transcript)?], |row| row.get(0),
-            ).map_err(|error| storage(error.to_string()))?;
-            Some(crate::durable::TranscriptCursor::new(
-                last.map_or(after.get(), |last| {
-                    u64::try_from(last).expect("nonnegative transcript")
-                }) + 1,
-            ))
-        }
-        ConversationWindowAt::Turn { id, .. } => {
-            let inherited: Option<Option<String>> = connection.query_row(
-                &format!("{OWNERS}SELECT inherited FROM owners WHERE conversation=?2 AND attempt=?3 LIMIT 1"),
-                params![seq_to_i64(cut.journal)?,id.conversation_id.as_str(),id.attempt_id.as_str()], |row| row.get(0),
-            ).optional().map_err(|error| storage(error.to_string()))?;
-            let inherited = inherited.ok_or_else(|| {
-                ConversationStoreError::InvalidReference(
-                    "turn is absent from this Conversation".into(),
-                )
-            })?;
-            let cursor =
-                location(connection, id, inherited.as_deref(), &cut)?.ok_or_else(|| {
-                    ConversationStoreError::InvalidReference(
-                        "turn has no published transcript location yet".into(),
-                    )
-                })?;
-            target = Some(id.clone());
-            target_cursor = Some(crate::durable::TranscriptCursor::new(cursor));
-            // Read forward from the exact target, never the intervening prefix.
-            let last: i64 = connection.query_row(
-                "SELECT MAX(position) FROM (SELECT position FROM transcript_order WHERE position>=?1 AND position<=?3 ORDER BY position LIMIT ?2)",
-                params![seq_to_i64(cursor)?,limit,seq_to_i64(cut.transcript)?], |row| row.get(0),
-            ).map_err(|error| storage(error.to_string()))?;
-            Some(crate::durable::TranscriptCursor::new(
-                nonnegative(last, "target window")? + 1,
-            ))
-        }
-    };
+    let cut = cut(connection, conversation)?;
     let upper = crate::durable::TranscriptCursor::new(cut.transcript + 1);
-    let mut page = load_transcript_page(
-        connection,
-        Some(before.map_or(upper, |before| before.min(upper))),
-        limit,
-    )?;
+    let before = match at {
+        ConversationWindowAt::Latest => upper,
+        ConversationWindowAt::Older { before } => (*before).min(upper),
+    };
+    let mut page = load_transcript_page(connection, Some(before), limit)?;
     bound_tool_results(connection, &mut page, &cut)?;
-    if let ConversationWindowAt::Newer { after, .. } = at {
-        page.entries
-            .retain(|entry| entry.cursor.get() > after.get());
-    }
-    if let Some(cursor) = target_cursor {
-        page.entries.retain(|entry| entry.cursor >= cursor);
-    }
     if let Some(first) = page.entries.first() {
         let older: bool = connection
             .query_row(
@@ -394,36 +319,7 @@ pub(super) fn window(
             .map_err(|error| storage(error.to_string()))?;
         page.next_cursor = older.then_some(first.cursor);
     }
-    let newer_cursor = newer_cursor(
-        connection,
-        &cut,
-        page.entries.last().map(|entry| entry.cursor),
-    )?;
-    Ok(DurableConversationWindow {
-        cut,
-        page,
-        newer_cursor,
-        target,
-        target_cursor,
-    })
-}
-
-fn newer_cursor(
-    connection: &Connection,
-    cut: &ConversationReadCut,
-    last: Option<crate::durable::TranscriptCursor>,
-) -> Result<Option<crate::durable::TranscriptCursor>, ConversationStoreError> {
-    let Some(cursor) = last else {
-        return Ok(None);
-    };
-    let newer: bool = connection
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM transcript_order WHERE position>?1 AND position<=?2)",
-            params![seq_to_i64(cursor.get())?, seq_to_i64(cut.transcript)?],
-            |row| row.get(0),
-        )
-        .map_err(|error| storage(error.to_string()))?;
-    Ok(newer.then_some(cursor))
+    Ok(DurableConversationWindow { cut, page })
 }
 
 // Tool result links may have completed after C; their canonical positions
@@ -447,6 +343,91 @@ fn bound_tool_results(
         }
     }
     Ok(())
+}
+
+/// One local Attempt's additive execution totals through the lineage cut,
+/// folded exactly as whole-conversation statistics and occupancy fold them.
+fn turn_execution(
+    connection: &Connection,
+    conversation: &ConversationId,
+    attempt: &AttemptId,
+    through: u64,
+) -> Result<TurnExecution, ConversationStoreError> {
+    use crate::events::types::{RuntimeEvent as E, RuntimeEventEnvelope};
+    use crate::model::finish::ModelFinishReason;
+    let mut execution = TurnExecution::default();
+    let mut activity = crate::durable::response::timing::ActivityFold::default();
+    // The newest occupancy boundary: a request and its reported usage, or a
+    // compaction that invalidates the previous reading.
+    let mut boundary: Option<(
+        crate::runtime::identity::RequestId,
+        Option<crate::model::types::ModelUsage>,
+    )> = None;
+    let mut closing = false;
+    let mut statement = connection.prepare("SELECT event_json FROM events INDEXED BY events_attempt_idx WHERE attempt_id=?1 AND sequence<=?2 AND json_extract(event_json,'$.event.type') IN ('turn_started','model_request_started','model_request_completed','model_request_failed','tool_execution_started','tool_execution_completed','tool_execution_failed','compaction_started','compaction_completed','assistant_message_committed','attempt_completed') ORDER BY sequence").map_err(|error| storage(error.to_string()))?;
+    let rows = statement
+        .query_map(params![attempt.as_str(), seq_to_i64(through)?], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|error| storage(error.to_string()))?;
+    for json in rows {
+        let event: RuntimeEventEnvelope = super::decode(
+            &json.map_err(|error| storage(error.to_string()))?,
+            "turn execution fact",
+        )?;
+        match event.event {
+            E::TurnStarted => execution.steps += 1,
+            E::ModelRequestStarted { request_id, .. } => {
+                execution.model_requests += 1;
+                boundary = Some((request_id, None));
+            }
+            E::ModelRequestCompleted {
+                request_id,
+                usage,
+                generation,
+                ..
+            }
+            | E::ModelRequestFailed {
+                request_id,
+                usage,
+                generation,
+                ..
+            } => {
+                activity.request(generation.as_ref(), usage.as_ref());
+                if let Some(usage) = usage {
+                    execution.requests_with_usage += 1;
+                    crate::durable::response::add_usage(&mut execution.reported_usage, &usage);
+                    if let Some((current, reading)) = &mut boundary
+                        && *current == request_id
+                    {
+                        *reading = Some(usage);
+                    }
+                }
+            }
+            E::ToolExecutionStarted { tool_call_id, .. } => {
+                activity.tool_started(attempt.clone(), tool_call_id, event.timestamp);
+            }
+            E::ToolExecutionCompleted { tool_call_id, .. }
+            | E::ToolExecutionFailed { tool_call_id, .. } => {
+                activity.tool_settled(attempt.clone(), tool_call_id, event.timestamp);
+            }
+            E::CompactionStarted | E::CompactionCompleted { .. } => boundary = None,
+            E::AssistantMessageCommitted { .. } => closing = true,
+            E::AttemptCompleted {
+                finish_reason: ModelFinishReason::Stop | ModelFinishReason::Refusal,
+                ..
+            } => execution.completed_response = closing,
+            _ => {}
+        }
+    }
+    activity.record(&mut execution);
+    if let Some((request, Some(usage))) = boundary {
+        execution.occupancy = crate::context::occupancy::measure(
+            &usage,
+            &super::load_request_snapshot(connection, conversation, &request)?,
+        )?;
+    }
+    Ok(execution)
 }
 
 /// Lineage carries immutable summaries and member references, never executable facts.
@@ -497,6 +478,7 @@ pub(super) fn lineage_turns(
             outcome: InheritedTurnOutcome::IncompleteAtCut,
             started_at: Some(start.timestamp),
             ended_at: None,
+            execution: Some(turn_execution(connection, conversation, &id, through)?),
         };
         let mut facts = connection.prepare("SELECT event_json FROM events INDEXED BY events_attempt_idx WHERE attempt_id=?1 AND sequence<=?2 AND json_extract(event_json,'$.event.type') IN ('assistant_message_committed','attempt_completed','attempt_cancelled','attempt_failed','attempt_timed_out','attempt_limit_exceeded') ORDER BY sequence").map_err(|error| storage(error.to_string()))?;
         let events = facts

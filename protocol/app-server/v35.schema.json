@@ -283,16 +283,6 @@
                 "target": {
                   "$ref": "#/$defs/AttachmentTarget"
                 },
-                "cut": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/$defs/ConversationReadCut"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
                 "offset": {
                   "description": "Absent selects the newest native outline page.",
                   "type": [
@@ -1912,7 +1902,7 @@
       "type": "string"
     },
     "ConversationWindowAt": {
-      "description": "A single transcript read vocabulary; every selector replaces a finite window.",
+      "description": "One contiguous transcript read vocabulary: the newest page, or the page\nbefore an already-read boundary, each at the current cut.",
       "oneOf": [
         {
           "type": "object",
@@ -1933,16 +1923,6 @@
             "before": {
               "$ref": "#/$defs/TranscriptCursor"
             },
-            "cut": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/ConversationReadCut"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "type": {
               "type": "string",
               "const": "older"
@@ -1953,48 +1933,6 @@
             "type",
             "before"
           ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "after": {
-              "$ref": "#/$defs/TranscriptCursor"
-            },
-            "cut": {
-              "$ref": "#/$defs/ConversationReadCut"
-            },
-            "type": {
-              "type": "string",
-              "const": "newer"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "after",
-            "cut"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "id": {
-              "$ref": "#/$defs/ConversationTurnId"
-            },
-            "cut": {
-              "$ref": "#/$defs/ConversationReadCut"
-            },
-            "type": {
-              "type": "string",
-              "const": "turn"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "id",
-            "cut"
-          ]
         }
       ]
     },
@@ -2002,56 +1940,6 @@
       "description": "A durable transcript cursor.\n\nThis cursor belongs to the transcript ordering spine. It is deliberately\ndistinct from the Runtime Client observation cursor, the Event Journal\nsequence, and the inbound mailbox sequence.",
       "type": "string",
       "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-    },
-    "ConversationReadCut": {
-      "description": "Frozen inclusive Journal/transcript upper bounds plus a semantic mutation epoch.",
-      "type": "object",
-      "properties": {
-        "conversation_id": {
-          "$ref": "#/$defs/ConversationId"
-        },
-        "journal": {
-          "type": "string",
-          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-        },
-        "transcript": {
-          "type": "string",
-          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-        },
-        "mutation_revision": {
-          "description": "Edits/removals of mutable transcript bodies retire unreconstructible cuts.",
-          "type": "string",
-          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "conversation_id",
-        "journal",
-        "transcript",
-        "mutation_revision"
-      ]
-    },
-    "ConversationTurnId": {
-      "description": "Origin survives lineage copying; ordinal never participates in identity.",
-      "type": "object",
-      "properties": {
-        "conversation_id": {
-          "$ref": "#/$defs/ConversationId"
-        },
-        "attempt_id": {
-          "$ref": "#/$defs/AttemptId"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "conversation_id",
-        "attempt_id"
-      ]
-    },
-    "AttemptId": {
-      "description": "Identifies one attempt to execute an agent manifest.",
-      "type": "string"
     },
     "SessionModelConfig": {
       "description": "The authoritative mutable model configuration of one conversation\nsession.\n\nThis one type is the session's state, the `model_get` result, and the\n`model_set` parameter: an update is a whole-state replacement, never an\nambiguous JSON patch.",
@@ -2746,6 +2634,10 @@
         "attempt_id",
         "invocation"
       ]
+    },
+    "AttemptId": {
+      "description": "Identifies one attempt to execute an agent manifest.",
+      "type": "string"
     },
     "WorkflowDefinitionPath": {
       "description": "Static source location; never a concrete execution authority.",
@@ -7680,13 +7572,48 @@
         "model": {
           "description": "Provider-facing historical model, never substituted from current config.",
           "type": "string"
+        },
+        "breakdown": {
+          "description": "Heuristic composition of the same request's input.",
+          "$ref": "#/$defs/ContextBreakdown"
         }
       },
       "additionalProperties": false,
       "required": [
         "input_tokens",
         "context_window_tokens",
-        "model"
+        "model",
+        "breakdown"
+      ]
+    },
+    "ContextBreakdown": {
+      "description": "Where one request's measured input went, priced by the provider-neutral\n`ceil(bytes / 4)` estimate. Only the System prompt and Tool definitions are\nestimated; messages are the measured remainder, so the parts sum to the\nprovider's reading unless the estimates alone exceed it.",
+      "type": "object",
+      "properties": {
+        "system_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "tool_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "message_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "system_tokens",
+        "tool_tokens",
+        "message_tokens"
       ]
     },
     "RuntimeClientCompactionView": {
@@ -11044,7 +10971,7 @@
       "additionalProperties": false
     },
     "ConversationStatistics": {
-      "description": "Whole-conversation execution totals, independent of any transcript window.\nForked Conversations start a fresh execution epoch, as native lineage does.",
+      "description": "Whole-conversation execution totals, independent of any transcript window.\nA lineage child includes its inherited turns' recorded execution, as a\n`DeepSeek` Harness fork folds its copied prefix; it owns none of it.",
       "type": "object",
       "properties": {
         "turns": {
@@ -11068,10 +10995,10 @@
           ]
         },
         "timing": {
-          "description": "Complete measured request timing, separate from usage coverage.",
+          "description": "Summed measured work time, separate from usage coverage.",
           "anyOf": [
             {
-              "$ref": "#/$defs/CompletedResponseTiming"
+              "$ref": "#/$defs/ConversationTiming"
             },
             {
               "type": "null"
@@ -11135,12 +11062,12 @@
         "started_at"
       ]
     },
-    "CompletedResponseTiming": {
-      "description": "Historical product timing derived from native lifecycle and generation evidence.\nMissing evidence stays absent; these are not destination execution facts.",
+    "ConversationTiming": {
+      "description": "Whole-conversation work time. Unlike a completed response's exact\naggregate, each figure sums only the requests or Tool executions that\nmeasured it, and is absent until the first one did.",
       "type": "object",
       "properties": {
-        "total_duration_ms": {
-          "description": "Authoritative successful Attempt completion minus its start timestamp.",
+        "model_ms": {
+          "description": "Summed dispatch-to-provider-terminal time of measured requests.",
           "type": [
             "integer",
             "null"
@@ -11149,8 +11076,8 @@
           "minimum": 0,
           "maximum": 9007199254740991
         },
-        "ttft_ms": {
-          "description": "First actual request's adapter-dispatch-to-first-output duration.",
+        "tool_ms": {
+          "description": "Summed start-to-terminal time of settled foreground Tool executions.",
           "type": [
             "integer",
             "null"
@@ -11159,8 +11086,8 @@
           "minimum": 0,
           "maximum": 9007199254740991
         },
-        "generation_ms": {
-          "description": "Sum of output-producing requests' first-output-to-provider-terminal spans.",
+        "mean_ttft_ms": {
+          "description": "Mean dispatch-to-first-output time over requests that produced output.",
           "type": [
             "integer",
             "null"
@@ -11170,7 +11097,7 @@
           "maximum": 9007199254740991
         },
         "output_tokens_per_second": {
-          "description": "Fully covered output usage divided by fully covered positive generation work.",
+          "description": "Output tokens over decode time, summed over requests that report\nusage and a positive decode span.",
           "type": [
             "number",
             "null"
@@ -11375,6 +11302,13 @@
               "type": "null"
             }
           ]
+        },
+        "models": {
+          "description": "Distinct provider-facing models of the Attempt's actual requests.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "additionalProperties": false,
@@ -11406,6 +11340,51 @@
         "attempt_id",
         "closing_message_id"
       ]
+    },
+    "CompletedResponseTiming": {
+      "description": "Historical product timing derived from native lifecycle and generation evidence.\nMissing evidence stays absent; these are not destination execution facts.",
+      "type": "object",
+      "properties": {
+        "total_duration_ms": {
+          "description": "Authoritative successful Attempt completion minus its start timestamp.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "ttft_ms": {
+          "description": "First actual request's adapter-dispatch-to-first-output duration.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "generation_ms": {
+          "description": "Sum of output-producing requests' first-output-to-provider-terminal spans.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "output_tokens_per_second": {
+          "description": "Fully covered output usage divided by fully covered positive generation work.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "additionalProperties": false
     },
     "ForegroundToolExecution": {
       "description": "The foreground tool execution read model of one logical tool call.\n\nKeyed by the canonical logical tool-call identity, so parallel physical\ncompletion timing can never corrupt logical identities or canonical\nordering. Native, MCP, and Python foreground executions converge through\nthis one shape.",
@@ -13250,46 +13229,12 @@
     "ConversationWindow": {
       "type": "object",
       "properties": {
-        "cut": {
-          "$ref": "#/$defs/ConversationReadCut"
-        },
         "page": {
           "$ref": "#/$defs/RuntimeClientTranscriptPage"
-        },
-        "newer_cursor": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RuntimeClientTranscriptCursor"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "target": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ConversationTurnId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "target_cursor": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RuntimeClientTranscriptCursor"
-            },
-            {
-              "type": "null"
-            }
-          ]
         }
       },
       "additionalProperties": false,
       "required": [
-        "cut",
         "page"
       ]
     },
@@ -13325,6 +13270,35 @@
         "total",
         "offset",
         "turns"
+      ]
+    },
+    "ConversationReadCut": {
+      "description": "Inclusive Journal/transcript bounds a read was captured at, plus its semantic mutation epoch.",
+      "type": "object",
+      "properties": {
+        "conversation_id": {
+          "$ref": "#/$defs/ConversationId"
+        },
+        "journal": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "transcript": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "mutation_revision": {
+          "description": "Advances on every edit/removal of a mutable pending transcript body.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "conversation_id",
+        "journal",
+        "transcript",
+        "mutation_revision"
       ]
     },
     "ConversationTurn": {
@@ -13367,6 +13341,23 @@
         "ordinal",
         "prompt",
         "response"
+      ]
+    },
+    "ConversationTurnId": {
+      "description": "Origin survives lineage copying; ordinal never participates in identity.",
+      "type": "object",
+      "properties": {
+        "conversation_id": {
+          "$ref": "#/$defs/ConversationId"
+        },
+        "attempt_id": {
+          "$ref": "#/$defs/AttemptId"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "conversation_id",
+        "attempt_id"
       ]
     },
     "GoalView": {
@@ -14638,9 +14629,6 @@
               "type": "null"
             }
           ]
-        },
-        "eligibility": {
-          "$ref": "#/$defs/AdoptionEligibility"
         }
       },
       "required": [
@@ -14648,8 +14636,7 @@
         "sources",
         "version",
         "desired",
-        "units",
-        "eligibility"
+        "units"
       ]
     },
     "UnitApplication": {
@@ -14753,47 +14740,6 @@
         "impact"
       ]
     },
-    "AdoptionEligibility": {
-      "description": "Advisory only; adoption always revalidates the native admission gate.",
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "status": {
-              "type": "string",
-              "const": "eligible"
-            }
-          },
-          "required": [
-            "status"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "status": {
-              "type": "string",
-              "const": "busy"
-            }
-          },
-          "required": [
-            "status"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "status": {
-              "type": "string",
-              "const": "unavailable"
-            }
-          },
-          "required": [
-            "status"
-          ]
-        }
-      ]
-    },
     "RuntimeClientSnapshot": {
       "description": "The authoritative Runtime Client snapshot of one conversation runtime.\n\nEvery section is a deterministic projection of one authoritative\nruntime owner. The shape belongs to the Runtime Client protocol: internal\nsnapshot types are projected into these external DTOs, never exposed\ndirectly.",
       "type": "object",
@@ -14827,6 +14773,10 @@
         "effective_approval_mode": {
           "description": "The authoritative mode used by the current attempt boundary.",
           "$ref": "#/$defs/ApprovalMode"
+        },
+        "configuration_adoption_eligibility": {
+          "description": "Whether this live runtime could adopt a prepared Session configuration\nnow. Runtime-domain advisory state published by the runtime with its\nadoption gate's idle rule over in-memory owners, and changed only by the\n`configuration_adoption_eligibility_changed` event; it describes no\ncandidate and is never configuration application state. `unavailable` until the runtime runs, after it stops, and for a\ndurable inspection projection. `session/adoptConfiguration` revalidates\nthe real gate at its commit boundary.",
+          "$ref": "#/$defs/AdoptionEligibility"
         },
         "durability_failure": {
           "description": "The runtime's durable-authority failure, when it has entered the\nexplicit degraded state. While set, no new durable admission/execution\nwork may begin.",
@@ -14982,6 +14932,7 @@
         "conversation_id",
         "shutting_down",
         "effective_approval_mode",
+        "configuration_adoption_eligibility",
         "messages",
         "transcript",
         "trace",
@@ -15500,6 +15451,47 @@
         "state",
         "path",
         "truncated"
+      ]
+    },
+    "AdoptionEligibility": {
+      "description": "Whether a live runtime could adopt a prepared configuration now.\n\nRuntime-domain advisory state, published by the runtime through its Runtime\nClient projection; it is never part of a `ConfigurationApplication`.\nAdoption always revalidates the native admission gate.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "eligible"
+            }
+          },
+          "required": [
+            "status"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "busy"
+            }
+          },
+          "required": [
+            "status"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "unavailable"
+            }
+          },
+          "required": [
+            "status"
+          ]
+        }
       ]
     },
     "RuntimeDurabilityFailure": {
@@ -20184,6 +20176,24 @@
             "type"
           ],
           "additionalProperties": false
+        },
+        {
+          "description": "The live runtime's configuration-adoption eligibility changed.\n\nPublished only on an actual change of the native derivation, never for\nordinary streaming. Advisory: `session/adoptConfiguration` revalidates\nthe real gate at its commit boundary.",
+          "type": "object",
+          "properties": {
+            "eligibility": {
+              "$ref": "#/$defs/AdoptionEligibility"
+            },
+            "type": {
+              "type": "string",
+              "const": "configuration_adoption_eligibility_changed"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "eligibility"
+          ]
         },
         {
           "description": "Bounded authoritative durable Goal view. Every emission follows a\ncommitted durable transition; there is no activation-only form.",

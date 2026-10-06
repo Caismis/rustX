@@ -37,17 +37,16 @@ it('collapse, rail expansion, Inspector and Settings appearance gestures emit no
   expect(server.requests.slice(baseline).every(row => row.request.method === 'configuration/sourcesRead')).toBe(true);
   expect(JSON.stringify(localStorage)).not.toMatch(/workspaceId|cwd|snapshot|interaction/);
 });
-it('the sidebar Extensions shortcut opens native settings and leaves the general settings entry available', async () => {
+it('Extensions remain reachable through Settings without a sidebar shortcut', async () => {
   await server.connect();
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost} />); });
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Extensions' })));
-  expect(screen.getByRole('heading', { name: 'User Settings' })).toBeTruthy();
-  expect(screen.getByRole('tab', { name: 'Extensions' }).getAttribute('aria-selected')).toBe('true');
-  expect(screen.getByRole('heading', { name: 'Extensions' })).toBeTruthy();
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Close Settings' })));
+  expect(screen.queryByRole('button', { name: 'Extensions' })).toBeNull();
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Settings' })));
   expect(screen.getByRole('tab', { name: 'General' }).getAttribute('aria-selected')).toBe('true');
+  await act(async () => fireEvent.click(screen.getByRole('tab', { name: 'Extensions' })));
+  expect(screen.getByRole('heading', { name: 'Extensions' })).toBeTruthy();
 });
+
 it('waiting interactions outrank running; queued input alone is not a waiting interaction', async () => {
   server.snapshots.get('A')!.attempt = { attempt_id: 'running', phase: { type: 'running' }, turn: 1 };
   server.snapshots.get('A')!.pending_interactions = [interaction('approval')];

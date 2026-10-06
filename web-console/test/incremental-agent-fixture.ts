@@ -1,4 +1,4 @@
-import type { RuntimeClientAgent } from '../../protocol/app-server/v34';
+import type { RuntimeClientAgent } from '../../protocol/app-server/v35';
 export const incrementalAgent = (activation_id = 'activation-1'): RuntimeClientAgent => ({
   agent_id: 'durable-child', parent_agent_id: 'parent', activation_id,
   current_activation: activation_id, child_conversation_id: 'child-conversation',

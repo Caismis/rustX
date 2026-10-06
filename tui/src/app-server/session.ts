@@ -374,7 +374,7 @@ export class AppServerSession {
   ): Promise<RuntimeClientTranscriptPage> {
     const page = await this.#client.call(
       "session/transcript",
-      { target: this.#target, at: beforeCursor ? { type: 'older', before: beforeCursor, cut: null } : { type: 'latest' }, limit },
+      { target: this.#target, at: beforeCursor ? { type: 'older', before: beforeCursor } : { type: 'latest' }, limit },
       "transcript_window",
     );
     return page.window.page;

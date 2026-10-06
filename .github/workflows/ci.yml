@@ -525,12 +525,12 @@ jobs:
       # this is not Finder/Terminal GUI smoke and does not duplicate browser E2E.
       - name: Desktop adapter and Host boundaries
         working-directory: web-console
-        run: pnpm exec vitest run test/desktop-host.test.ts
+        run: pnpm exec vitest run test/desktop-host.test.ts test/document-archive.test.ts test/document-integration.test.ts
 
   web-console:
     name: Full Web conformance
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -553,6 +553,28 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm typecheck
           pnpm test
+      - name: Install isolated document conversion runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap apparmor-profiles libreoffice-writer libreoffice-impress fonts-liberation
+          # Ubuntu restricts capabilities in unprivileged user namespaces.
+          # Load its packaged bwrap-specific profile, which grants setup
+          # capabilities to bwrap but denies them to its executed children.
+          # Keep system-wide restrictions and converter network isolation.
+          sudo apparmor_parser -r /usr/share/apparmor/extra-profiles/bwrap-userns-restrict
+          test "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)" = 1
+          # A transient user service owns each converter cgroup. No root payload.
+          sudo loginctl enable-linger "$USER"
+          sudo systemctl start "user@$(id -u).service"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
+      - name: Verify document sandbox namespace admission
+        run: >-
+          bwrap --unshare-all --unshare-user --disable-userns --die-with-parent --new-session
+          --cap-drop ALL --ro-bind /usr /usr --symlink usr/lib /lib
+          --symlink usr/lib64 /lib64 -- /usr/bin/true
+      - name: Verify aggregate Office resource admission
+        run: node web-console/scripts/check-office-sandbox.ts
       - name: Typecheck
         working-directory: web-console
         run: pnpm typecheck
@@ -583,8 +605,8 @@ jobs:
       - name: Prepare the existing provider emulator
         working-directory: test-support/fake-provider
         run: uv sync --frozen
-      - name: Build the real App Server and native Tool supervisors
-        run: cargo build --bins
+      - name: Build the real App Server, native Tool supervisors and Artifact fixture
+        run: cargo build --bins --example document_artifact_fixture --locked
       # `pnpm test:e2e` is `pnpm build && bash scripts/browser-tests.sh`: the one
       # production build of this job (Vite plus the artifact provenance check)
       # runs from checked-in source immediately before browser acceptance, so

@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v34';
+import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v35';
 import { AgentControls } from '../src/app/agent/AgentControls';
 import { ModelSelect } from '../src/presentation/agent/ModelSelect';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
@@ -18,11 +18,11 @@ const count = (method: string) => server.requests.filter(row => row.request.meth
 it('keeps initial model loading inside the popup and cached refresh out of the trigger layout', () => {
  const props = { current: 'exact/model', profile: 'brief', disabled: false, loading: true, load: () => {}, choose: () => {}, initialOpen: true };
  const { rerender } = render(<ModelSelect {...props} choices={[]} />);
- expect(screen.getByText('Loading models…').closest('[role="menu"]')).not.toBeNull();
+ expect(screen.getByText('Reading native models…').closest('[role="menu"]')).not.toBeNull();
  const trigger = screen.getByRole('button', { name: 'Model and reasoning' });
  expect(trigger.parentElement?.querySelector('[role="status"]')).toBeNull();
  rerender(<ModelSelect {...props} choices={[{ id: 'exact/model', profiles: [{ id: 'brief', label: 'brief' }] }]} />);
- expect(screen.queryByText('Loading models…')).toBeNull();
+ expect(screen.queryByText('Reading native models…')).toBeNull();
  expect(screen.getByRole('button', { name: 'Model and reasoning' })).toBe(trigger);
  expect(trigger.textContent).toContain('exact/model');
 });
@@ -52,7 +52,7 @@ function modelFixture() {
 }
 async function openModels() {
  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Model and reasoning' })));
- await waitFor(() => expect(screen.queryByText('Loading models…')).toBeNull());
+ await waitFor(() => expect(screen.queryByText('Reading native models…')).toBeNull());
 }
 it('does not dim the model trigger during a held catalog read', async () => {
  modelFixture(); await server.attached('A'); server.held.add('session/models'); render(<Control/>);
@@ -60,7 +60,7 @@ it('does not dim the model trigger during a held catalog read', async () => {
  fireEvent.click(trigger);
  await server.waitFor('session/models', 1);
  expect(trigger.disabled).toBe(false);
- expect(screen.getByText('Loading models…').closest('[role="menu"]')).not.toBeNull();
+ expect(screen.getByText('Reading native models…').closest('[role="menu"]')).not.toBeNull();
  expect(count('session/setModel')).toBe(0);
 });
 it('model/profile menu advertises only exact native values and acknowledgement alone never changes selection', async () => {

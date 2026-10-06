@@ -66,6 +66,23 @@ function streamingOf(state: PresentationState): StreamingMessage | undefined {
 const initial = () => replaceFromSnapshot(snapshot(), runtimeCursor(0));
 
 describe("presentation projection", () => {
+  it("carries the runtime's published adoption eligibility from the snapshot and its change event alone", () => {
+    let state = replaceFromSnapshot(
+      snapshot({ configuration_adoption_eligibility: { status: "busy" } }),
+      runtimeCursor(1),
+    );
+    assert.equal(state.adoptionEligibility, "busy");
+    // Ordinary runtime traffic is not an eligibility fact.
+    state = reduce(state, { cursor: runtimeCursor(2), event: { type: "trace_changed" } });
+    assert.equal(state.adoptionEligibility, "busy");
+    state = reduce(state, {
+      cursor: runtimeCursor(3),
+      event: { type: "configuration_adoption_eligibility_changed", eligibility: { status: "eligible" } },
+    });
+    assert.equal(state.adoptionEligibility, "eligible");
+    assert.equal(state.cursor, "3");
+  });
+
   it("derives the initial state from an authoritative snapshot", () => {
     const state = replaceFromSnapshot(
       snapshot({

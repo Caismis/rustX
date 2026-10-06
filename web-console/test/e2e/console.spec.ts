@@ -120,7 +120,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await fixture.control('observations/await?kind=response_completed&count=4&timeoutMs=30000');
     await expect(page.getByText('Approval completed.', { exact: true })).toBeVisible();
     await send('Questionnaire please'); await expect(page.getByRole('region', { name: 'Questionnaire' })).toBeVisible();
-    await reload(); await page.getByRole('radio', { name: 'Keep native', exact: true }).click(); await page.getByRole('button', { name: 'Submit answers' }).click();
+    await reload(); await page.getByRole('radio', { name: 'Keep native', exact: true }).click(); await page.getByRole('button', { name: 'Submit', exact: true }).click();
     await expect(page.getByText('Questionnaire completed.', { exact: true })).toBeVisible();
     await send('Publish while detached'); await fixture.gate('publish-question');
     await connectionAction(page, 'Disconnect');
@@ -135,7 +135,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await connectionAction(page, 'Reconnect');
     await expect(page.getByLabel('Transport token')).toHaveCount(0); await showInspector(page);
     await expect(page.getByRole('region', { name: 'Questionnaire' })).toBeVisible();
-    await page.getByRole('radio', { name: 'Keep native', exact: true }).click(); await page.getByRole('button', { name: 'Submit answers' }).click();
+    await page.getByRole('radio', { name: 'Keep native', exact: true }).click(); await page.getByRole('button', { name: 'Submit', exact: true }).click();
     await expect(page.getByText('Detached question completed.', { exact: true })).toBeVisible();
     await expect(page.getByLabel('Native diagnostic JSON')).toContainText('console-model');
     fixture.writeSettings('second-model');

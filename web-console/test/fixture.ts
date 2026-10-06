@@ -1,6 +1,6 @@
 import type { ProductHostWorkspaces } from '../src/workspaces/host';
-import type { TraceDetail } from '../../protocol/app-server/v34';
-import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v34';
+import type { TraceDetail } from '../../protocol/app-server/v35';
+import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v35';
 import { fixtures } from '../../protocol/app-server/fixtures';
 import { cfg3Source } from './cfg3-data';
 import { AppServerClient, RpcFailure, sameTarget, type Socket } from '../src/client/app-server';
@@ -12,7 +12,7 @@ if (!rustHello || !('result' in rustHello) || rustHello.result?.type !== 'initia
 export const capabilities: ServerCapabilities = rustHello.result.capabilities;
 export function snapshot(id = 'A'): RuntimeClientSnapshot {
   return {
-    settings_evidence: 'live_session',
+    settings_evidence: 'live_session', configuration_adoption_eligibility: { status: 'eligible' },
     conversation_id: `conversation-${id}`, shutting_down: false, effective_approval_mode: 'policy',
     workflows: { revision: '0', runs: [], omitted_runs: 0 }, messages: [], transcript: { entries: [] }, trace_updates: [], trace: { records: [] },
     inbound: {}, capabilities: { configured_tools: [], revision: '0' }, pending_interactions: [],
@@ -75,12 +75,12 @@ export class Server {
   held = new Set<Request['method']>();
   requests: { request: Request; socket: FakeSocket }[] = [];
   private waiters: { method: Request['method']; count: number; resolve: (request: Request) => void }[] = [];
-  version = 34;
+  version = 35;
   /** Record details this scenario staged, keyed by Trace record identity. */
   readonly traceDetails = new Map<string, TraceDetail>();
   capabilities = capabilities;
   socketFactory = (_url: string, protocols: string[]) => {
-    if (protocols[0] !== 'rustx.app-server.v34' || protocols[1] !== `rustx-token.${TOKEN}`) throw new Error('Wrong browser admission protocol');
+    if (protocols[0] !== 'rustx.app-server.v35' || protocols[1] !== `rustx-token.${TOKEN}`) throw new Error('Wrong browser admission protocol');
     const socket = new FakeSocket((request, source) => this.receive(request, source), () => { this.targets.get(socket)?.clear(); this.reservations.get(socket)?.clear(); }); this.sockets.push(socket);
     queueMicrotask(() => socket.open()); return socket;
   };
@@ -233,4 +233,4 @@ export class Server {
   }
 }
 
-export function readingWindow(page: import('../../protocol/app-server/v34').RuntimeClientTranscriptPage, conversation_id = 'conv-A') { return { page, cut: { conversation_id, journal: '0', transcript: '0', mutation_revision: '0' }, newer_cursor: null, target: null, target_cursor: null }; }
+export function readingWindow(page: import('../../protocol/app-server/v35').RuntimeClientTranscriptPage) { return { page }; }

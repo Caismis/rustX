@@ -20,7 +20,11 @@ pub enum AdoptionError {
     Failed { diagnostic: String },
 }
 
-/// Advisory only; adoption always revalidates the native admission gate.
+/// Whether a live runtime could adopt a prepared configuration now.
+///
+/// Runtime-domain advisory state, published by the runtime through its Runtime
+/// Client projection; it is never part of a `ConfigurationApplication`.
+/// Adoption always revalidates the native admission gate.
 #[derive(
     Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]
@@ -104,7 +108,6 @@ pub struct ConfigurationApplication {
     pub desired: ApplicationIdentity,
     pub units: BTreeMap<ApplyUnit, UnitApplication>,
     pub candidate: Option<AvailableConfiguration>,
-    pub eligibility: AdoptionEligibility,
 }
 
 #[derive(
@@ -470,7 +473,6 @@ impl ApplicationState {
                 version: self.version,
                 desired: identity.clone(),
                 candidate: None,
-                eligibility: AdoptionEligibility::Unavailable,
                 units: BTreeMap::from([
                     (ApplyUnit::ExecutionPolicy, UnitApplication::Preparing),
                     (ApplyUnit::Capabilities, UnitApplication::Preparing),

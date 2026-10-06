@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { TurnProcessView, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v34';
+import type { TurnProcessView, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v35';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { turnProcesses } from '../src/bindings/turn-process';
 import { snapshot } from './fixture';
@@ -18,6 +18,10 @@ it('folds only native completed membership across steering and interleaved Attem
   for (const text of ['Answer final', 'Answer live', 'steering']) expect(screen.getByText(text).closest('[hidden]')).toBeNull();
   fireEvent.click(folded);
   expect(screen.getByText('Answer first').closest('[hidden]')).toBeNull();
+  // A settled Attempt's reasoning sits in its Harness step group until opened.
+  const steps = screen.getAllByRole('button', { name: 'Analysis completed' });
+  expect(steps).toHaveLength(3);
+  for (const step of steps) fireEvent.click(step);
   for (const disclosure of screen.getAllByRole('button', { name: /^Reasoning/ })) fireEvent.click(disclosure);
   expect(ui.container.querySelectorAll('[data-markdown-variant="compact"]').length).toBeGreaterThanOrEqual(3);
   expect(screen.getByText('Answer final').closest('[data-markdown-variant]')?.getAttribute('data-markdown-variant')).toBe('normal');

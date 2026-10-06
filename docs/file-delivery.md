@@ -72,7 +72,7 @@ Attempt, or model request.
 
 ## Authorized read and containment
 
-App Server v34 has no public `session/fileRead` Method. An ordinary authenticated
+App Server v35 has no public `session/fileRead` Method. An ordinary authenticated
 App Server connection cannot enter the file-read seam, even with the exact
 attachment, canonical Tool message ID, delivery index, Session cwd, and reference.
 Initialize client names are metadata and have no authorization role.
@@ -88,12 +88,20 @@ unavailable. Native startup rejects reuse of the ordinary credential, symlink or
 non-regular secret files, and files readable by other users.
 
 Only `/product-host/file-read` WebSocket admission accepts the private
-`rustx.product-host.file-read.v1` subprotocol plus `rustx-product-host.<secret>`.
+`rustx.product-host.file-read.v2` subprotocol plus `rustx-product-host.<secret>`.
 The response selects only the public subprotocol name, never the secret. Ordinary
 transport credentials cannot authenticate this lane, and this credential cannot
 authenticate the ordinary App Server lane. Handshake admission creates a native
 cancellation authority; no ordinary JSON field can manufacture it. The socket
 accepts one bounded internal read payload and creates no attachment or Agent.
+On cancellation it revokes publication immediately, then joins the exact admitted
+read before acknowledging a clean WebSocket close. In particular a descriptor
+read running on the blocking pool must release its native permit first. Previously
+dropping the socket's result receiver left that detached read alive, so a
+browser-only cancellation change could not establish physical settlement. The
+Node Host now waits for the clean close acknowledgement or a valid terminal read
+response; abnormal transport termination retains the bounded Host admission slot
+as unavailable. The private payload and all public App Server schemas are unchanged.
 
 The browser's authenticated Product Host HTTP carrier accepts only authority scope
 and exact target/message/index coordinates. The Node Host supplies canonical roots
@@ -152,9 +160,9 @@ the ordinary native failure vocabulary.
 | Session-file preview and Download | 524,288 bytes (512 KiB), inclusive |
 | Session-file base64 carrier | 699,052 characters; below the 1 MiB native frame cap |
 | Native Session-file reads | 2 owned reads per AppServerHost; excess fails, no unbounded queue |
-| Product Host file operations | 2 per Host instance; temporary connections close in `finally` |
-| Browser Session-file transfers / retained URLs | 2 / 2 per selected-view owner |
-| Managed Artifact transfers / URLs / bytes | Existing 2 / 16 / 262,144 bytes |
+| Product Host file operations | 2 physical read obligations per Host instance; clean close/terminal response releases admission, unknown settlement keeps its slot unavailable |
+| Browser private Host reads / retained preview URLs | 2 private permits / 3 aggregate URLs: 2 visible panes plus 1 transient Download |
+| Managed Artifact transfers / URLs / bytes | Existing independent 2 / 16 / 262,144 bytes; preview leases separately obey the aggregate 3-URL limit |
 | Rendered Session-file text / Markdown input | 512 KiB original bytes, fatal UTF-8 decode |
 | Raster dimensions | At most 4096 on either axis and 4,194,304 pixels |
 | Raster animation | Static only; animation fails inline but Download remains |
@@ -162,17 +170,20 @@ the ordinary native failure vocabulary.
 
 Each browser Session-file response contains at most 699,052 base64 characters.
 Its transient binary string, decoded text string, byte array, and Blob each
-contain at most 524,288 characters or bytes as applicable; at most two reads/URLs
-are owned. These values are bounded before decoding or URL allocation. A raster's
+contain at most 524,288 characters or bytes as applicable; at most two reads
+and three URLs (two visible panes plus one transient Download) are owned. These values are bounded before decoding or URL allocation. A raster's
 logical RGBA output is at most 16,777,216 bytes, with dimensions checked before
 browser decoding. Read buffers and decoded content are effect-owned and ephemeral;
 only finite Blob URLs are retained by the resource owner.
 
-`FilePreviewResources` has a closed Artifact versus Session-file source union,
-separate concrete source owners, and one presentation seat. Rendering and Download
-share one authorized byte transfer and one Blob URL. Text/Markdown/code Download
-uses original bytes and filename, including CRLF, spaces, and Unicode, never
-rendered HTML. UTF-8 or raster decode failure retains bounded original-byte Download.
+`FilePreviewCoordinator` preserves the closed Artifact versus Session-file union
+and separate concrete source authorities. The Session preview workspace owns
+logical occurrences; one `FilePreviewLease` owns each visible selected body. At
+most two bodies own original URLs, with a separate single transient Download
+lease. Download does not navigate tabs or panes, always reauthorizes original
+bytes and revokes its URL exactly once. Text/Markdown/code Download preserves
+original bytes and filename, including CRLF, spaces and Unicode, never rendered
+HTML. UTF-8 or raster decode failure keeps original Download available.
 An unsupported format explicitly reports no inline viewer and remains downloadable
 inside the same bound. No partial oversized download is offered.
 
@@ -183,15 +194,41 @@ remote embedded resource loading, HTML execution, or SVG inline execution is add
 Raster headers are inspected through image-size's Uint8Array API before browser
 image decoding; active formats are rejected. No filesystem library API enters Web.
 
-Each effect owns an AbortController, live publication flag, and its allocated URL.
+Each active occurrence lease owns its source, cancellation signal and original URL;
+each mounted viewer additionally fences its asynchronous presentation callbacks.
 Source replacement, retry, close/unmount, Session/node change, attachment replacement,
 reconnect, native authority revision, and Product Host authority revision retire
 old owners. Responses recheck captured attachment and both authority scopes before
 base64 decoding or URL allocation. Obsolete successes, errors, loading completions,
 and image callbacks cannot publish into the new keyed preview. Cleanup aborts
 reads, unsubscribes through existing App ownership, and revokes each URL once.
-Same-authority display refresh does not recreate the owner.
+Same-authority display refresh does not recreate the owner. Hidden tabs and
+background Sessions retain only bounded view-state metadata, never URLs, file
+bytes, workers or live derivation demand. Reload persists none of this workspace
+state. The separate existing inline Conversation Artifact owner retains its
+original 16-URL policy; these are not hidden preview documents.
+
+Browser Session-file original reads use an exact private HTTP operation token. The Host
+acknowledges the token in response headers after registering one of its two
+active cancellation handles. Cancellation sends the token and exact Host scope;
+the browser keeps the original response open until the native/Host read finally
+settles. Waiting current intents are finite (two pane demands and one Download)
+and removed immediately when their lease retires. Unknown transport settlement
+fails private Host read admission closed for that Host authority. Converter-only
+settlement uncertainty belongs to document admission and does not disable raw
+Session-file reads or original Download; a lost document terminal witness can
+conceal a native read and therefore still fails private read admission closed.
+Ordinary managed Artifact preview/Download uses public `artifact/read` and its
+independent ArtifactResources transfer limit, so none of these private settlement
+failures disables it. Artifact document reauthorization instead uses the private
+read seam and participates in private admission for the whole derivation. This avoids treating an aborted
+fetch as physical read completion; no public native Method, authority or tab
+registry is introduced.
 
 The existing #430/#443 RightPanel and ChatViewport remain the geometry and scroll
 owners. Delivery opens no second sidebar or automatic scroll effect. Width is
 presentation-only; the existing turn navigator and reading-anchor contract apply.
+
+The closed PDF, OOXML and HTML viewer families extend this ownership contract;
+see [advanced document previews](document-previews.md) for their admission,
+conversion, isolation, resource and platform limits.

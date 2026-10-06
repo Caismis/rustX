@@ -1,5 +1,6 @@
-import type { SourceMutation, SourceSettings } from '../../../protocol/app-server/v34.ts';
-import type { AttachmentTarget, SessionFileReference } from '../../../protocol/app-server/v34.ts';
+import type { SourceMutation, SourceSettings } from '../../../protocol/app-server/v35.ts';
+import type { AttachmentTarget, SessionFileReference } from '../../../protocol/app-server/v35.ts';
+import type { DocumentRequest, DocumentResult } from '../../shared/documents.ts';
 export interface DeliveryRead { target: AttachmentTarget; message_id: string; delivery_index: number }
 export interface DeliveryBytes { file: SessionFileReference; data: string }
 export type WorkspaceConfigurationOperation = { kind: 'read' | 'reconcile' } | { kind: 'write'; expected_revision: string; mutation: SourceMutation };
@@ -54,7 +55,20 @@ export class WorkspaceHostError extends Error {
     this.uncertain = uncertain;
   }
 }
+/** Private physical facts, independent of cancellation/publication intent.
+ * A lost document carrier can conceal either its native reread or converter. */
+export type SettlementFailureKind = 'file_settlement_unknown' | 'converter_settlement_unknown' | 'document_settlement_unknown';
+export function settlementFailureKind(cause: unknown): SettlementFailureKind | undefined {
+  if (!(cause instanceof WorkspaceHostError)) return;
+  switch (cause.kind) {
+    case 'file_settlement_unknown':
+    case 'converter_settlement_unknown':
+    case 'document_settlement_unknown': return cause.kind;
+  }
+}
+
 export interface ProductHostWorkspaces {
+  previewDocument?(scope: WorkspaceAuthorityScope, request: DocumentRequest, signal?: AbortSignal): Promise<DocumentResult>;
   desktopCatalog?(scope: WorkspaceAuthorityScope, refresh?: boolean): Promise<import('./desktop.ts').DesktopCatalog>;
   openWorkspace?(scope: WorkspaceAuthorityScope, target: import('./desktop.ts').DesktopTarget, application: import('./desktop.ts').DesktopAppId): Promise<import('./desktop.ts').DesktopLaunch>;
   readDelivery?(scope: WorkspaceAuthorityScope, read: DeliveryRead, signal?: AbortSignal): Promise<DeliveryBytes>;

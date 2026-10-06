@@ -92,7 +92,7 @@ it('retained questionnaire validation switches language without changing the dra
     disabled={false} status="native-status" onSubmit={() => { submissions++; }} onDecline={() => {}}/>);
   const input = screen.getByRole('textbox');
   fireEvent.change(input, { target: { value: 'not-a-number' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Submit answers' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Submit' }));
   const key = 'interactions:copy.value-enter-a-canonical-whole-number';
   expect(screen.getByRole('status').textContent).toContain(translator('en')(key, { p0: 'Native number' }));
   act(() => localeController.setLocale('zh'));

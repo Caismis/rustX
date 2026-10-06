@@ -1,5 +1,17 @@
 # Runtime Invariants
 
+Preview tabs are browser presentation metadata, never native file authority.
+An occurrence and its active lease must both be current before bytes or derived
+content can publish. Closing, hiding or replacing their scope retires the lease;
+reopening the same exact source cannot adopt the old occurrence's completion.
+At most two selected visible preview bodies own resources, and hidden tabs own
+no workers, URLs or bytes. Office derivation remains one active Host operation.
+Cancellation removes waiting demand immediately but releases an admitted permit
+only on proven physical settlement. In particular, the private native file-read
+socket joins its canceled read before acknowledging clean close; unknown transport
+settlement keeps admission unavailable. The public authority/protocol contract is
+unchanged. See [preview workspace invariants](preview-workspace.md).
+
 Pending Inbound owns accepted queue mutation. `(ConversationId, InboundSequence,
 MessageId)` identifies one occurrence, and its native revision is a compare-and-set
 precondition. Mutation and canonical claim are ordered by the durable transaction.
@@ -2941,6 +2953,19 @@ inspected candidate/binding revision. Existing Attempts and every derived reques
 Tool batch, child and Workflow retain their captured immutable configuration.
 Session bindings survive runtime unload/load within the process. See
 [configuration application](configuration.md#save-automatic-application-and-session-adoption).
+
+Configuration application and adoption eligibility are separate domains:
+
+```text
+ConfigurationApplication publication is configuration-domain state.
+Configuration adoption eligibility is runtime-domain advisory state, published
+by the live runtime on its Runtime Client snapshot only when it changes.
+Runtime Client snapshot identity is never a configuration invalidation signal.
+Native adoption revalidates eligibility at the actual commit boundary.
+Ordinary streaming Runtime Client deltas cause no Session-configuration RPC.
+```
+
+See [Session configuration adoption eligibility](app-server-protocol.md#session-configuration-adoption-eligibility-v35).
 
 Session/Node/Conversation/ToolExecution identities are typed UUIDv7, allocated with
 collision/no-overwrite checks. Semantic order uses explicit metadata. The fixed
@@ -7210,7 +7235,7 @@ never bytes.
   established. Recording it never blocks on a client and never holds the
   Catalog mutex for delivery.
 
-  The integrated App Server v34 contract preserves this catalog owner alongside
+  The integrated App Server v35 contract preserves this catalog owner alongside
   finite Jobs, durable Agents and bounded client request lanes; see the
   [PR #416 integration audit](pr-416-main-integration.md).
 

@@ -1,11 +1,12 @@
 // Deterministic native protocol fixture, never part of the production entry.
 import { useState } from 'react';
 import { AgentComposer } from '../../src/app/agent/AgentComposer';
+import { composerPreferences } from '../../src/app/composer/preferences';
 import { createRoot } from 'react-dom/client';
 import { RpcFailure } from '../../src/client/app-server';
 import { App } from '../../src/app/App';
 import { Server, interaction, snapshot, endpoint } from '../fixture';
-import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v34';
+import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v35';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -42,9 +43,10 @@ s.messages = [
 ];
 s.transcript.entries = s.messages.map((message, i) => ({ cursor: String(i + 1), item: { type: 'message', message } }));
 if (mode === 'settled') {
- s.transcript.entries[1].completed_response = { closing_message_id: 'answer-1', origin: { conversation_id: 'origin-conversation', closing_message_id: 'answer-1', attempt_id: 'attempt-1' }, surface_revision: '2', retry_message_id: 'user-1', completed_at: '2026-09-18T11:59:00Z', usage: { input_tokens: 15000, output_tokens: 800, total_tokens: 15800, details: { cached_input_tokens: 12000 } } };
- s.transcript.statistics = { turns: '12', steps: '34', completed_responses: '1', model_requests: '2', requests_with_usage: '2', reported_usage: s.transcript.entries[1].completed_response.usage };
- s.context = { compaction_count: 0, compaction_in_progress: false, last_request_occupancy: { input_tokens: 15000, context_window_tokens: 128000, model: 'native/coder' } };
+ s.transcript.entries[1].completed_response = { closing_message_id: 'answer-1', origin: { conversation_id: 'origin-conversation', closing_message_id: 'answer-1', attempt_id: 'attempt-1' }, surface_revision: '2', retry_message_id: 'user-1', completed_at: '2026-09-18T11:59:00Z', usage: { input_tokens: 15000, output_tokens: 800, total_tokens: 15800, details: { cached_input_tokens: 12000 } }, models: ['native/coder'] };
+ s.transcript.statistics = { turns: '12', steps: '34', completed_responses: '1', model_requests: '2', requests_with_usage: '2', reported_usage: s.transcript.entries[1].completed_response.usage,
+   timing: { model_ms: 20500, tool_ms: 9652000, mean_ttft_ms: 3100, output_tokens_per_second: 49 } };
+ s.context = { compaction_count: 0, compaction_in_progress: false, last_request_occupancy: { input_tokens: 15000, context_window_tokens: 128000, model: 'native/coder', breakdown: { system_tokens: 1900, tool_tokens: 6000, message_tokens: 7100 } } };
 }
 if (mode !== 'settled' && mode !== 'composer') s.attempt = { attempt_id: 'attempt-1', phase: { type: 'running' }, turn: 1, execution_settings: { resource_revision: '1', approval_mode: 'policy' } };
 if (mode === 'streaming') {
@@ -61,6 +63,11 @@ if (mode === 'questionnaire') {
  const pending = interaction('questionnaire');
  if (pending.request.kind.type === 'questionnaire') pending.request.kind.questionnaire.questions.push({ header: 'Coverage', question: 'Which checks should be included?', answer: { type: 'multi_choice', min_selected: 1, max_selected: 2, allow_custom: true, options: [{ label: 'Native contracts', description: 'Verify runtime authority.' }, { label: 'Browser references', description: 'Verify the pinned presentation.' }] } });
  s.pending_interactions = [pending];
+ // The pending call's own transcript row reports the wait, never the questions.
+ const ask = { id: 'call-ask', tool_id: 'tool-ask-user', name: 'ask_user', arguments: { questions: [{ header: 'Direction', question: 'Which direction?', options: [] }, { header: 'Coverage', question: 'Which checks should be included?', options: [] }] } };
+ const answer = s.messages[1];
+ if (answer.role === 'assistant') answer.content.push({ type: 'tool_call', ...ask });
+ s.transcript.entries[1] = { cursor: '2', item: { type: 'message', message: s.messages[1] }, tool_calls: [{ message_id: 'answer-1', block_index: 2, call_id: ask.id, tool_id: ask.tool_id, name: ask.name, state: { type: 'running', arguments: JSON.stringify(ask.arguments) } }] };
 }
 server.snapshots.set('A', s);
 await server.attached('A');
@@ -80,6 +87,8 @@ if (mode === 'composer') {
       await server.update('A', next);
     },
     holdCancellation: () => { server.held.add('turn/cancel'); },
+    // Stands in for the General Settings row, which owns this preference.
+    busyEnter: value => composerPreferences().setBusyEnter(value),
     cancellations: () => server.requests.flatMap(row => row.request.method === 'turn/cancel' ? [row.request.params.target] : []),
     acknowledgeCancellation: async () => {
       const request = server.requests.find(row => row.request.method === 'turn/cancel')?.request;
@@ -93,7 +102,7 @@ if (mode === 'composer') {
   };
 }
 declare global {
-  interface Window { composerFixture: { running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; cancellations(): import('../../../protocol/app-server/v34').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
+  interface Window { composerFixture: { running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; busyEnter(value: 'queue' | 'steer'): void; cancellations(): import('../../../protocol/app-server/v35').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
 }
 
 function RestoredComposerFixture() {

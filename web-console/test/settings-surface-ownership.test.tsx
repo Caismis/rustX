@@ -8,7 +8,7 @@ import type { WriteOutcome } from '../src/app/settings/machines/port';
 import { SessionConfiguration } from '../src/app/SessionConfiguration';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { OutcomeUncertain } from '../src/client/app-server';
-import type { ConfigurationApplication, SourceSettings, SourceTarget } from '../../protocol/app-server/v34';
+import type { ConfigurationApplication, SourceSettings, SourceTarget } from '../../protocol/app-server/v35';
 import { cfg3Application, cfg3Source } from './cfg3-data';
 import { cfg3Client, cfg3Host, cfg3Session } from './cfg3-fixture';
 afterEach(cleanup);
@@ -49,7 +49,7 @@ it('S1-02 Workspace Settings stays bound to its exact target across Session focu
   fireEvent.click(screen.getByRole('button', { name: 'Reload configuration' }));
   await screen.findByRole('alert');
   expect((screen.getByLabelText('read') as HTMLInputElement).checked).toBe(true);
-  fireEvent.click(screen.getByRole('button', { name: 'Save Built-in tools' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
   expect(writes(s)).toHaveLength(0);
   expect(s.request.mock.calls.every(([op]) => op.method !== 'configuration/sourceWrite' || writeTarget(op).kind === 'workspace')).toBe(true);
 });
@@ -63,7 +63,7 @@ async function inheritedTools(s: ReturnType<typeof cfg3Client>) {
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={cfg3Host(s)} />);
   await findOnAdvanced(/Revision: workspace-1/);
   fireEvent.click(screen.getByRole('tab', { name: 'Tools & Permissions' }));
-  return within(screen.getByRole('form', { name: 'Built-in tools' }));
+  return within(screen.getByRole('form', { name: 'Native Tools' }));
 }
 
 it('S1-04 an inherited unit displays the native effective value and authors nothing', async () => {
@@ -75,13 +75,13 @@ it('S1-04 an inherited unit displays the native effective value and authors noth
   expect(form.getByText(/Inherited — no Workspace override/).textContent).toContain('Inherited from User');
   expect(form.getByText(/Native effective value available/)).toBeTruthy();
   // Nothing is dirty, so there is no authored intent to submit.
-  expect((form.getByRole('button', { name: 'Save Built-in tools' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((form.getByRole('button', { name: 'Save Native Tools' }) as HTMLButtonElement).disabled).toBe(true);
 });
 
 it('S1-04 opening an inherited unit and saving without an edit writes nothing', async () => {
   const s = cfg3Client(); const form = await inheritedTools(s);
-  fireEvent.click(form.getByRole('button', { name: 'Save Built-in tools' }));
-  fireEvent.submit(screen.getByRole('form', { name: 'Built-in tools' }));
+  fireEvent.click(form.getByRole('button', { name: 'Save Native Tools' }));
+  fireEvent.submit(screen.getByRole('form', { name: 'Native Tools' }));
   await waitFor(() => expect(sourcesReads(s).length).toBeGreaterThanOrEqual(1));
   // No `configuration/sourceWrite` at all: the inherited ["read"] is never
   // materialized into Workspace authoring, and no empty override is created.
@@ -91,8 +91,8 @@ it('S1-04 opening an inherited unit and saving without an edit writes nothing', 
 it('S1-04 an explicit edit authors exactly the edited unit', async () => {
   const s = cfg3Client(); const form = await inheritedTools(s);
   fireEvent.click(form.getByLabelText('write'));
-  expect((form.getByRole('button', { name: 'Save Built-in tools' }) as HTMLButtonElement).disabled).toBe(false);
-  fireEvent.click(form.getByRole('button', { name: 'Save Built-in tools' }));
+  expect((form.getByRole('button', { name: 'Save Native Tools' }) as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(form.getByRole('button', { name: 'Save Native Tools' }));
   // The edit starts from the displayed native effective value, so the authored
   // unit is exactly what the user sees plus the change they made.
   await waitFor(() => expect(writes(s)[0][0]).toMatchObject({ params: { target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'workspace-1', mutation: { kind: 'config', mutation: { unit: 'native_tools', authored: ['read', 'write'] } } } }));
@@ -101,12 +101,12 @@ it('S1-04 an explicit edit authors exactly the edited unit', async () => {
 
 it('S1-04 an explicit Override then an explicit empty selection writes [] and never null', async () => {
   const s = cfg3Client(); const form = await inheritedTools(s);
-  fireEvent.click(form.getByRole('button', { name: 'Override Built-in tools' }));
+  fireEvent.click(form.getByRole('button', { name: 'Override Native Tools' }));
   // Override is an explicit authoring action; it starts from what is displayed.
   expect((form.getByLabelText('read') as HTMLInputElement).checked).toBe(true);
   fireEvent.click(form.getByLabelText('read'));
   expect((form.getByLabelText('read') as HTMLInputElement).checked).toBe(false);
-  fireEvent.click(form.getByRole('button', { name: 'Save Built-in tools' }));
+  fireEvent.click(form.getByRole('button', { name: 'Save Native Tools' }));
   await waitFor(() => expect(writes(s)[0][0]).toMatchObject({ params: { expected_revision: 'workspace-1', mutation: { kind: 'config', mutation: { unit: 'native_tools', authored: [] } } } }));
   // An explicit empty array is a legal authored value, never a removal.
   expect((writes(s)[0][0].params as { mutation: { mutation: { authored: unknown } } }).mutation.mutation.authored).toEqual([]);
@@ -119,8 +119,8 @@ it('S1-04 an inherited unit offers no Use global default, because there is no Wo
   // exact CAS". With no override authored, that mutation has no meaning and is
   // not offered; Override is the action that exists here.
   expect(form.queryByRole('button', { name: /Use global default/ })).toBeNull();
-  expect(form.queryByRole('button', { name: /^Remove Built-in tools/ })).toBeNull();
-  expect(form.getByRole('button', { name: 'Override Built-in tools' })).toBeTruthy();
+  expect(form.queryByRole('button', { name: /^Remove Native Tools/ })).toBeNull();
+  expect(form.getByRole('button', { name: 'Override Native Tools' })).toBeTruthy();
   expect(writes(s)).toHaveLength(0);
 });
 
@@ -142,30 +142,30 @@ it('S1-04 Use global default removes a real Workspace override through exact CAS
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={cfg3Host(s)} />);
   await findOnAdvanced(/Revision: workspace-1/);
   fireEvent.click(screen.getByRole('tab', { name: 'Tools & Permissions' }));
-  const before = within(screen.getByRole('form', { name: 'Built-in tools' }));
+  const before = within(screen.getByRole('form', { name: 'Native Tools' }));
   // The Workspace override is what is displayed and reported.
   expect((before.getByLabelText('bash') as HTMLInputElement).checked).toBe(true);
   expect(before.getByText(/Workspace override — empty selections remain explicit/).textContent).toContain('Workspace override');
   // Use global default is override removal, confirmed through its dialog.
-  await confirmAction('Use global default Built-in tools');
+  await confirmAction('Use global default Native Tools');
   // The outgoing mutation is the exact revision-fenced removal of this unit.
   await waitFor(() => expect(writes(s)[0][0]).toMatchObject({ params: { target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'workspace-1', mutation: { kind: 'config', mutation: { unit: 'native_tools', authored: null } } } }));
   await findOnAdvanced(/Revision: saved-2/);
   // The authoritative reread is what decides the resulting presentation: the
   // Workspace authors nothing, and the native inherited value is effective.
-  const after = within(screen.getByRole('form', { name: 'Built-in tools' }));
+  const after = within(screen.getByRole('form', { name: 'Native Tools' }));
   await waitFor(() => expect((after.getByLabelText('read') as HTMLInputElement).checked).toBe(true));
   expect((after.getByLabelText('bash') as HTMLInputElement).checked).toBe(false);
   expect(after.getByText(/Inherited — no Workspace override/).textContent).toContain('Inherited from User');
   // No pending draft, no residual removal action, and exactly one write.
-  expect((after.getByRole('button', { name: 'Save Built-in tools' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((after.getByRole('button', { name: 'Save Native Tools' }) as HTMLButtonElement).disabled).toBe(true);
   expect(after.queryByRole('button', { name: /Use global default/ })).toBeNull();
   expect(after.queryByRole('button', { name: 'Use reviewed revision' })).toBeNull();
   expect(writes(s)).toHaveLength(1);
 });
 
 it.each([
-  ['an explicit empty list', { agent: { tools: { builtin: [] } } }, ['Tools & Permissions'], 'Built-in tools'],
+  ['an explicit empty list', { agent: { tools: { builtin: [] } } }, ['Tools & Permissions'], 'Native Tools'],
   ['an explicit false', { agent: { plugins: { todo: { enabled: false } } } }, ['Extensions', 'Native'], 'Todo extension'],
   ['an explicit empty object', { agent: { plugins: { todo: {} } } }, ['Extensions', 'Native'], 'Todo extension'],
   ['an explicit empty string', { agent: { description: '' } }, ['Agent'], 'Root description'],
@@ -191,7 +191,7 @@ it('S1-04 an invalid Workspace document offers no unit editor and no removal, be
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={cfg3Host(s)} />);
   await screen.findByText(/invalid rustx\.toml/);
   fireEvent.click(screen.getByRole('tab', { name: 'Tools & Permissions' }));
-  expect(screen.queryByRole('form', { name: 'Built-in tools' })).toBeNull();
+  expect(screen.queryByRole('form', { name: 'Native Tools' })).toBeNull();
   expect(screen.queryByRole('button', { name: /Use global default/ })).toBeNull();
   expect(writes(s)).toHaveLength(0);
 });
@@ -205,10 +205,10 @@ it('S1-04 Discard returns to the inherited presentation without authoring anythi
   expect((form.getByLabelText('read') as HTMLInputElement).checked).toBe(true);
   expect((form.getByLabelText('write') as HTMLInputElement).checked).toBe(false);
   expect(form.getByText(/Inherited — no Workspace override/)).toBeTruthy();
-  expect((form.getByRole('button', { name: 'Save Built-in tools' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((form.getByRole('button', { name: 'Save Native Tools' }) as HTMLButtonElement).disabled).toBe(true);
   // Nothing browser-authored is left, so nothing is offered for discarding.
   expect(form.queryByRole('button', { name: 'Discard draft' })).toBeNull();
-  fireEvent.submit(screen.getByRole('form', { name: 'Built-in tools' }));
+  fireEvent.submit(screen.getByRole('form', { name: 'Native Tools' }));
   await waitFor(() => expect(sourcesReads(s).length).toBeGreaterThanOrEqual(1));
   expect(writes(s)).toHaveLength(0);
 });
@@ -221,13 +221,13 @@ it('S1-04 an authored Workspace override is displayed and reported as an overrid
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={cfg3Host(s)} />);
   await findOnAdvanced(/Revision: workspace-1/);
   fireEvent.click(screen.getByRole('tab', { name: 'Tools & Permissions' }));
-  const form = within(screen.getByRole('form', { name: 'Built-in tools' }));
+  const form = within(screen.getByRole('form', { name: 'Native Tools' }));
   expect((form.getByLabelText('bash') as HTMLInputElement).checked).toBe(true);
   expect(form.getByText(/Workspace override — empty selections remain explicit/).textContent).toContain('Workspace override');
   // An existing override needs no Override action, and a no-op Save is still
   // unavailable: authoring is an edit, never a re-write of the same value.
-  expect(form.queryByRole('button', { name: 'Override Built-in tools' })).toBeNull();
-  expect((form.getByRole('button', { name: 'Save Built-in tools' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(form.queryByRole('button', { name: 'Override Native Tools' })).toBeNull();
+  expect((form.getByRole('button', { name: 'Save Native Tools' }) as HTMLButtonElement).disabled).toBe(true);
 });
 
 // Blocking finding 4 — a malformed lower source makes the effective value
@@ -240,16 +240,16 @@ it('S1-13 an unresolvable configuration never presents the effective value as Un
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={cfg3Host(s)} />);
   await findOnAdvanced(/Revision: workspace-1/);
   fireEvent.click(screen.getByRole('tab', { name: 'Tools & Permissions' }));
-  const form = within(screen.getByRole('form', { name: 'Built-in tools' }));
+  const form = within(screen.getByRole('form', { name: 'Native Tools' }));
   // Authored presence and effective resolution are reported independently.
   expect(form.getByText(/Inherited — no Workspace override/).textContent).toContain('Native effective value unavailable — resolution failed');
   expect(form.getByText(/Native effective resolution failed/).textContent).toContain('Source cannot be resolved');
-  const resolved = screen.getByRole('form', { name: 'Built-in tools' }).querySelector('pre')!;
+  const resolved = screen.getByRole('form', { name: 'Native Tools' }).querySelector('pre')!;
   expect(resolved.textContent).toBe('Native effective value unavailable — resolution failed');
   expect(resolved.textContent).not.toContain('Unset');
   // The valid Workspace source remains authorable through exact CAS.
   fireEvent.click(form.getByLabelText('read'));
-  fireEvent.click(form.getByRole('button', { name: 'Save Built-in tools' }));
+  fireEvent.click(form.getByRole('button', { name: 'Save Native Tools' }));
   await waitFor(() => expect(writes(s)[0][0]).toMatchObject({ params: { expected_revision: 'workspace-1', mutation: { kind: 'config', mutation: { unit: 'native_tools', authored: ['read'] } } } }));
 });
 
@@ -265,7 +265,7 @@ it('S1-06 a successful read clears only the relevant read error, never a distinc
   fireEvent.click(screen.getByLabelText('read'));
   // A distinct write failure.
   failWrites = true;
-  fireEvent.click(screen.getByRole('button', { name: 'Save Built-in tools' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
   await screen.findByText(/native write rejected/);
   // A failed read reports its own error.
   failReads = true;
@@ -287,10 +287,10 @@ it('S1-07 a committed save followed by a failed reread is saved plus uncertain, 
   await findOnAdvanced(/Revision: workspace-1/); fireEvent.click(screen.getByRole('tab', { name: 'Tools & Permissions' }));
   fireEvent.click(screen.getByLabelText('read'));
   failReads = true;
-  fireEvent.click(screen.getByRole('button', { name: 'Save Built-in tools' }));
-  await screen.findByText(/saved\. Check the status above to confirm it has taken effect/);
+  fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
+  await screen.findByText(/saved\. Native coordination owns application/);
   expect(screen.getByText(/Source read failed/)).toBeTruthy();
-  expect(screen.getByText(/Showing the last loaded configuration. Current status could not be confirmed./)).toBeTruthy();
+  expect(screen.getByText(/Last observation retained; current status uncertain/)).toBeTruthy();
   // Exactly one write: the committed mutation is never replayed or presented as unsaved.
   expect(writes(s)).toHaveLength(1);
 });
@@ -304,7 +304,7 @@ it('S1-09 a lost write reply rereads authority once and never replays or leaks a
   const ui = render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
   await findOnAdvanced(/Revision: workspace-1/); fireEvent.click(screen.getByRole('tab', { name: 'Tools & Permissions' }));
   fireEvent.click(screen.getByLabelText('read'));
-  fireEvent.click(screen.getByRole('button', { name: 'Save Built-in tools' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
   await screen.findByText(/Save outcome uncertain/);
   await waitFor(() => expect(sourcesReads(s).length).toBeGreaterThanOrEqual(2));
   expect(writes(s)).toHaveLength(1);
@@ -322,7 +322,7 @@ it.each(['before', 'after'] as const)('S1-09 an uncertain save stays uncertain w
   render(<SettingsSurface client={s.client} target={userSettingsTarget} />);
   await findOnAdvanced(/Revision: user-1/); fireEvent.click(screen.getByRole('tab', { name: 'Tools & Permissions' }));
   fireEvent.click(screen.getByLabelText('read'));
-  fireEvent.click(screen.getByRole('button', { name: 'Save Built-in tools' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   const outcome = async () => { await act(async () => { fail(); await held.catch(() => {}); }); await screen.findByText(/Save outcome uncertain/); };
   // The App Server connection is replaced: a new generation with its own
@@ -428,7 +428,7 @@ it('S1-14 a confirmed Provider literal-secret save drops the submitted payload e
   fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'secret' } });
   fireEvent.click(screen.getByRole('button', { name: 'Add Provider' }));
   fireEvent.change(screen.getByLabelText('Endpoint'), { target: { value: 'https://native.invalid' } });
-  await chooseOption('Credential source', 'Enter a secret');
+  await chooseOption('Credential source', 'Enter a literal secret');
   fireEvent.change(screen.getByLabelText('New literal credential'), { target: { value: SECRET_SENTINEL } });
   // Before submission the sentinel is the live editing draft, which is where an
   // authored secret legitimately lives.
@@ -437,7 +437,7 @@ it('S1-14 a confirmed Provider literal-secret save drops the submitted payload e
   fireEvent.click(screen.getByRole('button', { name: 'Save Provider secret' }));
   // The write commits and native acknowledges it; the post-write authoritative
   // reread fails, so the transaction cannot settle yet.
-  await screen.findByText(/saved\. Check the status above to confirm it has taken effect/);
+  await screen.findByText(/saved\. Native coordination owns application/);
   await screen.findByText(/Saved, but the authoritative reread failed/);
   expect(writes(s)).toHaveLength(1);
   // Navigating away unmounts the editor; the store survives, and it must no
@@ -457,7 +457,7 @@ it('S1-14 a confirmed Provider literal-secret save drops the submitted payload e
   // The reopened editor reconstructs from the redacted native projection only.
   // Models kept its own focus, so returning to it reopens the same Provider.
   await openSettingsPage('Models');
-  expect(credentialSource()).toContain('Keep the saved credential');
+  expect(credentialSource()).toContain('Keep the credential this scope already authored');
   expect(screen.queryByRole('button', { name: 'Use reviewed revision' })).toBeNull();
 });
 
@@ -637,7 +637,7 @@ async function heldSecretSave(s: ReturnType<typeof cfg3Client>) {
   fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'secret' } });
   fireEvent.click(screen.getByRole('button', { name: 'Add Provider' }));
   fireEvent.change(screen.getByLabelText('Endpoint'), { target: { value: 'https://native.invalid' } });
-  await chooseOption('Credential source', 'Enter a secret');
+  await chooseOption('Credential source', 'Enter a literal secret');
   fireEvent.change(screen.getByLabelText('New literal credential'), { target: { value: SECRET_SENTINEL } });
   // The dirty draft is the only place the authored secret legitimately lives.
   expect(retained(s)).toContain(SECRET_SENTINEL);
@@ -674,7 +674,7 @@ it('S1-16 a definitive acknowledgement outlives the whole Settings dialog and re
   // The committed revision is the base, so closing Settings never manufactures
   // an external conflict or a reviewed-revision gesture.
   await openResourceRow('secret');
-  expect(credentialSource()).toContain('Keep the saved credential');
+  expect(credentialSource()).toContain('Keep the credential this scope already authored');
   expect(screen.queryByText(/Source revision changed/)).toBeNull();
   expect(screen.queryByRole('button', { name: 'Use reviewed revision' })).toBeNull();
   // Exactly one write, and reopening replays nothing.
@@ -746,7 +746,7 @@ it('S1-35 while one unit owns the target mutation barrier every other unit stays
   expect(submitted).toHaveBeenCalledTimes(1);
   // The commit is acknowledged; its post-commit read is still outstanding.
   await act(async () => { write.resolve({ acknowledgement: committed }); });
-  await screen.findByText('Saved. Check the status above to confirm it has taken effect.');
+  await screen.findByText('Saved. Native application proceeds automatically.');
   expect(saveStatus().disabled).toBe(true);
   expect(statusInput.disabled).toBe(false);
   // The authoritative post-commit observation releases the barrier in place:

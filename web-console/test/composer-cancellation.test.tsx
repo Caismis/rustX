@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import type { RuntimeClientSnapshot } from '../../protocol/app-server/v34';
+import type { RuntimeClientSnapshot } from '../../protocol/app-server/v35';
 import { composerPreferences } from '../src/app/composer/preferences';
 import { App } from '../src/app/App';
 import { isOutcomeUncertain } from '../src/client/app-server';
@@ -166,7 +166,7 @@ it('a locally refused control continuation cannot clear a successor cancellation
 it.each(['queue', 'steer'] as const)('resident ContextSeat preserves %s submission, exact cancellation and compact draft ownership', async preference => {
   composerPreferences().setBusyEnter(preference);
   await mount(); vi.useRealTimers();
-  expect(screen.getByRole('button', { name: 'Last request context unavailable' })).toBeTruthy();
+  expect(document.querySelector('[data-context-seat]')).toBeNull();
   const expected = server.client.cancellationTarget('A')!;
   fireEvent.change(input(), { target: { value: 'ordinary draft' } });
   await act(async () => fireEvent.keyDown(input(), { key: 'Enter' }));

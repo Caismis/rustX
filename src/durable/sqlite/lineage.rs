@@ -38,7 +38,13 @@ pub(super) fn read(
     // Member presence selects message-backed history. A terminal-only predecessor
     // controls structural prefix membership only AFTER the Journal cut filtered time.
     turns.retain_mut(|turn| {
-        if turn.prompt_message_id.as_ref().is_some_and(|id| !referenced.contains(id)) {
+        // A prompt outside the retained cut is not inherited; the turn keeps
+        // its identity and simply has no prompt preview.
+        if turn
+            .prompt_message_id
+            .as_ref()
+            .is_some_and(|id| !referenced.contains(id))
+        {
             turn.prompt_message_id = None;
         }
         let had_members = !turn.process_message_ids.is_empty();
@@ -115,10 +121,8 @@ fn responses(
                 evidence.members.insert(message_id.clone());
                 evidence.closing = Some(message_id);
             }
-            RuntimeEvent::ModelRequestStarted { request_id, .. } => {
-                evidence.timing.start(request_id.clone());
-                evidence.last_request = Some(request_id);
-                evidence.requests += 1;
+            RuntimeEvent::ModelRequestStarted { request_id, model } => {
+                evidence.request_started(request_id, model);
             }
             RuntimeEvent::ModelRequestCompleted {
                 request_id,
@@ -190,6 +194,7 @@ fn responses(
                             usage: (evidence.requests > 0 && evidence.requests == evidence.reports)
                                 .then(|| evidence.usage.take())
                                 .flatten(),
+                            models: std::mem::take(&mut evidence.models),
                         },
                     );
                 }

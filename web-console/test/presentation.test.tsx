@@ -57,18 +57,18 @@ it('pending interaction remains visible but disabled across transport loss and r
   render(<App client={server.client} workspaceHost={server.workspaceHost} />);
   act(() => server.socket.close());
   expect(screen.getByRole('region', { name: 'Questionnaire' })).toBeTruthy();
-  expect((screen.getByRole('button', { name: 'Submit answers' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole('button', { name: 'Submit' }) as HTMLButtonElement).disabled).toBe(true);
   await act(() => server.connect());
-  expect((screen.getByRole('button', { name: 'Submit answers' }) as HTMLButtonElement).disabled).toBe(false);
+  expect((screen.getByRole('button', { name: 'Submit' }) as HTMLButtonElement).disabled).toBe(false);
 });
 it('option labels are presentation; duplicate labels still submit the selected native index', () => {
   let submitted: unknown;
   render(<Questionnaire disabled={false} status="Pending" questions={[{ header: 'Pick', question: 'Which one?', answer: {
     type: 'single_choice', allow_custom: false, options: [{ label: 'Same', description: 'First' }, { label: 'Same', description: 'Second' }],
   } }]} onDecline={() => {}} onSubmit={value => { submitted = value; }} />);
-  fireEvent.click(screen.getAllByRole('radio')[1]); fireEvent.click(screen.getByRole('button', { name: 'Submit answers' }));
+  fireEvent.click(screen.getAllByRole('radio')[1]); fireEvent.click(screen.getByRole('button', { name: 'Submit' }));
   expect(submitted).toEqual({ answers: [{ question_index: 0, answer: { type: 'option', value: { option_index: 1 } } }] });
-  expect(screen.queryByLabelText('Custom answer')).toBeNull();
+  expect(screen.queryByLabelText('Type your answer')).toBeNull();
 });
 
 it('native Review preserves instance and subject digest and waits for authoritative removal', async () => {

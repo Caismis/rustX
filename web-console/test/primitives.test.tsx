@@ -11,6 +11,32 @@ it('Harness Menu never dispatches a disabled entry', () => {
   fireEvent.click(view.getByRole('menuitem', { name: 'A' }));
   expect(select).not.toHaveBeenCalled();
 });
+it('a split-button Menu hands the keyboard back to the control that opened it after a selection', async () => {
+  function Split() {
+    const [open, setOpen] = useState(false);
+    return <Menu open={open} autoFocus onClose={() => setOpen(false)} onSelect={() => setOpen(false)} items={[{ id: 'a', label: 'A' }]}
+      anchor={<div><button>Primary</button><button onClick={() => setOpen(value => !value)}>More</button></div>} />;
+  }
+  const view = render(<Split />);
+  const more = view.getByRole('button', { name: 'More' });
+  more.focus(); fireEvent.click(more);
+  fireEvent.click(await view.findByRole('menuitem', { name: 'A' }));
+  await Promise.resolve();
+  expect(document.activeElement).toBe(more);
+});
+it('a split-button Menu opened from outside its anchor closes onto its own menu button', async () => {
+  function Split() {
+    const [open, setOpen] = useState(false);
+    return <><button onClick={() => setOpen(true)}>Retry</button>
+      <Menu open={open} autoFocus onClose={() => setOpen(false)} onSelect={() => setOpen(false)} items={[{ id: 'a', label: 'A' }]}
+        anchor={<div><button>Primary</button><button aria-haspopup="menu" onClick={() => setOpen(value => !value)}>More</button></div>} /></>;
+  }
+  const view = render(<Split />);
+  const retry = view.getByRole('button', { name: 'Retry' });
+  retry.focus(); fireEvent.click(retry);
+  fireEvent.keyDown(await view.findByRole('menuitem', { name: 'A' }), { key: 'Escape' });
+  expect(document.activeElement).toBe(view.getByRole('button', { name: 'More' }));
+});
 it('icon-only disclosure has an accessible name and a controlled content target', () => {
   const toggle = vi.fn();
   const view = render(<DisclosureRow icon={null} title="Details" open={false} expandable onToggle={toggle}>Body</DisclosureRow>);

@@ -2,7 +2,7 @@ import type { AppServerClient } from '../../client/app-server';
 import { shallowEqual, useClientSelector } from '../../client/selectors';
 import { AgentTranscript } from './AgentTranscript';
 import { RuntimeFacts } from './Activity';
-import { ConversationStats } from './ConversationStats';
+import { ConversationStats } from './UsageStats';
 import { TodoDock } from '../composer/TodoDock';
 import { GoalDock } from '../composer/GoalDock';
 import { QueueDock } from '../composer/QueueDock';
@@ -10,8 +10,8 @@ import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 import { todoDock, goalDock, queueRows } from '../../bindings/composer-context';
 import { ChatViewport } from '../../presentation/layout/ChatViewport';
 import { Trajectory } from '../trajectory/Trajectory';
-import type { HistoryAction } from '../commands/native';
-import type { CompletedResponseView } from '../../../../protocol/app-server/v34';
+import type { ResponseAction } from '../commands/native';
+import type { CompletedResponseView } from '../../../../protocol/app-server/v35';
 import { useRef, useState } from 'react';
 import { useTranslation } from '../../locale/react';
 import { TurnNavigator } from './TurnNavigator';
@@ -19,7 +19,7 @@ import { turnAnchor } from '../../client/transcript';
 
 export function ConversationLive({ client, sessionId, mode, disabled, onHistorical }: {
   client: AppServerClient; sessionId?: string; mode: 'chat' | 'trajectory'; disabled: boolean;
-  onHistorical: (id: HistoryAction, response: CompletedResponseView) => void;
+  onHistorical: (id: ResponseAction, response: CompletedResponseView) => void;
 }) {
   const tx=useTranslation(), viewport=useRef<ChatViewport>(null), [active,setActive]=useState<string | null>();
   const view = useClientSelector(client, state => {
@@ -35,7 +35,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, onHistoric
   if (!view) return null;
   return mode === 'trajectory' && view.trace
     ? <Trajectory key={`${view.id}:${view.target?.attachment_id}`} cache={view.trace} onSelect={id => client.selectTrace(view.id, id)} onLoadDetail={id => { void client.loadTraceDetail(view.id, id); }} loadEarlier={() => void client.loadEarlierTrace(view.id).catch(() => {})} latest={() => client.latestTrace(view.id)}/>
-    : <ChatViewport ref={viewport} key={`${view.id}:${view.target?.attachment_id}`} historical={view.history?.mode==='historical'} latestLabel={tx('agent:agent-transcript.return-to-latest')}
+    : <ChatViewport ref={viewport} key={`${view.id}:${view.target?.attachment_id}`} latestLabel={tx('agent:agent-transcript.return-to-latest')}
       overlay={<TurnNavigator key={`rail:${view.id}:${view.target?.attachment_id}`} client={client} sessionId={view.id} active={active} onNavigate={turn=>{
         const intent=viewport.current?.beginNavigation();
         if(intent){
@@ -48,8 +48,8 @@ export function ConversationLive({ client, sessionId, mode, disabled, onHistoric
         }
       }}/>}
       latestTurn={view.attempt && view.attempt.phase.type!=='settled' ? turnAnchor({conversation_id:view.conversation_id,attempt_id:view.attempt.attempt_id}) : undefined}
-      onLatest={()=>client.latestTranscript(view.id)} onUserIntent={()=>client.userScrolled(view.id)} onActiveTurn={setActive}>
-      <AgentTranscript snapshot={view} history={view.history} loadEarlier={() => void client.loadEarlier(view.id).catch(() => {})} loadNewer={()=>void client.loadNewer(view.id).catch(()=>{})} lineageSwitchSafe={view.safe} historicalDisabled={view.disabled} onHistorical={onHistorical}/>
+      onActiveTurn={setActive}>
+      <AgentTranscript snapshot={view} history={view.history} loadEarlier={() => void client.loadEarlier(view.id).catch(() => {})} lineageSwitchSafe={view.safe} historicalDisabled={view.disabled} onHistorical={onHistorical}/>
       <ConversationActivity client={client} sessionId={view.id}/>
     </ChatViewport>;
 }
@@ -74,6 +74,11 @@ export function ConversationDocks({ client, sessionId, disabled }: { client: App
 }
 
 export function ConversationTotals({ client, sessionId }: { client: AppServerClient; sessionId: string }) {
-  const snapshot = useClientSelector(client, state => state.views[sessionId]?.snapshot, (a, b) => a?.transcript.statistics === b?.transcript.statistics);
-  return <ConversationStats snapshot={snapshot}/>;
+  const facts = useClientSelector(client, state => {
+    const view = state.views[sessionId];
+    // A detached or disconnected view's last reading is not current occupancy.
+    const current = state.connection === 'connected' && view?.attachment === 'attached';
+    return { statistics: view?.snapshot?.transcript.statistics, occupancy: current ? view?.snapshot?.context?.last_request_occupancy : undefined };
+  }, shallowEqual);
+  return <ConversationStats statistics={facts.statistics} occupancy={facts.occupancy}/>;
 }

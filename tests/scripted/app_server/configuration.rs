@@ -3,9 +3,55 @@
 #![allow(clippy::large_futures)] // bounded fixture futures; no recursive or unbounded stack growth
 use super::*;
 use crate::local_runtime::configuration::application::{
-    AdoptionError, ApplyUnit, ConfigurationApplication, UnitApplication,
+    AdoptionEligibility, AdoptionError, ApplyUnit, ConfigurationApplication, UnitApplication,
 };
 use crate::local_runtime::configuration::settings::{ConfigMutation, SourceMutation};
+
+/// A resident Session's configuration-adoption eligibility exactly as a
+/// Runtime Client attachment observes it: the bootstrap snapshot value, then
+/// only published change events. Nothing here reads configuration authority
+/// or derives eligibility; every value is the runtime's own publication.
+struct EligibilityStream {
+    _attachment: crate::runtime_client::RuntimeAttachment,
+    subscription: crate::runtime_client::EventSubscription,
+    current: AdoptionEligibility,
+}
+
+impl EligibilityStream {
+    fn open(fixture: &Fixture, id: &crate::local_runtime::session::SessionId) -> Self {
+        let host = fixture.manager.configuration_host(id).unwrap();
+        let (attachment, _) = host
+            .attach_read_only(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .unwrap();
+        let (snapshot, cursor) = host.snapshot().unwrap();
+        let subscription = attachment.subscribe_events(cursor).unwrap();
+        Self {
+            _attachment: attachment,
+            subscription,
+            current: snapshot.configuration_adoption_eligibility,
+        }
+    }
+
+    /// Consumes published events until the runtime has published `expected`.
+    /// Every eligibility event must change the value: a repeated publication
+    /// fails here.
+    async fn until(&mut self, expected: AdoptionEligibility) {
+        while self.current != expected {
+            match self.subscription.next().await {
+                crate::runtime_client::EventDelivery::Event(event) => {
+                    if let crate::runtime_client::RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged {
+                        eligibility,
+                    } = event.event
+                    {
+                        assert_ne!(eligibility, self.current, "eligibility republished unchanged");
+                        self.current = eligibility;
+                    }
+                }
+                other => panic!("eligibility stream ended: {other:?}"),
+            }
+        }
+    }
+}
 
 async fn source_settled(
     f: &Fixture,
@@ -975,6 +1021,8 @@ async fn t11_admission_gate_orders_busy_adoption_without_cancelling_attempt() {
         )
         .await;
         let candidate = settled(&fixture, 0).await.candidate.unwrap();
+        let mut eligibility = EligibilityStream::open(&fixture, &id);
+        eligibility.until(AdoptionEligibility::Eligible).await;
         let gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
         let release = gate.arm_scoped();
         runtime.install_configuration_admission_gate(gate.clone());
@@ -1005,26 +1053,14 @@ async fn t11_admission_gate_orders_busy_adoption_without_cancelling_attempt() {
                 .admitted_attempt
                 .is_some()
         );
-        assert_eq!(
-            fixture
-                .manager
-                .configuration_application(&id)
-                .unwrap()
-                .eligibility,
-            crate::local_runtime::configuration::application::AdoptionEligibility::Busy
-        );
+        // The admitted attempt makes the runtime publish Busy; the
+        // configuration application is untouched by it.
+        eligibility.until(AdoptionEligibility::Busy).await;
         let settlement = runtime.settlement_signal();
         fixture.gates[0].release();
         settlement.notified().await;
-        runtime.wait_for_configuration_admissions().await;
-        assert_eq!(
-            fixture
-                .manager
-                .configuration_application(&id)
-                .unwrap()
-                .eligibility,
-            crate::local_runtime::configuration::application::AdoptionEligibility::Eligible
-        );
+        // Settlement publishes Eligible without any configuration read.
+        eligibility.until(AdoptionEligibility::Eligible).await;
         fixture
             .manager
             .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
@@ -1126,14 +1162,8 @@ async fn t11_background_execution_busy_settles_into_eligible_adoption() {
             .manager
             .probe(&fixture.sessions[0].active_conversation_id);
         let preparations = probe.configuration_preparations.load(Ordering::SeqCst);
-        assert_eq!(
-            fixture
-                .manager
-                .configuration_application(&id)
-                .unwrap()
-                .eligibility,
-            crate::local_runtime::configuration::application::AdoptionEligibility::Eligible
-        );
+        let mut eligibility = EligibilityStream::open(&fixture, &id);
+        eligibility.until(AdoptionEligibility::Eligible).await;
         let (executor, mut started, release) = GatedBackgroundExecutor::new();
         let executor: Arc<dyn crate::tools::executor::ToolExecutor> = Arc::new(executor);
         let invocation = crate::tools::types::ToolInvocation {
@@ -1179,14 +1209,7 @@ async fn t11_background_execution_busy_settles_into_eligible_adoption() {
             runtime.idle_epoch(),
             Err(crate::runtime::conversation_runtime::IdleBusyReason::Background)
         );
-        assert_eq!(
-            fixture
-                .manager
-                .configuration_application(&id)
-                .unwrap()
-                .eligibility,
-            crate::local_runtime::configuration::application::AdoptionEligibility::Busy
-        );
+        eligibility.until(AdoptionEligibility::Busy).await;
         assert_eq!(
             fixture.manager.adopt_configuration(
                 &id,
@@ -1218,20 +1241,13 @@ async fn t11_background_execution_busy_settles_into_eligible_adoption() {
             requests[0]
         );
         fixture.gates[0].release();
-        // No notification fires for busy -> idle: eligibility is computed at
-        // read time, so poll the manager read inside the liveness guard.
-        loop {
-            let view = fixture.manager.configuration_application(&id).unwrap();
-            if view.eligibility
-                == crate::local_runtime::configuration::application::AdoptionEligibility::Eligible
-            {
-                let pending = view.candidate.as_ref().unwrap();
-                assert_eq!(pending.identity, candidate.identity);
-                assert_eq!(pending.expected_binding, candidate.expected_binding);
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
+        // The runtime publishes busy -> idle itself when the last owner
+        // releases its admission; nothing polls.
+        eligibility.until(AdoptionEligibility::Eligible).await;
+        let view = fixture.manager.configuration_application(&id).unwrap();
+        let pending = view.candidate.as_ref().unwrap();
+        assert_eq!(pending.identity, candidate.identity);
+        assert_eq!(pending.expected_binding, candidate.expected_binding);
         assert_eq!(
             probe.configuration_preparations.load(Ordering::SeqCst),
             preparations,

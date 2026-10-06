@@ -3,7 +3,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { CapabilityInspection1, Model, Request1, SourceSettings } from '../../protocol/app-server/v34';
+import type { CapabilityInspection1, Model, Request1, SourceSettings } from '../../protocol/app-server/v35';
 import { settingsTransactionOwners } from '../src/app/settings/Settings';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { OutcomeUncertain } from '../src/client/app-server';
@@ -126,7 +126,7 @@ it('S2-03 each setting has exactly one primary editor across the six pages', asy
   }
   expect(seen.get('Default model')).toBe('Models');
   expect(seen.get('Root instructions')).toBe('Agent');
-  expect(seen.get('Built-in tools')).toBe('Tools & Permissions');
+  expect(seen.get('Native Tools')).toBe('Tools & Permissions');
   expect(seen.get('Todo extension')).toBe('Extensions');
   expect(seen.get('Context policy')).toBe('Advanced');
 });
@@ -138,7 +138,7 @@ it('S2-04 Agent holds identity and guidance; Tools & Permissions holds what the 
   await user(s, 'Agent');
   expect(forms()).toEqual(['Root identity', 'Root description', 'Root instructions', 'Project guidance']);
   await openSettingsPage('Tools & Permissions');
-  expect(forms()).toEqual(expect.arrayContaining(['Approval mode', 'Built-in tools', 'Skill visibility', 'Agent allowlist', 'Workflow allowlist']));
+  expect(forms()).toEqual(expect.arrayContaining(['Approval mode', 'Native Tools', 'Skill visibility', 'Agent allowlist', 'Workflow allowlist']));
   // Per-Tool policies are one task deeper, not scattered primary tabs.
   expect(screen.getByRole('button', { name: 'Advanced Tool policies' }).getAttribute('aria-expanded')).toBe('false');
   // The old native-unit tabs do not exist as navigation.
@@ -861,7 +861,7 @@ it('S2-09 a committed Model accepts no edit until its authoritative reread, and 
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0].params.expected_revision).toBe('user-1');
   expect(writes(s)[0].params.mutation).toEqual({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...fullModel(), id: 'wire-new' } } });
-  await screen.findByText('Saved. Check the status above to confirm it has taken effect.');
+  await screen.findByText('Saved. Native application proceeds automatically.');
   // The post-commit read is outstanding: the presentation still holds the
   // pre-commit Model, and it is no base for a new draft of the same unit.
   expect(wire().value).toBe('wire');

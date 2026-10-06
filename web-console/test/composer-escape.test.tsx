@@ -41,7 +41,7 @@ it.each(['unavailable', 'inactive', 'no Attempt'] as const)('%s scope cannot can
   escape(); escape(); expect(p.onCancel).not.toHaveBeenCalled();
 });
 it('focus outside the editor and window blur invalidate old arms', () => {
-  const { p, input, escape } = mount(); escape(); act(() => screen.getByRole('button', { name: 'Enter while running: Queue' }).focus());
+  const { p, input, escape } = mount(); escape(); act(() => screen.getByRole('button', { name: 'Commands' }).focus());
   escape(); act(() => input.focus()); escape(); expect(p.onCancel).not.toHaveBeenCalled();
   fireEvent(window, new Event('blur')); escape(); expect(p.onCancel).not.toHaveBeenCalled();
 });

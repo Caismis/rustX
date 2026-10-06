@@ -48,15 +48,16 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     await expect(page.getByText('No current tasks')).toHaveCount(0);
     await expect(page.locator('[data-todo-state]')).toHaveCount(0);
     await expect(goal).toHaveCount(0); await expect(queue).toHaveCount(0);
-    await expect(page.locator('[data-composer-context-stack] > *')).toHaveCount(2);
-    await expect(page.locator('[data-composer-context-stack] > [data-context-seat]')).toHaveCount(1);
+    await expect(page.locator('[data-composer-context-stack] > *')).toHaveCount(1);
+    await expect(page.locator('[data-composer-context-stack] > [data-context-seat]')).toHaveCount(0);
     const stackGeometry = async () => {
       const stack = (await page.locator('[data-composer-context-stack]').boundingBox())!;
       const seats = page.locator('[data-composer-context-stack] > *');
       const first = (await seats.first().boundingBox())!, last = (await seats.last().boundingBox())!;
       return { lead: Math.round(first.y - stack.y), trail: Math.round(stack.y + stack.height - last.y - last.height) };
     };
-    // The stack contains only the Context and Composer seats, with its 6px
+    // The stack contains only the Composer seat (an idle Context seat renders
+    // nothing), with its 6px
     // leading rhythm; no empty Todo wrapper or trailing height remains.
     expect(await stackGeometry()).toEqual({ lead: 6, trail: 0 });
     await page.screenshot({ path: 'test-results/composer-no-todo-dock.png', fullPage: true });
@@ -68,9 +69,14 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     // Real composed Agent Status, placed only by the runtime-published anchors it
     // carries: every composition renders exactly once, subordinate to its own
     // anchor row, and never repeats under later messages.
-    while (await page.locator('[data-turn-process][aria-expanded="false"]').count()) await page.locator('[data-turn-process][aria-expanded="false"]').first().click();
-    const notes = page.getByRole('note', { name: 'Agent Status' });
+    const notes = page.getByRole('note', { name: 'Agent Status', includeHidden: true });
     await expect(notes).not.toHaveCount(0);
+    // Status projection can arrive after Todo/final text. Its first annotation
+    // owns a disclosure beside its hidden body, not the adjacent message owner.
+    const statusProcess = notes.first().locator('xpath=ancestor::*[./*[@data-turn-process]][1]').locator(':scope > [data-turn-process]');
+    await expect(statusProcess).toHaveCount(1);
+    if (await statusProcess.getAttribute('aria-expanded') === 'false') await statusProcess.click();
+    await expect(notes.first()).toBeVisible();
     const placement = async () => page.locator('[data-agent-status]').evaluateAll(nodes =>
       nodes.map(node => [node.getAttribute('data-agent-status'), node.closest('[data-chat-anchor-key]')?.getAttribute('data-chat-anchor-key') ?? null] as const));
     const placed = await placement();
@@ -99,22 +105,35 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     await expect(goal).toContainText('Active Goal');
     await expect(goal).toContainText('Verify the composer docks');
     await expect(goal).toContainText('1/1 rounds');
-    while (await page.locator('[data-turn-process][aria-expanded="false"]').count()) await page.locator('[data-turn-process][aria-expanded="false"]').first().click();
     const activity = page.locator('[data-goal-activity]').filter({ hasText: 'Goal started' });
     await expect(activity).toHaveCount(1);
+    // Goal state and transcript reads publish independently. Reveal the exact
+    // historical owner only after its activity has arrived.
+    const process = activity.locator('xpath=ancestor::*[@data-turn-process-owner][1]').locator(':scope > [data-turn-process]');
+    await expect(process).toHaveCount(1);
+    // That attempt has settled durably, but its process view publishes on its
+    // own read. Only a settled process is toggleable, and only then are its
+    // steps grouped (collapsed) as in Harness, so reveal both once it settles.
+    await expect(process).toBeEnabled();
+    if (await process.getAttribute('aria-expanded') === 'false') await process.click();
+    const step = page.locator('[data-step-process]').filter({ has: activity }).last().locator(':scope > button');
+    if (await step.getAttribute('aria-expanded') === 'false') await step.click();
+    await expect(activity).toBeVisible();
+    const details = activity.getByText('Execution details', { exact: true });
+    await expect(details).toBeVisible();
     await expect(activity.locator('[data-tool-renderer]')).toHaveCount(0);
     await page.screenshot({ path: test.info().outputPath('goal-activity.png') });
     await expect(activity.locator('details')).not.toHaveAttribute('open', '');
-    await activity.getByText('Execution details', { exact: true }).click();
+    await details.click();
     await expect(activity.locator('pre')).toContainText('native.create_goal');
     await expect(activity.locator('pre')).toContainText('"name": "create_goal"');
-    await activity.getByText('Execution details', { exact: true }).click();
+    await details.click();
     await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeVisible();
     await message.fill('Queued during the Goal round'); await page.getByRole('button', { name: 'Queue', exact: true }).click();
     await expect(queue.locator('[data-inbound-sequence]')).toContainText('Queued during the Goal round');
     await expect(queue.locator('[data-submission-echo]')).toHaveCount(0);
     const order = () => page.locator('[data-composer-context-stack] > *').evaluateAll(nodes => nodes.map(node => node.getAttribute('aria-label') ?? (node.hasAttribute('data-context-seat') ? 'Context' : node.querySelector('[data-composer-card]') ? 'Composer' : 'unknown')));
-    expect(await order()).toEqual(['Context', 'To-dos', 'Goal', 'Queue', 'Composer']);
+    expect(await order()).toEqual(['To-dos', 'Goal', 'Queue', 'Composer']);
     await aligned([todo, goal, queue]);
 
     // Native mutation while the provider gate prevents claim. Both controls

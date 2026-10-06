@@ -1214,3 +1214,125 @@ async fn capability_projection_carries_builtin_tools_and_revision() {
     let (snapshot, _) = host.snapshot().expect("snapshot");
     assert_eq!(snapshot.capabilities, capabilities);
 }
+
+/// Configuration-adoption eligibility is runtime-domain state the runtime
+/// publishes on change, not a side effect of event traffic. A long streamed
+/// answer publishes Busy once at admission and Eligible once after settlement;
+/// none of its deltas publishes eligibility, so a client that observes
+/// eligibility never re-reads configuration because output streamed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn streamed_deltas_publish_no_adoption_eligibility_change() {
+    use rustx::local_runtime::configuration::application::AdoptionEligibility;
+    const DELTAS: usize = 200;
+    let (release_tx, release_rx) = support::fake::model_release();
+    let mut steps = vec![
+        FakeStep::Emit(ModelEvent::Started),
+        // Parked before the first delta until Busy is observably published,
+        // so the admission publication cannot interleave with the deltas.
+        FakeStep::ParkUntilReleased(release_rx),
+    ];
+    steps.extend((0..DELTAS).map(|index| {
+        FakeStep::Emit(ModelEvent::TextDelta {
+            block_index: ContentBlockIndex::new(0),
+            text: format!("{index} "),
+        })
+    }));
+    steps.push(FakeStep::Emit(ModelEvent::Completed {
+        finish_reason: ModelFinishReason::Stop,
+        usage: None,
+    }));
+    let (_, host) = host(
+        "conv_0d6b1f4e-4a51-7c3e-9a1d-451451451451",
+        FakeModel::new(vec![steps]),
+        ToolRegistry::new(),
+        status_engine(),
+        None,
+    )
+    .await;
+    let (attachment, _) = host
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .expect("attach");
+    let subscription = attachment
+        .subscribe_events(rustx::runtime_client::RuntimeClientCursor::new(0))
+        .expect("subscribe");
+    let eligibility = |event: &RuntimeClientProtocolEvent| match &event.event {
+        RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged { eligibility } => {
+            Some(eligibility.clone())
+        }
+        _ => None,
+    };
+    let mut seen = receive_until(&subscription, |event| {
+        eligibility(event) == Some(AdoptionEligibility::Eligible)
+    })
+    .await;
+    attachment.handle_request(RuntimeClientRequest::SubmitInbound {
+        id: rustx::runtime_client::RequestId::new(1),
+        content: text("stream"),
+    });
+    seen.extend(
+        receive_until(&subscription, |event| {
+            eligibility(event) == Some(AdoptionEligibility::Busy)
+        })
+        .await,
+    );
+    let busy_at = seen.len();
+    release_tx.send(true).expect("release");
+    seen.extend(
+        receive_until(&subscription, |event| {
+            matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+        })
+        .await,
+    );
+    seen.extend(
+        receive_until(&subscription, |event| {
+            eligibility(event) == Some(AdoptionEligibility::Eligible)
+        })
+        .await,
+    );
+
+    let streamed = &seen[busy_at..];
+    let deltas: Vec<usize> = streamed
+        .iter()
+        .enumerate()
+        .filter(|(_, event)| matches!(event.event, RuntimeClientEvent::AssistantTextDelta { .. }))
+        .map(|(index, _)| index)
+        .collect();
+    // Publication release may coalesce model deltas; every streamed byte is
+    // still published between the first and last delta event.
+    let text: String = streamed
+        .iter()
+        .filter_map(|event| match &event.event {
+            RuntimeClientEvent::AssistantTextDelta { delta, .. } => Some(delta.as_str()),
+            _ => None,
+        })
+        .collect();
+    let expected = (0..DELTAS).fold(String::new(), |mut text, index| {
+        use std::fmt::Write as _;
+        write!(text, "{index} ").expect("writing to a String cannot fail");
+        text
+    });
+    assert_eq!(text, expected);
+    let (first, last) = (deltas[0], deltas[deltas.len() - 1]);
+    assert!(
+        streamed[first..=last]
+            .iter()
+            .all(|event| eligibility(event).is_none()),
+        "no delta publishes eligibility"
+    );
+    // After admission, exactly one publication remains: settlement's Eligible.
+    let after_busy: Vec<_> = streamed.iter().filter_map(eligibility).collect();
+    assert_eq!(after_busy, vec![AdoptionEligibility::Eligible]);
+    // The whole stream never republishes an unchanged value.
+    let published: Vec<_> = seen.iter().filter_map(eligibility).collect();
+    assert!(
+        published.windows(2).all(|pair| pair[0] != pair[1]),
+        "{published:?}"
+    );
+    assert_eq!(
+        host.snapshot()
+            .expect("snapshot")
+            .0
+            .configuration_adoption_eligibility,
+        AdoptionEligibility::Eligible
+    );
+}

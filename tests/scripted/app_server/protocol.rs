@@ -1632,7 +1632,7 @@ async fn artifact_carrier_is_native_scoped_bounded_and_cold_reopen_safe() {
         rejected(
             &connection,
             Method::ArtifactRead {
-                target: other,
+                target: other.clone(),
                 artifact_id: artifact_id.clone(),
             },
         )
@@ -1647,6 +1647,17 @@ async fn artifact_carrier_is_native_scoped_bounded_and_cold_reopen_safe() {
         .await;
         let uploaded = binary_upload(&connection, target.clone(), "hello.txt", b"hi").await;
         assert_eq!(uploaded.len(), 1);
+        let product_host = TrustedFileHost::new(&f).await;
+        let host_read = |target| crate::app_server::product_host::FileRead {
+            target,
+            source: crate::app_server::product_host::ReadSource::Artifact {
+                artifact_id: artifact_id.clone(),
+            },
+            roots: vec![],
+        };
+        assert_eq!(product_host.success(host_read(target.clone())).await, read);
+        product_host.rejected(host_read(other.clone())).await;
+
         rejected(
             &connection,
             Method::SessionUploadPrepare {
@@ -1671,6 +1682,7 @@ async fn artifact_carrier_is_native_scoped_bounded_and_cold_reopen_safe() {
             },
         )
         .await;
+        product_host.rejected(host_read(target.clone())).await;
         rejected(
             &connection,
             Method::ArtifactRead {
@@ -1703,6 +1715,7 @@ async fn artifact_carrier_is_native_scoped_bounded_and_cold_reopen_safe() {
                 .unwrap()
         };
         assert_ne!(artifact_id, next);
+        product_host.close().await;
         connection.close();
         f.close().await;
     })
@@ -3128,7 +3141,13 @@ async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_r
             assert_eq!(tail.usage.as_ref().unwrap().total_tokens, 120);
             assert_eq!(tail.timing.as_ref().unwrap().generation_ms, Some(1280));
             assert_eq!(projected.entries.iter().filter(|entry| entry.completed_response.is_some()).count(), 2);
-            assert_eq!(projected.statistics.unwrap(), crate::runtime_client::response::ConversationStatistics::default());
+            // As a Harness fork folds its copied prefix, the child's totals and
+            // context reading include both inherited turns, without owning them.
+            let totals = projected.statistics.unwrap();
+            assert_eq!((totals.turns, totals.model_requests, totals.requests_with_usage, totals.completed_responses), (2, 2, 2, 2));
+            assert_eq!(totals.reported_usage.unwrap().total_tokens, 240);
+            assert!(totals.latest_turn.is_none());
+            assert_eq!(crate::context::occupancy::read(&copied, 0).unwrap().unwrap().input_tokens, 100);
             assert!(copied.read_events(None, 128).unwrap().events.is_empty());
             let child_id = session.id.clone(); let child_node = session.active_node.clone();
             drop(copied); drop(destination);
@@ -3163,6 +3182,12 @@ async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_r
         let destination = controller.acquire_session(&session.id, Some(&session.active_node)).await.unwrap();
         let retry = SqliteConversationStore::open_existing(session.active_conversation_id, &destination.database_path).unwrap();
         assert_eq!(retry.load_canonical().unwrap().len(), 2);
+        // Regenerate keeps only the prefix before the retried input: one turn.
+        let mut retried = crate::runtime_client::snapshot::transcript_page_view(retry.load_transcript_page(None, 64).unwrap()).unwrap();
+        crate::runtime_client::response::decorate(&retry, &mut retried).unwrap();
+        let totals = retried.statistics.unwrap();
+        assert_eq!((totals.turns, totals.model_requests, totals.completed_responses), (1, 1, 1));
+        assert_eq!(totals.reported_usage.unwrap().total_tokens, 120);
         rejected(&connection, Method::SessionBranch { session_id: source.id.clone(), node_id: source.active_node.clone(), surface_revision: crate::conversation::SurfaceRevision::new(revision.get() + 1), boundary: MessageId::new("assistant-b"), side: LineageSide::After }).await;
         rejected(&connection, Method::SessionBranch { session_id: source.id.clone(), node_id: source.active_node.clone(), surface_revision: revision, boundary: MessageId::new("user-b"), side: LineageSide::After }).await;
         assert_eq!(store.load_canonical().unwrap(), original);
@@ -4319,14 +4344,14 @@ impl TrustedFileHost {
         let mut request = self.endpoint.as_str().into_client_request().unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.product-host.file-read.v1, rustx-product-host.{credential}")
+            format!("rustx.product-host.file-read.v2, rustx-product-host.{credential}")
                 .parse()
                 .unwrap(),
         );
         let (socket, reply) = tokio_tungstenite::connect_async(request).await?;
         assert_eq!(
             reply.headers()["sec-websocket-protocol"],
-            "rustx.product-host.file-read.v1"
+            "rustx.product-host.file-read.v2"
         );
         Ok(socket)
     }
@@ -4379,8 +4404,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         let target = attach(&browser, &f, 0).await;
         let read = |message_id| crate::app_server::product_host::FileRead {
             target: target.clone(),
-            message_id,
-            delivery_index: 0,
+            source: crate::app_server::product_host::ReadSource::SessionFile { message_id, delivery_index: 0 },
             roots: vec![f.workspaces[0].clone()],
         };
         assert_eq!(
@@ -4463,13 +4487,13 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         let Some(Response::Failure(denied)) = browser.handle_json(&forged.to_string()).await else { panic!("ordinary file bypass succeeded") };
         assert_eq!(denied.error.code, -32601);
         assert!(product_host.open(FILE_BROWSER_TOKEN).await.is_err(), "normal transport credential cannot authenticate private file seam");
-        // Historical paging carries the same typed fact after activity folds.
+        // Older paging carries the same typed fact after activity folds.
         let MethodResult::TranscriptWindow { window } = call(&browser, 4120, Method::Transcript {
             target: target.clone(), at: crate::durable::reading::ConversationWindowAt::Latest, limit: 1,
         }).await else { panic!() };
         let MethodResult::TranscriptWindow { window: older } = call(&browser, 4121, Method::Transcript {
             target: target.clone(), at: crate::durable::reading::ConversationWindowAt::Older {
-                before: window.page.entries[0].cursor.into(), cut: Some(window.cut),
+                before: window.page.entries[0].cursor.into(),
             }, limit: 64,
         }).await else { panic!() };
         assert!(older.page.entries.iter().any(|entry| matches!(&entry.item,
@@ -4495,7 +4519,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         assert_eq!(inherited.result.deliveries.as_slice(), std::slice::from_ref(&file));
         assert_ne!(fork_target.conversation_id, file.scope.conversation_id);
         let MethodResult::SessionFileBytes { file: inherited_file, data } = product_host.success( crate::app_server::product_host::FileRead {
-            target: fork_target, message_id: inherited.id.clone(), delivery_index: 0, roots: vec![f.workspaces[0].clone()],
+            target: fork_target, source: crate::app_server::product_host::ReadSource::SessionFile { message_id: inherited.id.clone(), delivery_index: 0 }, roots: vec![f.workspaces[0].clone()],
         }).await else { panic!() };
         assert_eq!(inherited_file, file);
         assert_eq!(base64::engine::general_purpose::STANDARD.decode(data).unwrap(), original);
@@ -4503,7 +4527,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         std::fs::write(f.workspaces[1].join(&file.path), b"UNRELATED").unwrap();
         let unrelated = attach_session(&browser, &f.sessions[1]).await;
         assert_eq!(product_host.rejected( crate::app_server::product_host::FileRead {
-            target: unrelated, message_id: tool.id.clone(), delivery_index: 0, roots: vec![f.workspaces[1].clone()],
+            target: unrelated, source: crate::app_server::product_host::ReadSource::SessionFile { message_id: tool.id.clone(), delivery_index: 0 }, roots: vec![f.workspaces[1].clone()],
         }).await, ErrorData::SessionFileRead { reason: FileFailure::Unavailable });
         let mut denied = read(tool.id.clone());
         denied.roots = vec![f.workspaces[1].clone()];
@@ -4575,6 +4599,8 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         for revoked in ["credential", "socket", "attachment"] {
             let mut completed = probe.completed.subscribe();
             probe.completed.send_replace(None);
+            let mut retirement_waiting = probe.retirement_waiting.subscribe();
+            probe.retirement_waiting.send_replace(false);
             let gate_release = probe.before_bytes.arm_scoped();
             let mut pending = product_host.open(FILE_HOST_TOKEN).await.unwrap();
             pending.send(tokio_tungstenite::tungstenite::Message::Text(serde_json::to_string(&read(tool.id.clone())).unwrap().into())).await.unwrap();
@@ -4587,15 +4613,31 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
             } else if revoked == "socket" {
                 // This is the exact native fence used when Node aborts after
                 // registration removal or Host replacement, not a clock wait.
-                pending.close(None).await.unwrap();
+                pending.close(Some(tokio_tungstenite::tungstenite::protocol::CloseFrame {
+                    code: tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Normal,
+                    reason: "".into(),
+                })).await.unwrap();
                 let authority = probe.authority.lock().unwrap().clone().unwrap();
                 authority.cancelled().await;
+                // Observe the exact retirement future being polled Pending
+                // while descriptor read is held. The transport cannot ACK a
+                // clean close and release Node admission before this settles.
+                retirement_waiting.wait_for(|waiting| *waiting).await.unwrap();
+                assert_eq!(*completed.borrow(), None);
+                assert_eq!(f.host.file_reads().available_permits(), crate::tools::session_files::SESSION_FILE_MAX_READS - 1);
+                assert!(futures_util::poll!(pending.next()).is_pending(), "close acknowledgement waits for the native read permit");
             } else {
                 call(&browser, 4193, Method::SessionDetach { target: target.clone() }).await;
             }
             drop(gate_release);
             completed.wait_for(Option::is_some).await.unwrap();
             assert_eq!(*completed.borrow(), Some(false), "{revoked}: native read publishes no bytes after revocation");
+            if revoked == "socket" {
+                let frame = pending.next().await.unwrap().unwrap();
+                assert!(matches!(frame, tokio_tungstenite::tungstenite::Message::Close(Some(frame)) if frame.code == tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Normal));
+                assert_eq!(f.host.file_reads().available_permits(), crate::tools::session_files::SESSION_FILE_MAX_READS, "clean native close is a physical permit retirement witness");
+                assert!(matches!(product_host.success(read(tool.id.clone())).await, MethodResult::SessionFileBytes { .. }), "a replacement read is admitted after the close acknowledgement");
+            }
             while let Some(frame) = pending.next().await {
                 if let Ok(tokio_tungstenite::tungstenite::Message::Text(text)) = frame {
                     let reply: Response = serde_json::from_str(&text).unwrap();

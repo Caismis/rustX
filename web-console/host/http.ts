@@ -5,6 +5,11 @@ import { NativeFileReadError } from './file-read.ts';
 /** Workspace authority only. The launcher carrier authenticates before this handler;
  * independently managed deployments supply their own browser authentication. */
 export function workspaceHandler(host?: ProductHostWorkspaces) {
+  // One active document carrier. The token cancels this operation only; it is
+  // neither a tab registry nor native authority, and is forgotten at settlement.
+  type FileOperation = { id: string; scope: { authorityId: string; endpoint: string }; abort: AbortController };
+  let document: FileOperation | undefined;
+  const files = new Map<string, FileOperation>();
   return async (request: IncomingMessage, response: ServerResponse, next: () => void = () => { response.writeHead(404).end(); }) => {
     if (!request.url?.startsWith('/product-host/')) return next();
     try {
@@ -37,16 +42,62 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
           if (!host.openWorkspace) throw new Error('Desktop unavailable on this Product Host');
           if (Object.keys(body).some(key => !['scope', 'target', 'application'].includes(key))) throw new Error('Invalid desktop request');
           value = await host.openWorkspace(scope(), body.target, body.application); break;
+        case 'document-preview':
+          if (!host.previewDocument) throw new Error('preview_unavailable');
+          {
+            if (Object.keys(body).some(key => !['scope', 'request', 'operationId'].includes(key))
+              || typeof body.operationId !== 'string' || !/^[a-f0-9-]{36}$/.test(body.operationId)) throw new Error('Invalid document operation');
+            if (document) throw new Error('capacity');
+            const owned = { id: body.operationId as string, scope: scope(), abort: new AbortController() };
+            document = owned;
+            const operation = owned.abort;
+            const closed = () => { if (!response.writableFinished) operation.abort(); };
+            response.on('close', closed);
+            // Header acknowledgement precedes cancellation admission. The browser
+            // keeps this response open until the Host's physical finally settles.
+            response.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Rustx-Document-Operation': owned.id });
+            response.flushHeaders();
+            try {
+              const result = await host.previewDocument(owned.scope, body.request, operation.signal);
+              response.end(JSON.stringify({ ok: true, value: result }));
+            } catch (error) {
+              response.end(JSON.stringify({ ok: false, message: String(error), kind: error instanceof WorkspaceHostError ? error.kind : undefined }));
+            } finally { response.off('close', closed); if (document === owned) document = undefined; }
+            return;
+          }
+        case 'document-cancel': {
+          if (Object.keys(body).some(key => !['scope', 'operationId'].includes(key)) || typeof body.operationId !== 'string') throw new Error('Invalid document cancellation');
+          const captured = scope();
+          if (document && document.id === body.operationId && document.scope.authorityId === captured.authorityId && document.scope.endpoint === captured.endpoint) document.abort.abort();
+          break;
+        }
         case 'file-read':
           if (!host.readDelivery) throw new Error('Session file reads unavailable on this Product Host');
           {
-            const read = new AbortController();
-            const closed = () => { if (!response.writableFinished) read.abort(); };
+            if (Object.keys(body).some(key => !['scope', 'read', 'operationId'].includes(key))
+              || typeof body.operationId !== 'string' || !/^[a-f0-9-]{36}$/.test(body.operationId)) throw new Error('Invalid file operation');
+            if (files.size >= 2 || files.has(body.operationId)) throw new Error('capacity');
+            const owned: FileOperation = { id: body.operationId, scope: scope(), abort: new AbortController() };
+            files.set(owned.id, owned);
+            const closed = () => { if (!response.writableFinished) owned.abort.abort(); };
             response.on('close', closed);
-            try { value = await host.readDelivery(scope(), body.read, read.signal); }
-            finally { response.off('close', closed); }
+            response.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Rustx-File-Operation': owned.id });
+            response.flushHeaders();
+            try {
+              const result = await host.readDelivery(owned.scope, body.read, owned.abort.signal);
+              response.end(JSON.stringify({ ok: true, value: result }));
+            } catch (error) {
+              response.end(JSON.stringify({ ok: false, message: String(error), kind: error instanceof WorkspaceHostError ? error.kind : undefined,
+                nativeError: error instanceof AppServerRequestError || error instanceof NativeFileReadError ? error.error : undefined }));
+            } finally { response.off('close', closed); files.delete(owned.id); }
+            return;
           }
+        case 'file-cancel': {
+          if (Object.keys(body).some(key => !['scope', 'operationId'].includes(key)) || typeof body.operationId !== 'string') throw new Error('Invalid file cancellation');
+          const captured = scope(), owned = files.get(body.operationId);
+          if (owned && owned.scope.authorityId === captured.authorityId && owned.scope.endpoint === captured.endpoint) owned.abort.abort();
           break;
+        }
         case 'list': value = await host.listWorkspaces(); break;
         case 'adopt': value = await host.adoptWorkspace(scope(), string('location')); break;
         case 'rename': value = await host.renameWorkspace(scope(), string('id'), string('displayName')); break;

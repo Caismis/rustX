@@ -15,13 +15,14 @@ use std::{io, path::PathBuf, sync::Arc};
 use tokio_util::sync::CancellationToken;
 
 pub(crate) const PATH: &str = "/product-host/file-read";
-pub(crate) const SUBPROTOCOL: &str = "rustx.product-host.file-read.v1";
+pub(crate) const SUBPROTOCOL: &str = "rustx.product-host.file-read.v2";
 
 #[cfg(test)]
 #[derive(Debug)]
 pub(crate) struct ReadProbe {
     pub before_bytes: Arc<crate::runtime::conversation_runtime::Gate>,
     pub completed: tokio::sync::watch::Sender<Option<bool>>,
+    pub retirement_waiting: tokio::sync::watch::Sender<bool>,
     pub authority: std::sync::Mutex<Option<CancellationToken>>,
 }
 #[cfg(test)]
@@ -30,6 +31,7 @@ impl Default for ReadProbe {
         Self {
             before_bytes: Arc::default(),
             completed: tokio::sync::watch::channel(None).0,
+            retirement_waiting: tokio::sync::watch::channel(false).0,
             authority: std::sync::Mutex::default(),
         }
     }
@@ -66,6 +68,7 @@ impl Drop for Authority {
 
 /// One authenticated host-only socket owns one read. Disconnect, authority
 /// replacement and process shutdown synchronously cancel its publication fence.
+/// A close acknowledgement is emitted only after its admitted read retires.
 pub(crate) async fn serve<S>(
     socket: tokio_tungstenite::WebSocketStream<S>,
     host: AppServerHost,
@@ -93,12 +96,31 @@ where
     tokio::pin!(read);
     let result = tokio::select! {
         biased;
-        () = shutdown.cancelled() => return Ok(()),
-        () = authorization.cancelled() => return Ok(()),
-        _ = reader.next() => return Ok(()), // close, EOF, error or a second payload revokes this single operation
-        result = &mut read => result,
+        () = shutdown.cancelled() => None,
+        () = authorization.cancelled() => None,
+        _ = reader.next() => None, // close, EOF, error or a second payload revokes this single operation
+        result = &mut read => Some(result),
     };
-    check_authorization(&authorization)?;
+    let Some(result) = result else {
+        authorization.cancel();
+        // Admission owns a detached native operation and possibly a blocking
+        // descriptor read. Dropping its receiver cannot release that permit.
+        // Do not poll the socket (and flush an automatic close reply) until the
+        // exact operation has retired, even after its publication is revoked.
+        let _ = std::future::poll_fn(|cx| {
+            let result = std::future::Future::poll(read.as_mut(), cx);
+            #[cfg(test)]
+            if result.is_pending() {
+                host.file_read_probe().retirement_waiting.send_replace(true);
+            }
+            result
+        })
+        .await;
+        return tokio::time::timeout(super::transport::WRITE_TIMEOUT, writer.close())
+            .await
+            .map_err(io::Error::other)?
+            .map_err(io::Error::other);
+    };
     let response = match result {
         Ok(result) => Response::Success(Box::new(Success {
             jsonrpc: JsonRpcVersion::V2,
@@ -114,13 +136,18 @@ where
     let record = super::transport::serialize_record(&response)?;
     tokio::select! {
         biased;
-        () = shutdown.cancelled() => Ok(()),
-        () = authorization.cancelled() => Ok(()),
-        result = tokio::time::timeout(super::transport::WRITE_TIMEOUT, async {
-            writer.send(Message::Text(record.into())).await.map_err(io::Error::other)?;
-            writer.close().await.map_err(io::Error::other)
-        }) => result.map_err(io::Error::other)?,
+        () = shutdown.cancelled() => (),
+        () = authorization.cancelled() => (),
+        result = tokio::time::timeout(super::transport::WRITE_TIMEOUT, writer.send(Message::Text(record.into()))) => {
+            result.map_err(io::Error::other)?.map_err(io::Error::other)?;
+        },
     }
+    // A read already retired before cancellation can acknowledge the same clean
+    // close, without turning a known settlement into a transport-loss outcome.
+    tokio::time::timeout(super::transport::WRITE_TIMEOUT, writer.close())
+        .await
+        .map_err(io::Error::other)?
+        .map_err(io::Error::other)
 }
 
 /// Internal one-operation payload, accepted only after host-only authentication.
@@ -129,9 +156,19 @@ where
 #[serde(remote = "Self", deny_unknown_fields)]
 pub(crate) struct FileRead {
     pub target: AttachmentTarget,
-    pub message_id: crate::runtime::identity::MessageId,
-    pub delivery_index: usize,
+    pub source: ReadSource,
     pub roots: Vec<PathBuf>,
+}
+#[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum ReadSource {
+    SessionFile {
+        message_id: crate::runtime::identity::MessageId,
+        delivery_index: usize,
+    },
+    Artifact {
+        artifact_id: crate::runtime::ArtifactId,
+    },
 }
 fn check_authorization(authorization: &CancellationToken) -> io::Result<()> {
     if authorization.is_cancelled() {
@@ -210,11 +247,29 @@ async fn read_admitted(
             .expect("read authority probe") = Some(authorization.clone());
     }
     let FileRead {
-        message_id,
-        delivery_index,
+        source,
         roots: allowed_roots,
         ..
     } = request;
+    let (message_id, delivery_index) = match source {
+        ReadSource::SessionFile {
+            message_id,
+            delivery_index,
+        } => (message_id, delivery_index),
+        ReadSource::Artifact { artifact_id } => {
+            let _permit = host.file_reads().try_acquire_owned().map_err(|_| {
+                domain(ErrorData::SessionFileRead {
+                    reason: FileFailure::Capacity,
+                })
+            })?;
+            let data = authority
+                .artifact_read(&artifact_id)
+                .map_err(client_error)?;
+            route.attachment.read_authority().map_err(client_error)?;
+            check_rpc_authorization(&authorization)?;
+            return Ok(MethodResult::ArtifactBytes { data });
+        }
+    };
     let failed = |reason| domain(ErrorData::SessionFileRead { reason });
     if delivery_index >= crate::tools::session_files::PRESENT_MAX_FILES
         || allowed_roots.is_empty()

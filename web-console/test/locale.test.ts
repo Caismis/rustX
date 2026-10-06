@@ -1,4 +1,4 @@
-import { compactTokens } from '../src/app/agent/TurnTail';
+import { formatDuration, formatExactTokens, formatTokens } from '../src/app/agent/token-format';
 import { describe, expect, it, vi } from 'vitest';
 import { LocaleController, documentLanguage, LOCALE_STORAGE_KEY, type LocaleEnvironment, type LocaleId } from '../src/locale/controller';
 import { displayText, interpolate, message, searchVocabulary, translator } from '../src/locale/translation';
@@ -52,8 +52,11 @@ describe('one browser locale owner', () => {
 });
 
 it('presentation formatting uses the selected rustX locale', () => {
-  expect(compactTokens(translator('en'), 12000)).toBe('12K');
-  expect(compactTokens(translator('zh'), 12000)).toBe('1.2万');
+  expect(formatTokens(15461, translator('zh'))).toBe('15.5K');
+  expect(formatExactTokens(15461, translator('zh'))).toBe('15,461');
+  expect(formatDuration(20500, translator('zh'))).toBe('20.5秒');
+  expect(formatDuration(9652000, translator('zh'))).toBe('160分52秒');
+  expect(formatDuration(9652000, translator('en'))).toBe('160m52s');
 });
 
 

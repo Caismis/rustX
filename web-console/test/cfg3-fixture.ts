@@ -1,10 +1,11 @@
 import { cfg3Source, cfg3Effective, cfg3Application } from './cfg3-data';
+import { snapshot } from './fixture';
 import { vi } from 'vitest';
-import type { AttachmentTarget, EffectiveConfiguration, MethodResult, Request1, SourceSettings } from '../../protocol/app-server/v34';
+import type { AttachmentTarget, EffectiveConfiguration, MethodResult, Request1, SourceSettings } from '../../protocol/app-server/v35';
 import { AppServerClient, type ClientView } from '../src/client/app-server';
 export const cfg3Session = 'ses_00000000-0000-7000-8000-000000000001';
 export const cfg3Target: AttachmentTarget = { session_id: cfg3Session, conversation_id: 'conv_00000000-0000-7000-8000-000000000001', runtime_incarnation: '1', attachment_id: 'attachment-1' };
-export function cfg3Client(handler?: (operation: Request1, source: SourceSettings, effective: EffectiveConfiguration) => Promise<MethodResult | void>) { const source = cfg3Source(), effective = cfg3Effective(), client = new AppServerClient(); let state: ClientView = { connection: 'connected', generation: 1, sessions: [], uncertain: [], interactionOperations: {}, views: { [cfg3Session]: { id: cfg3Session, attachmentIntent: 'wanted', attachment: 'attached', target: cfg3Target } } }; vi.spyOn(client, 'getSnapshot').mockImplementation(() => state);
+export function cfg3Client(handler?: (operation: Request1, source: SourceSettings, effective: EffectiveConfiguration) => Promise<MethodResult | void>) { const source = cfg3Source(), effective = cfg3Effective(), client = new AppServerClient(); let state: ClientView = { connection: 'connected', generation: 1, sessions: [], uncertain: [], interactionOperations: {}, views: { [cfg3Session]: { id: cfg3Session, attachmentIntent: 'wanted', attachment: 'attached', target: cfg3Target, snapshot: snapshot() } } }; vi.spyOn(client, 'getSnapshot').mockImplementation(() => state);
     // Like the real client, a published snapshot change notifies every subscriber synchronously.
     const listeners = new Set<() => void>(), subscribe = client.subscribe; vi.spyOn(client, 'subscribe').mockImplementation(listener => { listeners.add(listener); const release = subscribe(listener); return () => { listeners.delete(listener); release(); }; });
     const publish = (patch: Partial<ClientView>) => { state = { ...state, ...patch }; for (const listener of listeners) listener(); }; const request = vi.spyOn(client, 'request').mockImplementation(async (operation) => { const overridden = await handler?.(operation, source, effective); if (overridden)

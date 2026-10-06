@@ -66,12 +66,12 @@ test('T1-08/09/15 Calls warnings, independent background, search and truncated f
   await expect(ledger.locator('[data-display-type="RecordRow"][data-owner="trace:5"]')).toHaveCount(0);
   await expect(ledger.locator('[data-owner="trace:6"]')).toBeVisible();
   await expectStableScreenshot(page, 'trajectory-calls.png');
-  await page.getByRole('textbox', { name: 'Search loaded Trace' }).fill('Missing field');
+  await page.getByRole('searchbox', { name: 'Search loaded Trace' }).fill('Missing field');
   await expect(ledger.locator('[data-display-type="RecordRow"][data-owner="trace:5"]')).toBeVisible();
   await expectStableScreenshot(page, 'trajectory-search.png');
   await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '0');
   await expect(page.locator('[data-history-reads]')).toHaveAttribute('data-history-reads', '0');
-  await page.getByRole('textbox', { name: 'Search loaded Trace' }).fill('');
+  await page.getByRole('searchbox', { name: 'Search loaded Trace' }).fill('');
   await ledger.locator('[data-request-owner="trace:11"]').click();
   await expect(page.getByRole('complementary')).toContainText('failed');
   await page.getByRole('tab', { name: 'Diff', exact: true }).click();
@@ -120,15 +120,15 @@ for (const kind of ['request', 'tool']) {
     await page.goto(`${fixtureOrigin}/test/fixtures/trajectory.html?threshold&structure${kind === 'tool' ? '&tool' : ''}`);
     const ledger = page.getByRole('table', { name: 'Trace ledger' });
     await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
-    const segment = ledger.locator('[data-structural="step"][data-step="1"]');
+    const segment = ledger.locator('[data-attempt="attempt-a"] [data-structural="turn"]');
     const recordInspector = page.getByRole('complementary', { name: 'Trace record inspector' });
     const structureInspector = page.getByRole('complementary', { name: 'Trace structure inspector' });
     await segment.focus(); await page.keyboard.press('Enter'); await segment.click();
     await expect(segment).toBeFocused();
     await expect(segment).not.toHaveAttribute('data-owner');
     await expect(recordInspector).toHaveCount(0);
-    // No native Step is loaded yet: the child never lends its identity.
-    await expect(structureInspector).toContainText('The exact native Step record is not loaded at this read cut');
+    // No native Attempt is loaded yet: the child never lends its identity.
+    await expect(structureInspector).toContainText('The exact native Attempt record is not loaded at this read cut');
     await expect(structureInspector).not.toContainText('trace:100');
     await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '0');
     // Anchor the top of this structure itself. The old native starts are absent.
@@ -136,17 +136,15 @@ for (const kind of ['request', 'tool']) {
     const before = (await segment.boundingBox())!.y;
     // Keep DOM keyboard ownership on the segment while invoking the controlled prepend.
     await page.getByRole('button', { name: 'Load earlier records into the overview' }).evaluate((el: HTMLButtonElement) => el.click());
-    // Same native Step control survives a changed loaded anchor.
-    const merged = ledger.locator('[data-structural="step"][data-step="1"]');
+    // Same native Turn control survives a changed loaded anchor.
+    const merged = ledger.locator('[data-attempt="attempt-a"] [data-structural="turn"]');
     await expect(merged).toBeFocused();
     await expect(merged).toHaveAttribute('data-selected', 'true');
-    await expect(merged.locator('xpath=ancestor::*[@data-attempt][1]')).toHaveAttribute('data-attempt', 'attempt-a');
-    await expect(merged).toHaveAttribute('data-step', '1');
     await expect.poll(async () => Math.abs((await merged.boundingBox())!.y - before)).toBeLessThan(2);
     await expect(recordInspector).toHaveCount(0);
-    // The exact native Step record now loaded is its own bounded evidence.
-    await expect(structureInspector.getByText('Record', { exact: true }).locator('xpath=following-sibling::dd[1]')).toHaveText('trace:51');
-    await expect(structureInspector.getByText('Logical Step', { exact: true }).locator('xpath=following-sibling::dd[1]')).toHaveText('1');
+    // The exact native Attempt record now loaded is its own bounded evidence.
+    await expect(structureInspector.getByText('Record', { exact: true }).locator('xpath=following-sibling::dd[1]')).toHaveText('trace:50');
+    await expect(structureInspector.locator('dt').filter({ hasText: /^Attempt$/ }).locator('xpath=following-sibling::dd[1]')).toHaveText('attempt-a');
     await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '0');
     await expect(page.locator('[data-history-reads]')).toHaveAttribute('data-history-reads', '1');
     // Child inspection remains an explicit, separate user action.
@@ -195,7 +193,7 @@ for (const width of [1440, 390]) {
     await expect(page.locator('[data-history-reads]')).toHaveAttribute('data-history-reads', '1');
     await expect(ledger.getByRole('button', { name: 'Expand Turn 2' })).toBeVisible();
     await expect(selected).toBeVisible();
-    const search = page.getByRole('textbox', { name: 'Search loaded Trace' });
+    const search = page.getByRole('searchbox', { name: 'Search loaded Trace' });
     await search.fill('request-3');
     await expect(selected).toHaveAttribute('aria-selected', 'true');
     await expect(ledger.getByRole('button', { name: 'Turn 2', exact: true })).toBeVisible();
@@ -293,7 +291,7 @@ for (const width of [1440, 390]) {
 }
 
 for (const width of [1440, 390]) {
-  test(`407: exact native Turn/Step evidence is inspectable by keyboard without detail reads at ${width}px`, async ({ page }) => {
+  test(`407: exact native Turn evidence is inspectable by keyboard without detail reads at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 844 });
     await page.goto(`${fixtureOrigin}/test/fixtures/trajectory.html`);
     const ledger = page.getByRole('table', { name: 'Trace ledger' });
@@ -303,19 +301,17 @@ for (const width of [1440, 390]) {
     const turn = ledger.getByRole('button', { name: 'Turn 1', exact: true });
     await expect(turn).not.toContainText('attempt-a');
     await turn.focus(); await page.keyboard.press('Enter');
-    await expect(inspector.getByText('Turn 1 · native Attempt')).toBeVisible();
+    await expect(inspector.locator('header')).toContainText('Attempt'); await expect(inspector.locator('header').getByText('Turn 1', { exact: true })).toBeVisible();
     await expect(fact('Record')).toHaveText('trace:1');
     await expect(fact('Attempt')).toHaveText('attempt-a');
     await expect(fact('State')).toHaveText('completed');
     await expect(page.getByRole('complementary', { name: 'Trace record inspector' })).toHaveCount(0);
-    const step = ledger.getByRole('button', { name: 'Step 1', exact: true });
-    await step.focus(); await page.keyboard.press('Enter');
-    await expect(step).toHaveAttribute('aria-pressed', 'true');
-    await expect(fact('Record')).toHaveText('trace:2');
-    await expect(fact('Logical Step')).toHaveText('1');
+    await expect(turn).toHaveAttribute('aria-pressed', 'true');
+    // As in Harness, a Step has no chrome to inspect.
+    await expect(ledger.getByRole('button', { name: 'Step 1', exact: true })).toHaveCount(0);
     await inspector.getByRole('button', { name: 'Close structure' }).click();
     await expect(inspector).toHaveCount(0);
-    await expect(step).toBeFocused();
+    await expect(turn).toBeFocused();
     await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '0');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   });
@@ -347,15 +343,17 @@ for (const width of [1440, 390]) {
     await ledger.getByRole('button', { name: 'Fold Turn 1' }).click();
     await ledger.getByRole('button', { name: 'Fold Turn 2' }).click();
     const foldedKeys = await ledger.locator('[data-display-key]').evaluateAll(rows => rows.map(row => row.getAttribute('data-display-key')));
-    const search = page.getByRole('textbox', { name: 'Search loaded Trace' });
+    const search = page.getByRole('searchbox', { name: 'Search loaded Trace' });
     for (const [query, attempt, expected] of [
       ['Step 2', 'attempt-a', ['trace:5', 'trace:8']],
       ['Turn 2', 'attempt-b', ['trace:7']],
       ['Message', 'attempt-a', ['trace:2']],
     ] as const) {
       await search.fill(query);
-      if (query !== 'Message') await expect(ledger.getByRole('button', { name: query, exact: true }).locator('xpath=ancestor::*[@data-attempt][1]')).toHaveAttribute('data-attempt', attempt);
-      else await expect(ledger.getByRole('row', { name: 'Message', exact: true })).toHaveCount(0);
+      // As in Harness, only a Turn has chrome; Step and Message queries expose
+      // their member cells without a header of their own.
+      if (query.startsWith('Turn')) await expect(ledger.getByRole('button', { name: query, exact: true }).locator('xpath=ancestor::*[@data-attempt][1]')).toHaveAttribute('data-attempt', attempt);
+      else await expect(ledger.getByRole('button', { name: query, exact: true })).toHaveCount(0);
       await expect(ledger.getByRole('button', { name: attempt === 'attempt-a' ? 'Turn 1' : 'Turn 2', exact: true })).toBeVisible();
       await expect.poll(() => page.locator('[data-record-id]:not([data-dimmed])').evaluateAll(spans => spans.map(span => span.getAttribute('data-record-id')))).toEqual([...expected]);
       await expect.poll(() => ledger.locator('[data-owner]').evaluateAll(rows => rows.map(row => row.getAttribute('data-owner')))).toEqual([...expected]);
@@ -443,21 +441,32 @@ for (const width of [1440, 390]) for (const locale of ['en', 'zh'] as const) {
     expect((await system.boundingBox())!.y).toBeLessThan((await turn.boundingBox())!.y);
     const assertHierarchy = async () => {
       const positions = await ledger.locator('[role="row"]').evaluateAll(rows => rows.flatMap(row => [...row.querySelectorAll<HTMLElement>('[data-structural]')].map(control => ({ attempt: row.getAttribute('data-attempt'), kind: control.dataset.structural, y: control.getBoundingClientRect().y }))));
+      // As in Harness, a Request dot sits on its row's top boundary or inside
+      // its own marker seat; every other control stays inside its row.
       const contained = await ledger.locator('[role="row"]').evaluateAll(rows => rows.every(row => {
         const box = row.getBoundingClientRect();
-        return [...row.querySelectorAll('button')].every(button => { const control = button.getBoundingClientRect(); return control.top >= box.top && control.bottom <= box.bottom; });
+        return [...row.querySelectorAll('button')].every(button => { const control = button.getBoundingClientRect(); const center = (control.top + control.bottom) / 2;
+          return button.hasAttribute('data-request-owner') ? center >= box.top - .5 && center <= box.bottom : control.top >= box.top && control.bottom <= box.bottom; });
       }));
       expect(contained).toBe(true);
-      for (const step of positions.filter(control => control.kind === 'step')) expect(step.y).toBeGreaterThanOrEqual(positions.find(control => control.kind === 'turn' && control.attempt === step.attempt)!.y);
+      // As in Harness, the Turn label is the only structural chrome.
+      expect(positions.every(control => control.kind === 'turn')).toBe(true);
     };
     await assertHierarchy();
     await expect(system.locator('[data-structural="step"]')).toHaveCount(0);
-    await expect(system).toContainText('historical agent');
+    // As in Harness, the System row names its change; the prompt is inspected.
+    await expect(system).toContainText(locale === 'zh' ? '初始系统提示词' : 'Initial System Prompt');
+    await expect(system).not.toContainText('historical agent');
     await expect(ledger.locator('[data-owner="trace:104"]')).toContainText('git diff --stat');
     await expect(ledger.locator('[data-owner="trace:104"]')).toContainText('3 files changed');
     const marker = ledger.locator('[data-request-owner="trace:108"]');
     await expect(marker).toHaveAttribute('data-request-id', 'request-108');
-    expect((await marker.locator('xpath=ancestor::*[@role="row"]').boundingBox())!.height).toBe(10);
+    // The recovery Request's dot sits above its own output; the failed retry
+    // before it has no output, so it keeps its own 10px marker seat.
+    await expect(marker.locator('xpath=ancestor::*[@role="row"]')).toHaveAttribute('data-owner', 'trace:109');
+    const failedSeat = ledger.locator('[data-request-owner="trace:107"]').locator('xpath=ancestor::*[@role="row"]');
+    await expect(failedSeat).toHaveAttribute('data-display-type', 'MarkerSeat');
+    expect((await failedSeat.boundingBox())!.height).toBe(10);
     await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '0');
     // Native failure wins over the Request lane's normal violet color.
     const errorColor = await page.locator('[data-record-id="trace:105"]').evaluate(el => getComputedStyle(el).backgroundColor);
@@ -472,7 +481,7 @@ for (const width of [1440, 390]) for (const locale of ['en', 'zh'] as const) {
     await expect(ledger.locator('[data-display-type="TurnSummary"]')).toHaveCount(1);
     await assertHierarchy();
     await expectStableScreenshot(page, `ledger-421-fold-${width}-${locale}.png`);
-    const search = page.getByRole('textbox');
+    const search = page.getByRole('searchbox');
     await search.fill('Step 2'); await expect(marker).toBeVisible(); await assertHierarchy();
     await search.fill('historical agent'); await assertHierarchy();
     await search.fill(''); await expect(ledger.locator('[data-display-type="TurnSummary"]')).toHaveCount(1);
@@ -493,50 +502,50 @@ for (const virtual of [false, true]) {
     await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
     const system = ledger.locator('[data-display-type="SystemPromptCell"][data-owner="trace:3"]');
     const turn = ledger.locator('[data-attempt="attempt-a"] [data-structural="turn"]');
-    const step = ledger.locator('[data-step="1"]');
+    const initialRequest = ledger.locator('[data-request-owner="trace:3"]');
     const reads = page.locator('[data-detail-reads]');
     await expect(system).toBeVisible();
     expect((await system.boundingBox())!.y).toBeLessThan((await turn.boundingBox())!.y);
-    expect((await step.boundingBox())!.y).toBeGreaterThanOrEqual((await turn.boundingBox())!.y);
-    await expect(system.locator('[data-request-owner="trace:3"]')).toHaveAttribute('data-request-id', 'request-3');
+    // As in Harness, Steps have no chrome.
+    await expect(ledger.locator('[data-structural="step"]')).toHaveCount(0);
+    await expect(system.locator('[data-request-owner]')).toHaveCount(0);
+    await expect(ledger.locator('[data-request-owner="trace:3"]')).toHaveAttribute('data-request-id', 'request-3');
     // Fixed model/virtual estimates must contain actual controls and not overlap.
     const geometry = await ledger.locator('[role="row"]').evaluateAll(rows => rows.map((row, index) => {
       const box = row.getBoundingClientRect(); const next = rows[index + 1]?.getBoundingClientRect();
       return { kind: row.getAttribute('data-display-type'), height: box.height, model: Number.parseFloat((row as HTMLElement).style.height),
-        contained: [...row.querySelectorAll('button')].every(button => { const b = button.getBoundingClientRect(); return b.top >= box.top && b.bottom <= box.bottom; }),
+        contained: [...row.querySelectorAll('button')].every(button => { const b = button.getBoundingClientRect(); const center = (b.top + b.bottom) / 2;
+          return button.hasAttribute('data-request-owner') ? center >= box.top - .5 && center <= box.bottom : b.top >= box.top && b.bottom <= box.bottom; }),
         nonoverlap: !next || box.bottom <= next.top + .01 };
     }));
     expect(geometry.every(row => row.height === row.model && row.contained && row.nonoverlap)).toBe(true);
-    expect(geometry.filter(row => row.kind === 'StructuralSeat').map(row => row.height)).toEqual([20, 20, 20]);
+    // Only Turn openings grow to 20px: the output-less initial Request and the empty Turn.
+    expect(geometry.filter(row => row.kind === 'StructuralSeat').map(row => row.height)).toEqual([20, 20]);
     expect(geometry.some(row => row.kind === 'MarkerSeat' && row.height === 10)).toBe(true);
     if (virtual) expect(await ledger.locator('[role="row"]').count()).toBeLessThan(150);
     await system.focus(); await page.keyboard.press('ArrowDown'); await expect(turn).toBeFocused();
-    await page.keyboard.press('ArrowDown'); await expect(step).toBeFocused();
-    await expect(page.getByRole('complementary')).toContainText('trace:2');
+    await expect(page.getByRole('complementary')).toContainText('trace:1');
     await expect(reads).toHaveAttribute('data-detail-reads', '0');
+    await page.keyboard.press('ArrowDown'); await expect(initialRequest).toBeFocused();
+    await expect(reads).toHaveAttribute('data-detail-reads', '1');
     await page.keyboard.press('ArrowUp'); await expect(turn).toBeFocused();
-    await page.keyboard.press('ArrowDown'); await expect(step).toBeFocused();
+    await expect(page.getByRole('complementary')).toContainText('trace:1');
     // Give the disappearing history affordance real scroll extent in both modes.
-    await step.evaluate(el => { const pane = el.closest('[data-trajectory-scroll]')!; pane.scrollTop += el.getBoundingClientRect().top - pane.getBoundingClientRect().top; pane.dispatchEvent(new Event('scroll')); });
-    const key = await step.getAttribute('data-display-key'); const before = (await step.boundingBox())!.y;
+    await turn.evaluate(el => { const pane = el.closest('[data-trajectory-scroll]')!; pane.scrollTop += el.getBoundingClientRect().top - pane.getBoundingClientRect().top; pane.dispatchEvent(new Event('scroll')); });
+    const key = await turn.getAttribute('data-display-key'); const before = (await turn.boundingBox())!.y;
     await page.getByRole('button', { name: 'Load earlier records into the overview' }).evaluate((el: HTMLButtonElement) => el.click());
     await expect(page.locator('[data-history-reads]')).toHaveAttribute('data-history-reads', '1');
-    await expect(step).toHaveAttribute('data-display-key', key!); await expect(step).toBeFocused();
-    await expect.poll(async () => Math.abs((await step.boundingBox())!.y - before)).toBeLessThan(2);
-    await expect(page.getByRole('complementary')).toContainText('trace:2');
-    await expect(reads).toHaveAttribute('data-detail-reads', '0');
-    await page.getByRole('button', { name: 'Close structure' }).click(); await expect(step).toBeFocused();
+    await expect(turn).toHaveAttribute('data-display-key', key!); await expect(turn).toBeFocused();
+    await expect.poll(async () => Math.abs((await turn.boundingBox())!.y - before)).toBeLessThan(2);
+    await expect(page.getByRole('complementary')).toContainText('trace:1');
+    await expect(reads).toHaveAttribute('data-detail-reads', '1');
+    await page.getByRole('button', { name: 'Close structure' }).click(); await expect(turn).toBeFocused();
     const user = ledger.locator('[data-display-type="RecordRow"][data-owner="trace:91"]');
-    const navStep = ledger.locator('[data-step="navigation-step"]'); const request = ledger.locator('[data-request-owner="trace:100"]');
-    await user.focus(); await page.keyboard.press('ArrowDown'); await expect(navStep).toBeFocused();
-    await expect(page.getByRole('complementary')).toContainText('trace:92');
-    await expect(reads).toHaveAttribute('data-detail-reads', '0');
-    await page.keyboard.press('ArrowDown'); await expect(request).toBeFocused();
+    const request = ledger.locator('[data-request-owner="trace:100"]');
+    await user.focus(); await page.keyboard.press('ArrowDown'); await expect(request).toBeFocused();
     await expect(request).toHaveAttribute('data-request-id', 'request-100');
-    await expect(reads).toHaveAttribute('data-detail-reads', '1');
-    await page.keyboard.press('ArrowUp'); await expect(navStep).toBeFocused();
-    await expect(page.getByRole('complementary')).toContainText('trace:92');
-    await expect(reads).toHaveAttribute('data-detail-reads', '1');
+    await expect(reads).toHaveAttribute('data-detail-reads', '2');
+    await page.keyboard.press('ArrowUp'); await expect(user).toBeFocused();
   });
 }
 
@@ -547,55 +556,52 @@ for (const width of [1440, 390]) for (const locale of ['en', 'zh'] as const) {
     await page.goto(`${fixtureOrigin}/test/fixtures/trajectory.html?ordered`);
     const ledger = page.locator('[data-trajectory-scroll]');
     await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
-    const ids = ['z-first', 'a-empty', 'm-empty', 'b-last'];
-    const steps = ids.map(id => ledger.locator(`[data-step="${id}"]`));
     const turn = ledger.locator('[data-attempt="ordered-turn"] [data-structural="turn"]');
     const system = ledger.locator('[data-display-type="SystemPromptCell"][data-owner="trace:702"]');
-    const checkOrder = async () => {
-      const boxes = await Promise.all(steps.map(step => step.boundingBox()));
-      for (let n = 1; n < boxes.length; n++) expect(boxes[n]!.y).toBeGreaterThan(boxes[n - 1]!.y);
-      expect((await system.boundingBox())!.y).toBeLessThan((await turn.boundingBox())!.y);
-      expect(boxes[0]!.y).toBeGreaterThanOrEqual((await turn.boundingBox())!.y);
-    };
-    await expect(steps[0]!).toBeVisible(); await checkOrder();
+    const request = ledger.locator('[data-request-owner="trace:702"]');
+    const later = ledger.locator('[data-display-type="RecordRow"][data-owner="trace:706"]');
+    const reads = page.locator('[data-detail-reads]');
+    const opening = turn.locator('xpath=ancestor::*[@role="row"]');
+    await expect(turn).toBeVisible();
+    expect((await system.boundingBox())!.y).toBeLessThan((await turn.boundingBox())!.y);
+    // As in Harness, Steps have no chrome, and the empty middle Steps add no row:
+    // the output-less initial Request opens the Turn and the later output follows it.
+    await expect(ledger.locator('[data-step]')).toHaveCount(0);
     expect(await ledger.locator('[role="row"]').count()).toBeLessThan(150);
-    for (const step of steps.slice(0, 3)) {
-      const geometry = await step.evaluate(el => {
-        const row = el.closest<HTMLElement>('[role="row"]')!; const box = row.getBoundingClientRect();
-        const next = row.nextElementSibling!.getBoundingClientRect();
-        return { height: box.height, estimate: Number(row.style.height.replace('px', '')), kind: row.dataset.displayType,
-          count: row.querySelectorAll('[data-step]').length, owner: row.dataset.owner,
-          contains: [...row.querySelectorAll('button')].every(button => { const b = button.getBoundingClientRect(); return b.top >= box.top && b.bottom <= box.bottom; }), nonoverlap: box.bottom <= next.top };
-      });
-      expect(geometry).toEqual({ height: 20, estimate: 20, kind: 'StructuralSeat', count: 1, owner: undefined, contains: true, nonoverlap: true });
-    }
+    const geometry = await opening.evaluate(row => {
+      const box = row.getBoundingClientRect(); const next = row.nextElementSibling as HTMLElement;
+      return { height: box.height, estimate: Number((row as HTMLElement).style.height.replace('px', '')), kind: (row as HTMLElement).dataset.displayType,
+        owner: (row as HTMLElement).dataset.owner, next: next.dataset.owner, nonoverlap: box.bottom <= next.getBoundingClientRect().top };
+    });
+    expect(geometry).toEqual({ height: 20, estimate: 20, kind: 'StructuralSeat', owner: 'trace:702', next: 'trace:706', nonoverlap: true });
+    await expect(opening.locator('[data-request-owner="trace:702"]')).toHaveCount(1);
     await expectStableScreenshot(page, `ledger-order-${width}-${locale}.png`);
     await turn.focus();
-    for (const step of steps) { await page.keyboard.press('ArrowDown'); await expect(step).toBeFocused(); }
-    await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '0');
+    await page.keyboard.press('ArrowDown'); await expect(request).toBeFocused();
+    await page.keyboard.press('ArrowDown'); await expect(later).toBeFocused();
+    await expect(reads).toHaveAttribute('data-detail-reads', '2');
     await expectStableScreenshot(page, `ledger-order-inspector-${width}-${locale}.png`);
-    await page.getByRole('complementary').getByRole('button').click();
+    await page.getByRole('complementary').getByRole('button', { name: locale === 'en' ? 'Close record' : '关闭记录' }).click();
     const fold = ledger.locator('[data-attempt="ordered-turn"][data-turn-start]').getByRole('button').first();
     await fold.click();
-    await expect(ledger.locator('[data-attempt="ordered-turn"] [data-step]')).toHaveCount(1);
-    await expect(steps[3]!).toBeVisible();
+    await expect(later).toBeVisible();
+    await expect(ledger.locator('[data-attempt="ordered-turn"] [data-request-owner]')).toHaveCount(0);
     await expect(ledger.locator('[data-attempt="ordered-turn"][data-display-type="StructuralSeat"]')).toHaveCount(0);
     await expect(ledger.locator('[data-display-type="TurnSummary"]')).toHaveCount(1);
     await expectStableScreenshot(page, `ledger-order-fold-${width}-${locale}.png`);
     await fold.click();
-    await steps[0]!.click();
-    await steps[0]!.evaluate(el => { const pane = el.closest('[data-trajectory-scroll]')!; pane.scrollTop += el.getBoundingClientRect().top - pane.getBoundingClientRect().top; pane.dispatchEvent(new Event('scroll')); });
-    const key = await steps[0]!.getAttribute('data-display-key'); const before = (await steps[0]!.boundingBox())!.y;
+    await turn.click();
+    await turn.evaluate(el => { const pane = el.closest('[data-trajectory-scroll]')!; pane.scrollTop += el.getBoundingClientRect().top - pane.getBoundingClientRect().top; pane.dispatchEvent(new Event('scroll')); });
+    const key = await turn.getAttribute('data-display-key'); const before = (await turn.boundingBox())!.y;
     // Invoke the real controlled page callback without transferring DOM focus.
     await page.getByRole('button', { name: locale === 'en' ? 'Load earlier records into the overview' : '将更早记录加载到概览' }).evaluate((el: HTMLButtonElement) => el.click());
     await expect(page.locator('[data-history-reads]')).toHaveAttribute('data-history-reads', '1');
-    await expect(steps[0]!).toBeFocused(); await expect(steps[0]!).toHaveAttribute('data-display-key', key!);
-    await expect.poll(async () => Math.abs((await steps[0]!.boundingBox())!.y - before)).toBeLessThan(2);
-    await expect(steps[0]!.locator('xpath=ancestor::*[@role="row"]')).toHaveAttribute('data-owner', 'trace:650');
-    await checkOrder();
-    await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '0');
-    await ledger.locator('[data-owner="trace:706"]').click();
-    await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '1');
+    // The prepended record now opens the Turn; its focused label keeps its place.
+    await expect(turn).toBeFocused(); await expect(turn).toHaveAttribute('data-display-key', key!);
+    await expect.poll(async () => Math.abs((await turn.boundingBox())!.y - before)).toBeLessThan(2);
+    await expect(opening).toHaveAttribute('data-owner', 'trace:650');
+    expect((await system.boundingBox())!.y).toBeLessThan((await turn.boundingBox())!.y);
+    await expect(reads).toHaveAttribute('data-detail-reads', '2');
   });
 }
 
@@ -609,28 +615,29 @@ for (const width of [1440, 390]) for (const locale of ['en', 'zh'] as const) {
     const ledger = page.locator('[data-trajectory-scroll]');
     await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
     const turnRows = ledger.locator('[role="row"][data-attempt="ordered-turn"]');
-    const stepControls = turnRows.locator('[data-step]');
     const turn = turnRows.locator('[data-structural="turn"]');
     const toggle = ledger.locator('[data-attempt="ordered-turn"][data-turn-start]').getByRole('button').first();
-    const expected = ['z-first', 'a-empty', 'm-empty', ...Array.from({ length: 46 }, (_, n) => `empty-${46 - n}`), 'b-last'];
-    const stepIds = () => stepControls.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-step')));
+    const owners = () => turnRows.evaluateAll(rows => rows.map(row => row.getAttribute('data-owner')));
     const virtualHeight = () => ledger.locator(':scope > div').first().evaluate(el => Number.parseFloat((el as HTMLElement).style.height));
-    await expect(stepControls).toHaveCount(50);
-    expect(await stepIds()).toEqual(expected);
-    await expect(ledger).toHaveAttribute('aria-rowcount', '202');
-    expect(await ledger.locator('[role="row"]').count()).toBeLessThan(202);
-    expect(await virtualHeight()).toBe(2580);
-    expect(await stepControls.evaluateAll(nodes => nodes.every((node, i) => i === 0 || node.getBoundingClientRect().y > nodes[i - 1]!.getBoundingClientRect().y))).toBe(true);
+    // As in Harness, fifty native Steps cost no rows: the Turn shows its System
+    // cell, the output-less initial Request that opens it, and its later output.
+    await expect(ledger.locator('[data-step]')).toHaveCount(0);
+    await expect(turnRows).toHaveCount(3);
+    expect(await owners()).toEqual(['trace:702', 'trace:702', 'trace:706']);
+    await expect(ledger).toHaveAttribute('aria-rowcount', '154');
+    expect(await ledger.locator('[role="row"]').count()).toBeLessThan(154);
+    expect(await virtualHeight()).toBe(1620);
     await expectStableScreenshot(page, `ledger-compact-expanded-${width}-${locale}.png`);
-    const keys = await stepControls.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-display-key')));
+    const keys = await turnRows.evaluateAll(rows => rows.map(row => row.getAttribute('data-display-key')));
     await toggle.click();
     await expect(toggle).toBeFocused();
     await expect(ledger).toHaveAttribute('aria-rowcount', '154');
     await expect(turnRows).toHaveCount(3);
-    expect(await stepIds()).toEqual(['b-last']);
+    expect(await owners()).toEqual(['trace:702', 'trace:706', null]);
     await expect(ledger.locator('[data-attempt="ordered-turn"][data-display-type="StructuralSeat"]')).toHaveCount(0);
     await expect(ledger.locator('[data-attempt="ordered-turn"][data-display-type="TurnSummary"]')).toHaveCount(1);
-    await expect(turnRows.locator('[data-request-owner="trace:702"]')).toHaveAttribute('data-request-id', 'request-702');
+    // As in Harness, a folded Turn shows no Request markers.
+    await expect(turnRows.locator('[data-request-owner]')).toHaveCount(0);
     expect(await virtualHeight()).toBe(1620);
     const geometry = await turnRows.evaluateAll(rows => {
       const boxes = rows.map(row => row.getBoundingClientRect());
@@ -640,20 +647,20 @@ for (const width of [1440, 390]) for (const locale of ['en', 'zh'] as const) {
     });
     expect(geometry).toEqual({ heights: [30, 30, 20], span: 80, contained: true, ordered: true });
     await expectStableScreenshot(page, `ledger-compact-fold-${width}-${locale}.png`);
-    await turn.focus(); await page.keyboard.press('ArrowDown'); await expect(stepControls).toBeFocused();
+    await turn.focus(); await page.keyboard.press('ArrowDown');
+    await expect(turnRows.filter({ has: page.locator('[data-structural="turn"]') })).toBeFocused();
     await page.keyboard.press('ArrowUp'); await expect(turn).toBeFocused();
-    await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '0');
-    await page.getByRole('complementary').getByRole('button').click();
-    // Search exposes the hidden initial-only Step's fallback without changing saved folds.
+    await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '1');
+    await page.getByRole('complementary').getByRole('button', { name: locale === 'en' ? 'Close structure' : '关闭结构' }).click();
+    // Search exposes folded content without changing saved folds.
     const collapsedKeys = await turnRows.evaluateAll(rows => rows.map(row => row.getAttribute('data-display-key')));
-    const search = page.getByRole('textbox'); await search.fill('order-match');
-    expect(await stepIds()).toEqual(['z-first', 'b-last']);
+    const search = page.getByRole('searchbox'); await search.fill('order-match');
+    expect(await owners()).toEqual(['trace:702', 'trace:706']);
     await search.fill('');
     expect(await turnRows.evaluateAll(rows => rows.map(row => row.getAttribute('data-display-key')))).toEqual(collapsedKeys);
     await toggle.click();
     await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
-    await expect(stepControls).toHaveCount(50); expect(await stepIds()).toEqual(expected);
-    expect(await stepControls.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-display-key')))).toEqual(keys);
+    expect(await turnRows.evaluateAll(rows => rows.map(row => row.getAttribute('data-display-key')))).toEqual(keys);
     // Collapse again and prepend while the exact Turn action owns the top anchor.
     await toggle.click(); await turn.click();
     await turn.evaluate(el => { const pane = el.closest('[data-trajectory-scroll]')!; pane.scrollTop += el.getBoundingClientRect().top - pane.getBoundingClientRect().top; pane.dispatchEvent(new Event('scroll')); });
@@ -662,8 +669,8 @@ for (const width of [1440, 390]) for (const locale of ['en', 'zh'] as const) {
     await expect(page.locator('[data-history-reads]')).toHaveAttribute('data-history-reads', '1');
     await expect(turn).toBeFocused(); await expect(turn).toHaveAttribute('data-display-key', key!);
     await expect.poll(async () => Math.abs((await turn.boundingBox())!.y - before)).toBeLessThan(2);
-    await expect(turnRows).toHaveCount(3); expect(await stepIds()).toEqual(['z-first']);
-    await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '0');
+    await expect(turnRows).toHaveCount(3); expect(await owners()).toEqual(['trace:702', 'trace:650', null]);
+    await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '1');
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
   });
 }
@@ -682,7 +689,7 @@ test('424: JSON null Step records remain exactly owned through prepend, fold, se
   await expect(rows).toHaveCount(1);
   await expect(rows).toHaveAttribute('data-owner', 'trace:910');
   await expect(ledger.locator('[data-structural="step"]')).toHaveCount(0);
-  const search = page.getByRole('textbox', { name: 'Search loaded Trace' });
+  const search = page.getByRole('searchbox', { name: 'Search loaded Trace' });
   await search.fill('adopted second');
   await expect(rows).toHaveCount(1);
   await expect(rows).toHaveAttribute('data-owner', 'trace:911');

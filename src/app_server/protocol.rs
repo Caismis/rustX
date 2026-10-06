@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v34 envelope and method vocabulary.
+//! Rust authority for the App Server v35 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 34;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 35;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -129,7 +129,6 @@ pub enum Method {
     #[serde(rename = "session/turns")]
     ConversationTurns {
         target: AttachmentTarget,
-        cut: Option<crate::durable::reading::ConversationReadCut>,
         /// Absent selects the newest native outline page.
         offset: Option<usize>,
         #[schemars(range(min = 1, max = 64))]

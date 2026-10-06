@@ -23,6 +23,7 @@ from fake_provider.scenario import (
     Text,
 )
 from fake_provider.server import ProviderServer
+from fake_provider.scenarios import build
 
 CHAT = "/v1/chat/completions"
 
@@ -67,6 +68,26 @@ def chat_step(**expect) -> Step:
 
 
 # -- ordered progression ---------------------------------------------------
+
+
+def test_artifact_preview_scenario_rejects_every_model_request():
+    async def scenario() -> None:
+        harness = await serve(build("web_artifact_document"))
+        try:
+            state = (await harness.control("GET", "/state")).json
+            assert state["ok"] is True
+            assert state["requestCount"] == 0
+            response = await harness.post(CHAT, {"model": "console-model", "messages": ["unexpected"]})
+            assert response.status == 500
+            state = (await harness.control("GET", "/state")).json
+            assert state["ok"] is False
+            assert state["requestCount"] == 1
+            assert state["stepsMatched"] == 0
+        finally:
+            harness.run.shutdown_requested.set()
+            await harness.server.serve_until_shutdown()
+
+    asyncio.run(scenario())
 
 
 def test_steps_are_consumed_in_order_and_the_scenario_completes():

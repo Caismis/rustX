@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-open-in-app/OpenTargetButton.tsx; see PROVENANCE.md. */
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { AppServerClient } from '../../client/app-server';
 import type { WorkspaceAuthority } from '../../workspaces/authority';
@@ -8,6 +9,7 @@ import { useTranslation } from '../../locale/react';
 import { Button } from '../../presentation/primitives/Button';
 import css from './OpenWorkspace.module.css';
 import { Menu } from '../../presentation/primitives/Menu';
+import { IconChevronDownOutline14, IconFolderOpenOutline16 } from '../../presentation/primitives/icons';
 
 export function OpenWorkspace(props: { client: AppServerClient; host: ProductHostWorkspaces; authority: WorkspaceAuthority; target: DesktopTarget; disabled: boolean }) {
   const revision = useSyncExternalStore(props.authority.subscribe, props.authority.getRevision);
@@ -54,14 +56,14 @@ function WorkspaceAction({ client, host, authority, target, disabled }: Paramete
   const reason = unavailable === 'mapping' ? tx('agent:desktop.mapping') : unavailable === 'headless' ? tx('agent:desktop.headless')
     : unavailable === 'platform' ? tx('agent:desktop.platform') : tx('agent:desktop.applications');
   return <div className={css.action}>
-    <div className="row">
-      <Button size="sm" disabled={disabled || !!unavailable} aria-disabled={disabled || busy || !!unavailable} onClick={() => void perform()} title={tx('agent:desktop.host')}>{label}</Button>
-      <Menu open={menu} onClose={() => setMenu(false)} align="end" autoFocus
-        anchor={<Button size="sm" disabled={disabled || !!unavailable} aria-disabled={disabled || busy || !!unavailable} aria-label={tx('agent:desktop.choose')} aria-haspopup="menu" aria-expanded={menu}
-          onClick={() => menu ? setMenu(false) : void perform(undefined, true)}>▾</Button>}
-        items={catalog?.available ? [...catalog.applications.map(app => ({ id: app.id, label: app.id === 'files' ? tx('agent:desktop.files') : app.label })), { id: 'refresh', label: tx('agent:desktop.retry') }] : []}
-        onSelect={id => { setMenu(false); if (id === 'refresh') void perform(undefined, true, true); else void perform(id as DesktopAppId); }}/>
-    </div>
+    <Menu className={css.menuAnchor} open={menu} onClose={() => setMenu(false)} align="end" dense autoFocus
+      anchor={<div className={css.split} data-state={busy ? 'busy' : 'idle'}>
+        <button type="button" className={css.main} disabled={disabled || !!unavailable} aria-disabled={disabled || busy || !!unavailable} aria-label={label} title={tx('agent:desktop.host')} onClick={() => void perform()}><IconFolderOpenOutline16 size={13}/></button>
+        <button type="button" className={css.chevron} disabled={disabled || !!unavailable} aria-disabled={disabled || busy || !!unavailable} aria-label={tx('agent:desktop.choose')} aria-haspopup="menu" aria-expanded={menu}
+          onClick={() => menu ? setMenu(false) : void perform(undefined, true)}><IconChevronDownOutline14 size={10}/></button>
+      </div>}
+      items={catalog?.available ? [...catalog.applications.map(app => ({ id: app.id, label: app.id === 'files' ? tx('agent:desktop.files') : app.label })), { id: 'refresh', label: tx('agent:desktop.retry') }] : []}
+      onSelect={id => { setMenu(false); if (id === 'refresh') void perform(undefined, true, true); else void perform(id as DesktopAppId); }}/>
     {unavailable && <p role="status">{reason}</p>}
     {phase === 'spawned' && <p role="status">{tx('agent:desktop.spawned')}</p>}
     {(phase === 'failed' || phase === 'uncertain') && <div role="alert"><p>{phase === 'uncertain' ? tx('agent:desktop.uncertain') : tx('agent:desktop.failed')}</p>

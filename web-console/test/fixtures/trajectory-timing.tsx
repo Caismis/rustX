@@ -5,6 +5,7 @@ import { createRoot } from 'react-dom/client';
 import { TrajectoryTimeline } from '../../src/app/trajectory/TrajectoryTimeline';
 import { traceRecord, traceTool } from '../trace-fixture';
 import '../../src/presentation/theme/base.css';
+import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
 import '../../src/presentation/theme/reset.css';
 

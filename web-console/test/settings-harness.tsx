@@ -4,7 +4,7 @@ import { createActor } from 'xstate';
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { AppServerClient } from '../src/client/app-server';
 import { ConnectionController } from '../src/connection/controller';
-import type { SourceMutation, SourceSettings } from '../../protocol/app-server/v34';
+import type { SourceMutation, SourceSettings } from '../../protocol/app-server/v35';
 import { settingsTargetMachine, type SettingsTargetContext } from '../src/app/settings/machines/settings-target';
 import type { ConfigurationPort, WriteOutcome } from '../src/app/settings/machines/port';
 import { SettingsActorContext } from '../src/app/settings/machines/react';
@@ -144,7 +144,7 @@ export async function openResourceRow(name: string) {
  * observation. Source paths and revisions are diagnostics and live on
  * Advanced, so readiness is asserted from the lifecycle itself. */
 export async function settingsReady() {
-  await screen.findByText('Configuration loaded');
+  await screen.findByText('Authoritative source observed');
 }
 
 /** The primary page currently displayed. */

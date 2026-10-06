@@ -1,14 +1,6 @@
-.root { width: min(var(--dsh-chat-content-width), calc(100% - 48px)); margin-inline: auto; box-sizing: border-box; padding: 4px 0; color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.root { padding: 4px 12px; color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .root p { margin: 4px 0; }
 .root summary { cursor: pointer; }
 .root summary:focus-visible { outline: 2px solid var(--dsw-alias-button-info-fill); outline-offset: 2px; }
-.root:empty { display: none; }
-.controls { display: flex; flex-direction: column; min-width: 0; max-width: 100%; }
-.controls small { font-size: 10px; padding: 0 6px; }
-.modelRow { display: flex; align-items: center; min-width: 0; gap: 8px; }
-.modelRow > div { min-width: 0; }
-.ringButton { display: flex; align-items: center; gap: 4px; flex: none; height: 28px; padding: 0 4px; border: 0; border-radius: 24px; background: transparent; color: var(--dsw-alias-label-secondary); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; cursor: pointer; }
-.ringButton:hover { background: var(--dsw-alias-interactive-bg-hover); }
-.ringButton:focus-visible { outline: 2px solid var(--dsw-alias-button-info-fill); outline-offset: 2px; }
 .read { margin-block: 4px; padding: 4px 8px; border: 1px solid currentColor; border-radius: 6px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
 .read:focus-visible { outline: 2px solid var(--dsw-alias-button-info-fill); outline-offset: 2px; }

@@ -90,8 +90,9 @@ scoped to the native-confirmed unit rather than every Session. Conflicts preserv
 the draft. Settings renders simultaneous applied, preparing, failed/retry,
 process-restart state. The single **Adopt configuration** control lives below the
 focused Session title, outside Settings. It sends the inspected candidate and
-expected Session binding; native eligibility is advisory and the native admission
-gate revalidates both. Failed preparation offers one owner-specific Settings
+expected Session binding; the runtime's published adoption eligibility (Runtime
+Client snapshot state, never part of the application) is advisory and the native
+admission gate revalidates both. Failed preparation offers one owner-specific Settings
 action per authored owner named by native `ConfigurationApplication.sources`.
 That application's `scope` is the Session identity, never a source owner, so the
 browser parses no scope string, infers nothing from the Session `cwd` and routes

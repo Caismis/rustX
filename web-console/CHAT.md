@@ -79,7 +79,9 @@ partials. Surface messages outside the loaded page are not appended as history.
 Typed current context is disclosed separately. Subagent, Workflow and background
 activity are current adjuncts, not fabricated historical placements. Foreground
 Tools occupy their canonical Assistant block position.
-Historical interaction/publication audits are read-only; live Approval,
+Historical interaction/publication audits are read-only; a native `ask_user`
+questionnaire's request and settlement audits are told by its call's question row
+instead (matched by interaction id on the loaded page), so they render no body. Live Approval,
 Questionnaire and Review retain existing typed settlement and uncertain-outcome
 controls. Todo/Goal/Queue projection remains in the composer docks. WEB-05 adds
 native historical actions as described below; it never derives canonical history.
@@ -98,8 +100,24 @@ a settled durable record wins. React never joins call and result messages.
 ToolId. Unknown identities use the same generic Harness card. Inputs, text/JSON
 output, native status and managed image/file attachments remain truthful subsets.
 Edit/Write diffs show **requested changes**, not an inferred filesystem diff.
+The native `ask_user` call (ToolId `tool-ask-user`) uses Harness's question row:
+`bindings/ask-user.ts` reads its verdict from the persisted arguments and result
+(waiting, `N/M answered`, cancelled for a decline, interrupted for a cancelled
+call) and pairs each answer with its question by the echoed `question_index`, so
+an omitted (skipped) question reads as not answered. A failed call, or a record it
+cannot pair, keeps the generic card with the raw input and output.
 Background execution uses its native ExecutionId, not a fabricated call identity.
-No process folding or subcall nesting is inferred from adjacency or Tool names.
+No subcall nesting is inferred from adjacency or Tool names.
+
+Inside a settled Attempt, `bindings/step-groups.ts` applies Harness's step
+grouping (its default `detailed` mode, which groups history only): reasoning,
+Tool calls and bodied records collect into one group until a reply (visible
+Assistant text, refusal or media) or an independent message closes it. Interaction
+audits join the group of the Attempt they name. A group renders whole where it
+starts, so canonical order never changes; its collapsed title ranks the top three
+Tool categories by distinct calls (`Read files, ran commands…`, `向用户提出了问题`,
+or `Analysis completed` for reasoning alone) and its body is capped and scrolls.
+A live or page-cut Attempt keeps every row in place.
 
 ## Agent Status annotations
 
@@ -173,15 +191,15 @@ ordinary events advance it without a snapshot reread.
 
 ## Paging and reconnect
 
-The cache holds at most 512 entries and an 8 MiB conservative UTF-16 serialization
-budget; each older request asks for at most 64 entries. It is a contiguous durable
-window, never canonical persistence. Current refresh preserves it only with a
-matching durable cursor and fact identity. Current entries win overlaps. Missing
-continuity or a capacity overflow replaces the window with the current page;
-capacity replacement has a visible diagnostic. Unsettled native Tool projections
-outside a fresh page also force a visible window rebase; historical assembled state
-is never retained indefinitely as a substitute for rereading terminal authority. At the entry bound, Return to
-latest explicitly replaces the window before more paging.
+The cache is one contiguous durable window from its oldest loaded page through
+the live tail, as Harness's Chat window; each older request asks for at most 64
+entries. It is never canonical persistence. Current refresh preserves it only with
+a matching durable cursor and fact identity. Current entries win overlaps. Missing
+continuity replaces the window with the current page. Unsettled native Tool
+projections outside a fresh page also force a visible window rebase; historical
+assembled state is never retained indefinitely as a substitute for rereading
+terminal authority. Turn jumps page through this same window
+([conversation-reading.md](../docs/conversation-reading.md)).
 
 Older responses require the same connection generation, complete attachment
 target and window epoch. Ordinary overlapping live refresh does not advance that
@@ -215,16 +233,22 @@ checks it on repeated initialization, and refuses obsolete stores without migrat
 The native `After` validator accepts local evidence and inherited provenance through
 one shared projection, while still requiring the exact destination append revision.
 
-The tail's lineage menu exposes Branch in this Session and Fork to new Session.
-Both use `side: after` and the immutable Surface revision that first appended the
+The tail follows Harness `MessageIconActions`: Copy, Regenerate (rustX's only
+extra lineage action, seated where Harness places extra actions) and one branch
+action, Branch into a new Session (`session/fork`), then the Turn usage pill and
+time. A completed response already names its exact boundary, so both lineage
+actions run on the click, as Harness `forkAt` does: no confirming chooser opens,
+the response actions lock until the transition settles, and a failure surfaces as
+the App notice. In-Session Branch is reached through `/branch` and Session tree.
+Branch into a new Session uses `side: after` and the immutable Surface revision that first appended the
 closing response. The resulting prefix includes that Assistant response and the
 composer is empty. The native owner validates the exact response/revision pair
 and durable completion. Compaction and later appends do not change that historical
 cut. Unknown revisions and mismatched boundaries fail visibly, without refreshing
 or replaying the mutation. `session/tree` resolves the attached Conversation's
 node, never the Session's mutable default. Independent Fork still copies native
-uploads in the inherited prefix before publication; in-Session Branch shares the
-Session's upload ownership.
+uploads in the inherited prefix before publication; in-Session Branch (`/branch`)
+shares the Session's upload ownership.
 
 Command discovery retains explicit pre-input boundary selection for native draft
 restoration. Retry uses `side: before`, the input in the final request's frozen
@@ -310,8 +334,8 @@ no-overwrite rules, mutable file semantics, fork copies and deletion recovery.
 
 ## WEB-02 review corrections
 
-The mandatory App Server vocabulary is v34 (`rustx.app-server.v34` and generated
-`protocol/app-server/v34.ts` / `v34.schema.json`). v12 and earlier initialization and
+The mandatory App Server vocabulary is v35 (`rustx.app-server.v35` and generated
+`protocol/app-server/v35.ts` / `v35.schema.json`). v12 and earlier initialization and
 WebSocket offers are rejected; there is no compatibility mode. Runtime Client
 retains its independently versioned contract.
 
@@ -371,19 +395,35 @@ these native totals from the newest snapshot. Older page responses never replace
 newer totals. Compaction does not erase journal usage. Fork/Branch create fresh
 Conversation execution epochs, as established by native lineage. Inherited tails
 retain their own historical usage while destination cumulative execution totals
-start from zero; these two quantities are deliberately separate.
+start from zero; these two quantities are deliberately separate. Its `timing`
+follows Harness session statistics rather than a per-response exact aggregate:
+LLM time sums measured requests' dispatch-to-terminal spans, Tool time sums
+foreground Tool start-to-terminal pairs within their Attempt, TTFT is the mean
+over requests that produced output, and TPS divides output tokens by decode time
+over requests that report both. Each figure is absent until measured.
 
-The Context owner exposes the last provider-measured request occupancy paired with
-that exact request snapshot's model capacity. It is labeled **Last request context**,
-excludes unsent input, and disappears after compaction or a newer unmeasured request.
-No Web tokenization or browser-clock timing is used.
+The Composer Context seat renders only compaction lifecycle and occupies no
+stack seat while idle. Under the Composer card, the Harness Detailed-mode dock
+shows three pills, each opening a trigger-anchored stat dialog (Base UI
+Popover): Turn/Step counts with whole-session decode speed (LLM time, Tool time,
+mean TTFT, TPS from native `statistics.timing`), reported tokens with cache hit
+(uncached and cached input, output, and an explicit usage-report coverage row
+when some requests did not report), and the last measured request's context
+ring. The ring reads `last_request_occupancy` only while the view is connected
+and attached; its numerator is the provider measurement, and its System prompt /
+Tool definitions / Messages parts are the native `ceil(bytes / 4)` breakdown, the
+messages part being the measured remainder. No Web tokenization or browser-clock
+timing is used.
 
 #364 merged as `3063ebd6`. Its native `GenerationEvidence` is the single request
 clock contract consumed independently by Trace and completed-response projections.
-Chat never reads Trace. `Ran for` is successful Attempt completion minus Attempt
-start, including tools and retries. Details distinguish first-request TTFT from
-dispatch (never Attempt-start latency), summed first-output-to-terminal model
-work, and output speed over fully covered positive generation spans. Unknown
+Chat never reads Trace. The completed Turn's actions carry the Harness Turn
+usage pill: its dialog shows the exact total, the requests' distinct models,
+cache hit, uncached and cached input, and output with reasoning. The process
+header owns the Turn duration (successful Attempt completion minus start); the
+per-response timing (first-request TTFT from dispatch, summed
+first-output-to-terminal work, output speed over fully covered positive
+generation spans) stays native evidence. Unknown
 endpoints/usage remain absent; zero measured generation is zero with no rate.
 Known no-output requests add no decode span; missing request evidence invalidates
 exact aggregate generation. Failed requests with evidence remain included.
@@ -391,7 +431,7 @@ exact aggregate generation. Failed requests with evidence remain included.
 Immutable bootstrap provenance preserves response timing and usage through
 Branch/Fork/reopen/deeper lineage without copying source execution records.
 Destination execution totals remain destination-local. Mandatory versions are
-App Server v34, Runtime Client v53, SQLite v44, and Session catalog v13, with no
+App Server v35, Runtime Client v53, SQLite v44, and Session catalog v13, with no
 old protocol artifacts or compatibility readers.
 
 Projection cost is currently O(J + R): indexed 128-event batches over the captured
@@ -452,7 +492,7 @@ the existing transaction coordinator. A confirmation gates elevation. The source
 controls future admission; an already-admitted Attempt remains frozen. Composer
 model intent is different: it never authors the Workspace default model.
 
-App Server v34 / Runtime Client v53 project one `turn_process` owner on exact
+App Server v35 / Runtime Client v53 project one `turn_process` owner on exact
 canonical Assistant and Tool members. Native Journal identities, whole-process
 counts and an immutable control cursor survive unsuccessful settlement and
 bounded paging. Failed/stopped processes stay open; successful final-answer,

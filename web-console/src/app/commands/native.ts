@@ -1,4 +1,4 @@
-import type { CompletedResponseView, AttachmentTarget, MethodResult, SessionUserMessageBoundary } from '../../../../protocol/app-server/v34';
+import type { CompletedResponseView, AttachmentTarget, MethodResult, SessionUserMessageBoundary } from '../../../../protocol/app-server/v35';
 import { AppServerClient, sameTarget } from '../../client/app-server';
 import { selectSessionModel } from '../model-preference';
 import { lineageSwitchSafe } from '../../bindings/projection';
@@ -9,6 +9,8 @@ export interface HistoricalSelection {
   boundary: SessionUserMessageBoundary | CompletedResponseView;
 }
 export type HistoryAction = 'fork' | 'branch' | 'retry';
+/** The lineage actions a completed response offers in place. */
+export type ResponseAction = Extract<HistoryAction, 'fork' | 'retry'>;
 export class CommandSession {
   readonly target: AttachmentTarget;
   private readonly generation: number;
