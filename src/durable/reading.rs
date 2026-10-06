@@ -94,6 +94,43 @@ pub struct TurnReadingProvenance {
     pub outcome: InheritedTurnOutcome,
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
     pub ended_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// The origin Attempt's execution totals at the lineage cut. A seed written
+    /// before this evidence existed has none, and contributes no totals.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<TurnExecution>,
+}
+
+/// Additive execution evidence of one native Attempt through a lineage cut.
+///
+/// As a DeepSeek Harness fork folds its copied event prefix, a lineage child's
+/// whole-conversation statistics and context occupancy include the turns it
+/// inherited. These are the Attempt's own facts, never destination execution:
+/// they own no request, Tool, settlement or live clock.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TurnExecution {
+    /// Logical model steps (`TurnStarted`).
+    pub steps: u64,
+    pub model_requests: u64,
+    pub requests_with_usage: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reported_usage: Option<crate::model::types::ModelUsage>,
+    /// Whether the Attempt closed with a finalized response.
+    pub completed_response: bool,
+    /// Summed request generation work, as `ActivityFold` measures it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_ms: Option<u64>,
+    pub ttft_ms: u64,
+    pub ttft_requests: u64,
+    pub decode_ms: u64,
+    pub decode_tokens: u64,
+    /// Summed settled foreground Tool time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_ms: Option<u64>,
+    /// The context reading after the Attempt's last request, absent when that
+    /// request reported none or a later compaction invalidated it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub occupancy: Option<crate::context::occupancy::ContextOccupancy>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

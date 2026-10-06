@@ -6,7 +6,7 @@ use super::{
 use crate::durable::reading::{
     ConversationReadCut, ConversationTurn, ConversationTurnId, ConversationTurnPage,
     ConversationWindowAt, DurableConversationWindow, InheritedTurnOutcome, TURN_PAGE_MAX,
-    TURN_PROMPT_PREVIEW_MAX, TURN_RESPONSE_PREVIEW_MAX, TurnReadingProvenance,
+    TURN_PROMPT_PREVIEW_MAX, TURN_RESPONSE_PREVIEW_MAX, TurnExecution, TurnReadingProvenance,
 };
 use crate::runtime::identity::{AttemptId, ConversationId, MessageId};
 
@@ -345,6 +345,91 @@ fn bound_tool_results(
     Ok(())
 }
 
+/// One local Attempt's additive execution totals through the lineage cut,
+/// folded exactly as whole-conversation statistics and occupancy fold them.
+fn turn_execution(
+    connection: &Connection,
+    conversation: &ConversationId,
+    attempt: &AttemptId,
+    through: u64,
+) -> Result<TurnExecution, ConversationStoreError> {
+    use crate::events::types::{RuntimeEvent as E, RuntimeEventEnvelope};
+    use crate::model::finish::ModelFinishReason;
+    let mut execution = TurnExecution::default();
+    let mut activity = crate::durable::response::timing::ActivityFold::default();
+    // The newest occupancy boundary: a request and its reported usage, or a
+    // compaction that invalidates the previous reading.
+    let mut boundary: Option<(
+        crate::runtime::identity::RequestId,
+        Option<crate::model::types::ModelUsage>,
+    )> = None;
+    let mut closing = false;
+    let mut statement = connection.prepare("SELECT event_json FROM events INDEXED BY events_attempt_idx WHERE attempt_id=?1 AND sequence<=?2 AND json_extract(event_json,'$.event.type') IN ('turn_started','model_request_started','model_request_completed','model_request_failed','tool_execution_started','tool_execution_completed','tool_execution_failed','compaction_started','compaction_completed','assistant_message_committed','attempt_completed') ORDER BY sequence").map_err(|error| storage(error.to_string()))?;
+    let rows = statement
+        .query_map(params![attempt.as_str(), seq_to_i64(through)?], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|error| storage(error.to_string()))?;
+    for json in rows {
+        let event: RuntimeEventEnvelope = super::decode(
+            &json.map_err(|error| storage(error.to_string()))?,
+            "turn execution fact",
+        )?;
+        match event.event {
+            E::TurnStarted => execution.steps += 1,
+            E::ModelRequestStarted { request_id, .. } => {
+                execution.model_requests += 1;
+                boundary = Some((request_id, None));
+            }
+            E::ModelRequestCompleted {
+                request_id,
+                usage,
+                generation,
+                ..
+            }
+            | E::ModelRequestFailed {
+                request_id,
+                usage,
+                generation,
+                ..
+            } => {
+                activity.request(generation.as_ref(), usage.as_ref());
+                if let Some(usage) = usage {
+                    execution.requests_with_usage += 1;
+                    crate::durable::response::add_usage(&mut execution.reported_usage, &usage);
+                    if let Some((current, reading)) = &mut boundary
+                        && *current == request_id
+                    {
+                        *reading = Some(usage);
+                    }
+                }
+            }
+            E::ToolExecutionStarted { tool_call_id, .. } => {
+                activity.tool_started(attempt.clone(), tool_call_id, event.timestamp);
+            }
+            E::ToolExecutionCompleted { tool_call_id, .. }
+            | E::ToolExecutionFailed { tool_call_id, .. } => {
+                activity.tool_settled(attempt.clone(), tool_call_id, event.timestamp);
+            }
+            E::CompactionStarted | E::CompactionCompleted { .. } => boundary = None,
+            E::AssistantMessageCommitted { .. } => closing = true,
+            E::AttemptCompleted {
+                finish_reason: ModelFinishReason::Stop | ModelFinishReason::Refusal,
+                ..
+            } => execution.completed_response = closing,
+            _ => {}
+        }
+    }
+    activity.record(&mut execution);
+    if let Some((request, Some(usage))) = boundary {
+        execution.occupancy = crate::context::occupancy::measure(
+            &usage,
+            &super::load_request_snapshot(connection, conversation, &request)?,
+        )?;
+    }
+    Ok(execution)
+}
+
 /// Lineage carries immutable summaries and member references, never executable facts.
 pub(super) fn inherited_turns(
     connection: &Connection,
@@ -393,6 +478,7 @@ pub(super) fn lineage_turns(
             outcome: InheritedTurnOutcome::IncompleteAtCut,
             started_at: Some(start.timestamp),
             ended_at: None,
+            execution: Some(turn_execution(connection, conversation, &id, through)?),
         };
         let mut facts = connection.prepare("SELECT event_json FROM events INDEXED BY events_attempt_idx WHERE attempt_id=?1 AND sequence<=?2 AND json_extract(event_json,'$.event.type') IN ('assistant_message_committed','attempt_completed','attempt_cancelled','attempt_failed','attempt_timed_out','attempt_limit_exceeded') ORDER BY sequence").map_err(|error| storage(error.to_string()))?;
         let events = facts

@@ -98,7 +98,8 @@ pub(crate) fn terminal_turn(
 }
 
 /// Whole-conversation execution totals, independent of any transcript window.
-/// Forked Conversations start a fresh execution epoch, as native lineage does.
+/// A lineage child includes its inherited turns' recorded execution, as a
+/// DeepSeek Harness fork folds its copied prefix; it owns none of it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationStatistics {
@@ -342,6 +343,24 @@ fn project(
     }
     let mut statistics = ConversationStatistics::default();
     let mut activity = timing::ActivityFold::default();
+    // As a DeepSeek Harness fork folds its copied event prefix, whole-conversation
+    // totals begin with the inherited turns' own recorded execution.
+    if selected.is_none() {
+        for turn in store.load_inherited_turns()? {
+            statistics.turns += 1;
+            let Some(execution) = turn.execution else {
+                continue;
+            };
+            statistics.steps += execution.steps;
+            statistics.model_requests += execution.model_requests;
+            statistics.requests_with_usage += execution.requests_with_usage;
+            if let Some(usage) = &execution.reported_usage {
+                add_usage(&mut statistics.reported_usage, usage);
+            }
+            statistics.completed_responses += u64::from(execution.completed_response);
+            activity.absorb(&execution);
+        }
+    }
     let scopes = selected.map_or_else(
         || vec![FactScope::All],
         |selected| selected.iter().cloned().map(FactScope::Attempt).collect(),

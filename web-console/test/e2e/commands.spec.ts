@@ -112,6 +112,9 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await expect(page.getByLabel('Completed Turn', { exact: true })).toHaveCount(1);
     await expect(usageButton).toHaveCount(1);
     expect(await usageDetails()).toBe(originalUsage);
+    // As a Harness fork folds its copied prefix, the composer's session totals
+    // include the inherited turn rather than starting empty.
+    await expect(page.getByLabel('Session statistics', { exact: true }).getByRole('button', { name: '120 tok', exact: true })).toBeVisible();
     // Native #319 copies uploads in the inherited post-response prefix before publishing the child.
     const root = join(fixture.workspaceA, '.agents/uploads', forkId);
     const batches = readdirSync(root);

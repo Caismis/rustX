@@ -77,7 +77,8 @@ Attempt still running at C retains its origin and mapped location with
 state remains incomplete after source settlement, reopen and repeated lineage.
 It projects as `TurnProcessOutcome::IncompleteAtCut`, with no live timer or
 failure/cancellation claim. Destination execution owns no inherited Attempt,
-request, Tool or settlement. Genuine terminal outcomes before C remain unchanged.
+request, Tool or settlement; each inherited turn only carries its origin Attempt's
+recorded execution totals for whole-conversation statistics and occupancy. Genuine terminal outcomes before C remain unchanged.
 
 Clone copies all selected structure through R and temporal evidence through C.
 A later clone of the same R may differ because it captures a newer C. Fork and

@@ -28,6 +28,15 @@ fn deep_lineage_reopen_preserves_response_facts_without_execution_ownership() {
     let original = page(&store, None, 64);
     let original_b = tails(&original)[1].clone();
     let original_turns = store.conversation_turns(0, 64).unwrap();
+    // As a Harness fork folds its copied prefix, every generation reads the
+    // origin's totals and context, owning neither its execution nor its clock.
+    let inherited_totals = ConversationStatistics {
+        latest_turn: None,
+        ..original.statistics.clone().unwrap()
+    };
+    let origin_occupancy =
+        crate::context::occupancy::read(&store, store.presentation_frontier().unwrap()).unwrap();
+    assert!(origin_occupancy.is_some());
     for generation in 1..=3 {
         let id = ConversationId::generate();
         let path = directory.path().join(format!("child-{generation}.sqlite"));
@@ -106,16 +115,12 @@ fn deep_lineage_reopen_preserves_response_facts_without_execution_ownership() {
         assert_eq!(b.timing, original_b.timing);
         assert_eq!(b.timing.as_ref().unwrap().generation_ms, Some(1280));
         assert!(is_completed_response(&child, &b.closing_message_id).unwrap());
-        assert_eq!(
-            projected.statistics,
-            Some(ConversationStatistics::default())
-        );
+        assert_eq!(projected.statistics, Some(inherited_totals.clone()));
         assert_eq!(child.presentation_frontier().unwrap(), 0);
         assert!(child.read_events(None, 128).unwrap().events.is_empty());
-        assert!(
-            crate::context::occupancy::read(&child, 0)
-                .unwrap()
-                .is_none()
+        assert_eq!(
+            crate::context::occupancy::read(&child, 0).unwrap(),
+            origin_occupancy
         );
         let paged = page(&child, None, 1);
         assert_eq!(tails(&paged), vec![b]);
@@ -138,7 +143,8 @@ fn deep_lineage_reopen_preserves_response_facts_without_execution_ownership() {
             Err(ConversationStoreError::InitialHistoryMismatch)
         ));
     }
-    // Local execution totals start here, independently of both historical tails.
+    // Local execution adds to the inherited totals; its own request replaces
+    // the inherited context reading.
     user(&store, "local-user");
     append(
         &store,
@@ -164,9 +170,14 @@ fn deep_lineage_reopen_preserves_response_facts_without_execution_ownership() {
         Some(1280)
     );
     let totals = current.statistics.unwrap();
-    assert_eq!(totals.completed_responses, 1);
-    assert_eq!(totals.model_requests, 1);
-    assert_eq!(totals.reported_usage.unwrap().total_tokens, 120);
+    assert_eq!(totals.turns, 3);
+    assert_eq!(totals.completed_responses, 3);
+    assert_eq!(totals.model_requests, 3);
+    assert_eq!(totals.reported_usage.unwrap().total_tokens, 360);
+    assert_eq!(
+        totals.latest_turn.unwrap().attempt_id,
+        AttemptId::new("local")
+    );
 }
 
 #[test]
@@ -281,9 +292,13 @@ fn interrupted_process_content_retains_native_origin_outcome_and_destination_loc
                 && turn.attempt_id == AttemptId::new("stopped")
                 && turn.outcome == TurnProcessOutcome::Cancelled)
     );
+    // The cancelled turn's own recorded execution travels with it.
     assert_eq!(
         projected.statistics,
-        Some(ConversationStatistics::default())
+        Some(ConversationStatistics {
+            latest_turn: None,
+            ..original.statistics.clone().unwrap()
+        })
     );
     let outline = child.conversation_turns(0, 64).unwrap();
     assert_eq!(outline.turns.len(), 1);

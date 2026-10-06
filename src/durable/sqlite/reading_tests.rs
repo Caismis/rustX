@@ -293,6 +293,7 @@ fn copied_turns_preserve_origin_and_use_destination_locations() {
                 outcome: InheritedTurnOutcome::Completed,
                 started_at: None,
                 ended_at: Some(provenance.completed_at),
+                execution: None,
             }])
             .unwrap()
             .with_completed_responses(vec![provenance])

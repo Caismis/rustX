@@ -1,4 +1,5 @@
 //! Response aggregation is a sibling of Trace over the same request evidence.
+use crate::durable::reading::TurnExecution;
 use crate::durable::response::{CompletedResponseTiming, ConversationTiming};
 use crate::model::{ModelUsage, generation_evidence::GenerationEvidence};
 use crate::runtime::identity::{AttemptId, RequestId, ToolCallId};
@@ -145,6 +146,28 @@ impl ActivityFold {
         };
         let span = u64::try_from(at.signed_duration_since(started).num_milliseconds()).unwrap_or(0);
         self.tool_ms = Some(self.tool_ms.unwrap_or(0).saturating_add(span));
+    }
+    /// Writes this fold's additive work into one inherited turn's evidence.
+    pub(crate) fn record(&self, execution: &mut TurnExecution) {
+        execution.model_ms = self.model_ms;
+        execution.ttft_ms = self.ttft_ms;
+        execution.ttft_requests = self.ttft_requests;
+        execution.decode_ms = self.decode_ms;
+        execution.decode_tokens = self.decode_tokens;
+        execution.tool_ms = self.tool_ms;
+    }
+    /// Adds one inherited turn's recorded work, as if its facts were folded here.
+    pub(crate) fn absorb(&mut self, execution: &TurnExecution) {
+        let add = |total: Option<u64>, part: Option<u64>| match (total, part) {
+            (total, None) => total,
+            (total, Some(part)) => Some(total.unwrap_or(0).saturating_add(part)),
+        };
+        self.model_ms = add(self.model_ms, execution.model_ms);
+        self.tool_ms = add(self.tool_ms, execution.tool_ms);
+        self.ttft_ms = self.ttft_ms.saturating_add(execution.ttft_ms);
+        self.ttft_requests += execution.ttft_requests;
+        self.decode_ms = self.decode_ms.saturating_add(execution.decode_ms);
+        self.decode_tokens = self.decode_tokens.saturating_add(execution.decode_tokens);
     }
     pub(crate) fn summary(&self) -> Option<ConversationTiming> {
         #[allow(clippy::cast_precision_loss)] // Display ratio, as in the per-response rate.

@@ -63,7 +63,7 @@ pub(crate) fn read(
         limit: 1,
     })?;
     let Some(event) = boundary.first() else {
-        return Ok(None);
+        return inherited(store);
     };
     let RuntimeEvent::ModelRequestStarted { request_id, .. } = &event.event else {
         return Ok(None);
@@ -88,7 +88,50 @@ pub(crate) fn read(
     else {
         return Ok(None);
     };
-    let snapshot = store.load_request_snapshot(request_id)?;
+    measure(usage, &store.load_request_snapshot(request_id)?)
+}
+
+/// Before its own first request, a lineage child reads the context its newest
+/// inherited request measured, as a Harness fork's copied prefix does, unless
+/// its retained Surface compacted after that turn's content.
+fn inherited(
+    store: &dyn ConversationStore,
+) -> Result<Option<ContextOccupancy>, ConversationStoreError> {
+    use crate::conversation::SurfaceOp;
+    let Some(turn) = store
+        .load_inherited_turns()?
+        .into_iter()
+        .rev()
+        .find(|turn| {
+            turn.execution
+                .as_ref()
+                .is_some_and(|execution| execution.model_requests > 0)
+        })
+    else {
+        return Ok(None);
+    };
+    let history = store.load_surface_history(store.load_head()?.revision)?;
+    let appended = history.iter().rposition(|op| {
+        matches!(op, SurfaceOp::Append { message_id } if turn.process_message_ids.contains(message_id))
+    });
+    let compacted = history
+        .iter()
+        .rposition(|op| matches!(op, SurfaceOp::Replace { .. }));
+    if compacted > appended {
+        return Ok(None);
+    }
+    Ok(turn.execution.and_then(|execution| execution.occupancy))
+}
+
+/// The occupancy one terminal reading measures for its own frozen request.
+///
+/// # Errors
+///
+/// Fails only when the frozen request cannot be serialized for pricing.
+pub(crate) fn measure(
+    usage: &crate::model::types::ModelUsage,
+    snapshot: &crate::model::snapshot::RequestSnapshot,
+) -> Result<Option<ContextOccupancy>, ConversationStoreError> {
     if snapshot.context_window_tokens == 0 {
         return Ok(None);
     }
@@ -115,7 +158,7 @@ pub(crate) fn read(
     Ok(Some(ContextOccupancy {
         input_tokens: usage.input_tokens,
         context_window_tokens: snapshot.context_window_tokens,
-        model: snapshot.invocation.model,
+        model: snapshot.invocation.model.clone(),
         breakdown: ContextBreakdown {
             system_tokens,
             tool_tokens,

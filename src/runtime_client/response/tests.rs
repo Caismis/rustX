@@ -609,9 +609,18 @@ fn real_compaction_preserves_response_identity_cut_and_cumulative_usage() {
     assert_eq!(inherited_tail.origin, tail.origin);
     assert_eq!(inherited_tail.usage, tail.usage);
     assert!(is_completed_response(&child, &inherited_tail.closing_message_id).unwrap());
+    // Totals travel with the inherited turn; its pre-compaction context
+    // reading does not, because the retained Surface compacted after it.
     assert_eq!(
         inherited.statistics,
-        Some(ConversationStatistics::default())
+        Some(ConversationStatistics {
+            latest_turn: None,
+            ..after.statistics.clone().unwrap()
+        })
+    );
+    assert_eq!(
+        crate::context::occupancy::read(&child, child.presentation_frontier().unwrap()).unwrap(),
+        None
     );
 }
 

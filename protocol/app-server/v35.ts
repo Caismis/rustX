@@ -6027,7 +6027,8 @@ export interface RuntimeClientTranscriptPage {
 }
 /**
  * Whole-conversation execution totals, independent of any transcript window.
- * Forked Conversations start a fresh execution epoch, as native lineage does.
+ * A lineage child includes its inherited turns' recorded execution, as a
+ * DeepSeek Harness fork folds its copied prefix; it owns none of it.
  */
 export interface ConversationStatistics {
   /**

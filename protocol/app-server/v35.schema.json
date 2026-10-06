@@ -10971,7 +10971,7 @@
       "additionalProperties": false
     },
     "ConversationStatistics": {
-      "description": "Whole-conversation execution totals, independent of any transcript window.\nForked Conversations start a fresh execution epoch, as native lineage does.",
+      "description": "Whole-conversation execution totals, independent of any transcript window.\nA lineage child includes its inherited turns' recorded execution, as a\nDeepSeek Harness fork folds its copied prefix; it owns none of it.",
       "type": "object",
       "properties": {
         "turns": {
