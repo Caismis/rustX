@@ -60,7 +60,6 @@
     "react": "19.3.0",
     "react-aria-components": "1.21.1",
     "react-dom": "19.3.0",
-    "react-resizable-panels": "4.12.4",
     "saxes": "6.0.0",
     "shiki": "4.3.1",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",

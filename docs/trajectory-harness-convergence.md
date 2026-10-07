@@ -38,7 +38,7 @@ includes it through `f4c044e9`, as recorded in the current validation document.
 | Semantic rendering and structural controls | `TrajectoryRow.tsx`, `TrajectoryCell.tsx` |
 | Summary-only bilingual search | `search.ts`, `layout.ts::matchedRecordIds` |
 | Timeline native geometry and gesture lifetime | `timeline.ts`, `TrajectoryTimeline.tsx`; epoch, projection revision, pointer owner preserved |
-| Inspector | `TrajectoryInspector.tsx`; existing React Aria tabs and react-resizable-panels |
+| Inspector | `TrajectoryInspector.tsx` (Harness details panel: per-kind tabs, overview sections); `Trajectory.tsx` owns the Harness resize handle and narrow overlay |
 | Locale | `src/locale/dictionaries/trajectory.ts`, locale controller, i18n checker |
 | Browser evidence | `test/trace-fixture.ts`, `test/fixtures/trajectory.tsx`, `test/e2e/trajectory*.spec.ts`, pinned `scripts/browser-tests.sh` |
 | Provenance | `PROVENANCE.md`, `source-inventory.json`, `scripts/provenance.ts` |
@@ -160,8 +160,8 @@ Paths are under `packages/client/ui-trajectory/src/client/`.
 | `trajectory-virtual-rows.ts` | Measurable stable seats and 9px terminal boundaries | `TrajectoryLedger.tsx`, `TrajectoryLedgerRow`; 10px Request-only seats and 20px structural seats. Reject attaching request-only records to the next content by list position |
 | `TrajectoryTurn.tsx`, `TrajectoryTurn.module.css`, `TrajectoryGroupHeader.tsx` | Turn and Step hierarchy | Exact grouping retained; reject full standalone headers and padded card bodies |
 | `TrajectoryCell.module.css` | Semantic role colors | Neutral System/Compaction, green Context, violet Assistant, amber Tool; native User convention remains blue rather than Harness green |
-| `TrajectoryTimeline.module.css`, existing attributed `TrajectoryTimeline.tsx` | Three lanes / 50px plot / 44px labels | Existing rustX Timeline gesture and native timing owners; no Harness timing inference, no Context or duplicate Assistant span |
-| `TrajectoryTable.tsx` Inspector and `.detailsHeader` CSS | Compact tabs/header and code typography | `TrajectoryInspector.tsx` and CSS; retain bounded lazy native details and react-resizable-panels instead of upstream manual resize state |
+| `TrajectoryTimeline.module.css`, `TrajectoryTimeline.tsx` | Three lanes / 50px plot / 44px label safe area, clipped projected domain, delayed block tooltip, minimum selection and edge pan | rustX native timing, epoch and gesture-revision owners retained; no Harness timing inference, no Context or duplicate Assistant span |
+| `TrajectoryTable.tsx` details panel and CSS | Per-kind tabs, overview sections, usage/timing panels, tool catalog, prompt diff, source blocks, resize handle | `TrajectoryInspector.tsx`, `Trajectory.tsx` and CSS; bounded lazy native details fill Harness's views; Harness's own resize state replaces react-resizable-panels |
 | `trajectory-search-index.ts` | Structural vocabulary searchable on semantic cells | `search.ts`; reject indexing heavy detail blocks/prompts and skipping native Request inspection targets. Both locales indexed independently of active locale |
 
 Provenance preserves earlier per-file lineage and adds this pinned mapping and

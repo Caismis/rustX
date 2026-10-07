@@ -233,11 +233,11 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     const history = wire.responses.filter(row => row.result?.snapshot?.trace).at(-1)!.result.snapshot.trace.records;
     const request = history.find((row: any) => row.request?.context_additions.some((context: any) => context.context_kind === 'agent_status'));
     expect(request).toBeTruthy();
-    await trajectory.getByLabel('Search loaded Trace').fill(request.request.model);
+    await trajectory.getByLabel('Search trajectory').fill(request.request.model);
     await trajectory.locator(`[data-request-owner="${request.id}"]`).click();
-    const inspector = trajectory.getByLabel('Trace record inspector');
-    await inspector.getByRole('tab', { name: 'Context', exact: true }).click();
-    await expect(inspector).toContainText('Accepted contribution');
+    const inspector = trajectory.getByRole('complementary', { name: 'Event details' });
+    await inspector.getByRole('tab', { name: 'Options', exact: true }).click();
+    await expect(inspector).toContainText(request.request.model);
     await expect.poll(() => wire.responses.filter(row => row.method === 'session/traceDetail').length).toBeGreaterThan(0);
     const detail = wire.responses.filter(row => row.method === 'session/traceDetail').at(-1)!.result.detail.request;
     const status = detail.contributions.find((entry: any) => entry.producer.Native === 'agent_status');

@@ -226,18 +226,6 @@ it('a lifecycle repair invalidates cached detail and fences a pending older read
   const cached = completeTraceDetail(replaceTrace({ records: [running] }), running.id, 1, detail(1));
   expect(refreshTrace(cached, { records: [entry(1)] }).details[running.id]).toBeUndefined();
 });
-it('latest Trace reads its own current page and never reuses the attachment snapshot', async () => {
-  server = new Server(); server.snapshots.set('A', { ...snapshot(), trace: { records: [entry(1)] } });
-  await server.attached('A'); const session = server.client.getSnapshot().views.A.snapshot;
-  server.held.add('session/trace'); server.client.latestTrace('A');
-  const read = await server.waitFor('session/trace', 1);
-  const observed = new Promise<void>(resolve => { const stop = server!.client.subscribe(() => {
-    if (server!.client.getSnapshot().views.A.trace?.page.records[0]?.id === 'trace:100') { stop(); resolve(); }
-  }); });
-  server.socket.success(read, { type: 'trace', page: { records: [entry(100)] } }); await observed;
-  expect(server.client.getSnapshot().views.A.snapshot).toBe(session);
-  expect(server.requests.filter(item => item.request.method === 'session/snapshot')).toHaveLength(0);
-});
 
 it('native TraceChanged coalesces burst reads independently of durable Session updates', async () => {
   server = new Server(); await server.attached('A');

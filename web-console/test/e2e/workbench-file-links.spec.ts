@@ -50,7 +50,7 @@ test('trajectory preview uses the same file reference delegate', async ({ page }
   await page.goto(`${origin}/test/fixtures/workbench.html?file-links`);
   await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
   await page.locator('[data-trace-id="trace:1"]').click();
-  const inspector = page.getByRole('complementary', { name: 'Trace record inspector' });
+  const inspector = page.getByRole('complementary', { name: 'Event details' });
   await inspector.getByRole('tab', { name: 'Summary', exact: true }).click();
   await inspector.getByRole('button', { name: 'モルガン 解説', exact: true }).click();
   await expect(page.locator('[data-workbench]').getByRole('heading', { name: 'モルガン 解説' })).toBeVisible();

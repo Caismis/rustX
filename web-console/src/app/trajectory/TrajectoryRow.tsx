@@ -1,62 +1,95 @@
-/* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness semantic ledger; see PROVENANCE.md. */
-import type { CSSProperties, KeyboardEvent } from 'react';
+/* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness TrajectoryTable.tsx ledger rows; see PROVENANCE.md. */
+import type { CSSProperties, KeyboardEvent, MouseEvent } from 'react';
 import { useTranslation } from '../../locale/react';
-import { traceStateLabel } from '../../bindings/status-labels';
-import { CellContent, CellIcon, cellNarrowLabel, SystemPromptCell } from './TrajectoryCell';
-import type { FocusableDisplayItem, TrajectoryLedgerRow } from './layout';
+import { CellContent, KindTag, cellKind, cellLabel, isErrorRecord, listText } from './TrajectoryCell';
+import type { InspectableDisplayItem, TrajectoryLedgerRow } from './layout';
 import css from './Trajectory.module.css';
 
-export function TrajectoryRow({ row, index, style, activeKey, activeTurn, folded, calls, focusedIds, select, toggleTurn, toggleCalls, onKeyDown }: {
+export interface TrajectoryRowActions {
+  select: (item: InspectableDisplayItem) => void;
+  toggleTurn: (id: string) => void;
+  toggleCalls: (id: string) => void;
+  /** Turns with more than one content row, the only ones Harness folds. */
+  foldableTurns: ReadonlySet<string>;
+  /** Assistant records with loaded Tool calls to fold. */
+  callOwners: ReadonlySet<string>;
+  /** Loaded-window Request ordinals, as the dot names them. */
+  requestNumbers: ReadonlyMap<string, number>;
+}
+
+export function TrajectoryRow({ row, index, style, activeKey, activeTurn, folded, focusedIds, actions, onKeyDown }: {
   row: TrajectoryLedgerRow; index: number; style: CSSProperties; activeKey?: string; activeTurn?: string;
-  folded: ReadonlySet<string>; calls: ReadonlySet<string>; focusedIds: ReadonlySet<string> | null;
-  select: (item: FocusableDisplayItem) => void; toggleTurn: (id: string) => void; toggleCalls: (id: string) => void;
+  folded: ReadonlySet<string>; focusedIds: ReadonlySet<string> | null;
+  actions: TrajectoryRowActions;
   onKeyDown: (event: KeyboardEvent<HTMLElement>, key: string) => void;
 }) {
   const tx = useTranslation();
   const item = row.item;
   const record = item?.record;
-  const shortLabel = record ? cellNarrowLabel(tx)[record.kind] : undefined;
-  const truncated = item?.type === 'ContextRow' ? item.context.truncated || item.context.preview?.truncated
-    : item?.type === 'SystemPromptCell' ? record?.request?.system_prompt.preview?.truncated
-      : record?.truncated || record?.preview?.truncated || record?.tool?.arguments?.truncated || record?.tool?.detail?.truncated;
+  const summary = row.kind === 'summary';
+  // A Request is selected on its dot, never as a row, as in Harness.
+  const selected = item !== undefined && item.type !== 'RequestBoundary' && activeKey === item.display_key;
+  const turn = row.turn;
   // As in Harness, the promoted initial prompt precedes the Turn's rail.
   const initialSystem = item?.type === 'SystemPromptCell' && record?.request?.system_prompt.state === 'initial';
-  const activate = () => { if (item) select(item); else if (row.turn) select(row.turn); };
+  const error = record !== undefined && item?.type === 'RecordRow' && isErrorRecord(record);
+  const toggleSummary = () => {
+    if (row.callsOwner) actions.toggleCalls(row.callsOwner);
+    else if (turn) actions.toggleTurn(turn.attempt_id);
+  };
+  const onDoubleClick = (event: MouseEvent) => {
+    if (summary || !item || item.type === 'RequestBoundary' || !turn) return;
+    if (folded.has(turn.attempt_id) && actions.foldableTurns.has(turn.attempt_id)) { event.preventDefault(); actions.toggleTurn(turn.attempt_id); return; }
+    if (item.type === 'RecordRow' && actions.callOwners.has(item.owner_record_id)) { event.preventDefault(); actions.toggleCalls(item.owner_record_id); return; }
+    if (row.turnStart && actions.foldableTurns.has(turn.attempt_id)) { event.preventDefault(); actions.toggleTurn(turn.attempt_id); }
+  };
+  const request = row.request;
+  const requestNumber = request ? actions.requestNumbers.get(request.owner_record_id) : undefined;
+  const requestLabel = tx('trajectory:request.label', { request: requestNumber ?? '—' });
+  const label = summary
+    ? tx('trajectory:request.collapsed-summary', { kind: tx(row.callsOwner ? 'trajectory:request.collapsed-assistant' : 'trajectory:request.collapsed-turn'), summary: row.summary ?? '' })
+    : item && item.type !== 'RequestBoundary'
+      ? tx('trajectory:request.row-aria', { request: requestNumber === undefined ? '' : tx('trajectory:request.row-prefix', { request: requestNumber }), kind: cellLabel(tx, cellKind(item)), content: listText(tx, item) || tx('trajectory:request.no-content') })
+      : turn?.label;
   return <div data-display-key={row.display_key} data-owner={item?.owner_record_id} data-trace-id={record?.id}
-    data-display-type={row.kind === 'structure' ? 'StructuralSeat' : row.kind === 'marker' ? 'MarkerSeat' : row.kind === 'summary' ? 'TurnSummary' : item?.type}
-    data-kind={record?.kind} data-state={record?.state} data-attempt={row.turn?.attempt_id}
-    data-selected={activeKey === row.display_key || undefined} data-turn-start={row.turnStart || undefined}
+    data-display-type={row.kind === 'structure' ? 'StructuralSeat' : row.kind === 'marker' ? 'MarkerSeat' : summary ? (row.callsOwner ? 'CallsSummary' : 'TurnSummary') : item?.type}
+    data-kind={item ? cellKind(item) : undefined} data-state={record?.state} data-attempt={turn?.attempt_id}
+    data-error={error || undefined} data-running={record?.state === 'running' || undefined}
+    data-selected={selected || undefined} data-turn-start={row.turnStart || undefined}
+    data-collapsed-summary={summary ? (row.callsOwner ? 'assistant' : 'turn') : undefined}
     data-timeline-focus={focusedIds && record ? focusedIds.has(record.id) ? 'inside' : 'outside' : undefined}
-    role="row" aria-rowindex={index + 1} aria-selected={activeKey === row.display_key}
-    aria-label={item ? `${item.label} ${item.preview || traceStateLabel(tx, item.record.state)}` : row.summary ?? row.turn?.label}
-    tabIndex={item && item.type !== 'RequestBoundary' ? 0 : -1} className={css.record} style={style} onClick={activate} onKeyDown={event => { if (event.key === 'Escape' || (event.target === event.currentTarget && item)) onKeyDown(event, item?.display_key ?? ''); }}>
+    role="row" aria-rowindex={index + 1} aria-selected={selected} aria-label={label}
+    tabIndex={(item && item.type !== 'RequestBoundary') || summary ? 0 : -1} className={css.record} style={style}
+    onClick={() => { if (summary) toggleSummary(); else if (item && item.type !== 'RequestBoundary') actions.select(item); }}
+    onDoubleClick={onDoubleClick}
+    onKeyDown={event => {
+      if (event.target !== event.currentTarget) return;
+      if (summary && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); toggleSummary(); return; }
+      if (event.key === 'Escape' || item) onKeyDown(event, item?.display_key ?? '');
+    }}>
     <span role="cell" className={css.event}>
-      {row.turn && row.turn.attempt_id === activeTurn && !initialSystem && <span className={css.rail} aria-hidden="true" />}
-      {row.turnStart && row.turn && <span className={css.turnChrome} data-active={row.turn.attempt_id === activeTurn || undefined}>
-        <button data-display-key={`${row.turn.display_key}:fold`} className={css.foldToggle} aria-label={tx('trajectory:trajectory.value-value', { p0: folded.has(row.turn.attempt_id) ? tx('trajectory:trajectory.expand') : tx('trajectory:copy.fold'), p1: row.turn.label })} onClick={event => { event.stopPropagation(); toggleTurn(row.turn!.attempt_id); }}>{folded.has(row.turn.attempt_id) ? '▸' : '▾'}</button>
-        <button data-display-key={row.turn.display_key} onKeyDown={event => onKeyDown(event, row.turn!.display_key)} data-structural="turn" aria-pressed={activeKey === row.turn.display_key} data-selected={activeKey === row.turn.display_key || undefined} aria-label={row.turn.label} title={row.turn.attempt_id} onClick={event => { event.stopPropagation(); select(row.turn!); }}><span className={css.turnLabelFull}>{row.turn.label}</span><span className={css.turnLabelCompact}>#{row.turn.ordinal}</span></button>
+      {request && <button type="button" onKeyDown={event => onKeyDown(event, request.display_key)} className={css.requestChrome} data-display-key={request.display_key}
+        aria-label={requestLabel} aria-pressed={activeKey === request.display_key} data-label={requestLabel}
+        data-request-owner={request.owner_record_id} data-request-id={request.record.request?.request_id}
+        data-selected={activeKey === request.display_key || undefined} data-status={isErrorRecord(request.record) ? 'error' : undefined}
+        style={row.requestRun ? { '--request-boundary-offset': `${row.requestRun * 8}px` } as CSSProperties : undefined}
+        onClick={event => { event.stopPropagation(); actions.select(request); }}
+        onDoubleClick={event => { event.stopPropagation(); }} />}
+      {turn && turn.attempt_id === activeTurn && !initialSystem && <span className={css.turnRail} aria-hidden="true" />}
+      {selected && <span className={css.selectionRail} aria-hidden="true" />}
+      {row.turnStart && turn && <span className={turn.attempt_id === activeTurn ? `${css.turnLabel} ${css.turnLabelActive}` : css.turnLabel} aria-label={turn.label}>
+        <span className={css.turnLabelFull} aria-hidden="true">{turn.label}</span>
+        <span className={css.turnLabelCompact} aria-hidden="true">#{turn.ordinal}</span>
       </span>}
-      {row.kind === 'semantic' && item && <span className={css.kindTag} data-kind={item.type === 'SystemPromptCell' ? 'system' : item.type === 'ContextRow' ? 'context' : record?.kind}>
-        {item.type === 'RecordRow' && !shortLabel && <span className={css.kindIcon}><CellIcon kind={item.record.kind} /></span>}
-        <span className={css.kindLabel}>{item.type === 'SystemPromptCell' ? tx('trajectory:trajectory.system') : item.type === 'ContextRow' ? tx('trajectory:trajectory.context') : item.label}</span>
-        {shortLabel && <span className={css.kindShort}>{shortLabel}</span>}
-      </span>}
+      {row.kind === 'semantic' && item && <KindTag kind={cellKind(item)} />}
     </span>
     <div role="cell" className={css.content}>
-      {/* Positioned against the row, so it sits in the gutter. */}
-      {row.request && <button onKeyDown={event => onKeyDown(event, row.request!.display_key)} className={css.requestChrome} data-display-key={row.request.display_key} aria-pressed={activeKey === row.request.display_key} data-request-owner={row.request.owner_record_id} data-request-id={row.request.record.request?.request_id} data-selected={activeKey === row.request.display_key || undefined} data-status={row.request.record.state}
-        aria-label={`${row.request.label} ${row.request.record.request?.request_id}`} title={`${row.request.record.request?.model} · ${row.request.record.request?.request_id} · ${traceStateLabel(tx, row.request.record.state)}`}
-        style={row.requestRun ? { '--request-boundary-offset': `${row.requestRun * 8}px` } as CSSProperties : undefined}
-        data-label={(row.request.record.request?.retry_number ?? 0) > 0 ? `${row.request.label} ${row.request.record.request?.retry_number}` : row.request.label}
-        onClick={event => { event.stopPropagation(); select(row.request!); }} />}
-      {row.kind === 'summary' ? <button className={css.collapsed} onClick={event => { event.stopPropagation(); if (row.turn) toggleTurn(row.turn.attempt_id); }}>{row.summary}</button>
-        : item?.type === 'SystemPromptCell' ? <SystemPromptCell cell={item} />
-          : item?.type === 'RecordRow' ? <CellContent record={item.record} />
-            : item && row.kind === 'semantic' ? <span className={css.preview}>{item.type === 'ContextRow' ? `${item.label} · ${item.preview}` : item.preview}</span> : null}
-      {item?.type === 'CollapsedCallSummary' && <button className={css.collapsed} onClick={event => { event.stopPropagation(); toggleCalls(item.record.id); }}>{tx('trajectory:trajectory.expand-calls')}</button>}
-      {item?.type === 'RecordRow' && item.record.calls.length > 0 && <button className={css.collapsed} onClick={event => { event.stopPropagation(); toggleCalls(item.record.id); }}>{calls.has(item.record.id) ? tx('trajectory:trajectory.expand') : tx('trajectory:trajectory.collapse')} {tx('trajectory:trajectory.calls')}</button>}
-      {record && row.kind !== 'marker' && item?.type === 'RecordRow' && record.state !== 'completed' && <span className={css.state}>{traceStateLabel(tx, record.state)}</span>}
-      {(truncated || row.request?.record.request?.context_truncated) && <span className={css.state} title={tx('trajectory:trajectory.truncated')} aria-label={tx('trajectory:trajectory.truncated')}>…</span>}
+      {summary
+        ? <span className={css.collapsedTurnContent} title={row.summary}>
+          <span className={css.collapsedTurnEllipsis}>…</span>
+          <span className={css.collapsedTurnText}>{row.summary}</span>
+        </span>
+        : item && row.kind === 'semantic' ? <CellContent item={item} /> : null}
     </div>
   </div>;
 }
