@@ -83,7 +83,6 @@ function Fixture() {
       <span data-detail-reads={reads} data-history-reads={pages} data-native-count={cache.page.records.length} data-trace-epoch={cache.epoch}>Fixture</span>
     </header>
     <Trajectory cache={cache} onSelect={id => setCache(current => selectTrace(current, id))}
-      latest={() => setCache(current => replaceTrace(snapshot, current))}
       loadEarlier={() => { setPages(n => n + 1); setCache(current => prependTrace(current, { records: stepLess ? stepLessRecords().slice(0, 2) : ordered ? [traceRecord(650, { kind: 'assistant', request: null, location: { attempt_id: 'ordered-turn', step_id: 'z-first' }, preview: text('Earlier exact Step content') })] : chrome ? [request(50, 'changed', 'unchanged')] : renumber ? [traceRecord(50, { location: { attempt_id: 'older-attempt', step_id: 'old-step' } })] : Array.from({ length: 32 }, (_, n) => structure && n < 2 ? traceRecord(n + 50, { kind: n === 0 ? 'attempt' : 'step', request: null, location: n === 0 ? { attempt_id: 'attempt-a' } : { attempt_id: 'attempt-a', step_id: '1' } }) : request(n + 50, 'changed', 'unchanged')), next_cursor: null })); }}
       onLoadDetail={id => {
         setReads(n => n + 1);

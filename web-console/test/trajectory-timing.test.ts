@@ -97,17 +97,15 @@ it('T1-12 epoch zero, missing instant, parallel domains and canonical acceptance
   expect(trajectoryTimeline(translator('en'), projectTrajectory(translator('en'), records), 'sequence')!.spans.map(span => span.id)).toEqual(['trace:0', 'trace:1', 'trace:2', 'trace:3', 'trace:7']);
 });
 
-it('T1-12 four modes keep native time distinct from a shared idle-compression transform', () => {
+it('T1-12 the two Harness modes keep native time distinct from a shared idle-compression transform', () => {
   const records = [0, 100, 2000].map((ms, n) => traceRecord(n, { kind: n === 1 ? 'background' : 'tool', request: null,
     timing: { started_at: new Date(ms).toISOString(), ended_at: new Date(ms + 1000).toISOString(), duration_ms: '1000' } }));
-  const spans = (mode: 'sequence' | 'duration' | 'time' | 'actual') => trajectoryTimeline(translator('en'), projectTrajectory(translator('en'), records), mode)!.spans.map(s => [s.start, s.end]);
+  const spans = (mode: 'sequence' | 'duration') => trajectoryTimeline(translator('en'), projectTrajectory(translator('en'), records), mode)!.spans.map(s => [s.start, s.end]);
   expect(spans('sequence')).toEqual([[0, 1], [1, 2], [2, 3]]);
   expect(spans('duration')).toEqual([[0, 1000], [100, 1100], [1100, 2100]]);
-  expect(spans('time')).toEqual([[0, 0], [100, 100], [2000, 2000]]);
-  expect(spans('actual')).toEqual([[0, 1000], [100, 1100], [2000, 3000]]);
 });
 
-it.each(['sequence', 'duration', 'time', 'actual'] as const)('%s Turn boundaries belong to their own projected visible activity', mode => {
+it.each(['sequence', 'duration'] as const)('%s Turn boundaries belong to their own projected visible activity', mode => {
   const at = (ms: number) => ({ started_at: new Date(ms).toISOString() });
   const records = [
     traceRecord(0, { kind: 'attempt', request: null, location: { attempt_id: 'a' }, timing: at(0) }),
@@ -135,7 +133,7 @@ it.each(['sequence', 'duration', 'time', 'actual'] as const)('%s Turn boundaries
     expect(boundary.at).toBeLessThanOrEqual(model.end);
   }
   // Compression removes both intra-Turn gaps and the gap between Turns.
-  expect(model.boundaries.map(b => b.at)).toEqual(mode === 'sequence' ? [0, 2, 4] : mode === 'duration' ? [100, 200] : [100, 1000]);
+  expect(model.boundaries.map(b => b.at)).toEqual(mode === 'sequence' ? [0, 2, 4] : [100, 200]);
   expect(trajectoryTimeline(translator('en'), projectTrajectory(translator('en'), records.slice(4, 6)), mode)).toBeNull();
 });
 
@@ -147,8 +145,8 @@ it('projects prompt inputs separately without inventing input duration or phase 
   const sequence = trajectoryTimeline(translator('en'), projection, 'sequence')!;
   expect(sequence.spans.map(span => span.kind)).toEqual(['system', 'user', 'request']);
   expect(sequence.spans[0]).toMatchObject({ ownerId: record.id, lane: 0 });
-  for (const mode of ['duration', 'time', 'actual'] as const) {
-    const model = trajectoryTimeline(translator('en'), projection, mode)!;
+  {
+    const model = trajectoryTimeline(translator('en'), projection, 'duration')!;
     const input = model.spans.find(span => span.kind === 'system')!;
     const request = model.spans.find(span => span.kind === 'request')!;
     expect(input.start).toBe(request.start); expect(input.end).toBe(input.start);

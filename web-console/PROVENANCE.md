@@ -1529,3 +1529,38 @@ Overview sections link to their corresponding facet, reasoning remains folded
 inside the message preview, and attachments stay with their content. Context
 reads still use the immutable native request owner but render only the selected
 message ID. rustX-only lifecycle records retain native evidence inspection.
+
+### Trajectory Harness parity: details, overview and ledger rows
+
+Reference: `/home/caismis/Documents/codes/deepseek-harness@5badb15009ae1756c3afe0ae0cef1faafc290ccc`,
+read-only: `ui-trajectory` `TrajectoryTable.tsx`/`.module.css`,
+`TrajectoryTimeline.tsx`/`.module.css`, `TrajectoryToolbar.tsx`, `locales.ts`,
+`trajectory-preview.ts` and `ui-primitives/src/markdown/plain-text.ts`.
+
+The details panel is ported from Harness's: role tag and Turn · group location
+(or `Request #N`), Harness tab sets per kind, the Summary fact list with source
+and hierarchy links and token rows, titled overview sections that open their tab,
+the usage (this request / session cumulative), timing, tool catalog, prompt diff,
+source-block and program views, and Harness's own copy in both locales. rustX's
+Native tab, explanatory notes, inspection-bound notices and Turn-structure
+inspector are removed; native facts that Harness has no view for (Agent identity,
+activation origin, exit code, managed-output locator, retry ordinal) are no longer
+shown in the panel. A Diff still refuses truncated or missing prompts. The panel
+uses Harness's resize handle and narrow overlay; `react-resizable-panels@4.12.4`
+is no longer a dependency and its notice is removed.
+
+The overview is ported from Harness's: a 44px lane-label column beside a track
+that clips its projected domain (zooming or panning no longer draws over the
+labels or past the edge), a delayed tooltip per block naming its role, recorded
+range and timing, Harness's minimum selection, edge pan, hover line and turn
+boundaries. The Model block shows TTFT then decoding, placed by the native phase
+bridge. rustX's keyboard zoom/pan, hover hint line and the visible Actual time
+switch (hidden in Harness) are removed with the `time`/`actual` projections.
+
+Ledger rows drop rustX-only chrome: the Turn fold caret and selectable Turn
+label, the per-row Collapse Calls button, lifecycle words and truncation marks.
+As in Harness, double-clicking a Turn's opening row or an Assistant folds it,
+and the folded summary row expands it; a tool-only Assistant reads (tool call
+only), Context rows show their content, and row text is a plain-text projection of
+the Markdown preview (`preview.ts`). The toolbar's Jump to latest control and the
+client `latestTrace` read it drove are removed.

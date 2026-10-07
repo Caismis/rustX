@@ -22,7 +22,7 @@ function Fixture({ bridge, sequence = false }: { bridge: boolean; sequence?: boo
   return <section aria-label={sequence ? 'Sequence phases' : bridge ? 'Measured bridge' : 'Missing bridge'}>
     <h1>{bridge ? '400 ms preparation, 320 ms TTFT, 1280 ms generation' : 'Numeric TTFT without a bridge'}</h1>
     <TrajectoryTimeline model={trajectoryTimeline(translator('en'), projectTrajectory(translator('en'), [request, reference]), sequence ? "sequence" : "duration")} mode={sequence ? "sequence" : "duration"} range={null}
-      selectedId={null} searchMatches={null} onRangeChange={noop} onSelect={noop}
+      selectedId={null} searchMatches={null} onRangeChange={noop} onSelect={noop} onReveal={noop}
       hasEarlierRecords={false} loadingEarlier={false} canLoadEarlier={false} onLoadEarlier={noop} />
   </section>;
 }

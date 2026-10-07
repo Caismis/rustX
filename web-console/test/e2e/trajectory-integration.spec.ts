@@ -94,7 +94,7 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy gate, exact adoption 
     await expect(boundary).toContainText('System Prompt and Tools Updated');
     await boundary.click();
     await page.getByRole('tab', { name: 'Diff', exact: true }).click();
-    await expect(page.getByRole('complementary', { name: 'Trace record inspector' }).getByRole('tabpanel')).toContainText('TRACE_NEW_INSTRUCTIONS');
+    await expect(page.getByRole('complementary', { name: 'Event details' }).getByRole('tabpanel')).toContainText('TRACE_NEW_INSTRUCTIONS');
     await page.screenshot({ path: 'test-results/trajectory-native-adoption.png' });
     passed = true;
   } finally { await remote.shutdown(); await page.close(); await f.stop(passed); }

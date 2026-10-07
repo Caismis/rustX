@@ -217,13 +217,12 @@ it('same Session attachment replacement rejects a held Trace response', async ()
   expect(s.client.getSnapshot().views.A).toBe(replacement);
 });
 
-it.each(['snapshot', 'latest'] as const)('%s supersession keeps a burst bounded to one active tail read and one follow-up', async owner => {
+it('snapshot supersession keeps a burst bounded to one active tail read and one follow-up', async () => {
   const s = await create(); s.held.add('session/trace');
   emit(s, '1', { type: 'trace_changed' });
   const old = await s.waitFor('session/trace', 1);
   const work = s.client['traceReads'].get('A')!.work;
-  if (owner === 'snapshot') { s.cursor = 1n; await s.client.refresh('A'); }
-  else s.client.latestTrace('A');
+  s.cursor = 1n; await s.client.refresh('A');
   const trace = s.client.getSnapshot().views.A.trace;
   for (let cursor = 2; cursor <= 101; cursor++) emit(s, String(cursor), { type: 'trace_changed' });
   expect(s.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(1);
@@ -234,12 +233,11 @@ it.each(['snapshot', 'latest'] as const)('%s supersession keeps a burst bounded 
   await work;
   expect(s.client.getSnapshot().views.A.trace!.page.records).toEqual([traceRecord(1)]);
   expect(s.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(2);
-  expect(s.requests.filter(row => row.request.method === 'session/snapshot')).toHaveLength(owner === 'snapshot' ? 1 : 0);
+  expect(s.requests.filter(row => row.request.method === 'session/snapshot')).toHaveLength(1);
 });
 
 it.each([
   { owner: 'snapshot', invalidations: 1 },
-  { owner: 'latest', invalidations: 0 },
   { owner: 'existing authority', invalidations: 100 },
 ])('failed Trace iteration preserves the owed read for $owner ($invalidations invalidations)', async ({ owner, invalidations }) => {
   const s = await create(); s.held.add('session/trace');
@@ -251,9 +249,8 @@ it.each([
     s.cursor = 1n;
     s.snapshots.set('A', { ...s.snapshots.get('A')!, trace: { records: [traceRecord(1)] } });
     await s.client.refresh('A');
-  } else if (owner === 'latest') s.client.latestTrace('A');
+  }
   if (owner !== 'existing authority') expect(s.client['traceAuthorities'].get('A')).not.toBe(authority);
-  if (owner === 'latest') expect(s.client.getSnapshot().views.A.trace!.page.records).toEqual([]);
   for (let cursor = 2; cursor <= invalidations + 1; cursor++) emit(s, String(cursor), { type: 'trace_changed' });
   const beforeFailure = s.client.getSnapshot().views.A;
   expect(s.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(1);
@@ -280,13 +277,12 @@ it.each([
 
 it('failed Trace iteration without a newer obligation propagates the error and never retries', async () => {
   const s = await create(); s.held.add('session/trace');
-  s.client.latestTrace('A');
+  emit(s, '1', { type: 'trace_changed' });
   const request = await s.waitFor('session/trace', 1);
   const work = s.client['traceReads'].get('A')!.work;
   const rejected = expect(work).rejects.toThrow('current Trace read failed');
   s.socket.deliver({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: 'current Trace read failed', data: { kind: 'invalid_state' } } });
   await rejected;
-  expect(s.client.getSnapshot().views.A.trace!.error).toContain('current Trace read failed');
   expect(s.client['traceReads'].has('A')).toBe(false);
   expect(s.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(1);
   expect(s.requests.filter(row => row.request.method === 'session/snapshot')).toHaveLength(0);
@@ -296,7 +292,7 @@ it('a failed owed follow-up stops without further invalidation and reports only 
   const s = await create(); s.held.add('session/trace');
   emit(s, '1', { type: 'trace_changed' });
   const old = await s.waitFor('session/trace', 1);
-  s.client.latestTrace('A');
+  emit(s, '2', { type: 'trace_changed' });
   const work = s.client['traceReads'].get('A')!.work;
   const rejected = expect(work).rejects.toThrow('latest read failed');
   s.socket.deliver({ jsonrpc: '2.0', id: old.id, error: { code: -32000, message: 'superseded read failed' } });
@@ -304,8 +300,6 @@ it('a failed owed follow-up stops without further invalidation and reports only 
   expect(s.client.getSnapshot().views.A.trace!.error).toBeUndefined();
   s.socket.deliver({ jsonrpc: '2.0', id: fresh.id, error: { code: -32000, message: 'latest read failed' } });
   await rejected;
-  expect(s.client.getSnapshot().views.A.trace!.error).toContain('latest read failed');
-  expect(s.client.getSnapshot().views.A.trace!.error).not.toContain('superseded');
   expect(s.client['traceReads'].has('A')).toBe(false);
   expect(s.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(2);
 });

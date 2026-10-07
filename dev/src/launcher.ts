@@ -1,7 +1,7 @@
-import { accessSync, constants, mkdtempSync, writeFileSync, rmSync, statSync } from 'node:fs';
+import { accessSync, constants, mkdtempSync, writeFileSync, rmSync, statSync, realpathSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import type { LocalHostConfig } from '../../web-console/host/workspaces.ts';
 import type { Arguments } from './arguments.ts';
 import { spawnOwned, type Spawn, type OwnedChild, type ChildSpec } from './process.ts';
@@ -61,6 +61,17 @@ export class Launcher {
       this.#active();
       try { accessSync(args.binary, constants.X_OK); }
       catch { throw new Error(`Native binary unavailable: ${args.binary}. Run cargo build --bins, or pass --binary /absolute/path/rustx.`); }
+      // Match Rust's current_exe(): helpers belong beside the resolved executable.
+      const binaryDirectory = dirname(realpathSync(args.binary));
+      for (const name of ['bash-supervisor', 'interactive-supervisor']) {
+        const helper = join(binaryDirectory, name);
+        try {
+          accessSync(helper, constants.X_OK);
+          if (!statSync(helper).isFile()) throw new Error('not a file');
+        } catch {
+          throw new Error(`Native helper unavailable: ${helper}. Run cargo build --bins and keep rustx, bash-supervisor, and interactive-supervisor together.`);
+        }
+      }
       if (args.mode === 'tui') {
         this.#child({ component: 'tui', command: process.execPath, args: [join(this.#root, 'tui/src/main.ts'), '--binary', args.binary, ...args.forwarded], cwd: process.cwd(), terminal: true }, true);
         return;

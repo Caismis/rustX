@@ -506,46 +506,39 @@ visible native record, **not** the structural or detail owner. A proven loaded
 Attempt/Step record may supply `native_record` evidence by exact kind and native
 structural IDs; no child can supply it. If the native start record is outside the
 page, that evidence is absent. No header owns a detail read: no fake detail
-domain and no owner-fetch paging. Only a Turn header is selectable; it opens a
-separate structure inspector that renders only its exact Attempt `native_record`
-summary (record ID, native kind, Attempt ID, lifecycle state, recorded
-start/end/duration, native ID and preview when present). Without that record it
-states that exact structural evidence is unavailable at this read cut.
+domain and no owner-fetch paging. As in Harness, no structure is selectable: the
+Turn label is a plain label hanging from the Turn's opening row, and a Step has no
+chrome at all.
 
 Keys are JSON tuples, never indexes: record + native ID, system/request-boundary
 + Record ID + Request ID, context + Record ID + Request ID + Message ID, group +
 Attempt + native Step (or null for Message), turn + Attempt, collapsed-calls +
-canonical Assistant Message ID, and history-boundary + opaque cursor. One Trace
+Assistant Record ID, and history-boundary + opaque cursor. One Trace
 cache supplies Session/Conversation scope. The Trajectory component lifetime is
 keyed by Session, Conversation and attachment so local state cannot leak across
 authority replacement.
 
 Selection resolution uses a display universe containing base projected items plus
-current dynamic items produced by collapse/search policy, deduplicated by semantic
-display key. `CollapsedCallSummary` is a real selectable item with its own display
-identity while sharing its Assistant's detail owner. Its exact key wins while the
-summary exists; receiving detail never selects the Assistant row in its place.
-Only expansion or search that removes the summary permits same-owner/facet
-fallback, normally to the Assistant `RecordRow`. Base owner/facet targets remain
-available when search filters them out, without causing reads or stealing search
-focus. Calls construction remains solely in the display-policy projection.
+current items produced by collapse/search policy, deduplicated by semantic display
+key. Folded Tool calls render as a `CallsSummary` toggle row, as in Harness: it
+names the folded calls and expands them, and is never a selection. Base
+owner/facet targets remain available when search filters them out, without
+causing reads or stealing search focus.
 
-Detail selection stores display key, native owner, facet and optional Context
-Message ID. Structural focus is a separate local state with no detail owner.
-Click, Enter or Space on a Turn label selects that structure, replaces any record
-Inspector with the structure inspector and clears cache selection without a detail
-read; that inspector reads the header's evidence from the current projection, so
-a lifecycle refresh or Turn renumbering never shows a stale copy. Closing it
-returns focus to the header without reselecting it. Arrow keys navigate Turn
-labels, Request markers and semantic rows; entering an inspectable row explicitly selects its owner. A Turn's
-fold button changes only collapse state, preserving its selected cell and Inspector. Escape clears selection. Timeline
-selection only resolves inspectable items, never a structural header.
+Detail selection stores display key, native owner and tab, plus the Context
+Message ID for a Context cell. As in Harness, a newly selected item reopens the
+most recently used tab it has, otherwise its own default tab. Double-clicking a
+Turn's opening row folds the Turn when it has more than one content row (its
+System cells and first content row stay above a `… N steps · M tool calls`
+summary); clicking the summary, or Enter on it, expands it. Double-clicking an
+Assistant with loaded Tool executions folds its calls. Arrow keys navigate Request
+markers and semantic rows; entering one explicitly selects its owner. Escape and a
+click on empty ledger space clear selection.
 
-A late detail reply can populate its owner's cache but cannot replace structural
-focus or a newer detail facet. On prepend, structural focus retains the same native
-Attempt key even when the first loaded record changes. Crossing the virtual
-mount threshold restores DOM focus to that same key. Inspectable selection retains
-its exact record/facet. Neither path falls back to a numeric position.
+A late detail reply can populate its owner's cache but cannot replace a newer
+selection or tab. Crossing the virtual mount threshold restores DOM focus to the
+same display key. Inspectable selection retains its exact record and tab; neither
+path falls back to a numeric position.
 
 Turn numbers are loaded-window display ordinals. Prepending an older Attempt may
 renumber every Turn; it cannot move collapse, selection, detail, search or focus.
@@ -561,8 +554,8 @@ There is no Attempt-first renderer or compatibility hierarchy.
 
 Calls collapse joins canonical Assistant proposals to **loaded** executions by
 Session/Conversation, Attempt, Turn, ToolCall ID and Tool ID. Missing/ambiguous
-scope remains uncollapsed. Proposals and executions have separate counts; failed,
-denied, waiting, running and unknown states remain in the summary. Background,
+scope remains uncollapsed. The summary names the folded executions as Harness
+does: their count, then the distinct Tool names. Background,
 Subagent, Workflow and Interaction never become Subtools. Search temporarily overrides Calls and Turn
 collapse, searches only loaded labels/previews/native identities, and performs
 no detail or history reads. Search returns only stable semantic cell keys. Turn,
@@ -572,8 +565,9 @@ ordinal phrases match the complete label, not unrelated numbers in cell content.
 Ledger filtering and Timeline dimming share this membership: Timeline uses the
 native owners of matching cells, without expanding matches to sibling semantic
 cells on the same Request. History and structural headers are never search results. Matching cells retain their Turn/group headers; clearing
-search restores the untouched collapse sets. History loading lives at the boundary; Jump to latest
-appears only off-tail. The old toolbar load/latest/count chrome is removed.
+search restores the untouched collapse sets. History loading lives at the boundary;
+as in Harness, scrolling back to the tail resumes following it, with no separate
+latest control or toolbar load/count chrome.
 
 SYSTEM mapping is initial prompt → Initial System Prompt; prompt change →
 System Prompt Updated; Tools change only → Tools Updated; both → System Prompt
@@ -590,28 +584,27 @@ Turn chrome moves to a prepended row cannot shift what the reader sees. There ar
 the inline control across a change in its semantic seat. Tail follow
 runs only at the tail; content/lifecycle-only repair does not pull a reader down.
 
-The local Inspector uses React Aria tabs and existing safe Markdown, Shiki, JSON
-and artifact primitives. System Prompt cells expose System Prompt/Tools initially, and Diff first for a
-native prompt update; Context cells open their exact frozen Context. Summary and
-Native remain available. Diff requires complete predecessor/current evidence;
-truncated or missing evidence yields uncertainty, never a browser equality claim.
-Both cells retain their exact immutable RequestSnapshot-backed record owner.
-Summary is a human-readable view; Native holds IDs and allowlisted native facts.
-Tool Input, Result and Schema share one historical-read state decision. A pending
-read shows loading (or not-yet-loaded); a failed read shows that facet's read error,
-without claiming absence or automatically retrying. Only a successfully loaded
-detail can establish bounded Tool-payload omission or missing individual facts.
-The former says Tool detail is unavailable in the bounded projection. With a loaded
-Tool payload, missing proposal arguments are unavailable at the read cut; a Tool
-without a canonical result says no result is recorded at that cut. Missing
-historical definitions are unavailable, never blank or inferred from current
-configuration.
-Code remains conditional on the native supported source contract.
-`react-resizable-panels@4.12.4` owns drag/keyboard resizing, constraints, container
-reconciliation and double-click reset. Default Inspector width is
-clamp(320px, 38%, 440px), minimum 320px; Ledger minimum is 340px. Below a measured
-Trajectory width of 720px the panels stack. A Ledger container query at 560px
-compacts Event/icons even in a desktop viewport. No geometry is persisted.
+The details panel follows Harness `TrajectoryTable.tsx`: a role tag with the
+record's Turn · group location (or `Request #N` with its Turn), Harness tab sets per
+kind, and existing safe Markdown, Shiki, JSON and artifact primitives. System
+Prompt cells show System Prompt and Tools, with Diff first for a native prompt
+update; a Diff requires complete predecessor and current prompts, and missing or
+truncated evidence is stated, never diffed. User and Context messages show
+Summary, Preview, Raw and Source; Assistant messages Summary, Preview and Raw,
+with recorded thinking expanded above the answer and their Tool calls linking to
+the executions; Tools show Summary, Payload (or Code for a native program
+source), Result, Schema and Timing; Requests show Summary, Options, Usage and
+Timing. Summaries hold Harness's status, source/hierarchy links and token rows
+above titled previews that open their full tab. Only the record's own native
+facts fill these views: a detail still loading says so, a failed read shows its
+native error, and an absent value uses Harness's own wording. Session-cumulative
+usage is shown only when the loaded window starts at the conversation's first
+record.
+As in Harness, the panel's left edge is a resize handle: drag or the arrow keys
+(16px) resize it within 320–720px while the ledger keeps 280px, and a
+double-click restores the default clamp(320px, 38%, 440px). Below a 760px
+viewport the panel overlays the ledger. A ledger container query at 620px
+compacts the event column to role glyphs. No geometry is persisted.
 
 The timeline consumes the exact same `TrajectoryProjection` as the ledger:
 Turn boundaries, order and native identities are never reconstructed separately.
@@ -621,7 +614,7 @@ visible spans has no boundary. Structural Attempt/Step timestamps do not supply
 presentation coordinates; they remain native Inspector evidence.
 Drag focus persists as native record IDs, so prepending history or a lifecycle
 refresh only relocates its visible coordinates. It is owned by the Trace cache
-epoch that created it: any `replaceTrace` rebase (Jump to latest, resynchronizing,
+epoch that created it: any `replaceTrace` rebase (resynchronizing,
 a disjoint or over-bound refresh) retires it, even when the new domain reuses those
 record IDs, so no stale focus can dim rows without a visible interval. A drag
 that covers no span sets no focus.
@@ -649,12 +642,10 @@ durations. Parallel domain evidence retains overlap. Mode contracts:
 | --- | --- | --- |
 | sequence | shared Turn/group presentation order | equal width; no clock claim |
 | duration | recorded time with one cross-lane union-of-occupied-time transform | measured widths; idle gaps removed; overlap retained |
-| time | absolute recorded starts | markers; idle gaps retained |
-| actual | absolute recorded starts/ends | measured widths; idle gaps and overlap retained |
 
-Actual time is an intentional rustX toolbar extension exposing the pinned
-projection's second axis. Hover/Inspector retains original absolute timestamps;
-normalized duration positions do not replace native times. Missing timestamps
+As in Harness, the toolbar's Duration toggle switches between the two; Harness's
+hidden actual-time axis is not exposed. A block's tooltip retains the original
+absolute timestamps; normalized duration positions do not replace native times. Missing timestamps
 are omitted, zero is valid, single timestamps are markers, and no running end
 is synthesized. No aggregate sums overlapping parent/child duration.
 
@@ -668,7 +659,7 @@ Harness-only semantics lacking native facts. Interaction settlement remains in t
 
 See [Session-owned workspace uploads](session-uploads.md) for receipt admission, model paths, fork copies and durable cleanup.
 
-The inspector uses entity-specific Summary/Input/Result/Schema/Usage/Timing and
+The inspector uses entity-specific Summary/Payload/Result/Schema/Usage/Timing and
 attachment views, Markdown, the audited Harness JSON tree and code primitives.
 Native Bash command content has a shell contract; Write content has source text
 but no inferred language. Unknown third-party Tool contracts get structured JSON.
@@ -687,8 +678,7 @@ alone cannot authorize phase placement. Journal timing remains authoritative in
 Inspector timing facts and can include persistence/settlement latency; it cannot
 substitute for a provider endpoint. A silent provider can have a terminal span
 without first-output evidence. Zero is a valid measurement, not missing evidence.
-These rules govern timed spans; sequence mode uses equal units and time mode
-shows start markers intentionally.
+These rules govern timed spans; sequence mode uses equal units intentionally.
 
 
 ## Semantic ledger and bounded Tool input
@@ -707,11 +697,17 @@ name never substitutes for an absent result.
 Trajectory orchestration owns selection and cache access; `TrajectoryLedger` owns
 virtual geometry and prepend anchoring; `TrajectoryRow` consumes pre-resolved
 semantic content and structural actions; `TrajectoryCell` renders bounded content.
-The Timeline has three 15px lanes in 50px chrome. Its existing projection revision,
-pointer retirement, epoch and native focus semantics remain unchanged. Keyboard
-`+` zooms and `Home` resets; wheel/drag/arrow/Escape interaction remains available.
-Native Request is the Model authority; no accepted-Assistant duplicate span or
-Context duration is introduced. Inspector sizing remains with react-resizable-panels.
+The Timeline follows Harness `TrajectoryTimeline.tsx`: a 44px lane-label column
+beside a track that clips its own projected domain, so zooming or panning never
+draws over the labels or past the edge. Drag focuses an interval (a narrower drag
+widens to one block, centred); the wheel zooms about the pointer; a right-button
+drag pans a zoomed domain and a right-button click, double-click or Escape clears
+the focus. A whitespace click focuses one block-width and scrolls the nearest
+record into view without selecting it. Each block shows a delayed tooltip naming
+its role, recorded start → end and total, with TTFT and decoding for a Model
+block. Its existing projection revision, pointer retirement, epoch and native
+focus semantics remain unchanged. Native Request is the Model authority; no
+accepted-Assistant duplicate span or Context duration is introduced.
 
 See [Harness convergence and validation](trajectory-harness-convergence.md) for
 pinned source mapping and deterministic evidence.

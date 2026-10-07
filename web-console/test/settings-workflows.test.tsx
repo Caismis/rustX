@@ -971,7 +971,6 @@ it('S2-12 React Aria and TanStack Form stay bounded to their declared interactio
     'src/app/settings/general/GeneralPage.tsx', // Accessible appearance radio cards.
     'src/app/settings/models/ModelsPage.tsx',
     'src/app/settings/primitives/aria.tsx',
-    'src/app/trajectory/TrajectoryInspector.tsx',
     'src/presentation/settings/SettingsRoot.tsx',
   ]);
   expect(importers('@base-ui/react/dialog')).toEqual(['src/presentation/primitives/DialogSurface.tsx']);

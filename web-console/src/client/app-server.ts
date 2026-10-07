@@ -1163,20 +1163,6 @@ export class AppServerClient {
       if (current()) this.setSession(id, { trace: completeTraceDetail(this.state.views[id].trace!, record, epoch, undefined, String(error)) });
     }
   }
-  latestTrace(id: string) {
-    const view = this.state.views[id];
-    if (view?.target) {
-      const generation = this.state.generation, target = view.target;
-      const trace = this.supersedeTrace(id, replaceTrace({ records: [] }, view.trace));
-      const authority = this.traceAuthorities.get(id);
-      this.setSession(id, { trace });
-      void this.refreshTraceDomain(id).catch(error => {
-        if (this.current(generation) && sameTarget(this.state.views[id]?.target, target) && this.traceAuthorities.get(id) === authority && this.state.views[id]?.trace?.epoch === trace.epoch) {
-          this.setSession(id, { trace: { ...this.state.views[id].trace!, error: String(error) } });
-        }
-      });
-    }
-  }
   /** A new navigation or an explicit reload retires the previous jump's landing. */
   invalidateReading(id: string) {
     const intent = (this.readingIntents.get(id) ?? 0) + 1;

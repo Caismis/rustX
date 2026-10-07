@@ -545,6 +545,16 @@ const keyboard = (page: Page) => page.evaluate(() => {
   const active = document.activeElement!;
   return { body: active === document.body, disabled: active.matches(':disabled'), settings: active.closest('[role="dialog"][aria-label="Settings"]') !== null, rendered: active.getClientRects().length > 0, connected: active.isConnected };
 });
+/**
+ * Opening a Models row unmounts the focused row. Base UI's dialog then refocuses
+ * its popup in a microtask and again on the next animation frame, which would
+ * overwrite a focus moved before then. Wait for the dialog to hold focus and for
+ * a frame requested after Base UI's own to run.
+ */
+const settleDialogFocus = async (page: Page) => {
+  await page.waitForFunction(() => document.activeElement?.matches('[role="dialog"]') === true);
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => resolve(null))));
+};
 const releaseWrites = (page: Page) => page.evaluate(() => (window as unknown as { rustxReleaseWrites: () => void }).rustxReleaseWrites());
 
 test('confirming a removal settles focus on its unit while the write is in flight; dismissal returns it to the trigger', async ({ page }) => {
@@ -553,6 +563,7 @@ test('confirming a removal settles focus on its unit while the write is in fligh
   await openUserSettings(page);
   await openSettingsPage(page, 'Models');
   await settings.getByRole('row', { name: 'transport', exact: true }).click();
+  await settleDialogFocus(page);
   const unit = settings.getByRole('form', { name: 'Provider transport' });
   const remove = unit.getByRole('button', { name: 'Remove Provider transport', exact: true });
   const deletion = page.getByRole('alertdialog', { name: 'Remove Provider transport from User configuration?' });
@@ -587,6 +598,7 @@ test('confirming a removal settles focus on its unit while the write is in fligh
   await openUserSettings(page);
   await openSettingsPage(page, 'Models');
   await settings.getByRole('row', { name: 'transport', exact: true }).click();
+  await settleDialogFocus(page);
   await expect(remove).toBeEnabled(); await remove.focus(); await expect(remove).toBeFocused();
 
   // Confirm: the removal is submitted and held in flight. The unit's controls,
