@@ -469,13 +469,13 @@ export function TrajectoryInspector({
   const messages = detail?.messages ?? [];
   const kind = selection.cell_type === 'SystemPromptCell' ? 'system' : selection.cell_type === 'ContextRow' ? 'context' : record.kind;
   const tag = selection.cell_type === 'SystemPromptCell' ? tx('trajectory:trajectory.system') : selection.cell_type === 'ContextRow' ? tx('trajectory:trajectory.context') : cellLabel(tx)[record.kind];
-  const subject = selection.cell_type === 'SystemPromptCell' ? tx('trajectory:copy.system-prompt')
+  const subject = selection.cell_type === 'SystemPromptCell' ? (record.request?.system_prompt.state === 'initial' ? tx('trajectory:layout.initial-system-prompt') : tx('trajectory:copy.system-prompt'))
     : record.kind === 'request' && record.request ? record.request.model
       : record.kind === 'tool' && record.tool ? record.tool.name ?? record.tool.tool_id : undefined;
 
   return (
     <aside className={css.inspector} data-kind={kind} aria-label={tx('trajectory:trajectory-inspector.trace-record-inspector')}>
-      <InspectorHeader kind={kind} tag={tag} location={[location, subject].filter(Boolean).join(' · ')} closeLabel={tx('trajectory:trajectory-inspector.close-record')} onClose={onClose} />
+      <InspectorHeader kind={kind} tag={tag} location={[selection.cell_type === 'SystemPromptCell' ? undefined : location, subject].filter(Boolean).join(' · ')} closeLabel={tx('trajectory:trajectory-inspector.close-record')} onClose={onClose} />
       <Tabs className={css.inspectorTabs} selectedKey={active} onSelectionChange={key => onFacet(key as TrajectoryFacet)}>
       <TabList aria-label={tx('trajectory:trajectory-inspector.record-sections')} className={css.tabs}>
         {sections.map(name => <Tab key={name} id={name}>{facetLabel(tx, name)}</Tab>)}
@@ -654,7 +654,11 @@ export function TrajectoryInspector({
           <Structured value={{ value: messages, truncated: detail?.truncated ?? false }} label={tx('trajectory:trajectory-inspector.projected-messages')} />
         )}
 
-        {active === 'System Prompt' && request && (<><h3 className={css.sectionLabelHeading}>{tx('trajectory:trajectory-inspector.effective-system-prompt')}</h3><Text value={request.effective_system_prompt} markdown /></>)}
+        {active === 'System Prompt' && (request
+          ? request.effective_system_prompt.text === '' && !request.effective_system_prompt.truncated
+            ? <p className={css.unavailable}>{tx('trajectory:trajectory-inspector.no-system-prompt')}</p>
+            : <Text value={request.effective_system_prompt} markdown />
+          : !loading && !error ? <p className={css.unavailable} role={detail ? undefined : 'status'}>{tx(detail ? 'trajectory:trajectory-inspector.system-prompt-unavailable' : 'trajectory:trajectory-inspector.loading-record-detail')}</p> : null)}
 
         {active === 'Diff' && <PromptDiff record={record} detail={detail} />}
 

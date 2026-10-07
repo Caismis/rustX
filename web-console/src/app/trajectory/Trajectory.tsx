@@ -56,7 +56,7 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
   const revision = timelineProjectionRevision(timelineModel, mode);
   const range = useMemo<TrajectoryTimeRange | null>(() => {
     if (focus?.epoch === cache.epoch && focus.revision === revision) return focus.range;
-    const spans = timelineModel?.spans.filter(span => focusedIds?.has(span.id)) ?? [];
+    const spans = timelineModel?.spans.filter(span => focusedIds?.has(span.ownerId ?? span.id)) ?? [];
     return spans.length ? { start: Math.min(...spans.map(span => span.start)), end: Math.max(...spans.map(span => span.end)) } : null;
   }, [timelineModel, focusedIds, focus, cache.epoch, revision]);
   const setRange = (range: TrajectoryTimeRange | null) => {
@@ -167,9 +167,9 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
     {cache.error && <p role="alert" className={css.error}>{cache.error}</p>}
     {/* Epoch retires read-domain ownership; the Timeline separately fences
         coordinate interactions by its semantic projection revision. */}
-    <TrajectoryTimeline key={cache.epoch} model={timelineModel} mode={mode} range={range} selectedId={selection?.owner_record_id ?? null} searchMatches={matchingOwners} onRangeChange={setRange}
+    <TrajectoryTimeline key={cache.epoch} model={timelineModel} mode={mode} range={range} selectedId={timelineModel?.spans.find(span => span.displayKey === selection?.display_key)?.id ?? null} searchMatches={matches === null ? null : new Set(timelineModel?.spans.filter(span => span.displayKey ? matches.has(span.displayKey) : matchingOwners?.has(span.ownerId ?? span.id)).map(span => span.id))} onRangeChange={setRange}
       hasEarlierRecords={Boolean(cache.page.next_cursor)} canLoadEarlier={canLoadEarlier} loadingEarlier={cache.loading === true} onLoadEarlier={requestOlder}
-      onSelect={id => { const item = preferredItem(allItems, id); if (!item) return; setCollapsedTurns(current => { const next = new Set(current); if (item.record.location.attempt_id) next.delete(item.record.location.attempt_id); return next; }); setCalls(current => { const matching = matchingCalls(records); return new Set([...current].filter(owner => !matching.get(owner)?.some(record => record.id === item.owner_record_id))); }); if (matches && !matches.has(item.display_key)) setQuery(''); select(item); }} />
+      onSelect={id => { const span = timelineModel?.spans.find(span => span.id === id); const item = span?.displayKey ? allItems.find(item => item.display_key === span.displayKey && isInspectable(item)) : preferredItem(allItems, id); if (!item || !isInspectable(item)) return; setCollapsedTurns(current => { const next = new Set(current); if (item.record.location.attempt_id) next.delete(item.record.location.attempt_id); return next; }); setCalls(current => { const matching = matchingCalls(records); return new Set([...current].filter(owner => !matching.get(owner)?.some(record => record.id === item.owner_record_id))); }); if (matches && !matches.has(item.display_key)) setQuery(''); select(item); }} />
     <Group className={css.split} orientation={narrow ? 'vertical' : 'horizontal'}>
       <Panel id="ledger" minSize={narrow ? '160px' : '340px'} className={css.ledgerPanel}>
         <TrajectoryLedger ref={ledger} rows={rows} first={records[0]?.id} activeKey={activeKey} focusKey={pendingFocus} onFocused={() => setPendingFocus(undefined)}

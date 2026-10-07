@@ -1456,3 +1456,11 @@ Product Host resolves references within the admitted native workspace with
 no-follow descriptor traversal. References open the existing Workbench dock
 content identity rather than synthesizing an Artifact or committed delivery.
 Document-local resource links retain their own base path and resource owner.
+
+Trajectory prompt inspection now follows Harness `TrajectoryTable.tsx`'s explicit
+missing-system-prompt state and direct Markdown payload. Frozen rustX request
+detail remains the sole source; current configuration never fills history.
+The timeline includes projected SystemPromptCell and ContextRow input entries,
+with independent display keys and their original request detail owner. Sequence
+mode places the initial prompt first; timed modes use zero-duration markers at
+the owning request snapshot, since no separate input clock is recorded.

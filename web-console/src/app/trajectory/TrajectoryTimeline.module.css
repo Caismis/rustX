@@ -205,3 +205,6 @@
   pointer-events: none;
   background: var(--dsw-alias-state-business-primary);
 }
+
+.span[data-kind='system'] { background: var(--dsw-alias-label-tertiary); }
+.span[data-kind='context'] { background: var(--dsw-alias-state-success-primary); }

@@ -655,7 +655,7 @@
           "treatment": "Toolbar markup adapted; Actual time stays a visible rustX switch."
         }
       ],
-      "local_sha256": "a342aaeaf3e1782f3bb3c1864d0080fa4283518d762b714406d042ec35617f25"
+      "local_sha256": "75f5323d61ac0d8fe7c4e92305f60635a9c1c657f69b914c5decb9d193b8d77a"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -715,7 +715,7 @@
           "treatment": "Details header (role tag, section/group location, icon close) adapted."
         }
       ],
-      "local_sha256": "b011c95d1c08ffe5c4e07f455ba55b4b1026b728baaaa36d561311c4797d07db"
+      "local_sha256": "8de0a1937d7ca3594a8b1138542567f64e4b140be9cf559d919cae2b9c0d5521"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -735,7 +735,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "361687450a6bc8a1896940ad480427ab36ec0de195ba38b1b13938c35cac0a16",
+      "local_sha256": "134c44227a06ba279415dbc27fc1560d8ef99f08447f75e4833c358f3576264d",
       "additional_sources": [
         {
           "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
@@ -868,7 +868,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "2a82769ebbec12cedd8a1a555b7c6ee93a91bd18070f3473ed22b0bfc3606d9a",
+      "local_sha256": "b96b99ebf0627552cf281ec8b45a69cd0db175dbe1e5f91fd90ab3460539ec4d",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/timeline.ts",
@@ -2635,7 +2635,7 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "93cb187dee885bb2549651181024d83c2fecbdcbe8dbc6dc061b11fec97c0e46"
+      "local_sha256": "91d3f6e26a10bf5c20edb5f7f1bcb520bfa0c4c28059846c62b1761bf1c7ae08"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
@@ -3347,7 +3347,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "d25a365684224ef2074410bb49130e4df36c7bdd1b147c9c8b32ff3c1443d099"
+      "local_sha256": "4ecd156038eb598f5f104df5e386b5dcd881d7c6e4ebd32e163ea40127662796"
     },
     {
       "upstream": "packages/client/ui-workspace/src/client/locales.ts",

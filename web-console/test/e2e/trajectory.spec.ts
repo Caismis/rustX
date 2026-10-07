@@ -727,3 +727,18 @@ for (const width of [1440, 390]) test(`retained input ownership repair orders th
   await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '0');
   expect(errors).toEqual([]);
 });
+
+test('system prompt input span and model request preserve distinct selections and historical text', async ({ page }) => {
+  await page.goto(`${fixtureOrigin}/test/fixtures/trajectory.html`);
+  const system = page.locator('[data-record-id][data-kind="system"]').first();
+  const model = page.locator('[data-record-id="trace:3"]');
+  await system.click();
+  const inspector = page.getByRole('complementary', { name: 'Trace record inspector' });
+  await expect(system).toHaveAttribute('aria-pressed', 'true');
+  await expect(model).toHaveAttribute('aria-pressed', 'false');
+  await expect(inspector.getByRole('tab', { name: 'System Prompt', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(inspector.getByRole('tabpanel')).toContainText('You are the historical agent.');
+  await model.click();
+  await expect(inspector.getByRole('tab', { name: 'Summary', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(system).toHaveAttribute('aria-pressed', 'false');
+});

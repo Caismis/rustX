@@ -804,7 +804,7 @@ it.each([
   fireEvent.change(search, { target: { value: query } });
   const ledger = screen.getByRole('table', { name: 'Trace ledger' });
   expect([...ledger.querySelectorAll('[data-owner]')].map(el => el.getAttribute('data-display-key'))).toEqual(ledgerRows(translator('en'), projectTrajectory(translator('en'), records), [...items.filter(item => !isInspectable(item)), ...expected], new Set(), true).filter(row => row.item).map(row => row.display_key));
-  expect([...document.querySelectorAll('[data-record-id]:not([data-dimmed])')].map(el => el.getAttribute('data-record-id'))).toEqual([owner]);
+  expect([...document.querySelectorAll('[data-record-id]:not([data-dimmed])')].map(el => el.getAttribute('data-record-id'))).toEqual([type === 'SystemPromptCell' || type === 'ContextRow' ? expected[0].display_key : owner]);
   expect(screen.getByRole('tab', { name: 'System Prompt' }).getAttribute('aria-selected')).toBe('true');
   fireEvent.change(search, { target: { value: '' } });
   expect(row('SystemPromptCell').getAttribute('aria-selected')).toBe('true');
@@ -836,7 +836,7 @@ it.each(['Turn 2', 'Step 2'])('%s reveals every semantic cell of its structural 
   const items = trajectoryItems(records);
   const ledger = screen.getByRole('table', { name: 'Trace ledger' });
   expect([...ledger.querySelectorAll('[data-owner]')].map(el => el.getAttribute('data-display-key'))).toEqual(ledgerRows(translator('en'), projectTrajectory(translator('en'), records), [...items.filter(item => !isInspectable(item)), ...expected], new Set(), true).filter(row => row.item).map(row => row.display_key));
-  expect([...document.querySelectorAll('[data-record-id]:not([data-dimmed])')].map(el => el.getAttribute('data-record-id'))).toEqual(query === 'Turn 2' ? ['trace:1', 'trace:5'] : ['trace:5']);
+  expect([...document.querySelectorAll('[data-record-id]:not([data-dimmed])')].map(el => el.getAttribute('data-record-id'))).toEqual([...expected.filter(isInspectable).filter(item => item.type === 'SystemPromptCell' || item.type === 'ContextRow').map(item => item.display_key), ...(query === 'Turn 2' ? ['trace:1', 'trace:5'] : ['trace:5'])]);
 });
 
 const epochRecords = (...ns: number[]) => ns.map(n => traceRecord(n, { location: { attempt_id: `attempt-${n}`, step_id: 'step' } }));
@@ -1674,4 +1674,36 @@ it('retained idle inputs move into their native answering turns, below the initi
   const ledger = screen.getByRole('table', { name: 'Trace ledger' });
   expect([...ledger.querySelectorAll('[data-display-type="SystemPromptCell"], [data-display-type="RecordRow"]')].length).toBeGreaterThan(0);
   expect(load).not.toHaveBeenCalled();
+});
+
+it('system prompt and context timeline inputs select their own facets, not the shared request boundary', () => {
+  const request = richRequest();
+  const detail = requestDetail(0); detail.request!.effective_system_prompt = { text: '# Frozen system prompt\n\nHistorical instructions.', truncated: false };
+  show(completeTraceDetail(cacheOf([request]), request.id, 1, detail));
+  fireEvent.click(row('SystemPromptCell'));
+  const system = document.querySelector<HTMLButtonElement>('[data-record-id][data-kind="system"]')!;
+  const model = document.querySelector<HTMLButtonElement>('[data-record-id][data-kind="request"]')!;
+  expect(system.getAttribute('aria-pressed')).toBe('true'); expect(model.getAttribute('aria-pressed')).toBe('false');
+  expect(screen.getByRole('heading', { name: 'Frozen system prompt' })).toBeDefined();
+  fireEvent.click(model);
+  expect(screen.getByRole('tab', { name: 'Summary' }).getAttribute('aria-selected')).toBe('true');
+  expect(row('SystemPromptCell').getAttribute('aria-selected')).not.toBe('true');
+  fireEvent.click(system);
+  expect(screen.getByRole('tab', { name: 'System Prompt' }).getAttribute('aria-selected')).toBe('true');
+  fireEvent.click(document.querySelector<HTMLButtonElement>('[data-record-id][data-kind="context"]')!);
+  expect(screen.getByRole('tab', { name: 'Context' }).getAttribute('aria-selected')).toBe('true');
+});
+
+it('distinguishes an absent historical prompt from pending and failed reads', () => {
+  const request = richRequest(), detail = requestDetail(0);
+  const view = show(cacheOf([request])); fireEvent.click(row('SystemPromptCell'));
+  expect(screen.queryByText('This request did not include a system prompt.')).toBeNull();
+  expect(screen.getByRole('status').textContent).toContain('Loading');
+  const renderCache = (cache: TraceCache) => view.rerender(<Trajectory cache={cache} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop}/>);
+  renderCache(completeTraceDetail(cacheOf([request]), request.id, 1, undefined, 'Historical read failed'));
+  expect(screen.getByRole('alert').textContent).toContain('Historical read failed');
+  expect(screen.queryByText('This request did not include a system prompt.')).toBeNull();
+  detail.request!.effective_system_prompt = { text: '', truncated: false };
+  renderCache(completeTraceDetail(cacheOf([request]), request.id, 1, detail));
+  expect(screen.getByText('This request did not include a system prompt.')).toBeDefined();
 });
