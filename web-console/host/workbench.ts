@@ -46,7 +46,7 @@ export class WorkspaceTerminals {
   readonly shells = ['/bin/bash', '/bin/zsh', '/bin/sh'].filter(existsSync);
   close() { for (const terminal of this.terminals.values()) void this.stop(terminal); this.terminals.clear(); }
   private async stop(terminal: TerminalState) { if (!terminal.exited) terminal.pty.kill('SIGKILL'); await terminal.done; }
-  async request(owner: string, cwd: string, request: Exclude<WorkbenchRequest, { kind: 'applications' | 'open' | 'office' }>, signal?: AbortSignal): Promise<WorkbenchResult> {
+  async request(owner: string, cwd: string, request: Exclude<WorkbenchRequest, { kind: 'applications' | 'open' | 'office' | 'resolve' }>, signal?: AbortSignal): Promise<WorkbenchResult> {
     if (request.kind === 'files' || request.kind === 'read' || request.kind === 'bytes') return workspaceFile(cwd, request.path, request.kind !== 'files', request.kind === 'bytes');
     const list = () => ({ terminals: [...this.terminals].filter(([, t]) => t.owner === owner).map(([id, t]) => ({ id, shell: t.shell, exited: t.exited })), shells: this.shells });
     if (request.kind === 'terminals') return list();

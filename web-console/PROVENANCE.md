@@ -1447,3 +1447,12 @@ Install-closure notices include Node-only ExcelJS dependencies as well as browse
 modules. The upstream `buffers@0.1.1` distribution has no published license
 statement; that omission is recorded explicitly, not replaced with an inferred
 license. The ExcelJS browser entry does not import that Node-only archive reader.
+
+Conversation file references use Harness `ui-primitives/src/markdown/file-link.ts`
+and the `MarkdownFileLink` delegate from `render.tsx`, retaining its URI decoding,
+line fragment grammar, settled-message activation and existing file-link CSS.
+The rustX Session owns the delegate for Conversation and Trajectory previews;
+Product Host resolves references within the admitted native workspace with
+no-follow descriptor traversal. References open the existing Workbench dock
+content identity rather than synthesizing an Artifact or committed delivery.
+Document-local resource links retain their own base path and resource owner.

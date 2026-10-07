@@ -3,7 +3,7 @@ import { deriveWorkspaceOffice } from './documents/operation.ts';
 import { WorkspaceTerminals, workspaceFile, withWorkspacePath } from './workbench.ts';
 import { OfficeSettlementError } from './documents/office-cgroup.ts';
 import { readFileSync, writeFileSync, renameSync, realpathSync, statSync, fstatSync, existsSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { sameEndpoint } from '../src/workspaces/endpoint.ts';
 import { WorkspaceHostError } from '../src/workspaces/host.ts';
@@ -176,6 +176,16 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     this.mutationScope(scope); signal?.throwIfAborted();
     if (!this.classifyLocation(cwd).authorized) throw new Error('Workspace is not authorized');
     const root = realpathSync(cwd);
+    if (call.request.kind === 'resolve') {
+      const input = call.request.path;
+      if (typeof input !== 'string' || !input || input.length > 4096 || /[\u0000-\u001f\u007f]/.test(input)) throw new Error('Invalid file reference');
+      const path = relative(root, resolve(root, input));
+      if (!path || path === '..' || path.startsWith('../') || isAbsolute(path)) throw new Error('File reference is outside this workspace');
+      return withWorkspacePath(root, path, false, fd => {
+        if (!fstatSync(fd).isFile()) throw new Error('Not a regular file');
+        return { path };
+      });
+    }
     if (call.request.kind === 'office') {
       const path = call.request.path, extension = path.split('.').at(-1)?.toLowerCase();
       if (extension !== 'docx' && extension !== 'pptx') throw new Error('converter_unavailable');

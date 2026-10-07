@@ -1,6 +1,7 @@
 import type { DesktopTarget } from './desktop';
 export type WorkbenchRequest =
   | { kind: 'files'; path: string }
+  | { kind: 'resolve'; path: string }
   | { kind: 'read'; path: string }
   | { kind: 'bytes'; path: string }
   | { kind: 'office'; path: string }
@@ -14,6 +15,8 @@ export type WorkbenchRequest =
   | { kind: 'close'; id: string };
 export interface WorkbenchTerminal { id: string; shell: string; exited: boolean }
 export interface WorkbenchResult {
+  /** Host-admitted, normalized workspace-relative file reference. */
+  path?: string;
   applications?: import('./desktop').DesktopCatalog;
   entries?: { name: string; directory: boolean; link: boolean }[];
   text?: string;

@@ -1,5 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Harness guide and DockLayout port; see PROVENANCE.md. */
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useImperativeHandle, type Ref, useRef, useState, useSyncExternalStore } from 'react';
 import type { ProductHostWorkspaces, WorkspaceAuthorityScope } from '../../workspaces/host';
 import type { DesktopTarget } from '../../workspaces/desktop';
 import type { WorkbenchRequest, WorkbenchTerminal } from '../../workspaces/workbench';
@@ -18,8 +18,9 @@ import type { DockIntents } from '../../presentation/dockkit/contract/adapter';
 import css from '../../presentation/right-panel/Workbench.module.css';
 const TerminalView = lazy(() => import('./WorkbenchTerminal'));
 const guideTab = (id: TabId): TabRecord => ({id,kind:'start',contentId:`start:${id}`,title:''});
-export function Workbench({ host, scope, target, visible, floatingVisible, fullscreen, toggleFullscreen, closePanel }: {
-  host: ProductHostWorkspaces; scope?: WorkspaceAuthorityScope; target?: DesktopTarget; visible: boolean; floatingVisible: boolean; fullscreen: boolean; toggleFullscreen: () => void; closePanel: () => void;
+export interface WorkbenchHandle { openFile(path: string, line?: number): Promise<boolean> }
+export function Workbench({ fileRef, host, scope, target, visible, floatingVisible, fullscreen, toggleFullscreen, closePanel }: {
+  fileRef?: Ref<WorkbenchHandle>; host: ProductHostWorkspaces; scope?: WorkspaceAuthorityScope; target?: DesktopTarget; visible: boolean; floatingVisible: boolean; fullscreen: boolean; toggleFullscreen: () => void; closePanel: () => void;
 }) {
   const tx = useTranslation();
   const storageKey = JSON.stringify([scope?.endpoint,scope?.authorityId,target?.session_id,target?.active_node]);
@@ -50,6 +51,23 @@ export function Workbench({ host, scope, target, visible, floatingVisible, fulls
     dock.openContent({paneId,kind:tab.kind,contentId,title:tab.path ?? ''});
     if(active && active.kind==='start') dock.closeTab(active.id);
   };
+  useImperativeHandle(fileRef, () => ({ openFile: async (path, line) => {
+    const ticket = ++navigation.current, signal = lifetime.current?.signal;
+    setError('');
+    try {
+      const result = await call({ kind: 'resolve', path });
+      if (signal?.aborted || ticket !== navigation.current || !result.path) return false;
+      open(dock.activeDockPaneId(), { kind: 'file', path: result.path });
+      if (line !== undefined) {
+        const tab = Object.values(dock.getSnapshot().state.tabs).find(t => t.contentId === `file:${result.path}`)!;
+        const view = viewFor(tab.id); view.mode = 'code'; view.line = line; view.focusRevision = (view.focusRevision ?? 0) + 1;
+        // Remount just this view so a repeated line reference is a fresh navigation.
+        setFileFocus(n => n + 1);
+      }
+      return true;
+    } catch (cause) { if (!signal?.aborted && ticket === navigation.current) setError(String(cause)); return false; }
+  }}));
+  const [, setFileFocus] = useState(0);
   useEffect(()=>{
     if(!visible || !available) return;
     const abort=new AbortController();
@@ -119,7 +137,7 @@ export function Workbench({ host, scope, target, visible, floatingVisible, fulls
         <span className={css.hero}><CompassGlyph size={56}/></span>
         <button type="button" className={css.entry} disabled={!available} aria-keyshortcuts={isMac ? 'Alt+Meta+P' : 'Alt+Control+P'} onClick={() => open(pane.id, { kind: 'files' })}><span className={css.entryIcon}><GuideArtworkFiles size={26}/></span><span className={css.entryText}><span className={css.entryTitle}>{tx('artifacts:workbench.files')}</span><span className={css.entryDescription}>{tx('artifacts:workbench.files-description')}</span></span><ShortcutKeys keys={isMac ? ['⌥', '⌘', 'P'] : ['Alt', 'Ctrl', 'P']}/></button>
         <div className={`${css.entry} ${css.terminalEntry}`}><button type="button" className={css.launch} aria-label={tx('artifacts:workbench.new-terminal')} aria-keyshortcuts="Control+`" disabled={!available || busy || !shell} onClick={() => void create(pane.id)}/><span className={css.entryIcon}><PluginArtworkTerminal size={26}/></span><span className={css.entryText}><span className={css.titleRow}><span className={css.entryTitle}>{tx('artifacts:workbench.new-terminal')}</span><Menu open={menu === pane.id} autoFocus align="end" items={shells.map(s => ({ id: s, label: s.split('/').at(-1)! }))} selectedId={shell} onClose={() => setMenu(undefined)} onSelect={s => { setShell(s); setMenu(undefined); void create(pane.id, s); }} anchor={<button type="button" className={css.shellTrigger} disabled={busy || !shells.length} aria-label={tx('artifacts:workbench.shell')} aria-haspopup="menu" aria-expanded={menu === pane.id} onClick={() => setMenu(menu === pane.id ? undefined : pane.id)}><IconChevronDownOutline14/></button>}/></span><span className={css.entryDescription}>{tx('artifacts:workbench.terminal-description')}</span></span><ShortcutKeys keys={[isMac ? '⌃' : 'Ctrl', '`']}/></div>
-      </div> :tab.kind==='files'?<WorkspaceFiles call={call} view={viewFor(tab.id)} onOpen={path=>open(pane.id,{kind:'file',path})}/>:tab.kind==='file'?<WorkspaceFile onOpen={path=>open(pane.id,{kind:'file',path})} path={tab.title} call={call} view={viewFor(tab.id)}/>:<Suspense fallback={<p>{tx('artifacts:workbench.loading')}</p>}><TerminalView id={tab.contentId} call={call}/></Suspense>}
+      </div> :tab.kind==='files'?<WorkspaceFiles call={call} view={viewFor(tab.id)} onOpen={path=>open(pane.id,{kind:'file',path})}/>:tab.kind==='file'?<WorkspaceFile key={`${tab.id}:${viewFor(tab.id).focusRevision ?? 0}`} onOpen={path=>open(pane.id,{kind:'file',path})} path={tab.title} call={call} view={viewFor(tab.id)}/>:<Suspense fallback={<p>{tx('artifacts:workbench.loading')}</p>}><TerminalView id={tab.contentId} call={call}/></Suspense>}
     </div>;
   };
   return <div className={css.root} hidden={!visible && (!floatingVisible || !state.floats.length)} data-workbench>

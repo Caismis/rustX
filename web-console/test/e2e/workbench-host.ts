@@ -11,6 +11,8 @@ export function workbenchFixture(): Plugin {
     writeFileSync(join(root, 'src/test.py'), 'def greet(name):\n    return "Hello, " + name\n\n' + '# long line ' + 'source '.repeat(120) + '\n');
     writeFileSync(join(root, 'src/file10.txt'), 'ten'); writeFileSync(join(root, 'src/file2.txt'), 'two');
     mkdirSync(join(root, 'docs'));
+    writeFileSync(join(root, 'docs/モルガン_解説.md'), '# モルガン 解説\n\n**Rendered file reference**');
+    writeFileSync(join(root, 'lines.py'), Array.from({length: 150}, (_, i) => `# line ${i + 1}`).join('\n'));
     writeFileSync(join(root, 'docs/guide.md'), '---\ntitle: Sidebar documentation\nauthor: Example\n---\n# Rendered document\n\n| Feature | Status |\n| --- | --- |\n| Markdown | Ready |\n\n**Bold text** and $x^2$.\n\n![diagram](diagram.svg)\n\n[Read source](../src/test.py)\n');
     writeFileSync(join(root, 'docs/diagram.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="300"><rect width="800" height="300" fill="#4285f4"/></svg>');
     writeFileSync(join(root, 'docs/page.html'), '<!doctype html><style>h1{color:rgb(200,0,0)}</style><h1>HTML document</h1><script>parent.postMessage("unexpected-script", "*")</script>');

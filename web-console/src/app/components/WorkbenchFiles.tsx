@@ -16,7 +16,7 @@ import css from '../../presentation/right-panel/WorkbenchFiles.module.css';
 import type { DesktopApplication } from '../../workspaces/desktop';
 export type WorkbenchCall = (request: WorkbenchRequest, signal?: AbortSignal) => Promise<WorkbenchResult>;
 /** Only tree metadata and view preferences outlive a mounted body; source bytes do not. */
-export interface FileTabView { expanded: Set<string>; levels: Map<string, WorkbenchResult>; cwd: string; revision: number; mode?: Viewer; zoom?: ZoomPreference; document?: PreviewViewState; top: number; left: number; wrap: boolean }
+export interface FileTabView { line?: number; focusRevision?: number; expanded: Set<string>; levels: Map<string, WorkbenchResult>; cwd: string; revision: number; mode?: Viewer; zoom?: ZoomPreference; document?: PreviewViewState; top: number; left: number; wrap: boolean }
 export const fileTabView = (): FileTabView => ({ expanded: new Set(), levels: new Map(), cwd: '', revision: 0, top: 0, left: 0, wrap: false });
 const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 function Reload({ reload }: { reload: () => void }) {
@@ -67,7 +67,7 @@ export function WorkspaceFile({ path, call, view, onOpen }: { path: string; call
     void call({ kind: mode === 'office' ? 'office' : loadsBytes(mode) ? 'bytes' : 'read', path }, abort.signal).then(result => { if (!abort.signal.aborted && revision === view.revision) setValue(result); }, cause => { if (!abort.signal.aborted) setError(String(cause)); });
     return () => abort.abort();
   }, [path, call, revision, view, mode]);
-  useLayoutEffect(() => { const el = scroll.current; if (!el) return; el.scrollTop = view.top; el.scrollLeft = view.left; return () => { view.top = el.scrollTop; view.left = el.scrollLeft; }; }, [view, !!value, mode]);
+  useLayoutEffect(() => { const el = scroll.current; if (!el) return; el.scrollTop = view.line !== undefined && mode === 'code' ? Math.max(0, view.line - 1) * parseFloat(getComputedStyle(el.querySelector('.line') ?? el).lineHeight) : view.top; el.scrollLeft = view.left; view.line = undefined; return () => { view.top = el.scrollTop; view.left = el.scrollLeft; }; }, [view, !!value, mode]);
   const [lifetime] = useState(() => new AbortController());
   useEffect(() => () => lifetime.abort(), [lifetime]);
   const bytes = useMemo(() => value?.base64 ? Uint8Array.from(atob(value.base64), c => c.charCodeAt(0)) : new Uint8Array(), [value]);

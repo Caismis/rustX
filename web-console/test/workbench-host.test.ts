@@ -99,3 +99,18 @@ it('binary previews retain descriptor admission and enforce a bounded byte read'
   const service=new WorkspaceTerminals();services.push(service);
   expect(await service.request('owner',root,{kind:'bytes',path:'image.png'})).toEqual({cwd:root,base64:bytes.toString('base64')});
 });
+
+it('resolves file references within the admitted native workspace without following symlinks', async () => {
+  const root = directory(), outside = directory();
+  mkdirSync(join(root, 'docs')); writeFileSync(join(root, 'docs/モルガン 解説.md'), '# document');
+  writeFileSync(join(outside, 'secret'), 'private'); symlinkSync(outside, join(root, 'escape'));
+  const host = new LocalWorkspaceHost({ roots: [{ id: 'root', cwd: root, displayName: 'Root' }], picker: false, metadataFile: join(root, 'metadata.json'), nativeFilesystem: 'shared', transportToken: 'test', endpoint: 'ws://localhost:8080' }, undefined, async () => root);
+  try {
+    const scope = await host.listWorkspaces(), target = { session_id: 'A', active_node: 'node-A' };
+    for (const path of ['docs/モルガン 解説.md', './docs/モルガン 解説.md', join(root, 'docs/モルガン 解説.md')])
+      expect(await host.workbench(scope, { target, request: { kind: 'resolve', path } })).toEqual({ path: 'docs/モルガン 解説.md' });
+    for (const path of [join(outside, 'secret'), '../secret', 'escape/secret', 'missing.md', 'docs', 'a\0b'])
+      await expect(host.workbench(scope, { target, request: { kind: 'resolve', path } })).rejects.toThrow();
+    await expect(host.workbench({ ...scope, authorityId: 'retired' }, { target, request: { kind: 'resolve', path: 'docs/モルガン 解説.md' } })).rejects.toThrow();
+  } finally { host.close(); }
+});

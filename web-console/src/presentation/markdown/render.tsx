@@ -4,6 +4,7 @@
  * KaTeX runs with trust disabled. Unknown AST node kinds render nothing.
  */
 
+import { FileLink } from './FileLinks';
 import { DocumentImage, DocumentLink } from './DocumentResources';
 import { Fragment, createElement } from 'react'
 import type { Key, ReactNode } from 'react'
@@ -228,7 +229,7 @@ function renderNode(node: Md.RootContent, key: Key, context: MarkdownRenderConte
     case 'table':
       return renderTable(node, key, context)
     case 'link':
-      return renderAnchor(node.url, renderChildren(node.children, context), key)
+      return renderAnchor(node.url, renderChildren(node.children, context), key, context.streaming)
     case 'linkReference':
       return renderLinkReference(node, key, context)
     case 'image':
@@ -423,8 +424,8 @@ function renderSafeLink(href: string, children: ReactNode[], key: Key): ReactNod
 }
 
 /** Anchor over a parsed markdown destination, which hast normalized before the allowlist saw it. */
-function renderAnchor(url: string, children: ReactNode[], key: Key): ReactNode {
-  return <DocumentLink key={key} url={url} fallback={renderSafeLink(normalizeUri(url), children, key)}>{children}</DocumentLink>
+function renderAnchor(url: string, children: ReactNode[], key: Key, streaming: boolean): ReactNode {
+  return <DocumentLink key={key} url={url} fallback={<FileLink url={url} streaming={streaming} fallback={renderSafeLink(normalizeUri(url), children, key)}>{children}</FileLink>}>{children}</DocumentLink>
 }
 
 /**
@@ -467,7 +468,7 @@ function renderLinkReference(
     return <Fragment key={key}>{'['}{renderChildren(node.children, context)}{referenceSuffix(node)}</Fragment>
   }
   const rendered = renderChildren(node.children, context)
-  return renderAnchor(definition.url, rendered, key)
+  return renderAnchor(definition.url, rendered, key, context.streaming)
 }
 
 function renderImageReference(

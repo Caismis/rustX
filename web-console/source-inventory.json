@@ -1570,6 +1570,7 @@
       "retained_dependencies": [
         "./CodeBlock.tsx",
         "./DocumentResources",
+        "./FileLinks",
         "./MarkdownText.module.css",
         "./incremental.ts",
         "./katex.tsx",
@@ -1585,7 +1586,7 @@
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "c133b2720ff026bf757e4ea339ef3df977da6709066157ffcdaa8d284bdbc79f"
+      "local_sha256": "fc78b1c505f4f84da504af1f19d0a2b2f20203d360b98dd65721e1105b406313"
     },
     {
       "upstream": "packages/client/ui-primitives/src/markdown/useViewportHighlighting.ts",
@@ -3741,7 +3742,7 @@
         "Harness slot registry",
         "Harness terminal Host and Session store"
       ],
-      "local_sha256": "03f88f46bafef73b6d2f65be675ac3d5919467f8bd6b5fd731e5dd6453d95656",
+      "local_sha256": "c8d8f7777d8f015d1b96fc38746c8af5b8e9e7e9c202594f19261c3888212f0c",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-sidebar-terminal/src/client/TerminalGuide.tsx",
@@ -4054,7 +4055,7 @@
           "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime."
         }
       ],
-      "local_sha256": "603cd6620087ef49af4a246732cc30752445d834d97a3308da0b12152f162b23"
+      "local_sha256": "c5ef52c29408a3802e48317d0b18c47b42c582c2688c0464c0c572331f093f8b"
     },
     {
       "upstream": "packages/client/ui-sidebar-files/src/client/FilesBody.module.css",
@@ -5284,6 +5285,63 @@
         "vitest"
       ],
       "local_sha256": "ac2a445363f47e3cdab3081b16049323a289a9ee3a09a2c4296b1f958076d84f"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/markdown/file-link.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "5739f469133c873ecc97256f6de026b50425a4f0a9f75c662d3b6b26516d26c0",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/markdown/file-link.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [],
+      "local_sha256": "1fb38d05fd2faa422a5c1b14575294ca247e29b19b51dfdc697a30cd4c2dc061"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/markdown/render.tsx",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "6e4af631d34ae8c8ea1dbeabd1b4593ee9ff23c3470d2855708b3cf8b84bbca2",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/markdown/FileLinks.tsx",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "../primitives/LinkIcon",
+        "./MarkdownText.module.css",
+        "./file-link",
+        "react"
+      ],
+      "local_sha256": "bfaf8390bd5cb36acbd3a2b78972e183e82f11c6f2553224d8c2c4377c4d8ac2"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/LinkIcon.tsx",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "243b360d7a74b6470bbce6034a3518214bb840a305b0e731bd0600409ddbc3eb",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/primitives/LinkIcon.tsx",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "./FileTypeIcon.tsx",
+        "./code-file-types.ts",
+        "./icons/props.ts",
+        "react"
+      ],
+      "local_sha256": "afb6eccc3273a1c87bfb2334091acf8e79590c99ace6d7c210be5f60aaae3d02",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-primitives/src/icons/shared-artwork.tsx",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "25c995efd540d047afcee7dbf54742ca62dc0d159bdbf93794cb617419b08f84",
+          "treatment": "Retain CodeBracketsArtwork geometry for local code file references."
+        }
+      ]
     }
   ],
   "inspected_only": [
