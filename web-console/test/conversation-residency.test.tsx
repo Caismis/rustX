@@ -11,7 +11,7 @@ import { modelPreferences, NewSessionModelPreference, selectSessionModel } from 
 import { inputTrigger } from '../src/app/composer/input-trigger';
 import { cfg3Source } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
-import type { CatalogModelView, RuntimeClientEvent, RuntimeClientSnapshot, SessionModelConfig, SourceSettings } from '../../protocol/app-server/v36';
+import type { CatalogModelView, RuntimeClientEvent, RuntimeClientSnapshot, SessionModelConfig, SourceSettings } from '../../protocol/app-server/v37';
 
 // These spies execute the actual functions, including their hooks. Calls count
 // render invocations, not merely DOM mutation or wrapper/parent renders.
@@ -111,7 +111,8 @@ it('hero and committed Session retain the exact composer card/input; internal ph
   expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(0);
   await act(async () => server.reply(attached));
   const sent = await server.waitFor('turn/start', 1);
-  expect(input()).toBe(message); expect(message.selectionStart).toBe(4);
+  expect(input()).toBe(message); expect(message.value).toBe('');
+  expect(document.querySelector('[data-pending-message]')?.textContent).toContain('first task');
   await act(async () => server.reply(sent));
   expect(screen.getByLabelText('Session title')).toBeTruthy();
   expect(input()).toBe(message); expect(message.closest('[data-composer-seat]')).toBe(seat);

@@ -1,4 +1,4 @@
-import type { RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v36';
+import type { RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v37';
 
 export const HISTORY_PAGE_SIZE = 64;
 /** One contiguous durable read window from its oldest loaded page through the

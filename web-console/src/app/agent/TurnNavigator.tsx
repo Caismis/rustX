@@ -5,7 +5,7 @@
 // before navigating.
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { defaultRangeExtractor, elementScroll, observeElementOffset, useVirtualizer, type Range } from '@tanstack/react-virtual';
-import type { ConversationTurn } from '../../../../protocol/app-server/v36';
+import type { ConversationTurn } from '../../../../protocol/app-server/v37';
 import type { AppServerClient } from '../../client/app-server';
 import { shallowEqual, useClientSelector } from '../../client/selectors';
 import { turnKey } from '../../client/transcript';

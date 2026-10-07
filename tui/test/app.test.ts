@@ -135,6 +135,10 @@ function fakeHost(options: FakeHostOptions = {}): AppServerHost {
     client: {
       closed: undefined,
       pendingCount: 0,
+      call: async (method: string, params: { session_id: string }) => {
+        assert.equal(method, "session/history");
+        return { type: "session_history", conversation_id: `conv-${params.session_id}`, window: { page: { entries: [] } } };
+      },
       close: () => {},
       onClose: (listener: (error: TransportClosedError) => void) => {
         options.onClose?.(listener);

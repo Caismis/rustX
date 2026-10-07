@@ -8,7 +8,7 @@ import { NavigationEpoch } from '../src/client/navigation';
 import { RpcFailure } from '../src/client/app-server';
 import { sameEndpoint } from '../src/workspaces/endpoint';
 import { WorkspaceHostError, type WorkspaceCatalog, type ProductHostWorkspaces } from '../src/workspaces/host';
-import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v36';
+import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v37';
 import { cfg3Source } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
 import { modelPreferences, NewSessionModelPreference } from '../src/app/model-preference';
@@ -250,7 +250,7 @@ it.each(['ready', 'navigation', 'disconnect', 'rejection', 'branch'] as const)('
   fireEvent.change(input, { target: { value: 'Send after connecting' } });
   await act(async () => fireEvent.change(document.querySelector('input[type=file]')!, { target: { files: [new File(['queued'], 'queued.txt', { type: 'text/plain' })] } }));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
-  expect(screen.getByText('Connecting… Your message will send when ready.')).toBeTruthy();
+  expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).value).toBe('');
   expect(methods().filter(method => method === 'turn/start')).toHaveLength(0);
   if (outcome === 'navigation') navigation.invalidate();
   await act(async () => {

@@ -5688,3 +5688,50 @@ async fn human_message_activity_reorders_live_catalog_without_focus_or_rename_ac
     })
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn durable_history_is_readable_before_and_during_runtime_preparation() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = std::sync::Arc::new(AppServerConnection::new(f.host.clone()));
+        initialize(&connection).await;
+        let id = f.id(0).await;
+        let probe = f.manager.probe(&id);
+        let read = || Method::SessionHistory {
+            session_id: f.sessions[0].id.clone(),
+            node_id: None,
+            at: crate::durable::reading::ConversationWindowAt::Latest,
+            limit: 64,
+        };
+        let MethodResult::SessionHistory {
+            conversation_id,
+            window,
+        } = call(&connection, 500, read()).await
+        else {
+            panic!("history");
+        };
+        assert_eq!(conversation_id, id);
+        assert!(window.page.entries.is_empty());
+        assert_eq!(
+            probe.compositions.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        assert_eq!(connection.attachment_counts(), (0, 0));
+        probe.before_compose.arm();
+        let worker = connection.clone();
+        let session = f.sessions[0].clone();
+        let attaching = tokio::spawn(async move { attach_session(&worker, &session).await });
+        probe.before_compose.entered().await;
+        assert!(matches!(
+            call(&connection, 501, read()).await,
+            MethodResult::SessionHistory { .. }
+        ));
+        assert!(!attaching.is_finished());
+        assert_eq!(connection.attachment_counts(), (0, 1));
+        probe.before_compose.release();
+        attaching.await.unwrap();
+        connection.close();
+        f.close().await;
+    })
+    .await;
+}

@@ -381,6 +381,54 @@ impl SessionController {
     pub async fn read_session(&self, id: &SessionId) -> Result<SessionSnapshot, SessionError> {
         self.catalog.lock().await.snapshot(id)
     }
+    /// Read a bounded durable window without composing a runtime or resolving tools.
+    pub(crate) async fn read_history(
+        &self,
+        id: &SessionId,
+        node: Option<&SessionNodeId>,
+        at: crate::durable::reading::ConversationWindowAt,
+        limit: usize,
+    ) -> Result<
+        (
+            crate::runtime::identity::ConversationId,
+            crate::runtime_client::snapshot::ConversationWindow,
+        ),
+        SessionError,
+    > {
+        let access = self.acquire_session(id, node).await?;
+        tokio::task::spawn_blocking(move || {
+            use crate::durable::ConversationStore as _;
+            let store = crate::durable::SqliteConversationStore::open_existing(
+                access.node.conversation_id.clone(),
+                &access.database_path,
+            )
+            .map_err(SessionError::Store)?
+            .with_lifecycle(access.allocation);
+            let read = store
+                .conversation_window(&at, limit)
+                .map_err(SessionError::Store)?;
+            let mut page = crate::runtime_client::snapshot::transcript_page_view(read.page)
+                .map_err(|detail| SessionError::Catalog { detail })?;
+            crate::runtime_client::response::decorate_window(&store, &mut page, read.cut.journal)
+                .map_err(SessionError::Store)?;
+            if !read
+                .cut
+                .reconstructible_from(&store.conversation_read_cut().map_err(SessionError::Store)?)
+            {
+                return Err(SessionError::Catalog {
+                    detail: "History changed during read".into(),
+                });
+            }
+            Ok((
+                access.node.conversation_id,
+                crate::runtime_client::snapshot::ConversationWindow { page },
+            ))
+        })
+        .await
+        .map_err(|error| SessionError::Catalog {
+            detail: error.to_string(),
+        })?
+    }
     /// Exact durable display metadata; does not resolve configuration or compose a runtime.
     /// # Errors
     /// Unknown/deleting identities are returned.

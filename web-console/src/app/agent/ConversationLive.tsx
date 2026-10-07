@@ -12,8 +12,11 @@ import { todoDock, goalDock, queueRows } from '../../bindings/composer-context';
 import { ChatViewport } from '../../presentation/layout/ChatViewport';
 import { Trajectory } from '../trajectory/Trajectory';
 import type { ResponseAction } from '../commands/native';
-import type { CompletedResponseView } from '../../../../protocol/app-server/v36';
-import { useRef, useState } from 'react';
+import type { CompletedResponseView } from '../../../../protocol/app-server/v37';
+import { useRef, useState, useSyncExternalStore } from 'react';
+import { UserMessage, AssistantMessage } from '../../presentation/agent/Message';
+import pendingCss from './PendingMessage.module.css';
+import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 import { useTranslation } from '../../locale/react';
 import { TurnNavigator } from './TurnNavigator';
 import { turnAnchor } from '../../client/transcript';
@@ -23,17 +26,21 @@ export function ConversationLive({ client, sessionId, mode, disabled, onHistoric
   onHistorical: (id: ResponseAction, response: CompletedResponseView) => void;
 }) {
   const tx=useTranslation(), viewport=useRef<ChatViewport>(null), [active,setActive]=useState<string | null>();
+  const submission = useSyncExternalStore(client.firstSubmissions.subscribe, () => sessionId ? client.firstSubmissions.session(sessionId) : undefined);
+  const waiting = !!submission && ['attaching', 'uploading', 'admitting'].includes(submission.phase);
   const view = useClientSelector(client, state => {
     const view = sessionId ? state.views[sessionId] : undefined;
-    if (!view?.snapshot) return undefined;
-    const snapshot = view.snapshot;
+    if (!view) return undefined;
+    const preview = view.attachment === 'attaching' ? view.preview : undefined;
+    const snapshot = preview ? { messages: [], attempt: null, statuses: [], conversation_id: preview.conversationId, transcript: preview.history.page } : view.snapshot;
+    if (!snapshot) return undefined;
     return { id: view.id, target: view.target, messages: snapshot.messages, attempt: snapshot.attempt,
       transcript: snapshot.transcript, statuses: snapshot.statuses, conversation_id: snapshot.conversation_id,
-      history: view.history, trace: mode === 'trajectory' ? view.trace : undefined,
+      readingPreview: !!preview, history: preview?.history ?? view.history, trace: mode === 'trajectory' ? view.trace : undefined,
       safe: lineageSwitchSafe(view), disabled: disabled || view.attachment !== 'attached' || view.attachmentIntent !== 'wanted'
-        || !!view.modelMutation || !!snapshot.shutting_down || !!snapshot.durability_failure };
+        || !!view.modelMutation || !!view.snapshot?.shutting_down || !!view.snapshot?.durability_failure };
   }, shallowEqual);
-  if (!view) return null;
+  if (!view) return sessionId ? <ChatViewport latestLabel={tx('agent:agent-transcript.return-to-latest')}><PendingMessage client={client} sessionId={sessionId}/></ChatViewport> : null;
   return mode === 'trajectory' && view.trace
     ? <Trajectory key={`${view.id}:${view.target?.attachment_id}`} cache={view.trace} onSelect={id => client.selectTrace(view.id, id)} onLoadDetail={id => { void client.loadTraceDetail(view.id, id); }} loadEarlier={() => void client.loadEarlierTrace(view.id).catch(() => {})}/>
     : <ChatViewport ref={viewport} key={`${view.id}:${view.target?.attachment_id}`} latestLabel={tx('agent:agent-transcript.return-to-latest')}
@@ -50,8 +57,9 @@ export function ConversationLive({ client, sessionId, mode, disabled, onHistoric
       }}/>}
       latestTurn={view.attempt && view.attempt.phase.type!=='settled' ? turnAnchor({conversation_id:view.conversation_id,attempt_id:view.attempt.attempt_id}) : undefined}
       onActiveTurn={setActive}>
-      <AgentTranscript requestFeedback={attemptId => <ModelRetries client={client} sessionId={view.id} attemptId={attemptId}/>} snapshot={view} history={view.history} loadEarlier={() => void client.loadEarlier(view.id).catch(() => {})} lineageSwitchSafe={view.safe} historicalDisabled={view.disabled} onHistorical={onHistorical}/>
+      {(view.messages.length > 0 || !!view.transcript.entries?.length || !waiting) && <AgentTranscript requestFeedback={attemptId => <ModelRetries client={client} sessionId={view.id} attemptId={attemptId}/>} snapshot={view} history={view.history} loadEarlier={() => void (view.readingPreview ? client.loadEarlierPreview(view.id) : client.loadEarlier(view.id)).catch(() => {})} lineageSwitchSafe={view.safe} historicalDisabled={view.disabled} onHistorical={onHistorical}/>}
       <ConversationActivity client={client} sessionId={view.id}/>
+      <PendingMessage client={client} sessionId={view.id}/>
     </ChatViewport>;
 }
 function ConversationActivity({ client, sessionId }: { client: AppServerClient; sessionId: string }) {
@@ -82,4 +90,14 @@ export function ConversationTotals({ client, sessionId }: { client: AppServerCli
     return { statistics: view?.snapshot?.transcript.statistics, occupancy: current ? view?.snapshot?.context?.last_request_occupancy : undefined };
   }, shallowEqual);
   return <ConversationStats statistics={facts.statistics} occupancy={facts.occupancy}/>;
+}
+
+function PendingMessage({ client, sessionId }: { client: AppServerClient; sessionId: string }) {
+  const tx = useTranslation();
+  const flow = useSyncExternalStore(client.firstSubmissions.subscribe, () => client.firstSubmissions.session(sessionId));
+  if (!flow || !['attaching', 'uploading', 'admitting'].includes(flow.phase)) return null;
+  return <div className={pendingCss.root} data-pending-message="">
+    <UserMessage label={tx('agent:message.your-message')} attachments={flow.draft.files.map((file, i) => <AttachmentCard key={flow.attachmentIds[i]} name={file.name} image={file.type.startsWith('image/')}/>)}><div className={pendingCss.text}>{flow.draft.text}</div></UserMessage>
+    <AssistantMessage label={tx('agent:message.assistant-response')}><p className={pendingCss.waiting} role="status" data-first-submission={flow.phase}><span className={pendingCss.dot} aria-hidden="true"/>{tx(flow.phase === 'attaching' ? 'common:app.connecting' : flow.phase === 'uploading' ? 'common:startup.uploading' : 'common:startup.admitting')}</p></AssistantMessage>
+  </div>;
 }

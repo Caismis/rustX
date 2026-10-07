@@ -27,7 +27,7 @@ async function connected() {
   const transport = new FakeTransport();
   const pending = AppServerClient.initialize({ transport });
   const [request] = await transport.log.awaitMethod("initialize");
-  transport.respond(request!.id, { type: "initialized", authority_id: 'fixture-app-server-authority', protocol_version: 36, capabilities: SERVER_CAPABILITIES });
+  transport.respond(request!.id, { type: "initialized", authority_id: 'fixture-app-server-authority', protocol_version: 37, capabilities: SERVER_CAPABILITIES });
   return { transport, host: new AppServerHost({ client: await pending, ownership: "external" }) };
 }
 async function catalog(transport: FakeTransport, sessions = rows, count = 1) {
@@ -62,10 +62,11 @@ function appFor(t: TestContext, host: AppServerHost, focus: StartupFocus, reconn
   t.mock.method(Editor.prototype, "setAutocompleteProvider", function(this: Editor, provider: Parameters<Editor["setAutocompleteProvider"]>[0]) {
     editor = this; return autocomplete.call(this, provider);
   });
+  let surface!: TUI;
   let input!: Parameters<TUI["addInputListener"]>[0];
   const addInput = TUI.prototype.addInputListener;
   t.mock.method(TUI.prototype, "addInputListener", function(this: TUI, listener: typeof input) {
-    input = listener; return addInput.call(this, listener);
+    surface = this; input = listener; return addInput.call(this, listener);
   });
   const hidden: ResumeSelector[] = [];
   const surfaces: ResumeSelector[] = [];
@@ -88,7 +89,7 @@ function appFor(t: TestContext, host: AppServerHost, focus: StartupFocus, reconn
   const app = new RustxTuiApp({ host, ...focus, reconnect, sessionSettings: parsedResume().sessionSettings });
   const running = app.run();
   t.after(async () => { await app.quit(); await running; });
-  return { app, surfaces, hidden, feedback, editor, input: (data: string) => input(data) };
+  return { app, surfaces, hidden, feedback, editor, render: () => surface.render(100).join("\n"), input: (data: string) => input(data) };
 }
 
 it("remote missing cwd fails at argument parsing before token reading or connection", () => {
@@ -389,10 +390,18 @@ for (const outcome of ["ready", "withdraw", "disconnect", "rejection"] as const)
     const h = appFor(t, host, focus);
     await transport.log.awaitMethod("session/attach");
     assert.equal(h.editor.disableSubmit, false);
+    assert.doesNotMatch(h.render(), /Connecting/);
+    const [history] = await transport.log.awaitMethod("session/history");
+    transport.respond(history!.id, { type: "session_history", conversation_id: "conv_01900000-0000-7000-8000-000000000002", window: { page: { entries: [{ cursor: "1", item: { type: "message", message: { id: "saved", role: "user", source: "human", content: [{ type: "text", text: "Previously saved message" }] } } }] } } });
+    await tick();
+    assert.match(h.render(), /Previously saved message/);
+    assert.doesNotMatch(h.render(), /Connecting/);
     h.editor.setText("queued while connecting");
     h.editor.handleInput("\r");
     assert.equal(transport.log.count("turn/start"), 0);
     assert.equal(h.editor.disableSubmit, true);
+    assert.match(h.render(), /Connecting/);
+    assert.match(h.render(), /Previously saved message/);
     if (outcome === "rejection") {
       const [request] = await transport.log.awaitMethod("session/attach");
       transport.respondError(request!.id, { code: -32000, message: "Preparation failed" });

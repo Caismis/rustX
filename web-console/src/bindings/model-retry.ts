@@ -1,4 +1,4 @@
-import type { TraceRecord } from '../../../protocol/app-server/v36';
+import type { TraceRecord } from '../../../protocol/app-server/v37';
 
 export interface ModelRetryNotice {
   key: string;

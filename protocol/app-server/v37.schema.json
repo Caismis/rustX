@@ -974,6 +974,53 @@
           ]
         },
         {
+          "description": "Read durable history without loading runtime resources or acquiring control.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "session/history"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                },
+                "node_id": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionNodeId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "at": {
+                  "$ref": "#/$defs/ConversationWindowAt"
+                },
+                "limit": {
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "session_id",
+                "at",
+                "limit"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
           "type": "object",
           "properties": {
             "method": {
@@ -5424,6 +5471,27 @@
           "required": [
             "type",
             "page"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "conversation_id": {
+              "$ref": "#/$defs/ConversationId"
+            },
+            "window": {
+              "$ref": "#/$defs/ConversationWindow"
+            },
+            "type": {
+              "type": "string",
+              "const": "session_history"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "conversation_id",
+            "window"
           ]
         },
         {

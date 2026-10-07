@@ -1,7 +1,7 @@
 import { message } from '../../locale/translation';
 import { useTranslation, useNotice } from '../../locale/react';
 import { useEffect, useRef, useState } from 'react';
-import type { ModelCatalogView, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v36';
+import type { ModelCatalogView, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v37';
 import { AppServerClient, isOutcomeUncertain, sameTarget, type SessionView } from '../../client/app-server';
 import { ModelSelect } from '../../presentation/agent/ModelSelect';
 import { Button } from '../../presentation/primitives/Button';

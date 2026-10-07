@@ -3,7 +3,7 @@ import { App } from '../../src/app/App';
 import { Server, snapshot } from '../fixture';
 import { cfg3Source, cfg3Effective } from '../cfg3-data';
 import { RpcFailure } from '../../src/client/app-server';
-import type { Request } from '../../../protocol/app-server/v36';
+import type { Request } from '../../../protocol/app-server/v37';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -15,6 +15,7 @@ import '../../src/app/console.css';
 // Product Host admission and all presentation are the production implementations.
 const server = new Server();
 if (!new URL(location.href).searchParams.has('existing')) server.snapshots.clear();
+else server.snapshots.get('A')!.transcript.entries = [{ cursor: '1', item: { type: 'message', message: { id: 'saved-user', role: 'user', source: 'human', content: [{ type: 'text', text: 'Previously saved message' }] } } }];
 server.workspaceHost.resolveWorkspace = async () => ({ cwd: '/workspace/A' });
 server.workspaceHost.classifyLocations = async paths => paths.map(() => ({ authorized: true, workspaceId: 'workspace-a' }));
 const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], toolCalls: true, reasoning: false };

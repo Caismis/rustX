@@ -2,7 +2,7 @@ import { incrementalAgent } from './incremental-agent-fixture';
 import { afterEach, expect, it } from 'vitest';
 import { Server } from './fixture';
 import { traceRecord } from './trace-fixture';
-import type { RuntimeClientEvent } from '../../protocol/app-server/v36';
+import type { RuntimeClientEvent } from '../../protocol/app-server/v37';
 const servers: Server[] = [];
 const create = async () => { const s = new Server(); servers.push(s); await s.attached('A'); return s; };
 afterEach(() => { for (const s of servers) s.client.disconnect(); servers.length = 0; });

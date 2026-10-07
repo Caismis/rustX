@@ -8,10 +8,10 @@ import type {
   ConfigurationApplication, RuntimeClientSessionDeletionResult, PendingInboundRef, PendingMutationOutcome, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot,
   SessionPersistentState, SessionSummary, ServerCapabilities, UserInputBlock, UploadReceipt, UploadedFile,
-} from '../../../protocol/app-server/v36';
+} from '../../../protocol/app-server/v37';
 import { transferUpload, uploadOperationId } from '../../../protocol/app-server/upload';
 import { HISTORY_PAGE_SIZE, prependTranscript, refreshTranscript, replaceTranscript, turnKey, type TranscriptCache } from './transcript';
-import type { ConversationTurn, ConversationTurnPage, ConversationWindow, RuntimeClientTranscriptEntry } from '../../../protocol/app-server/v36';
+import type { ConversationTurn, ConversationTurnPage, ConversationWindow, RuntimeClientTranscriptEntry } from '../../../protocol/app-server/v37';
 import { ProtocolLog, type WireContext } from './protocol-log';
 
 /** Expected observed cancellation identity; never substituted with a successor Attempt. */
@@ -59,6 +59,8 @@ export interface SessionView {
   trace?: TraceCache;
   cursor?: RuntimeClientCursor;
   history?: TranscriptCache;
+  /** Read-only durable history, never an execution snapshot or control claim. */
+  preview?: { conversationId: string; history: TranscriptCache };
   turnOutline?: { paging: OutlinePagingIntent; page?: ConversationTurnPage; loading?: boolean; error?: string };
   turnNavigation?: { intent: number; pending?: string; error?: string };
   settings?: SessionPersistentState;
@@ -201,7 +203,7 @@ function goalRefusal(error: unknown) {
 const READS = new Set<Request1['method']>([
   'session/turns', 'session/uploadStatus',
   'artifact/read', 'initialize', 'server/info', 'session/list', 'session/read', 'session/summary', 'session/tree', 'session/deletePreview',
-  'session/configuration', 'session/snapshot', 'session/transcript', 'session/trace', 'session/traceDetail', 'session/settings', 'session/model', 'session/models',
+  'session/history', 'session/configuration', 'session/snapshot', 'session/transcript', 'session/trace', 'session/traceDetail', 'session/settings', 'session/model', 'session/models',
   'configuration/sourcesRead', 'session/effectiveConfiguration', 'resources/read', 'job/status', 'job/list', 'job/wait', 'agent/status', 'agent/list', 'agent/wait', 'agent/transcript', 'session/boundaries',
 ]);
 /** Domain settlement has no RPC response deadline. Separate bounded lanes keep
@@ -360,7 +362,7 @@ export class AppServerClient {
     // Ownership commits after close/retirement, before attempting the new transport.
     committed?.();
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v36', `rustx-token.${token}`]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v37', `rustx-token.${token}`]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -378,12 +380,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 36, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 37, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (!hello.authority_id || hello.protocol_version !== 36 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v36 with native multi-Session, headless interactions, and single-controller admission is required.');
+      if (!hello.authority_id || hello.protocol_version !== 37 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v37 with native multi-Session, headless interactions, and single-controller admission is required.');
       }
       if (this.state.authorityId && this.state.authorityId !== hello.authority_id) {
         try { this.admitAuthorityReplacement(); }
@@ -956,6 +958,36 @@ export class AppServerClient {
       await this.performAttach(id, generation, epoch, navigationCurrent, attached);
     });
   }
+  private async readHistoryPreview(id: string, generation: number, epoch: number, admissionCurrent: () => boolean) {
+    const node = this.state.views[id]?.nodeId;
+    const current = () => this.current(generation) && admissionCurrent() && this.attachmentEpochs.get(id) === epoch
+      && this.state.views[id]?.attachment === 'attaching' && this.state.views[id]?.nodeId === node;
+    try {
+      const result = await this.request({ method: 'session/history', params: { session_id: id, node_id: node, at: { type: 'latest' }, limit: HISTORY_PAGE_SIZE } }, 'session_history', undefined, current);
+      if (current()) this.setSession(id, { preview: { conversationId: result.conversation_id, history: replaceTranscript(result.window.page) } });
+    } catch { /* Attachment recovery owns errors; a late read cannot replace the live view. */ }
+  }
+  async loadEarlierPreview(id: string): Promise<void> {
+    const view = this.state.views[id], preview = view?.preview, before = preview?.history.page.next_cursor;
+    if (!preview || preview.history.loading || before == null || view.attachment !== 'attaching') return;
+    const generation = this.state.generation, epoch = preview.history.epoch, node = view.nodeId;
+    const current = () => this.current(generation) && this.state.views[id]?.attachment === 'attaching'
+      && this.state.views[id]?.nodeId === node && this.state.views[id]?.preview?.history.epoch === epoch;
+    this.setSession(id, { preview: { ...preview, history: { ...preview.history, loading: true, error: undefined } } });
+    try {
+      const admission = await this.admitAttachment(id, current);
+      if (!admission) return;
+      const result = await this.request({ method: 'session/history', params: { session_id: id, node_id: node, at: { type: 'older', before }, limit: HISTORY_PAGE_SIZE } }, 'session_history', undefined, admission);
+      if (!current()) return;
+      if (result.conversation_id !== preview.conversationId || result.window.page.next_cursor != null && BigInt(result.window.page.next_cursor) >= BigInt(before)) throw new Error('Invalid history page.');
+      this.setSession(id, { preview: { ...preview, history: prependTranscript(preview.history, result.window.page) } });
+    } catch (error) {
+      if (current()) this.setSession(id, { preview: { ...preview, history: { ...preview.history, error: String(error) } } });
+    } finally {
+      const latest = this.state.views[id]?.preview;
+      if (current() && latest) this.setSession(id, { preview: { ...latest, history: { ...latest.history, loading: false } } });
+    }
+  }
   /** Serialize explicit attachment gestures, including close during attach and
    * reopen during release. This queue never retries and cannot cross generations. */
   private changeAttachment(id: string, kind: 'attach' | 'detach' | 'switch', operation: (generation: number) => Promise<void>): Promise<void> {
@@ -986,12 +1018,19 @@ export class AppServerClient {
     try {
       const admitted = await this.admitAttachment(id, admissionCurrent);
       if (!admitted || !admitted.current()) return;
-      const result = await this.request({ method: 'session/attach', params: { session_id: id, node_id: this.state.views[id]?.nodeId } }, 'attached', undefined, admitted);
+      const opening = { current: admitted.current, validate: async (signal: AbortSignal) => {
+        const valid = await admitted.validate(signal);
+        // Both reads belong to the same explicitly admitted Open gesture. Start
+        // durable history at its final validation, independently of runtime load.
+        if (valid && admitted.current()) void this.readHistoryPreview(id, generation, epoch, admitted.current);
+        return valid;
+      } };
+      const result = await this.request({ method: 'session/attach', params: { session_id: id, node_id: this.state.views[id]?.nodeId } }, 'attached', undefined, opening);
       if (!current()) return;
       target = result.target;
       if (result.configuration) this.publish({ configuration: { ...this.state.configuration, [id]: result.configuration } });
       if (result.target.session_id !== id || result.target.conversation_id !== result.snapshot.conversation_id) throw new Error('Mismatched attachment identity.');
-      this.setSession(id, { target: result.target, snapshot: result.snapshot, cursor: result.cursor, history: replaceTranscript(result.snapshot.transcript, this.state.views[id]?.history), turnOutline: undefined, turnNavigation: undefined, trace: this.supersedeTrace(id, replaceTrace(result.snapshot.trace, this.state.views[id]?.trace)), attachment: 'attached' });
+      this.setSession(id, { target: result.target, snapshot: result.snapshot, preview: undefined, cursor: result.cursor, history: replaceTranscript(result.snapshot.transcript, this.state.views[id]?.history), turnOutline: undefined, turnNavigation: undefined, trace: this.supersedeTrace(id, replaceTrace(result.snapshot.trace, this.state.views[id]?.trace)), attachment: 'attached' });
       attached?.(result.target);
       this.reconcileInteractions(id); this.settleSubmissions(id);
       const settings = await this.request({ method: 'session/settings', params: { session_id: id } }, 'settings');
@@ -1043,7 +1082,7 @@ export class AppServerClient {
         if (!current()) return;
         if (result.snapshot.conversation_id !== target.conversation_id) throw new Error('Mismatched snapshot conversation.');
         if (BigInt(result.cursor) >= BigInt(this.state.views[id].cursor ?? '0')) {
-          this.setSession(id, { snapshot: result.snapshot, cursor: result.cursor, history: refreshTranscript(this.state.views[id]?.history, result.snapshot.transcript), trace: this.supersedeTrace(id, refreshTrace(this.state.views[id]?.trace, result.snapshot.trace, result.snapshot.trace_updates)), error: undefined });
+          this.setSession(id, { snapshot: result.snapshot, preview: undefined, cursor: result.cursor, history: refreshTranscript(this.state.views[id]?.history, result.snapshot.transcript), trace: this.supersedeTrace(id, refreshTrace(this.state.views[id]?.trace, result.snapshot.trace, result.snapshot.trace_updates)), error: undefined });
           this.reconcileInteractions(id); this.settleSubmissions(id);
           await this.refreshDisplaySummary(id);
           if (!current()) return;
@@ -1464,7 +1503,7 @@ export class AppServerClient {
   }
   /** Transport continuation guard, not Session model authority. A successful
    * mutation response alone cannot enable a dependent Send. */
-  async setAgentModel(id: string, config: import('../../../protocol/app-server/v36').SessionModelConfig) {
+  async setAgentModel(id: string, config: import('../../../protocol/app-server/v37').SessionModelConfig) {
     const target = this.target(id), generation = this.state.generation;
     if (this.state.views[id].modelMutation) throw new Error('Reread native model state before another mutation.');
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);

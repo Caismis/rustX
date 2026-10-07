@@ -1381,7 +1381,7 @@ antialiased differently depending on which tile or partial repaint drew them:
 search capture, and other captures varied too. As its own layer it rendered
 identically in 45 of 45 targeted replays.
 
-Trace retained-input ownership repair updates generated imports to App Server v36.
+Trace retained-input ownership repair updates generated imports to App Server v37.
 Source inventory local hashes and dependency closure reflect this mechanical
 protocol change; all Harness upstream pins remain unchanged.
 
@@ -1618,3 +1618,10 @@ submission gesture (local `5badb15009ae1756c3afe0ae0cef1faafc290ccc`,
 existing attachment prepares resources. The generic connecting notice does not
 infer MCP status. Only the completed native attachment permits upload and turn
 admission; navigation/transport replacement never replays the pending gesture.
+
+Quiet connection correction: keep the Harness resident chat/composer layout and
+render the locally submitted user bubble plus generic waiting feedback inside the
+conversation. Opening alone has no connecting notice. App Server v37 adds the
+read-only `session/history` window so cold stored history can render independently
+of resource preparation; this is a native durable read, never a fabricated runtime
+snapshot. Both clients fence late history reads against the current attachment.

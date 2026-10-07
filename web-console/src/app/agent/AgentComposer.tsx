@@ -6,7 +6,7 @@ import { useTranslation, useNotice } from '../../locale/react';
 // Native textarea replaces Lexical. Commands are client grammar; effects are typed.
 import { useEffect, useLayoutEffect, useState, useRef, useSyncExternalStore, type ReactNode } from 'react';
 import { AttachmentIntake, transferInputs, pasteText, type IntakeInput, type IntakeFile, type UploadPort } from '../../client/uploads';
-import type { UploadPolicy, UploadReceipt, UploadedFile, UserInputBlock } from '../../../../protocol/app-server/v36';
+import type { UploadPolicy, UploadReceipt, UploadedFile, UserInputBlock } from '../../../../protocol/app-server/v37';
 import { commands, available, parseCommand, type CommandId } from '../commands/registry';
 import { matchCommands } from '../commands/matching';
 import { CommandMenu } from '../commands/CommandMenu';
@@ -41,7 +41,9 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
   const intake = intakeOwner ?? localIntake;
   const selections = useSyncExternalStore(intake.subscribe, intake.snapshot);
   const retained = firstSubmission && !['rejected', 'discarded', 'admitted'].includes(firstSubmission.phase) ? firstSubmission : undefined;
-  const files: readonly Pick<IntakeFile, "id" | "file" | "name" | "receipt" | "status" | "reason" | "error">[] = retained ? retained.draft.files.map((file, index) => ({ id: retained.attachmentIds[index], name: file.name, file, receipt: retained.receipts[index], status: retained.receipts[index] ? 'ready' : index === retained.uploadIndex && retained.failedPhase === 'uploading' && retained.phase === 'uncertain' ? 'uncertain' : index === retained.uploadIndex && retained.failedPhase === 'uploading' && retained.phase === 'failed' ? 'failed' : index === retained.uploadIndex && retained.phase === 'uploading' ? 'uploading' : 'draft', reason: undefined, error: undefined })) : selections;
+  const inTranscript = !!retained && !!(retained.session || retained.existingSessionId) && ['attaching', 'uploading', 'admitting'].includes(retained.phase);
+  const shownText = inTranscript ? '' : retained?.draft.text;
+  const files: readonly Pick<IntakeFile, "id" | "file" | "name" | "receipt" | "status" | "reason" | "error">[] = inTranscript ? [] : retained ? retained.draft.files.map((file, index) => ({ id: retained.attachmentIds[index], name: file.name, file, receipt: retained.receipts[index], status: retained.receipts[index] ? 'ready' : index === retained.uploadIndex && retained.failedPhase === 'uploading' && retained.phase === 'uncertain' ? 'uncertain' : index === retained.uploadIndex && retained.failedPhase === 'uploading' && retained.phase === 'failed' ? 'failed' : index === retained.uploadIndex && retained.phase === 'uploading' ? 'uploading' : 'draft', reason: undefined, error: undefined })) : selections;
   const [error, setError] = useNotice();
   const [dragging, setDragging] = useState(false);
   const pending = files.some(file => file.status !== 'ready' && !(onDraftSend && file.status === 'draft'));
@@ -49,13 +51,13 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
   const pick = (picked: IntakeInput[]) => {
     if (!disabled && !busy) intake.add(picked, uploadPolicy, onDraftSend ? undefined : port);
   };
-  const [draft, setDraft] = useState(() => firstSubmission?.draft.text ?? (restoreSupported ? initialContent.flatMap(block => block.type === 'text' ? [block.text] : []).join('') : ''));
+  const [draft, setDraft] = useState(() => (inTranscript ? '' : firstSubmission?.draft.text) ?? (restoreSupported ? initialContent.flatMap(block => block.type === 'text' ? [block.text] : []).join('') : ''));
   const draftBinding = useRef(binding);
   const restoredInput = useRef(initialContent);
   const retainedInput = useRef(retained);
-  if (retained && (retainedInput.current !== retained || draft !== retained.draft.text)) {
+  if (retained && (retainedInput.current !== retained || draft !== shownText)) {
     retainedInput.current = retained;
-    setDraft(retained.draft.text);
+    setDraft(shownText ?? '');
 
   }
   const invocation = useRef<{ id: CommandId; draft: string } | undefined>(undefined);

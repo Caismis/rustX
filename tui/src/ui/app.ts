@@ -46,6 +46,7 @@ import { PromptHistory } from "./components/prompt-history.ts";
 import { ComposerContext } from "./components/composer-context.ts";
 import { PendingInputView } from "./components/pending-input.ts";
 import { isAttemptActive } from "../presentation/state.ts";
+import { historyPresentation } from "../presentation/projection.ts";
 import { sanitizeField } from "../sanitize.ts";
 import type { ConnectingSession, SessionCatalogPage } from "../startup.ts";
 import {
@@ -184,7 +185,7 @@ export class RustxTuiApp {
   #session: AppServerSession | undefined;
   readonly #dispatcher: CommandDispatcher;
   #initialConnection: ConnectingSession | undefined;
-  #connecting: { queued?: string } | undefined;
+  #connecting: { queued?: string; history?: PresentationState } | undefined;
   #initialResumePage: SessionCatalogPage | undefined;
   readonly #workspace: string | undefined;
 
@@ -202,14 +203,14 @@ export class RustxTuiApp {
   readonly #todos = new Container();
   readonly #transient = new TransientFeedbackSurface();
   readonly #footer = new FooterView(() => ({
-    state: this.#session?.state,
+    state: this.#connecting ? undefined : this.#session?.state,
     connection: this.#connectionLabel(),
-    session: this.#sessionInfo,
-    conversation: this.#conversationContext(),
+    session: this.#connecting ? undefined : this.#sessionInfo,
+    conversation: this.#connecting ? undefined : this.#conversationContext(),
   }));
   readonly #editor: ComposerEditor;
   readonly #promptHistory: string[] = [];
-  readonly #composerContext = new ComposerContext(() => ({ state: this.#session?.state, draft: this.#draft }));
+  readonly #composerContext = new ComposerContext(() => ({ state: this.#connecting ? undefined : this.#session?.state, draft: this.#draft }));
   #submitting = false;
   #draft = new ComposerDraft();
   readonly #drafts = new Map<string, ComposerDraft>();
@@ -504,11 +505,16 @@ export class RustxTuiApp {
     this.#switching = true;
     const previousDraft = this.#draft;
     previousDraft.text = this.#editor.getExpandedText();
-    const connection: { queued?: string } | undefined = changingNode ? undefined : {};
+    const connection: { queued?: string; history?: PresentationState } | undefined = changingNode ? undefined : {};
     this.#connecting = connection;
     if (connection) { this.#draft = new ComposerDraft(); this.#editor.setText(""); this.#renderConnecting(); }
     this.#editor.disableSubmit = changingNode;
     const host = this.#host;
+    if (connection) void host.client.call("session/history", { session_id: sessionId, node_id: nodeId, at: { type: "latest" }, limit: 100 }, "session_history").then(result => {
+      if (this.#connecting !== connection || this.#host !== host || this.#finished) return;
+      connection.history = historyPresentation(result.conversation_id, result.window.page);
+      this.#renderConnecting();
+    }).catch(() => {});
     let installed: AppServerSession | undefined;
     try {
       const next = changingNode && nodeId !== undefined
@@ -1722,10 +1728,17 @@ export class RustxTuiApp {
 
   #renderConnecting(): void {
     this.#startup.clear(); this.#transcript.clear(); this.#activity.clear(); this.#todos.clear();
-    this.#startup.addChild(new Text("You can send a message while this conversation connects.", 1, 0));
-    if (this.#connecting?.queued !== undefined) this.#transcript.addChild(new Text(sanitizeField(this.#connecting.queued, true), 1, 0));
-    this.#loader.setMessage(this.#connecting?.queued === undefined ? "Connecting…" : "Connecting… Your message will send when ready. Esc to withdraw.");
-    this.#loader.start(); this.#activity.addChild(this.#loader); this.#tui.requestRender();
+    this.#loader.stop();
+    const history = this.#connecting?.history;
+    if (history) for (const block of renderTranscript(history, this.#preferences, correlateTools(history))) {
+      this.#transcript.addChild(banded(block)); this.#transcript.addChild(new Spacer(1));
+    }
+    if (this.#connecting?.queued !== undefined) {
+      this.#transcript.addChild(new Text(sanitizeField(this.#connecting.queued, true), 1, 0));
+      this.#loader.setMessage("Connecting… Esc to withdraw.");
+      this.#loader.start(); this.#activity.addChild(this.#loader);
+    }
+    this.#tui.requestRender();
   }
 
   /**

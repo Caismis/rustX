@@ -1,7 +1,7 @@
 import { traceStateLabel } from '../../bindings/status-labels';
 import type { Translate } from '../../locale/translation';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/layout.ts; see PROVENANCE.md. */
-import type { TraceContextKind, TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v36';
+import type { TraceContextKind, TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v37';
 
 /** The Harness detail tab identities. Labels follow the locale; ids never do. */
 export type TrajectoryFacet = 'overview' | 'rendered' | 'raw' | 'source' | 'input' | 'output' | 'schema' | 'timing' | 'options' | 'usage' | 'system-prompt' | 'tools' | 'diff';

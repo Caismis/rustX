@@ -1,0 +1,6 @@
+.root { display: flex; flex-direction: column; gap: 20px; padding-bottom: 16px; width: 100%; max-width: var(--dsh-chat-content-width); margin: 0 auto; }
+.text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.waiting { display: flex; align-items: center; gap: 8px; color: var(--dsw-alias-label-tertiary); font-size: 14px; }
+.dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .dot { animation: none; } }

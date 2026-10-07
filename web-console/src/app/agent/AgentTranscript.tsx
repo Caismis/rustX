@@ -6,7 +6,7 @@ import { stepGroups, type StepPiece } from '../../bindings/step-groups';
 import { StepGroup } from '../../presentation/agent/StepGroup';
 import { TurnError } from '../../presentation/agent/TurnError';
 import { TurnProcess } from '../../presentation/agent/TurnProcess';
-import type { RuntimeClientSnapshot, CompletedResponseView, RuntimeClientTranscriptEntry, MessageBlock, InFlightBlock, ForegroundToolExecution } from '../../../../protocol/app-server/v36';
+import type { RuntimeClientSnapshot, CompletedResponseView, RuntimeClientTranscriptEntry, MessageBlock, InFlightBlock, ForegroundToolExecution } from '../../../../protocol/app-server/v37';
 import { conversation, json } from '../../bindings/projection';
 import { agentStatusPlacement, isAgentStatusContext, statusesAt } from '../../bindings/agent-status';
 import { Button } from '../../presentation/primitives/Button';

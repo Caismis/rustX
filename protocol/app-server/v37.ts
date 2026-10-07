@@ -237,6 +237,15 @@ export type Request1 =
       };
     }
   | {
+      method: 'session/history';
+      params: {
+        session_id: SessionId;
+        node_id?: SessionNodeId | null;
+        at: ConversationWindowAt;
+        limit: number;
+      };
+    }
+  | {
       method: 'session/summary';
       params: {
         session_id: SessionId;
@@ -1041,6 +1050,11 @@ export type MethodResult =
   | {
       page: RuntimeClientTranscriptPage;
       type: 'transcript';
+    }
+  | {
+      conversation_id: ConversationId;
+      window: ConversationWindow;
+      type: 'session_history';
     }
   | {
       window: ConversationWindow;

@@ -3,7 +3,7 @@ import { useTranslation } from '../../locale/react';
 import type { Theme } from '../appearance';
 import type { ReactNode } from 'react';
 import { shallowEqual, useSelector } from '@xstate/react';
-import type { SourceScope } from '../../../../protocol/app-server/v36';
+import type { SourceScope } from '../../../../protocol/app-server/v37';
 import type { AppServerClient } from '../../client/app-server';
 import { Button } from '../../presentation/primitives/Button';
 import { UnitForm } from './forms/bridge';

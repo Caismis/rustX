@@ -1186,3 +1186,8 @@ function sameInteraction(
     left.interaction_id === right.interaction_id
   );
 }
+
+/** Durable read-only history while runtime preparation is pending. */
+export function historyPresentation(conversationId: string, page: import('../protocol/app-server.ts').RuntimeClientTranscriptPage): PresentationState {
+  return { ...emptyPresentationState(null), conversationId, transcript: (page.entries ?? []).map(transcriptEntryFromWire), statistics: page.statistics, transcriptNextCursor: page.next_cursor ?? undefined };
+}

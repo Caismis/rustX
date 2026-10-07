@@ -3,7 +3,7 @@ import { useState, type ReactNode } from 'react';
 import type {
   AppServerPolicy, ContextLayer, RuntimeLayer, SourceScope, SourceSettings, SubagentsLayer,
   TimeoutLayer, ToolDeadlineLayer,
-} from '../../../../../protocol/app-server/v36';
+} from '../../../../../protocol/app-server/v37';
 import { Button } from '../../../presentation/primitives/Button';
 import { UnitForm } from '../forms/bridge';
 import { TextField } from '../forms/controls';

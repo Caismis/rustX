@@ -502,6 +502,25 @@ impl AppServerConnection {
                     .await
                     .map_err(session_error)?,
             }),
+            Method::SessionHistory {
+                session_id,
+                node_id,
+                at,
+                limit,
+            } => {
+                if limit == 0 || limit > 256 {
+                    return Err(domain(ErrorData::InvalidParams));
+                }
+                let (conversation_id, window) = self
+                    .sessions
+                    .read_history(&session_id, node_id.as_ref(), at, limit)
+                    .await
+                    .map_err(session_error)?;
+                Ok(MethodResult::SessionHistory {
+                    conversation_id,
+                    window,
+                })
+            }
             Method::SessionRead { session_id } => Ok(MethodResult::Session {
                 session: self
                     .sessions
