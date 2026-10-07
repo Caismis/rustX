@@ -62,7 +62,8 @@ process.stdout.write(JSON.stringify({denied,network,secret:process.env.RUSTX_OFF
     try {
       const document=await task.promise;
       const content=await(await document.getPage(1)).getTextContent();
-      const text=content.items.map(item=>'str' in item?item.str:'').join(' ');
+      // Text items already contain source whitespace; font-run boundaries are not spaces.
+      const text=content.items.map(item=>'str' in item?item.str:'').join('');
       expect(text).toContain(extension==='docx'?'rustX 中文文档预览':'rustX presentation preview');
     } finally { await task.destroy(); }
   },65000);
