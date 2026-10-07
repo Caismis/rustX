@@ -1231,6 +1231,23 @@ export class AppServerClient {
     this.setSession(id, { turnNavigation: { intent, ...(landed ? {} : { error: this.state.views[id]?.history?.error ?? 'This turn is outside the readable native history.' }) } });
     return landed && userCurrent();
   }
+  /** Locate the exact source message without substituting a turn boundary.
+   * Message cursors belong to the source lineage, so discover them there. */
+  async navigateMessage(id: string, messageId: string, userCurrent: () => boolean = () => true) {
+    const view = this.state.views[id];
+    if (!view?.history || view.attachment !== 'attached' || view.attachmentIntent !== 'wanted') return false;
+    const intent = this.invalidateReading(id), target = view.target;
+    const current = () => this.readingIntents.get(id) === intent && sameTarget(this.state.views[id]?.target, target) && userCurrent();
+    const anchored = () => this.state.views[id]?.history?.page.entries?.some(entry => entry.item.type === 'message' && entry.item.message.id === messageId);
+    while (current() && !anchored() && this.state.views[id]?.history?.page.next_cursor != null) {
+      await this.pageOlder(id);
+      if (this.state.views[id]?.history?.error) break;
+    }
+    if (!current()) return false;
+    const landed = !!anchored();
+    this.setSession(id, { turnNavigation: { intent, ...(landed ? {} : { error: this.state.views[id]?.history?.error ?? 'The fork source message is outside the readable native history.' }) } });
+    return landed;
+  }
   /** Harness's loadOlder/loadThrough: prepend older native pages until the
    * window's head reaches `through` (one page without it). A jump arriving
    * during a read lowers its shared target; pages publish together at the end,

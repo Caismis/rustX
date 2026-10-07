@@ -213,14 +213,49 @@ fn local_previews(
 }
 
 /// Prompt and response of an inherited turn from its immutable provenance.
+/// Both reading ownership and completed-response replay ownership explicitly
+/// name retained human inputs. Their earliest text-bearing input is the preview;
+/// transcript adjacency and the source's current state are never evidence.
 fn inherited_previews(
     connection: &Connection,
     turn: &TurnReadingProvenance,
 ) -> Result<(String, String), ConversationStoreError> {
-    let prompt = match &turn.prompt_message_id {
-        Some(id) => message_preview(connection, id, TURN_PROMPT_PREVIEW_MAX)?,
-        None => String::new(),
-    };
+    let mut statement = connection
+        .prepare_cached(
+            "WITH inputs AS (
+            SELECT ?1 AS message_id
+            UNION
+            SELECT json_extract(p.value,'$.retry_message_id')
+            FROM bootstrap_identity b,json_each(b.response_provenance) p
+            WHERE json_extract(p.value,'$.origin.conversation_id')=?2
+              AND json_extract(p.value,'$.origin.attempt_id')=?3
+        )
+        SELECT m.message_id FROM inputs i JOIN message_ledger m ON m.message_id=i.message_id
+        WHERE json_extract(m.message_json,'$.role')='user'
+          AND json_extract(m.message_json,'$.source')='human'
+          AND COALESCE(json_extract(m.message_json,'$.kind'),'message')='message'
+        ORDER BY m.position",
+        )
+        .map_err(|error| storage(format!("inherited prompt owners: {error}")))?;
+    let inputs = statement
+        .query_map(
+            params![
+                turn.prompt_message_id.as_ref().map(MessageId::as_str),
+                turn.id.conversation_id.as_str(),
+                turn.id.attempt_id.as_str()
+            ],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(|error| storage(format!("inherited prompt owners: {error}")))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| storage(format!("inherited prompt owners: {error}")))?;
+    let mut prompt = String::new();
+    for id in inputs {
+        prompt = message_preview(connection, &MessageId::new(id), TURN_PROMPT_PREVIEW_MAX)?;
+        if !prompt.is_empty() {
+            break;
+        }
+    }
     let response = if matches!(turn.outcome, InheritedTurnOutcome::IncompleteAtCut) {
         String::new()
     } else {

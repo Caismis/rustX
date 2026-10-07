@@ -27,9 +27,14 @@ acceptance, so transcript adjacency is never used to find a prompt. `response`
 is the newest text/refusal-bearing Assistant member, present only once the turn
 has a terminal at the cut. Both join text blocks with single spaces, collapse
 whitespace and end with an ellipsis when clipped: at most 50 and 120 Unicode
-characters (one and three rail-card lines). Inherited turns carry their prompt as
-`TurnReadingProvenance.prompt_message_id`, remapped to destination identity on
-copy and dropped when the prompt is outside the retained cut; their response is
+characters (one and three rail-card lines). Inherited prompt previews use the
+earliest text-bearing Human input explicitly named by the turn's
+`TurnReadingProvenance.prompt_message_id` or its completed response's native
+`retry_message_id`. Both relationships are remapped to destination identity on
+copy and dropped when the input is outside the retained cut. An opening prompt
+precedes later steering input; when only response replay input is retained, that
+recorded input provides the preview. Neither nearby User messages nor live reads
+of the source Session establish ownership. The inherited response is
 the newest text-bearing retained member of a settled inherited turn.
 
 `TurnReadingProvenance` is a separate immutable lineage/bootstrap domain from

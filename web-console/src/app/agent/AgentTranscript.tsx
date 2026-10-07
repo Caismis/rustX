@@ -12,6 +12,7 @@ import { Button } from '../../presentation/primitives/Button';
 import { Feedback } from '../components/ConversationFeedback';
 import { AgentStatusAnnotation } from './AgentStatus';
 import { Message } from './Message';
+import { ForkPoint, type ForkPointInfo, type ForkOrigin } from './ForkPoint';
 import { ToolDeliveries } from '../components/Artifact';
 import { entryIdentity, turnAnchor, type TranscriptCache } from '../../client/transcript';
 import type { ResponseAction } from '../commands/native';
@@ -39,7 +40,7 @@ function MessageSeat({ id, hidden, owner, turnOwner, reveal, prefix, suffix, bod
     {prefix}<div hidden={bodyHidden}>{message ? <Message message={message} tools={tools} actions={actions} blocks={blocks} streaming={streaming} reasoningHidden={reasoningHidden}/> : other}</div>{suffix}
   </div>;
 }
-export function AgentTranscript({ snapshot, history, loadEarlier, onHistorical, historicalDisabled, lineageSwitchSafe = false }: { snapshot: Pick<RuntimeClientSnapshot, 'messages' | 'attempt' | 'transcript' | 'statuses' | 'conversation_id'>; history?: TranscriptCache; loadEarlier?: () => void; onHistorical?: (action: ResponseAction, response: CompletedResponseView) => void; historicalDisabled?: boolean; lineageSwitchSafe?: boolean }) {
+export function AgentTranscript({ snapshot, history, loadEarlier, onHistorical, historicalDisabled, lineageSwitchSafe = false, forkPoint, onOpenSource, sourceDisabled }: { snapshot: Pick<RuntimeClientSnapshot, 'messages' | 'attempt' | 'transcript' | 'statuses' | 'conversation_id'>; history?: TranscriptCache; loadEarlier?: () => void; onHistorical?: (action: ResponseAction, response: CompletedResponseView) => void; historicalDisabled?: boolean; lineageSwitchSafe?: boolean; forkPoint?: ForkPointInfo; onOpenSource?: (origin: ForkOrigin) => void; sourceDisabled?: boolean }) {
   const tx = useTranslation();
   const { messages, streaming } = conversation(snapshot);
   const entries = history?.page.entries ?? snapshot.transcript.entries ?? [];
@@ -88,7 +89,8 @@ export function AgentTranscript({ snapshot, history, loadEarlier, onHistorical, 
     {history?.page.next_cursor != null && <Button disabled={history.loading} onClick={loadEarlier}>{history.loading ? tx('agent:agent-transcript.loading-earlier') : tx('agent:agent-transcript.load-earlier')}</Button>}
     {history?.error && <p role="alert">{history.error}</p>}
     {!messages.length && !entries.length && <Feedback kind="empty" title={tx('agent:agent-transcript.ready-for-a-task')}><p>{tx('agent:agent-transcript.what-would-you-like-to-work-on')}</p></Feedback>}
-    {[...turnPresentation(entries), ...(liveProcess ? [{ kind: 'live-process' as const }] : []), ...(streaming && !durableIds.has(streaming.message_id) ? [{ kind: 'streaming' as const, streaming }] : [])].map(node => {
+    {[...turnPresentation(entries, forkPoint ? { ...(history?.page ?? snapshot.transcript), inherited_through: forkPoint.through } : undefined), ...(liveProcess ? [{ kind: 'live-process' as const }] : []), ...(streaming && !durableIds.has(streaming.message_id) ? [{ kind: 'streaming' as const, streaming }] : [])].map(node => {
+      if (node.kind === 'fork-point') return <ForkPoint key="fork-point" point={forkPoint!} disabled={historicalDisabled || sourceDisabled} onOpen={onOpenSource}/>;
       if (node.kind === 'live-process') return <div key="live-process" data-chat-turn-owner={turnAnchor({conversation_id:snapshot.conversation_id,attempt_id:snapshot.attempt!.attempt_id})}>{liveProcess}</div>;
       if (node.kind === 'streaming') return <div key={`message:${node.streaming.message_id}`}><MessageSeat key="seat" id={`message:${node.streaming.message_id}`} turnOwner={snapshot.attempt ? turnAnchor({conversation_id:snapshot.conversation_id,attempt_id:snapshot.attempt.attempt_id}) : undefined}
         message={{ role: 'assistant', id: node.streaming.message_id, content: [] }} blocks={node.streaming.blocks ?? []} streaming

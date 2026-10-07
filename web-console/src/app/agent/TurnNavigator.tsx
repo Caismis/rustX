@@ -67,6 +67,21 @@ export function TurnNavigator({ client, sessionId, onNavigate, active }: { clien
     [view.running, view.conversation, view.attempt]);
   const page = view.outline?.page;
   const items = useMemo(() => turnRailItems(page, currentId, view.location), [page, currentId, view.location]);
+  // Hover reads the same immutable native page as a click, without navigating.
+  // Debouncing avoids fetching every page crossed while scrubbing the rail.
+  const previewRead = useRef<string | null>(null);
+  useEffect(() => {
+    if (!previewKey) { previewRead.current = null; return; }
+    const item = items.find(item => item.key === previewKey);
+    if (!item || item.turn || view.attachment !== 'attached' || busyOrdinal !== null || view.outline?.loading) return;
+    const key = `${view.generation}:${view.conversation}:${previewKey}`;
+    if (previewRead.current === key) return;
+    const timer = setTimeout(() => {
+      previewRead.current = key;
+      void client.readTurns(sessionId, Math.floor((item.ordinal - 1) / OUTLINE_PAGE) * OUTLINE_PAGE);
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [client, sessionId, previewKey, items, view.attachment, view.generation, view.conversation, view.outline?.loading, busyOrdinal]);
   const missingLocation = !!page && !!view.location && BigInt(page.cut.transcript) < BigInt(view.location);
   useEffect(() => { if (missingLocation && !view.outline?.loading && !view.outline?.error && view.attachment === 'attached') void client.refreshTurns(sessionId); },
     [client, sessionId, missingLocation, view.outline?.loading, view.outline?.error, view.attachment, page?.offset]);
@@ -260,7 +275,8 @@ function TurnRail({ navigationLabel, loading, items, isActive, isBusy, attached,
       </div>
     </div>
     {preview !== undefined && previewPosition !== undefined && <div id={previewId} role="tooltip" className={css.preview}
-      style={{ '--turn-preview-center': `${previewPosition.start + previewPosition.size / 2 - scrollTop}px` } as CSSProperties}>
+      style={{ '--turn-preview-center': `${previewPosition.start + previewPosition.size / 2 - scrollTop}px`,
+        '--turn-preview-height': '100px' } as CSSProperties}>
       <div className={css.previewPrompt}>{title(preview)}</div>
       {preview.turn?.response ? <div className={css.previewResponse}>{preview.turn.response}</div> : null}
     </div>}

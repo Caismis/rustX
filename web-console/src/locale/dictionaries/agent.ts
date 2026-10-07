@@ -1,5 +1,13 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
+  "fork-point.label": "Fork point",
+  "fork-point.from": "Forked from “{name}”",
+  "fork-point.open-source": "View source",
+  "fork-point.reload": "Reload fork point",
+  "fork-point.before": "Forked before the selected message",
+  "fork-point.after": "Forked after the selected message",
+  "compaction.summary": "Context summary",
+  "compaction.description": "A condensed record of earlier context used to continue this conversation.",
   "conversation-stats.speed-unit": "token/s",
   "conversation-stats.token-unit": "token",
   "submission.immediate": "Immediately",
@@ -337,6 +345,14 @@ export const en = {
 } as const;
 export type AgentKey = keyof typeof en;
 export const zh = {
+  "fork-point.label": "分叉点",
+  "fork-point.from": "从「{name}」分叉",
+  "fork-point.open-source": "查看来源",
+  "fork-point.reload": "重新加载分叉点",
+  "fork-point.before": "在所选消息之前分叉",
+  "fork-point.after": "在所选消息之后分叉",
+  "compaction.summary": "上下文压缩摘要",
+  "compaction.description": "先前上下文的精简记录，用于继续当前对话。",
   "conversation-stats.speed-unit": "token/s",
   "conversation-stats.token-unit": "token",
   "submission.immediate": "立即",

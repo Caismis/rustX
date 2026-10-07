@@ -434,6 +434,9 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         MethodResult::TranscriptWindow {
             window: crate::runtime_client::snapshot::ConversationWindow {
                 page: crate::runtime_client::snapshot::RuntimeClientTranscriptPage {
+                    inherited_through: Some(
+                        crate::runtime_client::snapshot::RuntimeClientTranscriptCursor::new(0),
+                    ),
                     entries: Vec::new(),
                     next_cursor: None,
                     statistics: None,

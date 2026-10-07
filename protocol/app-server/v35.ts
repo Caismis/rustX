@@ -6013,6 +6013,10 @@ export interface TraceMessageDetail {
  */
 export interface RuntimeClientTranscriptPage {
   /**
+   * Last native transcript position inherited by this lineage; zero for an empty prefix.
+   */
+  inherited_through?: RuntimeClientTranscriptCursor | null;
+  /**
    * Native whole-conversation totals, independent of this page.
    */
   statistics?: ConversationStatistics | null;
@@ -8206,6 +8210,10 @@ export interface RuntimeDurabilityFailure {
  * One bounded newest-or-older page of derived transcript history.
  */
 export interface RuntimeClientTranscriptPage1 {
+  /**
+   * Last native transcript position inherited by this lineage; zero for an empty prefix.
+   */
+  inherited_through?: RuntimeClientTranscriptCursor | null;
   /**
    * Native whole-conversation totals, independent of this page.
    */

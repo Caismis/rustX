@@ -11,15 +11,18 @@ import { todoDock, goalDock, queueRows } from '../../bindings/composer-context';
 import { ChatViewport } from '../../presentation/layout/ChatViewport';
 import { Trajectory } from '../trajectory/Trajectory';
 import type { ResponseAction } from '../commands/native';
-import type { CompletedResponseView } from '../../../../protocol/app-server/v35';
-import { useRef, useState } from 'react';
+import type { AttachmentTarget, CompletedResponseView } from '../../../../protocol/app-server/v35';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from '../../locale/react';
 import { TurnNavigator } from './TurnNavigator';
 import { turnAnchor } from '../../client/transcript';
+import { type ForkOrigin, useForkPoint } from './ForkPoint';
 
-export function ConversationLive({ client, sessionId, mode, disabled, onHistorical }: {
+export function ConversationLive({ client, sessionId, mode, disabled, onHistorical, onOpenSource, sourceLocation }: {
   client: AppServerClient; sessionId?: string; mode: 'chat' | 'trajectory'; disabled: boolean;
   onHistorical: (id: ResponseAction, response: CompletedResponseView) => void;
+  onOpenSource?: (origin: ForkOrigin) => void;
+  sourceLocation?: { target: AttachmentTarget; messageId: string };
 }) {
   const tx=useTranslation(), viewport=useRef<ChatViewport>(null), [active,setActive]=useState<string | null>();
   const view = useClientSelector(client, state => {
@@ -32,6 +35,18 @@ export function ConversationLive({ client, sessionId, mode, disabled, onHistoric
       safe: lineageSwitchSafe(view), disabled: disabled || view.attachment !== 'attached' || view.attachmentIntent !== 'wanted'
         || !!view.modelMutation || !!snapshot.shutting_down || !!snapshot.durability_failure };
   }, shallowEqual);
+  const fork = useForkPoint(client, mode === 'chat' ? view?.target : undefined, view?.history?.page.inherited_through);
+  const located = useRef<object | undefined>(undefined);
+  useEffect(() => {
+    if (!view?.target || mode !== 'chat' || !sourceLocation || sourceLocation.target !== view.target || located.current === sourceLocation) return;
+    const intent = viewport.current?.beginNavigation();
+    if (!intent) return;
+    located.current = sourceLocation;
+    const target = view.target;
+    void client.navigateMessage(view.id, sourceLocation.messageId, intent.current).then(landed => {
+      if (landed) intent.commit(`message:${sourceLocation.messageId}`, () => client.getSnapshot().views[view.id]?.target === target);
+    });
+  }, [client, view?.target, mode, sourceLocation]);
   if (!view) return null;
   return mode === 'trajectory' && view.trace
     ? <Trajectory key={`${view.id}:${view.target?.attachment_id}`} cache={view.trace} onSelect={id => client.selectTrace(view.id, id)} onLoadDetail={id => { void client.loadTraceDetail(view.id, id); }} loadEarlier={() => void client.loadEarlierTrace(view.id).catch(() => {})} latest={() => client.latestTrace(view.id)}/>
@@ -49,7 +64,8 @@ export function ConversationLive({ client, sessionId, mode, disabled, onHistoric
       }}/>}
       latestTurn={view.attempt && view.attempt.phase.type!=='settled' ? turnAnchor({conversation_id:view.conversation_id,attempt_id:view.attempt.attempt_id}) : undefined}
       onActiveTurn={setActive}>
-      <AgentTranscript snapshot={view} history={view.history} loadEarlier={() => void client.loadEarlier(view.id).catch(() => {})} lineageSwitchSafe={view.safe} historicalDisabled={view.disabled} onHistorical={onHistorical}/>
+      {fork.error && <div role="alert"><p>{fork.error}</p><button type="button" onClick={fork.retry}>{tx('agent:fork-point.reload')}</button></div>}
+      <AgentTranscript snapshot={view} history={view.history} loadEarlier={() => void client.loadEarlier(view.id).catch(() => {})} lineageSwitchSafe={view.safe} historicalDisabled={view.disabled} onHistorical={onHistorical} forkPoint={fork.point} onOpenSource={onOpenSource} sourceDisabled={fork.point?.origin.source_session === view.id && !view.safe}/>
       <ConversationActivity client={client} sessionId={view.id}/>
     </ChatViewport>;
 }

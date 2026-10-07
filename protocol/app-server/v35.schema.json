@@ -10937,6 +10937,17 @@
       "description": "One bounded newest-or-older page of derived transcript history.",
       "type": "object",
       "properties": {
+        "inherited_through": {
+          "description": "Last native transcript position inherited by this lineage; zero for an empty prefix.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeClientTranscriptCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "statistics": {
           "description": "Native whole-conversation totals, independent of this page.",
           "anyOf": [

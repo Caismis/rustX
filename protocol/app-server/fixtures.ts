@@ -675,6 +675,7 @@ export const fixtures = [
       "type": "transcript_window",
       "window": {
         "page": {
+          "inherited_through": "0",
           "entries": []
         }
       }

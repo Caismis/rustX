@@ -1470,6 +1470,15 @@ supplies the ordered, paged native Attempt outline, stamped with the
 [conversation-reading.md](conversation-reading.md) for normative identity, lineage,
 location, bounds and paging semantics.
 
+Transcript pages expose `inherited_through`, the final native cursor in the
+immutable lineage seed (zero for an empty prefix). It includes terminal-only
+inherited turns and remains unchanged by local appends or compaction. Clients
+combine this position with the attached node's `SessionNodeOrigin::Fork` to
+place a fork separator; different origin Conversation IDs alone do not prove
+a Session fork. Turn navigation locates the destination's own transcript,
+while an explicit source action opens the recorded Session/node and locates
+`source_message` in that source lineage.
+
 The v35 `ConversationReadCut` fields are `conversation_id`, inclusive `journal`
 and `transcript` bounds, and `mutation_revision`. Requests never name a cut;
 each read captures a fresh one. Surface revision and pending

@@ -766,6 +766,9 @@ pub struct TranscriptTool {
 /// A bounded page of the derived durable transcript.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TranscriptPage {
+    /// Last position of the immutable lineage seed, including terminal-only turns.
+    /// Zero denotes an empty inherited prefix.
+    pub inherited_through: TranscriptCursor,
     /// Items in chronological order within this page.
     pub entries: Vec<TranscriptEntry>,
     /// The cursor to pass as `before` for the next older page.

@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, within, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { TurnNavigator } from '../src/app/agent/TurnNavigator';
 import { Server } from './fixture';
@@ -40,6 +40,22 @@ it('every native turn has a fixed-pitch mark; only the visible range mounts and 
   // Turns outside the one native page are known by ordinal only and load first.
   expect(ui.getByRole('button', { name: 'Load and jump to turn 960' })).toBeTruthy();
   expect(turnsRequests()).toHaveLength(1);
+});
+
+it('hover loads inherited previews without navigating, then clicks the destination anchor', async () => {
+  const { ui, navigate } = await thousandTurns();
+  server.handlers.set('session/turns', request => {
+    if (request.method !== 'session/turns') throw new Error('outline method');
+    const offset = request.params.offset ?? 960;
+    return { type: 'conversation_turns', page: { cut: { conversation_id: 'conversation-A', journal: '1', transcript: '1000', mutation_revision: '0' }, offset, total: 1000,
+      turns: Array.from({ length: 64 }, (_, i) => ({ ...native(offset + i + 1), id: { conversation_id: 'fork-source', attempt_id: `source-${offset+i+1}` } })) } };
+  });
+  fireEvent.pointerMove(ui.getByRole('button', { name: 'Load and jump to turn 960' }));
+  await waitFor(() => expect(ui.getByRole('tooltip').textContent).toBe('Prompt 960Response 960'));
+  expect(navigate).not.toHaveBeenCalled();
+  expect(turnsRequests()).toHaveLength(2);
+  fireEvent.click(ui.getByRole('button', { name: 'Jump to turn 960' }));
+  expect(navigate).toHaveBeenCalledExactlyOnceWith({ ...native(960), id: { conversation_id: 'fork-source', attempt_id: 'source-960' } });
 });
 
 it('previews show the native prompt and final response, fall back to the turn number, and focus never navigates alone', async () => {

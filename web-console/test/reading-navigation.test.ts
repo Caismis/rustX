@@ -40,6 +40,24 @@ it('a loaded native anchor lands at once without any read', async () => {
  expect(server.client.getSnapshot().views.A.turnNavigation).toEqual({intent:expect.any(Number)});
 });
 
+it('source-message navigation reads its own lineage and stops at the exact message', async () => {
+ await ready();
+ expect(await server.client.navigateMessage('A','m610')).toBe(true);
+ expect(reads()).toHaveLength(0);
+ const work=server.client.navigateMessage('A','m530');
+ await serve(); expect(await work).toBe(true);
+ expect(reads()).toHaveLength(2);
+ expect(cursors()?.[0]).toBe(472);
+ expect(cursors()?.at(-1)).toBe(663);
+});
+
+it('an obsolete source-message jump stops paging after the in-flight read', async () => {
+ await ready(); let current=true;
+ const work=server.client.navigateMessage('A','m1',()=>current);
+ const pending=await server.waitFor('session/transcript',1); current=false; server.reply(pending);
+ expect(await work).toBe(false); expect(reads()).toHaveLength(1);
+});
+
 it('a distant turn pages older history through its location, publishing one contiguous window joined to the live tail', async () => {
  await ready();
  const work=server.client.navigateTurn('A',turn(1));

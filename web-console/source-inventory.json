@@ -3180,7 +3180,7 @@
         "dynamic language registration"
       ],
       "additional_sources": [],
-      "local_sha256": "a904550ee2c86a41f3ef8f2e07cfff1a1500db1596949b354a1dda62974cfcdc"
+      "local_sha256": "1d723cddbb2ea73e3c1d36f1dc7d1314f45e997940373bcfe1a92e6779b39b29"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",
@@ -3440,7 +3440,7 @@
         "Cordis runtime",
         "Harness scroll ownership"
       ],
-      "local_sha256": "1e8cfb9804081f130e0c09d2daf5923807d1d870161a9fba9bcb2b6326f230cb"
+      "local_sha256": "99127ffd035e51a002c602b7634b6e38317c41a81ad1d058512b5927d66aaa99"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/stop-sequence.ts",
