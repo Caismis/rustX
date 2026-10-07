@@ -162,3 +162,36 @@ it('compaction summaries keep one native transcript position and disclose Markdo
   fireEvent.click(marker);
   expect(ui.queryByRole('heading', { name: 'Preserved context' })).toBeNull();
 });
+
+it.each(['cancelled', 'failed'] as const)('native %s keeps released partial prose without recovery JSON or completed-response actions', outcome => {
+  const s = snapshot();
+  const audit = { stream_id: 'stream', attempt_id: 'attempt-A', turn_id: '1', request_id: 'request', message_id: 'partial', kind: outcome === 'failed' ? 'unaccepted' as const : 'incomplete' as const,
+    settled_at: '2026-10-07T00:00:00Z', content: [
+      { kind: 'text' as const, block_index: 0, text: '## Partial answer\n\nAlready released.' },
+      { kind: 'reasoning' as const, block_index: 1, text: 'Already released reasoning' },
+      { kind: 'proposed_tool_call' as const, block_index: 2, call_id: 'proposal', tool_id: 'bash', name: 'bash', arguments: '{', complete: false },
+    ] };
+  const turn = { conversation_id: s.conversation_id, attempt_id: 'attempt-A', event_id: 'end', control_cursor: '1', outcome, message_count: 0, tool_call_count: 0 };
+  s.transcript = { entries: [{ cursor: '1', item: { type: 'publication_audit', audit } }, { cursor: '2', item: { type: 'attempt_terminal', turn } }] };
+  // A stale partial snapshot cannot duplicate a durably settled publication.
+  s.attempt = { attempt_id: 'attempt-A', phase: { type: 'running' }, turn: 1, in_flight: { message_id: 'partial', blocks: [{ type: 'text', block_index: 0, text: 'Stale streaming copy' }] } };
+  const ui = render(<AgentTranscript snapshot={s}/>);
+  expect(ui.getAllByRole('heading', { name: 'Partial answer' })).toHaveLength(1);
+  expect(ui.getByRole('button', { name: outcome === 'cancelled' ? 'Stopped' : 'Failed' }).hasAttribute('disabled')).toBe(true);
+  expect(ui.queryByText('Stale streaming copy')).toBeNull();
+  expect(ui.queryByText('Assistant recovery details')).toBeNull();
+  expect(ui.container.querySelector('pre')).toBeNull();
+  expect(ui.queryByRole('button', { name: 'Regenerate' })).toBeNull();
+  expect(ui.queryByText('Assembling bash…')).toBeNull();
+  fireEvent.click(ui.getByRole('button', { name: /^Reasoning/ }));
+  expect(ui.getByText('Already released reasoning')).toBeTruthy();
+});
+it.each(['empty', 'proposal', 'whitespace'] as const)('%s publication audits do not add Chat rows or stopped labels', mode => {
+  const s = snapshot();
+  s.transcript = { entries: [{ cursor: '1', item: { type: 'publication_audit', audit: {
+    stream_id: 'stream', attempt_id: 'attempt-A', turn_id: '1', request_id: 'request', message_id: 'partial', kind: 'incomplete', settled_at: '2026-10-07T00:00:00Z', content: mode === 'empty' ? [] : mode === 'whitespace' ? [{ kind: 'text', block_index: 0, text: '  ' }] : [{ kind: 'proposed_tool_call', block_index: 0, call_id: 'proposal', tool_id: 'bash', name: 'bash', arguments: '{', complete: false }],
+  } } }] };
+  const ui = render(<AgentTranscript snapshot={s}/>);
+  expect(ui.container.querySelector('[data-chat-anchor-key]')).toBeNull();
+  expect(ui.container.textContent).toBe('');
+});

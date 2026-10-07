@@ -287,7 +287,11 @@ def web_compaction() -> Scenario:
                     }]})), Finish("tool_calls"))),
                     Step(expected, HttpError(400, {"error": {"message": "context window exceeded", "type": "invalid_request_error", "code": "context_length_exceeded"}})),
                     Step(expected, Stream(Gate("automatic-summary"), Text("Preserve compaction-evidence-435 and the user's instruction to continue."), Finish())),
-                    Step(expected, Stream(Text("Question answered after compaction."), Finish())))
+                    Step(expected, Stream(Text("Question answered after compaction."), Finish())),
+                    Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("Stop a partial reply",)),
+                         Stream(Text("## Partial answer\n\nThis text was already released."), Gate("stop-partial"), Text("This must not appear after stopping."), Finish()), allow_disconnect=True),
+                    Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("Continue after stopping",)),
+                         Stream(Text("Conversation continued after stopping."), Finish())))
 
 
 SCENARIOS["web_compaction"] = web_compaction

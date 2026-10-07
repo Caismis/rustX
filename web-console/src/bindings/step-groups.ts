@@ -73,6 +73,9 @@ export function stepGroups(entries: readonly RuntimeClientTranscriptEntry[], bod
     const key = audit ? owner : process && SETTLED.has(process.outcome) ? JSON.stringify([process.conversation_id, process.attempt_id]) : undefined;
     if (key !== owner) { flush(); owner = key; ownerAttempt = key ? process?.attempt_id : undefined; }
     if (!key) continue;
+    // Frozen partial prose stays in transcript order like an Assistant reply,
+    // never inside a Tool/reasoning group or a raw recovery disclosure.
+    if (item.type === 'publication_audit') { flush(); continue; }
     if (item.type === 'attempt_terminal' || item.type === 'message' && item.message.role === 'tool') continue;
     const seat: StepPiece[] = [];
     pieces.set(entry.cursor, seat);

@@ -1,3 +1,20 @@
+## Interrupted Assistant presentation
+
+Behavioral reference: local `../deepseek-harness` at
+`5badb15009ae1756c3afe0ae0cef1faafc290ccc`, specifically
+`packages/client/ui-chat/src/client/chat/{AssistantNodeView,AssistantMarkdown,TurnProcessNodeView,TurnTailNodeView}.tsx`.
+Harness freezes released prose/reasoning on interruption, uses the stopped
+process label, and does not replace it with a diagnostic JSON disclosure.
+The rustX adapter renders typed publication-audit text, reasoning and refusal
+through the existing Assistant/Markdown components. Empty audits and unexecuted
+Tool proposals have no Chat body. Audits retain their native cursor; their
+message identity suppresses stale streaming duplicates. Native terminal facts
+continue to own stopped/failed labels. Copy and the native settlement time are
+available for partial prose; completed-response actions are not fabricated.
+Native audit data remains available through existing Inspector/Trajectory reads.
+The adapter and grouping changes are rustX-authored; no Harness runtime or
+interruption state machine is copied.
+
 ## Compaction continuation and checkpoint UI
 
 Read-only reference: local `../deepseek-harness` at

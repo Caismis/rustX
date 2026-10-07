@@ -98,8 +98,27 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
       await marker.last().click();
       await expect(page.getByText("Preserve compaction-evidence-435 and the user's instruction to continue.", { exact: true })).toBeVisible();
       await page.screenshot({ path: `/tmp/rustx-compaction-${locale}-${theme}.png` });
+      await expect(page.getByText(copy('Assistant recovery details', '助手恢复详情'), { exact: true })).toHaveCount(0);
       expect(errors).toEqual([]);
       await expect(page.getByRole('region', { name: copy('Questionnaire', '问卷'), exact: true })).toHaveCount(0);
+      await message.fill('Stop a partial reply'); await message.press('Enter');
+      await fixture.gate('stop-partial');
+      await expect(page.getByRole('heading', { name: 'Partial answer' })).toBeVisible();
+      await page.getByRole('button', { name: copy('Stop', '停止'), exact: true }).click();
+      await expect(page.getByRole('button', { name: copy('Stopped', '已停止'), exact: true })).toBeVisible();
+      // Release the abandoned provider stream only after native cancellation.
+      // Late output must not replace the frozen partial or enter the next turn.
+      await fixture.release('stop-partial');
+      await expect(page.getByRole('heading', { name: 'Partial answer' })).toHaveCount(1);
+      await expect(page.getByText('This text was already released.', { exact: true })).toBeVisible();
+      await expect(page.getByText('This must not appear after stopping.', { exact: true })).toHaveCount(0);
+      await expect(page.getByText(copy('Assistant recovery details', '助手恢复详情'), { exact: true })).toHaveCount(0);
+      if (await latest.isVisible()) await latest.click();
+      await page.screenshot({ path: `/tmp/rustx-stopped-${locale}-${theme}.png` });
+      await message.fill('Continue after stopping'); await message.press('Enter');
+      await expect(page.getByText('Conversation continued after stopping.', { exact: true })).toBeVisible();
+      await expect(page.getByText('This must not appear after stopping.', { exact: true })).toHaveCount(0);
+      expect(errors).toEqual([]);
       passed = true;
     } finally { await fixture.stop(passed); }
   });
