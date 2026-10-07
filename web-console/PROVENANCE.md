@@ -1597,3 +1597,16 @@ owns one media-query listener only while that preference is active; explicit
 Light/Dark preferences remain persisted overrides. The App applies the resolved
 palette before its layout is painted and releases the listener on replacement.
 Host theme storage and plugin lifecycle are not imported.
+
+Sidebar recency was compared with local DeepSeek-harness commit
+`5badb15009ae1756c3afe0ae0cef1faafc290ccc`, specifically
+`packages/client/ui-workspace/src/client/tree.ts` (`orderByRecency`) and
+`packages/api/session-controller/src/list.ts` (`applySessionListMetadata`, `updatedAt`).
+The browser displays native Session summaries newest first with identity tie-breaking,
+including grouped, flat, and search views. Native `SessionSummary.updated_at` now
+projects the later of creation and committed ordinary human-message time, matching
+Harness semantics, while `SessionSnapshot.updated_at` retains metadata semantics.
+The native catalog persists `last_prompt_at`, sorts before pagination, and emits
+catalog invalidations on activity so unseen Sessions can enter the current page.
+Startup, composition, and storage recovery derive missed activity from the durable
+message ledger; no browser clock, focus event, rename, or model output moves a row.

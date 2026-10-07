@@ -106,6 +106,7 @@ fn seed_published_sessions(catalog: &mut SessionCatalog, count: usize) {
                 name: None,
                 display_preview: lineage.display_preview.clone(),
                 created_at: now,
+                last_prompt_at: None,
                 updated_at: now,
                 active_node: lineage.node_id.clone(),
                 nodes,

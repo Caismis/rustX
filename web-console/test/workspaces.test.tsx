@@ -818,3 +818,41 @@ it('current blank conversation is pinned, reused, relocated and hidden on depart
   expect(methods()).not.toContain('session/create');
   expect(methods()).not.toContain('session/delete');
 });
+
+it('preserves native recency order in grouped, flat and search views', async () => {
+  server.summaries.set('A', { cwd: '/workspace/A', updated_at: '2026-10-01T00:00:00Z' });
+  server.summaries.set('B', { cwd: '/workspace/A', updated_at: '2026-10-02T00:00:00Z' });
+  await mount();
+  const order = () => within(screen.getByRole('tree', { name: 'Session browser' }))
+    .getAllByRole('button', { name: /^Open Session / }).map(node => node.getAttribute('aria-label'));
+  expect(order()).toEqual(['Open Session B', 'Open Session A']);
+  expect(server.client.getSnapshot().sessions.map(row => row.id)).toEqual(['B', 'A']);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'View options' })));
+  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Flat view' })));
+  expect(order()).toEqual(['Open Session B', 'Open Session A']);
+  server.summaries.set('A', { cwd: '/workspace/A', updated_at: '2026-10-03T00:00:00Z' });
+  await act(async () => server.invalidateSummary('A', server.socket, true));
+  await waitFor(() => expect(order()).toEqual(['Open Session A', 'Open Session B']));
+  // Equal times use identity, independent of the catalog response order.
+  server.summaries.set('B', { cwd: '/workspace/A', updated_at: '2026-10-03T00:00:00Z' });
+  await act(async () => server.invalidateSummary('B', server.socket, true));
+  expect(order()).toEqual(['Open Session A', 'Open Session B']);
+  await act(async () => fireEvent.change(screen.getByRole('textbox', { name: 'Search Session metadata' }), { target: { value: 'Session' } }));
+  expect(within(screen.getByRole('tree', { name: 'Session browser' })).getAllByRole('treeitem', { name: /^Open Session / }).map(node => node.getAttribute('aria-label'))).toEqual(['Open Session A', 'Open Session B']);
+});
+
+it('native activity invalidation replaces the current page with a recently active off-page Session', async () => {
+  let recent = false;
+  server.snapshots.set('older', snapshot('older'));
+  server.summaries.set('older', { cwd: '/workspace/A', name: 'Older conversation', updated_at: '2026-10-07T00:00:00Z' });
+  server.handlers.set('session/list', () => ({ type: 'sessions', sessions: recent
+    ? [server.summary('older'), server.summary('A')] : [server.summary('A'), server.summary('B')], next_offset: 32 }));
+  await mount();
+  expect(screen.queryByRole('button', { name: 'Open Older conversation' })).toBeNull();
+  recent = true;
+  await act(async () => server.invalidateSummary('older', server.socket, true));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Open Older conversation' })).toBeTruthy());
+  expect(server.client.getSnapshot().sessions.map(row => row.id)).toEqual(['older', 'A']);
+  expect(methods().filter(method => method === 'session/list')).toHaveLength(2);
+  expect(methods()).not.toContain('session/attach');
+});

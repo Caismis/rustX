@@ -14505,7 +14505,7 @@
           ]
         },
         "updated_at": {
-          "description": "Last metadata/active-node publication instant.",
+          "description": "Latest committed human-message time, or creation time for a new Session.",
           "type": "string",
           "format": "date-time"
         },
@@ -20106,7 +20106,7 @@
           ]
         },
         {
-          "description": "Invalidate the named Session summary. When `catalog_changed` is true,\nmembership may also have changed; reread `session/list` from native authority.\n\nIt is an *invalidation*, not a value: it carries no metadata, makes no\ndurability claim beyond the catalog commit that produced it, and is not\ncanonical history, an Agent event, an Attempt event, or a Conversation\nruntime cursor. It is addressed by Session identity alone — no\nattachment target — because Session metadata belongs to the Session and\nnot to whichever Conversation of it a client happens to display, and\nbecause observing metadata must never require holding a runtime\nattachment.\n\nCreation, copies and deletion invalidate catalog membership at visibility;\nasynchronous display-projection\npublication refreshes metadata: the Session's first ordinary root-lineage user message is\ncommitted canonically first, and its derived `preview` is committed to\nthe catalog afterwards, so a client that read `session/summary` in\nbetween legitimately cached `preview: null`.",
+          "description": "Invalidate the named Session summary. When `catalog_changed` is true,\nmembership or recency order may have changed; reread `session/list` from native authority.\n\nIt is an *invalidation*, not a value: it carries no metadata, makes no\ndurability claim beyond the catalog commit that produced it, and is not\ncanonical history, an Agent event, an Attempt event, or a Conversation\nruntime cursor. It is addressed by Session identity alone — no\nattachment target — because Session metadata belongs to the Session and\nnot to whichever Conversation of it a client happens to display, and\nbecause observing metadata must never require holding a runtime\nattachment.\n\nCreation, copies and deletion invalidate catalog membership at visibility;\nasynchronous display-projection\npublication refreshes metadata: the Session's first ordinary root-lineage user message is\ncommitted canonically first, and its derived `preview` is committed to\nthe catalog afterwards, so a client that read `session/summary` in\nbetween legitimately cached `preview: null`.",
           "type": "object",
           "properties": {
             "method": {

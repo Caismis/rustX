@@ -7764,7 +7764,7 @@ export interface SessionSummary {
    */
   preview?: string | null;
   /**
-   * Last metadata/active-node publication instant.
+   * Latest committed human-message time, or creation time for a new Session.
    */
   updated_at: string;
   /**

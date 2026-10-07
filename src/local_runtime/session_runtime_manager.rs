@@ -1632,6 +1632,14 @@ impl SessionRuntimeManager {
         // Both are best-effort: canonical history is unaffected, and the row
         // falls back to identity until a later seam succeeds.
         let session_id = access.session.id.clone();
+        if let Err(error) = self.sessions.repair_activity(&session_id).await {
+            tracing::warn!(%session_id, %error, "Session activity repair failed during composition");
+        }
+        super::session_activity::arm_activity(
+            self.sessions.downgrade_catalog(),
+            session_id.clone(),
+            composition.runtime(),
+        );
         match self
             .sessions
             .repair_display_preview_report(&session_id)

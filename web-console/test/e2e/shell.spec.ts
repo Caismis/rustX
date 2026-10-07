@@ -238,3 +238,26 @@ test('a Session row scrolled out from under its open actions menu leaves the key
   await expect(title).toHaveCount(0);
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
 });
+
+test('sidebar recency updates grouped, flat and search rows while preserving the composer', async ({ page }) => {
+  await page.goto(`${fixtureOrigin}/test/fixtures/shell.html`);
+  const tree = page.getByRole('tree', { name: 'Session browser' });
+  const rows = tree.locator('button[data-session-id]:visible');
+  const order = () => rows.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-session-id')));
+  const input = page.getByRole('textbox', { name: 'Message', exact: true });
+  await input.fill('Keep my draft');
+  await input.focus();
+  await page.evaluate(() => window.sessionFixture.activity('B', '2026-10-07T12:00:00Z'));
+  await expect.poll(order).toEqual(['B', 'A']);
+  await expect(input).toHaveValue('Keep my draft');
+  await expect(input).toBeFocused();
+  await expect(page.getByLabel('Session title')).toHaveText('Session A');
+  await page.getByRole('button', { name: 'View options', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Flat view', exact: true }).click();
+  await expect.poll(order).toEqual(['B', 'A', 'C']);
+  await page.evaluate(() => window.sessionFixture.activity('A', '2026-10-07T13:00:00Z'));
+  await expect.poll(order).toEqual(['A', 'B', 'C']);
+  await page.getByRole('button', { name: 'Search Sessions', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Search Session metadata' }).fill('Session');
+  await expect.poll(order).toEqual(['A', 'B', 'C']);
+});

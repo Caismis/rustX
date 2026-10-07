@@ -332,6 +332,17 @@ impl SessionController {
         };
         catalog.retain_lifecycle(controller);
         catalog.recover_upload_preparations()?;
+        // Recover derived activity after a process exit, before serving catalog pages.
+        // This inspects durable messages without composing or selecting runtimes.
+        for id in catalog.persisted_session_ids() {
+            match catalog.activity_subject(&id).and_then(|time| match time {
+                Some(time) => catalog.publish_activity(&id, time).map(|_| ()),
+                None => Ok(()),
+            }) {
+                Ok(()) => {}
+                Err(error) => tracing::warn!(%id, %error, "Session activity repair failed"),
+            }
+        }
         Ok(Self::new(catalog))
     }
     pub(crate) fn new(catalog: SessionCatalog) -> Self {
@@ -505,6 +516,20 @@ impl SessionController {
             Err(error) => Err(error),
         }
     }
+    pub(crate) async fn repair_activity(&self, id: &SessionId) -> Result<(), SessionError> {
+        let snapshot = self.catalog.lock().await.clone();
+        let target = id.clone();
+        let time = tokio::task::spawn_blocking(move || snapshot.activity_subject(&target))
+            .await
+            .map_err(|error| SessionError::Catalog {
+                detail: error.to_string(),
+            })??;
+        if let Some(time) = time {
+            self.catalog.lock().await.publish_activity(id, time)?;
+        }
+        Ok(())
+    }
+
     /// Prepare valid private storage outside the metadata lock, then atomically
     /// publish. There is no reuse of another Session, even an unused one.
     /// # Errors
@@ -665,6 +690,7 @@ impl SessionController {
             .map_err(|error| SessionError::Catalog {
                 detail: error.to_string(),
             })??;
+        self.repair_activity(id).await?;
         self.repair_display_preview(id).await.map(|_| ())
     }
     /// Read a bounded graph page without loading a runtime.
@@ -1898,6 +1924,65 @@ mod tests {
             kind: crate::message::types::InboundKind::Message,
             timestamp: None,
         })
+    }
+
+    #[tokio::test]
+    async fn activity_reopen_repairs_a_committed_message_without_changing_metadata() {
+        let root = tempfile::tempdir().unwrap();
+        let controller = SessionController::open(root.path()).unwrap();
+        let session = controller
+            .create_session(settings(root.path()))
+            .await
+            .unwrap()
+            .session;
+        let time = chrono::DateTime::parse_from_rfc3339("2100-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let crate::message::types::MessageBlock::User(mut message) = user("recovered activity")
+        else {
+            unreachable!()
+        };
+        message.timestamp = Some(time);
+        append_root_history(
+            &controller,
+            &session.id,
+            crate::message::types::MessageBlock::User(message),
+        )
+        .await;
+        assert_eq!(
+            controller
+                .read_session_summary(&session.id)
+                .await
+                .unwrap()
+                .updated_at,
+            session.created_at
+        );
+        drop(controller);
+        let reopened = SessionController::open(root.path()).unwrap();
+        assert_eq!(
+            reopened
+                .read_session_summary(&session.id)
+                .await
+                .unwrap()
+                .updated_at,
+            time
+        );
+        assert_eq!(reopened.read_session(&session.id).await.unwrap(), session);
+        let generation = reopened.catalog.lock().await.document_generation();
+        drop(reopened);
+        let reopened = SessionController::open(root.path()).unwrap();
+        assert_eq!(
+            reopened.catalog.lock().await.document_generation(),
+            generation
+        );
+        assert_eq!(
+            reopened
+                .read_session_summary(&session.id)
+                .await
+                .unwrap()
+                .updated_at,
+            time
+        );
     }
 
     // P12

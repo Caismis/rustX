@@ -699,7 +699,7 @@ pub enum NotificationMethod {
     #[serde(rename = "session/closed")]
     Closed { target: AttachmentTarget },
     /// Invalidate the named Session summary. When `catalog_changed` is true,
-    /// membership may also have changed; reread `session/list` from native authority.
+    /// membership or recency order may have changed; reread `session/list` from native authority.
     ///
     /// It is an *invalidation*, not a value: it carries no metadata, makes no
     /// durability claim beyond the catalog commit that produced it, and is not

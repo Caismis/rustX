@@ -6389,6 +6389,18 @@
       "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
       "upstream_sha256": "aea7f8a7e81efef2a118b1bde6f1a6add7f446d2371731af10d9102f05dca1c9",
       "treatment": "Issue #440 inspected for lifecycle, bounded conversion and isolation concepts. No source copied. Cordis, registry/slots, cache, eager unzip, workbook engine and libreoffice-kit excluded."
+    },
+    {
+      "upstream": "packages/client/ui-workspace/src/client/tree.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "b02a9b6c9d8c5a019a09bcd5e5bcf10a6f703c11765f191bcee714f381f57ed8",
+      "treatment": "Compared Session recency semantics: last human prompt or creation, descending time and identity tie-break. Native rustX projects durable human-message time and sorts before paging; browser preserves native order. No Harness runtime or storage source copied."
+    },
+    {
+      "upstream": "packages/api/session-controller/src/list.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "ce50fb9b16abd6f1fef92d73158552df369928327a4c7876a6f5588e249ab381",
+      "treatment": "Compared Session recency semantics: last human prompt or creation, descending time and identity tie-break. Native rustX projects durable human-message time and sorts before paging; browser preserves native order. No Harness runtime or storage source copied."
     }
   ],
   "historical_inspection": {

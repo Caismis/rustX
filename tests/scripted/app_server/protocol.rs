@@ -7,6 +7,20 @@ use crate::runtime_client::event::RuntimeClientEvent;
 
 use super::app_server_conformance as conformance;
 
+// Wait on the catalog's native publication signal, not on elapsed time or retries.
+async fn activity_published(f: &Fixture, id: &crate::local_runtime::session::SessionId) {
+    let mut changes = f.manager.sessions.summary_invalidations().changes();
+    loop {
+        let catalog = f.manager.sessions.catalog.lock().await;
+        let expected = catalog.activity_subject(id).unwrap().unwrap();
+        if catalog.summary(id).unwrap().updated_at >= expected {
+            return;
+        }
+        drop(catalog);
+        changes.changed().await.unwrap();
+    }
+}
+
 async fn binary_upload(
     connection: &AppServerConnection,
     target: AttachmentTarget,
@@ -3344,7 +3358,7 @@ async fn session_list_searches_by_identity_name_and_projection_open_no_store() {
 
 // P05 + P06 (runtime plane): the first turn's canonical commit publishes the
 // normalized, 120-character-bounded projection while the turn is still
-// parked; a later turn never repaints it and never commits the catalog again.
+// parked; a later turn updates activity but never repaints the first-message preview.
 #[tokio::test]
 async fn the_first_turn_publishes_the_bounded_projection_and_later_turns_never_repaint() {
     bounded(async {
@@ -3413,6 +3427,7 @@ async fn the_first_turn_publishes_the_bounded_projection_and_later_turns_never_r
             .find(|row| row.id == target.session_id)
             .unwrap();
         assert_eq!(row.preview.as_deref(), Some(expected.as_str()));
+        activity_published(&f, &target.session_id).await;
         let generation = f
             .manager
             .sessions
@@ -3424,7 +3439,7 @@ async fn the_first_turn_publishes_the_bounded_projection_and_later_turns_never_r
         await_attempt_settled(&connection, &target.session_id).await;
         // P06 (runtime plane): a second turn is an ordinary new commit, but
         // the one-shot publisher is spent — the settled first line survives
-        // byte-identically and no catalog commit happens.
+        // byte-identically while the new human activity commits separately.
         let reply = call(
             &connection,
             53,
@@ -3451,6 +3466,7 @@ async fn the_first_turn_publishes_the_bounded_projection_and_later_turns_never_r
         else {
             panic!("summary")
         };
+        activity_published(&f, &target.session_id).await;
         assert_eq!(summary.preview.as_deref(), Some(expected.as_str()));
         assert_eq!(
             f.manager
@@ -3459,8 +3475,8 @@ async fn the_first_turn_publishes_the_bounded_projection_and_later_turns_never_r
                 .lock()
                 .await
                 .document_generation(),
-            generation,
-            "a later turn never commits the catalog again"
+            generation + 1,
+            "a later human turn publishes activity without repainting the preview"
         );
         f.close().await;
     })
@@ -3564,6 +3580,7 @@ async fn an_agent_sourced_boundary_never_repaints_the_settled_projection() {
         assert!(probe.borrow().published);
         f.gates[0].release();
         await_attempt_settled(&connection, &target.session_id).await;
+        activity_published(&f, &target.session_id).await;
         let generation = f
             .manager
             .sessions
@@ -3619,15 +3636,10 @@ async fn a_failed_projection_commit_preserves_history_and_repairs_exactly_once()
         let f = Fixture::new().await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
-        // Arm before the attach so no catalog write can interleave between
-        // arming and the publisher's commit.
-        f.manager
-            .sessions
-            .catalog
-            .lock()
-            .await
-            .arm_write_fault_before_rename();
         let target = attach(&connection, &f, 0).await;
+        let gate = crate::local_runtime::session_display_projection::publication_test_support::arm(
+            &target.session_id,
+        );
         let mut probe = crate::local_runtime::session_display_projection::display_projection_probe(
             &target.session_id,
         )
@@ -3643,6 +3655,17 @@ async fn a_failed_projection_commit_preserves_history_and_repairs_exactly_once()
         .await;
         assert!(matches!(reply, MethodResult::InboundAccepted { .. }));
         f.gates[0].wait_entered().await;
+        gate.parked(1).await;
+        activity_published(&f, &target.session_id).await;
+        // The independent activity write is settled; inject the fault into
+        // exactly the parked preview publication.
+        f.manager
+            .sessions
+            .catalog
+            .lock()
+            .await
+            .arm_write_fault_before_rename();
+        gate.release();
         probe
             .wait_for(|probe| probe.finished)
             .await
@@ -3871,6 +3894,18 @@ async fn a_parked_publication_serves_a_null_summary_then_invalidates_it() {
             "canonical history exists and the projection is still unpublished"
         );
 
+        // Consume the independently committed activity invalidation while the
+        // preview is still parked, so coalescing cannot merge the two facts.
+        loop {
+            if let NotificationMethod::SummaryInvalidated {
+                session_id,
+                catalog_changed: true,
+            } = connection.next_notification().await.notification
+                && session_id == target.session_id
+            {
+                break;
+            }
+        }
         gate.release();
         probe
             .wait_for(|probe| probe.finished)
@@ -3884,11 +3919,11 @@ async fn a_parked_publication_serves_a_null_summary_then_invalidates_it() {
                 catalog_changed,
             } = connection.next_notification().await.notification
             {
-                assert!(
-                    !catalog_changed,
-                    "preview publication does not change catalog membership"
-                );
-                break session_id;
+                // The human commit separately invalidates recency. Wait for
+                // the preview-only invalidation after releasing its gate.
+                if !catalog_changed {
+                    break session_id;
+                }
             }
         };
         assert_eq!(
@@ -5565,6 +5600,91 @@ async fn detached_unconsumed_upload_is_absent_and_releases_supervisor_capacity()
         replacement.close();
         assert!(f.host.drain().await.is_empty());
         f.host.finish_drain().unwrap();
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn human_message_activity_reorders_live_catalog_without_focus_or_rename_activity() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let before = f
+            .manager
+            .sessions
+            .read_session_summary(&target.session_id)
+            .await
+            .unwrap()
+            .updated_at;
+        call(
+            &connection,
+            801,
+            Method::TurnStart {
+                target: target.clone(),
+                content: wire_text("activity moves this conversation"),
+            },
+        )
+        .await;
+        f.gates[0].wait_entered().await;
+        loop {
+            if let NotificationMethod::SummaryInvalidated {
+                session_id,
+                catalog_changed: true,
+            } = connection.next_notification().await.notification
+                && session_id == target.session_id
+            {
+                break;
+            }
+        }
+        let summary = f
+            .manager
+            .sessions
+            .read_session_summary(&target.session_id)
+            .await
+            .unwrap();
+        assert!(summary.updated_at > before);
+        let MethodResult::Sessions { sessions, .. } = call(
+            &connection,
+            802,
+            Method::SessionList {
+                query: None,
+                offset: 0,
+                limit: 32,
+            },
+        )
+        .await
+        else {
+            panic!("list")
+        };
+        assert_eq!(sessions[0].id, target.session_id);
+        f.manager
+            .sessions
+            .rename_session(&target.session_id, "renamed without activity")
+            .await
+            .unwrap();
+        assert_eq!(
+            f.manager
+                .sessions
+                .read_session_summary(&target.session_id)
+                .await
+                .unwrap()
+                .updated_at,
+            summary.updated_at
+        );
+        f.gates[0].release();
+        await_attempt_settled(&connection, &target.session_id).await;
+        assert_eq!(
+            f.manager
+                .sessions
+                .read_session_summary(&target.session_id)
+                .await
+                .unwrap()
+                .updated_at,
+            summary.updated_at
+        );
+        f.close().await;
     })
     .await;
 }
