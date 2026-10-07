@@ -12,6 +12,8 @@ const literal = (path: string) => JSON.stringify(path);
 export function macOfficeProfile(directory: string, runtimeRoots: string[]): string {
   return `(version 1)
 (deny default)
+(import "system.sb")
+(deny network*)
 (allow process-fork process-exec sysctl-read mach-lookup dynamic-code-generation)
 (allow signal (target children))
 (allow process-info* (target self))

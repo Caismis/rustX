@@ -47,3 +47,6 @@ jobs:
         if: runner.os == 'macOS'
         working-directory: web-console
         run: pnpm exec vitest run test/document-integration.test.ts test/office-macos.test.ts
+      - name: macOS sandbox diagnostics on failure
+        if: failure() && runner.os == 'macOS'
+        run: sudo log show --last 3m --style compact --predicate 'process == "sandboxd" OR eventMessage CONTAINS "deny"' | tail -150
