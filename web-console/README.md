@@ -497,7 +497,9 @@ is enabled in `pnpm-workspace.yaml`; Linux needs Python, make, a C++ compiler an
 Node headers for native addons; macOS needs Python and Xcode Command Line Tools.
 The small Node-API workspace filesystem binding exposes descriptor operations
 missing from `node:fs`, without relying on `/proc` or path-based reopening.
-Development, build and test commands rebuild it automatically. Browser code
+Development, build and test commands rebuild both addons from pinned source.
+This also avoids node-pty 1.1.0's macOS prebuilt `spawn-helper` missing its execute
+permission (upstream microsoft/node-pty#850), without runtime permission repair. Browser code
 never imports these addons. The
 workbench HTTP route uses the same authenticated carrier and native Session/node
 admission as the existing desktop workspace action.

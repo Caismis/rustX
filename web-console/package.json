@@ -20,8 +20,8 @@
     "check:provenance": "node scripts/provenance.ts && node scripts/notices.ts",
     "check:i18n": "node scripts/check-i18n.ts",
     "test:issue-420-performance": "vitest run --config vite.performance.config.ts",
-    "install": "node-gyp rebuild --directory host/workspace-fs",
-    "build:host": "node-gyp rebuild --directory host/workspace-fs"
+    "install": "pnpm build:host",
+    "build:host": "node-gyp rebuild --directory node_modules/node-pty && node-gyp rebuild --directory host/workspace-fs"
   },
   "dependencies": {
     "@base-ui/react": "1.8.0",
