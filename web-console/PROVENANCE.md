@@ -1464,3 +1464,16 @@ The timeline includes projected SystemPromptCell and ContextRow input entries,
 with independent display keys and their original request detail owner. Sequence
 mode places the initial prompt first; timed modes use zero-duration markers at
 the owning request snapshot, since no separate input clock is recorded.
+
+### Trajectory detail presentation alignment
+
+The detail facet matrix now follows the pinned Harness `TrajectoryTable.tsx`
+`SYSTEM_PROMPT_TABS`, `SYSTEM_UPDATE_TABS`, `REQUEST_TABS`, and `detailTabs`:
+prompt/catalog cells no longer inherit request summary/native tabs; request
+markers expose summary/options/usage/timing; messages and individual context
+rows expose summary/preview/raw content; tool source replaces the redundant
+input tab. Raw content is message text, not the protocol message envelope.
+Overview sections link to their corresponding facet, reasoning remains folded
+inside the message preview, and attachments stay with their content. Context
+reads still use the immutable native request owner but render only the selected
+message ID. rustX-only lifecycle records retain native evidence inspection.

@@ -99,15 +99,9 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await trajectory.getByLabel('Search loaded Trace').fill(requestRecord.request!.model);
     await trajectory.locator(`[data-request-owner="${requestRecord.id}"]`).click();
     const inspector = trajectory.getByLabel('Trace record inspector');
-    await inspector.getByRole('tab', { name: 'Native', exact: true }).click();
-    await expect(inspector).toContainText(requestRecord.request!.request_id);
-    await expect(inspector).toContainText('Logical Step');
-    // Historical request input is now inspectable rather than withheld, and
-    // it is fetched on demand for the selected record only.
-    await inspector.getByRole('tab', { name: 'System Prompt', exact: true }).click();
-    await expect(inspector).toContainText('Effective system prompt');
-    await inspector.getByRole('tab', { name: 'Context', exact: true }).click();
-    await expect(inspector).toContainText('Reconstructed request context');
+    await expect(inspector.getByRole('tab')).toHaveText(['Summary', 'Options', 'Usage', 'Timing']);
+    await inspector.getByRole('tab', { name: 'Options', exact: true }).click();
+    await expect(inspector).toContainText(requestRecord.request!.model);
     await page.screenshot({ path: '/tmp/rustx-364-trajectory-desktop.png' });
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(inspector).toBeVisible();

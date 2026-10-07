@@ -545,7 +545,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "c13d207150a8bf83e21376dcbe6c89318faf006b98f0f514d3bf2ae8341aec04",
+      "local_sha256": "a0b37b1e44849de91c388505e0f710356b091fa67cc3757596ab62a7a80a574b",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTurnHeader.module.css",
@@ -715,7 +715,7 @@
           "treatment": "Details header (role tag, section/group location, icon close) adapted."
         }
       ],
-      "local_sha256": "8de0a1937d7ca3594a8b1138542567f64e4b140be9cf559d919cae2b9c0d5521"
+      "local_sha256": "0e270cfcffcf44604b5076be352103937e759046742cbe818e7910915e2d033b"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -803,7 +803,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "e45f9463138d227571d88d24a9f74271a494d0b9ec5c27011c1481f22f709dda",
+      "local_sha256": "e5a1cf98311016728373f3b451fb39dc0cc9a8e26a8f92781bb5200483eb0841",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/layout.ts",
@@ -2635,7 +2635,7 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "91d3f6e26a10bf5c20edb5f7f1bcb520bfa0c4c28059846c62b1761bf1c7ae08"
+      "local_sha256": "e39d16226e2eb8cf8cb51f89e480045f0cb6c0b1943ef74c78d79ee850dffe42"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
@@ -3347,7 +3347,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "4ecd156038eb598f5f104df5e386b5dcd881d7c6e4ebd32e163ea40127662796"
+      "local_sha256": "c235d9e872fa6fe5d76307ba5957afc6b56727550560c2d586428dd4ae03e1de"
     },
     {
       "upstream": "packages/client/ui-workspace/src/client/locales.ts",

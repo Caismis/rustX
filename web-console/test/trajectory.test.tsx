@@ -71,11 +71,11 @@ const inputMatrix = [
   ['unchanged', 'initial', 'Initial Tools', 'Tools'],
   ['unchanged', 'changed', 'Tools Updated', 'Tools'],
   ['unchanged', 'unchanged', undefined, 'Summary'],
-  ['unchanged', 'previous_unavailable', 'Previous Tool catalog unavailable', 'Summary'],
+  ['unchanged', 'previous_unavailable', 'Previous Tool catalog unavailable', 'System Prompt'],
   ['previous_unavailable', 'initial', 'Previous System Prompt unavailable · Initial Tools', 'Tools'],
   ['previous_unavailable', 'changed', 'Previous System Prompt unavailable · Tools Updated', 'Tools'],
-  ['previous_unavailable', 'unchanged', 'Previous System Prompt unavailable', 'Summary'],
-  ['previous_unavailable', 'previous_unavailable', 'Previous System Prompt unavailable · Previous Tool catalog unavailable', 'Summary'],
+  ['previous_unavailable', 'unchanged', 'Previous System Prompt unavailable', 'System Prompt'],
+  ['previous_unavailable', 'previous_unavailable', 'Previous System Prompt unavailable · Previous Tool catalog unavailable', 'System Prompt'],
 ] as const;
 
 it.each(inputMatrix)('T1-01 preserves native %s + %s without classification reads', (prompt, tools, label, facet) => {
@@ -96,12 +96,10 @@ it.each(inputMatrix)('T1-01 preserves native %s + %s without classification read
   fireEvent.click(row(label ? 'SystemPromptCell' : 'RequestBoundary'));
   expect(screen.getByRole('tab', { name: facet }).getAttribute('aria-selected')).toBe('true');
   expect(screen.queryByRole('tab', { name: 'Diff' }) !== null).toBe(prompt === 'changed');
-  expect(screen.getByRole('tab', { name: 'Tools' })).toBeDefined();
+  expect(Boolean(screen.queryByRole('tab', { name: 'Tools' }))).toBe(Boolean(label));
   expect(load.mock.calls).toEqual([[record.id]]); // only the selected immutable owner
-  fireEvent.click(screen.getByRole('tab', { name: 'Summary' }));
-  expect(screen.getByRole('tabpanel').textContent).toContain(tools.replaceAll('_', ' '));
   fireEvent.click(row('RequestBoundary'));
-  expect(screen.queryByRole('tab', { name: 'Diff' }) !== null).toBe(prompt === 'changed');
+  expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(['Summary', 'Options', 'Usage', 'Timing']);
 });
 
 it.each([
@@ -143,7 +141,7 @@ it('T1-04 preserves frozen Context order and exact owner/display/facet identitie
   const load = vi.fn(); show(cacheOf([record]), load);
   fireEvent.click(row('SystemPromptCell')); expect(screen.getByRole('tab', { name: 'System Prompt' }).getAttribute('aria-selected')).toBe('true');
   fireEvent.click(document.querySelector('[data-display-type="ContextRow"][data-display-key*="context-a"]')!);
-  expect(screen.getByRole('tab', { name: 'Context' }).getAttribute('aria-selected')).toBe('true');
+  expect(screen.getByRole('tab', { name: 'Summary' }).getAttribute('aria-selected')).toBe('true');
   expect(document.querySelector('[data-context-message-id="context-a"][data-selected]')).not.toBeNull();
   fireEvent.click(row('RequestBoundary')); expect(screen.getByRole('tab', { name: 'Summary' }).getAttribute('aria-selected')).toBe('true');
 });
@@ -168,7 +166,7 @@ it('T1-04 controlled out-of-order owner responses cannot change a newer facet or
   expect(reads).toEqual(['trace:0', 'trace:1']);
   await act(async () => { resolvers.get('trace:1')!(requestDetail(1)); });
   await act(async () => { resolvers.get('trace:0')!(requestDetail(0)); });
-  expect(screen.getByRole('tab', { name: 'Context' }).getAttribute('aria-selected')).toBe('true');
+  expect(screen.getByRole('tab', { name: 'Summary' }).getAttribute('aria-selected')).toBe('true');
   expect(selected.getAttribute('aria-selected')).toBe('true');
   expect(document.activeElement).toBe(selected);
   fireEvent.click(row('SystemPromptCell', 'trace:1'));
@@ -177,12 +175,12 @@ it('T1-04 controlled out-of-order owner responses cannot change a newer facet or
   expect(screen.getByRole('tab', { name: 'Summary' }).getAttribute('aria-selected')).toBe('true');
 });
 
-it('T1-05 latest unchanged-only page directly discovers prompt with one lazy owner read', () => {
+it('T1-05 latest unchanged-only page inspects request options with one lazy owner read', () => {
   const load = vi.fn(); show(cacheOf([traceRecord(9), traceRecord(10)]), load);
   expect(load).not.toHaveBeenCalled(); expect(document.querySelector('[data-display-type="SystemPromptCell"]')).toBeNull();
   fireEvent.click(row('RequestBoundary', 'trace:10'));
-  fireEvent.click(screen.getByRole('button', { name: 'View System Prompt' }));
-  expect(screen.getByRole('tab', { name: 'System Prompt' }).getAttribute('aria-selected')).toBe('true');
+  fireEvent.click(screen.getByRole('tab', { name: 'Options' }));
+  expect(screen.getByRole('tab', { name: 'Options' }).getAttribute('aria-selected')).toBe('true');
   expect(load.mock.calls).toEqual([['trace:10']]);
 });
 
@@ -264,7 +262,7 @@ it.each(['request', 'tool'] as const)('T1-04/06 mid-Turn %s anchor never lends i
   fireEvent.click(row(kind === 'request' ? 'RequestBoundary' : 'RecordRow', child.id));
   expect(select).toHaveBeenLastCalledWith(child.id);
   expect(load.mock.calls).toEqual([[child.id]]);
-  expect(screen.getByRole('tab', { name: kind === 'request' ? 'System Prompt' : 'Input' })).toBeDefined();
+  expect(screen.getByRole('tab', { name: kind === 'request' ? 'Options' : 'Input' })).toBeDefined();
 });
 
 it('407: the exact native Attempt record is inspectable structural evidence without any detail read', () => {
@@ -432,11 +430,11 @@ it('T1-11 content-only updates never move an off-tail reader', () => {
   expect(ledger.scrollTop).toBe(150); expect(screen.getByRole('button', { name: 'Jump to latest' })).toBeDefined();
 });
 
-it('safe existing Tool renderers expose supported Code, Input, Result and Native', () => {
+it('safe existing Tool renderers expose supported Code, Result, Schema and Timing', () => {
   const record = traceTool(1); show(completeTraceDetail(cacheOf([record]), record.id, 1, toolDetail(1)));
   fireEvent.click(row('RecordRow', record.id));
-  for (const facet of ['Code', 'Input', 'Result', 'Native']) { fireEvent.click(screen.getByRole('tab', { name: facet })); expect(screen.getByRole('tab', { name: facet }).getAttribute('aria-selected')).toBe('true'); }
-  expect(within(screen.getByRole('tabpanel')).getByText('tool-bash')).toBeDefined();
+  for (const facet of ['Code', 'Result', 'Schema', 'Timing']) { fireEvent.click(screen.getByRole('tab', { name: facet })); expect(screen.getByRole('tab', { name: facet }).getAttribute('aria-selected')).toBe('true'); }
+  expect(within(screen.getByRole('tabpanel')).getByText('1.00 s')).toBeDefined();
 });
 
 
@@ -575,7 +573,7 @@ it.each(['expand', 'search', 'other owner'] as const)('T1-04 pending summary det
     fireEvent.change(search, { target: { value: 'ASSISTANT' } });
   } else {
     fireEvent.click(row('RequestBoundary', 'trace:2'));
-    fireEvent.click(screen.getByRole('button', { name: 'View System Prompt' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Options' }));
     act(() => row('RequestBoundary', 'trace:2').focus());
   }
   const focus = document.activeElement;
@@ -585,7 +583,7 @@ it.each(['expand', 'search', 'other owner'] as const)('T1-04 pending summary det
   if (transition === 'other owner') {
     expect(row('CollapsedCallSummary').getAttribute('aria-selected')).toBe('false');
     expect(row('RequestBoundary', 'trace:2').getAttribute('aria-pressed')).toBe('true');
-    expect(screen.getByRole('tab', { name: 'System Prompt' }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByRole('tab', { name: 'Options' }).getAttribute('aria-selected')).toBe('true');
     expect(selections).toEqual(['trace:0', 'trace:2']);
     expect(reads).toEqual(['trace:0', 'trace:2']);
   } else {
@@ -663,10 +661,8 @@ it('407: exact Attempt and Step identity own one Turn/group across interleaved r
   expect(ledger.textContent).not.toContain('opaque-step');
   expect(ledger.textContent).not.toContain('attempt-a');
   fireEvent.click(row('RequestBoundary', 'trace:2'));
-  fireEvent.click(screen.getByRole('tab', { name: 'Native' }));
-  expect(screen.getByRole('tabpanel').textContent).toContain('opaque-step');
-  expect(screen.getByRole('tabpanel').textContent).toContain('attempt-a');
-  expect(screen.getByRole('tabpanel').textContent).toContain('request-2');
+  expect(row('RequestBoundary', 'trace:2').getAttribute('aria-pressed')).toBe('true');
+  expect(screen.queryByRole('tab', { name: 'Native' })).toBeNull();
 });
 
 it('407: prepend renumbers Turn while collapsed selection, prompt detail and focus retain native identity', () => {
@@ -708,7 +704,7 @@ it('407: System Prompt cells expose semantic tabs and preserve unknown historica
   const initial = richRequest();
   const view = show(completeTraceDetail(cacheOf([initial]), initial.id, 1, requestDetail(0)));
   fireEvent.click(row('SystemPromptCell'));
-  expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(['System Prompt', 'Tools', 'Summary', 'Native']);
+  expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(['System Prompt', 'Tools']);
   expect(screen.queryByRole('tab', { name: 'Diff' })).toBeNull();
   const unknown = richRequest();
   unknown.request!.system_prompt.state = 'previous_unavailable';
@@ -719,8 +715,8 @@ it('407: System Prompt cells expose semantic tabs and preserve unknown historica
   view.rerender(<Trajectory cache={completeTraceDetail(cacheOf([unknown]), unknown.id, 1, detail)} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop} />);
   fireEvent.click(row('SystemPromptCell'));
   expect(screen.queryByRole('tab', { name: 'Diff' })).toBeNull();
-  fireEvent.click(screen.getByRole('tab', { name: 'Summary' }));
-  expect(screen.getByRole('tabpanel').textContent).toContain('previous unavailable');
+  expect(row('SystemPromptCell').textContent).toContain('Previous System Prompt unavailable');
+  expect(screen.getByRole('tabpanel').textContent).toContain('You are the historical agent.');
   expect(screen.getByRole('tabpanel').textContent).not.toMatch(/unchanged|No changes/);
 });
 
@@ -1643,8 +1639,8 @@ it('424: wire-null User survives folds and search, is keyboard reachable and sel
   fireEvent.click(row('RecordRow', records[0]!.id));
   expect(select).toHaveBeenLastCalledWith(records[0]!.id);
   expect(load.mock.calls).toEqual([[records[0]!.id]]);
-  fireEvent.click(screen.getByRole('tab', { name: 'Native' }));
-  expect(within(screen.getByRole('tabpanel')).getByText(records[0]!.id)).toBeTruthy();
+  expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(['Summary', 'Preview', 'Raw Content']);
+  expect(row('RecordRow', records[0]!.id).getAttribute('aria-selected')).toBe('true');
 });
 
 it('retained idle inputs move into their native answering turns, below the initial prompt, when refreshed outside the latest page', () => {
@@ -1691,7 +1687,7 @@ it('system prompt and context timeline inputs select their own facets, not the s
   fireEvent.click(system);
   expect(screen.getByRole('tab', { name: 'System Prompt' }).getAttribute('aria-selected')).toBe('true');
   fireEvent.click(document.querySelector<HTMLButtonElement>('[data-record-id][data-kind="context"]')!);
-  expect(screen.getByRole('tab', { name: 'Context' }).getAttribute('aria-selected')).toBe('true');
+  expect(screen.getByRole('tab', { name: 'Summary' }).getAttribute('aria-selected')).toBe('true');
 });
 
 it('distinguishes an absent historical prompt from pending and failed reads', () => {
@@ -1706,4 +1702,48 @@ it('distinguishes an absent historical prompt from pending and failed reads', ()
   detail.request!.effective_system_prompt = { text: '', truncated: false };
   renderCache(completeTraceDetail(cacheOf([request]), request.id, 1, detail));
   expect(screen.getByText('This request did not include a system prompt.')).toBeDefined();
+});
+
+it('Harness message details show semantic preview and raw text, never message JSON', () => {
+  const record = traceRecord(0, { kind: 'assistant', request: null });
+  const detail = assistantDetail();
+  detail.messages = [{ message_id: 'assistant-0', role: 'assistant', truncated: false, blocks: [{ type: 'reasoning', text: { text: 'Private reasoning text', truncated: false } }, { type: 'text', text: { text: '# Answer\n\n**Bold content**', truncated: false } }] }];
+  show(completeTraceDetail(cacheOf([record]), record.id, 1, detail));
+  fireEvent.click(row('RecordRow'));
+  expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(['Summary', 'Preview', 'Raw Content']);
+  fireEvent.click(screen.getByRole('tab', { name: 'Preview' }));
+  expect(screen.getByRole('heading', { name: 'Answer' })).toBeTruthy();
+  expect(screen.getByText('Private reasoning text').closest('details')?.open).toBe(false);
+  fireEvent.click(screen.getByRole('tab', { name: 'Raw Content' }));
+  expect(screen.queryByRole('heading', { name: 'Answer' })).toBeNull();
+  expect(screen.getByRole('tabpanel').textContent).toContain('# Answer\n\n**Bold content**');
+  expect(screen.getByRole('tabpanel').textContent).not.toContain('message_id');
+});
+
+it('Harness context details restrict preview and raw content to the selected frozen message', () => {
+  const record = richRequest(); record.state = 'failed'; const detail = requestDetail(0);
+  const base = detail.request!.messages[0]!;
+  detail.request!.messages = ['context-z', 'context-a'].map(message_id => ({ ...base, message_id, blocks: [{ type: 'text', text: { text: `# ${message_id}`, truncated: false } }] }));
+  show(completeTraceDetail(cacheOf([record]), record.id, 1, detail));
+  fireEvent.click(document.querySelector('[data-display-type="ContextRow"][data-display-key*="context-a"]')!);
+  expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(['Summary', 'Preview', 'Raw Content']);
+  expect(screen.getByRole('tabpanel').textContent).not.toContain('context-z');
+  expect(screen.getByRole('tabpanel').textContent).not.toContain('failed');
+  fireEvent.click(screen.getByRole('tab', { name: 'Preview' }));
+  expect(screen.getByRole('heading', { name: 'context-a' })).toBeTruthy();
+  fireEvent.click(screen.getByRole('tab', { name: 'Raw Content' }));
+  expect(screen.getByRole('tabpanel').textContent).toContain('# context-a');
+  expect(screen.getByRole('tabpanel').textContent).not.toContain('context-z');
+});
+
+
+it('tool result attachments remain available in summary and result without an extra facet', () => {
+  const record = traceTool(1); const detail = toolDetail(1);
+  detail.tool!.result!.attachments = [{ artifact_id: 'output-file', name: 'report.md', mime_type: 'text/markdown', image: false }];
+  show(completeTraceDetail(cacheOf([record]), record.id, 1, detail));
+  fireEvent.click(row('RecordRow', record.id));
+  expect(screen.queryByRole('tab', { name: 'Artifacts' })).toBeNull();
+  expect(within(screen.getByRole('tabpanel')).getByText('report.md')).toBeTruthy();
+  fireEvent.click(screen.getByRole('tab', { name: 'Result' }));
+  expect(within(screen.getByRole('tabpanel')).getByText('report.md')).toBeTruthy();
 });
