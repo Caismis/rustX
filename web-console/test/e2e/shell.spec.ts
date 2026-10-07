@@ -136,8 +136,7 @@ test('Harness shell reference states and presentation-only navigation', async ({
   // Global Settings opens at General, which holds Appearance.
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await expectStableScreenshot(page, 'settings-shell-light.png');
-  await page.getByRole('radiogroup', { name: 'Theme', exact: true }).getByText('Dark', { exact: true }).click();
- await expect(page.getByRole('radio', { name: 'Dark', exact: true })).toBeChecked();
+  await page.getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: 'Dark', exact: true }).click();
   await expectStableScreenshot(page, 'settings-shell-dark.png');
   await page.getByRole('button', { name: 'Close Settings' }).click();
   await expectStableScreenshot(page, 'desktop-expanded-dark.png');

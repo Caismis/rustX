@@ -32,8 +32,7 @@ async function openUserSettings(page: Page) {
 }
 async function setTheme(page: Page, theme: 'Light' | 'Dark') {
   await openUserSettings(page);
-  await dialog(page).getByRole('radiogroup', { name: 'Theme', exact: true }).getByText(theme, { exact: true }).click();
-  await expect(dialog(page).getByRole('radio', { name: theme, exact: true })).toBeChecked();
+  await dialog(page).getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: theme, exact: true }).click();
   await closeSettings(page);
 }
 
@@ -111,7 +110,7 @@ test('desktop: six pages share one stable Harness frame, distinct icons and one 
     await expect(settings.getByRole('heading', { level: 3, name, exact: true })).toBeVisible();
     // The owner and observation state live in the fixed header on every page.
     await expect(settings.getByRole('heading', { level: 2, name: 'User Settings' })).toBeVisible();
-    await expect(settings.locator('[data-lifecycle="ready"]')).toHaveText('Configuration loaded');
+    await expect(settings.locator('[data-lifecycle="ready"]')).toHaveText('Authoritative source observed');
     await expectNoHorizontalOverflow(page);
     await expectAccessible(page, settingsScope);
     if (references[name]) await expectStableScreenshot(settings, references[name]);
@@ -120,7 +119,7 @@ test('desktop: six pages share one stable Harness frame, distinct icons and one 
   // Settings forms retain their geometry; Provider cards use pinned Harness ModelsSection geometry.
   await openSettingsPage(page, 'Agent');
   const identity = settings.getByRole('form', { name: 'Root identity' });
-  const configurationDetails = identity.getByRole('button', { name: 'Configuration details', exact: true });
+  const configurationDetails = identity.getByRole('button', { name: 'Source revision & replacement', exact: true });
   await expect(identity.locator('[data-authored]')).toBeHidden();
   await configurationDetails.click();
   await expect(identity.locator('[data-authored]')).toBeVisible();
@@ -167,9 +166,9 @@ test('Workspace inherited and overridden units, restore versus deletion, nested 
   // Overridden and dirty: the draft's Save / Discard row sticks in reach.
   await openSettingsPage(page, 'Agent');
   const identity = settings.getByRole('form', { name: 'Root identity' });
-  await identity.getByRole('button', { name: 'Configuration details', exact: true }).click();
+  await identity.getByRole('button', { name: 'Source revision & replacement', exact: true }).click();
   await expect(identity.locator('[data-authored="present"]')).toBeVisible();
-  await identity.getByRole('button', { name: 'Configuration details', exact: true }).click();
+  await identity.getByRole('button', { name: 'Source revision & replacement', exact: true }).click();
   await identity.getByLabel('Agent identity').fill('rustx-workspace-reviewer');
   await expect(identity).toHaveAttribute('data-draft', 'true');
   await expect(identity.getByRole('button', { name: 'Save Root identity' })).toBeEnabled();
@@ -232,7 +231,7 @@ test('deletion confirmation, CAS conflict review, loading and read failure are d
   errors = await start(page, '?scenario=loading');
   await openUserSettings(page);
   await openSettingsPage(page, 'Models');
-  await expect(settings.locator('[role="status"][data-lifecycle="loading"]')).toHaveText('Loading configuration…');
+  await expect(settings.locator('[role="status"][data-lifecycle="loading"]')).toHaveText('Loading authoritative sources…');
   await expect(settings.locator('[data-lifecycle="loading"][aria-busy="true"]')).toContainText('Nothing is shown until native answers');
   await expect(settings.getByRole('row')).toHaveCount(0);
   await expectAccessible(page, settingsScope);
@@ -244,7 +243,7 @@ test('deletion confirmation, CAS conflict review, loading and read failure are d
   await openUserSettings(page);
   await openSettingsPage(page, 'Models');
   await expect(settings.getByRole('alert')).toContainText('/bound/rustx.toml is not readable by the App Server process');
-  await expect(settings.locator('[role="status"][data-lifecycle="failed"]')).toHaveText('Configuration unavailable');
+  await expect(settings.locator('[role="status"][data-lifecycle="failed"]')).toHaveText('Source authority unavailable');
   await expectAccessible(page, settingsScope);
   await expectStableScreenshot(settings, 'settings-read-error-light.png');
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
@@ -621,7 +620,7 @@ test('confirming a removal settles focus on its unit while the write is in fligh
   // Native answers: the removal settles normally, exactly once, and the
   // keyboard is still inside the unit's workflow.
   await releaseWrites(page);
-  await expect(unit.getByText('Provider transport saved. Check the status above to confirm it has taken effect.')).toBeVisible();
+  await expect(unit.getByText('Provider transport saved. Native coordination owns application.')).toBeVisible();
   await expect(remove).toHaveCount(0);
   await expect.poll(writes).toBe(1);
   await expect(unit).toBeFocused();
@@ -668,7 +667,7 @@ test('confirming a restore of inheritance settles focus on its unit while the wr
   await expect(unit).toBeFocused();
   await releaseWrites(page);
   await expect.poll(writes).toBe(1);
-  await expect(unit.getByText('Root identity saved. Check the status above to confirm it has taken effect.')).toBeVisible();
+  await expect(unit.getByText('Root identity saved. Native coordination owns application.')).toBeVisible();
   await expect(unit.locator('[data-authored="absent"]')).toContainText('Inherited — no Workspace override');
   await expect(unit).toBeFocused();
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);

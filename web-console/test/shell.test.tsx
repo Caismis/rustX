@@ -28,7 +28,7 @@ it('collapse, rail expansion, Inspector and Settings appearance gestures emit no
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
   // Appearance lives on General, the page global Settings opens at.
   const theme = (option: string) => {
-    fireEvent.click(screen.getByRole('radio', { name: option }));
+    fireEvent.click(screen.getByRole('button', { name: option }));
   };
   theme('Dark');
   expect(document.body.hasAttribute('data-ds-dark-theme')).toBe(true);

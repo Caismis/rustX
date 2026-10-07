@@ -63,7 +63,7 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     await openSettingsPage(page, 'Tools & Permissions');
     await settings.getByRole('button', { name: 'Remove workflows 1', exact: true }).click();
     await settings.getByRole('button', { name: 'Save Workflow allowlist', exact: true }).click();
-    await expect(settings.getByText('Workflow allowlist saved. Check the status above to confirm it has taken effect.')).toBeVisible();
+    await expect(settings.getByText('Workflow allowlist saved. Native coordination owns application.')).toBeVisible();
     expect(readFileSync(workflowPath, 'utf8')).toBe(workflow);
     expect(readFileSync(agentPath, 'utf8')).toBe(agent);
     expect((await fixture.control('requests')).requests).toHaveLength(3);

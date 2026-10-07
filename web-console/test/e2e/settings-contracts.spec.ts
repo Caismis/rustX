@@ -52,7 +52,7 @@ reasoning = { default_profile = "deep", profiles = { deep = { enabled = true }, 
       const form = settings.getByRole('form', { name: title, exact: true });
       const save = async () => {
         await form.getByRole('button', { name: `Save ${title}`, exact: true }).click();
-        await expect(settings.getByText(`${title} saved. Check the status above to confirm it has taken effect.`)).toBeVisible();
+        await expect(settings.getByText(`${title} saved. Native coordination owns application.`)).toBeVisible();
       };
       await choose(form, 'Summary model', 'summary-b');
       if (owner === 'Agent') {
@@ -105,7 +105,7 @@ reasoning = { default_profile = "deep", profiles = { deep = { enabled = true }, 
         await form.getByLabel('Working directory').fill(fixture.workspaceA);
       }
       await form.getByRole('button', { name: `Save MCP implicit-${transport}`, exact: true }).click();
-      await expect(settings.getByText(`MCP implicit-${transport} saved. Check the status above to confirm it has taken effect.`)).toBeVisible();
+      await expect(settings.getByText(`MCP implicit-${transport} saved. Native coordination owns application.`)).toBeVisible();
       await settings.getByRole('button', { name: '← Extensions', exact: true }).click();
     }
     const mcp = readFileSync(mcpFile, 'utf8');

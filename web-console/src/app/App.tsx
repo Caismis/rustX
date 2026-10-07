@@ -93,7 +93,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   };
   const collapsePanel = () => { previewOwner.collapse(); returnPreviewFocus(); };
   const [theme, setTheme] = useState(readTheme);
-  useEffect(() => applyTheme(theme), [theme]);
+  useLayoutEffect(() => applyTheme(theme), [theme]);
   const [conversationMode, setConversationMode] = useState<'chat' | 'trajectory'>('chat');
   const [preferences] = useState(readPreferences);
   const endpoint = state.endpoint ?? '';

@@ -1,7 +1,7 @@
 import { expandModelAuthoring } from './shell-actions';
 import { openEmptySession } from './shell-actions';
 import {
-  choose, closeSettings, connectRemote, openSettingsPage, openWorkspaceSettings, selectedSettingsPage,
+  closeSettings, connectRemote, openSettingsPage, openWorkspaceSettings, selectedSettingsPage,
 } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { appendFileSync, existsSync } from 'node:fs';
@@ -35,7 +35,7 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     await settings.getByRole('button', { name: 'Add Arguments', exact: true }).click();
     await settings.getByLabel('Arguments 2', { exact: true }).fill(join(fixture.directory, 'mcp-started'));
     await settings.getByRole('button', { name: 'Save MCP local-fixture', exact: true }).click();
-    await expect(settings.getByText('MCP local-fixture saved. Check the status above to confirm it has taken effect.')).toBeVisible();
+    await expect(settings.getByText('MCP local-fixture saved. Native coordination owns application.')).toBeVisible();
     expect(existsSync(join(fixture.directory, 'mcp-started'))).toBe(false);
     await openSettingsPage(page, 'Advanced');
     await expect(settings.getByText(/Revision:/)).toBeVisible();
@@ -65,7 +65,7 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     await expect(definition).toHaveAttribute('data-definition', 'overriding');
     await settings.getByLabel('MCP command').fill('unused-workspace-command');
     await settings.getByRole('button', { name: 'Save MCP local-fixture', exact: true }).click();
-    await expect(settings.getByText('MCP local-fixture saved. Check the status above to confirm it has taken effect.')).toBeVisible();
+    await expect(settings.getByText('MCP local-fixture saved. Native coordination owns application.')).toBeVisible();
     await expect(definition).toHaveAttribute('data-definition', 'authored');
     await settings.getByLabel('MCP command').fill('preserved-draft');
     appendFileSync(join(fixture.workspaceA, '.agents/mcp.toml'), '\n# external edit invalidates the draft revision\n');
@@ -75,7 +75,7 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     await settings.screenshot({ path: test.info().outputPath('cfg3-cas-conflict.png') });
     await settings.getByRole('button', { name: 'Use reviewed revision', exact: true }).click();
     await settings.getByRole('button', { name: 'Save MCP local-fixture', exact: true }).click();
-    await expect(settings.getByText('MCP local-fixture saved. Check the status above to confirm it has taken effect.')).toBeVisible();
+    await expect(settings.getByText('MCP local-fixture saved. Native coordination owns application.')).toBeVisible();
     await settings.getByRole('button', { name: '← Extensions', exact: true }).click();
     await settings.getByRole('tab', { name: 'Agents', exact: true }).click();
     await settings.getByLabel('New Agent identity').fill('reviewer');
@@ -86,7 +86,7 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     await settings.getByLabel('Instructions', { exact: true }).fill('Review the requested change and report concrete findings.');
     await settings.getByLabel('read', { exact: true }).check();
     await settings.getByRole('button', { name: 'Save Agent reviewer', exact: true }).click();
-    await expect(settings.getByText('Agent reviewer saved. Check the status above to confirm it has taken effect.')).toBeVisible();
+    await expect(settings.getByText('Agent reviewer saved. Native coordination owns application.')).toBeVisible();
     await settings.getByRole('button', { name: '← Extensions', exact: true }).click();
     await expect(settings.getByRole('row', { name: 'reviewer', exact: true })).toContainText('Valid definition');
     await settings.screenshot({ path: test.info().outputPath('cfg3-named-agent.png') });
@@ -101,7 +101,7 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     await page.setViewportSize({ width: 1440, height: 1000 });
     await closeSettings(page);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    await choose(settings, 'Theme', 'Dark');
+    await settings.getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: 'Dark', exact: true }).click();
     await closeSettings(page);
     await openWorkspaceSettings(page, 'Workspace A'); await expandModelAuthoring(page);
     await openSettingsPage(page, 'Extensions');

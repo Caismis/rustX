@@ -22,9 +22,9 @@ it('keeps preview content inert, wrapping local, and error retries explicit', ()
  expect(retry).not.toHaveBeenCalled(); fireEvent.click(screen.getByRole('button', { name: 'Retry preview' })); expect(retry).toHaveBeenCalledOnce();
 });
 it('persists only the safe Web appearance preference', () => {
- expect(readTheme()).toBe('light'); applyTheme('dark'); expect(readTheme()).toBe('dark'); expect(document.body.hasAttribute('data-ds-dark-theme')).toBe(true);
+ expect(readTheme()).toBe('system'); applyTheme('dark'); expect(readTheme()).toBe('dark'); expect(document.body.hasAttribute('data-ds-dark-theme')).toBe(true);
  expect({ ...localStorage }).toEqual({ 'rustx-appearance-v1': 'dark', 'rustx-locale-v1': 'en' });
- localStorage.setItem('rustx-appearance-v1', 'unexpected'); expect(readTheme()).toBe('light');
+ localStorage.setItem('rustx-appearance-v1', 'unexpected'); expect(readTheme()).toBe('system');
 });
 it('Goal Tool labels describe native outcomes while preserving exact tool identity', () => {
  const tool: ForegroundToolExecution = { call_id: 'goal-call', tool_id: 'native.create_goal', name: 'create_goal', state: { type: 'assembled', arguments: '{}' } } as ForegroundToolExecution;

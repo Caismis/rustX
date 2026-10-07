@@ -22,7 +22,7 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
    await expect(settings.getByText(/Revision:/)).toBeVisible();
    await settings.getByLabel('max_connections', { exact: true }).fill('19');
    await settings.getByRole('button', { name: 'Save App Server policy', exact: true }).click();
-   await expect(settings.getByText('App Server policy saved. Check the status above to confirm it has taken effect.')).toBeVisible();
+   await expect(settings.getByText('App Server policy saved. Native coordination owns application.')).toBeVisible();
    await expect(settings.getByText('Saved process policy is active.')).toBeVisible();
    const source = await remote.client.call('configuration/sourcesRead', { target: { kind: 'user' } }, 'source_settings');
    expect(source.projection.process_bindings?.max_connections).toBe(19);
@@ -34,9 +34,9 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
    // native effective value while authoring none of it.
    await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
    const tools = settings.getByRole('form', { name: 'Built-in tools', exact: true });
-   await tools.getByRole('button', { name: 'Configuration details', exact: true }).click();
+   await tools.getByRole('button', { name: 'Source revision & replacement', exact: true }).click();
    await expect(settings.getByRole('form', { name: 'Built-in tools', exact: true }).getByText('Inherited — no Workspace override')).toBeVisible();
-   await tools.getByRole('button', { name: 'Configuration details', exact: true }).click();
+   await tools.getByRole('button', { name: 'Source revision & replacement', exact: true }).click();
    await expect(settings.getByRole('button', { name: 'Save Built-in tools', exact: true })).toBeDisabled();
    // An explicit edit against that displayed value is Workspace A's own draft.
    await settings.getByLabel('read', { exact: true }).uncheck();
@@ -54,7 +54,7 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
    await expect(settings.getByLabel('read', { exact: true })).not.toBeChecked();
    await expect(settings.getByLabel('write', { exact: true })).toBeChecked();
    await settings.getByRole('button', { name: 'Save Built-in tools', exact: true }).click();
-   await expect(settings.getByText('Built-in tools saved. Check the status above to confirm it has taken effect.')).toBeVisible();
+   await expect(settings.getByText('Built-in tools saved. Native coordination owns application.')).toBeVisible();
    const authored = await f.workspaceHost.host.configureWorkspace(a.id, f.endpoint, { kind: 'read' });
    if (authored.kind !== 'read') throw new Error('expected a read outcome');
    expect(authored.projection.workspace?.authored?.agent?.tools?.builtin).not.toContain('read');

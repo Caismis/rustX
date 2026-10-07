@@ -498,6 +498,7 @@
         "../../presentation/settings/SettingsContent.module.css",
         "../../presentation/settings/SettingsRoot",
         "../../workspaces/host",
+        "../appearance",
         "./ConnectionSettings",
         "./advanced/AdvancedPage",
         "./agent/AgentPage",
@@ -522,7 +523,7 @@
         "Harness source merge and model catalog authority"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "fa7c52f4df893776c3b98951b2a369dccb04d259266d08470a413749dcfc3d10",
+      "local_sha256": "4ef8887a29d72f29c946bfa88d37237d3c3ecc3614b345272a47b0f4d30f4d5c",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-model-selection/src/client/ModelSelect.tsx",
@@ -3289,7 +3290,7 @@
         "Host locale persistence",
         "dynamic language registration"
       ],
-      "local_sha256": "346a8cd04ad10195fe06f45b72c4a178b9442b09a119ea052ce60feefa4431f0",
+      "local_sha256": "c4bb7fecd16a05c5bd69d43e3fe558621609be7d25f64a500072fb9e0ddef28e",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -5435,6 +5436,37 @@
       ],
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "local_sha256": "8b8efac648dc9d9d925674efe32e9584f0fd69d9dd23f4d32c5f4bb207413db2",
+      "classification": "A"
+    },
+    {
+      "upstream": "packages/client/ui-theme/src/client/AppearanceRow.tsx",
+      "destination": "web-console/src/presentation/settings/AppearanceRow.tsx",
+      "treatment": "Ported three preference cubes and selected appearance from Harness. Browser preference remains separate from resolved system color scheme.",
+      "upstream_sha256": "88778d6678654a337ade450289ada6e51aa5bcd19f4e8f5e9b135f7f4da3585e",
+      "retained_dependencies": [
+        "../primitives/icons",
+        "./AppearanceRow.module.css"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Host preference storage and Cordis slots"
+      ],
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "local_sha256": "bb58170191b1b011c84bc183ae9d86b37f5d17b0ace02c18c5d083f665d180b8",
+      "classification": "A"
+    },
+    {
+      "upstream": "packages/client/ui-theme/src/client/AppearanceRow.module.css",
+      "destination": "web-console/src/presentation/settings/AppearanceRow.module.css",
+      "treatment": "Ported three preference cubes and selected appearance from Harness. Browser preference remains separate from resolved system color scheme. Resolves upstream radius-xl to its 20px value; decorative icon wrapper preserves the 16px icon box.",
+      "upstream_sha256": "2e1f8f44ee41256aaf6af103d38edb7220a3e0a82099be8e9d3e0b75a5e4f6c4",
+      "retained_dependencies": [],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Host preference storage and Cordis slots"
+      ],
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "local_sha256": "d94ebe864be9009234d11abc16e8ba41458219dc8516243b1c38190e7e6dbb9d",
       "classification": "A"
     }
   ],

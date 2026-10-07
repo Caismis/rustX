@@ -22,7 +22,7 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     // Global Settings opens at General, one of exactly six product pages.
     await expect(page.getByRole('tablist', { name: 'Settings pages' }).getByRole('tab')).toHaveText(['General', 'Models', 'Agent', 'Tools & Permissions', 'Extensions', 'Advanced']);
     expect(await selectedSettingsPage(page)).toBe('General');
-    const saved = async (unit: string) => { await expect(settings.getByText(`${unit} saved. Check the status above to confirm it has taken effect.`)).toBeVisible(); };
+    const saved = async (unit: string) => { await expect(settings.getByText(`${unit} saved. Native coordination owns application.`)).toBeVisible(); };
     const row = (name: string) => settings.getByRole('row', { name, exact: true });
     await openSettingsPage(page, 'Models'); await expandModelAuthoring(page);
     await settings.getByLabel('New Provider identity').fill('acceptance');

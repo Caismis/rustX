@@ -968,7 +968,6 @@ it('S2-12 no global state framework, router, second design system or form devtoo
 
 it('S2-12 React Aria and TanStack Form stay bounded to their declared interaction owners', () => {
   expect(importers('react-aria-components')).toEqual([
-    'src/app/settings/general/GeneralPage.tsx', // Accessible appearance radio cards.
     'src/app/settings/models/ModelsPage.tsx',
     'src/app/settings/primitives/aria.tsx',
     'src/presentation/settings/SettingsRoot.tsx',

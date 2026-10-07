@@ -30,8 +30,7 @@ for (const mode of ['settled', 'streaming', 'tools', 'error', 'approval', 'quest
  if (mode === 'selectors') {
  await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
  await page.getByRole('button', { name: 'Settings', exact: true }).click();
- await page.getByRole('radiogroup', { name: 'Theme', exact: true }).getByText('Dark', { exact: true }).click();
- await expect(page.getByRole('radio', { name: 'Dark', exact: true })).toBeChecked();
+ await page.getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: 'Dark', exact: true }).click();
  await page.getByRole('button', { name: 'Close Settings' }).click();
  await expectStableScreenshot(page, 'agent-dark-desktop.png');
  await page.setViewportSize({ width: 390, height: 844 });

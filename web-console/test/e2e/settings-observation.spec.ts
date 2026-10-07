@@ -70,7 +70,7 @@ test('publications and an acknowledgement during outstanding convergence reads c
     await expect(settings.getByText(/Revision:/)).toBeVisible();
     const field = settings.getByLabel('max_connections', { exact: true });
     const save = settings.getByRole('button', { name: 'Save App Server policy', exact: true });
-    const notice = settings.getByText('App Server policy saved. Check the status above to confirm it has taken effect.');
+    const notice = settings.getByText('App Server policy saved. Native coordination owns application.');
     // Settle a save whose acknowledgement already landed: release held
     // authoritative reads one at a time until the post-commit read is adopted.
     // Each stale or superseded read may owe exactly one more bounded read.
@@ -143,7 +143,7 @@ test('a delayed write acknowledgement cannot regress a newer authoritative sourc
     // The delayed acknowledgement settles only the save outcome. The visible
     // whole projection stays the authoritative one and nothing is replayed.
     probe.releaseWrites();
-    await expect(settings.getByText('App Server policy saved. Check the status above to confirm it has taken effect.')).toBeVisible();
+    await expect(settings.getByText('App Server policy saved. Native coordination owns application.')).toBeVisible();
     await expect(revision).toHaveText(observed);
     expect(probe.writes()).toBe(1);
   } finally { await remote.shutdown(); await f.stop(false); }

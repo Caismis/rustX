@@ -1,5 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
+  "appearance.system": "System",
   "policy.foreground_only": "Foreground only",
   "policy.background_only": "Background only",
   "policy.model_selectable": "Model selectable",
@@ -522,6 +523,7 @@ export const en = {
 } as const;
 export type SettingsKey = keyof typeof en;
 export const zh = {
+  "appearance.system": "跟随系统",
   "policy.foreground_only": "仅前台",
   "policy.background_only": "仅后台",
   "policy.model_selectable": "由模型选择",

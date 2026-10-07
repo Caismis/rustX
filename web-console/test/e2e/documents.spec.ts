@@ -129,7 +129,7 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
     await panel.getByRole('button', { name: 'Retry preview', exact: true }).click();
     await expect(panel.locator('.textLayer')).toContainText('page 1'); await close();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Theme', 'Dark');
+    await page.getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: 'Dark', exact: true }).click();
     await page.getByRole('button', { name: 'Close Settings', exact: true }).click();
     await open('sample.pdf'); await expect(panel.locator('.textLayer')).toContainText('page 1');
     await page.screenshot({ animations: 'disabled', path: info.outputPath('pdf-dark.png') });
