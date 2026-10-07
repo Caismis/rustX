@@ -7,3 +7,4 @@ minimumReleaseAgeExclude:
 
 allowBuilds:
   node-pty: true
+  koffi: true
