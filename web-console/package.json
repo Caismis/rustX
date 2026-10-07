@@ -9,17 +9,19 @@
     "node": ">=24"
   },
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
+    "dev": "pnpm build:host && vite --host 127.0.0.1",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "build": "vite build && node scripts/provenance.ts --artifact",
+    "test": "pnpm build:host && vitest run",
+    "build": "pnpm build:host && vite build && node scripts/provenance.ts --artifact",
     "preview": "vite preview --host 127.0.0.1",
     "test:e2e": "pnpm build && bash scripts/browser-tests.sh",
     "test:e2e:update": "RUSTX_SCREENSHOT_UPDATE=1 pnpm test:e2e",
     "dogfood:server": "node scripts/dogfood.ts",
     "check:provenance": "node scripts/provenance.ts && node scripts/notices.ts",
     "check:i18n": "node scripts/check-i18n.ts",
-    "test:issue-420-performance": "vitest run --config vite.performance.config.ts"
+    "test:issue-420-performance": "vitest run --config vite.performance.config.ts",
+    "install": "node-gyp rebuild --directory host/workspace-fs",
+    "build:host": "node-gyp rebuild --directory host/workspace-fs"
   },
   "dependencies": {
     "@base-ui/react": "1.8.0",

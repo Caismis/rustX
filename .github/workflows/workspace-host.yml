@@ -1,0 +1,40 @@
+name: Workspace Host platform conformance
+
+on:
+  push:
+    paths:
+      - '.github/workflows/workspace-host.yml'
+      - 'web-console/host/**'
+      - 'web-console/src/workspaces/**'
+      - 'web-console/test/workbench-host.test.ts'
+      - 'web-console/package.json'
+      - 'web-console/pnpm-lock.yaml'
+      - 'web-console/pnpm-workspace.yaml'
+
+permissions:
+  contents: read
+
+jobs:
+  workspace-host:
+    name: Workspace filesystem and PTY (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install pinned dependencies and compile POSIX binding
+        working-directory: web-console
+        run: |
+          corepack enable
+          corepack install
+          pnpm install --frozen-lockfile
+          pnpm build:host
+      - name: Real filesystem and PTY boundaries
+        working-directory: web-console
+        run: pnpm exec vitest run test/workbench-host.test.ts

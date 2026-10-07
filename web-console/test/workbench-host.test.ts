@@ -1,15 +1,15 @@
 // @vitest-environment node
 import { afterEach, expect, it, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, symlinkSync, realpathSync, renameSync, openSync, closeSync, constants, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { workspaceFile, WorkspaceTerminals } from '../host/workbench';
+import { workspaceFile, workspaceDescriptors, WorkspaceTerminals } from '../host/workbench';
 import { LocalWorkspaceHost } from '../host/workspaces';
 const directories: string[] = [];
 const services: WorkspaceTerminals[] = [];
 afterEach(() => { vi.unstubAllEnvs(); services.splice(0).forEach(service => service.close()); directories.splice(0).forEach(path => rmSync(path, { recursive: true, force: true })); });
-function directory() { const path = mkdtempSync(join(tmpdir(), 'rustx-workbench-')); directories.push(path); return path; }
+function directory() { const path = realpathSync(mkdtempSync(join(tmpdir(), 'rustx-workbench-'))); directories.push(path); return path; }
 it('lists and reads relative files, rejects traversal, symlinks, binary and oversized content', () => {
   const root = directory(), outside = directory(); mkdirSync(join(root, 'nested')); writeFileSync(join(root, 'nested/a.txt'), 'hello'); writeFileSync(join(outside, 'secret'), 'outside'); symlinkSync(outside, join(root, 'escape'));
   expect(workspaceFile(root, '', false).entries?.map(row => row.name)).toContain('nested');
@@ -43,4 +43,26 @@ it('Host rereads the exact native target and rejects a replaced authority before
     expect(await host.workbench(scope, call)).toEqual({ text: 'A' }); expect(calls).toBe(1);
     await expect(host.workbench({ ...scope, authorityId: 'retired' }, call)).rejects.toThrow(); expect(calls).toBe(1);
   } finally { host.close(); }
+});
+
+it('held directory descriptors survive path replacement without following its replacement symlink', () => {
+  const root = directory(), outside = directory();
+  mkdirSync(join(root, 'nested')); writeFileSync(join(root, 'nested/a.txt'), 'inside'); writeFileSync(join(outside, 'a.txt'), 'outside');
+  const parent = openSync(root, constants.O_RDONLY | constants.O_DIRECTORY);
+  const held = workspaceDescriptors.openChild(parent, 'nested', true);
+  try {
+    renameSync(join(root, 'nested'), join(root, 'retained')); symlinkSync(outside, join(root, 'nested'));
+    expect(() => workspaceDescriptors.openChild(parent, 'nested', true)).toThrow();
+    expect(workspaceDescriptors.entries(held).map(entry => entry.name.toString())).toEqual(['a.txt']);
+    const file = workspaceDescriptors.openChild(held, 'a.txt', false);
+    try { expect(readFileSync(file, 'utf8')).toBe('inside'); } finally { closeSync(file); }
+    for (const name of ['', '..', '.', 'a/b', 'a\0b']) expect(() => workspaceDescriptors.openChild(held, name, false)).toThrow();
+  } finally { closeSync(held); closeSync(parent); }
+});
+it('bounds native directory iteration and preserves UTF-8 filename identity', () => {
+  const root = directory(), name = '\ufeff文件.txt'; writeFileSync(join(root, name), 'unicode');
+  expect(workspaceFile(root, '', false).entries?.[0].name).toBe(name);
+  expect(workspaceFile(root, name, true).text).toBe('unicode');
+  for (let i = 0; i < 2000; i++) writeFileSync(join(root, String(i)), '');
+  expect(() => workspaceFile(root, '', false)).toThrow('2000');
 });

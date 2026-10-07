@@ -1,27 +1,30 @@
 /** Host-owned workspace browsing and PTYs. Never imported into the browser. */
-import { constants, openSync, closeSync, readdirSync, fstatSync, readSync, existsSync } from 'node:fs';
+import { constants, openSync, closeSync, fstatSync, readSync, existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { spawn, type IPty } from 'node-pty';
 import { desktopEnvironment } from './desktop.ts';
 import type { WorkbenchRequest, WorkbenchResult } from '../src/workspaces/workbench.ts';
+export const workspaceDescriptors = createRequire(import.meta.url)('./workspace-fs/build/Release/workspace_fs.node') as {
+  openChild(fd: number, name: string, directory: boolean): number;
+  entries(fd: number): { name: Buffer; directory: boolean; link: boolean }[];
+};
 const MAX_OUTPUT = 256 * 1024;
 interface TerminalState { owner: string; shell: string; pty: IPty; output: string; offset: number; exited: boolean; listeners: Set<() => void>; done: Promise<void> }
 /** Descriptor-relative traversal rejects symlinks at every component, including
- * ancestors of the authorized root. Linux procfs exposes each held directory. */
+ * ancestors of the authorized root. POSIX openat/fdopendir work on Linux and macOS. */
 export function workspaceFile(cwd: string, path: string, read: boolean): WorkbenchResult {
-  if (process.platform !== 'linux') throw new Error('Workspace file browsing requires a Linux Product Host');
   if (typeof path !== 'string' || path.length > 4096 || path.startsWith('/') || path.split('/').some(p => p === '..' || p === '.' || p.includes('\0'))) throw new Error('Invalid workspace path');
   let fd = openSync('/', constants.O_RDONLY | constants.O_DIRECTORY);
   try {
     const parts = [...cwd.split('/').filter(Boolean), ...path.split('/').filter(Boolean)];
     parts.forEach((part, index) => {
       const directory = index < parts.length - 1 || !read;
-      const next = openSync(`/proc/self/fd/${fd}/${part}`, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK | (directory ? constants.O_DIRECTORY : 0));
+      const next = workspaceDescriptors.openChild(fd, part, directory);
       closeSync(fd); fd = next;
     });
     if (!read) {
-      const entries = readdirSync(`/proc/self/fd/${fd}`, { withFileTypes: true });
-      if (entries.length > 2000) throw new Error('Directory exceeds 2000 entries');
-      return { entries: entries.map(entry => ({ name: entry.name, directory: entry.isDirectory(), link: entry.isSymbolicLink() })).sort((a, b) => Number(b.directory) - Number(a.directory) || a.name.localeCompare(b.name)) };
+      const entries = workspaceDescriptors.entries(fd).map(entry => ({ ...entry, name: new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(entry.name) }));
+      return { entries: entries.sort((a, b) => Number(b.directory) - Number(a.directory) || a.name.localeCompare(b.name)) };
     }
     const stat = fstatSync(fd);
     if (!stat.isFile() || stat.size > 1024 * 1024) throw new Error('Preview supports regular text files up to 1 MiB');

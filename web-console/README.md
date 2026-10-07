@@ -479,8 +479,8 @@ applications, authorization, launch feedback and platform limitations.
 The conversation header's right-panel button opens a Start page with Workspace
 files and New terminal. Files are read from the current native Session's cwd;
 paths are relative, symlinks are not followed, directory pages are bounded to
-2,000 entries, and text previews to 1 MiB. Descriptor-relative browsing currently
-requires a Linux Product Host. Remote/unmapped Hosts do not gain filesystem access.
+2,000 entries, and text previews to 1 MiB. Descriptor-relative browsing uses the same POSIX `openat`/`fdopendir`
+implementation on Linux and macOS. Remote/unmapped Hosts do not gain filesystem access.
 
 Terminals use Host-owned `node-pty` processes and lazy-loaded xterm.js. Choose an
 installed shell on Start, open up to eight terminals per Host, switch tabs, or
@@ -492,8 +492,12 @@ persisted across Host restarts. These are user-operated shells with the Host
 user's filesystem permissions, independent of agent approval policies. Host
 transport/provider secrets are not copied into the shell environment.
 
-Run `pnpm install --frozen-lockfile` after updating. The reviewed `node-pty` build
+Run `pnpm install --frozen-lockfile` and `pnpm build:host` after updating. The reviewed `node-pty` build
 is enabled in `pnpm-workspace.yaml`; Linux needs Python, make, a C++ compiler and
-Node headers for its native addon. Browser code never imports that addon. The
+Node headers for native addons; macOS needs Python and Xcode Command Line Tools.
+The small Node-API workspace filesystem binding exposes descriptor operations
+missing from `node:fs`, without relying on `/proc` or path-based reopening.
+Development, build and test commands rebuild it automatically. Browser code
+never imports these addons. The
 workbench HTTP route uses the same authenticated carrier and native Session/node
 admission as the existing desktop workspace action.
