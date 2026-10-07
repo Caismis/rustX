@@ -39,11 +39,11 @@ process.stdout.write(JSON.stringify({denied,network,secret:process.env.RUSTX_OFF
       await writeFile(join(root,'child.mjs'), `import fs from 'node:fs';fs.writeFileSync('pending','ready');fs.renameSync('pending','ready');setInterval(()=>{},1000);`);
       await writeFile(join(root,'parent.mjs'), `import {spawn} from 'node:child_process';spawn(process.execPath,['child.mjs'],{stdio:'inherit'});setInterval(()=>{},1000);`);
       const work=runMacOfficeSandbox(root,[node,join(root,'parent.mjs')],[resolve(dirname(node),'..')],controller.signal);
-      const rejection=expect(work).rejects.toThrow('obsolete');
-      await admitted;
+      const outcome=work.then(()=>({error:new Error('Unexpected success')}),error=>({error}));
+      await Promise.race([admitted, outcome.then(({error})=>{throw error})]);
       controller.abort();
       // close cannot fire while either process retains the inherited stdout pipe.
-      await rejection;
+      expect((await outcome).error.message).toBe('obsolete');
     } finally { watcher.close();controller.abort();await rm(root,{recursive:true,force:true}); }
   });
   it.each(['docx','pptx'] as const)('native engine renders %s as a real PDF', async extension => {

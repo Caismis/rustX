@@ -12,7 +12,10 @@ const literal = (path: string) => JSON.stringify(path);
 export function macOfficeProfile(directory: string, runtimeRoots: string[]): string {
   return `(version 1)
 (deny default)
-(allow process-fork process-exec signal sysctl-read mach-lookup)
+(allow process-fork process-exec sysctl-read mach-lookup dynamic-code-generation)
+(allow signal (target children))
+(allow process-info* (target self))
+(allow file-map-executable ${[...runtimeRoots, '/System', '/usr/lib'].map(path => `(subpath ${literal(path)})`).join(' ')})
 (allow file-read-metadata)
 (allow file-read* ${[directory, ...runtimeRoots, '/System', '/usr/lib', '/usr/share', '/Library/Fonts'].map(path => `(subpath ${literal(path)})`).join(' ')})
 (allow file-read* (literal "/dev/null") (literal "/dev/random") (literal "/dev/urandom"))
@@ -51,12 +54,12 @@ export async function runMacOfficeSandbox(directory: string, command: string[], 
       else if (!failure) chunks.push(chunk);
     });
     child.once('error', () => { failure ??= new Error('converter_unavailable'); });
-    child.once('close', code => {
+    child.once('close', (code, exitSignal) => {
       clearTimeout(timer); signal.removeEventListener('abort', abort);
       // Retire any residual descendants before releasing private files or the seat.
       killGroup();
       if (failure) reject(failure);
-      else if (code !== 0) reject(new Error('converter_failure', { cause: diagnostic }));
+      else if (code !== 0) reject(new Error('converter_failure', { cause: new Error(`exit=${code}, signal=${exitSignal}: ${diagnostic}`) }));
       else resolveResult(Buffer.concat(chunks));
     });
   });
