@@ -29,10 +29,12 @@ export async function runMacOfficeSandbox(directory: string, command: string[], 
   signal.throwIfAborted();
   return await new Promise<Buffer>((resolveResult, reject) => {
     const child = spawn('/usr/bin/sandbox-exec', ['-f', profile, ...command], {
-      detached: true, cwd: directory, stdio: ['ignore', 'pipe', 'ignore'],
+      detached: true, cwd: directory, stdio: ['ignore', 'pipe', 'pipe'],
       env: { PATH: '/usr/bin:/bin', HOME: directory, TMPDIR: directory, LANG: 'en_US.UTF-8' },
     });
     const chunks: Buffer[] = []; let size = 0, failure: Error | undefined;
+    let diagnostic = '';
+    child.stderr.on('data', (chunk: Buffer) => { diagnostic = (diagnostic + chunk.toString()).slice(0, 8192); });
     const killGroup = () => {
       if (!child.pid) return;
       try { process.kill(-child.pid, 'SIGKILL'); }
@@ -54,7 +56,7 @@ export async function runMacOfficeSandbox(directory: string, command: string[], 
       // Retire any residual descendants before releasing private files or the seat.
       killGroup();
       if (failure) reject(failure);
-      else if (code !== 0) reject(new Error('converter_failure'));
+      else if (code !== 0) reject(new Error('converter_failure', { cause: diagnostic }));
       else resolveResult(Buffer.concat(chunks));
     });
   });

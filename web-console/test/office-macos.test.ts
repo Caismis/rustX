@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { watch } from 'node:fs';
 import { mkdtemp, realpath, writeFile, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
@@ -27,11 +28,36 @@ process.stdout.write(JSON.stringify({denied,network,secret:process.env.RUSTX_OFF
       await rm(root,{recursive:true,force:true});await rm(outside,{recursive:true,force:true});
     }
   });
+  it('cancellation closes the entire process group before settling its inherited output pipe', async () => {
+    const root=await realpath(await mkdtemp(join(tmpdir(),'rustx-mac-cancel-')));
+    const node=await realpath(process.execPath);
+    const controller=new AbortController();
+    let ready!:()=>void;
+    const admitted=new Promise<void>(resolve=>{ready=resolve});
+    const watcher=watch(root,(_event,name)=>{if(name==='ready')ready()});
+    try {
+      await writeFile(join(root,'child.mjs'), `import fs from 'node:fs';fs.writeFileSync('pending','ready');fs.renameSync('pending','ready');setInterval(()=>{},1000);`);
+      await writeFile(join(root,'parent.mjs'), `import {spawn} from 'node:child_process';spawn(process.execPath,['child.mjs'],{stdio:'inherit'});setInterval(()=>{},1000);`);
+      const work=runMacOfficeSandbox(root,[node,join(root,'parent.mjs')],[resolve(dirname(node),'..')],controller.signal);
+      const rejection=expect(work).rejects.toThrow('obsolete');
+      await admitted;
+      controller.abort();
+      // close cannot fire while either process retains the inherited stdout pipe.
+      await rejection;
+    } finally { watcher.close();controller.abort();await rm(root,{recursive:true,force:true}); }
+  });
   it.each(['docx','pptx'] as const)('native engine renders %s as a real PDF', async extension => {
     const bytes=await readFile(new URL(`./fixtures/documents/sample.${extension}`,import.meta.url));
     const pdf=await convertOffice(bytes,extension,new AbortController().signal);
     expect(pdf.subarray(0,5).toString()).toBe('%PDF-');
     expect(pdf.length).toBeGreaterThan(1000);
-    expect(pdf.toString('latin1')).toMatch(/\/Type\s*\/Page\b/);
+    const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
+    const task=getDocument({data:new Uint8Array(pdf),useSystemFonts:false});
+    try {
+      const document=await task.promise;
+      const content=await(await document.getPage(1)).getTextContent();
+      const text=content.items.map(item=>'str' in item?item.str:'').join(' ');
+      expect(text).toContain(extension==='docx'?'rustX document preview':'rustX presentation preview');
+    } finally { await task.destroy(); }
   },20000);
 });
