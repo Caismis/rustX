@@ -5,7 +5,7 @@ import type { ProductHostWorkspaces } from '../../workspaces/host';
 import type { AttachmentTarget } from '../../../../protocol/app-server/v36';
 import type { FirstSubmitPort } from './first-submit';
 
-export function firstSubmitPort(client: AppServerClient, host: ProductHostWorkspaces, navigationCurrent: () => boolean, opened: (id: string) => (() => boolean) | void): FirstSubmitPort {
+export function firstSubmitPort(client: AppServerClient, host: ProductHostWorkspaces, navigationCurrent: () => boolean, opened: (id: string) => (() => boolean) | void, existing = false): FirstSubmitPort {
   const { generation, authorityRevision, endpoint } = client.getSnapshot();
   let target: AttachmentTarget | undefined;
   let navigation = navigationCurrent;
@@ -22,6 +22,13 @@ export function firstSubmitPort(client: AppServerClient, host: ProductHostWorksp
   };
   return {
     current,
+    async readExisting(id) {
+      await client.waitForAttachment(id, current);
+      requireCurrent();
+      const attached = client.target(id);
+      target = attached;
+      return { id, node: client.getSnapshot().views[id]?.nodeId, conversation: attached.conversation_id };
+    },
     async create(draft, acknowledged) {
       if (!endpoint || !draft.workspaceId) throw new Error('Choose a registered Workspace first.');
       const { cwd } = await host.resolveWorkspace(draft.workspaceId, endpoint);
@@ -41,7 +48,10 @@ export function firstSubmitPort(client: AppServerClient, host: ProductHostWorksp
       navigation = opened(session.id) ?? navigation;
     },
     async attach(session) {
-      await client.attach(session.id, session.node, current, attached => { target = attached; });
+      if (existing) {
+        await client.waitForAttachment(session.id, current);
+        bindSession(session);
+      } else await client.attach(session.id, session.node, current, attached => { target = attached; });
       requireCurrent();
       if (!target) throw new Error('Created Session was not attached.');
       if (target.conversation_id !== session.conversation) throw new Error('Created Session attached a different Conversation.');

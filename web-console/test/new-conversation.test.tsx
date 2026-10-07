@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConversationComposer } from '../src/app/new-conversation/ConversationComposer';
@@ -227,4 +228,46 @@ it('a transport drop keeps the draft mounted with no Product Host traffic, and t
   server.held.add('session/create');
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
   expect((await server.waitFor('session/create', 1)).params).toEqual({ settings: { cwd: '/workspace' } });
+});
+
+it.each(['ready', 'navigation', 'disconnect', 'rejection', 'branch'] as const)('existing conversation accepts a prompt during connection: %s', async outcome => {
+  server = new Server(); await server.connect();
+  const host = server.workspaceHost, authority = new WorkspaceAuthority(host), associations = new WorkspaceAssociations(server.client, authority);
+  const navigation = new NavigationEpoch(), current = navigation.capture(), opened = vi.fn();
+  server.held.add('session/attach');
+  if (outcome === 'rejection') server.handlers.set('session/attach', () => { throw new RpcFailure({ code: -32000, message: 'Connection failed' }); });
+  if (outcome === 'branch') server.nodeSnapshots.set('chosen-node', { ...snapshot('A'), conversation_id: 'chosen-conversation' });
+  const attaching = server.client.attach('A', outcome === 'branch' ? 'chosen-node' : undefined).catch(() => {});
+  const request = await server.waitFor('session/attach', 1);
+  function Seat() {
+    const state = useSyncExternalStore(server.client.subscribe, server.client.getSnapshot);
+    return <ConversationComposer client={server.client} host={host} authority={authority} associations={associations} binding="existing-A" current={current} opened={opened} activeView={state.views.A}
+      active={{ disabled: state.views.A?.attachment !== 'attached', submitDisabled: false, busy: false, active: false, onSend: async () => false, onUpload: async () => [], onCancel: () => {} }}/>;
+  }
+  await act(async () => { render(<Seat/>); });
+  const input = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
+  expect(input.disabled).toBe(false);
+  fireEvent.change(input, { target: { value: 'Send after connecting' } });
+  await act(async () => fireEvent.change(document.querySelector('input[type=file]')!, { target: { files: [new File(['queued'], 'queued.txt', { type: 'text/plain' })] } }));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
+  expect(screen.getByText('Connecting… Your message will send when ready.')).toBeTruthy();
+  expect(methods().filter(method => method === 'turn/start')).toHaveLength(0);
+  if (outcome === 'navigation') navigation.invalidate();
+  await act(async () => {
+    if (outcome === 'disconnect') server.socket.close(); else server.reply(request);
+    await attaching;
+  });
+  await waitFor(() => expect(server.client.firstSubmissions.draft('existing-A')?.phase).toBe(['ready', 'branch'].includes(outcome) ? 'admitted' : 'failed'));
+  expect(methods().filter(method => method === 'turn/start')).toHaveLength(['ready', 'branch'].includes(outcome) ? 1 : 0);
+  expect(methods().filter(method => method === 'session/attach')).toHaveLength(1);
+  expect(methods()).not.toContain('session/create');
+  expect(opened).not.toHaveBeenCalled();
+  if (!['ready', 'branch'].includes(outcome)) {
+    expect(input.value).toBe('Send after connecting');
+    expect(screen.getByText('queued.txt')).toBeTruthy();
+  }
+  if (outcome === 'branch') {
+    const sent = server.requests.find(row => row.request.method === 'turn/start')!.request;
+    if (sent.method === 'turn/start') expect(sent.params.target.conversation_id).toBe('chosen-conversation');
+  }
 });

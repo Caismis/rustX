@@ -926,6 +926,17 @@ export class AppServerClient {
       this.setSession(id, { deleting: false, deletionRecovery: undefined, deletionCommitted: undefined, recoveringDeletion: false, error: undefined });
     }
   }
+  /** Wait for the already requested attachment; never start or retry one. */
+  async waitForAttachment(id: string, current: () => boolean): Promise<void> {
+    const generation = this.state.generation;
+    const pending = this.attachmentChanges.get(id);
+    if (pending?.kind === 'attach') await pending.work;
+    const view = this.state.views[id];
+    if (!current() || !this.current(generation) || view?.attachmentIntent !== 'wanted'
+      || view.attachment !== 'attached' || !view.target) {
+      throw new Error(view?.error ?? 'Conversation connection changed. Your input was not sent.');
+    }
+  }
   /** Explicit Open / Attach gesture. Visibility itself does not acquire a claim. */
   attach(id: string, nodeId?: string, navigationCurrent: () => boolean = () => true, attached?: (target: AttachmentTarget) => void): Promise<void> {
     if (nodeId && this.state.views[id]?.target && this.state.views[id]?.nodeId !== nodeId) return Promise.reject(new Error('Use branch switching to open another node.'));

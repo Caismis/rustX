@@ -1610,3 +1610,11 @@ The native catalog persists `last_prompt_at`, sorts before pagination, and emits
 catalog invalidations on activity so unseen Sessions can enter the current page.
 Startup, composition, and storage recovery derive missed activity from the durable
 message ledger; no browser clock, focus event, rename, or model output moves a row.
+
+Connection-wait submission retains Harness's resident composer and one primary
+submission gesture (local `5badb15009ae1756c3afe0ae0cef1faafc290ccc`,
+`packages/client/ui-conversation/src/client/skeleton/InputBar.tsx` and
+`contract/composer-submission.ts`). RustX owns the local pending draft while its
+existing attachment prepares resources. The generic connecting notice does not
+infer MCP status. Only the completed native attachment permits upload and turn
+admission; navigation/transport replacement never replays the pending gesture.

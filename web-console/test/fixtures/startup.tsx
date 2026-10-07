@@ -13,7 +13,8 @@ import '../../src/app/console.css';
 
 // Only the transport is controlled. App, navigation, first-submit owner, client,
 // Product Host admission and all presentation are the production implementations.
-const server = new Server(); server.snapshots.clear();
+const server = new Server();
+if (!new URL(location.href).searchParams.has('existing')) server.snapshots.clear();
 server.workspaceHost.resolveWorkspace = async () => ({ cwd: '/workspace/A' });
 server.workspaceHost.classifyLocations = async paths => paths.map(() => ({ authorized: true, workspaceId: 'workspace-a' }));
 const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], toolCalls: true, reasoning: false };

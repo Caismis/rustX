@@ -145,3 +145,28 @@ for (const language of ['en', 'zh']) test(`lost ready read is reconciled from th
   expect((await methods(page)).filter(m => m === 'session/create')).toHaveLength(1);
   await release(page, 'turn/start'); await expect(page.locator('textarea')).toHaveValue('');
 });
+
+
+test('existing Session accepts text and files before connection, then sends once', async ({ page }) => {
+  await page.goto(`${fixture}?existing`);
+  await page.evaluate(() => { (window as any).startupFixture.allow('session/summary'); (window as any).startupFixture.resumeCatalog(); });
+  await page.locator('button[data-session-id=A]').click();
+  await expect.poll(() => methods(page)).toContain('session/attach');
+  await page.locator('textarea').fill('Ready when connected');
+  await page.locator('input[type=file]').setInputFiles({ name: 'queued.txt', mimeType: 'text/plain', buffer: Buffer.from('queued attachment') });
+  await page.locator('[data-composer-primary]').click();
+  await expect(page.getByText('Connecting… Your message will send when ready.')).toBeVisible();
+  expect((await methods(page)).filter(method => ['turn/start', 'session/uploadPrepare'].includes(method))).toEqual([]);
+  await expect(page.getByText('Retained first input outside this Conversation')).toHaveCount(0);
+  await page.screenshot({ path: 'test-results/existing-connecting.png', fullPage: true });
+  await release(page, 'session/attach');
+  await expect.poll(() => methods(page)).toContain('turn/start');
+  const requests = await page.evaluate(() => (window as any).startupFixture.requests());
+  expect(requests.filter((r: any) => r.method === 'session/attach')).toHaveLength(1);
+  expect(requests.filter((r: any) => r.method === 'turn/start')).toHaveLength(1);
+  expect(requests.filter((r: any) => r.method === 'session/create')).toHaveLength(0);
+  const sent = requests.find((r: any) => r.method === 'turn/start');
+  expect(sent.params.content).toEqual([expect.objectContaining({ type: 'upload' }), { type: 'text', text: 'Ready when connected' }]);
+  await release(page, 'turn/start');
+  await expect(page.locator('textarea')).toHaveValue('');
+});

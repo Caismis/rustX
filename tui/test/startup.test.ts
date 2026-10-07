@@ -137,7 +137,7 @@ it("a controlled A does not block browsing; its conflict occurs only on selectio
   assert.equal(paramsOf(request!, "session/attach").session_id, SESSION_A);
   transport.respondError(request!.id, { code: -32000, message: "A is controlled", data: { kind: "controller_in_use" } });
   await tick();
-  assert.equal(h.feedback.at(-1), `could not open Session ${SESSION_A}: another client already controls this Session`);
+  assert.equal(h.feedback.at(-1), `could not open Session ${SESSION_A}: another client already controls this Session · Input retained; nothing sent.`);
   assert.equal(host.client.closed, undefined);
   assert.equal(host.attached.length, 0);
   assert.equal(h.surfaces.at(-1), selector, "the same picker remains recoverable");
@@ -149,7 +149,7 @@ it("a controlled A does not block browsing; its conflict occurs only on selectio
 });
 
 for (const resume of [true, false]) for (const model of [undefined, "local/initial"]) {
-  it(`${resume ? "empty-catalog resume" : "ordinary startup"} creates and attaches exactly one Session with unchanged remote cwd (model=${model ?? "native default"})`, async () => {
+  it(`${resume ? "empty-catalog resume" : "ordinary startup"} creates and attaches exactly one Session with unchanged remote cwd (model=${model ?? "native default"})`, async (t) => {
     const { host, transport } = await connected();
     const parsed = parseArguments(["--connect", "wss://server.test", "--token-file", "/client/token", "--workspace", "/server/work/../project", ...(resume ? ["--resume"] : []), ...(model ? ["--model", model] : [])]);
     const starting = prepareStartup(host, parsed);
@@ -158,8 +158,11 @@ for (const resume of [true, false]) for (const model of [undefined, "local/initi
     assert.equal(paramsOf(create!, "session/create").settings.cwd, "/server/work/../project");
     assert.deepEqual(paramsOf(create!, "session/create").settings.model, model ? { model } : null);
     transport.respond(create!.id, { type: "session_transition", session: sessionView({ id: SESSION_NEW }) });
+    const focus = await starting;
+    assert.equal(transport.log.count("session/attach"), 0);
+    appFor(t, host, focus);
     await attachment(transport, SESSION_NEW);
-    assert.equal((await starting).session?.sessionId, SESSION_NEW);
+    await finishFocus(transport);
     assert.equal(transport.log.count("session/create"), 1);
     assert.equal(transport.log.count("session/attach"), 1);
     assert.equal(transport.log.count("session/list"), resume ? 1 : 0);
@@ -168,12 +171,13 @@ for (const resume of [true, false]) for (const model of [undefined, "local/initi
   });
 }
 
-it("explicit --session/--node attaches that identity directly without browsing or creating", async () => {
+it("explicit --session/--node attaches that identity directly without browsing or creating", async (t) => {
   const { host, transport } = await connected();
   const starting = prepareStartup(host, parseArguments(["--binary", "rustx", "--session", SESSION_B, "--node", "node_46e1cc43-3b60-768f-a449-f55af17cbce3"]));
+  appFor(t, host, await starting);
   const request = await attachment(transport, SESSION_B);
+  await finishFocus(transport);
   assert.equal(paramsOf(request, "session/attach").node_id, "node_46e1cc43-3b60-768f-a449-f55af17cbce3");
-  assert.equal((await starting).session?.sessionId, SESSION_B);
   assert.equal(transport.log.count("session/list"), 0);
   assert.equal(transport.log.count("session/create"), 0);
   await host.shutdown();
@@ -375,5 +379,38 @@ for (const stage of ["create", "attach"] as const) {
     assert.match(h.feedback.at(-1)!, /no unanswered mutations were resent/);
     await old.onCreate!();
     noControl(next.transport);
+  });
+}
+
+for (const outcome of ["ready", "withdraw", "disconnect", "rejection"] as const) {
+  it(`startup accepts input before attachment and handles ${outcome} without replay`, async (t) => {
+    const { host, transport } = await connected();
+    const focus = await prepareStartup(host, parseArguments(["--binary", "rustx", "--session", SESSION_A]));
+    const h = appFor(t, host, focus);
+    await transport.log.awaitMethod("session/attach");
+    assert.equal(h.editor.disableSubmit, false);
+    h.editor.setText("queued while connecting");
+    h.editor.handleInput("\r");
+    assert.equal(transport.log.count("turn/start"), 0);
+    assert.equal(h.editor.disableSubmit, true);
+    if (outcome === "rejection") {
+      const [request] = await transport.log.awaitMethod("session/attach");
+      transport.respondError(request!.id, { code: -32000, message: "Preparation failed" });
+      await tick();
+      assert.equal(h.editor.getText(), "queued while connecting");
+    } else if (outcome === "disconnect") {
+      transport.fail("socket_error"); await tick();
+      assert.equal(h.editor.getText(), "queued while connecting");
+    } else {
+      if (outcome === "withdraw") h.input("\x1b");
+      await attachment(transport, SESSION_A);
+      await finishFocus(transport);
+      if (outcome === "ready") {
+        const [request] = await transport.log.awaitMethod("turn/start");
+        assert.deepEqual(paramsOf(request!, "turn/start").content, [{ type: "text", text: "queued while connecting" }]);
+      } else assert.equal(h.editor.getText(), "queued while connecting");
+    }
+    assert.equal(transport.log.count("turn/start"), outcome === "ready" ? 1 : 0);
+    assert.equal(transport.log.count("session/attach"), 1);
   });
 }

@@ -46,7 +46,8 @@ import { PromptHistory } from "./components/prompt-history.ts";
 import { ComposerContext } from "./components/composer-context.ts";
 import { PendingInputView } from "./components/pending-input.ts";
 import { isAttemptActive } from "../presentation/state.ts";
-import type { SessionCatalogPage } from "../startup.ts";
+import { sanitizeField } from "../sanitize.ts";
+import type { ConnectingSession, SessionCatalogPage } from "../startup.ts";
 import {
   Container,
   Loader,
@@ -148,6 +149,7 @@ export interface RustxTuiAppOptions {
   reconnect?: () => Promise<AppServerHost>;
   /** Absent while browsing the resume catalog, before explicit selection. */
   session?: AppServerSession;
+  connecting?: ConnectingSession;
   /** `session/create` inputs for Sessions this client creates. */
   sessionSettings: SessionSettings;
   /** A read-only catalog page acquired during resume bootstrap. */
@@ -181,6 +183,8 @@ export class RustxTuiApp {
   #recovering = false;
   #session: AppServerSession | undefined;
   readonly #dispatcher: CommandDispatcher;
+  #initialConnection: ConnectingSession | undefined;
+  #connecting: { queued?: string } | undefined;
   #initialResumePage: SessionCatalogPage | undefined;
   readonly #workspace: string | undefined;
 
@@ -264,6 +268,7 @@ export class RustxTuiApp {
     this.#reconnect = options.reconnect;
     this.#session = options.session;
     this.#initialResumePage = options.resumePage;
+    this.#initialConnection = options.connecting;
     this.#workspace = options.cwd;
 
     this.#tui = new TUI(new ProcessTerminal());
@@ -301,6 +306,10 @@ export class RustxTuiApp {
     const host = this.#host;
     this.#removeConnectionListener = host.client.onClose((error) => {
       if (this.#host !== host || this.#quitting || this.#finished) return;
+      if (this.#connecting) {
+        this.#retainConnectingInput(this.#connecting.queued);
+        this.#connecting = undefined; this.#loader.stop(); this.#activity.clear();
+      }
       this.#deletion?.terminate();
       this.#initialResumePage = undefined;
       this.#reconnectChild = this.#childInspection?.reader.selected;
@@ -493,7 +502,12 @@ export class RustxTuiApp {
       return;
     }
     this.#switching = true;
-    this.#editor.disableSubmit = true;
+    const previousDraft = this.#draft;
+    previousDraft.text = this.#editor.getExpandedText();
+    const connection: { queued?: string } | undefined = changingNode ? undefined : {};
+    this.#connecting = connection;
+    if (connection) { this.#draft = new ComposerDraft(); this.#editor.setText(""); this.#renderConnecting(); }
+    this.#editor.disableSubmit = changingNode;
     const host = this.#host;
     let installed: AppServerSession | undefined;
     try {
@@ -501,17 +515,32 @@ export class RustxTuiApp {
         ? await this.#host.openNode(sessionId, nodeId)
         : await this.#host.attach(sessionId, nodeId);
       if (!this.#isCurrentPresentationLease(lease) || this.#host !== host) return;
+      const typed = this.#editor.getExpandedText();
+      if (connection) { this.#draft = previousDraft; this.#editor.setText(previousDraft.text); }
       this.#bindSession(next);
+      if (connection && typed) this.#editor.setText(typed);
       installed = next;
       // A returning attachment may have folded events while it was off screen,
       // and the server is the only thing entitled to say what it holds now.
       if (this.#session === next) {
         await next.resync();
       }
-      if (this.#session !== next || this.#host.client.closed !== undefined) return;
-      if (editorContent !== undefined) {
+      if (this.#finished || this.#quitting || this.#session !== next || this.#host.client.closed !== undefined) return;
+      if (editorContent !== undefined && (!connection || !this.#editor.getExpandedText())) {
         this.#draft.restore(editorContent);
         this.#editor.setText(this.#draft.text);
+      }
+      this.#connecting = undefined;
+      this.#switching = false;
+      const queued = connection?.queued;
+      if (queued !== undefined) {
+        const typed = this.#editor.getExpandedText();
+        const retainedDraft = this.#draft;
+        this.#draft = new ComposerDraft();
+        const sending = this.#onSubmit(queued, false, false);
+        this.#draft = retainedDraft;
+        this.#editor.setText(typed);
+        void sending;
       }
       this.#refreshDraftLabel();
       this.#showTransient("info", notice ?? `showing session ${sessionId}`);
@@ -519,9 +548,22 @@ export class RustxTuiApp {
     } catch (error: unknown) {
       if (this.#finished || this.#quitting || this.#host !== host ||
           (installed === undefined ? !this.#isCurrentPresentationLease(lease) : this.#session !== installed)) return;
+      if (connection) {
+        this.#retainConnectingInput(connection.queued);
+        const retained = this.#editor.getExpandedText();
+        this.#draft = previousDraft;
+        this.#editor.setText(retained || previousDraft.text);
+        this.#connecting = undefined;
+        this.#loader.stop(); this.#activity.clear();
+        if (this.#session) this.#renderState(this.#session.state);
+        else {
+          this.#startup.clear();
+          this.#startup.addChild(new Text("Connection failed. Press Enter to choose a Session. Your input has been retained.", 1, 0));
+        }
+      }
       this.#showTransient(
         "error",
-        `could not open Session ${sessionId}: ${compactDiagnostic(error)}`,
+        `could not open Session ${sessionId}: ${compactDiagnostic(error)} · Input retained; nothing sent.`,
       );
     } finally {
       if (this.#host === host && !this.#recovering) this.#switching = false;
@@ -571,7 +613,11 @@ export class RustxTuiApp {
       if (state !== undefined) {
         this.#renderState(state);
       }
-      if (this.#session === undefined) {
+      if (this.#initialConnection) {
+        const target = this.#initialConnection;
+        this.#initialConnection = undefined;
+        void this.#focusSession(target.sessionId, target.nodeId, undefined, undefined, this.#presentationLease());
+      } else if (this.#session === undefined) {
         this.#startup.addChild(new Text("Choose a Session to resume. Enter reopens the picker; Ctrl+C exits.", 1, 0));
         const page = this.#initialResumePage;
         this.#initialResumePage = undefined;
@@ -590,6 +636,18 @@ export class RustxTuiApp {
           if (matchesKey(data, "ctrl+r")) void this.#recoverConnection();
           if (matchesKey(data, "ctrl+c")) void this.quit();
           return { consume: true };
+        }
+        if (this.#connecting) {
+          if (matchesKey(data, "ctrl+c")) { void this.quit(); return { consume: true }; }
+          if (matchesKey(data, "escape")) {
+            const queued = this.#connecting.queued;
+            this.#connecting.queued = undefined;
+            this.#retainConnectingInput(queued);
+            this.#editor.disableSubmit = false;
+            this.#renderConnecting();
+            return { consume: true };
+          }
+          return undefined;
         }
         if (this.#session === undefined) {
           if (matchesKey(data, "ctrl+c")) { void this.quit(); return { consume: true }; }
@@ -724,7 +782,18 @@ export class RustxTuiApp {
   }
 
   async #onSubmit(text: string, queue = false, commands = true, preserveDraft = false): Promise<void> {
-    if (this.#switching || this.#finished) return;
+    if (this.#finished) return;
+    if (this.#connecting) {
+      if (!text.trim()) return;
+      if (commands && text.trim().startsWith("/")) { this.#editor.setText(text); return; }
+      if (this.#connecting.queued !== undefined) { this.#editor.setText(text); return; }
+      this.#connecting.queued = text;
+      this.#editor.setText("");
+      this.#editor.disableSubmit = true;
+      this.#renderConnecting();
+      return;
+    }
+    if (this.#switching) return;
     if (commands && /^\/settings(?:\s|$)/.test(text.trim())) {
       const lease = this.#presentationLease();
       const result = await this.#dispatcher.submit(text);
@@ -1643,6 +1712,22 @@ export class RustxTuiApp {
     }
   }
 
+  #retainConnectingInput(text: string | undefined): void {
+    if (text === undefined) return;
+    this.#promptHistory.push(text);
+    if (this.#promptHistory.length > 1000) this.#promptHistory.shift();
+    this.#editor.addToHistory(text);
+    if (!this.#editor.getExpandedText()) this.#editor.setText(text);
+  }
+
+  #renderConnecting(): void {
+    this.#startup.clear(); this.#transcript.clear(); this.#activity.clear(); this.#todos.clear();
+    this.#startup.addChild(new Text("You can send a message while this conversation connects.", 1, 0));
+    if (this.#connecting?.queued !== undefined) this.#transcript.addChild(new Text(sanitizeField(this.#connecting.queued, true), 1, 0));
+    this.#loader.setMessage(this.#connecting?.queued === undefined ? "Connecting…" : "Connecting… Your message will send when ready. Esc to withdraw.");
+    this.#loader.start(); this.#activity.addChild(this.#loader); this.#tui.requestRender();
+  }
+
   /**
    * Rebuilds the visible components from the projection.
    *
@@ -1651,6 +1736,7 @@ export class RustxTuiApp {
    * no Pi component carries state the projection does not have.
    */
   #renderState(state: PresentationState): void {
+    if (this.#connecting) { this.#renderConnecting(); return; }
     if (!hasSubagentSelection(state.agents, this.#selectedAgentId)) {
       this.#selectedAgentId = undefined;
       this.#subagentListFocused = false;
