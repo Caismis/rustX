@@ -47,6 +47,9 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean }
     this.frame = undefined;
     const el = this.viewport.current;
     if (!this.mounted || !el) return;
+    // Native scrolling can precede its scroll event. Adopt reader movement
+    // before a queued layout correction gets a chance to overwrite it.
+    this.onScroll();
     const floor = Math.max(0, el.scrollHeight - el.clientHeight);
     let desired = el.scrollTop;
     const navigation = this.navigation;
@@ -92,23 +95,28 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean }
   private onScroll = () => {
     const el = this.viewport.current!;
     const floor = Math.max(0, el.scrollHeight - el.clientHeight);
-    if (Math.abs(el.scrollTop - Math.min(this.writtenTop, floor)) > 0.5) {
+    const previous = Math.min(this.writtenTop, floor);
+    if (el.scrollTop < previous || Math.abs(el.scrollTop - previous) > 0.5) {
       this.intent++; this.navigation = undefined;
-      this.following = floor - el.scrollTop <= 24;
+      // A small upward gesture is reading intent even inside the bottom
+      // tolerance. Only a downward arrival may re-enable tail following.
+      this.following = el.scrollTop > this.writtenTop && floor - el.scrollTop <= 24;
       this.reading = this.following ? undefined : this.position();
-      this.setState({ detached: !this.following });
+      if (this.state.detached === this.following) this.setState({ detached: !this.following });
       this.publishActive();
     }
     this.writtenTop = el.scrollTop;
   };
   /** Explicit action changes intent; positioning still belongs to the frame. */
   returnToBottom = () => {
+    this.writtenTop = this.viewport.current?.scrollTop ?? this.writtenTop;
     this.intent++; this.navigation = undefined;
     this.explicitLatest = true;
     this.following = true; this.reading = undefined;
     this.setState({ detached: false }); this.markLayoutDirty();
   };
   beginNavigation = () => {
+    this.writtenTop = this.viewport.current?.scrollTop ?? this.writtenTop;
     const intent = ++this.intent;
     this.navigation = undefined; this.following = false; this.reading = this.position();
     this.setState({ detached: true });

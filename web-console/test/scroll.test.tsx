@@ -434,3 +434,36 @@ it('reading remains continuous across prompts, nested anchors, padding and hidde
     expect(v.active).toHaveBeenLastCalledWith(top >= 580 ? 'turn:second' : 'turn:first');
   }
 });
+
+for (const distance of [0.25, 0.5, 1, 6, 23]) it(`upward reader movement of ${distance}px releases tail follow immediately`, () => {
+  const v = coordinatedViewport();
+  v.scroll(800 - distance); v.flush();
+  expect(v.top()).toBe(800 - distance);
+  expect(v.ui.getByRole('button', { name: 'Return to latest' })).toBeTruthy();
+  v.grow(40); v.flush();
+  expect(v.top()).toBe(800 - distance);
+  v.scroll(840); v.flush();
+  v.grow(30); v.flush(); expect(v.top()).toBe(870);
+});
+
+it('actual reader movement wins a queued layout frame even before scroll event delivery', () => {
+  const v = coordinatedViewport();
+  v.grow(40);
+  v.el.scrollTop = 794; // Native scrolling has happened; its scroll event is still queued.
+  v.flush();
+  expect(v.top()).toBe(794);
+  fireEvent.scroll(v.el); v.flush();
+  expect(v.top()).toBe(794);
+  v.grow(40); v.flush(); expect(v.top()).toBe(794);
+});
+
+it('explicit latest and navigation supersede undelivered earlier scroll samples', () => {
+  const v = coordinatedViewport();
+  v.el.scrollTop = 700;
+  v.owner().returnToBottom(); v.flush(); expect(v.top()).toBe(800);
+  v.el.scrollTop = 700;
+  const navigation = v.owner().beginNavigation();
+  expect(navigation.commit('turn:target')).toBe(true);
+  v.flush(); expect(v.top()).toBe(500);
+  expect(navigation.current()).toBe(true);
+});

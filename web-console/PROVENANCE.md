@@ -1635,3 +1635,11 @@ bg-base fade. ConversationSeat publishes its measured height to its body; ledger
 and detail scroll areas reserve that height plus 16px, as Harness does. WebUI's
 Chat does not reserve an outer scrollbar gutter, so the overlay keeps the same
 full-width seat instead of applying Harness's outer-scroller gutter compensation.
+
+Chat bottom-follow repair: reviewed local Harness ui-chat/chat/use-chat-scroll.ts,
+use-chat-reading.ts and use-scroll-follow.ts at 5badb15009. Reader movement takes
+precedence over layout/follow work. WebUI retains its one-frame anchor-based
+scroll owner: upward motion exits following even within the bottom tolerance,
+queued corrections sample native movement before writing, and explicit latest
+or navigation actions acknowledge earlier scrolling. No timer or second scroll
+writer is introduced; returning downward to the floor restores following.

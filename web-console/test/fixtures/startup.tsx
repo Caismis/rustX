@@ -47,6 +47,12 @@ render();
 const handled = new Set<Request>(server.requests.filter(row => row.request.method === 'initialize' || row.request.method === 'session/list').map(row => row.request));
 (window as any).startupFixture = {
   requests: () => server.requests.map(({ request }) => request),
+  async appendSavedReply() {
+    const entry = server.snapshots.get('A')!.transcript.entries!.at(-1)!;
+    if (entry.item.type !== 'message' || entry.item.message.role !== 'assistant') throw Error('Expected saved reply');
+    entry.item.message.content.push({ type: 'text', text: '\n\nLive continuation. ' + 'More response content. '.repeat(80) });
+    await server.client.refresh('A');
+  },
   defaultModel(model: string) { nativeDefault = model; },
   model: () => server.client.getSnapshot().views.created?.snapshot?.model,
   operation: () => server.client.firstSubmissions.session('created'),
