@@ -8,12 +8,20 @@ import { convertOffice } from './converter.ts';
 type SourceBytes = { data: string; file?: DocumentResult['file'] };
 const digest = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
 export async function deriveDocument(request: DocumentRequest, read: () => Promise<SourceBytes>, signal: AbortSignal): Promise<DocumentResult> {
+  return deriveBytes(request.extension, request.digest, read, request.source.kind === 'artifact' ? 256 * 1024 : 512 * 1024, signal);
+}
+
+/** Workspace paths are admitted by the Host; they never become retained native deliveries. */
+export async function deriveWorkspaceOffice(extension: 'docx' | 'pptx', read: () => Promise<SourceBytes>, signal: AbortSignal): Promise<DocumentResult> {
+  const first = await read();
+  return deriveBytes(extension, digest(Buffer.from(first.data, 'base64')), read, 512 * 1024, signal);
+}
+async function deriveBytes(extension: DocumentRequest['extension'], sourceDigest: string, read: () => Promise<SourceBytes>, max: number, signal: AbortSignal): Promise<DocumentResult> {
   const decode = (source: SourceBytes) => {
-    const max = request.source.kind === 'artifact' ? 256 * 1024 : 512 * 1024;
     if (source.data.length > Math.ceil(max / 3) * 4) throw new Error('too_large');
     const bytes = Buffer.from(source.data, 'base64');
     if (bytes.length > max) throw new Error('too_large');
-    if (digest(bytes) !== request.digest) throw new Error('source_changed');
+    if (digest(bytes) !== sourceDigest) throw new Error('source_changed');
     return bytes;
   };
   const source = await read();
@@ -21,7 +29,7 @@ export async function deriveDocument(request: DocumentRequest, read: () => Promi
   const bytes = decode(source);
   const worker = new Worker(new URL('./worker.ts', import.meta.url), {
     execArgv: [], env: {},
-    workerData: { bytes, extension: request.extension },
+    workerData: { bytes, extension },
     resourceLimits: { maxOldGenerationSizeMb: 64, maxYoungGenerationSizeMb: 16, stackSizeMb: 2 },
   });
   let workbook: WorkbookPreview | undefined;
@@ -48,11 +56,11 @@ export async function deriveDocument(request: DocumentRequest, read: () => Promi
     signal.throwIfAborted();
   };
   await reauthorize();
-  if (request.extension === 'xlsx') {
+  if (extension === 'xlsx') {
     if (!workbook) throw new Error('malformed');
-    return { digest: request.digest, file: source.file, preview: workbook };
+    return { digest: sourceDigest, file: source.file, preview: workbook };
   }
-  const pdf = await convertOffice(bytes, request.extension, signal);
+  const pdf = await convertOffice(bytes, extension, signal);
   await reauthorize();
-  return { digest: request.digest, file: source.file, preview: { kind: 'pdf', data: pdf.toString('base64') } };
+  return { digest: sourceDigest, file: source.file, preview: { kind: 'pdf', data: pdf.toString('base64') } };
 }

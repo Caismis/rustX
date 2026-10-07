@@ -1,3 +1,5 @@
+import { FileLinks } from '../presentation/markdown/FileLinks';
+import { Workbench, type WorkbenchHandle } from './components/Workbench';
 import { DetachedFirstSubmissions } from './new-conversation/DetachedFirstSubmissions';
 import { message } from '../locale/translation';
 import { useTranslation, useNotice } from '../locale/react';
@@ -18,7 +20,7 @@ import { WorkspaceSessionNavigation } from '../workspaces/navigation';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useActorRef } from '@xstate/react';
 import type { AppServerClient } from '../client/app-server';
-import type { AttachmentTarget, CompletedResponseView, MethodResult, SessionNode, SourceTarget, UserInputBlock } from '../../../protocol/app-server/v35';
+import type { AttachmentTarget, CompletedResponseView, MethodResult, SessionNode, SourceTarget, UserInputBlock } from '../../../protocol/app-server/v36';
 import type { ForkOrigin } from './agent/ForkPoint';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
 import { CommandSession, type ResponseAction } from './commands/native';
@@ -56,6 +58,7 @@ function readPreferences(): { endpoint?: string; openViews: string[] } {
 }
 const defaultWorkspaceHost = new HttpWorkspaceHost();
 export function App({ client, workspaceHost = defaultWorkspaceHost, connection: providedConnection }: { client: AppServerClient; workspaceHost?: ProductHostWorkspaces; connection?: ConnectionController }) {
+  const fileWorkbench = useRef<WorkbenchHandle>(null);
   const tx = useTranslation();
   const state = useClientSelector(client, selectShell, sameValue);
   const connection = useMemo(() => providedConnection ?? new ConnectionController(client), [providedConnection, client]);
@@ -81,6 +84,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   useEffect(() => previewOwner.start(), [previewOwner]);
   const [previewFocus, setPreviewFocus] = useState(0);
   const previewOpener = useRef<HTMLElement | null>(null);
+  const [workbenchFullscreen, setWorkbenchFullscreen] = useState(false);
   const inspectorOpen = previews.mode === 'inspector';
   const returnPreviewFocus = () => {
     const opener = previewOpener.current;
@@ -288,7 +292,9 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     setOpenViews([]); focusSession();
     runGlobal(() => Promise.all(closing.map(id => client.release(id))));
   };
+  const focusDraft = () => document.querySelector<HTMLTextAreaElement>('[data-resident-composer] textarea')?.focus();
   const createInWorkspace = (id?: string) => {
+    if (center.kind === 'new-conversation' && center.workspaceId === id && newConversationCurrent()) { focusDraft(); return; }
     setDraftBinding(value => value + 1);
     navigation.invalidate(); setCommand(undefined); setRestored(undefined); setFocus({});
     setCenter({ kind: 'new-conversation', workspaceId: id });
@@ -308,13 +314,16 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   return <AppFrame dismissSidebarLabel={tx('sidebar:toggle.dismiss')} sidebar={geometry => <SidebarRoot {...geometry} startSession={() => createInWorkspace(workspace)}
     browser={(wide, expand) => <WorkspaceNavigation associations={associations} key={state.authorityRevision ?? 0} wide={wide} expand={expand} host={workspaceHost} client={client} state={state} endpoint={endpoint} navigation={navigation}
       metadataChanged={removed => { if (removed) setCenter(value => value.kind === 'new-conversation' && value.workspaceId === removed ? { kind: 'new-conversation' } : value); }}
-      workspaceSettings={(id, label) => openSettings(workspaceSettingsTarget(id, label))} workspace={workspace} selected={selected} selectWorkspace={createInWorkspace}
+      workspaceSettings={(id, label) => openSettings(workspaceSettingsTarget(id, label))} workspace={workspace} selected={selected}
+      draft={center.kind === 'new-conversation' && workspace ? { workspaceId: workspace, binding: String(draftBinding), focus: focusDraft } : undefined} selectWorkspace={createInWorkspace}
       openSession={open} openViews={openViews} closeView={closeView} closeAllViews={closeAllViews} createSession={createInWorkspace} deleteSession={setDeletingSession}
       forkSession={id => open(id, () => {
         setCommand({ request: { id: 'fork' }, current: navigation.capture(), generation: client.getSnapshot().generation, sessionId: id, conversationId: client.getSnapshot().views[id]?.target?.conversation_id });
       })} />}
     settings={wide => <SettingsTrigger wide={wide} onClick={() => openSettings(userSettingsTarget)} />} />}
-    rightOpen={previews.mode !== 'collapsed'} rightPanel={geometry => <RightPanel closeLabel={previews.mode === 'preview' ? tx('artifacts:workspace.collapse') : tx('common:right-panel.close-inspector')} {...geometry} fullscreen={previews.mode === 'preview' && previews.workspace?.fullscreen} open={previews.mode !== 'collapsed'} close={collapsePanel} title={previews.mode === 'preview' ? tx('artifacts:workspace.title') : tx('common:app.developer-inspector')}>
+    rightOpen={previews.mode !== 'collapsed'} rightPanel={geometry => <RightPanel headerless={previews.mode === 'workbench' || previews.mode === 'collapsed'} closeLabel={previews.mode === 'workbench' ? tx('artifacts:workbench.toggle') : previews.mode === 'preview' ? tx('artifacts:workspace.collapse') : tx('common:right-panel.close-inspector')} {...geometry} fullscreen={previews.mode === 'workbench' ? workbenchFullscreen : previews.mode === 'preview' && previews.workspace?.fullscreen} open={previews.mode !== 'collapsed'} close={collapsePanel} title={previews.mode === 'workbench' ? tx('artifacts:workbench.start') : previews.mode === 'preview' ? tx('artifacts:workspace.title') : tx('common:app.developer-inspector')}>
+      <Workbench fileRef={fileWorkbench} key={JSON.stringify([state.generation, selected, view?.summary?.active_node, workspaceAuthority.getRevision()])} closePanel={collapsePanel} host={workspaceHost} scope={workspaceAuthority.getCatalog()} target={view?.summary ? { session_id: view.id, active_node: view.summary.active_node } : undefined} visible={previews.mode === 'workbench'} floatingVisible={previews.mode === 'workbench' || previews.mode === 'collapsed'} fullscreen={workbenchFullscreen || !geometry.canShow} toggleFullscreen={() => { if (!geometry.canShow) collapsePanel(); else setWorkbenchFullscreen(value => !value); }}/>
+      {previews.mode === 'preview' && <Button size="sm" onClick={() => previewOwner.showWorkbench()}>{tx('artifacts:workbench.start')}</Button>}
       <PreviewWorkspace owner={previewOwner} snapshot={previews} focusRequest={previewFocus} returnFocus={returnPreviewFocus}/>
       {inspectorOpen && <LiveInspector client={client} sessionId={view?.id} />}
     </RightPanel>}
@@ -347,10 +356,10 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
         if (next) open(next); else focusSession();
       }
     }}/>}
-    <section className={`session-panel ${agentCss.root}`} data-phase={view ? 'active' : 'hero'} id="session-view" role="region" aria-labelledby="session-title">
+    <FileLinks.Provider value={file => { previewOwner.showWorkbench(); void fileWorkbench.current?.openFile(file.path, file.line); }}><section className={`session-panel ${agentCss.root}`} data-phase={view ? 'active' : 'hero'} id="session-view" role="region" aria-labelledby="session-title">
       <ConversationHeader host={workspaceHost} authority={workspaceAuthority} client={client} view={view && { ...view, summary: state.sessions.find(session => session.id === view.id) ?? view.summary }} authorityRevision={state.authorityRevision}
         connected={connected} attached={attached} commandOpen={commandOpen} inspectorOpen={inspectorOpen}
-        toggleInspector={() => previewOwner.toggleInspector()} previewToggle={previews.workspace && <Button size="sm" className={agentCss.iconButton} data-preview-toggle aria-label={tx('artifacts:workspace.reopen')} title={tx('artifacts:workspace.title')} aria-expanded={previews.mode === 'preview'} onClick={() => { if (previews.mode === 'preview') collapsePanel(); else { previewOwner.reveal(); setPreviewFocus(value => value + 1); } }}><IconPanelLeftOutline16 className={agentCss.mirrored} /></Button>} invokeCommand={invokeCommand}
+        toggleInspector={() => previewOwner.toggleInspector()} previewToggle={<Button size="sm" className={agentCss.iconButton} data-preview-toggle aria-label={tx(previews.workspace ? 'artifacts:workspace.reopen' : 'artifacts:workbench.toggle')} title={tx('artifacts:workbench.toggle')} aria-expanded={previews.mode === 'preview' || previews.mode === 'workbench'} onClick={event => { previewOpener.current = event.currentTarget; if (previews.mode === 'preview' || previews.mode === 'workbench') collapsePanel(); else { if (previews.workspace) previewOwner.reveal(); else previewOwner.showWorkbench(); setPreviewFocus(value => value + 1); } }}><IconPanelLeftOutline16 className={agentCss.mirrored} /></Button>} invokeCommand={invokeCommand}
         settingsFeedback={<SettingsNavigationFeedback navigation={navigationActor}/>} openOwningSettings={openOwningSettings} conversationMode={conversationMode} setConversationMode={setConversationMode}/>
 
       {view && <ConversationStatus client={client} sessionId={view.id} recover={action => {
@@ -365,6 +374,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
       <PreviewContext value={{ openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><ArtifactContext.Provider value={artifacts}><ConversationLive client={client} sessionId={view?.id} mode={conversationMode} disabled={commandOpen || transitioning === view?.id} onHistorical={transitionResponse} onOpenSource={openForkSource} sourceLocation={sourceLocation}/></ArtifactContext.Provider></PreviewContext>
       <ConversationSeat client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} sessionId={view?.id}
         initialWorkspace={workspace ?? (center.kind === 'new-conversation' ? center.workspaceId : undefined)}
+        workspacePicked={id => { if (newConversationCurrent()) setCenter({ kind: 'new-conversation', workspaceId: id }); }}
         binding={String(draftBinding)} current={newConversationCurrent} consumed={consumed} restored={restored}
         onCommand={id => invokeCommand({ id })}
         opened={id => { setOpenViews(current => current.includes(id) ? current : [...current, id]); focusSession(id, { commitDraft: true }); return navigation.capture(); }}/>
@@ -381,6 +391,6 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
           setOpenViews(current => current.includes(result.session.id) ? current : [...current, result.session.id]);
         }} />}
 
-    </section>
+    </section></FileLinks.Provider>
   </AppFrame>;
 }

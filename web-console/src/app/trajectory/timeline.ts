@@ -8,8 +8,8 @@ import type { Translate } from '../../locale/translation';
  * Journal wall spans and dispatch-origin numeric metrics cannot supply that
  * relationship. Missing bridge evidence leaves a request as a marker, with separate numeric metrics.
  */
-import type { TrajectoryProjection } from './layout';
-import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v35';
+import { trajectoryItems, isInspectable, type TrajectoryProjection } from './layout';
+import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v36';
 
 /** Horizontal projection of the overview's domain. */
 export type TrajectoryTimelineMode = 'sequence' | 'duration' | 'time' | 'actual';
@@ -23,7 +23,9 @@ export interface TrajectoryTimeRange {
 /** One record projected into the active domain. */
 export interface TrajectorySpan extends TrajectoryTimeRange {
   id: string;
-  kind: TraceKind;
+  ownerId?: string;
+  displayKey?: string;
+  kind: TraceKind | 'system' | 'context';
   lane: number;
   label: string;
   error: boolean;
@@ -148,6 +150,15 @@ export function trajectoryTimeline(tx: Translate,
   const records = projection.sections.flatMap(section => section.kind === 'outside'
     ? [section.record] : section.groups.flatMap(group => group.records));
   const spans: TrajectorySpan[] = [];
+  const items = trajectoryItems(tx, projection).filter(isInspectable);
+  const inputs = items.filter(item => item.type === 'SystemPromptCell' || item.type === 'ContextRow');
+  const inputSpan = (item: typeof inputs[number], at: number): TrajectorySpan => ({
+    id: item.display_key, ownerId: item.owner_record_id, displayKey: item.display_key,
+    kind: item.type === 'SystemPromptCell' ? 'system' : 'context', lane: 0,
+    label: item.label, error: false, start: at, end: at + (mode === 'sequence' ? 1 : 0),
+  });
+  const displayKey = (id: string) => items.find(item => item.owner_record_id === id && (item.type === 'RequestBoundary' || item.type === 'RecordRow'))?.display_key;
+
   // Derive boundaries only after projection (including idle compression).
   // Membership comes from the shared Turn model, never timestamps or adjacency.
   const boundaries = (): TrajectoryBoundary[] => {
@@ -163,11 +174,14 @@ export function trajectoryTimeline(tx: Translate,
     });
   };
   if (mode === 'sequence') {
+    const initial = inputs.filter(item => item.type === 'SystemPromptCell' && item.record.request?.system_prompt.state === 'initial');
+    for (const item of initial) spans.push(inputSpan(item, spans.length));
     for (const record of records) {
       if (record.kind === 'attempt' || record.kind === 'step' || record.kind === 'assistant') continue;
       const timing = timingOf(record);
+      for (const item of inputs.filter(item => item.owner_record_id === record.id && !initial.includes(item))) spans.push(inputSpan(item, spans.length));
       spans.push({
-        id: record.id,
+        id: record.id, displayKey: displayKey(record.id),
         kind: record.kind,
         lane: laneOf(record.kind),
         label: label(tx, record),
@@ -188,7 +202,7 @@ export function trajectoryTimeline(tx: Translate,
     if (timing.startedAt === undefined) continue;
     if (record.kind === 'attempt' || record.kind === 'step' || record.kind === 'assistant') continue;
     spans.push({
-      id: record.id,
+      id: record.id, displayKey: displayKey(record.id),
       kind: record.kind,
       lane: laneOf(record.kind),
       label: label(tx, record),
@@ -203,6 +217,10 @@ export function trajectoryTimeline(tx: Translate,
       ...(timing.ttftMs === undefined ? {} : { ttftMs: timing.ttftMs }),
       ...(timing.generationMs === undefined ? {} : { generationMs: timing.generationMs }),
     });
+  }
+  for (const item of inputs) {
+    const at = timingOf(item.record).startedAt;
+    if (at !== undefined) spans.push(inputSpan(item, at));
   }
   if (spans.length === 0) return null;
   // One union-of-occupied-time transform for every lane. Overlapping work
@@ -260,7 +278,7 @@ export function timelineFocus(
   return new Set(
     model.spans
       .filter(span => span.start <= range.end && span.end >= range.start)
-      .map(span => span.id),
+      .map(span => span.ownerId ?? span.id),
   );
 }
 

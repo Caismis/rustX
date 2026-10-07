@@ -1,3 +1,4 @@
+import { useInteractiveHtml } from '../../components/workbench-documents/html/preferences';
 import { localeController } from '../../../locale/controller';
 import { useTranslation } from '../../../locale/react';
 import { Choice } from '../primitives/aria';
@@ -16,6 +17,7 @@ import appearance from './GeneralPage.module.css';
  * source, a Workspace has no General page at all — see `settingsPages`. */
 export function GeneralPage({ theme, setTheme }: { theme: 'light' | 'dark'; setTheme?: (theme: 'light' | 'dark') => void }) {
   const tx = useTranslation();
+  const [interactiveHtml, setInteractiveHtml] = useInteractiveHtml();
   return <section aria-label={tx('settings:general-page.general')}>
     <h3>{tx('settings:general-page.general')}</h3>
     <p>{tx('settings:general-page.preferences-this-browser-client-owns-they-are-stored-by-the-clie')}</p>
@@ -29,5 +31,8 @@ export function GeneralPage({ theme, setTheme }: { theme: 'light' | 'dark'; setT
         <span>{tx(`settings:copy.${value}`)}</span>
       </Radio>)}
     </RadioGroup>
+    <Choice label={tx('artifacts:workbench.html-interactive')} value={interactiveHtml ? 'on' : 'off'}
+      options={[["on", tx('artifacts:workbench.html-enabled')], ["off", tx('artifacts:workbench.html-static')]]}
+      onChange={value => setInteractiveHtml(value === 'on')} description={tx('artifacts:workbench.html-description')} />
   </section>;
 }

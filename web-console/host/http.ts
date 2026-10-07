@@ -34,6 +34,15 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
       };
       let value: unknown;
       switch (request.url.slice('/product-host/'.length)) {
+        case 'workbench': {
+          if (!host.workbench || Object.keys(body).some(key => !['scope', 'call'].includes(key))) throw new Error('Workbench unavailable');
+          const abort = new AbortController();
+          const closed = () => { if (!response.writableFinished) abort.abort(); };
+          response.on('close', closed);
+          try { value = await host.workbench(scope(), body.call, abort.signal); }
+          finally { response.off('close', closed); }
+          break;
+        }
         case 'desktop-catalog':
           if (!host.desktopCatalog) throw new Error('Desktop unavailable on this Product Host');
           if (Object.keys(body).some(key => !['scope', 'refresh'].includes(key)) || typeof body.refresh !== 'boolean') throw new Error('Invalid desktop request');

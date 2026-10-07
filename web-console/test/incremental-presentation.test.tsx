@@ -4,7 +4,7 @@ import { act, cleanup, render, fireEvent } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
 import { Server } from './fixture';
 import { ConversationLive } from '../src/app/agent/ConversationLive';
-import type { RuntimeClientEvent } from '../../protocol/app-server/v35';
+import type { RuntimeClientEvent } from '../../protocol/app-server/v36';
 const servers: Server[] = [];
 afterEach(() => { cleanup(); for (const s of servers) s.client.disconnect(); servers.length = 0; });
 const emit = (s: Server, event: RuntimeClientEvent) => {

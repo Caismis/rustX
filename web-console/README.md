@@ -73,7 +73,7 @@ an independently managed runtime/Host. The [Host contract](WORKSPACES.md) descri
 that operator-owned integration. Use the launcher for complete local composition.
 
 Native authentication remains #36's **local/trusted, single writable controller** boundary.
-The browser sends subprotocols `rustx.app-server.v35` and `rustx-token.<token>` in its
+The browser sends subprotocols `rustx.app-server.v36` and `rustx-token.<token>` in its
 WebSocket handshake. No arbitrary authorization header, native URL credential,
 OAuth, tenancy, BFF or production hosting layer is introduced. Use the matching
 App Server transport token, never a provider key. Provider/MCP credentials are
@@ -135,7 +135,7 @@ and never rewrites an unsaved draft's base outside the explicit review workflow.
   come from `snapshot.messages`; current activity comes from `snapshot.attempt`.
   An in-flight message with an already committed ID is suppressed. No Harness
   event model, fake V3 Session log, optimistic conversation or event reducer exists.
-- `src/client/`: one WebSocket, generated `protocol/app-server/v35.ts` unions,
+- `src/client/`: one WebSocket, generated `protocol/app-server/v36.ts` unions,
   correlation IDs, initialize/capabilities, bounded requests, native routing,
   replaceable snapshots, connection/attachment fences and wire observer. Rust DTOs
   remain authoritative. The shared generator normalizes schema `$ref` siblings
@@ -473,3 +473,49 @@ Session header), or choose a discovered application from its chevron menu. This 
 launcher supplies its shared-filesystem mapping; remote/headless Hosts report
 unavailability. See [desktop opening](../docs/open-workspace.md) for supported
 applications, authorization, launch feedback and platform limitations.
+
+### Workspace panel
+
+The Files tab follows Harness's expandable directory tree, natural directory-first
+ordering, file-type artwork and full native-path toolbar. Opening a file creates
+an adjacent tab; repeated opens focus that tab, while the tree keeps its expansion
+and scroll position. Each file keeps its wrap/view/scroll preferences. Inactive
+file tabs retain no source bytes or read request. Code and plain-text views share
+explicit reload, and the code view adds syntax highlighting, line numbers and
+clipboard controls. Desktop actions reread the native Session target and validate
+workspace-relative paths through the same descriptor traversal as file reads.
+The macOS file-manager action reveals a file in Finder; Linux opens its parent
+folder. Editor actions pass the literal file path with the Session root as cwd.
+
+
+The conversation header's right-panel button opens a Start page with Workspace
+files and New terminal. Pages and shell tabs share one header strip: “+” opens
+a Start tab, selecting an entry replaces that Start tab, and the shell menu
+launches the selected shell. Split/merge and draggable pane dividers support two
+working panes. Terminal colors track the app theme while preserving shell OSC
+palette overrides. Files are read from the current native Session's cwd;
+paths are relative, symlinks are not followed, directory pages are bounded to
+2,000 entries, and text previews to 1 MiB. Descriptor-relative browsing uses the same POSIX `openat`/`fdopendir`
+implementation on Linux and macOS. Remote/unmapped Hosts do not gain filesystem access.
+
+Terminals use Host-owned `node-pty` processes and lazy-loaded xterm.js. Choose an
+installed shell on Start, open up to eight terminals per Host, switch tabs, or
+explicitly close a terminal to terminate it. Collapsing the panel detaches the
+renderer while the shell continues; reopening reads its bounded 256K-character output
+window. Terminal creation is idempotent by operation ID. Input is never replayed
+after a transport failure. Host shutdown closes all PTYs; terminals are not
+persisted across Host restarts. These are user-operated shells with the Host
+user's filesystem permissions, independent of agent approval policies. Host
+transport/provider secrets are not copied into the shell environment.
+
+Run `pnpm install --frozen-lockfile` and `pnpm build:host` after updating. The reviewed `node-pty` build
+is enabled in `pnpm-workspace.yaml`; Linux needs Python, make, a C++ compiler and
+Node headers for native addons; macOS needs Python and Xcode Command Line Tools.
+The small Node-API workspace filesystem binding exposes descriptor operations
+missing from `node:fs`, without relying on `/proc` or path-based reopening.
+Development, build and test commands rebuild both addons from pinned source.
+This also avoids node-pty 1.1.0's macOS prebuilt `spawn-helper` missing its execute
+permission (upstream microsoft/node-pty#850), without runtime permission repair. Browser code
+never imports these addons. The
+workbench HTTP route uses the same authenticated carrier and native Session/node
+admission as the existing desktop workspace action.

@@ -7729,11 +7729,15 @@
       ]
     },
     "TraceLifecycle": {
-      "description": "Refresh of an already loaded record, resolved at the server's snapshot cut.\n\nOnly mutable lifecycle facts travel here. Immutable historical input is\nnever repeated, because it cannot have changed.",
+      "description": "Refresh of an already loaded record, resolved at the server's snapshot cut.\n\nMutable lifecycle and resolved native location travel here. Immutable historical input is\nnever repeated, because it cannot have changed.",
       "type": "object",
       "properties": {
         "id": {
           "type": "string"
+        },
+        "location": {
+          "description": "Current native ownership, including an idle input's answering Attempt.",
+          "$ref": "#/$defs/TraceLocation"
         },
         "state": {
           "$ref": "#/$defs/TraceState"
@@ -7784,11 +7788,43 @@
       "additionalProperties": false,
       "required": [
         "id",
+        "location",
         "state",
         "timing",
         "attachments",
         "truncated"
       ]
+    },
+    "TraceLocation": {
+      "description": "Server-resolved native grouping of one record.\n\n`TurnId` is the logical model step inside an Attempt. An actual request\nretry never allocates a new step, so retries of one step group together.",
+      "type": "object",
+      "properties": {
+        "attempt_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AttemptId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "step_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TurnId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "TurnId": {
+      "description": "Identifies one turn within an attempt.",
+      "type": "string"
     },
     "TraceState": {
       "description": "The closed lifecycle vocabulary.\n\n`Incomplete` is the truthful answer whenever no terminal fact exists and\nno current runtime projection positively proves activity. It is never\nupgraded by the absence of evidence.",
@@ -8332,37 +8368,6 @@
         "has_detail",
         "truncated"
       ]
-    },
-    "TraceLocation": {
-      "description": "Server-resolved native grouping of one record.\n\n`TurnId` is the logical model step inside an Attempt. An actual request\nretry never allocates a new step, so retries of one step group together.",
-      "type": "object",
-      "properties": {
-        "attempt_id": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AttemptId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "step_id": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TurnId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "TurnId": {
-      "description": "Identifies one turn within an attempt.",
-      "type": "string"
     },
     "TraceKind": {
       "description": "The closed record vocabulary of the ledger.",

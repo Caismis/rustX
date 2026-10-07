@@ -4,3 +4,7 @@ pmOnFail: warn
 
 minimumReleaseAgeExclude:
   - pdfjs-dist@6.4.299
+
+allowBuilds:
+  node-pty: true
+  koffi: true

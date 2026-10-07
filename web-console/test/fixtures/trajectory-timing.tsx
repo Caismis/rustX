@@ -10,7 +10,7 @@ import '../../src/presentation/theme/design-platform.css';
 import '../../src/presentation/theme/reset.css';
 
 const noop = () => {};
-function Fixture({ bridge }: { bridge: boolean }) {
+function Fixture({ bridge, sequence = false }: { bridge: boolean; sequence?: boolean }) {
   const request = traceRecord(0);
   request.timing.duration_ms = '9000';
   request.timing.ended_at = '2026-09-15T00:00:09Z';
@@ -19,11 +19,11 @@ function Fixture({ bridge }: { bridge: boolean }) {
     ttft_ms: '320', generation_ms: '1280', terminal_ms: '1600', output_tokens_per_second: 93.75,
   };
   const reference = traceTool(1, { timing: { ...request.timing } });
-  return <section aria-label={bridge ? 'Measured bridge' : 'Missing bridge'}>
+  return <section aria-label={sequence ? 'Sequence phases' : bridge ? 'Measured bridge' : 'Missing bridge'}>
     <h1>{bridge ? '400 ms preparation, 320 ms TTFT, 1280 ms generation' : 'Numeric TTFT without a bridge'}</h1>
-    <TrajectoryTimeline model={trajectoryTimeline(translator('en'), projectTrajectory(translator('en'), [request, reference]), "duration")} mode="duration" range={null}
+    <TrajectoryTimeline model={trajectoryTimeline(translator('en'), projectTrajectory(translator('en'), [request, reference]), sequence ? "sequence" : "duration")} mode={sequence ? "sequence" : "duration"} range={null}
       selectedId={null} searchMatches={null} onRangeChange={noop} onSelect={noop}
       hasEarlierRecords={false} loadingEarlier={false} canLoadEarlier={false} onLoadEarlier={noop} />
   </section>;
 }
-createRoot(document.getElementById('root')!).render(<><Fixture bridge /><Fixture bridge={false} /></>);
+createRoot(document.getElementById('root')!).render(<><Fixture bridge /><Fixture bridge={false} /><Fixture bridge={false} sequence /></>);

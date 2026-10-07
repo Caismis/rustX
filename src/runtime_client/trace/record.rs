@@ -46,7 +46,7 @@ impl TraceProjection<'_> {
         let AnchorFacts {
             id,
             position,
-            mut location,
+            location,
             kind,
             state,
             timing,
@@ -101,14 +101,6 @@ impl TraceProjection<'_> {
         };
         match &anchor.event {
             E::InboundTurnAdopted { message_ids } => {
-                // An adoption committed while idle precedes the Attempt that
-                // answers it, so its own fact carries no Attempt. That
-                // Attempt is the first one started after it, the same native
-                // rule the conversation turn outline reads its prompt by.
-                // Until it starts at this cut the turn is unscoped.
-                if location.attempt_id.is_none() {
-                    location.attempt_id = self.answering_attempt(anchor.sequence)?;
-                }
                 for message in self
                     .store
                     .load_messages(&message_ids[..message_ids.len().min(ADOPTED_MESSAGE_LIMIT)])?

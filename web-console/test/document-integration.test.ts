@@ -22,7 +22,7 @@ it('rejects source version changes and revoked authorization without publishing 
   await expect(deriveDocument(request, async () => { if (++reads === 2) throw new Error('revoked'); return source; }, new AbortController().signal)).rejects.toThrow('revoked');
 });
 it('real sandbox converts real DOCX and PPTX and reauthorizes all three reads', async () => {
-  if (process.platform !== 'linux') {
+  if (!['linux', 'darwin'].includes(process.platform)) {
     const { request, source } = fixture('docx');
     await expect(deriveDocument(request, async () => source, new AbortController().signal)).rejects.toThrow('converter_unavailable');
     return;
@@ -33,7 +33,7 @@ it('real sandbox converts real DOCX and PPTX and reauthorizes all three reads', 
     expect(reads).toBe(3); expect(result.preview.kind).toBe('pdf');
     if (result.preview.kind === 'pdf') expect(Buffer.from(result.preview.data, 'base64').subarray(0, 5).toString()).toBe('%PDF-');
   }
-}, 40000);
+}, process.platform === 'darwin' ? 130000 : 40000);
 
 it('reauthorization compares Session-file fields, not their JSON property order', async () => {
   const { request, source } = fixture('xlsx');

@@ -162,7 +162,8 @@
  */
 .rightbarCol {
   grid-column: 3;
-  position: relative;
+  /* The panel is anchored to the full frame, including fullscreen and floats. */
+  position: static;
   min-width: 0;
   overflow: visible;
 }

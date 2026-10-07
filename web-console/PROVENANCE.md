@@ -1392,3 +1392,140 @@ antialiased differently depending on which tile or partial repaint drew them:
 12 of 30 fresh pinned-browser contexts differed (Δ1 on 7 pixels) in the focused
 search capture, and other captures varied too. As its own layer it rendered
 identically in 45 of 45 targeted replays.
+
+Trace retained-input ownership repair updates generated imports to App Server v36.
+Source inventory local hashes and dependency closure reflect this mechanical
+protocol change; all Harness upstream pins remain unchanged.
+
+New-conversation Sidebar visibility follows Harness `tree.ts` at
+`5badb15009ae1756c3afe0ae0cef1faafc290ccc`: pin the current blank above history,
+exclude blanks from search, and hide them when another Session is selected.
+Harness reuses a native blank and marks it engaged on accepted input. rustX keeps
+its existing deferred creation: a separate browser draft row has no Session ID,
+timestamp, or native actions. Workspace selection moves this row without
+resetting the input; leaving the draft removes its presentation. A native create
+acknowledgement ends the draft, and the authoritative catalog supplies the real
+row. Post-create admission failures retain their existing Session-scoped recovery
+and are never hidden or deleted as abandoned drafts.
+
+Trajectory overview alignment follows Harness `TrajectoryTimeline.tsx` at
+`5badb15009ae1756c3afe0ae0cef1faafc290ccc`. Its two model colours represent
+TTFT and decoding, not a reasoning-content boundary. The equal-width sequence
+view now paints the measured TTFT/generation ratio without promoting numeric
+metrics into wall-clock coordinates. Timed projections still require the native
+provider bridge. Press/drag selection, hover cursor, outside-range dimming,
+double-click clearing and zoomed edge panning retain native record identities
+and projection-generation fencing. Exact selection edges persist until the
+projection changes; changed coordinates reproject the selected native records.
+
+The Workspace panel Start page adapts Harness `ui-sidebar-right`'s GuideBody
+and its capsule styling at `5badb15009ae1756c3afe0ae0cef1faafc290ccc`. The
+upstream slot registry and filesystem/terminal Host are not imported. rustX's
+Product Host resolves the exact native Session/node before browsing or PTY
+admission. Existing preview occurrences, resource leases and Inspector ownership
+remain in `PreviewWorkspaceOwner`; the new workbench is a separate display mode.
+
+Workspace sidebar fidelity repair: the Start page now retains GuideBody's 380px
+capsules, 14px/20px insets, 56px compass, neutral watermark ink and 10% bottom
+spacer. Original guide artwork, fullscreen/restore glyphs and TerminalTheme OSC
+palette handling are retained with per-file provenance. The upstream DockLayout
+38px strip replaces the extra title/navigation rows; guide replacement, shell
+selection-and-launch, add/close tabs, keyboard navigation and shortcuts operate
+on rustX Session-scoped PTYs. The two-pane presentation now uses the upstream dockkit engine, planner,
+geometry, gesture handlers and component tree. It does not import Harness's
+runtime or plugin store.
+Browser checks cover guide geometry, light/dark terminal backgrounds, actual
+shell output, focus, tabs, split/merge/resize, shortcuts and a Chinese narrow view.
+
+### Workspace file tree and source tabs
+
+The file browser and viewer use the Harness `5badb15009ae1756c3afe0ae0cef1faafc290ccc`
+`ui-sidebar-files` FilesBody/store, document TextPreview/CodeBody, PathLabel,
+FileTypeIcon/CodeFileIcon artwork, CodeToolbar/CodeCard, and code-language table.
+`source-inventory.json` records each immutable source and adapted dependency.
+The 38px path toolbar, 18px tree indentation, natural folder-first ordering,
+separate resource tabs, persisted tree/view preferences and icon toolbar follow
+those sources. Harness remotes, stores and Session authority are excluded: rustX's
+existing Product Host admits every listing/read/desktop open against the native
+Session and uses descriptor-relative filesystem validation. The 1 MiB text limit remains. Complete binary previews have a separate 16 MiB
+Host read limit; Office conversion retains its existing stricter source and
+sandbox limits.
+
+
+### Sidebar document and docking source port
+
+The same upstream commit supplies `ui-dockkit` (engine and presentation),
+`ui-sidebar-right` layout persistence and shell CSS, document preview registry
+matching, Markdown frontmatter/field rendering, static HTML document preparation,
+image zoom controls, and the complete read-only Excel parser/rendering pipeline.
+The copied dockkit behavior tests remain alongside the port. Changes at seams:
+
+- React 19 ref initialization and existing rustX primitive/icon/locale bindings.
+- The embedder uses upstream `planSettle` to merge emptied panes and reseed the
+  guide; files deduplicate by workspace-relative path, Files pages by pane.
+- Metadata-only layout snapshots are validated before restoration and scoped
+  to the exact Product Host authority and native Session/node. Terminal tabs
+  reconcile against Host-owned PTYs, never start a process by restoring metadata.
+- Hidden document bodies release reads, object URLs and parser workers. Live
+  native terminals retain their Host lifetime and reattach when selected.
+- The copied spreadsheet worker uses Vite's module-worker bundling. An absent
+  XLSX default row height remains absent instead of becoming `NaN`.
+- Markdown documents opt into Host-admitted relative images and file navigation;
+  conversation Markdown's inert image policy is unchanged.
+- HTML copies the upstream packer, bootstrap and opaque `allow-scripts` iframe.
+  Inline interaction and direct local classic JS/CSS work through scoped Host
+  reads. The iframe receives no Host RPC, parent storage or same-origin access.
+  General settings can select the upstream inert/static mode. Module graphs,
+  CSS dependency traversal and dynamic relative fetch are not supported by DSH's
+  packer either. PDF display retains rustX's bounded PDF worker owner.
+- DOCX/PPTX retain OOXML admission and native source reauthorization. Linux keeps
+  its existing cgroup/Bubblewrap converter. macOS uses DSH's pinned
+  `@deepseek-ai/libreoffice-kit@0.1.5` native engine in a clean-environment
+  Seatbelt process group: private input/output, dependency and system-font reads,
+  no network or user-home access, CPU/file/descriptor and output/deadline limits.
+  The native engine keeps DSH's 60-second conversion budget. Its bounded 256 MiB
+  font staging is separate from the unchanged 4 MiB published PDF limit.
+  macOS does not claim Linux's cgroup memory/task limits. Missing sandbox or
+  engine fails closed. Legacy DOC/PPT remain outside the OOXML admission format.
+  The package includes native engine licenses and source/build information under
+  MPL-2.0; its optional platform payload must accompany the Host installation.
+
+
+Browser coverage includes default Markdown versus explicit source/text, YAML
+frontmatter, GFM tables/math, workspace-relative images and links, static HTML,
+SVG, PDF, CSV/XLSX, light/dark terminal rendering, native filesystem/PTY actions,
+source DockLayout floating/docking/collapse/restoration and narrow Chinese UI.
+Install-closure notices include Node-only ExcelJS dependencies as well as browser
+modules. The upstream `buffers@0.1.1` distribution has no published license
+statement; that omission is recorded explicitly, not replaced with an inferred
+license. The ExcelJS browser entry does not import that Node-only archive reader.
+
+Conversation file references use Harness `ui-primitives/src/markdown/file-link.ts`
+and the `MarkdownFileLink` delegate from `render.tsx`, retaining its URI decoding,
+line fragment grammar, settled-message activation and existing file-link CSS.
+The rustX Session owns the delegate for Conversation and Trajectory previews;
+Product Host resolves references within the admitted native workspace with
+no-follow descriptor traversal. References open the existing Workbench dock
+content identity rather than synthesizing an Artifact or committed delivery.
+Document-local resource links retain their own base path and resource owner.
+
+Trajectory prompt inspection now follows Harness `TrajectoryTable.tsx`'s explicit
+missing-system-prompt state and direct Markdown payload. Frozen rustX request
+detail remains the sole source; current configuration never fills history.
+The timeline includes projected SystemPromptCell and ContextRow input entries,
+with independent display keys and their original request detail owner. Sequence
+mode places the initial prompt first; timed modes use zero-duration markers at
+the owning request snapshot, since no separate input clock is recorded.
+
+### Trajectory detail presentation alignment
+
+The detail facet matrix now follows the pinned Harness `TrajectoryTable.tsx`
+`SYSTEM_PROMPT_TABS`, `SYSTEM_UPDATE_TABS`, `REQUEST_TABS`, and `detailTabs`:
+prompt/catalog cells no longer inherit request summary/native tabs; request
+markers expose summary/options/usage/timing; messages and individual context
+rows expose summary/preview/raw content; tool source replaces the redundant
+input tab. Raw content is message text, not the protocol message envelope.
+Overview sections link to their corresponding facet, reasoning remains folded
+inside the message preview, and attachments stay with their content. Context
+reads still use the immutable native request owner but render only the selected
+message ID. rustX-only lifecycle records retain native evidence inspection.

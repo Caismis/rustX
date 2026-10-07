@@ -1,5 +1,5 @@
-import type { SourceMutation, SourceSettings } from '../../../protocol/app-server/v35.ts';
-import type { AttachmentTarget, SessionFileReference } from '../../../protocol/app-server/v35.ts';
+import type { SourceMutation, SourceSettings } from '../../../protocol/app-server/v36.ts';
+import type { AttachmentTarget, SessionFileReference } from '../../../protocol/app-server/v36.ts';
 import type { DocumentRequest, DocumentResult } from '../../shared/documents.ts';
 export interface DeliveryRead { target: AttachmentTarget; message_id: string; delivery_index: number }
 export interface DeliveryBytes { file: SessionFileReference; data: string }
@@ -68,6 +68,7 @@ export function settlementFailureKind(cause: unknown): SettlementFailureKind | u
 }
 
 export interface ProductHostWorkspaces {
+  workbench?(scope: WorkspaceAuthorityScope, call: import('./workbench').WorkbenchCall, signal?: AbortSignal): Promise<import('./workbench').WorkbenchResult>;
   previewDocument?(scope: WorkspaceAuthorityScope, request: DocumentRequest, signal?: AbortSignal): Promise<DocumentResult>;
   desktopCatalog?(scope: WorkspaceAuthorityScope, refresh?: boolean): Promise<import('./desktop.ts').DesktopCatalog>;
   openWorkspace?(scope: WorkspaceAuthorityScope, target: import('./desktop.ts').DesktopTarget, application: import('./desktop.ts').DesktopAppId): Promise<import('./desktop.ts').DesktopLaunch>;

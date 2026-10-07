@@ -138,3 +138,21 @@ it.each(['sequence', 'duration', 'time', 'actual'] as const)('%s Turn boundaries
   expect(model.boundaries.map(b => b.at)).toEqual(mode === 'sequence' ? [0, 2, 4] : mode === 'duration' ? [100, 200] : [100, 1000]);
   expect(trajectoryTimeline(translator('en'), projectTrajectory(translator('en'), records.slice(4, 6)), mode)).toBeNull();
 });
+
+it('projects prompt inputs separately without inventing input duration or phase evidence', () => {
+  const record = traceRecord(8);
+  record.request!.system_prompt = { state: 'initial', preview: { text: 'Frozen prompt', truncated: false } };
+  const user = traceRecord(7, { kind: 'user', request: null });
+  const projection = projectTrajectory(translator('en'), [user, record]);
+  const sequence = trajectoryTimeline(translator('en'), projection, 'sequence')!;
+  expect(sequence.spans.map(span => span.kind)).toEqual(['system', 'user', 'request']);
+  expect(sequence.spans[0]).toMatchObject({ ownerId: record.id, lane: 0 });
+  for (const mode of ['duration', 'time', 'actual'] as const) {
+    const model = trajectoryTimeline(translator('en'), projection, mode)!;
+    const input = model.spans.find(span => span.kind === 'system')!;
+    const request = model.spans.find(span => span.kind === 'request')!;
+    expect(input.start).toBe(request.start); expect(input.end).toBe(input.start);
+    expect(input.dispatchAt).toBeUndefined(); expect(input.durationMs).toBeUndefined();
+    expect(input.id).not.toBe(request.id);
+  }
+});

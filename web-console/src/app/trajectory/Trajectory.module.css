@@ -552,7 +552,17 @@
   .event { padding: 0 3px 0 28px; }
   .kindIcon { display: flex; }
 }
-.summaryPreview { padding: 12px 0; border-bottom: 1px solid var(--dsw-alias-border-l2); }
+.summaryPreview { padding: 2px 0 8px; }
+.overviewHeading {
+  display: flex;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xs-strong-13);
+}
+.inspector[data-kind='system'] .inspectorLocation { font: var(--dsw-font-xs-13); }
 .copyText { margin: 4px 0; }
 .nativeDetails { padding: 12px 0; }
 

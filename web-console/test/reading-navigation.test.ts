@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import type { ConversationTurn, ConversationTurnPage, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v35';
+import type { ConversationTurn, ConversationTurnPage, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v36';
 import { Server, snapshot } from './fixture';
 import { RpcFailure } from '../src/client/app-server';
 import { turnKey } from '../src/client/transcript';

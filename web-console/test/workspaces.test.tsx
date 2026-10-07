@@ -546,7 +546,7 @@ it('classification belongs to exactly the native summary page that requested it'
 // Blocking finding 2 — the whole real path: SessionConfiguration → App owner
 // navigation → the concrete Settings target. Nothing here mocks the callback or
 // inspects a fabricated `source:*` string.
-async function failedSessionConfiguration(sources: readonly import('../../protocol/app-server/v35').SourceTarget[], host = hostFixture()) {
+async function failedSessionConfiguration(sources: readonly import('../../protocol/app-server/v36').SourceTarget[], host = hostFixture()) {
   server.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: '/workspace/A' } }));
   server.handlers.set('session/configuration', () => ({
     type: 'session_configuration',
@@ -605,7 +605,7 @@ it('S1-10 Session focus changes never retarget an opened owning Settings editor'
 // Settings navigation is linearized by one App-owned epoch. A delayed owning
 // Workspace catalog lookup is preparation, never authority to override a newer
 // navigation decision.
-async function pendingOwnershipLookup(sources: readonly import('../../protocol/app-server/v35').SourceTarget[]) {
+async function pendingOwnershipLookup(sources: readonly import('../../protocol/app-server/v36').SourceTarget[]) {
   const host = await failedSessionConfiguration(sources);
   const catalog = await host.listWorkspaces();
   const gate = deferred<WorkspaceCatalog>();
@@ -792,4 +792,29 @@ it.each(['en', 'zh'] as const)('selected off-page pending and unavailable demand
   await act(async () => gate.resolve([{ authorized: false, reason: 'unavailable' }, { authorized: true, workspaceId: 'wB' }]));
   expect(screen.getByText(tx('workspace:association.unavailable'))).toBeTruthy();
   expect(screen.queryByText(tx('workspace:association.refreshing'))).toBeNull();
+});
+
+it('current blank conversation is pinned, reused, relocated and hidden on departure without native creation', async () => {
+  await mount();
+  const draft = () => document.querySelector('[data-draft-conversation]')!;
+  expect(draft()).toBeNull();
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'New conversation in Workspace A' })));
+  expect(draft().getAttribute('aria-selected')).toBe('true');
+  expect(draft().closest('[data-workspace-group]')?.textContent).toContain('Workspace A');
+  expect(draft().nextElementSibling?.querySelector('[data-session-id]')?.getAttribute('data-session-id')).toBe('A');
+  expect(draft().querySelector('[data-session-id], [data-session-actions]')).toBeNull();
+  fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'unsent draft' } });
+  await act(async () => fireEvent.click(within(draft() as HTMLElement).getByRole('button')));
+  expect(document.activeElement).toBe(screen.getByLabelText('Message'));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'New conversation in Workspace A' })));
+  expect(document.querySelectorAll('[data-draft-conversation]')).toHaveLength(1);
+  expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('unsent draft');
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Choose Workspace' })));
+  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Workspace B' })));
+  expect(draft().closest('[data-workspace-group]')?.textContent).toContain('Workspace B');
+  expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('unsent draft');
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+  expect(draft()).toBeNull();
+  expect(methods()).not.toContain('session/create');
+  expect(methods()).not.toContain('session/delete');
 });

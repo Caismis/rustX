@@ -6,11 +6,15 @@ import { join } from 'node:path';
 import { OOXML_LIMITS } from './archive.ts';
 import { runOfficeSandbox } from './office-sandbox.ts';
 
-/** Only this Linux process boundary is supported. No unsandboxed fallback. */
+/** Platform-specific isolation is mandatory; there is no unsandboxed fallback. */
 export async function convertOffice(bytes: Buffer, extension: 'docx' | 'pptx', signal: AbortSignal): Promise<Buffer> {
-  if (process.platform !== 'linux') throw new Error('converter_unavailable');
   if (bytes.length > OOXML_LIMITS.source) throw new Error('too_large');
   signal.throwIfAborted();
+  if (process.platform === 'darwin') {
+    const { convertMacOffice } = await import('./office-macos.ts');
+    return convertMacOffice(bytes, extension, signal);
+  }
+  if (process.platform !== 'linux') throw new Error('converter_unavailable');
   try { await Promise.all(['/usr/bin/env', '/usr/bin/bwrap', '/usr/bin/prlimit', '/usr/bin/libreoffice', '/usr/bin/systemd-run'].map(path => access(path, constants.X_OK))); }
   catch { throw new Error('converter_unavailable'); }
   signal.throwIfAborted();

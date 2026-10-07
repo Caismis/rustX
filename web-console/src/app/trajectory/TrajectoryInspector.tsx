@@ -20,7 +20,6 @@ import { createContext, useContext, useEffect, useRef, type ReactNode, type RefO
 import type {
   TraceArtifact,
   TraceContentBlock,
-  TraceContextPresentation,
   TraceDetail,
   TraceGeneration,
   TraceJson,
@@ -28,7 +27,7 @@ import type {
   TraceSystemPromptPresentation,
   TraceText,
   TraceToolDefinition,
-} from '../../../../protocol/app-server/v35';
+} from '../../../../protocol/app-server/v36';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { Button } from '../../presentation/primitives/Button';
 import { JsonTree, type JsonTreeLabels } from '../../presentation/primitives/JsonTree';
@@ -36,11 +35,11 @@ import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { CodeBlock } from '../../presentation/markdown/CodeBlock';
 import { Tabs, TabList, Tab, TabPanel } from 'react-aria-components';
 import { diffLines } from 'diff';
-import { contextKindLabel, facetLabel, type TurnStructure, type TrajectoryFacet, type TrajectorySelection } from './layout';
+import { facetLabel, type TurnStructure, type TrajectoryFacet, type TrajectorySelection } from './layout';
 import { Artifact } from '../components/Artifact';
 import { formatDuration, formatInstant } from './timeline';
 import css from './Trajectory.module.css';
-import { previewOf, cellLabel } from './TrajectoryCell';
+import { cellLabel } from './TrajectoryCell';
 import { traceStateLabel } from '../../bindings/status-labels';
 
 function JSON_LABELS(tx: Translate): JsonTreeLabels { return {
@@ -86,7 +85,7 @@ function Text({ value, markdown = false }: { value: TraceText; markdown?: boolea
       ) : (
         <pre className={css.payload}>{value.text}</pre>
       )}
-      <Button size="sm" className={css.copyText} onClick={() => { void writeClipboard(value.text).then(ok => setCopied(ok ? message('trajectory:trajectory-inspector.copied') : message('trajectory:copy.copy-failed'))); }}>{copied || tx('trajectory:trajectory-inspector.copy-text')}</Button>
+      {!markdown && <Button size="sm" className={css.copyText} onClick={() => { void writeClipboard(value.text).then(ok => setCopied(ok ? message('trajectory:trajectory-inspector.copied') : message('trajectory:copy.copy-failed'))); }}>{copied || tx('trajectory:trajectory-inspector.copy-text')}</Button>}
       <Truncated of={value.truncated} />
     </>
   );
@@ -101,7 +100,7 @@ const InspectorBody = createContext<RefObject<HTMLElement | null> | undefined>(u
 function InspectorPanel({ active, children, selectedId, content }: { active: string; children: ReactNode; selectedId?: string; content?: TraceDetail }) {
   const body = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (active !== 'Context' || !selectedId || !body.current) return;
+    if (!selectedId || !body.current) return;
     const target = Array.from(body.current.querySelectorAll<HTMLElement>('[data-context-message-id]')).find(node => node.dataset.contextMessageId === selectedId);
     if (target) body.current.scrollTop += target.getBoundingClientRect().top - body.current.getBoundingClientRect().top;
   }, [active, selectedId, content]);
@@ -292,18 +291,6 @@ function SYSTEM_PROMPT_STATE(tx: Translate): Record<
 }; }
 
 /**
- * The exact native producer the server copied from the canonical message.
- *
- * Two certified extensions publish the same Context family, so the family
- * cannot name the producer and this renders the contributor identity the
- * server sent. No name is derived from the Context kind, and no extension
- * catalog is consulted: this is display of a resolved fact, not inference.
- */
-function contextSource(tx: Translate, source: TraceContextPresentation['source']): string {
-  return source.type === 'runtime' ? tx('trajectory:copy.runtime') : tx('trajectory:copy.extension-value', { p0: source.contributor });
-}
-
-/**
  * The System Prompt relationship the server resolved for this request.
  *
  * Nothing here compares request details. The classification, and the page
@@ -330,60 +317,18 @@ function SystemPrompt({ system }: { system: TraceSystemPromptPresentation }) {
   );
 }
 
-/**
- * Canonical Context this request introduced, in the server's frozen order.
- *
- * The order is `RequestSnapshot.request_context_ids`, so it is rendered as
- * given: no sort by time, family, provenance or label happens here.
- */
-function ContextAdditions({
-  additions,
-  truncated,
-  selectedId,
-}: {
-  selectedId?: string | undefined;
-  additions: readonly TraceContextPresentation[];
-  truncated: boolean;
-}) {
-  const tx = useTranslation();
-  return (
-    <>
-      <h3 className={css.sectionLabelHeading}>{tx('trajectory:trajectory-inspector.context-introduced-by-this-request')}</h3>
-      <p className={css.note}>
-        {tx('trajectory:trajectory-inspector.the-canonical-context-facts-this-actual-request-committed-with-i')}</p>
-      {additions.length === 0 && (
-        <p className={css.unavailable}>{tx('trajectory:trajectory-inspector.this-request-introduced-no-canonical-context')}</p>
-      )}
-      {additions.map(addition => (
-        <section key={addition.message_id} className={css.requestMessage} data-context-message-id={addition.message_id} data-selected={addition.message_id === selectedId || undefined}>
-          <h4 className={css.blockLabel}>
-            {contextKindLabel(tx, addition.context_kind)} · {contextSource(tx, addition.source)}
-            <span className={css.machine}> {addition.message_id}</span>
-          </h4>
-          {addition.preview ? <p>{addition.preview.text || tx('trajectory:trajectory-inspector.empty')}</p> : <p>{tx('trajectory:trajectory-inspector.content-unavailable')}</p>}
-          {addition.attachments.length > 0 && <Attachments artifacts={addition.attachments} />}
-          <Truncated of={addition.truncated || addition.preview?.truncated} />
-        </section>
-      ))}
-      {truncated && (
-        <p className={css.truncated}>
-          {tx('trajectory:trajectory-inspector.further-context-facts-omitted-at-the-summary-bound-the-first-in')}</p>
-      )}
-    </>
-  );
-}
-
 /** The sections available for one record, given what the server projected. */
 function sectionsOf(record: TraceRecord, detail: TraceDetail | undefined, selection: TrajectorySelection): TrajectoryFacet[] {
   if (record.kind === 'request') {
     const diff: TrajectoryFacet[] = record.request?.system_prompt.state === 'changed' ? ['Diff'] : [];
-    if (selection.cell_type === 'SystemPromptCell') return [...diff, 'System Prompt', 'Tools', 'Summary', 'Native'];
-    if (selection.cell_type === 'ContextRow') return ['Context', 'Summary', 'Native'];
-    return ['Summary', 'System Prompt', ...diff, 'Context', 'Tools', 'Options', 'Usage', 'Timing', 'Native'];
+    if (selection.cell_type === 'SystemPromptCell') return [...diff, 'System Prompt', 'Tools'];
+    if (selection.cell_type === 'ContextRow') return ['Summary', 'Content', 'Raw'];
+    return ['Summary', 'Options', 'Usage', 'Timing'];
   }
-  if (record.kind === 'assistant') return ['Summary', 'Content', ...(detail?.messages.some(message => message.blocks.some(block => block.type === 'reasoning')) ? ['Thinking' as const] : []), 'Raw', 'Timing', 'Native'];
-  if (record.kind === 'tool') return ['Summary', 'Input', ...(detail?.tool?.source ? ['Code' as const] : []), 'Result', 'Schema', 'Timing', 'Artifacts', 'Native'];
-  return ['Summary', ...(detail?.messages.length ? ['Content' as const] : []), 'Timing', 'Artifacts', 'Native'];
+  if (record.kind === 'assistant' || record.kind === 'user') return ['Summary', 'Content', 'Raw'];
+  if (record.kind === 'compaction') return ['Summary', 'Raw'];
+  if (record.kind === 'tool') return ['Summary', ...(detail?.tool?.source ? ['Code' as const] : ['Input' as const]), 'Result', 'Schema', 'Timing'];
+  return ['Summary', 'Native'];
 }
 
 /** Native classification is an input, never the output of jsdiff. */
@@ -461,21 +406,35 @@ export function TrajectoryInspector({
     if (record.has_detail && !detail && !loading && !error) onLoadDetail(record.id);
   }, [record.id, record.has_detail, detail, loading, error, onLoadDetail]);
   const sections = sectionsOf(record, detail, selection);
-  const active = sections.includes(section) ? section : 'Summary';
+  const active = sections.includes(section) ? section : sections[0]!;
   const request = detail?.request ?? undefined;
   const tool = detail?.tool ?? undefined;
+  const toolAttachments = [...new Map([...record.attachments, ...(tool?.result?.attachments ?? [])].map(artifact => [artifact.artifact_id, artifact])).values()];
   const toolState = toolDetailState(detail, loading, error);
   const toolFactFacet = record.kind === 'tool' && ['Input', 'Result', 'Schema'].includes(active);
-  const messages = detail?.messages ?? [];
+  const context = selection.cell_type === 'ContextRow'
+    ? record.request?.context_additions.find(entry => entry.message_id === selection.context_message_id) : undefined;
+  const messages = selection.cell_type === 'ContextRow'
+    ? (request?.messages.filter(entry => entry.message_id === selection.context_message_id) ?? [])
+    : detail?.messages ?? [];
+  const messageContent = (rendered: boolean) => <>
+    {messages.map((message, index) => <section key={message.message_id ?? index} data-context-message-id={message.message_id} data-selected={selection.cell_type === 'ContextRow' || undefined}>
+      {message.blocks.map((block, index) => rendered ? <Block key={index} block={block} />
+        : 'text' in block ? <Text key={index} value={block.text} /> : <Block key={index} block={block} />)}
+      <Truncated of={message.truncated} />
+    </section>)}
+    {!messages.length && (context?.preview || record.preview) && <section data-context-message-id={context?.message_id} data-selected={context ? true : undefined}><Text value={(context?.preview ?? record.preview)!} markdown={rendered} /></section>}
+    {(context?.attachments ?? record.attachments).length > 0 && <Attachments artifacts={context?.attachments ?? record.attachments} />}
+  </>;
   const kind = selection.cell_type === 'SystemPromptCell' ? 'system' : selection.cell_type === 'ContextRow' ? 'context' : record.kind;
   const tag = selection.cell_type === 'SystemPromptCell' ? tx('trajectory:trajectory.system') : selection.cell_type === 'ContextRow' ? tx('trajectory:trajectory.context') : cellLabel(tx)[record.kind];
-  const subject = selection.cell_type === 'SystemPromptCell' ? tx('trajectory:copy.system-prompt')
-    : record.kind === 'request' && record.request ? record.request.model
+  const subject = selection.cell_type === 'SystemPromptCell' ? (record.request?.system_prompt.state === 'initial' ? tx('trajectory:layout.initial-system-prompt') : tx('trajectory:copy.system-prompt'))
+    : selection.cell_type === 'ContextRow' ? undefined : record.kind === 'request' && record.request ? record.request.model
       : record.kind === 'tool' && record.tool ? record.tool.name ?? record.tool.tool_id : undefined;
 
   return (
     <aside className={css.inspector} data-kind={kind} aria-label={tx('trajectory:trajectory-inspector.trace-record-inspector')}>
-      <InspectorHeader kind={kind} tag={tag} location={[location, subject].filter(Boolean).join(' · ')} closeLabel={tx('trajectory:trajectory-inspector.close-record')} onClose={onClose} />
+      <InspectorHeader kind={kind} tag={tag} location={[selection.cell_type === 'SystemPromptCell' ? undefined : location, subject].filter(Boolean).join(' · ')} closeLabel={tx('trajectory:trajectory-inspector.close-record')} onClose={onClose} />
       <Tabs className={css.inspectorTabs} selectedKey={active} onSelectionChange={key => onFacet(key as TrajectoryFacet)}>
       <TabList aria-label={tx('trajectory:trajectory-inspector.record-sections')} className={css.tabs}>
         {sections.map(name => <Tab key={name} id={name}>{facetLabel(tx, name)}</Tab>)}
@@ -492,37 +451,36 @@ export function TrajectoryInspector({
       <InspectorPanel active={active} selectedId={selection.context_message_id} content={detail}>
         {active === 'Summary' && (
           <>
-          <div className={css.summaryPreview}><MarkdownText text={previewOf(tx, record)} /></div>
-          {tool?.source && <section className={css.summaryPreview}>
-            <h3 className={css.sectionLabelHeading}>{tx('trajectory:trajectory-inspector.code')}</h3>
-            <CodeBlock code={tool.source.text.text} lang={tool.source.language ?? undefined} lineNumbers copyLabel={tx('trajectory:copy.copy-source')} copiedLabel={tx('trajectory:trajectory-inspector.copied')} />
-            <Truncated of={tool.source.text.truncated} />
-          </section>}
-          {tool?.arguments && !tool.source && <section className={css.summaryPreview}>
-            <h3 className={css.sectionLabelHeading}>{tx('trajectory:trajectory-inspector.input')}</h3><Structured value={tool.arguments} label={tx('trajectory:trajectory-inspector.recorded-arguments')} />
-          </section>}
-          {tool?.result && <section className={css.summaryPreview}>
-            <h3 className={css.sectionLabelHeading}>{tx('trajectory:trajectory-inspector.result')}{' '}{tool.result.outcome}</h3>
-            {tool.result.blocks.map((block, index) => <Block key={index} block={block} />)}
-            <Truncated of={tool.result.blocks_truncated} />
-          </section>}
           <dl className={css.facts}>
-            <dt>{tx('trajectory:trajectory-inspector.status')}</dt><dd>{traceStateLabel(tx, record.state)}</dd>
-            {record.request && <>
-              <dt>{tx('trajectory:trajectory-inspector.model')}</dt><dd>{record.request.model}</dd>
-              <dt>{tx('trajectory:trajectory-inspector.retry-recovery-ordinal')}</dt><dd>{record.request.retry_number}</dd>
-              <SystemPrompt system={record.request.system_prompt} />
-              <dt>{tx('trajectory:trajectory-inspector.tools')}</dt><dd>{tx(`trajectory:catalog.${record.request.tool_catalog}`)}</dd>
-              <dt>{tx('trajectory:trajectory-inspector.context-introduced')}</dt><dd>{record.request.context_additions.length}{record.request.context_truncated ? tx('trajectory:trajectory-inspector.truncated') : ''}</dd>
-              {record.request.failure_kind && <><dt>{tx('trajectory:trajectory-inspector.failure')}</dt><dd>{record.request.failure_kind}</dd></>}
-              {sections.includes('System Prompt') && <><dt>{tx('trajectory:trajectory-inspector.historical-input')}</dt><dd><Button size="sm" onClick={() => onFacet('System Prompt')}>{tx('trajectory:trajectory-inspector.view-system-prompt')}</Button> <Button size="sm" onClick={() => onFacet('Tools')}>{tx('trajectory:trajectory-inspector.view-tools')}</Button></dd></>}
-              <dt>{tx('trajectory:trajectory-inspector.acceptance')}</dt><dd>{tx('trajectory:trajectory-inspector.provider-completion-alone-does-not-prove-canonical-assistant-acc')}</dd>
-            </>}
-            {record.calls.length > 0 && <><dt>{tx('trajectory:trajectory-inspector.proposed-calls')}</dt><dd>{record.calls.length} {tx('trajectory:trajectory-inspector.a-proposal-proves-assembly-not-execution')}</dd></>}
-            {record.tool && <><dt>{tx('trajectory:trajectory-inspector.execution')}</dt><dd>{record.tool.started ? tx('trajectory:trajectory-inspector.started-a-durable-start-fact-exists') : tx('trajectory:trajectory-inspector.proposed-only')}</dd><dt>{tx('trajectory:trajectory-inspector.outcome')}</dt><dd>{record.tool.outcome ?? tx('trajectory:trajectory-inspector.unknown')}</dd></>}
+            {selection.cell_type !== 'ContextRow' && <><dt>{tx('trajectory:trajectory-inspector.status')}</dt><dd>{traceStateLabel(tx, record.state)}</dd></>}
+            {context && <><dt>{tx('trajectory:trajectory-inspector.source')}</dt><dd>{context.source.type === 'runtime' ? tx('trajectory:copy.runtime') : tx('trajectory:copy.extension-value', { p0: context.source.contributor })}</dd></>}
+            {record.request && selection.cell_type !== 'ContextRow' && <><dt>{tx('trajectory:trajectory-inspector.model')}</dt><dd>{record.request.model}</dd></>}
+            {record.tool && <><dt>{tx('trajectory:trajectory-inspector.outcome')}</dt><dd>{record.tool.outcome ?? tx('trajectory:trajectory-inspector.unknown')}</dd></>}
           </dl>
+          {record.kind === 'request' && selection.cell_type !== 'ContextRow' ? <>
+            {(['Options', 'Usage', 'Timing'] as const).map(facet => <section key={facet} className={css.summaryPreview}>
+              <Button size="sm" className={css.overviewHeading} onClick={() => onFacet(facet)}>{facetLabel(tx, facet)} →</Button>
+              {facet === 'Usage' && !record.request?.usage && <Unavailable />}
+              {facet === 'Usage' && record.request?.usage && <dl className={css.facts}><dt>{tx('trajectory:trajectory-inspector.input-tokens')}</dt><dd>{record.request.usage.input_tokens}</dd><dt>{tx('trajectory:trajectory-inspector.output-tokens')}</dt><dd>{record.request.usage.output_tokens}</dd></dl>}
+              {facet === 'Timing' && <dl className={css.facts}><dt>{tx('trajectory:trajectory-inspector.journal-wall-duration')}</dt><dd>{formatDuration(tx, count(record.timing.duration_ms))}</dd></dl>}
+              {facet === 'Options' && request && <Structured value={{ value: Object.fromEntries(request.options.map(option => [option.name, option.value.value])), truncated: request.omitted_option_count > 0 }} label={facetLabel(tx, facet)} />}
+            </section>)}
+          </> : record.kind === 'tool' ? <>
+            <section className={css.summaryPreview}>
+              <Button size="sm" className={css.overviewHeading} onClick={() => onFacet(tool?.source ? 'Code' : 'Input')}>{facetLabel(tx, tool?.source ? 'Code' : 'Input')} →</Button>
+              <ToolFacet state={toolState} facet="Input">{tool?.source
+                ? <CodeBlock code={tool.source.text.text} lang={tool.source.language ?? undefined} lineNumbers copyLabel={tx('trajectory:copy.copy-source')} copiedLabel={tx('trajectory:trajectory-inspector.copied')} />
+                : tool?.arguments && <Structured value={tool.arguments} label={tx('trajectory:trajectory-inspector.recorded-arguments')} />}</ToolFacet>
+            </section>
+            <section className={css.summaryPreview}>
+              <Button size="sm" className={css.overviewHeading} onClick={() => onFacet('Result')}>{facetLabel(tx, 'Result')} →</Button>
+              <ToolFacet state={toolState} facet="Result">{tool?.result?.blocks.map((block, index) => <Block key={index} block={block} />)}{toolAttachments.length > 0 && <Attachments artifacts={toolAttachments} />}</ToolFacet>
+            </section>
+          </> : <section className={css.summaryPreview}>
+            {sections.includes('Content') && <Button size="sm" className={css.overviewHeading} onClick={() => onFacet('Content')}>{facetLabel(tx, 'Content')} →</Button>}
+            {messageContent(true)}
+          </section>}
           <Truncated of={record.truncated || detail?.truncated} />
-
           </>
         )}
 
@@ -631,78 +589,16 @@ export function TrajectoryInspector({
           </dl>
           </section></>}
 
-        {active === 'Content' && messages.map(message => (
-          <section key={message.message_id}>
-            <dl className={css.facts}>
-              <dt>{tx('trajectory:trajectory-inspector.role')}</dt>
-              <dd>{message.role}</dd>
-              {message.source && (
-                <>
-                  <dt>{tx('trajectory:trajectory-inspector.provenance')}</dt>
-                  <dd>{message.source}</dd>
-                </>
-              )}
-            </dl>
-            {message.blocks.map((block, index) => (
-              <Block key={index} block={block} />
-            ))}
-            <Truncated of={message.truncated} />
-          </section>
-        ))}
+        {active === 'Content' && messageContent(true)}
+        {active === 'Raw' && messageContent(false)}
 
-        {active === 'Raw' && (
-          <Structured value={{ value: messages, truncated: detail?.truncated ?? false }} label={tx('trajectory:trajectory-inspector.projected-messages')} />
-        )}
-
-        {active === 'System Prompt' && request && (<><h3 className={css.sectionLabelHeading}>{tx('trajectory:trajectory-inspector.effective-system-prompt')}</h3><Text value={request.effective_system_prompt} markdown /></>)}
+        {active === 'System Prompt' && (request
+          ? request.effective_system_prompt.text === '' && !request.effective_system_prompt.truncated
+            ? <p className={css.unavailable}>{tx('trajectory:trajectory-inspector.no-system-prompt')}</p>
+            : <Text value={request.effective_system_prompt} markdown />
+          : !loading && !error ? <p className={css.unavailable} role={detail ? undefined : 'status'}>{tx(detail ? 'trajectory:trajectory-inspector.system-prompt-unavailable' : 'trajectory:trajectory-inspector.loading-record-detail')}</p> : null)}
 
         {active === 'Diff' && <PromptDiff record={record} detail={detail} />}
-
-        {active === 'Thinking' && messages.map(message => <section key={message.message_id}>{message.blocks.filter(block => block.type === 'reasoning').map((block, index) => <Text key={index} value={block.text} markdown />)}</section>)}
-
-        {active === 'Context' && record.request && (
-          <ContextAdditions
-            additions={record.request.context_additions}
-            truncated={record.request.context_truncated}
-            selectedId={selection.context_message_id}
-          />
-        )}
-
-        {active === 'Context' && request && (
-          <>
-            {request.contributions.map(contribution => (
-              <section key={contribution.message_id} className={css.requestMessage}>
-                <h3 className={css.sectionLabelHeading}>{tx('trajectory:trajectory-inspector.accepted-contribution')}</h3>
-                <p className={css.note}>{tx('trajectory:trajectory-inspector.frozen-request-context-not-current-domain-state')}</p>
-                <Structured value={{ value: contribution, truncated: false }} label={tx('trajectory:trajectory-inspector.accepted-contribution-metadata')} />
-              </section>
-            ))}
-            <h3 className={css.sectionLabelHeading}>{tx('trajectory:trajectory-inspector.reconstructed-request-context')}</h3>
-            <p className={css.note}>
-              {tx('trajectory:trajectory-inspector.the-exact-provider-neutral-messages-this-request-carried-rebuilt')}</p>
-            {request.messages.map((entry, index) => (
-              <section key={entry.message_id ?? index} className={css.requestMessage} data-context-message-id={entry.message_id} data-selected={entry.message_id === selection.context_message_id || undefined}>
-                <h4 className={css.blockLabel}>
-                  {entry.role}
-                  {entry.source ? tx('trajectory:trajectory-inspector.value', { p0: entry.source }) : ''}
-                  {entry.message_id ? (
-                    <span className={css.machine}> {entry.message_id}</span>
-                  ) : (
-                    <span className={css.note}> {tx('trajectory:trajectory-inspector.request-only-no-canonical-identity')}</span>
-                  )}
-                </h4>
-                {entry.blocks.map((block, blockIndex) => (
-                  <Block key={blockIndex} block={block} />
-                ))}
-                <Truncated of={entry.truncated} />
-              </section>
-            ))}
-            {request.messages_truncated && (
-              <p className={css.truncated}>
-                {tx('trajectory:trajectory-inspector.older-context-omitted-at-the-inspection-bound-the-newest-items-a')}</p>
-            )}
-          </>
-        )}
 
         {active === 'Input' && (
           <ToolFacet state={toolState} facet={active}>
@@ -796,6 +692,7 @@ export function TrajectoryInspector({
               <Block key={index} block={block} />
             ))}
             <Truncated of={tool.result.blocks_truncated} />
+            {toolAttachments.length > 0 && <Attachments artifacts={toolAttachments} />}
           </> : <p className={css.unavailable}>{tx('trajectory:trajectory-inspector.no-canonical-tool-result-is-recorded-at-this-read-cut')}</p>}
         </ToolFacet>}
 
@@ -805,8 +702,6 @@ export function TrajectoryInspector({
 
         {active === 'Tools' && request && (
           <>
-            <p className={css.note}>
-              {tx('trajectory:trajectory-inspector.the-exact-historical-tool-catalog-this-request-carried-not-the-c')}</p>
             {request.tools.length === 0 && <p className={css.unavailable}>{tx('trajectory:trajectory-inspector.no-tool-definitions-recorded')}</p>}
             {request.tools.map(definition => (
               <Definition key={definition.tool_id} definition={definition} />
@@ -903,9 +798,6 @@ export function TrajectoryInspector({
           </dl>
         )}
 
-        {active === 'Artifacts' && (
-          <Attachments artifacts={[...record.attachments, ...(tool?.result?.attachments ?? [])]} />
-        )}
       </InspectorPanel>
       </Tabs>
     </aside>

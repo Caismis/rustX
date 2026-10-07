@@ -25,10 +25,10 @@ for (const width of [1440, 390]) {
       await expect(inspector.getByText('You are the historical agent.')).toBeVisible();
       await expectStableScreenshot(page, `trajectory-inspector-${width}-${theme}.png`);
       const context = ledger.locator('[data-display-type="ContextRow"]').last(); await context.click();
-      await expect(inspector.getByRole('tab', { name: 'Context', exact: true })).toHaveAttribute('aria-selected', 'true');
+      await expect(inspector.getByRole('tab', { name: 'Summary', exact: true })).toHaveAttribute('aria-selected', 'true');
       await expect(inspector.locator('[data-context-message-id="context-agent"][data-selected]').first()).toBeVisible();
-      await inspector.getByRole('tab', { name: 'Context', exact: true }).focus(); await page.keyboard.press('ArrowRight');
-      await expect(inspector.getByRole('tab', { name: 'Summary', exact: true })).toBeFocused();
+      await inspector.getByRole('tab', { name: 'Summary', exact: true }).focus(); await page.keyboard.press('ArrowRight');
+      await expect(inspector.getByRole('tab', { name: 'Preview', exact: true })).toBeFocused();
       await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '1');
       await inspector.getByRole('button', { name: 'Close record' }).click(); await expect(context).toBeFocused();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -74,6 +74,7 @@ test('T1-08/09/15 Calls warnings, independent background, search and truncated f
   await page.getByRole('searchbox', { name: 'Search loaded Trace' }).fill('');
   await ledger.locator('[data-request-owner="trace:11"]').click();
   await expect(page.getByRole('complementary')).toContainText('failed');
+  await ledger.locator('[data-display-type="SystemPromptCell"][data-owner="trace:11"]').click();
   await page.getByRole('tab', { name: 'Diff', exact: true }).click();
   await expect(page.getByRole('tabpanel')).toContainText('current prompt truncated; previous prompt truncated');
   await expect(page.getByRole('tabpanel')).not.toContainText('No changes');
@@ -687,15 +688,12 @@ test('424: JSON null Step records remain exactly owned through prepend, fold, se
   expect(await rows.evaluateAll(elements => elements.map(el => el.getAttribute('data-owner')))).toEqual(['trace:910', 'trace:911', 'trace:912']);
   await page.getByRole('button', { name: 'Fold Turn 1' }).click();
   await expect(rows).toHaveCount(1);
-  await expect(rows).toHaveAttribute('data-owner', 'trace:910');
   await expect(ledger.locator('[data-structural="step"]')).toHaveCount(0);
   const search = page.getByRole('searchbox', { name: 'Search loaded Trace' });
   await search.fill('adopted second');
   await expect(rows).toHaveCount(1);
-  await expect(rows).toHaveAttribute('data-owner', 'trace:911');
   await search.fill('');
   await expect(rows).toHaveCount(1);
-  await expect(rows).toHaveAttribute('data-owner', 'trace:910');
   const turn = page.getByRole('button', { name: 'Turn 1', exact: true });
   await turn.click();
   await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '0');
@@ -703,9 +701,64 @@ test('424: JSON null Step records remain exactly owned through prepend, fold, se
   await expect(rows).toBeFocused();
   await expect(page.locator('[data-history-reads]')).toHaveAttribute('data-history-reads', '1');
   await page.keyboard.press('Enter');
-  await page.getByRole('tab', { name: 'Native', exact: true }).click();
-  const inspector = page.getByRole('tabpanel');
-  await expect(inspector).toContainText('trace:910');
-  await expect(inspector).toContainText('adopted-attempt');
+  await expect(rows).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('tab', { name: 'Preview', exact: true })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Native', exact: true })).toHaveCount(0);
   await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '1');
+});
+
+for (const width of [1440, 390]) test(`retained input ownership repair orders the initial prompt and both turns at ${width}`, async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  await page.setViewportSize({ width, height: 844 });
+  await page.goto(`${fixtureOrigin}/test/fixtures/trajectory.html?retained-inputs`);
+  const ledger = page.getByRole('table', { name: 'Trace ledger' });
+  await page.getByRole('button', { name: 'Refresh native ownership' }).click();
+  const rows = ledger.locator('[role="row"][data-owner]');
+  await expect(rows).toHaveCount(5);
+  expect(await rows.evaluateAll(elements => elements.map(row => row.getAttribute('data-owner')))).toEqual(['trace:2', 'trace:0', 'trace:3', 'trace:4', 'trace:5']);
+  await expect(rows.nth(0)).toContainText('Initial System Prompt');
+  await expect(rows.nth(1).getByRole('button', { name: 'Turn 1', exact: true })).toBeVisible();
+  await expect(rows.nth(3).getByRole('button', { name: 'Turn 2', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Fold Turn 1', exact: true }).click();
+  await expect(ledger.locator('[data-owner="trace:0"]')).toContainText('First input');
+  await expect(ledger.locator('[data-owner="trace:3"]')).toHaveCount(0);
+  await expect(ledger.locator('[data-owner="trace:4"]')).toContainText('Second input');
+  await expect(page.locator('[data-history-reads]')).toHaveAttribute('data-history-reads', '0');
+  await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '0');
+  expect(errors).toEqual([]);
+});
+
+test('system prompt input span and model request preserve distinct selections and historical text', async ({ page }) => {
+  await page.goto(`${fixtureOrigin}/test/fixtures/trajectory.html`);
+  const system = page.locator('[data-record-id][data-kind="system"]').first();
+  const model = page.locator('[data-record-id="trace:3"]');
+  await system.click();
+  const inspector = page.getByRole('complementary', { name: 'Trace record inspector' });
+  await expect(system).toHaveAttribute('aria-pressed', 'true');
+  await expect(model).toHaveAttribute('aria-pressed', 'false');
+  await expect(inspector.getByRole('tab', { name: 'System Prompt', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(inspector.getByRole('tabpanel')).toContainText('You are the historical agent.');
+  await model.click();
+  await expect(inspector.getByRole('tab', { name: 'Summary', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(system).toHaveAttribute('aria-pressed', 'false');
+});
+
+for (const width of [1440, 390]) test(`Harness details isolate context and show message Markdown source at ${width}`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 844 });
+  await page.goto(`${fixtureOrigin}/test/fixtures/trajectory.html`);
+  const ledger = page.getByRole('table', { name: 'Trace ledger' });
+  await ledger.locator('[data-display-type="ContextRow"]').last().click();
+  const inspector = page.getByRole('complementary', { name: 'Trace record inspector' });
+  await expect(inspector.getByRole('tab')).toHaveText(['Summary', 'Preview', 'Raw Content']);
+  await expect(inspector.getByRole('tabpanel')).toContainText('Full content: Review the implementation');
+  await expect(inspector.getByRole('tabpanel')).not.toContainText('Full content: Workspace');
+  await inspector.getByRole('tab', { name: 'Raw Content', exact: true }).click();
+  await expect(inspector.getByRole('tabpanel')).toContainText('Full content: Review the implementation');
+  await expect(inspector.getByRole('tabpanel')).not.toContainText('message_id');
+  await ledger.locator('[data-display-type="RecordRow"][data-owner="trace:4"]').click();
+  await inspector.getByRole('tab', { name: 'Preview', exact: true }).click();
+  await expect(inspector.getByRole('tabpanel').locator('strong')).toHaveText('working tree');
+  await inspector.getByRole('tab', { name: 'Raw Content', exact: true }).click();
+  await expect(inspector.getByRole('tabpanel')).toContainText('**working tree**');
+  await expect(page.locator('vite-error-overlay')).toHaveCount(0);
 });

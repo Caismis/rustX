@@ -525,7 +525,9 @@ jobs:
       # this is not Finder/Terminal GUI smoke and does not duplicate browser E2E.
       - name: Desktop adapter and Host boundaries
         working-directory: web-console
-        run: pnpm exec vitest run test/desktop-host.test.ts test/document-archive.test.ts test/document-integration.test.ts
+        run: |
+          pnpm run build:host
+          pnpm exec vitest run test/desktop-host.test.ts test/document-archive.test.ts test/document-integration.test.ts test/workbench-host.test.ts
 
   web-console:
     name: Full Web conformance

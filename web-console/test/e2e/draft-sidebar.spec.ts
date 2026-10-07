@@ -1,0 +1,36 @@
+import { test, expect } from '@playwright/test';
+const origin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
+
+test('new conversation appears above history and disappears when leaving the unsent draft', async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  await page.goto(`${origin}/test/fixtures/shell.html`);
+  await page.getByRole('button', { name: 'Open Session A', exact: true }).click();
+  const group = page.locator('[data-workspace-group] [role=treeitem][aria-expanded]').first();
+  await group.press('Enter');
+  await page.getByRole('button', { name: 'New Conversation', exact: true }).nth(1).click();
+  const draft = page.locator('[data-draft-conversation]');
+  await expect(draft).toBeVisible();
+  await expect(draft).toHaveAttribute('aria-selected', 'true');
+  await expect(group).toHaveAttribute('aria-expanded', 'true');
+  expect(await draft.boundingBox()).toBeTruthy();
+  expect((await draft.boundingBox())!.y).toBeLessThan((await page.locator('[data-session-id=A]').boundingBox())!.y);
+  await page.locator('textarea').fill('unsent input');
+  await draft.getByRole('button').click();
+  await expect(page.locator('textarea')).toBeFocused();
+  await page.getByRole('button', { name: 'New Conversation', exact: true }).nth(1).click();
+  await expect(draft).toHaveCount(1);
+  await expect(page.locator('textarea')).toHaveValue('unsent input');
+  await page.screenshot({ path: '/tmp/rustx-nav-qa/draft-sidebar.png' });
+  await page.getByRole('button', { name: 'View options' }).click();
+  await page.getByRole('menuitem', { name: 'Flat view', exact: true }).click();
+  await expect(draft).toBeVisible();
+  await page.getByRole('button', { name: 'Search Sessions', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Search Session metadata', exact: true }).fill('Session A');
+  await expect(draft).toHaveCount(0);
+  await page.getByRole('button', { name: 'Clear search' }).click();
+  await expect(draft).toBeVisible();
+  await page.getByRole('button', { name: 'Open Session A', exact: true }).click();
+  await expect(draft).toHaveCount(0);
+  await expect(page.locator('[data-session-id=A]')).toBeVisible();
+  expect(errors).toEqual([]);
+});

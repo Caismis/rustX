@@ -17,7 +17,9 @@ async function begin(page: Page, language = 'en', files = false, model?: 'explic
 for (const language of ['en', 'zh']) test(`create ACK renders Conversation before attach/catalog; remount owns exactly one send (${language})`, async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', e => errors.push(e.message));
   await begin(page, language, true);
+  await expect(page.locator('[data-draft-conversation]')).toBeVisible();
   await release(page, 'session/create');
+  await expect(page.locator('[data-draft-conversation]')).toHaveCount(0);
   await expect(page.locator('#session-view')).toHaveAttribute('data-phase', 'active');
   await expect(page.locator('[data-first-submission]')).toHaveAttribute('data-first-submission', 'attaching');
   await expect.poll(() => methods(page)).toContain('session/attach');

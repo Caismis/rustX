@@ -1,9 +1,9 @@
 import { traceStateLabel } from '../../bindings/status-labels';
 import type { Translate } from '../../locale/translation';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/layout.ts; see PROVENANCE.md. */
-import type { TraceContextKind, TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v35';
+import type { TraceContextKind, TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v36';
 
-export type TrajectoryFacet = 'Summary' | 'System Prompt' | 'Diff' | 'Context' | 'Tools' | 'Options' | 'Usage' | 'Timing' | 'Native' | 'Content' | 'Thinking' | 'Raw' | 'Input' | 'Code' | 'Result' | 'Schema' | 'Artifacts';
+export type TrajectoryFacet = 'Summary' | 'System Prompt' | 'Diff' | 'Tools' | 'Options' | 'Usage' | 'Timing' | 'Native' | 'Content' | 'Raw' | 'Input' | 'Code' | 'Result' | 'Schema';
 export interface TrajectorySelection {
   display_key: string;
   owner_record_id: string;
@@ -76,7 +76,7 @@ export function systemPresentation(tx: Translate, record: TraceRecord): { label:
     : [promptLabel, toolsLabel].filter(Boolean).join(' · ');
   if (!label) return;
   const facet = prompt === 'changed' ? 'Diff' : prompt === 'initial' ? 'System Prompt'
-    : tools === 'changed' || tools === 'initial' ? 'Tools' : 'Summary';
+    : tools === 'changed' || tools === 'initial' ? 'Tools' : 'System Prompt';
   return { label, facet };
 }
 
@@ -115,7 +115,7 @@ function cellsOf(tx: Translate, record: TraceRecord): InspectableDisplayItem[] {
   const change = systemPresentation(tx, record);
   if (change) cells.push({ ...origin(record, 'system', change.label, request.system_prompt.preview?.text ?? (change.facet === 'Tools' ? (request.tool_catalog === 'changed' ? tx('trajectory:copy.frozen-tool-catalog-changed') : tx('trajectory:copy.initial-frozen-tool-catalog')) : tx('trajectory:copy.prompt-preview-unavailable')), change.facet, record.id, request.request_id), type: 'SystemPromptCell' });
   for (const context of request.context_additions) {
-    cells.push({ ...origin(record, 'context', contextKindLabel(tx, context.context_kind), context.preview?.text ?? tx('trajectory:trajectory-inspector.content-unavailable'), 'Context', record.id, request.request_id, context.message_id), type: 'ContextRow', context, context_message_id: context.message_id });
+    cells.push({ ...origin(record, 'context', contextKindLabel(tx, context.context_kind), context.preview?.text ?? tx('trajectory:trajectory-inspector.content-unavailable'), 'Summary', record.id, request.request_id, context.message_id), type: 'ContextRow', context, context_message_id: context.message_id });
   }
   cells.push({ ...origin(record, 'request-boundary', tx('trajectory:copy.request'), request.model, 'Summary', record.id, request.request_id), type: 'RequestBoundary' });
   return cells;

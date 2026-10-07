@@ -1,0 +1,5 @@
+buffers 0.1.1
+Author: James Halliday <mail@substack.net>
+Source: git://github.com/substack/node-buffers.git
+The published package and registry manifest contain no license declaration or license text.
+This is a Node-only transitive dependency of ExcelJS; it is not included in the browser document parser bundle. No license grant is inferred here.
