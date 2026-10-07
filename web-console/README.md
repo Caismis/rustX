@@ -476,6 +476,18 @@ applications, authorization, launch feedback and platform limitations.
 
 ### Workspace panel
 
+The Files tab follows Harness's expandable directory tree, natural directory-first
+ordering, file-type artwork and full native-path toolbar. Opening a file creates
+an adjacent tab; repeated opens focus that tab, while the tree keeps its expansion
+and scroll position. Each file keeps its wrap/view/scroll preferences. Inactive
+file tabs retain no source bytes or read request. Code and plain-text views share
+explicit reload, and the code view adds syntax highlighting, line numbers and
+clipboard controls. Desktop actions reread the native Session target and validate
+workspace-relative paths through the same descriptor traversal as file reads.
+The macOS file-manager action reveals a file in Finder; Linux opens its parent
+folder. Editor actions pass the literal file path with the Session root as cwd.
+
+
 The conversation header's right-panel button opens a Start page with Workspace
 files and New terminal. Pages and shell tabs share one header strip: “+” opens
 a Start tab, selecting an entry replaces that Start tab, and the shell menu

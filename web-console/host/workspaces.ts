@@ -1,8 +1,8 @@
 /** Local trusted Product Host. This module runs in Node, never in the browser. */
-import { WorkspaceTerminals } from './workbench.ts';
+import { WorkspaceTerminals, withWorkspacePath } from './workbench.ts';
 import { OfficeSettlementError } from './documents/office-cgroup.ts';
-import { readFileSync, writeFileSync, renameSync, realpathSync, statSync, existsSync } from 'node:fs';
-import { isAbsolute } from 'node:path';
+import { readFileSync, writeFileSync, renameSync, realpathSync, statSync, fstatSync, existsSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { sameEndpoint } from '../src/workspaces/endpoint.ts';
 import { WorkspaceHostError } from '../src/workspaces/host.ts';
@@ -174,7 +174,23 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     const cwd = await this.readSession(this.config.endpoint, this.config.transportToken, target);
     this.mutationScope(scope); signal?.throwIfAborted();
     if (!this.classifyLocation(cwd).authorized) throw new Error('Workspace is not authorized');
-    const value = await this.terminals.request(JSON.stringify([target.session_id, target.active_node]), realpathSync(cwd), call.request, signal);
+    const root = realpathSync(cwd);
+    if (call.request.kind === 'applications') return { applications: this.desktop.catalog(true) };
+    if (call.request.kind === 'open') {
+      const request = call.request;
+      if (!['files', 'code'].includes(request.application) || typeof request.directory !== 'boolean') throw new Error('Invalid workspace application');
+      if (this.desktopPending) throw new Error('A desktop launch is already pending');
+      this.desktopPending = true;
+      try {
+        const launch = this.desktop.prepare(request.application);
+        await withWorkspacePath(root, request.path, request.directory, fd => {
+          if (!request.directory && !fstatSync(fd).isFile()) throw new Error('Not a regular file');
+          return launch(root, join(root, request.path), !request.directory);
+        });
+        return {};
+      } finally { this.desktopPending = false; }
+    }
+    const value = await this.terminals.request(JSON.stringify([target.session_id, target.active_node]), root, call.request, signal);
     this.mutationScope(scope); signal?.throwIfAborted();
     return value;
   }

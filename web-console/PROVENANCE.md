@@ -1383,3 +1383,16 @@ on rustX Session-scoped PTYs. The bounded two-pane presentation uses the origina
 strip/chip/divider geometry; it does not import Harness's runtime or plugin store.
 Browser checks cover guide geometry, light/dark terminal backgrounds, actual
 shell output, focus, tabs, split/merge/resize, shortcuts and a Chinese narrow view.
+
+### Workspace file tree and source tabs
+
+The file browser and viewer use the Harness `5badb15009ae1756c3afe0ae0cef1faafc290ccc`
+`ui-sidebar-files` FilesBody/store, document TextPreview/CodeBody, PathLabel,
+FileTypeIcon/CodeFileIcon artwork, CodeToolbar/CodeCard, and code-language table.
+`source-inventory.json` records each immutable source and adapted dependency.
+The 38px path toolbar, 18px tree indentation, natural folder-first ordering,
+separate resource tabs, persisted tree/view preferences and icon toolbar follow
+those sources. Harness remotes, stores and Session authority are excluded: rustX's
+existing Product Host admits every listing/read/desktop open against the native
+Session and uses descriptor-relative filesystem validation. The existing 1 MiB
+text limit remains; this change does not add binary document renderers.

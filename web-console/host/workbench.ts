@@ -12,34 +12,39 @@ const MAX_OUTPUT = 256 * 1024;
 interface TerminalState { owner: string; shell: string; pty: IPty; output: string; offset: number; exited: boolean; listeners: Set<() => void>; done: Promise<void> }
 /** Descriptor-relative traversal rejects symlinks at every component, including
  * ancestors of the authorized root. POSIX openat/fdopendir work on Linux and macOS. */
-export function workspaceFile(cwd: string, path: string, read: boolean): WorkbenchResult {
+export function withWorkspacePath<T>(cwd: string, path: string, directory: boolean, action: (fd: number) => T): T {
   if (typeof path !== 'string' || path.length > 4096 || path.startsWith('/') || path.split('/').some(p => p === '..' || p === '.' || p.includes('\0'))) throw new Error('Invalid workspace path');
   let fd = openSync('/', constants.O_RDONLY | constants.O_DIRECTORY);
   try {
     const parts = [...cwd.split('/').filter(Boolean), ...path.split('/').filter(Boolean)];
     parts.forEach((part, index) => {
-      const directory = index < parts.length - 1 || !read;
-      const next = workspaceDescriptors.openChild(fd, part, directory);
+      const next = workspaceDescriptors.openChild(fd, part, index < parts.length - 1 || directory);
       closeSync(fd); fd = next;
     });
+    return action(fd);
+  } finally { closeSync(fd); }
+}
+export function workspaceFile(cwd: string, path: string, read: boolean): WorkbenchResult {
+  return withWorkspacePath(cwd, path, !read, fd => {
     if (!read) {
       const entries = workspaceDescriptors.entries(fd).map(entry => ({ ...entry, name: new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(entry.name) }));
-      return { entries: entries.sort((a, b) => Number(b.directory) - Number(a.directory) || a.name.localeCompare(b.name)) };
+      return { cwd, entries: entries.sort((a, b) => Number(b.directory) - Number(a.directory) || a.name.localeCompare(b.name)) };
     }
     const stat = fstatSync(fd);
     if (!stat.isFile() || stat.size > 1024 * 1024) throw new Error('Preview supports regular text files up to 1 MiB');
     const bytes = Buffer.alloc(1024 * 1024 + 1); let size = 0;
     while (size < bytes.length) { const count = readSync(fd, bytes, size, bytes.length - size, null); if (!count) break; size += count; }
     if (size > 1024 * 1024 || bytes.subarray(0, size).includes(0)) throw new Error('Preview supports text files up to 1 MiB');
-    return { text: new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, size)) };
-  } finally { closeSync(fd); }
+    return { cwd, text: new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, size)) };
+  });
 }
+
 export class WorkspaceTerminals {
   private terminals = new Map<string, TerminalState>();
   readonly shells = ['/bin/bash', '/bin/zsh', '/bin/sh'].filter(existsSync);
   close() { for (const terminal of this.terminals.values()) void this.stop(terminal); this.terminals.clear(); }
   private async stop(terminal: TerminalState) { if (!terminal.exited) terminal.pty.kill('SIGKILL'); await terminal.done; }
-  async request(owner: string, cwd: string, request: WorkbenchRequest, signal?: AbortSignal): Promise<WorkbenchResult> {
+  async request(owner: string, cwd: string, request: Exclude<WorkbenchRequest, { kind: 'applications' | 'open' }>, signal?: AbortSignal): Promise<WorkbenchResult> {
     if (request.kind === 'files' || request.kind === 'read') return workspaceFile(cwd, request.path, request.kind === 'read');
     const list = () => ({ terminals: [...this.terminals].filter(([, t]) => t.owner === owner).map(([id, t]) => ({ id, shell: t.shell, exited: t.exited })), shells: this.shells });
     if (request.kind === 'terminals') return list();

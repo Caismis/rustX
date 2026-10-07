@@ -1387,6 +1387,7 @@
       "retained_dependencies": [
         "../primitives/clipboard.ts",
         "./CodeBlock.module.css",
+        "./CodeToolbar",
         "./highlight.ts",
         "./useViewportHighlighting.ts",
         "clsx",
@@ -1398,7 +1399,7 @@
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "8f463a5055d9266589cba2d93c0296f4bc927b2786c16050dddb31094320642f"
+      "local_sha256": "a68d2cc8adf5033752df669ef7fd9185be957add4246913620bd8173df27c0d0"
     },
     {
       "upstream": "packages/client/ui-primitives/src/markdown/MarkdownText.module.css",
@@ -3289,7 +3290,7 @@
         "dynamic language registration"
       ],
       "additional_sources": [],
-      "local_sha256": "1150cf72b9881d6034cec27b20c32561d9b41d71642d5c21673a9cfab2c945ab"
+      "local_sha256": "f1ca2ff2ad541a7b6dfc08dc2d032db6e008c67ba3a987fb772f669c26f18431"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/locales.ts",
@@ -3716,13 +3717,14 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../locale/react",
-        "../../presentation/primitives/Button",
+        "../../presentation/primitives/FileTypeIcon",
         "../../presentation/primitives/Menu",
         "../../presentation/primitives/icons",
         "../../presentation/right-panel/Workbench.module.css",
         "../../workspaces/desktop",
         "../../workspaces/host",
         "../../workspaces/workbench",
+        "./WorkbenchFiles",
         "./WorkbenchIcons",
         "./WorkbenchTerminal",
         "react"
@@ -3731,7 +3733,7 @@
         "Harness slot registry",
         "Harness terminal Host and Session store"
       ],
-      "local_sha256": "d0a280470a2d65677fd5f3803a36b9148858f2173c7a2410dca33dc839da56cb",
+      "local_sha256": "d7472c6883869fc4b4d801c86102da05f3c90f54816c4236b3e82fb56f40e533",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-sidebar-terminal/src/client/TerminalGuide.tsx",
@@ -3760,7 +3762,7 @@
         "Harness slot registry",
         "Harness terminal Host and Session store"
       ],
-      "local_sha256": "a2503b985f097683144ee84c72d42620831d9181d66f1d6186f5bad6b3cb5163",
+      "local_sha256": "9ae7a373e1e0a3e9c7703d13eba0da068e6ec25630073d9dc803153538c7e40a",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-dockkit/src/components/dockkit.module.css",
@@ -3874,6 +3876,231 @@
       ],
       "additional_sources": [],
       "local_sha256": "9351b1526a0946313dda6860f755f224ef9c3e404af772a995cf7482be4db097"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/FileTypeIcon.tsx",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "4cf95fa56eb3bfa20d899672573a999acca6d63f03decd56bf46469422308252",
+      "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime.",
+      "destination": "web-console/src/presentation/primitives/FileTypeIcon.tsx",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness runtime, slot/store authority and remote transport"
+      ],
+      "retained_dependencies": [
+        "./CodeFileIcon.tsx",
+        "./FileTypeIcon.module.css",
+        "./code-file-types.ts",
+        "./icons/props.ts",
+        "clsx",
+        "react"
+      ],
+      "local_sha256": "edef0a274ba74127920d50442b1639fdbdca3b8ac6d949f9711a1a3c6cf4456b"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/FileTypeIcon.module.css",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "bc5756f2834772d4c7cc661d15417aafe0af8d00c959cdfe2dcde19bebcf62fe",
+      "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime.",
+      "destination": "web-console/src/presentation/primitives/FileTypeIcon.module.css",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness runtime, slot/store authority and remote transport"
+      ],
+      "retained_dependencies": [],
+      "local_sha256": "9017722b8fa2e0c1f6bcbf9ede30b655a464b07a319c1d4ad04d97606602a0b8"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/CodeFileIcon.tsx",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "882db02f0af7a6624006166c781cb03119e96febe445278941732a1320ecbbdf",
+      "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime.",
+      "destination": "web-console/src/presentation/primitives/CodeFileIcon.tsx",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness runtime, slot/store authority and remote transport"
+      ],
+      "retained_dependencies": [
+        "./code-file-icon-artwork.ts",
+        "./code-file-types.ts",
+        "./icons/props.ts",
+        "react"
+      ],
+      "local_sha256": "37b20340397d5199b529056d75a5be1e8d719687132e55ea7de1730ffb4dff7e"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/code-file-types.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "d0a34f3ba4affb69335e319ff928824d3427808caaadcec1e9fc1d4b548d42a2",
+      "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime.",
+      "destination": "web-console/src/presentation/primitives/code-file-types.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness runtime, slot/store authority and remote transport"
+      ],
+      "retained_dependencies": [],
+      "local_sha256": "9674c20cb4ac83da6e7e074809d7fa12dd3ec1c627bc42c1100ffc41709130ba"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/code-file-icon-artwork.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "1d4c6e8d77f46213258f6bf91acbaa4606cbbe09dff9b3fdc7404a90d5208515",
+      "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime.",
+      "destination": "web-console/src/presentation/primitives/code-file-icon-artwork.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness runtime, slot/store authority and remote transport"
+      ],
+      "retained_dependencies": [
+        "./code-file-types.ts"
+      ],
+      "local_sha256": "e252d707890d783c1265b9e03a0c49beae19dbb774989a49f78a22941833b5cd"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/PathLabel.tsx",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "d58b26243a4bb4084f3754fffd48fef1bafcae9361c4579d880e154ecd209be8",
+      "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime.",
+      "destination": "web-console/src/presentation/primitives/PathLabel.tsx",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness runtime, slot/store authority and remote transport"
+      ],
+      "retained_dependencies": [
+        "./PathLabel.module.css",
+        "clsx",
+        "react"
+      ],
+      "local_sha256": "33137725a9e1cd866afcc606a270c6754c75bcc8b09e0287b97c464140d81f10"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/PathLabel.module.css",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "d9a0a5851bcf16bfb59a5e94223119aff73337c42a255bc2a9dd0df2c4caa0f9",
+      "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime.",
+      "destination": "web-console/src/presentation/primitives/PathLabel.module.css",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness runtime, slot/store authority and remote transport"
+      ],
+      "retained_dependencies": [],
+      "local_sha256": "a4a147a3dee8b65cc6869055b0d32d56718052673d3e17842242ca130d4bee32"
+    },
+    {
+      "upstream": "packages/util/code-language/src/index.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "98edcfd8abd18ed277ba024a135a50b0d33c30e3a9786f88cceacbe523f48649",
+      "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime.",
+      "destination": "web-console/src/presentation/primitives/file-language.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness runtime, slot/store authority and remote transport"
+      ],
+      "retained_dependencies": [],
+      "local_sha256": "e71bc35c471469066f2dc704821d578c9278146ec477ed33e12a70b5e2cf073c"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-files/src/client/FilesBody.tsx",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "52ac73a7a921b9702096331c29dd4a8b7f559da6e9d92ea3a225a62f826f52ee",
+      "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime.",
+      "destination": "web-console/src/app/components/WorkbenchFiles.tsx",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness runtime, slot/store authority and remote transport"
+      ],
+      "retained_dependencies": [
+        "../../locale/react",
+        "../../presentation/markdown/CodeBlock",
+        "../../presentation/primitives/FileTypeIcon",
+        "../../presentation/primitives/Menu",
+        "../../presentation/primitives/PathLabel",
+        "../../presentation/primitives/file-language",
+        "../../presentation/primitives/icons",
+        "../../presentation/right-panel/WorkbenchFiles.module.css",
+        "../../workspaces/desktop",
+        "../../workspaces/workbench",
+        "react"
+      ],
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-sidebar-files/src/client/store.ts",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "e799ba4a770e56670360c485f79c2df8bbc158fc4525720a543dafe5167f410e",
+          "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime."
+        },
+        {
+          "upstream": "packages/client/ui-sidebar-documentpreview/src/client/TextPreview.tsx",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "25721b63e80b3e9b86508dc7d25a38ae56d8b433176f226b2d603d88d4051348",
+          "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime."
+        },
+        {
+          "upstream": "packages/client/ui-sidebar-documentpreview/src/client/code/CodeBody.tsx",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "189768299c97227af982f21aec4f21f72e00b37f170f7ad41114377512c52d77",
+          "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime."
+        }
+      ],
+      "local_sha256": "07ad5d7ed5301726248b1d21687e4743e2c8e8e4a597a0eae12025c9f854d553"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-files/src/client/FilesBody.module.css",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "7ac1f0f136195ad639128394edb4355133071b9ff510b7d2caefed51773a8522",
+      "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime.",
+      "destination": "web-console/src/presentation/right-panel/WorkbenchFiles.module.css",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness runtime, slot/store authority and remote transport"
+      ],
+      "retained_dependencies": [],
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-sidebar-documentpreview/src/client/code/CodeBody.module.css",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "009e8dcf43a3aa9add6788b1774624a0f717f657d1ae0c8a86170219eea20fc8",
+          "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime."
+        },
+        {
+          "upstream": "packages/client/ui-open-in-app/src/client/OpenTargetButton.module.css",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "cc8959182293fb47bab6006a24c0d12e5981667343859937ba0310d5ad6418cc",
+          "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime."
+        }
+      ],
+      "local_sha256": "b13a1b08f4a5b0b8737693e0a72ed2b9954b9d5cf29536226c411b95682de511"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/CodeToolbar.tsx",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "6bd7e7c39628894a4b92e1e8e58fbc96c8df411a5ffb14edf152d2a8f5df4b21",
+      "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime.",
+      "destination": "web-console/src/presentation/markdown/CodeToolbar.tsx",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness runtime, slot/store authority and remote transport"
+      ],
+      "retained_dependencies": [
+        "../primitives/Tooltip",
+        "../primitives/icons",
+        "./CodeToolbar.module.css",
+        "./highlight"
+      ],
+      "local_sha256": "3b909a08e8575726f1e8122a4988bf09472672ad592cca0ea24b5faf12462a6e"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/CodeCard.module.css",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "56cce1937d45385b9cb5574e8f7d89501154a1f8cd47a38da4d9051d7a740ada",
+      "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime.",
+      "destination": "web-console/src/presentation/markdown/CodeToolbar.module.css",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness runtime, slot/store authority and remote transport"
+      ],
+      "retained_dependencies": [],
+      "local_sha256": "99ca0b14683e8cdfbe86e184d809a9dec3ce8b69b6f23f6edaf93e2238c080f5"
     }
   ],
   "inspected_only": [

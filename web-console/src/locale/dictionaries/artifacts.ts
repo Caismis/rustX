@@ -1,5 +1,9 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
+  "workbench.file-tab": "Files",
+  "workbench.code": "Code",
+  "workbench.text": "Text",
+  "workbench.viewer": "View as",
   "workbench.start": "Start",
   "workbench.tabs": "Workspace tabs",
   "workbench.add-tab": "New tab",
@@ -101,6 +105,10 @@ export const en = {
 } as const;
 export type ArtifactsKey = keyof typeof en;
 export const zh = {
+  "workbench.file-tab": "文件",
+  "workbench.code": "代码",
+  "workbench.text": "文本",
+  "workbench.viewer": "查看方式",
   "workbench.start": "开始",
   "workbench.tabs": "工作区标签页",
   "workbench.add-tab": "新建标签页",

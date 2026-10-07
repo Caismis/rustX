@@ -124,12 +124,6 @@
 .entryCell { width: 380px; max-width: 100%; }
 
 .notice { margin:8px 16px; color:var(--dsw-alias-label-secondary); font-size:12px; }
-.files { display:flex; flex:1; min-height:0; flex-direction:column; }
-.path { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
-.list { overflow:auto; padding:4px 12px; }
-.list > button { display:flex; gap:8px; width:100%; padding:7px; text-align:left; border:0; background:transparent; color:inherit; font-size:12px; }
-.list > button:hover { background:var(--dsw-alias-interactive-bg-hover); }
-.source { overflow:auto; margin:0; padding:12px; font-size:12px; flex:1; }
 
 .root { --dsw-radius-xl:20px; --dsw-radius-sm:8px; height:100%; min-height:0; display:flex; color:var(--dsw-alias-label-primary); background:var(--dsw-alias-bg-base); }
 .root[hidden],.pane[hidden] { display:none; }
@@ -163,7 +157,6 @@
 .titleRow { display:flex; gap:4px; align-items:center; }
 .titleRow > div { pointer-events:auto; }
 .shellTrigger { display:flex; align-items:center; justify-content:center; width:20px; height:20px; border:0; border-radius:4px; background:transparent; color:var(--dsw-alias-label-tertiary); pointer-events:auto; padding:0; }
-.toolbar { display:flex; align-items:center; gap:8px; padding:8px; flex:none; }
 .terminal { display:flex; flex:1; flex-direction:column; min-height:0; padding-top:8px; color:var(--dsw-alias-label-primary); font-size:13px; }
 .terminalBody { flex:1; min-height:0; min-width:0; overflow:hidden; padding:8px; color:var(--dsw-alias-label-primary); background:var(--dsw-alias-bg-base); }
 .terminalBody :global(.xterm) { height:100%; }

@@ -2,6 +2,7 @@
 import { Fragment, useCallback, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { CSSProperties, ReactNode, Ref } from 'react'
 import clsx from 'clsx'
+import { CodeToolbar } from './CodeToolbar';
 import { writeClipboard } from '../primitives/clipboard.ts'
 import {
   StreamingHighlightSession, grammarLoadCount, highlightToHtml, subscribeGrammarLoaded,
@@ -31,6 +32,8 @@ export interface CodeBlockProps {
   /** Show a numbered gutter without adding numbers to copied source. Defaults to false. */
   lineNumbers?: boolean | undefined
   /** Copy-button idle label; the owner passes localized copy (this package is cordis-free, so copy arrives via props). */
+  /** Use the document viewer toolbar; the owner supplies its localized language fallback. */
+  toolbarLabel?: string
   copyLabel: string
   /** Copy-button label during the post-copy confirmation window. */
   copiedLabel: string
@@ -62,7 +65,7 @@ function renderLine(line: readonly HighlightSpan[], index: number): ReactNode {
   )
 }
 
-export function CodeBlock({ code, lang, streaming, className, contentRef, lineNumbers = false, copyLabel, copiedLabel }: CodeBlockProps) {
+export function CodeBlock({ code, lang, streaming, className, contentRef, lineNumbers = false, copyLabel, copiedLabel, toolbarLabel }: CodeBlockProps) {
   const trimmed = code.endsWith('\n') ? code.slice(0, -1) : code
   const sourceLines = lineNumbers ? trimmed.split('\n') : undefined
   const rootRef = useRef<HTMLDivElement>(null)
@@ -166,14 +169,14 @@ export function CodeBlock({ code, lang, streaming, className, contentRef, lineNu
       } as CSSProperties}>
       {/* These paired attributes are stable semantic hooks for owner styling and DOM tests. */}
       <div className={css.bannerWrap}>
-        <div className={css.banner} data-code-block-banner>
+        <>{toolbarLabel !== undefined ? <CodeToolbar lang={lang} label={toolbarLabel} copied={copied} copyLabel={copyLabel} copiedLabel={copiedLabel} onCopy={onCopy}/> : <div className={css.banner} data-code-block-banner>
           <div className={css.infostring}>{lang ?? ''}</div>
           <div className={css.action}>
-            <button type="button" className={css.copyButton} onClick={onCopy}>
+            <button type="button" className={css.copyButton} onClick={onCopy} aria-label={copied ? copiedLabel : copyLabel} title={copied ? copiedLabel : copyLabel}>
               {copied ? copiedLabel : copyLabel}
             </button>
           </div>
-        </div>
+        </div>}</>
       </div>
       <div ref={contentRef} className={css.content} data-code-block-content>{body}</div>
     </div>

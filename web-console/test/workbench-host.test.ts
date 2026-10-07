@@ -13,7 +13,7 @@ function directory() { const path = realpathSync(mkdtempSync(join(tmpdir(), 'rus
 it('lists and reads relative files, rejects traversal, symlinks, binary and oversized content', () => {
   const root = directory(), outside = directory(); mkdirSync(join(root, 'nested')); writeFileSync(join(root, 'nested/a.txt'), 'hello'); writeFileSync(join(outside, 'secret'), 'outside'); symlinkSync(outside, join(root, 'escape'));
   expect(workspaceFile(root, '', false).entries?.map(row => row.name)).toContain('nested');
-  expect(workspaceFile(root, 'nested/a.txt', true)).toEqual({ text: 'hello' });
+  expect(workspaceFile(root, 'nested/a.txt', true)).toEqual({ cwd: root, text: 'hello' });
   expect(() => workspaceFile(root, '../secret', true)).toThrow();
   expect(() => workspaceFile(root, 'escape/secret', true)).toThrow();
   expect(() => workspaceFile(root, 'escape', false)).toThrow();
@@ -40,7 +40,7 @@ it('Host rereads the exact native target and rejects a replaced authority before
   const host = new LocalWorkspaceHost({ roots: [{ id: 'root', cwd: root, displayName: 'Root' }], picker: false, metadataFile: join(root, 'metadata.json'), nativeFilesystem: 'shared', transportToken: 'test', endpoint: 'ws://localhost:8080' }, undefined, async (_endpoint, _token, target) => { expect(target).toEqual({ session_id: 'A', active_node: 'node-A' }); calls++; return root; });
   try {
     const scope = await host.listWorkspaces(); const call = { target: { session_id: 'A', active_node: 'node-A' }, request: { kind: 'read' as const, path: 'a.txt' } };
-    expect(await host.workbench(scope, call)).toEqual({ text: 'A' }); expect(calls).toBe(1);
+    expect(await host.workbench(scope, call)).toEqual({ cwd: root, text: 'A' }); expect(calls).toBe(1);
     await expect(host.workbench({ ...scope, authorityId: 'retired' }, call)).rejects.toThrow(); expect(calls).toBe(1);
   } finally { host.close(); }
 });
@@ -65,4 +65,25 @@ it('bounds native directory iteration and preserves UTF-8 filename identity', ()
   expect(workspaceFile(root, name, true).text).toBe('unicode');
   for (let i = 0; i < 2000; i++) writeFileSync(join(root, String(i)), '');
   expect(() => workspaceFile(root, '', false)).toThrow('2000');
+});
+
+it.each(['linux', 'darwin'] as const)('opens an admitted file on %s with literal argv and the Session directory as cwd', async platform => {
+  const { DesktopAdapter } = await import('../host/desktop');
+  const root = directory(), outside = directory(), name = '-汉字 "quote";$(echo x).py';
+  writeFileSync(join(root, name), 'print(1)'); symlinkSync(outside, join(root, 'escape'));
+  const launch = vi.fn(async () => ({ status: 'spawned' as const }));
+  const adapter = new DesktopAdapter({ platform, env: { PATH: '/bin', DISPLAY: ':0' }, macOSDesktop: () => true, executable: path => path, launch });
+  const host = new LocalWorkspaceHost({ roots: [{ id: 'root', cwd: root, displayName: 'Root' }], picker: false, metadataFile: join(root, 'metadata.json'), nativeFilesystem: 'shared', transportToken: 'test', endpoint: 'ws://localhost:8080' }, adapter, async (_e, _t, target) => { if (target.active_node !== 'node-A') throw new Error('Retired node'); return root; });
+  try {
+    const scope = await host.listWorkspaces(), target = { session_id: 'A', active_node: 'node-A' };
+    await host.workbench(scope, { target, request: { kind: 'open', path: name, directory: false, application: 'code' } });
+    expect(launch).toHaveBeenCalledWith(expect.objectContaining({ cwd: root, args: ['--new-window', '--', join(root, name)] }));
+    await host.workbench(scope, { target, request: { kind: 'open', path: name, directory: false, application: 'files' } });
+    expect(launch).toHaveBeenLastCalledWith(expect.objectContaining({ cwd: root, args: platform === 'darwin' ? ['-R', '--', join(root, name)] : [root] }));
+    launch.mockClear();
+    for (const path of ['../outside', '/etc/passwd', 'escape/file', 'missing']) await expect(host.workbench(scope, { target, request: { kind: 'open', path, directory: false, application: 'code' } })).rejects.toThrow();
+    await expect(host.workbench(scope, { target: { ...target, active_node: 'retired' }, request: { kind: 'open', path: name, directory: false, application: 'code' } })).rejects.toThrow('Retired');
+    await expect(host.workbench({ ...scope, authorityId: 'retired' }, { target, request: { kind: 'open', path: name, directory: false, application: 'files' } })).rejects.toThrow();
+    expect(launch).not.toHaveBeenCalled();
+  } finally { host.close(); }
 });
