@@ -4140,9 +4140,9 @@ async fn a_transient_retry_projects_retrying_model_then_the_retried_request() {
 /// `Succeeded` terminal, and exactly one terminal publication delivering
 /// the canonical answer exactly once. The only allowed difference is which
 /// intermediate disposable activity revisions each topology observed: the
-/// draining projection converges continuously; the stalled queue holds the
-/// reliable baseline plus at most one coalesced activity entry while the
-/// child runs and converges after the unpark.
+/// draining projection converges continuously; the stalled activity lane holds
+/// exactly one latest-value snapshot while reliable observations stay lossless.
+/// The projection converges after unpark.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_observation_consumer_topology_never_changes_child_execution() {
     /// The parent-side observation consumer topology of one run.
@@ -4278,23 +4278,6 @@ async fn the_observation_consumer_topology_never_changes_child_execution() {
             launch_wired_child_full(&plane, &child, "inspect the workspace", "true", wiring).await;
         let subagent_id = wired.accepted.subagent_id.clone();
 
-        // The reliable baseline of the stalled consumer: once the Running
-        // record is visible, its lifecycle observation is queued (the
-        // registry publishes under its lock before bumping the state
-        // version). No further lifecycle transition exists mid-run.
-        let baseline = if let Topology::Stalled = topology {
-            await_snapshot(
-                &plane,
-                &subagent_id,
-                |snapshot| snapshot.state == SubagentState::Running,
-                "the child record commits",
-            )
-            .await;
-            Some(bridge.as_ref().expect("the stalled bridge").queued())
-        } else {
-            None
-        };
-
         // The child is parked mid-execution with its progress reports live:
         // the same stable observation cut in every topology whose
         // observation channel is alive (the registry read model applies
@@ -4331,14 +4314,12 @@ async fn the_observation_consumer_topology_never_changes_child_execution() {
             .await;
             assert_eq!(working.state, SubagentState::Running);
         }
-        if let Some(baseline) = baseline {
+        if let Topology::Stalled = topology {
             let bridge = bridge.as_ref().expect("the stalled bridge");
-            assert!(
-                bridge.queued() <= baseline + 1,
-                "the parked queue holds the reliable baseline plus at most one coalesced \
-                 activity entry — pending observation state is O(active subagents), not \
-                 O(activity updates): baseline {baseline}, queued {}",
-                bridge.queued()
+            assert_eq!(
+                bridge.queued_activity(),
+                1,
+                "the parked activity lane holds exactly one latest-value snapshot"
             );
         }
 
@@ -4528,11 +4509,12 @@ async fn the_observation_consumer_topology_never_changes_child_execution() {
 /// observation bridge is parked before the child launches; the child runs a
 /// tool that reports 200 live progress revisions — far beyond the
 /// dispatcher's `OUTBOUND_CAPACITY` (64) or any queue capacity — and parks
-/// mid-execution. While the consumer is stalled the parent's pending queue
-/// holds the reliable lifecycle baseline plus at most one coalesced
-/// activity entry: pending observation state is O(active subagents), never
-/// O(activity updates). After the unpark the projection converges to the
-/// registry's latest revision without having observed the intermediates.
+/// mid-execution. While the consumer is stalled the parent's disposable lane
+/// holds exactly one coalesced activity entry: pending activity is
+/// O(active subagents), never O(activity updates). Reliable lifecycle and
+/// configuration updates remain independently ordered. After unpark the
+/// projection converges to the registry's latest revision without having
+/// observed the intermediates.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_stalled_parent_projection_coalesces_activity_and_converges() {
     let dir = tempfile::tempdir().expect("temp root");
@@ -4598,12 +4580,9 @@ async fn a_stalled_parent_projection_coalesces_activity_and_converges() {
     let wired = launch_wired_child(&parent.plane, &child, "inspect").await;
     let subagent_id = wired.accepted.subagent_id.clone();
 
-    // The reliable baseline: the Running lifecycle observation is queued
-    // (the registry publishes under its lock before bumping the state
-    // version) and the first request is still parked mid-stream, so no tool
-    // activity can have queued. No further lifecycle transition exists
-    // mid-run, so everything the parked queue accumulates from here is at
-    // most one coalesced activity entry.
+    // Confirm the child record before releasing its first request. Activity
+    // is counted in its own lane: unrelated reliable updates may arrive while
+    // the projection is parked, and must remain lossless.
     await_snapshot(
         &parent.plane,
         &subagent_id,
@@ -4611,8 +4590,6 @@ async fn a_stalled_parent_projection_coalesces_activity_and_converges() {
         "the child record commits",
     )
     .await;
-    let baseline = bridge.queued();
-
     // 200 live progress revisions flow while the consumer is stalled. The
     // wire may coalesce intermediates — that is the contract — but the
     // newest reported revision must land in the registry read model.
@@ -4636,10 +4613,10 @@ async fn a_stalled_parent_projection_coalesces_activity_and_converges() {
         "activity really flowed across the wire: {:?}",
         working.observation
     );
-    assert!(
-        bridge.queued() <= baseline + 1,
-        "200 reported revisions, at most one queued activity entry: baseline {baseline}, queued {}",
-        bridge.queued()
+    assert_eq!(
+        bridge.queued_activity(),
+        1,
+        "200 reported revisions leave exactly one latest-value activity snapshot"
     );
 
     // The stalled consumer resumes: the projection folds the coalesced
