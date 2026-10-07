@@ -35,6 +35,9 @@ jobs:
           corepack install
           pnpm install --frozen-lockfile
           pnpm build:host
+      - name: Install shared protocol decoder dependencies
+        working-directory: tui
+        run: pnpm install --frozen-lockfile
       - name: Real filesystem and PTY boundaries
         working-directory: web-console
         run: pnpm exec vitest run test/workbench-host.test.ts
