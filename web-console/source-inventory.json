@@ -1057,7 +1057,7 @@
       "destination": "web-console/src/presentation/agent/ModelSelect.tsx",
       "upstream_sha256": "4726d9ddcffd63295b0635fac728512308d56ef412ed9f6b037b3eddc552d1c0",
       "classification": "B",
-      "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority. #393: no longer passes the removed Menu portal prop. Issue #406: One model/profile control and unavailable selection presentation with explicit binding reset, over native catalog admission. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts.",
+      "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority. #393: no longer passes the removed Menu portal prop. Issue #406: One model/profile control and unavailable selection presentation with explicit binding reset, over native catalog admission. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Model menu layout repair: render catalog loading and unavailable-selection status inside the existing portaled menu, disable pending root rows and focus only when ready; upstream baseline unchanged.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../locale/react",
@@ -1072,7 +1072,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "5ae9b7c2ef12e82b18964c8e9dc2411bd439ab6f3f455cc1f033c77aad8c8cdc",
+      "local_sha256": "0a0fb4c46e2e5c2f85315d44deb21bb5573ef4696d2fd1bf5b248dd962100543",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-model-selection/src/client/ModelSelect.tsx",

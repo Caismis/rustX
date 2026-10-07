@@ -20,6 +20,13 @@ server.workspaceHost.resolveWorkspace = async () => ({ cwd: '/workspace/A' });
 server.workspaceHost.classifyLocations = async paths => paths.map(() => ({ authorized: true, workspaceId: 'workspace-a' }));
 const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], toolCalls: true, reasoning: false };
 server.workspaceHost.configureWorkspace = async () => ({ kind: 'read', projection: { ...cfg3Source(), session_models: { kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: ['fixture/native', 'fixture/second'].map(model => ({ model, protocol: 'openai_responses', contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'environment', variable: 'KEY' }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, reasoningProfiles: [] })) } }, prospective_approval_mode: 'policy', target: { kind: 'workspace', directory: '/workspace/A' } } });
+if (new URL(location.href).searchParams.has('models')) {
+  const saved = server.snapshots.get('A')!;
+  saved.model = cfg3Effective().effective_model;
+  saved.transcript.entries = Array.from({ length: 20 }, (_, index) => ({ cursor: String(index + 1), item: { type: 'message' as const, message: { id: `saved-${index}`, role: index % 2 ? 'assistant' as const : 'user' as const, source: 'human' as const, content: [{ type: 'text' as const, text: `Saved message ${index}: ` + 'Previously saved conversation content. '.repeat(12) }] } } }));
+  server.handlers.set('session/models', () => ({ type: 'models', catalog: { models: [{ model: saved.model!.configured.model, protocol: 'openai_responses', contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'literal' }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, reasoningProfiles: [] }] } }));
+  server.handlers.set('session/model', () => ({ type: 'model', model: saved.model! }));
+}
 let nativeDefault = 'fixture/native';
 server.handlers.set('session/create', request => {
   if (request.method !== 'session/create') throw Error('Wrong method');
