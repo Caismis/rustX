@@ -377,10 +377,12 @@ it('an older page prepends above the reading position and clipped ownership come
   } finally { v.server.client.disconnect(); }
 });
 
-it('detached unowned reading publishes unknown and semantic ownership cannot satisfy an exact locate', () => {
+it('unowned gaps retain the reading turn and semantic ownership cannot satisfy an exact locate', () => {
   const v = coordinatedViewport('turn:live');
   v.scroll(750); expect(v.active).toHaveBeenLastCalledWith('turn:target');
   v.positions.unowned = 700; v.replace(['turn:target', 'unowned']); v.flush();
+  expect(v.active).toHaveBeenLastCalledWith('turn:target');
+  v.replace(['unowned']); v.flush();
   expect(v.active).toHaveBeenLastCalledWith(null);
   const owner = v.owner();
   v.ui.rerender(<ChatViewport onActiveTurn={v.active}><div data-chat-anchor-key="b" data-chat-turn-owner="turn:clipped">clipped</div></ChatViewport>);
@@ -411,4 +413,24 @@ it('following a settled short final turn selects its native owner even while the
   v.scroll(500); expect(v.active).toHaveBeenLastCalledWith('turn:first');
   fireEvent.click(v.ui.getByRole('button', { name: 'Return to latest' })); v.flush();
   expect(v.active).toHaveBeenLastCalledWith('turn:second');
+});
+
+it('reading remains continuous across prompts, nested anchors, padding and hidden turns in both directions', () => {
+  const v = coordinatedViewport();
+  Object.assign(v.positions, { first: 120, nested: 180, prompt: 400, hidden: 450, second: 620, tail: 700 });
+  v.ui.rerender(<ChatViewport onActiveTurn={v.active}>
+    <div data-chat-anchor-key="first" data-chat-turn-owner="turn:first">
+      <div data-chat-anchor-key="nested">Nested response content</div>
+    </div>
+    <div data-chat-anchor-key="prompt">Next user prompt</div>
+    <div hidden><div data-chat-anchor-key="hidden" data-chat-turn-owner="turn:hidden"/></div>
+    <div data-chat-anchor-key="second" data-chat-turn-owner="turn:second"/>
+    <div data-chat-anchor-key="tail">Unowned tail</div>
+  </ChatViewport>);
+  v.flush();
+  expect(v.active).toHaveBeenLastCalledWith('turn:second');
+  for (const top of [0, 100, 200, 380, 500, 579, 580, 650, 580, 579, 500, 380, 200, 0]) {
+    v.scroll(top);
+    expect(v.active).toHaveBeenLastCalledWith(top >= 580 ? 'turn:second' : 'turn:first');
+  }
 });

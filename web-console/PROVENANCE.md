@@ -1552,3 +1552,14 @@ and the folded summary row expands it; a tool-only Assistant reads (tool call
 only), Context rows show their content, and row text is a plain-text projection of
 the Markdown preview (`preview.ts`). The toolbar's Jump to latest control and the
 client `latestTrace` read it drove are removed.
+
+
+Manual reading highlight continuity was checked against local Harness
+`5badb15009ae1756c3afe0ae0cef1faafc290ccc`, specifically
+`use-chat-viewport.ts::readVisibleTurn` and `use-chat-reading.ts`.
+ChatViewport now selects the preceding visible native turn region across prompts,
+nested message anchors and gaps, or the first loaded region before its start.
+Tail following selects the last native region even after unowned trailing content.
+This adapts Harness's nonempty reading candidate policy without its approximate
+binary-search candidate selection: native turn identity and exact locate anchors
+remain separate, and a window containing no native region still has no selection.
