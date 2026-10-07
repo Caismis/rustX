@@ -13,7 +13,15 @@ const packages = new Map<string, string>();
 /** Reviewed packages that declare a license but publish no license file. Each
  * is pinned to one exact version and one declared license, so an upgrade or a
  * license change fails closed instead of inheriting this record. */
-const declaredOnly: Record<string, { license: string; notice: string }> = {
+const declaredOnly: Record<string, { license: string | undefined; notice: string }> = {
+  '@fortune-sheet/core 1.0.4': { license: 'MIT', notice: readFileSync(join(root, 'licenses/fortune-sheet-1.0.4.txt'), 'utf8') },
+  '@fortune-sheet/react 1.0.4': { license: 'MIT', notice: readFileSync(join(root, 'licenses/fortune-sheet-1.0.4.txt'), 'utf8') },
+  'isarray 1.0.0': { license: 'MIT', notice: readFileSync(join(root, 'licenses/isarray-1.0.0.txt'), 'utf8') },
+  'saxes 5.0.1': { license: 'ISC', notice: readFileSync(join(root, 'licenses/saxes-5.0.1.txt'), 'utf8') },
+  'binary 0.3.0': { license: 'MIT', notice: readFileSync(join(root, 'licenses/binary-0.3.0.txt'), 'utf8') },
+  'chainsaw 0.1.0': { license: 'MIT/X11', notice: readFileSync(join(root, 'licenses/chainsaw-0.1.0.txt'), 'utf8') },
+  'buffers 0.1.1': { license: undefined, notice: readFileSync(join(root, 'licenses/buffers-0.1.1.txt'), 'utf8') },
+  '@nodable/entities 3.1.0': { license: 'MIT', notice: readFileSync(join(root, 'licenses/nodable-entities-3.1.0.txt'), 'utf8') },
   'saxes 6.0.0': { license: 'ISC', notice: readFileSync(join(root, 'licenses/saxes-6.0.0.txt'), 'utf8') },
   'client-only 0.0.1': {
     license: 'MIT',

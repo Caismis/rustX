@@ -1,5 +1,17 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
+  "workbench.markdown": "Markdown",
+  "workbench.html": "HTML",
+  "workbench.image": "Image",
+  "workbench.pdf": "PDF",
+  "workbench.office": "Office",
+  "workbench.excel": "Spreadsheet",
+  "workbench.zoom-in": "Zoom in",
+  "workbench.zoom-out": "Zoom out",
+  "workbench.fit-width": "Fit width",
+  "workbench.dock": "Dock panel",
+  "workbench.float": "Float tab",
+
   "workbench.file-tab": "Files",
   "workbench.code": "Code",
   "workbench.text": "Text",
@@ -105,6 +117,18 @@ export const en = {
 } as const;
 export type ArtifactsKey = keyof typeof en;
 export const zh = {
+  "workbench.markdown": "Markdown",
+  "workbench.html": "HTML",
+  "workbench.image": "图片",
+  "workbench.pdf": "PDF",
+  "workbench.office": "Office",
+  "workbench.excel": "表格",
+  "workbench.zoom-in": "放大",
+  "workbench.zoom-out": "缩小",
+  "workbench.fit-width": "适合宽度",
+  "workbench.dock": "停靠面板",
+  "workbench.float": "浮动标签",
+
   "workbench.file-tab": "文件",
   "workbench.code": "代码",
   "workbench.text": "文本",

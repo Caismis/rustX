@@ -1,0 +1,4 @@
+chainsaw 0.1.0
+Author: James Halliday <mail@substack.net>
+License: MIT/X11, as declared by the published package manifest.
+The published package contains no standalone license text.

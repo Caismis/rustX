@@ -255,3 +255,7 @@
 .plainText { flex: 1; min-height: 0; overflow: auto; padding: 8px 18px; }
 .plainText pre { margin: 0; font: var(--dsw-font-markdown-code-block); white-space: pre; }
 .plainText[data-wrap='true'] pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.document { flex: 1; min-height: 0; overflow: auto; position: relative; }
+
+.tool[hidden] { display:none; }

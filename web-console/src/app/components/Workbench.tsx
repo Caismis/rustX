@@ -1,107 +1,137 @@
-/* Copyright (c) 2026 DeepSeek. MIT. Guide layout adapted from ui-sidebar-right GuideBody; see PROVENANCE.md. */
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+/* Copyright (c) 2026 DeepSeek. MIT. Harness guide and DockLayout port; see PROVENANCE.md. */
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ProductHostWorkspaces, WorkspaceAuthorityScope } from '../../workspaces/host';
 import type { DesktopTarget } from '../../workspaces/desktop';
 import type { WorkbenchRequest, WorkbenchTerminal } from '../../workspaces/workbench';
 import { useTranslation } from '../../locale/react';
 import { WorkspaceFiles, WorkspaceFile, fileTabView, type FileTabView } from './WorkbenchFiles';
 import { FileTypeIcon } from '../../presentation/primitives/FileTypeIcon';
-import { IconPanelLeftOutline16, IconPlusOutline16, IconCloseOutline16, IconChevronDownOutline14 } from '../../presentation/primitives/icons';
+import { IconPanelLeftOutline16, IconChevronDownOutline14 } from '../../presentation/primitives/icons';
 import { Menu } from '../../presentation/primitives/Menu';
 import { CompassGlyph, GuideArtworkFiles, PluginArtworkTerminal, TerminalIcon, FullscreenGlyph, ExitFullscreenGlyph } from './WorkbenchIcons';
+import { readSidebarLayout, writeSidebarLayout } from './workbench-persistence';
+import { DockController } from '../../presentation/dockkit/engine/controller';
+import { DockLayout } from '../../presentation/dockkit/components/DockSurface';
+import { dockPaneIds, findTabPane, getPane } from '../../presentation/dockkit/engine/tree';
+import type { PaneId, TabId, TabRecord } from '../../presentation/dockkit/contract/types';
+import type { DockIntents } from '../../presentation/dockkit/contract/adapter';
 import css from '../../presentation/right-panel/Workbench.module.css';
 const TerminalView = lazy(() => import('./WorkbenchTerminal'));
-type Tab = { id: string; kind: 'start' | 'files' | 'terminal' | 'file'; path?: string; view?: FileTabView };
-const sameTab = (a: Tab, b: Tab) => a.kind === b.kind && (a.kind !== 'file' || a.path === b.path);
-type Pane = { id: string; tabs: Tab[]; selected: string };
-const guidePane = (): Pane => { const id = crypto.randomUUID(); return { id, tabs: [{ id, kind: 'start' }], selected: id }; };
-export function Workbench({ host, scope, target, visible, fullscreen, toggleFullscreen, closePanel }: {
-  host: ProductHostWorkspaces; scope?: WorkspaceAuthorityScope; target?: DesktopTarget; visible: boolean; fullscreen: boolean; toggleFullscreen: () => void; closePanel: () => void;
+const guideTab = (id: TabId): TabRecord => ({id,kind:'start',contentId:`start:${id}`,title:''});
+export function Workbench({ host, scope, target, visible, floatingVisible, fullscreen, toggleFullscreen, closePanel }: {
+  host: ProductHostWorkspaces; scope?: WorkspaceAuthorityScope; target?: DesktopTarget; visible: boolean; floatingVisible: boolean; fullscreen: boolean; toggleFullscreen: () => void; closePanel: () => void;
 }) {
   const tx = useTranslation();
-  const [panes, setPanes] = useState<Pane[]>(() => [guidePane()]);
-  const [focused, setFocused] = useState<string>();
-  const [terminals, setTerminals] = useState<WorkbenchTerminal[]>([]), [shells, setShells] = useState<string[]>([]);
-  const [shell, setShell] = useState(''), [error, setError] = useState(''), [busy, setBusy] = useState(false);
-  const [menu, setMenu] = useState<string>(), [width, setWidth] = useState(0), [ratio, setRatio] = useState(50);
-  const root = useRef<HTMLDivElement>(null);
-  const pendingCreate = useRef<{ id: string; shell: string } | null>(null);
-  const lifetime = useRef<AbortController | null>(null);
-  useEffect(() => { lifetime.current = new AbortController(); return () => lifetime.current?.abort(); }, []);
-  useEffect(() => { if (!visible || !root.current) return; const observer = new ResizeObserver(([entry]) => setWidth(entry.contentRect.width)); observer.observe(root.current); return () => observer.disconnect(); }, [visible]);
-  const call = useCallback(async (request: WorkbenchRequest, signal?: AbortSignal) => {
-    if (!host.workbench || !scope || !target) throw new Error(tx('artifacts:workbench.unavailable'));
-    return host.workbench(scope, { target, request }, signal ?? lifetime.current?.signal);
-  }, [host, scope?.authorityId, scope?.endpoint, target?.session_id, target?.active_node, tx]);
+  const storageKey = JSON.stringify([scope?.endpoint,scope?.authorityId,target?.session_id,target?.active_node]);
+  const [dock] = useState(() => new DockController({makeInitialTab:guideTab,makePaneTab:guideTab,settle:true,restored:readSidebarLayout(storageKey)}));
+  const {state} = useSyncExternalStore(dock.subscribe,dock.getSnapshot,dock.getSnapshot);
   useEffect(() => {
-    if (!visible || !scope || !target || !host.workbench) return;
-    const abort = new AbortController();
-    void call({ kind: 'terminals' }, abort.signal).then(value => {
-      if (abort.signal.aborted) return; setTerminals(value.terminals ?? []); setShells(value.shells ?? []); setShell(previous => previous || value.shells?.[0] || '');
-      setPanes(current => { const known = new Set(current.flatMap(p => p.tabs.map(t => t.id))); const restored = (value.terminals ?? []).filter(t => !known.has(t.id)).map(t => ({ id: t.id, kind: 'terminal' as const })); return restored.length ? current.map((p, i) => i ? p : { ...p, tabs: [...p.tabs, ...restored] }) : current; });
-    }, cause => { if (!abort.signal.aborted) setError(String(cause)); });
-    return () => abort.abort();
-  }, [call, visible]);
-  const available = !!host.workbench && !!scope && !!target;
-  const open = (paneId: string, tab: Tab) => setPanes(current => current.map(p => {
-    if (p.id !== paneId) return p;
-    const existing = tab.kind !== 'terminal' && p.tabs.find(t => sameTab(t, tab));
-    if (existing) return { ...p, selected: existing.id };
-    const active = p.tabs.find(t => t.id === p.selected);
-    if (tab.kind === 'files' || tab.kind === 'file') tab = { ...tab, view: fileTabView() };
-    return { ...p, selected: tab.id, tabs: active?.kind === 'start' ? p.tabs.map(t => t.id === active.id ? tab : t) : [...p.tabs, tab] };
-  }));
-  const create = async (paneId: string, selectedShell = shell) => {
-    if (busy || !selectedShell) return;
-    setBusy(true); setError(''); const pending = pendingCreate.current ??= { id: crypto.randomUUID(), shell: selectedShell };
-    try { const value = await call({ kind: 'create', ...pending }); if (!lifetime.current?.signal.aborted) { pendingCreate.current = null; setTerminals(value.terminals ?? []); open(paneId, { id: pending.id, kind: 'terminal' }); } }
-    catch (cause) { if (!lifetime.current?.signal.aborted) setError(String(cause)); }
-    finally { if (!lifetime.current?.signal.aborted) setBusy(false); }
+    const minted = Math.max(0,...Object.keys(state.nodes).concat(Object.keys(state.tabs)).map(id=>Number(id.replace(/^[a-z]+/,''))));
+    writeSidebarLayout(storageKey,{layout:state,minted,history:{entries:[],cursor:0}});
+  },[state,storageKey]);
+  const views = useRef(new Map<TabId,FileTabView>());
+  const navigation = useRef(0);
+  const viewFor = (id:TabId) => { let view=views.current.get(id); if(!view) {view=fileTabView();views.current.set(id,view);}return view; };
+  const [terminals,setTerminals] = useState<WorkbenchTerminal[]>([]), [shells,setShells] = useState<string[]>([]);
+  const [shell,setShell] = useState(''),[error,setError] = useState(''),[busy,setBusy] = useState(false),[menu,setMenu] = useState<PaneId>();
+  const pendingCreate = useRef<{id:string;shell:string}|null>(null), lifetime=useRef<AbortController|null>(null);
+  useEffect(()=>{lifetime.current=new AbortController();return()=>lifetime.current?.abort();},[]);
+  useEffect(()=>dock.setExpanded(visible),[dock,visible]);
+  const call=useCallback(async(request:WorkbenchRequest,signal?:AbortSignal)=>{
+    if(!host.workbench || !scope || !target) throw new Error(tx('artifacts:workbench.unavailable'));
+    return host.workbench(scope,{target,request},signal ?? lifetime.current?.signal);
+  },[host,scope?.authorityId,scope?.endpoint,target?.session_id,target?.active_node,tx]);
+  const available=!!host.workbench && !!scope && !!target;
+  const open=(paneId:PaneId,tab:{kind:string;path?:string;id?:string})=>{
+    navigation.current++;
+    const before=dock.getSnapshot().state;
+    const pane=getPane(before,paneId), active=pane.activeTabId && before.tabs[pane.activeTabId];
+    const contentId=tab.kind==='file' ? `file:${tab.path}` : tab.kind==='files' ? `files:${paneId}` : tab.id ?? crypto.randomUUID();
+    dock.openContent({paneId,kind:tab.kind,contentId,title:tab.path ?? ''});
+    if(active && active.kind==='start') dock.closeTab(active.id);
   };
-  const close = async (paneId: string, tab: Tab) => {
-    setError('');
+  useEffect(()=>{
+    if(!visible || !available) return;
+    const abort=new AbortController();
+    void call({kind:'terminals'},abort.signal).then(value=>{
+      if(abort.signal.aborted)return;
+      for(const tab of Object.values(dock.getSnapshot().state.tabs)) if(tab.kind==='terminal' && !value.terminals?.some(t=>t.id===tab.contentId))dock.closeTab(tab.id);
+      if(!Object.keys(dock.getSnapshot().state.tabs).length)dock.addTab(dock.activeDockPaneId());
+      setTerminals(value.terminals ?? []);setShells(value.shells ?? []);setShell(old=>old || value.shells?.[0] || '');
+      const focused = getPane(dock.getSnapshot().state,dock.activeDockPaneId()).activeTabId;
+      for(const terminal of value.terminals ?? []) if(!Object.values(dock.getSnapshot().state.tabs).some(tab=>tab.contentId===terminal.id))
+        dock.openContent({kind:'terminal',contentId:terminal.id,title:terminal.shell.split('/').at(-1) ?? ''});
+      if(focused && dock.getSnapshot().state.tabs[focused])dock.focusTab(focused);
+    },cause=>{if(!abort.signal.aborted)setError(String(cause));});
+    return()=>abort.abort();
+  },[call,visible,available,dock]);
+  const create=async(paneId:PaneId,selectedShell=shell)=>{
+    if(busy || !selectedShell)return;
+    const admittedNavigation = ++navigation.current;
+    setBusy(true);setError('');const pending=pendingCreate.current ??= {id:crypto.randomUUID(),shell:selectedShell};
+    try {const value=await call({kind:'create',...pending});if(!lifetime.current?.signal.aborted){pendingCreate.current=null;setTerminals(value.terminals ?? []);
+      if(navigation.current === admittedNavigation) open(paneId,{kind:'terminal',id:pending.id});
+      else {
+        // A newer file/tab selection owns focus even when PTY creation finishes later.
+        const current=dock.getSnapshot().state;
+        const focused=getPane(current,current.activePaneId).activeTabId;
+        dock.openContent({kind:'terminal',contentId:pending.id,title:pending.shell.split('/').at(-1) ?? ''});
+        if(focused)dock.focusTab(focused);
+      }}}
+    catch(cause){if(!lifetime.current?.signal.aborted)setError(String(cause));}
+    finally{if(!lifetime.current?.signal.aborted)setBusy(false);}
+  };
+  const close=async(id:TabId)=>{
+    const tab=dock.getSnapshot().state.tabs[id];if(!tab)return;
+    if(tab.kind==='start' && Object.keys(dock.getSnapshot().state.tabs).length===1)return;
     try {
-      if (tab.kind === 'terminal') { const value = await call({ kind: 'close', id: tab.id }); if (lifetime.current?.signal.aborted) return; setTerminals(value.terminals ?? []); }
-      setPanes(current => current.map(p => { if (p.id !== paneId) return p; const tabs = p.tabs.filter(t => t.id !== tab.id); if (!tabs.length) { const guide = guidePane(); return { ...guide, id: p.id }; } return { ...p, tabs, selected: p.selected === tab.id ? tabs[Math.max(0, p.tabs.findIndex(t => t.id === tab.id) - 1)].id : p.selected }; }));
-    } catch (cause) { if (!lifetime.current?.signal.aborted) setError(String(cause)); }
+      if(tab.kind==='terminal'){const value=await call({kind:'close',id:tab.contentId});if(lifetime.current?.signal.aborted)return;setTerminals(value.terminals ?? []);}
+      const lastContent = tab.kind !== 'start' && Object.keys(dock.getSnapshot().state.tabs).length === 1;
+      dock.closeTab(id);views.current.delete(id);
+      if(lastContent)closePanel();
+    }catch(cause){if(!lifetime.current?.signal.aborted)setError(String(cause));}
   };
-  const activePane = panes.find(p => p.id === focused) ?? panes[0];
-  useEffect(() => {
-    if (!visible) return;
-    const key = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || e.isComposing || !available) return;
-      if (e.ctrlKey && !e.altKey && !e.metaKey && e.code === 'Backquote') { e.preventDefault(); void create(activePane.id); }
-      if (e.altKey && (e.metaKey || e.ctrlKey) && e.code === 'KeyP') { e.preventDefault(); open(activePane.id, { id: crypto.randomUUID(), kind: 'files' }); }
+  const intents:DockIntents={
+    focusTab:id=>{navigation.current++;dock.focusTab(id);},focusPane:id=>dock.focusPane(id),
+    splitPane:id=>{if(dockPaneIds(dock.getSnapshot().state).length<2)dock.splitPane(id);},
+    addTab:id=>{navigation.current++;const pane=getPane(dock.getSnapshot().state,id);const guide=pane.tabs.find(t=>dock.getSnapshot().state.tabs[t].kind==='start');if(guide)dock.focusTab(guide);else dock.addTab(id);},
+    closeTab:id=>{void close(id);}, duplicateTab:id=>dock.duplicateTab(id),
+    floatTab:(id,rect)=>{dock.floatTab(id,rect);if(!dockPaneIds(dock.getSnapshot().state).some(p=>getPane(dock.getSnapshot().state,p).tabs.length))dock.addTab(dock.activeDockPaneId());},
+    unfloatPane:id=>dock.unfloatPane(id),placeTab:(id,p,index)=>dock.placeTab(id,p,index),
+    dropTab:(id,p,zone)=>{if(zone==='center'||dockPaneIds(dock.getSnapshot().state).length<2)dock.dropTab(id,p,zone);},
+    moveFloat:(id,x,y)=>dock.moveFloat(id,x,y),resizeFloat:(id,rect)=>dock.resizeFloat(id,rect),resizeSplit:(id,sizes)=>dock.resizeSplit(id,sizes),
+  };
+  useEffect(()=>{
+    if(!visible)return;
+    const key=(e:KeyboardEvent)=>{
+      if(e.defaultPrevented||e.isComposing||!available)return;
+      if(e.ctrlKey&&!e.altKey&&!e.metaKey&&e.code==='Backquote'){e.preventDefault();void create(dock.activeDockPaneId());}
+      if(e.altKey&&(e.metaKey||e.ctrlKey)&&e.code==='KeyP'){e.preventDefault();open(dock.activeDockPaneId(),{kind:'files'});}
     };
-    window.addEventListener('keydown', key, true); return () => window.removeEventListener('keydown', key, true);
+    window.addEventListener('keydown',key,true);return()=>window.removeEventListener('keydown',key,true);
   });
-  const split = () => { setRatio(50); if (panes.length === 2) setPanes([{ ...activePane, tabs: [...activePane.tabs, ...panes.find(p => p.id !== activePane.id)!.tabs.filter(t => t.kind === 'terminal' || !activePane.tabs.some(a => sameTab(a, t)))] }]); else { const next = guidePane(); setPanes([...panes, next]); setFocused(next.id); } };
-  const isMac = /Mac/.test(navigator.platform);
-  return <div ref={root} className={css.root} hidden={!visible} data-workbench>
-    {panes.map((pane, paneIndex) => { const tab = pane.tabs.find(t => t.id === pane.selected)!; const paneVisible = visible && (panes.length === 1 || width >= 640 || pane.id === activePane.id); const quiet = pane.tabs.length === 1 && tab.kind === 'start'; return <section key={pane.id} className={css.pane} data-workbench-pane hidden={panes.length > 1 && width < 640 && pane.id !== activePane.id} style={{ flex: panes.length === 2 && width >= 640 ? `0 0 ${paneIndex ? 100 - ratio : ratio}%` : '1' }} onFocusCapture={() => setFocused(pane.id)} onPointerDown={() => setFocused(pane.id)}>
-      <header className={css.strip}>
-        <div className={css.tabs} role="tablist" aria-label={tx('artifacts:workbench.tabs')} onKeyDown={e => { if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return; const buttons = [...e.currentTarget.querySelectorAll<HTMLButtonElement>('[role=tab]')]; let i = buttons.indexOf(document.activeElement as HTMLButtonElement); if (i < 0) return; e.preventDefault(); i = e.key === 'Home' ? 0 : e.key === 'End' ? buttons.length - 1 : (i + (e.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length; buttons[i].click(); buttons[i].focus(); }}>
-          {pane.tabs.map(t => <div className={css.tab} key={t.id} data-active={pane.selected === t.id} data-quiet={quiet}>
-            <button type="button" role="tab" aria-selected={pane.selected === t.id} tabIndex={pane.selected === t.id ? 0 : -1} onClick={() => setPanes(current => current.map(p => p.id === pane.id ? { ...p, selected: t.id } : p))}>{t.kind === 'start' ? <CompassGlyph className={css.titleIcon}/> : t.kind === 'files' ? <FileTypeIcon kind="folder" size={16}/> : t.kind === 'file' ? <FileTypeIcon path={t.path!} size={16}/> : <TerminalIcon/>}<span title={t.path}>{t.kind === 'file' ? t.path!.split('/').at(-1) : t.kind === 'terminal' ? terminals.find(term => term.id === t.id)?.shell.split('/').at(-1) ?? tx('artifacts:workbench.terminal') : tx(t.kind === 'start' ? 'artifacts:workbench.start' : 'artifacts:workbench.file-tab')}</span></button>
-            {!quiet && <button type="button" className={css.tabClose} aria-label={t.kind === 'terminal' ? tx('artifacts:workbench.close-terminal', { p0: terminals.findIndex(term => term.id === t.id) + 1 }) : tx('artifacts:workbench.close-tab')} onClick={() => void close(pane.id, t)}><IconCloseOutline16 size={14}/></button>}
-          </div>)}
-        </div>
-        {!pane.tabs.some(t => t.kind === 'start') && <button type="button" className={css.iconButton} aria-label={tx('artifacts:workbench.add-tab')} onClick={() => open(pane.id, { id: crypto.randomUUID(), kind: 'start' })}><IconPlusOutline16/></button>}
-        <span className={css.fill}/>
-        <button type="button" className={css.iconButton} disabled={panes.length === 1 && width < 640} aria-label={tx(panes.length === 2 ? 'artifacts:workbench.merge' : 'artifacts:workbench.split')} onClick={split}><IconPanelLeftOutline16/></button>
-        {(paneIndex === panes.length - 1 || width < 640) && <div className={css.chrome}><button type="button" className={css.iconButton} aria-label={tx(fullscreen ? 'artifacts:workbench.restore' : 'artifacts:workbench.fullscreen')} onClick={toggleFullscreen}>{fullscreen ? <ExitFullscreenGlyph/> : <FullscreenGlyph/>}</button><button type="button" className={css.iconButton} aria-label={tx('artifacts:workbench.toggle')} onClick={closePanel}><IconPanelLeftOutline16 className={css.mirrored}/></button></div>}
-      </header>
-      {error && pane.id === activePane.id && <p role="alert" className={css.notice}>{error}</p>}
-      {!available && <p className={css.notice}>{tx('artifacts:workbench.unavailable')}</p>}
-      <div className={css.body} onKeyDown={e => { if (tab.kind !== 'terminal' && e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); if (fullscreen) toggleFullscreen(); else closePanel(); } }}>
-      {tab.kind === 'start' ? <div className={css.guide}>
+  const isMac=/Mac/.test(navigator.platform);
+  const title=(tab:TabRecord)=>tab.kind==='file'?tab.title.split('/').at(-1):tab.kind==='terminal'?terminals.find(t=>t.id===tab.contentId)?.shell.split('/').at(-1) ?? tab.title:tx(tab.kind==='start'?'artifacts:workbench.start':'artifacts:workbench.file-tab');
+  const body=(tab:TabRecord)=>{
+    const pane=findTabPane(state,tab.id);
+    return <div className={css.body} onKeyDown={e=>{if(tab.kind!=='terminal'&&e.key==='Escape'&&!e.defaultPrevented){e.preventDefault();if(fullscreen)toggleFullscreen();else closePanel();}}}>
+    {tab.kind==='start'? <div className={css.guide}>
         <span className={css.hero}><CompassGlyph size={56}/></span>
-        <button type="button" className={css.entry} disabled={!available} aria-keyshortcuts={isMac ? 'Alt+Meta+P' : 'Alt+Control+P'} onClick={() => open(pane.id, { id: crypto.randomUUID(), kind: 'files' })}><span className={css.entryIcon}><GuideArtworkFiles size={26}/></span><span className={css.entryText}><span className={css.entryTitle}>{tx('artifacts:workbench.files')}</span><span className={css.entryDescription}>{tx('artifacts:workbench.files-description')}</span></span><ShortcutKeys keys={isMac ? ['⌥', '⌘', 'P'] : ['Alt', 'Ctrl', 'P']}/></button>
+        <button type="button" className={css.entry} disabled={!available} aria-keyshortcuts={isMac ? 'Alt+Meta+P' : 'Alt+Control+P'} onClick={() => open(pane.id, { kind: 'files' })}><span className={css.entryIcon}><GuideArtworkFiles size={26}/></span><span className={css.entryText}><span className={css.entryTitle}>{tx('artifacts:workbench.files')}</span><span className={css.entryDescription}>{tx('artifacts:workbench.files-description')}</span></span><ShortcutKeys keys={isMac ? ['⌥', '⌘', 'P'] : ['Alt', 'Ctrl', 'P']}/></button>
         <div className={`${css.entry} ${css.terminalEntry}`}><button type="button" className={css.launch} aria-label={tx('artifacts:workbench.new-terminal')} aria-keyshortcuts="Control+`" disabled={!available || busy || !shell} onClick={() => void create(pane.id)}/><span className={css.entryIcon}><PluginArtworkTerminal size={26}/></span><span className={css.entryText}><span className={css.titleRow}><span className={css.entryTitle}>{tx('artifacts:workbench.new-terminal')}</span><Menu open={menu === pane.id} autoFocus align="end" items={shells.map(s => ({ id: s, label: s.split('/').at(-1)! }))} selectedId={shell} onClose={() => setMenu(undefined)} onSelect={s => { setShell(s); setMenu(undefined); void create(pane.id, s); }} anchor={<button type="button" className={css.shellTrigger} disabled={busy || !shells.length} aria-label={tx('artifacts:workbench.shell')} aria-haspopup="menu" aria-expanded={menu === pane.id} onClick={() => setMenu(menu === pane.id ? undefined : pane.id)}><IconChevronDownOutline14/></button>}/></span><span className={css.entryDescription}>{tx('artifacts:workbench.terminal-description')}</span></span><ShortcutKeys keys={[isMac ? '⌃' : 'Ctrl', '`']}/></div>
-      </div> : tab.kind === 'files' ? paneVisible && <WorkspaceFiles key={tab.id} call={call} view={tab.view!} onOpen={path => open(pane.id, { id: crypto.randomUUID(), kind: 'file', path })}/> : tab.kind === 'file' ? paneVisible && <WorkspaceFile key={tab.id} path={tab.path!} call={call} view={tab.view!}/> : paneVisible && <Suspense fallback={<p>{tx('artifacts:workbench.loading')}</p>}><TerminalView key={tab.id} id={tab.id} call={call}/></Suspense>}
-      </div>
-      {paneIndex === 0 && panes.length === 2 && width >= 640 && <div className={css.divider} role="separator" aria-label={tx('artifacts:workbench.resize')} aria-orientation="vertical" aria-valuenow={Math.round(ratio)} tabIndex={0} onKeyDown={e => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); setRatio(v => Math.min(70, Math.max(30, v + (e.key === 'ArrowRight' ? 2 : -2)))); } }} onPointerDown={e => { e.preventDefault(); e.currentTarget.setPointerCapture(e.pointerId); }} onPointerMove={e => { if (e.currentTarget.hasPointerCapture(e.pointerId) && root.current) { const b = root.current.getBoundingClientRect(); setRatio(Math.min(70, Math.max(30, (e.clientX - b.left) / b.width * 100))); } }}/ >}
-    </section>; })}
+      </div> :tab.kind==='files'?<WorkspaceFiles call={call} view={viewFor(tab.id)} onOpen={path=>open(pane.id,{kind:'file',path})}/>:tab.kind==='file'?<WorkspaceFile onOpen={path=>open(pane.id,{kind:'file',path})} path={tab.title} call={call} view={viewFor(tab.id)}/>:<Suspense fallback={<p>{tx('artifacts:workbench.loading')}</p>}><TerminalView id={tab.contentId} call={call}/></Suspense>}
+    </div>;
+  };
+  return <div className={css.root} hidden={!visible && (!floatingVisible || !state.floats.length)} data-workbench>
+    {error&&<p role="alert" className={css.notice}>{error}</p>}
+    {!available&&<p className={css.notice}>{tx('artifacts:workbench.unavailable')}</p>}
+    <DockLayout state={state} active={visible || floatingVisible && state.floats.length > 0} canSplit={dockPaneIds(state).length<2} dropZones="horizontal" minPaneFraction={0.2} intents={intents}
+      canAddTab={id=>!getPane(state,id).tabs.some(t=>state.tabs[t].kind==='start')}
+      canCloseTab={id=>state.tabs[id].kind!=='start'||Object.keys(state.tabs).length>1}
+      labels={{emptyPane:tx('artifacts:workbench.start'),splitPane:tx('artifacts:workbench.split'),splitPaneDisabled:tx('artifacts:workbench.split'),splitPaneNarrow:tx('artifacts:workbench.split'),closeTab:tx('artifacts:workbench.close-tab'),addTab:tx('artifacts:workbench.add-tab'),dockFloat:tx('artifacts:workbench.dock'),closeFloat:tx('artifacts:workbench.close-tab'),dropZone:{center:tx('artifacts:workbench.dock'),left:tx('artifacts:workbench.split'),right:tx('artifacts:workbench.split'),top:tx('artifacts:workbench.split'),bottom:tx('artifacts:workbench.split')}}}
+      renderTab={body} renderTabTitle={tab=><span className={css.tabTitle}>{tab.kind==='start'?<CompassGlyph size={16}/>:tab.kind==='terminal'?<TerminalIcon/>:tab.kind==='files'?<FileTypeIcon kind="folder" size={16}/>:<FileTypeIcon path={tab.title} size={16}/>}<span>{title(tab)}</span></span>}
+      renderTabMenuItems={(tab,dismiss)=><button role="menuitem" onClick={()=>{dismiss();intents.floatTab(tab.id);}}>{tx('artifacts:workbench.float')}</button>}
+      chrome={<div className={css.chrome}><button type="button" className={css.iconButton} aria-label={tx(fullscreen?'artifacts:workbench.restore':'artifacts:workbench.fullscreen')} onClick={toggleFullscreen}>{fullscreen?<ExitFullscreenGlyph/>:<FullscreenGlyph/>}</button><button type="button" className={css.iconButton} aria-label={tx('artifacts:workbench.toggle')} onClick={closePanel}><IconPanelLeftOutline16 className={css.mirrored}/></button></div>}/>
   </div>;
 }
 function ShortcutKeys({ keys }: { keys: string[] }) { return <span className={css.shortcut}>{keys.map(key => <kbd key={key}>{key}</kbd>)}</span>; }

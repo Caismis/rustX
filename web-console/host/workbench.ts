@@ -24,17 +24,19 @@ export function withWorkspacePath<T>(cwd: string, path: string, directory: boole
     return action(fd);
   } finally { closeSync(fd); }
 }
-export function workspaceFile(cwd: string, path: string, read: boolean): WorkbenchResult {
+export function workspaceFile(cwd: string, path: string, read: boolean, binary = false): WorkbenchResult {
   return withWorkspacePath(cwd, path, !read, fd => {
     if (!read) {
       const entries = workspaceDescriptors.entries(fd).map(entry => ({ ...entry, name: new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(entry.name) }));
       return { cwd, entries: entries.sort((a, b) => Number(b.directory) - Number(a.directory) || a.name.localeCompare(b.name)) };
     }
+    const limit = binary ? 16 * 1024 * 1024 : 1024 * 1024;
     const stat = fstatSync(fd);
-    if (!stat.isFile() || stat.size > 1024 * 1024) throw new Error('Preview supports regular text files up to 1 MiB');
-    const bytes = Buffer.alloc(1024 * 1024 + 1); let size = 0;
+    if (!stat.isFile() || stat.size > limit) throw new Error(binary ? 'Preview supports regular files up to 16 MiB' : 'Preview supports regular text files up to 1 MiB');
+    const bytes = Buffer.alloc(limit + 1); let size = 0;
     while (size < bytes.length) { const count = readSync(fd, bytes, size, bytes.length - size, null); if (!count) break; size += count; }
-    if (size > 1024 * 1024 || bytes.subarray(0, size).includes(0)) throw new Error('Preview supports text files up to 1 MiB');
+    if (size > limit || (!binary && bytes.subarray(0, size).includes(0))) throw new Error(binary ? 'Preview supports files up to 16 MiB' : 'Preview supports text files up to 1 MiB');
+    if (binary) return { cwd, base64: bytes.subarray(0, size).toString('base64') };
     return { cwd, text: new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, size)) };
   });
 }
@@ -44,8 +46,8 @@ export class WorkspaceTerminals {
   readonly shells = ['/bin/bash', '/bin/zsh', '/bin/sh'].filter(existsSync);
   close() { for (const terminal of this.terminals.values()) void this.stop(terminal); this.terminals.clear(); }
   private async stop(terminal: TerminalState) { if (!terminal.exited) terminal.pty.kill('SIGKILL'); await terminal.done; }
-  async request(owner: string, cwd: string, request: Exclude<WorkbenchRequest, { kind: 'applications' | 'open' }>, signal?: AbortSignal): Promise<WorkbenchResult> {
-    if (request.kind === 'files' || request.kind === 'read') return workspaceFile(cwd, request.path, request.kind === 'read');
+  async request(owner: string, cwd: string, request: Exclude<WorkbenchRequest, { kind: 'applications' | 'open' | 'office' }>, signal?: AbortSignal): Promise<WorkbenchResult> {
+    if (request.kind === 'files' || request.kind === 'read' || request.kind === 'bytes') return workspaceFile(cwd, request.path, request.kind !== 'files', request.kind === 'bytes');
     const list = () => ({ terminals: [...this.terminals].filter(([, t]) => t.owner === owner).map(([id, t]) => ({ id, shell: t.shell, exited: t.exited })), shells: this.shells });
     if (request.kind === 'terminals') return list();
     if (typeof request.id !== 'string' || !/^[a-f0-9-]{36}$/.test(request.id)) throw new Error('Invalid terminal identity');

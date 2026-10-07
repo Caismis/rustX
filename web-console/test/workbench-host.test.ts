@@ -87,3 +87,15 @@ it.each(['linux', 'darwin'] as const)('opens an admitted file on %s with literal
     expect(launch).not.toHaveBeenCalled();
   } finally { host.close(); }
 });
+it('binary previews retain descriptor admission and enforce a bounded byte read', async () => {
+  const root=directory(),outside=directory(),bytes=Buffer.from([0,255,1,2]);
+  writeFileSync(join(root,'image.png'),bytes);
+  expect(workspaceFile(root,'image.png',true,true)).toEqual({cwd:root,base64:bytes.toString('base64')});
+  writeFileSync(join(outside,'private'),bytes);symlinkSync(outside,join(root,'escape'));
+  expect(()=>workspaceFile(root,'escape/private',true,true)).toThrow();
+  expect(()=>workspaceFile(root,'../private',true,true)).toThrow();
+  writeFileSync(join(root,'large'),Buffer.alloc(16*1024*1024+1));
+  expect(()=>workspaceFile(root,'large',true,true)).toThrow('16 MiB');
+  const service=new WorkspaceTerminals();services.push(service);
+  expect(await service.request('owner',root,{kind:'bytes',path:'image.png'})).toEqual({cwd:root,base64:bytes.toString('base64')});
+});

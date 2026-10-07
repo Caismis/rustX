@@ -1,5 +1,6 @@
 /** Local trusted Product Host. This module runs in Node, never in the browser. */
-import { WorkspaceTerminals, withWorkspacePath } from './workbench.ts';
+import { deriveWorkspaceOffice } from './documents/operation.ts';
+import { WorkspaceTerminals, workspaceFile, withWorkspacePath } from './workbench.ts';
 import { OfficeSettlementError } from './documents/office-cgroup.ts';
 import { readFileSync, writeFileSync, renameSync, realpathSync, statSync, fstatSync, existsSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
@@ -175,6 +176,19 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     this.mutationScope(scope); signal?.throwIfAborted();
     if (!this.classifyLocation(cwd).authorized) throw new Error('Workspace is not authorized');
     const root = realpathSync(cwd);
+    if (call.request.kind === 'office') {
+      const path = call.request.path, extension = path.split('.').at(-1)?.toLowerCase();
+      if (extension !== 'docx' && extension !== 'pptx') throw new Error('converter_unavailable');
+      const result = await deriveWorkspaceOffice(extension, async () => {
+        this.mutationScope(scope); signal?.throwIfAborted();
+        const current = await this.readSession(this.config.endpoint, this.config.transportToken!, target);
+        this.mutationScope(scope); signal?.throwIfAborted();
+        if (!this.classifyLocation(current).authorized || realpathSync(current) !== root) throw new Error('source_changed');
+        return { data: workspaceFile(root, path, true, true).base64! };
+      }, signal ?? new AbortController().signal);
+      if (result.preview.kind !== 'pdf') throw new Error('converter_failure');
+      return { cwd: root, base64: result.preview.data };
+    }
     if (call.request.kind === 'applications') return { applications: this.desktop.catalog(true) };
     if (call.request.kind === 'open') {
       const request = call.request;

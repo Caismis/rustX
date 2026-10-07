@@ -1,0 +1,4 @@
+binary 0.3.0
+Author: James Halliday <mail@substack.net>
+License: MIT, as declared by the published package manifest.
+The published package contains no standalone license text.

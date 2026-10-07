@@ -27,8 +27,8 @@ test('workspace panel browses real files and runs a real PTY, including collapse
   await expect.poll(async () => panel.locator('.xterm-rows').textContent()).toContain('RUSTX_TERMINAL');
   await expect.poll(async () => (await panel.boundingBox())!.x + (await panel.boundingBox())!.width).toBeLessThanOrEqual(1440);
   await page.screenshot({path: info.outputPath('workbench-terminal.png')});
-  await panel.getByRole('button', { name: 'Close terminal 1' }).click();
-  await expect(panel.getByRole('button', { name: 'Close terminal 1' })).toHaveCount(0);
+  await panel.getByRole('tab', { selected: true }).getByRole('button', { name: 'Close tab' }).click();
+  await expect(panel.locator('.xterm')).toHaveCount(0);
 });
 
 test('Chinese narrow workspace panel opens as a full-width page and closes', async ({ page }, info) => {
@@ -54,11 +54,11 @@ test('Harness guide geometry, single-row tabs, shell menu, split and terminal th
   await expect(files).toBeEnabled();
   await expect.poll(() => files.evaluate(el => getComputedStyle(el).width)).toBe('380px');
   expect(await files.evaluate(el => ({ padding: getComputedStyle(el).padding, fontWeight: getComputedStyle(el).fontWeight, radius: getComputedStyle(el).borderRadius }))).toEqual({ padding: '14px 20px', fontWeight: '400', radius: '20px' });
-  await expect(panel.locator('header')).toHaveCount(1);
-  expect(await panel.locator('header').evaluate(el => el.getBoundingClientRect().height)).toBe(38);
+  await expect(panel.locator('[data-dockkit-strip]:visible')).toHaveCount(1);
+  expect(await panel.locator('[data-dockkit-strip]:visible').evaluate(el => el.getBoundingClientRect().height)).toBe(38);
   await panel.getByRole('button', { name: 'Terminal shell', exact: true }).click();
   await page.getByRole('menuitem', { name: 'sh', exact: true }).click();
-  await expect(panel.getByRole('tab', { name: 'sh', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(panel.getByRole('tab', { name: 'sh', exact: false })).toHaveAttribute('aria-selected', 'true');
   await expect(panel.locator('.xterm')).toBeVisible();
   await expect.poll(() => panel.locator('.xterm').evaluate(el => getComputedStyle(el.parentElement!).backgroundColor)).toBe('rgb(255, 255, 255)');
   await page.screenshot({ path: info.outputPath('terminal-light.png') });
@@ -66,25 +66,27 @@ test('Harness guide geometry, single-row tabs, shell menu, split and terminal th
   await expect.poll(() => panel.locator('.xterm-viewport').evaluate(el => getComputedStyle(el).backgroundColor)).not.toBe('rgb(255, 255, 255)');
   await page.screenshot({ path: info.outputPath('terminal-dark.png') });
   await panel.getByRole('button', { name: 'New tab', exact: true }).click();
-  await expect(panel.getByRole('tab', { name: 'Start', exact: true })).toHaveAttribute('aria-selected', 'true');
-  await expect(panel.locator('header')).toHaveCount(1);
-  await panel.getByRole('tab', { name: 'Start', exact: true }).press('ArrowLeft');
-  await expect(panel.getByRole('tab', { name: 'sh', exact: true })).toBeFocused();
+  await expect(panel.getByRole('tab', { name: 'Start', exact: false })).toHaveAttribute('aria-selected', 'true');
+  await expect(panel.locator('[data-dockkit-strip]:visible')).toHaveCount(1);
+  await panel.getByRole('tab', { name: 'Start', exact: false }).press('ArrowLeft');
+  await expect(panel.getByRole('tab', { name: 'sh', exact: false })).toBeFocused();
   await panel.getByRole('button', { name: 'Fullscreen', exact: true }).click();
   await panel.getByRole('button', { name: 'Split pane', exact: true }).click();
-  await expect(panel.locator('[data-workbench-pane]')).toHaveCount(2);
+  await expect(panel.locator('[data-dockkit-pane]:visible')).toHaveCount(2);
   await expect(panel.getByRole('button', { name: 'Restore', exact: true })).toHaveCount(1);
-  const separator = panel.getByRole('separator'); await separator.focus(); await separator.press('ArrowRight'); await expect(separator).toHaveAttribute('aria-valuenow', '52');
-  await panel.getByRole('button', { name: 'Merge panes', exact: true }).first().click();
-  await expect(panel.locator('[data-workbench-pane]')).toHaveCount(1);
-  await panel.getByRole('tab', { name: 'sh', exact: true }).click();
-  await panel.getByRole('button', { name: 'Close terminal 1' }).click();
+  const separator = panel.locator('[data-dockkit-divider]'), box = (await separator.boundingBox())!;
+  await page.mouse.move(box.x, box.y + 100); await page.mouse.down(); await page.mouse.move(box.x + 40, box.y + 100); await page.mouse.up();
+  await panel.locator('[data-dockkit-pane]:visible').last().getByRole('tab').getByRole('button', { name: 'Close tab' }).click();
+  await expect(panel.locator('[data-dockkit-pane]:visible')).toHaveCount(1);
+  await panel.getByRole('tab', { name: 'sh', exact: false }).click();
+  await panel.getByRole('tab', { selected: true }).getByRole('button', { name: 'Close tab' }).click();
+  await expect(panel.locator('.xterm')).toHaveCount(0);
   await page.keyboard.press('Control+Backquote');
   await expect(panel.locator('.xterm')).toBeVisible();
   await page.keyboard.press('Control+Alt+p');
   await expect(panel.getByRole('region', { name: 'Workspace files', exact: true })).toBeVisible();
-  await panel.getByRole('tab', { name: 'sh', exact: true }).click();
-  await panel.getByRole('button', { name: 'Close terminal 1' }).click();
+  await panel.getByRole('tab', { name: 'sh', exact: false }).click();
+  await panel.getByRole('tab', { selected: true }).getByRole('button', { name: 'Close tab' }).click();
   expect(errors).toEqual([]);
 });
 
@@ -117,7 +119,7 @@ test('file tree and source tabs preserve their own view state and use Harness to
   await page.screenshot({ path: info.outputPath('files-tree-light.png') });
   await tree.getByRole('button', { name: 'test.py', exact: true }).click();
   const file = panel.locator('[data-workbench-file="src/test.py"]');
-  await expect(panel.getByRole('tab', { name: 'test.py', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(panel.getByRole('tab', { name: 'test.py', exact: false })).toHaveAttribute('aria-selected', 'true');
   await expect(file.locator('[data-path-label]')).toHaveAttribute('title', /\/src\/test.py$/);
   await expect(file.locator('[data-line-numbers]')).toBeVisible();
   await expect(file.locator('[data-code-block-banner]')).toContainText('python');
@@ -132,10 +134,10 @@ test('file tree and source tabs preserve their own view state and use Harness to
   await file.getByRole('button', { name: 'Copy', exact: true }).click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toContain('def greet(name):');
   await page.screenshot({ path: info.outputPath('file-python-light.png') });
-  await panel.getByRole('tab', { name: 'Files', exact: true }).click();
+  await panel.getByRole('tab', { name: 'Files', exact: false }).click();
   await expect(tree.getByRole('button', { name: 'src', exact: true })).toHaveAttribute('aria-expanded', 'true');
   await tree.getByRole('button', { name: 'test.py', exact: true }).click();
-  await expect(panel.getByRole('tab', { name: 'test.py', exact: true })).toHaveCount(1);
+  await expect(panel.getByRole('tab', { name: 'test.py', exact: false })).toHaveCount(1);
   await expect(file.getByRole('button', { name: 'Wrap lines', exact: true })).toHaveAttribute('aria-pressed', 'true');
   // The path came from the native test Host. Change the real file, then explicitly reload it.
   const { writeFileSync } = await import('node:fs');
@@ -146,7 +148,7 @@ test('file tree and source tabs preserve their own view state and use Harness to
   await expect(file.locator('pre')).toHaveText('print("refreshed")');
   await page.evaluate(() => document.body.setAttribute('data-ds-dark-theme', ''));
   await page.screenshot({ path: info.outputPath('file-python-dark.png') });
-  await panel.getByRole('tab', { name: 'test.py', exact: true }).locator('..').getByRole('button', { name: 'Close tab' }).click();
+  await panel.getByRole('tab', { name: 'test.py', exact: false }).getByRole('button', { name: 'Close tab' }).click();
   await expect(tree.getByRole('button', { name: 'test.py', exact: true })).toBeVisible();
   await tree.getByRole('button', { name: 'src', exact: true }).click();
   await expect(tree.getByRole('button', { name: 'test.py', exact: true })).toHaveCount(0);
@@ -159,7 +161,8 @@ test('file tree and source tabs preserve their own view state and use Harness to
   await page.evaluate(() => localStorage.setItem('rustx-locale-v1', 'zh'));
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.reload(); await page.locator('[data-preview-toggle]').click();
-  await panel.getByRole('button', { name: /工作区文件/ }).click();
+  await expect(panel.getByRole('tab', { name: 'test.py', exact: false })).toHaveAttribute('aria-selected', 'true');
+  await panel.getByRole('tab', { name: '文件', exact: false }).click();
   await panel.getByRole('button', { name: 'src', exact: true }).click();
   await expect(panel.getByRole('button', { name: 'test.py', exact: true })).toBeVisible();
   await panel.screenshot({ path: info.outputPath('files-tree-zh.png') });

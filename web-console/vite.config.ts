@@ -12,6 +12,8 @@ export default defineConfig({
   // It is replaced by an inert module in the bundle and in tests alike; see
   // src/app/settings/forms/inert-devtools-event-client.ts.
   resolve: { alias: [{ find: /^@tanstack\/devtools-event-client$/, replacement: fileURLToPath(new URL('./src/app/settings/forms/inert-devtools-event-client.ts', import.meta.url)) }] },
+  // Prebundle lazy document engines before the first file opens; avoid a dev-server reload mid-session.
+  optimizeDeps: { include: ['@fortune-sheet/react', '@fortune-sheet/core', 'exceljs', 'papaparse', 'xlsx', 'xlsx/dist/cpexcel.full.mjs', 'fast-xml-parser', 'fflate', 'yaml'] },
   server: { host: '127.0.0.1', strictPort: true },
   test: {
     setupFiles: ['./test/setup.ts'], include: ['test/**/*.test.ts', 'test/**/*.test.tsx'], environment: 'jsdom', restoreMocks: true,

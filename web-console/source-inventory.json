@@ -1262,7 +1262,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "65057571cf2aec805e94a35d999fcd503f026022c3b8f2f0c8d590c84d1e9ad9",
+      "local_sha256": "de0c01c07b91b54990371ab46065cc73becc4ba5ba4beed0a1b43df949faa888",
       "classification": "A"
     },
     {
@@ -1569,6 +1569,7 @@
       "upstream_sha256": "3576c16a37846a55f215562d15df9394cf5761fc46eae8f89fdcea8420f09d3d",
       "retained_dependencies": [
         "./CodeBlock.tsx",
+        "./DocumentResources",
         "./MarkdownText.module.css",
         "./incremental.ts",
         "./katex.tsx",
@@ -1584,7 +1585,7 @@
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "fd11f7e342f7ffd44d00ae7210f7def2e69eca3256150bba0a865cf887ff4ccb"
+      "local_sha256": "c133b2720ff026bf757e4ea339ef3df977da6709066157ffcdaa8d284bdbc79f"
     },
     {
       "upstream": "packages/client/ui-primitives/src/markdown/useViewportHighlighting.ts",
@@ -2160,10 +2161,11 @@
       ],
       "retained_dependencies": [
         "../primitives/Button",
+        "./InspectorPanel.module.css",
         "./SidebarRight.module.css",
         "react"
       ],
-      "local_sha256": "7bdbd3b003266c115838e2d500c59c7dfba16f11ce69d2fa93cb99b9bf33a545",
+      "local_sha256": "2c7805ae42b3a829961f61baf22d202d9189bd6d0b91ce847b02ef9cc4885eda",
       "classification": "B"
     },
     {
@@ -2179,7 +2181,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "af1ea13edeba84fb7f4c477bb5bb607d42e6426bac976e0f604728c541b66556",
+      "local_sha256": "a0e08221a9b86238098853b3ee43d6f921bc64860e0e84d6a1d1a738f1ceab9e",
       "retained_dependencies": [],
       "classification": "B"
     },
@@ -3290,7 +3292,7 @@
         "dynamic language registration"
       ],
       "additional_sources": [],
-      "local_sha256": "f1ca2ff2ad541a7b6dfc08dc2d032db6e008c67ba3a987fb772f669c26f18431"
+      "local_sha256": "ccbcaa159c38d11b884a03c3ece7514e1ba289363e38b893eea8542c7deadbfc"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/locales.ts",
@@ -3717,6 +3719,11 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../locale/react",
+        "../../presentation/dockkit/components/DockSurface",
+        "../../presentation/dockkit/contract/adapter",
+        "../../presentation/dockkit/contract/types",
+        "../../presentation/dockkit/engine/controller",
+        "../../presentation/dockkit/engine/tree",
         "../../presentation/primitives/FileTypeIcon",
         "../../presentation/primitives/Menu",
         "../../presentation/primitives/icons",
@@ -3727,13 +3734,14 @@
         "./WorkbenchFiles",
         "./WorkbenchIcons",
         "./WorkbenchTerminal",
+        "./workbench-persistence",
         "react"
       ],
       "excluded_dependencies": [
         "Harness slot registry",
         "Harness terminal Host and Session store"
       ],
-      "local_sha256": "d7472c6883869fc4b4d801c86102da05f3c90f54816c4236b3e82fb56f40e533",
+      "local_sha256": "03f88f46bafef73b6d2f65be675ac3d5919467f8bd6b5fd731e5dd6453d95656",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-sidebar-terminal/src/client/TerminalGuide.tsx",
@@ -3762,7 +3770,7 @@
         "Harness slot registry",
         "Harness terminal Host and Session store"
       ],
-      "local_sha256": "9ae7a373e1e0a3e9c7703d13eba0da068e6ec25630073d9dc803153538c7e40a",
+      "local_sha256": "e3fe9da21ea9d4c60200192135925be08efcdc69b8eab5591bd47ff676e92292",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-dockkit/src/components/dockkit.module.css",
@@ -4018,8 +4026,12 @@
         "../../presentation/primitives/file-language",
         "../../presentation/primitives/icons",
         "../../presentation/right-panel/WorkbenchFiles.module.css",
+        "../../presentation/right-panel/preview-view-state",
         "../../workspaces/desktop",
         "../../workspaces/workbench",
+        "./workbench-documents/DocumentBody",
+        "./workbench-documents/definitions",
+        "./workbench-documents/zoom/types",
         "react"
       ],
       "additional_sources": [
@@ -4042,7 +4054,7 @@
           "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime."
         }
       ],
-      "local_sha256": "07ad5d7ed5301726248b1d21687e4743e2c8e8e4a597a0eae12025c9f854d553"
+      "local_sha256": "603cd6620087ef49af4a246732cc30752445d834d97a3308da0b12152f162b23"
     },
     {
       "upstream": "packages/client/ui-sidebar-files/src/client/FilesBody.module.css",
@@ -4069,7 +4081,7 @@
           "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime."
         }
       ],
-      "local_sha256": "b13a1b08f4a5b0b8737693e0a72ed2b9954b9d5cf29536226c411b95682de511"
+      "local_sha256": "4a16a6a1a6a9e399f5f38ec1862cdabdedc694eead55498da6c0d94859837f02"
     },
     {
       "upstream": "packages/client/ui-primitives/src/CodeToolbar.tsx",
@@ -4101,6 +4113,1076 @@
       ],
       "retained_dependencies": [],
       "local_sha256": "99ca0b14683e8cdfbe86e184d809a9dec3ce8b69b6f23f6edaf93e2238c080f5"
+    },
+    {
+      "upstream": "packages/client/ui-dockkit/src/index.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "b28bc59f5298191b1469c96871ead1bc80a20bc6efec8169f771ce490b55d01f",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/dockkit/index.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "./components/DockSurface.tsx",
+        "./components/FloatLayer.tsx",
+        "./contract/adapter.ts",
+        "./contract/types.ts",
+        "./engine/constraints.ts",
+        "./engine/controller.ts",
+        "./engine/geometry.ts",
+        "./engine/initial.ts",
+        "./engine/operations.ts",
+        "./engine/planner.ts",
+        "./engine/sequence.ts",
+        "./engine/tree.ts"
+      ],
+      "local_sha256": "28592703d3b9a4f9eefa30ca137208281b7c6fe42e6ab800c240cbc370c0dd68"
+    },
+    {
+      "upstream": "packages/client/ui-dockkit/src/components/DockSurface.tsx",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "f786e1a95f09832487fce6a01475293273ad025c474288acad731d02b7d2e1fb",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/dockkit/components/DockSurface.tsx",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "../contract/adapter.ts",
+        "../contract/types.ts",
+        "../engine/constraints.ts",
+        "../engine/geometry.ts",
+        "../engine/tree.ts",
+        "./PaneTree.tsx",
+        "./TabLayout.tsx",
+        "./dockkit.module.css",
+        "./measure.ts",
+        "./pointer.ts",
+        "./render.ts",
+        "react"
+      ],
+      "local_sha256": "9205ac56cecaa8e5aae1c1b3bed638c4c814b6d0f55d70166eac9b191e8c3d58"
+    },
+    {
+      "upstream": "packages/client/ui-dockkit/src/components/FloatLayer.tsx",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "1665e8163b0b0f13397f2f8bc6dc07c59d2e285fce63177d127d10f9406b79ec",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/dockkit/components/FloatLayer.tsx",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "../contract/adapter.ts",
+        "../contract/types.ts",
+        "../engine/constraints.ts",
+        "../engine/geometry.ts",
+        "../engine/tree.ts",
+        "../primitives",
+        "./TabTitle.tsx",
+        "./dockkit.module.css",
+        "./pointer.ts",
+        "clsx",
+        "react"
+      ],
+      "local_sha256": "deb7791eda89fd57f7c91bc0d2050569710fc7c5fe79a3a5207d7cc82dc3e7f4"
+    },
+    {
+      "upstream": "packages/client/ui-dockkit/src/components/PaneTree.tsx",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "b3504195fc149c86447e9c66da43bf0eea290d05c0dda25932e0d98495ce42b6",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/dockkit/components/PaneTree.tsx",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "../contract/types.ts",
+        "../engine/tree.ts",
+        "./TabPanel.tsx",
+        "./dockkit.module.css",
+        "./render.ts",
+        "clsx",
+        "react"
+      ],
+      "local_sha256": "49a2a7b34317a7dc27dc458f07e1810136142d0962f0bd600f1aea2a420d6012"
+    },
+    {
+      "upstream": "packages/client/ui-dockkit/src/components/TabLayout.tsx",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "ea6305089a7697214a3dba28ca0c364253721b5b67533fc5245bad3036e990be",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/dockkit/components/TabLayout.tsx",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "../contract/adapter.ts",
+        "../contract/types.ts",
+        "../engine/tree.ts",
+        "./FloatLayer.tsx",
+        "./PaneTree.tsx",
+        "./TabPanel.tsx",
+        "./dockkit.module.css",
+        "./render.ts",
+        "clsx",
+        "react"
+      ],
+      "local_sha256": "610d4fafc938b7bcfbc493c3045df66be61db6165d4f21b001407a4e7eccfa8e"
+    },
+    {
+      "upstream": "packages/client/ui-dockkit/src/components/TabMenu.tsx",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "20b266cfe69a8081bbc548df383b66067ae3e781f9619f8c16fe4f029607d780",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/dockkit/components/TabMenu.tsx",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "../contract/adapter.ts",
+        "../primitives",
+        "./dockkit.module.css",
+        "react",
+        "react-dom"
+      ],
+      "local_sha256": "322456b721eb48d911b5244c00c7a8c13b28bda6045154b9fe1c5d3559858f2d"
+    },
+    {
+      "upstream": "packages/client/ui-dockkit/src/components/TabPanel.tsx",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "21d7c1dde24b86f3f165d87af68e1cbe69d9336f1fc5931cb058bee902043c5e",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/dockkit/components/TabPanel.tsx",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "../contract/types.ts",
+        "../engine/tree.ts",
+        "../primitives",
+        "./TabMenu.tsx",
+        "./TabTitle.tsx",
+        "./dockkit.module.css",
+        "./render.ts",
+        "clsx",
+        "react"
+      ],
+      "local_sha256": "1946a04935338c3f9606bc2e00ec9413ea4fb4b0952e2f9f4f7b4ed6c5ee728d"
+    },
+    {
+      "upstream": "packages/client/ui-dockkit/src/components/TabTitle.tsx",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "93e0fc61611e3f787a41528f8538081992f87432a24f2a8b4cdae334c3020ee0",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/dockkit/components/TabTitle.tsx",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "./dockkit.module.css",
+        "react"
+      ],
+      "local_sha256": "e64c89c0e526241fe0253014629ae7a53c17a38d6816ce9aa78c485466568135"
+    },
+    {
+      "upstream": "packages/client/ui-dockkit/src/components/dockkit.module.css",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "aa18d0e2a41bfd99babd9011f1107b26d387c30665fdbcc3d6276ec268750fdf",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/dockkit/components/dockkit.module.css",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [],
+      "local_sha256": "102ed447057b3f04745c3de395a61de6bf45ec6e906607f5ac2057d95f246e14"
+    },
+    {
+      "upstream": "packages/client/ui-dockkit/src/components/measure.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "393474808c98e5d7f5e7b6a045b2a15197bc0fd62e1dd66470c9377c5b5f2a63",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/dockkit/components/measure.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "../contract/types.ts",
+        "../engine/geometry.ts"
+      ],
+      "local_sha256": "777e0f75e661fd727ffefc03e3a99ddbfbd9bdf05cf466c7ad961372e204c409"
+    },
+    {
+      "upstream": "packages/client/ui-dockkit/src/components/pointer.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "9a5ebab889935f64050b511f9de120c8542a75734271c310bb9b5502573489ad",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/dockkit/components/pointer.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "react"
+      ],
+      "local_sha256": "e352db6cfb074c96a7641a6d33b01fbbd5f5781ad4123ba744e349d5241c03d5"
+    },
+    {
+      "upstream": "packages/client/ui-dockkit/src/components/render.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "7a20176c9efd17e3114506a3f193218d190958ef8294275d2dc263223c5b96b7",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/dockkit/components/render.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "../contract/adapter.ts",
+        "../contract/types.ts",
+        "../engine/geometry.ts",
+        "react"
+      ],
+      "local_sha256": "4545a435acde3ad8091c7ebde17c89fe1454a6a93af41cd54e7972e10444466f"
+    },
+    {
+      "upstream": "packages/client/ui-dockkit/src/contract/adapter.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "546c3bda130d38fecbabc0177c9d7ae5adf768ac22e25807da90d3a4c1a1dd4a",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/dockkit/contract/adapter.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "./types.ts",
+        "react"
+      ],
+      "local_sha256": "93d1694938bf7923e84c1216cf86f4afbcf0424666e0045caa83b5089a7b82c9"
+    },
+    {
+      "upstream": "packages/client/ui-dockkit/src/contract/types.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "1cd9b883e63e9437c42af58a994633d30692c6cdb581b59499f91d2bd37f244b",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/dockkit/contract/types.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [],
+      "local_sha256": "68be0927b1debf61a7ce76ee9ffc201dbf92a328a4b2aaec96ae40e776f30ba2"
+    },
+    {
+      "upstream": "packages/client/ui-dockkit/src/engine/constraints.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "1530328c10435e0278f67fd4e1689a43c35c60e2bb1ac4d86fee9b21c5e09c15",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/dockkit/engine/constraints.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "../contract/types.ts",
+        "./tree.ts"
+      ],
+      "local_sha256": "ec5db1f448aed3bc7f40b17fe9b1a3b716beee280f3693a211a3dba2415f1a4f"
+    },
+    {
+      "upstream": "packages/client/ui-dockkit/src/engine/controller.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "44045b13ed82ff502cb502f24d50d72e539c7df9b9ba9d66d1b295b730db0a8f",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/dockkit/engine/controller.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "../contract/types.ts",
+        "./constraints.ts",
+        "./initial.ts",
+        "./operations",
+        "./planner.ts",
+        "./sequence.ts"
+      ],
+      "local_sha256": "3be9730cbc528caecbff80fcab0cde4dfcd478062426738ab8abcdaca3b499c8"
+    },
+    {
+      "upstream": "packages/client/ui-dockkit/src/engine/geometry.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "16ac9bbeaaffb65c4612245afb56d51dfbfe03f443275127dc856d9f9dd4dec5",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/dockkit/engine/geometry.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "../contract/types.ts",
+        "./constraints.ts"
+      ],
+      "local_sha256": "ab4b13ddd6fd00b158d96c0b851a013cad89945f0babee01331a7195a0ab25da"
+    },
+    {
+      "upstream": "packages/client/ui-dockkit/src/engine/initial.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "cdd9ac0d7cb184c47d840479c5a80570a76d1f6713b810b32b5ddd35d8674efc",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/dockkit/engine/initial.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "../contract/types.ts",
+        "./planner.ts"
+      ],
+      "local_sha256": "5c6d53ef94f7dc534e8492d8b0dbedceaec29b217cff1759de1bf7ce652c1ad4"
+    },
+    {
+      "upstream": "packages/client/ui-dockkit/src/engine/operations.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "ab910652d80e3be1b7ffa75e61e594e7ab73d00d01f6029d69c07996a9e4c064",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/dockkit/engine/operations.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "../contract/types.ts",
+        "./tree.ts"
+      ],
+      "local_sha256": "6b76e3962400b0545f1cf7325b4c6fb3c2a20028fa1d33365e9573e7fa4f91b2"
+    },
+    {
+      "upstream": "packages/client/ui-dockkit/src/engine/planner.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "4c3080aa23799a3feec54c533f444d86925a659f0a28526bc239ad814962bb73",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/dockkit/engine/planner.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "../contract/types.ts",
+        "./constraints.ts",
+        "./initial.ts",
+        "./operations.ts",
+        "./tree.ts"
+      ],
+      "local_sha256": "60292632eda33a6ff8b2d7b41002363e37380fc49ef8f01342af7c0ec986bbc3"
+    },
+    {
+      "upstream": "packages/client/ui-dockkit/src/engine/sequence.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "6baed06f30f4477aa1c8e19ad75b0a86b2f044bddd557066d7e823c271a70464",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/dockkit/engine/sequence.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "../contract/types.ts",
+        "./operations.ts"
+      ],
+      "local_sha256": "a33cd629e3f00b5906305ecb9ee99385a36841ad5d58d0a7acc57406c44284e3"
+    },
+    {
+      "upstream": "packages/client/ui-dockkit/src/engine/tree.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "83c8fffcb2f56b4428b6d0c4a5ae435c375d103c9256220cca79bb15f139e291",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/dockkit/engine/tree.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "../contract/types.ts"
+      ],
+      "local_sha256": "96684b08d3539dbccc273d5b0ccc583fa83b2976a425b5a7dbaf1203ad57565b"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/MenuSurface.tsx",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "1e9b1f476305d4076b23b42fd08b63f9429b8e1f646c06ebc39d8ded5de7fdbf",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/primitives/MenuSurface.tsx",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "./MenuSurface.module.css",
+        "clsx",
+        "react",
+        "react-dom"
+      ],
+      "local_sha256": "9db8f3048ac3c7d6571bc450f1cbfd0b11cc93499d03195a5891bfe97226ecc3"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/MenuSurface.module.css",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "6230cfabdb5294b5cf174bc79842a9596f6aee6cd76a8cd5e183c67279bca9ae",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/primitives/MenuSurface.module.css",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [],
+      "local_sha256": "ecb368c33cecc28856b182814c9c0d259335b30a152bd93ae249057773ca9415"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/focus.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "68fb4c2bde84ec41933090246cc1806494db78f15741ada54585630fe15ecc9b",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/primitives/focus.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [],
+      "local_sha256": "47d92c5fbc1f5995b374f6e65473db492907888c6acc36ee16bc0678ee9776aa"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/keyboard-composition.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "be1684e7f3b8306da3cb991f1a5e393065d74107892b78a1002cdf2624f23f6c",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/primitives/keyboard-composition.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [],
+      "local_sha256": "8adcd444447ef38060c79b4f0961ffb324c620eea180553e4946ffc50baa011f"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/markdown/frontmatter.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "44476d3d3d66f8015501e2d02d9a0912cbf790f98c0c529d41c909c2bd6d3967",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/app/components/workbench-documents/frontmatter.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [],
+      "local_sha256": "30bca21b66a2a5cc88bc5bf3b2badbd56dd34c0bd5154c11d742822f0b67f5b4"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/markdown/frontmatter-fields.tsx",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "6a9b79a17596e3c410b25e2713af627d38eacc7475d7ef529f376aa54728e703",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/app/components/workbench-documents/frontmatter-fields.tsx",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "./frontmatter-fields.module.css",
+        "react",
+        "yaml"
+      ],
+      "local_sha256": "2acbc5c501c81e91547415441bc8c076abfbf31f057a58b5116fe54dda1536d5"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/markdown/frontmatter-fields.module.css",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "399a4186764d0d8cf2d25f2d2f5c0ec624dcde8f1a3adcd67f7a359d69361271",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/app/components/workbench-documents/frontmatter-fields.module.css",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [],
+      "local_sha256": "328bbe5f8c749e046ca9af6097da8b9892dffd8c7c370ee2c5ccbb24691c9568"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/markdown/MarkdownBody.module.css",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "58ce708a0e5f059bb8d071d72fa03766c6e50a55341265727c07120db596cdb2",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/app/components/workbench-documents/MarkdownBody.module.css",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [],
+      "local_sha256": "6f0ea621e011477fba68029ba64761693760c451d8bbe3b048b8283583c8dda0"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/ExcelBody.module.css",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "2d5a0130b0ccb63d5c1e387eec4f608f9bea96a0379d79027b279cb64be426bb",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/app/components/workbench-documents/excel/ExcelBody.module.css",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [],
+      "local_sha256": "32d1d25839e8251679fcadf3ae9ead8d46ee5ad238c91554988603e6f5892ff7"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/convert.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "fd41b4dd3e0edfe25e61f24a0d4e5032ba924c97d8428105a9c4bce438c2ecab",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/app/components/workbench-documents/excel/convert.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "./delimited.ts",
+        "./error.ts",
+        "./format.ts",
+        "./model.ts",
+        "./xls.ts",
+        "./xlsx.ts"
+      ],
+      "local_sha256": "f78521b4f0871eb21d019ae6ce72a2622f370fa69a3baea7e4d873219f62f458"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/delimited.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "bff9ad20c71c4cf2caaf7bf5aad0f22e30f574fbac978bccb36eff629dabc46f",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/app/components/workbench-documents/excel/delimited.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "./error.ts",
+        "./model.ts",
+        "@fortune-sheet/core",
+        "papaparse"
+      ],
+      "local_sha256": "fe0423ed9322ab71db6c405563c0ef545c90ec31e659e1fef4aa712bec3e5720"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/error.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "af0d846d2c7caa19ff17f9922f35d9ea4c65b18b6c7db8d7e9f7c779b4b5307e",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/app/components/workbench-documents/excel/error.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [],
+      "local_sha256": "27b0792bd64c1ad688c2986a817eed1cfbf4f230738c7aaf2d06cac99d057eb5"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/excel.tsx",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "37ffe5e647aec51d99ce2352bd1b5d475200e885fe4dccf3b24da0654b03b5e5",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/app/components/workbench-documents/excel/excel.tsx",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "../../../../locale/dictionaries/workbench-excel",
+        "../primitives",
+        "./ExcelBody.module.css",
+        "./format.ts",
+        "./model",
+        "./model.ts",
+        "./parse.ts",
+        "@fortune-sheet/react",
+        "@fortune-sheet/react/dist/index.css?inline",
+        "react"
+      ],
+      "local_sha256": "e2219b1a6f2299e15e30dbd8e08d318f3149aef3ffb0731156e91914e447b65e"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/format.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "719e9fd036f3a58485dc99a40f2d3b3c68e73821507e2153e32f7f5020ffa9d1",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/app/components/workbench-documents/excel/format.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "./error.ts"
+      ],
+      "local_sha256": "79c8dae4cea32356421521e365c6c55b4a87cfd24556bf02d77dbfad3e8b604c"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/model.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "e8f26157fac1cc0a6942c30212dacb24da191d0cb733973f1538402d064a030d",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/app/components/workbench-documents/excel/model.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "@fortune-sheet/core"
+      ],
+      "local_sha256": "e34d55d54e836643ddee34542be4d8c659833b72a097dcdc3779ede8f6f86a5e"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/parse.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "8d403f32f4631ab04c486a83a43246f1f7b722d87cc63ad47e04957cdbaf7581",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/app/components/workbench-documents/excel/parse.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "./format.ts",
+        "./model.ts"
+      ],
+      "local_sha256": "52dc22322407ee56c010f01c810ef2b88c7c09fbe503170acff09876ad4b9ac0"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/worker.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "7df26329b6e5fe3c18c43e10c55782541afa5de0a11817524f91618f6446d713",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/app/components/workbench-documents/excel/worker.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "./convert.ts",
+        "./error.ts",
+        "./format.ts",
+        "./model.ts"
+      ],
+      "local_sha256": "7a9c73af727a574387e7d062cb8c7b01a2a0c808d05df50f4d8f24fd9dec5b3d"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/xls.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "ef04356ac4bc63d15f992695eedf5e3c383332f30cd045036b46e7531858970d",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/app/components/workbench-documents/excel/xls.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "./error.ts",
+        "./model.ts",
+        "@fortune-sheet/core",
+        "xlsx",
+        "xlsx/dist/cpexcel.full.mjs"
+      ],
+      "local_sha256": "59e69bfcacc8f07240c06e17c42c398917fcd5c304d8be9e145361ea77b6eac3"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/xlsx-archive.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "ffd99f6b2424122b427754e53f6c2cc9f68ff7fa783e0f1816b3998ceb3b6618",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/app/components/workbench-documents/excel/xlsx-archive.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "./model.ts",
+        "fast-xml-parser",
+        "fflate"
+      ],
+      "local_sha256": "40007c6e99ad2efd01321a85ced2d6ac278f90abd87f430c5539681077d96ff6"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/xlsx.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "7192d771db899ece3d7c300ec4cf5f7f1a77c664cd0d0db7a82c2932831178bf",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/app/components/workbench-documents/excel/xlsx.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "./error.ts",
+        "./model.ts",
+        "./xlsx-archive.ts",
+        "@fortune-sheet/core",
+        "exceljs",
+        "fast-xml-parser"
+      ],
+      "local_sha256": "ea199c20bda37aef8565a4daed1ba9de42409fe91f7741120fae028f8be229f5"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/zoom/ZoomControls.module.css",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "b73e0fd34444dd0b4ff17e3d5ca595971f2c1c99180538e35a85dd8a33ce2acd",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/app/components/workbench-documents/zoom/ZoomControls.module.css",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [],
+      "local_sha256": "70572fab5decdc344dc01c2bc11ebf77963366a1f0d3ad7832858d6d3fd8dab7"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/zoom/ZoomControls.tsx",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "47b74d6fee777be7cc030b3b8b8b28482f08891a888e6fc68d5fb4a14b8b076a",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/app/components/workbench-documents/zoom/ZoomControls.tsx",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "../primitives",
+        "./ZoomControls.module.css",
+        "./types.ts",
+        "react"
+      ],
+      "local_sha256": "9b5f4fa6fd08cdc31fe75454230bc4e9a70f2457081aa70517cb1b0446f2c181"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/zoom/ZoomViewport.module.css",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "597acbd5b4b858bc9712b61b5b2b6300d6a9b085adf075ec840116b484c87840",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/app/components/workbench-documents/zoom/ZoomViewport.module.css",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [],
+      "local_sha256": "d131dedc83230601855921944532002b3f5dd7d8c38a458b4a689af4cb269319"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/zoom/ZoomViewport.tsx",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "b7a427c072ae528377aa3740c75ddefae5e9bef9010430e43611649e0b8eb79c",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/app/components/workbench-documents/zoom/ZoomViewport.tsx",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "./ZoomControls.tsx",
+        "./ZoomViewport.module.css",
+        "./types.ts",
+        "react"
+      ],
+      "local_sha256": "548eda82416c702a4d9431a910b6a3213f7430bbe081f7c60dfbf0434e4c39f9"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/zoom/types.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "aee361914c9687c510d588e658bd09d545b7b043378ed445049298874111820b",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/app/components/workbench-documents/zoom/types.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [],
+      "local_sha256": "bbe128faa7688bc370143dd2d788c0eab4590e157191747d277cf0af70fde7ae"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/html/basic-document.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "d229243c4fc237c4a6a423a9c73b29153b7a2ab4cc0f29b9d1a715044ef82922",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/app/components/workbench-documents/basic-document.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "./bytes.ts",
+        "dompurify"
+      ],
+      "local_sha256": "d26fa97343159acf7f75c8d87019059438e566c0f0b5e8cba44e9bb312be2162"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/html/bytes.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "b6da60105672540f9352db43d4d12b6bb937c80e8c14b0093cc9311766cbc130",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/app/components/workbench-documents/bytes.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [],
+      "local_sha256": "71234a992590905c46f9a846ddb89dcd3608522f0226abe8b6aed0da3b47b2e9"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/document/registry.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "29c4e408b7da7a1b63d86e644f995cbf23833f7868fb615745a69e03d19ed124",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/app/components/workbench-documents/registry.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "./suffix.ts"
+      ],
+      "local_sha256": "94ab8528a29daa1ace49097266c92eba770e0fe27541104f5024493ed604b0f3"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/document/suffix.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "30647dd990e0080ba62ac3a1d287a30e46a2a0e25fc0856dbc97076a077c3311",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/app/components/workbench-documents/suffix.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [],
+      "local_sha256": "c287ff51f7e9396b7e0d39775ad013c7f4afdfeca6147be71c39b7d327b2c205"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/markdown/MarkdownBody.tsx",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "a737f15db56ff0f0d051d4314ea30a28a6f66e3866801e4a212219fc8934d8ae",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/app/components/workbench-documents/DocumentBody.tsx",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "../../../locale/dictionaries/workbench-excel",
+        "../../../locale/react",
+        "../../../presentation/markdown/DocumentResources",
+        "../../../presentation/markdown/MarkdownText",
+        "../WorkbenchFiles",
+        "../documents/PdfPreview",
+        "./MarkdownBody.module.css",
+        "./basic-document",
+        "./definitions",
+        "./excel/excel",
+        "./excel/format",
+        "./frontmatter",
+        "./frontmatter-fields",
+        "./resources",
+        "./zoom/ZoomViewport",
+        "./zoom/types",
+        "react"
+      ],
+      "local_sha256": "c90567a9fb4869c855395e9fe87a2ded77bb9c55ba43d4b18a9cc166b8827107"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/locales.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "f0a4c6e82e24161885fb8150c866a6ae1e5d5f43cbe73ca514aa9a821784a40d",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/locale/dictionaries/workbench-excel.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [],
+      "local_sha256": "265d954ceba4f60246ca84413964f084e9d3b70142e525d06f8d703d730a79ff"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-right/src/client/persistence.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "b080ae7b49ce1a609d4ad9fe0561a9450c88eef69928db9bad8d89f057dcf7c6",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/app/components/workbench-persistence.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "../../presentation/dockkit/contract/types",
+        "../../presentation/dockkit/engine/sequence"
+      ],
+      "local_sha256": "4837f5a4eaecc2114557c3299dc00dd8441078722f646462e9b6f26017dbe41c"
+    },
+    {
+      "upstream": "packages/client/ui-dockkit/tests/apply.client.spec.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "5c46f77426e5b67b5f0c1666c614c201776dc07fa2f418576fae84fcb1c5da9d",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/test/dockkit/apply.test.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "../../src/presentation/dockkit/contract/types.ts",
+        "../../src/presentation/dockkit/engine/initial.ts",
+        "../../src/presentation/dockkit/engine/operations.ts",
+        "../../src/presentation/dockkit/engine/tree.ts",
+        "./fixtures.client.ts",
+        "vitest"
+      ],
+      "local_sha256": "fca3c3d6fef600d97bcbeca0e12d4be7edec1936ff9b6bd3e1341303e31f1c88"
+    },
+    {
+      "upstream": "packages/client/ui-dockkit/tests/constraints.client.spec.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "a7ce60df1d9a483091fdb9ea354e23c5072a53f1fab6fce4d502cb11e68e2a57",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/test/dockkit/constraints.test.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "../../src/presentation/dockkit/contract/types.ts",
+        "../../src/presentation/dockkit/engine/constraints.ts",
+        "../../src/presentation/dockkit/engine/initial.ts",
+        "../../src/presentation/dockkit/engine/operations.ts",
+        "../../src/presentation/dockkit/engine/tree.ts",
+        "./fixtures.client.ts",
+        "vitest"
+      ],
+      "local_sha256": "ffd66c8106f9a89a88c75d187f1958e11f0e6479fffa80ed361d53c06ae24cb1"
+    },
+    {
+      "upstream": "packages/client/ui-dockkit/tests/controller.client.spec.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "ac66f1925efb4a8ddb3fc43c588e3bf19150ab6a4e8154ecb6e092764cddf54b",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/test/dockkit/controller.test.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "../../src/presentation/dockkit/contract/types.ts",
+        "../../src/presentation/dockkit/engine/constraints.ts",
+        "../../src/presentation/dockkit/engine/controller.ts",
+        "../../src/presentation/dockkit/engine/tree.ts",
+        "./fixtures.client.ts",
+        "vitest"
+      ],
+      "local_sha256": "d2ebc50e1850d6ed4a7b34e0b6f2e691c379b67a4b6b11796aef88d623a588d4"
+    },
+    {
+      "upstream": "packages/client/ui-dockkit/tests/fixtures.client.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "64cc51a22d0e7ae273b43ab7afc114ed3ea54507084a96d856e9317015730d71",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/test/dockkit/fixtures.client.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "../../src/presentation/dockkit/contract/adapter.ts",
+        "../../src/presentation/dockkit/contract/types.ts",
+        "../../src/presentation/dockkit/index.ts"
+      ],
+      "local_sha256": "3f1c38282fc54ebb6f2f549c8a82ac9ab207eae092e818ed2fb52b2e2fb1a56b"
+    },
+    {
+      "upstream": "packages/client/ui-dockkit/tests/geometry.client.spec.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "1196a3641d39db5adf5d08e092e9497911fd8a7aaf19e137ffa36dd8d0b58241",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/test/dockkit/geometry.test.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "../../src/presentation/dockkit/engine/geometry.ts",
+        "../../src/presentation/dockkit/index.ts",
+        "vitest"
+      ],
+      "local_sha256": "7fb37c6cbc193c9259c2efdcf0b97aa52fc71ff886bc449a0da464768d10a319"
+    },
+    {
+      "upstream": "packages/client/ui-dockkit/tests/planner.client.spec.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "b0a3f2e880b963bbbc50471f3480c5435f9219af319ee5c3ef3d6657dcef1160",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/test/dockkit/planner.test.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "../../src/presentation/dockkit/contract/types.ts",
+        "../../src/presentation/dockkit/engine/controller.ts",
+        "../../src/presentation/dockkit/engine/initial.ts",
+        "../../src/presentation/dockkit/engine/operations.ts",
+        "../../src/presentation/dockkit/engine/planner.ts",
+        "../../src/presentation/dockkit/engine/sequence.ts",
+        "../../src/presentation/dockkit/engine/tree.ts",
+        "./fixtures.client.ts",
+        "vitest"
+      ],
+      "local_sha256": "1b7faa56e731508bdf427a99682bd0e0ffd5fa22a3668453ebe45eac389241c2"
+    },
+    {
+      "upstream": "packages/client/ui-dockkit/tests/sequence.client.spec.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "6370aa78fe49aec60e3599745b7c298e33a84693b579c7ade09af73c02ccb432",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/test/dockkit/sequence.test.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "../../src/presentation/dockkit/contract/types.ts",
+        "../../src/presentation/dockkit/engine/initial.ts",
+        "../../src/presentation/dockkit/engine/operations.ts",
+        "../../src/presentation/dockkit/engine/sequence.ts",
+        "../../src/presentation/dockkit/engine/tree.ts",
+        "./fixtures.client.ts",
+        "vitest"
+      ],
+      "local_sha256": "6c34fafad4e6e41c61d13446491bb51568e8485ee7d01ef6d1710870a40c4565"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-right/src/client/shell/SidebarRight.module.css",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "2062ebe9808edbaf4f9c197859140b6881a8b531493605a6f07dd77dd8c2f25f",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/right-panel/InspectorPanel.module.css",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [],
+      "local_sha256": "af1ea13edeba84fb7f4c477bb5bb607d42e6426bac976e0f604728c541b66556"
     }
   ],
   "inspected_only": [

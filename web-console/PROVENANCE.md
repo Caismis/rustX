@@ -1376,11 +1376,12 @@ remain in `PreviewWorkspaceOwner`; the new workbench is a separate display mode.
 Workspace sidebar fidelity repair: the Start page now retains GuideBody's 380px
 capsules, 14px/20px insets, 56px compass, neutral watermark ink and 10% bottom
 spacer. Original guide artwork, fullscreen/restore glyphs and TerminalTheme OSC
-palette handling are retained with per-file provenance. A single dockkit-style
+palette handling are retained with per-file provenance. The upstream DockLayout
 38px strip replaces the extra title/navigation rows; guide replacement, shell
 selection-and-launch, add/close tabs, keyboard navigation and shortcuts operate
-on rustX Session-scoped PTYs. The bounded two-pane presentation uses the original
-strip/chip/divider geometry; it does not import Harness's runtime or plugin store.
+on rustX Session-scoped PTYs. The two-pane presentation now uses the upstream dockkit engine, planner,
+geometry, gesture handlers and component tree. It does not import Harness's
+runtime or plugin store.
 Browser checks cover guide geometry, light/dark terminal backgrounds, actual
 shell output, focus, tabs, split/merge/resize, shortcuts and a Chinese narrow view.
 
@@ -1394,5 +1395,43 @@ The 38px path toolbar, 18px tree indentation, natural folder-first ordering,
 separate resource tabs, persisted tree/view preferences and icon toolbar follow
 those sources. Harness remotes, stores and Session authority are excluded: rustX's
 existing Product Host admits every listing/read/desktop open against the native
-Session and uses descriptor-relative filesystem validation. The existing 1 MiB
-text limit remains; this change does not add binary document renderers.
+Session and uses descriptor-relative filesystem validation. The 1 MiB text limit remains. Complete binary previews have a separate 16 MiB
+Host read limit; Office conversion retains its existing stricter source and
+sandbox limits.
+
+
+### Sidebar document and docking source port
+
+The same upstream commit supplies `ui-dockkit` (engine and presentation),
+`ui-sidebar-right` layout persistence and shell CSS, document preview registry
+matching, Markdown frontmatter/field rendering, static HTML document preparation,
+image zoom controls, and the complete read-only Excel parser/rendering pipeline.
+The copied dockkit behavior tests remain alongside the port. Changes at seams:
+
+- React 19 ref initialization and existing rustX primitive/icon/locale bindings.
+- The embedder uses upstream `planSettle` to merge emptied panes and reseed the
+  guide; files deduplicate by workspace-relative path, Files pages by pane.
+- Metadata-only layout snapshots are validated before restoration and scoped
+  to the exact Product Host authority and native Session/node. Terminal tabs
+  reconcile against Host-owned PTYs, never start a process by restoring metadata.
+- Hidden document bodies release reads, object URLs and parser workers. Live
+  native terminals retain their Host lifetime and reattach when selected.
+- The copied spreadsheet worker uses Vite's module-worker bundling. An absent
+  XLSX default row height remains absent instead of becoming `NaN`.
+- Markdown documents opt into Host-admitted relative images and file navigation;
+  conversation Markdown's inert image policy is unchanged.
+- HTML uses the upstream static sandbox preparation. Interactive HTML and the
+  Harness remote resource/runtime APIs are not imported. PDF display continues
+  to use rustX's bounded PDF worker owner. DOCX/PPTX use the existing sandboxed
+  Office converter; converter availability remains a Host capability (Linux
+  with the required sandbox tools). Legacy DOC/PPT and macOS Office conversion
+  are unavailable rather than launched outside that boundary.
+
+Browser coverage includes default Markdown versus explicit source/text, YAML
+frontmatter, GFM tables/math, workspace-relative images and links, static HTML,
+SVG, PDF, CSV/XLSX, light/dark terminal rendering, native filesystem/PTY actions,
+source DockLayout floating/docking/collapse/restoration and narrow Chinese UI.
+Install-closure notices include Node-only ExcelJS dependencies as well as browser
+modules. The upstream `buffers@0.1.1` distribution has no published license
+statement; that omission is recorded explicitly, not replaced with an inferred
+license. The ExcelJS browser entry does not import that Node-only archive reader.

@@ -4,6 +4,7 @@
  * KaTeX runs with trust disabled. Unknown AST node kinds render nothing.
  */
 
+import { DocumentImage, DocumentLink } from './DocumentResources';
 import { Fragment, createElement } from 'react'
 import type { Key, ReactNode } from 'react'
 import clsx from 'clsx'
@@ -423,7 +424,7 @@ function renderSafeLink(href: string, children: ReactNode[], key: Key): ReactNod
 
 /** Anchor over a parsed markdown destination, which hast normalized before the allowlist saw it. */
 function renderAnchor(url: string, children: ReactNode[], key: Key): ReactNode {
-  return renderSafeLink(normalizeUri(url), children, key)
+  return <DocumentLink key={key} url={url} fallback={renderSafeLink(normalizeUri(url), children, key)}>{children}</DocumentLink>
 }
 
 /**
@@ -441,8 +442,8 @@ function inlineCodeHttpUrl(value: string): string | undefined {
   }
 }
 
-function renderImage(_url: string, alt: string, key: Key, _context: MarkdownRenderContext): ReactNode {
-  return <span key={key} className={css.imageAlt}>{alt}</span>
+function renderImage(url: string, alt: string, key: Key, _context: MarkdownRenderContext): ReactNode {
+  return <DocumentImage key={key} url={url} alt={alt}/>
 }
 
 /** The bracketed source text a reference reverts to when its definition is missing. */

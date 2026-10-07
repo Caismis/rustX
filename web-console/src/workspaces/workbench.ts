@@ -2,6 +2,8 @@ import type { DesktopTarget } from './desktop';
 export type WorkbenchRequest =
   | { kind: 'files'; path: string }
   | { kind: 'read'; path: string }
+  | { kind: 'bytes'; path: string }
+  | { kind: 'office'; path: string }
   | { kind: 'applications' }
   | { kind: 'open'; path: string; directory: boolean; application: 'files' | 'code' }
   | { kind: 'terminals' }
@@ -15,6 +17,7 @@ export interface WorkbenchResult {
   applications?: import('./desktop').DesktopCatalog;
   entries?: { name: string; directory: boolean; link: boolean }[];
   text?: string;
+  base64?: string;
   /** Canonical directory resolved by the Host from the admitted native Session. */
   cwd?: string;
   terminals?: WorkbenchTerminal[];
