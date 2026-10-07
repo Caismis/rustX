@@ -6,7 +6,7 @@ import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v36
 import { IconSettingsOutline16, IconSparkle16, IconUserOutline16 } from '../../presentation/primitives/icons';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
 import type { InspectableDisplayItem } from './layout';
-import { trajectoryPreviewText } from './preview';
+import { markdownPreviewText } from '../../presentation/markdown/preview';
 import css from './Trajectory.module.css';
 
 /** The ledger's role vocabulary: native kinds plus the two input cells. */
@@ -87,13 +87,13 @@ function attachmentSummary(tx: Translate, record: TraceRecord): string {
 function compactionText(tx: Translate, record: TraceRecord): string {
   if (record.state === 'running') return tx('trajectory:layout.compacting');
   if (record.state !== 'completed') return tx('trajectory:layout.compaction-failed');
-  return record.preview?.text ? trajectoryPreviewText(record.preview.text) : tx('trajectory:layout.compacted');
+  return record.preview?.text ? markdownPreviewText(record.preview.text) : tx('trajectory:layout.compacted');
 }
 
 /** The plain one-line text a record row shows, as Harness's display text. */
 export function recordText(tx: Translate, record: TraceRecord): string {
   if (record.kind === 'compaction') return compactionText(tx, record);
-  const preview = record.preview?.text ? trajectoryPreviewText(record.preview.text) : '';
+  const preview = record.preview?.text ? markdownPreviewText(record.preview.text) : '';
   const attachments = attachmentSummary(tx, record);
   return attachments === '' ? preview : preview === '' ? attachments : `${attachments} · ${preview}`;
 }
@@ -102,7 +102,7 @@ export function recordText(tx: Translate, record: TraceRecord): string {
 export function listText(tx: Translate, item: InspectableDisplayItem): string {
   const record = item.record;
   if (item.type === 'SystemPromptCell') return item.label;
-  if (item.type === 'ContextRow') return item.context.preview?.text ? trajectoryPreviewText(item.context.preview.text) : '';
+  if (item.type === 'ContextRow') return item.context.preview?.text ? markdownPreviewText(item.context.preview.text) : '';
   if (record.tool) return [record.tool.name ?? record.tool.tool_id, record.tool.arguments?.text].filter(Boolean).join(' ');
   const text = recordText(tx, record);
   return text === '' && record.kind === 'assistant' && record.calls.length ? tx('trajectory:record.tool-call-only') : text;
@@ -117,7 +117,7 @@ export function CellContent({ item }: { item: InspectableDisplayItem }) {
     return <span className={css.contentText} title={item.label} data-system-prompt-state={record.request?.system_prompt.state} data-tool-catalog-state={record.request?.tool_catalog}>{item.label}</span>;
   }
   if (item.type === 'ContextRow') {
-    const text = item.context.preview?.text ? trajectoryPreviewText(item.context.preview.text) : '';
+    const text = item.context.preview?.text ? markdownPreviewText(item.context.preview.text) : '';
     return <span className={css.contentText} title={text}>{text || '—'}</span>;
   }
   if (record.tool) {

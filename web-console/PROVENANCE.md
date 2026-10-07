@@ -50,6 +50,46 @@ noise at 15 light and 16 dark pixel sites. Each site has its own measured channe
 bound; adjacent pixels, dimensions and all other references remain exact. The
 manifest records independent runs, the pinned browser and decoded-image hashes.
 
+## Interrupted Assistant presentation
+
+Behavioral reference: local `../deepseek-harness` at
+`5badb15009ae1756c3afe0ae0cef1faafc290ccc`, specifically
+`packages/client/ui-chat/src/client/chat/{AssistantNodeView,AssistantMarkdown,TurnProcessNodeView,TurnTailNodeView}.tsx`.
+Harness freezes released prose/reasoning on interruption, uses the stopped
+process label, and does not replace it with a diagnostic JSON disclosure.
+The rustX adapter renders typed publication-audit text, reasoning and refusal
+through the existing Assistant/Markdown components. Empty audits and unexecuted
+Tool proposals have no Chat body. Audits retain their native cursor; their
+message identity suppresses stale streaming duplicates. Native terminal facts
+continue to own stopped/failed labels. Copy and the native settlement time are
+available for partial prose; completed-response actions are not fabricated.
+Native audit data remains available through existing Inspector/Trajectory reads.
+The adapter and grouping changes are rustX-authored; no Harness runtime or
+interruption state machine is copied.
+
+## Compaction continuation and checkpoint UI
+
+Read-only reference: local `../deepseek-harness` at
+`5badb15009ae1756c3afe0ae0cef1faafc290ccc`.
+`packages/client/ui-chat/src/client/chat/CompactionItem.tsx` and
+`src/client/locale.ts` supply the checkpoint disclosure and bilingual wording;
+`CompactionCommandCard.tsx` was consulted for one completed marker per command.
+The existing Message stylesheet already carries the Harness geometry, sticky
+expanded header, muted title, context icon and hover disclosure. The Message
+adapter now uses those styles for native `compaction_summary` Ledger messages.
+No history count, token estimate, command row or runtime outcome is invented.
+The temporary completion notice yields only when its exact native summary is
+present in the displayed transcript page. Source hashes are in the inventory.
+
+`context/compact` awaits model generation and native maintenance release. It
+uses the existing bounded domain-wait lane rather than the ordinary 30-second
+RPC deadline that disconnected every Session on the shared socket. Native
+execution, lost-response correlation and no-replay behavior remain authoritative.
+Controlled-clock tests hold the reply beyond the RPC deadline and verify read
+and control capacity. The real App Server with a gated scripted provider covers manual compaction,
+continued input, questionnaire settlement, automatic overflow compaction and
+final response in both locales at desktop and narrow viewport widths.
+
 ## #439 Composer keyboard policy
 
 Approved read-only reference: `deepseek-ai/deepseek-harness` at
@@ -1564,3 +1604,24 @@ and the folded summary row expands it; a tool-only Assistant reads (tool call
 only), Context rows show their content, and row text is a plain-text projection of
 the Markdown preview (`preview.ts`). The toolbar's Jump to latest control and the
 client `latestTrace` read it drove are removed.
+
+
+Manual reading highlight continuity was checked against local Harness
+`5badb15009ae1756c3afe0ae0cef1faafc290ccc`, specifically
+`use-chat-viewport.ts::readVisibleTurn` and `use-chat-reading.ts`.
+ChatViewport now selects the preceding visible native turn region across prompts,
+nested message anchors and gaps, or the first loaded region before its start.
+Tail following selects the last native region even after unowned trailing content.
+This adapts Harness's nonempty reading candidate policy without its approximate
+binary-search candidate selection: native turn identity and exact locate anchors
+remain separate, and a window containing no native region still has no selection.
+
+## Unified canonical compaction summary presentation
+
+CompactionMessage is the sole checkpoint disclosure. The adapter retains a bounded
+plain-text preview while collapsed, and the explanation and original Markdown
+while expanded. Trajectory and compaction share the existing GFM preview projection
+in src/presentation/markdown/preview.ts; the former app-local preview module and
+CompactionSummary component/styles are removed. Native transcript identity, fork
+boundaries and explicit source navigation remain unchanged. Both local presentation
+notes and the upstream interruption/continuation references are retained.

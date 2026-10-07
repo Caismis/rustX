@@ -208,7 +208,9 @@ const READS = new Set<Request1['method']>([
  * observation/admission from occupying the slots needed to stop or inspect work. */
 function requestLane(method: Request1['method']): 'wait' | 'admission' | 'control' | 'rpc' {
   switch (method) {
-    case 'agent/wait': case 'job/wait': return 'wait';
+    // Compaction awaits native summary generation and release, just like other
+    // long-lived domain waits. It must not expire the shared socket's RPC clock.
+    case 'context/compact': case 'agent/wait': case 'job/wait': return 'wait';
     case 'agent/sendMessage': return 'admission';
     case 'agent/interrupt': case 'job/cancel': case 'turn/cancel': return 'control';
     default: return 'rpc';

@@ -108,6 +108,23 @@ test('native distant reading rail, detached/latest follow and measured width in 
     const target = page.locator('[data-chat-anchor-key]').filter({ hasText: 'Native reading answer 0' }).first();
     await expect(page.getByText(/Native reading answer 0\n/).first()).toBeVisible();
     await expect.poll(async () => Math.abs(await target.evaluate(el => el.getBoundingClientRect().top) - await viewport.evaluate(el=>el.getBoundingClientRect().top))).toBeLessThan(3);
+    // Manual reading across user prompts and message spacing must keep one
+    // highlighted native turn, in both directions, without a navigation click.
+    await page.mouse.move(10, 10);
+    const stops = await viewport.evaluate(el => {
+      const owners = [...el.querySelectorAll<HTMLElement>('[data-chat-turn-owner]')].filter(row => !row.closest('[hidden]'));
+      const first = owners[0], next = owners.find(row => row.dataset.chatTurnOwner !== first.dataset.chatTurnOwner)!;
+      const offset = el.scrollTop - el.getBoundingClientRect().top - Math.min(96, el.clientHeight * 0.2);
+      const start = first.getBoundingClientRect().top + offset;
+      const end = next.getBoundingClientRect().top + offset;
+      return { first: first.dataset.chatTurnOwner!.slice(5), next: next.dataset.chatTurnOwner!.slice(5),
+        positions: [start + 1, (start + end) / 2, end - 1, end + 1, end - 1, start + 1], end };
+    });
+    for (const top of stops.positions) {
+      await viewport.evaluate((el, top) => { el.scrollTop = top; el.dispatchEvent(new Event('scroll')); }, top);
+      await expect(rail.locator('[aria-current="true"]')).toHaveCount(1);
+      await expect(rail.locator('[aria-current="true"]')).toHaveAttribute('data-turn-id', top >= stops.end ? stops.next : stops.first);
+    }
     // Only ordinary older pages were read, and the window still reaches the live tail.
     expect(await page.evaluate(()=>(window as any).readingTransport.other)).toBe(0);
     expect(await page.evaluate(()=>(window as any).readingTransport.reads)).toBeGreaterThan(1);

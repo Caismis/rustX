@@ -11,7 +11,8 @@ import { agentStatusPlacement, isAgentStatusContext, statusesAt } from '../../bi
 import { Button } from '../../presentation/primitives/Button';
 import { Feedback } from '../components/ConversationFeedback';
 import { AgentStatusAnnotation } from './AgentStatus';
-import { Message } from './Message';
+import { Content, Message } from './Message';
+import { AssistantMessage } from '../../presentation/agent/Message';
 import { ForkPoint, type ForkPointInfo, type ForkOrigin } from './ForkPoint';
 import { ToolDeliveries } from '../components/Artifact';
 import { entryIdentity, turnAnchor, type TranscriptCache } from '../../client/transcript';
@@ -23,7 +24,9 @@ import css from '../../presentation/agent/Chat.module.css';
  * already renders their content beside the call. Suppressing a body does not
  * erase the entry's authoritative transcript position, so a `PostToolBatch`
  * annotation anchored there still renders in place — as an annotation-only slot. */
-const hasBody = (entry: RuntimeClientTranscriptEntry) => entry.item.type !== 'message' || entry.item.message.role !== 'tool';
+const hasBody = (entry: RuntimeClientTranscriptEntry) => entry.item.type === 'publication_audit'
+  ? entry.item.audit.content.some(block => block.kind !== 'proposed_tool_call' && block.text.trim() !== '')
+  : entry.item.type !== 'message' || entry.item.message.role !== 'tool';
 /** A native `ask_user` questionnaire is already told by its call's question row
  * (Harness shows no separate interaction record), so its request and settlement
  * audits keep their transcript positions without a body of their own. Other
@@ -50,6 +53,7 @@ export function AgentTranscript({ snapshot, history, loadEarlier, onHistorical, 
   const latestResponse = entries.filter(entry => entry.completed_response).at(-1);
   const latestUser = entries.filter(entry => entry.item.type === 'message' && entry.item.message.role === 'user').at(-1);
   const durableIds = new Set(entries.flatMap(entry => entry.item.type === 'message' ? [entry.item.message.id] : []));
+  const settledPublications = new Set(entries.flatMap(entry => entry.item.type === 'publication_audit' ? [entry.item.audit.message_id] : []));
   // Placement is a property of the authoritative status window and the runtime
   // facts each composition carries, never of what this page happens to hold: an
   // anchor outside the loaded transcript simply draws nothing until it is paged in.
@@ -58,10 +62,21 @@ export function AgentTranscript({ snapshot, history, loadEarlier, onHistorical, 
   const toldByCall = askUserAudits(entries);
   const steps = stepGroups(entries, entry => hasBody(entry) && !toldByCall(entry));
   const toolsOf = (entry: RuntimeClientTranscriptEntry) => (entry.tool_calls ?? []).map(tool => tool.state.type === 'settled' ? tool : snapshot.attempt?.foreground?.find(live => live.message_id === tool.message_id && live.block_index === tool.block_index && live.call_id === tool.call_id && live.tool_id === tool.tool_id) ?? tool);
-  const audit = (entry: RuntimeClientTranscriptEntry) => entry.item.type === 'message' ? null : <details>
-    <summary>{entry.item.type === 'publication_audit' ? tx('agent:agent-transcript.assistant-recovery-details') : tx('agent:agent-transcript.historical-interaction-details')}</summary>
-    <pre>{json(entry.item)}</pre>
-  </details>;
+  // Publication audits are frozen released output, not diagnostic cards. Empty
+  // failed requests (including overflow before compaction) have no Chat body.
+  // Proposed calls are not executions and must never acquire Tool UI or actions.
+  const audit = (entry: RuntimeClientTranscriptEntry) => {
+    if (entry.item.type === 'message') return null;
+    if (entry.item.type === 'publication_audit') {
+      const partial = entry.item.audit;
+      const text = partial.content.flatMap(block => block.kind === 'text' || block.kind === 'refusal' ? [block.text] : []).join('');
+      return <AssistantMessage label={tx('agent:message.incomplete-response')}>
+        <Content blocks={partial.content.flatMap(block => block.kind === 'proposed_tool_call' ? [] : [{ type: block.kind, block_index: block.block_index, text: block.text }])} markdown/>
+        {text.trim() && <div className={tailCss.actions}><CopyMessage text={text}/><MessageTime time={partial.settled_at}/></div>}
+      </AssistantMessage>;
+    }
+    return <details><summary>{tx('agent:agent-transcript.historical-interaction-details')}</summary><pre>{json(entry.item)}</pre></details>;
+  };
   // A settled Attempt's steps render in place: replies stand alone, and each
   // process group renders whole in the entry where it starts.
   const pieces = (entry: RuntimeClientTranscriptEntry, list: readonly StepPiece[], processOpen: boolean) => list.map(piece => piece.kind === 'reply'
@@ -89,7 +104,7 @@ export function AgentTranscript({ snapshot, history, loadEarlier, onHistorical, 
     {history?.page.next_cursor != null && <Button disabled={history.loading} onClick={loadEarlier}>{history.loading ? tx('agent:agent-transcript.loading-earlier') : tx('agent:agent-transcript.load-earlier')}</Button>}
     {history?.error && <p role="alert">{history.error}</p>}
     {!messages.length && !entries.length && <Feedback kind="empty" title={tx('agent:agent-transcript.ready-for-a-task')}><p>{tx('agent:agent-transcript.what-would-you-like-to-work-on')}</p></Feedback>}
-    {[...turnPresentation(entries, forkPoint ? { ...(history?.page ?? snapshot.transcript), inherited_through: forkPoint.through } : undefined), ...(liveProcess ? [{ kind: 'live-process' as const }] : []), ...(streaming && !durableIds.has(streaming.message_id) ? [{ kind: 'streaming' as const, streaming }] : [])].map(node => {
+    {[...turnPresentation(entries, forkPoint ? { ...(history?.page ?? snapshot.transcript), inherited_through: forkPoint.through } : undefined), ...(liveProcess ? [{ kind: 'live-process' as const }] : []), ...(streaming && !durableIds.has(streaming.message_id) && !settledPublications.has(streaming.message_id) ? [{ kind: 'streaming' as const, streaming }] : [])].map(node => {
       if (node.kind === 'fork-point') return <ForkPoint key="fork-point" point={forkPoint!} disabled={historicalDisabled || sourceDisabled} onOpen={onOpenSource}/>;
       if (node.kind === 'live-process') return <div key="live-process" data-chat-turn-owner={turnAnchor({conversation_id:snapshot.conversation_id,attempt_id:snapshot.attempt!.attempt_id})}>{liveProcess}</div>;
       if (node.kind === 'streaming') return <div key={`message:${node.streaming.message_id}`}><MessageSeat key="seat" id={`message:${node.streaming.message_id}`} turnOwner={snapshot.attempt ? turnAnchor({conversation_id:snapshot.conversation_id,attempt_id:snapshot.attempt.attempt_id}) : undefined}

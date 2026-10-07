@@ -3,12 +3,12 @@ import type { MessageBlock, UserContentBlock, AssistantContentBlock, InFlightBlo
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 import { Artifact } from '../components/Artifact';
-import { UserMessage, AssistantMessage } from '../../presentation/agent/Message';
+import { UserMessage, AssistantMessage, CompactionMessage } from '../../presentation/agent/Message';
 import { Reasoning } from '../../presentation/agent/Reasoning';
 import { Tool } from './Tool';
 import type { ForegroundToolExecution } from '../../../../protocol/app-server/v36';
 import type { ReactNode } from 'react';
-import { CompactionSummary } from './CompactionSummary';
+import { markdownPreviewText } from '../../presentation/markdown/preview';
 
 export function Content({ blocks, markdown = false, streaming = false, tools = [], reasoningHidden = false, include }: { reasoningHidden?: boolean; tools?: ForegroundToolExecution[]; markdown?: boolean; streaming?: boolean; blocks: (UserContentBlock | AssistantContentBlock | InFlightBlock)[]; include?: readonly number[] }) {
   const tx = useTranslation();
@@ -32,8 +32,8 @@ export function Message({ message, tools = [], actions, streaming = false, block
   const tx = useTranslation();
   if (message.role === 'tool') return null; // Results belong to the native call projection, never paired here.
   if (message.role === 'user' && typeof message.kind === 'object' && message.kind && 'compaction_summary' in message.kind) {
-    const preview = message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join(' ');
-    return <CompactionSummary preview={preview}><Content blocks={message.content} markdown /></CompactionSummary>;
+    const preview = markdownPreviewText(message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join(' '));
+    return <CompactionMessage title={tx('agent:context.succeeded')} summary={tx('agent:context.expand')} preview={preview} description={tx('agent:compaction.description')}><Content blocks={message.content} markdown /></CompactionMessage>;
   }
   if (message.role === 'user' && message.kind && message.kind !== 'message') return <details><summary>{tx('agent:message.context')}{' '}{Object.keys(message.kind)[0]}</summary><Content blocks={message.content} markdown/></details>;
   return message.role === 'user' ? <UserMessage label={tx('agent:message.your-message')} actions={actions}><Content blocks={message.content}/></UserMessage>

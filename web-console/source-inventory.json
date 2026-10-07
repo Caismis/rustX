@@ -970,7 +970,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "8de9fedd2016833e52f355cfd1cd7c83a691e13f1467a4ee9dcde56b4f09488e"
+      "local_sha256": "603b7d2538ff8495b874f2453996630bbbd3d6e414f265f350406eeac382538d"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -981,6 +981,7 @@
       "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
+        "../primitives/icons",
         "./Message.module.css",
         "react"
       ],
@@ -990,7 +991,15 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "64bf6a56b53d2499c1cbd12ac84618763a65d2055b317f8e208c34d556f873bd"
+      "local_sha256": "af7bb52d9b0bd37717054c28b4349582f5b20ed022f925c5db1ee99bca1cc3a8",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-chat/src/client/chat/CompactionItem.tsx",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "3e8f5a4b1392fa2d824d25e068667cbb982e3f9c11913977ff7806fb3ccc3f30",
+          "treatment": "Compaction checkpoint disclosure and bilingual summary wording adapted to native Ledger messages; no Harness runtime or command authority."
+        }
+      ]
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -1256,7 +1265,7 @@
     {
       "upstream": "packages/client/ui-chat/src/client/chat/ChatView.tsx",
       "destination": "web-console/src/presentation/layout/ChatViewport.tsx",
-      "treatment": "Rewritten Chat viewport with semantic reading anchors, explicit follow intent, browser-clamp attribution and a single RAF scroll commit. Runtime authority remains native rustX. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. PR #443 repair: detached active identity follows native start intervals, independent of anchor height; sole geometry/scroll owner retained. UI repair: Return to latest is the Harness ChatView toBottom control — a 34px floating chevron on the content column edge; the label stays the accessible name. UI/UX alignment: one contiguous window through the live tail, as Harness ChatView/loadThrough; historical replacement windows and later-content paging removed. Navigation highlight repair: use the Harness reading line (20% of viewport height, capped at 96px) and select the rendered tail owner while following settled output. Preserve native ownership and unowned boundaries.",
+      "treatment": "Rewritten Chat viewport with semantic reading anchors, explicit follow intent, browser-clamp attribution and a single RAF scroll commit. Runtime authority remains native rustX. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. PR #443 repair: detached active identity follows native start intervals, independent of anchor height; sole geometry/scroll owner retained. UI repair: Return to latest is the Harness ChatView toBottom control — a 34px floating chevron on the content column edge; the label stays the accessible name. UI/UX alignment: one contiguous window through the live tail, as Harness ChatView/loadThrough; historical replacement windows and later-content paging removed. Navigation highlight repair: use the Harness reading line (20% of viewport height, capped at 96px) and select the rendered tail owner while following settled output. Keep reading highlights continuous across unowned gaps using the preceding native region, or the first loaded region before its start; exact navigation remains separate.",
       "upstream_sha256": "5f6ba885fc60f79cefd212f8b0cb89ceaf72115d971db771fa40c190df89f414",
       "retained_dependencies": [
         "../primitives/icons/index.tsx",
@@ -1269,7 +1278,7 @@
         "Harness attachment identity and storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "21bd9b41c3e6074ef8a8d254720fcf69998575517c6354636104a7c3db760c71",
+      "local_sha256": "1149a221471487da83b1d84509470ad8dfe2740bf5499ca0da525d70481844e6",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/ChatView.tsx",
@@ -1294,6 +1303,18 @@
           "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
           "upstream_sha256": "171ab98296b21398b1909a4f346f23ee7988da8bf77bcbfac26ae9ad1dad1303",
           "treatment": "Inspected interaction patterns; semantic anchors and follow intent adapted, multiple smooth-scroll writers and runtime authority rejected."
+        },
+        {
+          "upstream": "packages/client/ui-chat/src/client/chat/use-chat-viewport.ts",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "171ab98296b21398b1909a4f346f23ee7988da8bf77bcbfac26ae9ad1dad1303",
+          "treatment": "Adapted reading-line placement, continuous gap selection, first-loaded-turn and tail-follow active-turn policy; rustX native identities and sole RAF scroll coordinator retained."
+        },
+        {
+          "upstream": "packages/client/ui-chat/src/client/chat/use-chat-reading.ts",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "3b1394c43c1c73c17e1a087e40382e5445623fbea310793a2e8d2f16d3dbf41e",
+          "treatment": "Adapted reading-line placement, continuous gap selection, first-loaded-turn and tail-follow active-turn policy; rustX native identities and sole RAF scroll coordinator retained."
         }
       ]
     },
@@ -2663,11 +2684,11 @@
         "../../../../protocol/app-server/v36",
         "../../locale/react",
         "../../locale/translation",
+        "../../presentation/markdown/preview",
         "../../presentation/primitives/Tooltip",
         "../../presentation/primitives/icons",
         "./Trajectory.module.css",
         "./layout",
-        "./preview",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -2680,7 +2701,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "3110ec7600c7861b5ca4bd3a1451192db8040082becb3aff5a070597c7038e99",
+      "local_sha256": "0bcd4816a536e3d6fc902a2a711ccb64a9bce33bafba2bc836ceb1c39aa12d55",
       "additional_sources": [
         {
           "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
@@ -3185,8 +3206,15 @@
         "Host locale persistence",
         "dynamic language registration"
       ],
-      "additional_sources": [],
-      "local_sha256": "1d723cddbb2ea73e3c1d36f1dc7d1314f45e997940373bcfe1a92e6779b39b29"
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-chat/src/client/locale.ts",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "b2613d81bd95541c28e7433a35b171cea6baa44080e94f89d2f1b0eb3e8503e9",
+          "treatment": "Compaction checkpoint disclosure and bilingual summary wording adapted to native Ledger messages; no Harness runtime or command authority."
+        }
+      ],
+      "local_sha256": "7e4518cb3fc9f1cafca5d8a88f2b119adaf8d92c8ab47abcbe5f51fe0303edc5"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",
@@ -5291,16 +5319,16 @@
     {
       "upstream": "packages/client/ui-trajectory/src/client/trajectory-preview.ts",
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "destination": "web-console/src/app/trajectory/preview.ts",
+      "destination": "web-console/src/presentation/markdown/preview.ts",
       "upstream_sha256": "e367a2fff648bb4383df672f3606d0b85bfd5f69efeee80541ead791785c0342",
       "classification": "B",
-      "treatment": "Bounded one-line Markdown preview ported for ledger rows; the plain-text projection from ui-primitives/markdown/plain-text.ts is inlined over rustX's existing parseGfm grammar. Trajectory Harness parity (UI repair): details panel tabs, overview sections, DSH resize handle and narrow overlay; overview lane-label safe area, clipped zoom/pan domain and delayed block tooltip; ledger rows without rustX-only fold carets, call toggles, state words or Turn-structure inspector.",
+      "treatment": "Bounded one-line Markdown preview ported for ledger rows; the plain-text projection from ui-primitives/markdown/plain-text.ts is inlined over rustX's existing parseGfm grammar. Trajectory Harness parity (UI repair): details panel tabs, overview sections, DSH resize handle and narrow overlay; overview lane-label safe area, clipped zoom/pan domain and delayed block tooltip; ledger rows without rustX-only fold carets, call toggles, state words or Turn-structure inspector. Shared bounded Markdown preview for Trajectory and canonical compaction summaries; presentation-only projection, no runtime authority.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
-        "../../presentation/markdown/parse"
+        "./parse"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "37d23f8e67da364c8e92e0b0f743aa6664da59d4017c505f99fc8831c90d429e",
+      "local_sha256": "6d2fb8c4b84c28387ab042f9d11258de40514c4913052c46530c77dc5cb7989f",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-primitives/src/markdown/plain-text.ts",
