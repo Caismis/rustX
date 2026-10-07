@@ -1013,6 +1013,7 @@
       "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
+        "../primitives/icons",
         "./Message.module.css",
         "react"
       ],
@@ -1022,7 +1023,15 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "64bf6a56b53d2499c1cbd12ac84618763a65d2055b317f8e208c34d556f873bd"
+      "local_sha256": "3956b785ac219fffc30c5740b0571411cf5c9aa4482c13aba7cd3ccf7c3b4e2a",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-chat/src/client/chat/CompactionItem.tsx",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "3e8f5a4b1392fa2d824d25e068667cbb982e3f9c11913977ff7806fb3ccc3f30",
+          "treatment": "Compaction checkpoint disclosure and bilingual summary wording adapted to native Ledger messages; no Harness runtime or command authority."
+        }
+      ]
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -3234,8 +3243,15 @@
         "Host locale persistence",
         "dynamic language registration"
       ],
-      "additional_sources": [],
-      "local_sha256": "821257dfae406989e5d815f27b3d6cd555a08bab8b404942e2ccd87d4a93a8b3"
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-chat/src/client/locale.ts",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "b2613d81bd95541c28e7433a35b171cea6baa44080e94f89d2f1b0eb3e8503e9",
+          "treatment": "Compaction checkpoint disclosure and bilingual summary wording adapted to native Ledger messages; no Harness runtime or command authority."
+        }
+      ],
+      "local_sha256": "698988795ec27c6682f8680dafabd5c23bfd024aa151e3b2d813efe35c9fdb82"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",

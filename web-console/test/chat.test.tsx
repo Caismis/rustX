@@ -138,3 +138,27 @@ it('a finite Job retains its expanded output across proactive terminal snapshot 
   expect(row?.textContent).toContain('Settled output');
   expect(ui.getByLabelText('Tool status').textContent).toBe('success');
 });
+
+it('compaction summaries keep one native transcript position and disclose Markdown like Harness', () => {
+  const s = snapshot();
+  const summary = { role: 'user' as const, id: 'summary', source: 'runtime' as const,
+    kind: { compaction_summary: {} }, content: [{ type: 'text' as const, text: '## Preserved context\n\nNative summary facts.' }] };
+  s.messages = [summary];
+  s.transcript = { entries: [
+    { cursor: '1', item: { type: 'message', message: { role: 'user', id: 'before', source: 'human', content: [{ type: 'text', text: 'Earlier question' }] } } },
+    { cursor: '2', item: { type: 'message', message: summary } },
+    { cursor: '3', item: { type: 'message', message: { role: 'user', id: 'after', source: 'human', content: [{ type: 'text', text: 'Next question' }] } } },
+  ] };
+  const ui = render(<AgentTranscript snapshot={s}/>);
+  expect([...ui.container.querySelectorAll('[data-chat-anchor-key]')].map(node => node.getAttribute('data-chat-anchor-key')))
+    .toEqual(['message:before', 'message:summary', 'message:after']);
+  const marker = ui.getByRole('button', { name: 'Context compacted · View compaction summary' });
+  expect(marker.getAttribute('aria-expanded')).toBe('false');
+  expect(ui.queryByRole('heading', { name: 'Preserved context' })).toBeNull();
+  expect(ui.container.textContent).not.toContain('compaction_summary');
+  fireEvent.click(marker);
+  expect(marker.getAttribute('aria-expanded')).toBe('true');
+  expect(ui.getAllByRole('heading', { name: 'Preserved context' })).toHaveLength(1);
+  fireEvent.click(marker);
+  expect(ui.queryByRole('heading', { name: 'Preserved context' })).toBeNull();
+});

@@ -3,7 +3,7 @@ import type { MessageBlock, UserContentBlock, AssistantContentBlock, InFlightBlo
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 import { Artifact } from '../components/Artifact';
-import { UserMessage, AssistantMessage } from '../../presentation/agent/Message';
+import { UserMessage, AssistantMessage, CompactionMessage } from '../../presentation/agent/Message';
 import { Reasoning } from '../../presentation/agent/Reasoning';
 import { Tool } from './Tool';
 import type { ForegroundToolExecution } from '../../../../protocol/app-server/v36';
@@ -30,6 +30,7 @@ export function Content({ blocks, markdown = false, streaming = false, tools = [
 export function Message({ message, tools = [], actions, streaming = false, blocks, reasoningHidden = false, include }: { reasoningHidden?: boolean; message: MessageBlock; tools?: ForegroundToolExecution[]; actions?: ReactNode; streaming?: boolean; blocks?: InFlightBlock[]; include?: readonly number[] }) {
   const tx = useTranslation();
   if (message.role === 'tool') return null; // Results belong to the native call projection, never paired here.
+  if (message.role === 'user' && typeof message.kind === 'object' && 'compaction_summary' in message.kind) return <CompactionMessage title={tx('agent:context.succeeded')} summary={tx('agent:context.expand')}><Content blocks={message.content} markdown/></CompactionMessage>;
   if (message.role === 'user' && message.kind && message.kind !== 'message') return <details><summary>{tx('agent:message.context')}{' '}{Object.keys(message.kind)[0]}</summary><Content blocks={message.content} markdown/></details>;
   return message.role === 'user' ? <UserMessage label={tx('agent:message.your-message')} actions={actions}><Content blocks={message.content}/></UserMessage>
     : <AssistantMessage label={tx(streaming ? 'agent:agent-transcript.streaming-response' : 'agent:message.assistant-response')}><Content blocks={blocks ?? message.content} markdown tools={tools} streaming={streaming} reasoningHidden={reasoningHidden} include={include}/></AssistantMessage>;

@@ -4,7 +4,7 @@ No rustX operation, interaction lifetime, or Tool behavior is simulated here.
 """
 import json
 from fake_provider.scenario import (
-    OPENAI_CHAT_COMPLETIONS, Expect, Finish, Gate, Scenario, Step, Stream, Text, ToolCall, Usage,
+    OPENAI_CHAT_COMPLETIONS, Expect, Finish, Gate, HttpError, Scenario, Step, Stream, Text, ToolCall, Usage,
 )
 
 
@@ -274,12 +274,20 @@ SCENARIOS['web_file_delivery'] = web_file_delivery
 
 
 def web_compaction() -> Scenario:
-    """Manual maintenance uses one gated summary request, without a model turn."""
+    """Manual compaction, a real questionnaire, then overflow compaction and continuation."""
     expected = Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
                       body_contains=("compaction-evidence-435",))
     return Scenario("web_compaction",
                     Step(expected, Stream(Text("Original context ready."), Finish(), Usage(32000, 20))),
-                    Step(expected, Stream(Gate("manual-summary"), Text("The user supplied compaction-evidence-435. Preserve that fact."), Finish())))
+                    Step(expected, Stream(Gate("manual-summary"), Text("The user supplied compaction-evidence-435. Preserve that fact."), Finish())),
+                    Step(expected, Stream(ToolCall("after-compact-question", "ask_user", json.dumps({"questions": [{
+                        "header": "Continuation", "question": "Continue after compaction?",
+                        "options": [{"label": "Continue", "description": "Keep the compacted history."},
+                                    {"label": "Inspect", "description": "Inspect the history first."}],
+                    }]})), Finish("tool_calls"))),
+                    Step(expected, HttpError(400, {"error": {"message": "context window exceeded", "type": "invalid_request_error", "code": "context_length_exceeded"}})),
+                    Step(expected, Stream(Gate("automatic-summary"), Text("Preserve compaction-evidence-435 and the user's instruction to continue."), Finish())),
+                    Step(expected, Stream(Text("Question answered after compaction."), Finish())))
 
 
 SCENARIOS["web_compaction"] = web_compaction

@@ -1,3 +1,26 @@
+## Compaction continuation and checkpoint UI
+
+Read-only reference: local `../deepseek-harness` at
+`5badb15009ae1756c3afe0ae0cef1faafc290ccc`.
+`packages/client/ui-chat/src/client/chat/CompactionItem.tsx` and
+`src/client/locale.ts` supply the checkpoint disclosure and bilingual wording;
+`CompactionCommandCard.tsx` was consulted for one completed marker per command.
+The existing Message stylesheet already carries the Harness geometry, sticky
+expanded header, muted title, context icon and hover disclosure. The Message
+adapter now uses those styles for native `compaction_summary` Ledger messages.
+No history count, token estimate, command row or runtime outcome is invented.
+The temporary completion notice yields only when its exact native summary is
+present in the displayed transcript page. Source hashes are in the inventory.
+
+`context/compact` awaits model generation and native maintenance release. It
+uses the existing bounded domain-wait lane rather than the ordinary 30-second
+RPC deadline that disconnected every Session on the shared socket. Native
+execution, lost-response correlation and no-replay behavior remain authoritative.
+Controlled-clock tests hold the reply beyond the RPC deadline and verify read
+and control capacity. The real App Server with a gated scripted provider covers manual compaction,
+continued input, questionnaire settlement, automatic overflow compaction and
+final response in both locales at desktop and narrow viewport widths.
+
 ## #439 Composer keyboard policy
 
 Approved read-only reference: `deepseek-ai/deepseek-harness` at
