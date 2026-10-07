@@ -64,6 +64,9 @@ pub struct TurnProcessView {
     pub message_count: u32,
     pub tool_call_count: u32,
     pub outcome: TurnProcessOutcome,
+    /// Normalized terminal failure, retained at its durable transcript position.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure: Option<super::event::RuntimeClientAttemptFailure>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -76,6 +79,10 @@ pub(crate) fn terminal_turn(
     event: crate::events::types::RuntimeEventEnvelope,
     cursor: super::snapshot::RuntimeClientTranscriptCursor,
 ) -> Result<TurnProcessView, String> {
+    let failure = match &event.event {
+        RuntimeEvent::AttemptFailed { error, .. } => Some(super::projection::client_failure(error)),
+        _ => None,
+    };
     let outcome = match event.event {
         RuntimeEvent::AttemptCancelled { .. } => TurnProcessOutcome::Cancelled,
         RuntimeEvent::AttemptFailed { .. } => TurnProcessOutcome::Failed,
@@ -92,6 +99,7 @@ pub(crate) fn terminal_turn(
         message_count: 0,
         tool_call_count: 0,
         outcome,
+        failure,
         started_at: None,
         ended_at: Some(event.timestamp),
     })
@@ -567,7 +575,7 @@ fn project(
                                 attempts.remove(&id);
                                 continue;
                             }
-                            if let Some(process) = process_view(
+                            if let Some(mut process) = process_view(
                                 store,
                                 &id,
                                 &evidence.members,
@@ -577,6 +585,10 @@ fn project(
                                 outcome,
                                 Some(event.event_id.clone()),
                             )? {
+                                if let RuntimeEvent::AttemptFailed { error, .. } = &event.event {
+                                    process.failure =
+                                        Some(super::projection::client_failure(error));
+                                }
                                 for member in &evidence.members {
                                     if wanted.contains(member) {
                                         processes.insert(member.clone(), process.clone());
@@ -686,6 +698,7 @@ fn process_view(
         message_count,
         tool_call_count,
         outcome,
+        failure: None,
         started_at,
         ended_at,
     }))

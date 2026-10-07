@@ -4,7 +4,7 @@ No rustX operation, interaction lifetime, or Tool behavior is simulated here.
 """
 import json
 from fake_provider.scenario import (
-    OPENAI_CHAT_COMPLETIONS, Expect, Finish, Gate, HttpError, Scenario, Step, Stream, Text, ToolCall, Usage,
+    OPENAI_CHAT_COMPLETIONS, Expect, Finish, Gate, HttpError, Raw, Scenario, Step, Stream, Text, ToolCall, Usage,
 )
 
 
@@ -323,3 +323,26 @@ SCENARIOS['web_preview_workspace'] = web_preview_workspace
 
 
 SCENARIOS['web_artifact_document'] = lambda: Scenario('web_artifact_document')
+
+
+def web_model_errors() -> Scenario:
+    expected = Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model")
+    return Scenario("web_model_errors",
+        Step(expected, HttpError(401, {"error": {"message": "Fixture authentication rejected", "type": "authentication_error"}})),
+        Step(expected, Stream(Text("Partial output stays readable."), Gate("invalid-response"),
+                             Raw(b'data: {"choices":"invalid"}\n\n')), allow_disconnect=True),
+        Step(expected, Stream(Text("Conversation recovered after model errors."), Finish())))
+
+SCENARIOS["web_model_errors"] = web_model_errors
+
+
+def web_timeout_retry() -> Scenario:
+    expected = Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model")
+    timeout = HttpError(408, {"error": {"message": "Fixture model response timeout", "type": "timeout"}})
+    return Scenario("web_timeout_retry",
+        Step(expected, timeout),
+        Step(expected, Stream(Gate("retry-started"), Text("Recovered after timeout."), Finish())),
+        Step(expected, timeout),
+        Step(expected, Stream(Gate("stop-retry"), Text("Late retry output must stay hidden."), Finish()), allow_disconnect=True))
+
+SCENARIOS["web_timeout_retry"] = web_timeout_retry

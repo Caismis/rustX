@@ -540,6 +540,7 @@ fn inherited_terminal(
         message_count: 0,
         tool_call_count: 0,
         outcome: provenance.outcome.into(),
+        failure: None,
         started_at: provenance.started_at,
         ended_at: provenance.ended_at,
     }

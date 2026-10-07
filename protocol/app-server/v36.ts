@@ -1711,6 +1711,141 @@ export type TurnProcessOutcome =
   | 'timed_out'
   | 'limit_exceeded';
 /**
+ * The normalized client-visible failure of one attempt.
+ *
+ * This is the external projection of the internal [`AttemptFailure`]
+ * ([`crate::events::types::AttemptFailure`]): provider-specific fields
+ * (such as the raw provider error code) never appear here.
+ */
+export type RuntimeClientAttemptFailure =
+  | {
+      /**
+       * Error classes the runtime distinguishes for retry/termination decisions.
+       * Provider SDK error structs never cross this boundary.
+       */
+      kind:
+        | 'invalid_request'
+        | 'authentication'
+        | 'rate_limit'
+        | 'timeout'
+        | 'transport'
+        | 'provider_error'
+        | 'context_window_exceeded'
+        | 'cancelled'
+        | 'unsupported'
+        | 'malformed_tool_proposal'
+        | 'generation_degenerated'
+        | 'generation_budget_exceeded';
+      /**
+       * The normalized human-readable message.
+       */
+      message: string;
+      /**
+       * The retry hint, when the provider reported one.
+       */
+      retry_after_ms?: number | null;
+      type: 'model';
+    }
+  | {
+      /**
+       * The normalized runtime error.
+       */
+      error:
+        | {
+            /**
+             * Human-readable diagnostic message.
+             */
+            message: string;
+            type: 'internal';
+          }
+        | {
+            /**
+             * Human-readable diagnostic message.
+             */
+            message: string;
+            type: 'invalid_state';
+          }
+        | {
+            /**
+             * Human-readable diagnostic message.
+             */
+            message: string;
+            type: 'unsupported';
+          }
+        | {
+            /**
+             * The tool name the model called.
+             */
+            name: string;
+            type: 'unknown_tool';
+          }
+        | {
+            /**
+             * Human-readable diagnostic message.
+             */
+            message: string;
+            type: 'durable_store';
+          }
+        | {
+            /**
+             * Human-readable diagnostic message.
+             */
+            message: string;
+            type: 'contract_violation';
+          }
+        | {
+            /**
+             * Human-readable diagnostic message.
+             */
+            message: string;
+            type: 'context_preparation_failed';
+          }
+        | {
+            /**
+             * Human-readable diagnostic message.
+             */
+            message: string;
+            type: 'context_compaction_failed';
+          }
+        | {
+            /**
+             * The policy's bounded rejection reason.
+             */
+            reason: string;
+            type: 'pre_step_rejected';
+          }
+        | {
+            /**
+             * Human-readable diagnostic message.
+             */
+            message: string;
+            type: 'pre_step_policy_failed';
+          }
+        | {
+            /**
+             * Human-readable diagnostic message.
+             */
+            message: string;
+            type: 'tool_result_observation_failed';
+          }
+        | {
+            /**
+             * The bounded recovery diagnostic: which durable evidence settled
+             * the attempt and what remained indeterminate.
+             */
+            message: string;
+            type: 'restart_interrupted';
+          }
+        | {
+            /**
+             * Human-readable diagnostic message.
+             */
+            message: string;
+            type: 'deferred_context_rejected';
+          };
+      type: 'runtime';
+    };
+/**
  * A content block inside a `UserMessageBlock`.
  */
 export type UserContentBlock =
@@ -2911,7 +3046,11 @@ export type RuntimeClientEvent =
           }
         | {
             /**
-             * The normalized client-visible failure.
+             * The normalized client-visible failure of one attempt.
+             *
+             * This is the external projection of the internal [`AttemptFailure`]
+             * ([`crate::events::types::AttemptFailure`]): provider-specific fields
+             * (such as the raw provider error code) never appear here.
              */
             error:
               | {
@@ -6302,6 +6441,10 @@ export interface TurnProcessView {
   message_count: number;
   tool_call_count: number;
   outcome: TurnProcessOutcome;
+  /**
+   * Normalized terminal failure, retained at its durable transcript position.
+   */
+  failure?: RuntimeClientAttemptFailure | null;
   started_at?: string | null;
   ended_at?: string | null;
 }
@@ -8324,7 +8467,11 @@ export interface RuntimeClientAttempt {
             }
           | {
               /**
-               * The normalized client-visible failure.
+               * The normalized client-visible failure of one attempt.
+               *
+               * This is the external projection of the internal [`AttemptFailure`]
+               * ([`crate::events::types::AttemptFailure`]): provider-specific fields
+               * (such as the raw provider error code) never appear here.
                */
               error:
                 | {

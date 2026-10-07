@@ -195,3 +195,39 @@ it.each(['empty', 'proposal', 'whitespace'] as const)('%s publication audits do 
   expect(ui.container.querySelector('[data-chat-anchor-key]')).toBeNull();
   expect(ui.container.textContent).toBe('');
 });
+
+it('terminal failures stay at their native position through subsequent turns and reconstruction', () => {
+  const s = snapshot();
+  const turn = { conversation_id: s.conversation_id, attempt_id: 'bad', control_cursor: '2', outcome: 'failed' as const,
+    message_count: 1, tool_call_count: 0, failure: { type: 'model' as const, kind: 'malformed_tool_proposal' as const, message: 'Invalid arguments <script>unsafe()</script>' } };
+  s.transcript = { entries: [
+    { cursor: '1', item: { type: 'message', message: { role: 'user', id: 'u', source: 'human', content: [{ type: 'text', text: 'Please answer' }] } } },
+    { cursor: '2', turn_process: turn, item: { type: 'message', message: { role: 'assistant', id: 'partial', content: [{ type: 'text', text: 'Already delivered' }] } } },
+    { cursor: '3', turn_process: turn, item: { type: 'attempt_terminal', turn } },
+    { cursor: '4', item: { type: 'message', message: { role: 'user', id: 'next', source: 'human', content: [{ type: 'text', text: 'Continue please' }] } } },
+  ] };
+  const ui = render(<AgentTranscript snapshot={s}/>);
+  expect(ui.getAllByText('This turn failed')).toHaveLength(1);
+  expect(ui.getByText(turn.failure.message)).toBeTruthy();
+  expect(ui.container.querySelector('script')).toBeNull();
+  const error = ui.container.querySelector('[data-turn-error]')!;
+  expect(ui.getByText('Already delivered').compareDocumentPosition(error) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(error.compareDocumentPosition(ui.getByText('Continue please')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  ui.rerender(<AgentTranscript snapshot={JSON.parse(JSON.stringify(s))}/>);
+  expect(ui.getAllByText('This turn failed')).toHaveLength(1);
+  expect(ui.getByText('malformed_tool_proposal')).toBeTruthy();
+  expect(ui.queryByText('Assistant recovery details')).toBeNull();
+});
+
+it('authentication failures use Harness copy and stopping never renders a failure row', () => {
+  const s = snapshot();
+  const turn = { conversation_id: s.conversation_id, attempt_id: 'auth', control_cursor: '1', outcome: 'failed' as const,
+    message_count: 0, tool_call_count: 0, failure: { type: 'model' as const, kind: 'authentication' as const, message: 'Provider authentication detail' } };
+  s.transcript = { entries: [{ cursor: '1', item: { type: 'attempt_terminal', turn } }] };
+  const ui = render(<AgentTranscript snapshot={s}/>);
+  expect(ui.getByText('API key is invalid')).toBeTruthy();
+  expect(ui.queryByText(turn.failure.message)).toBeNull();
+  s.transcript.entries![0].item = { type: 'attempt_terminal', turn: { ...turn, outcome: 'cancelled', failure: undefined } };
+  ui.rerender(<AgentTranscript snapshot={s}/>);
+  expect(ui.container.querySelector('[data-turn-error]')).toBeNull();
+});

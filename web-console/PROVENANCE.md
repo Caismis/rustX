@@ -1625,3 +1625,26 @@ in src/presentation/markdown/preview.ts; the former app-local preview module and
 CompactionSummary component/styles are removed. Native transcript identity, fork
 boundaries and explicit source navigation remain unchanged. Both local presentation
 notes and the upstream interruption/continuation references are retained.
+
+
+Terminal model-error feedback follows local Harness at
+`5badb15009ae1756c3afe0ae0cef1faafc290ccc`:
+`MessageItem.tsx::TurnErrorItem`, its `MessageItem.module.css` error-row styles,
+`locale.ts`, and `conversation-nodes/turn-error.ts`. The error dot, inline title,
+secondary diagnostic and code are retained. Authentication uses Harness copy.
+Native Attempt terminal evidence supplies normalized failures in transcript pages;
+the browser neither parses provider text for classifications nor starts retries.
+The row remains at the terminal cursor after partial output, later turns and
+reconnection. Manual cancellation is still Stopped, without an error row.
+
+
+Timeout retry presentation follows Harness `MessageItem.tsx::ModelRetryItem`,
+`MessageItem.module.css`, `conversation-nodes/retry.ts`, `locale.ts` and
+ui-primitives `TextShimmer` at `5badb15009ae1756c3afe0ae0cef1faafc290ccc`.
+Only Web presentation consumes existing Trace summaries and explicitly disclosed
+request detail. Exact native Attempt/Step/request/predecessor identities determine
+which timeout and subsequent request are shown. Scheduled delays, retry ceilings
+and pending retry cancellation are not exposed by this API and are not invented:
+there is no countdown or maximum; a timeout alone is not labelled an active retry.
+Actual started retries shimmer while attached and running. Settled or disconnected
+observations stop the animation. No runtime, protocol or retry policy is changed.

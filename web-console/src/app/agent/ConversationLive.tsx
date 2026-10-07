@@ -1,5 +1,6 @@
 import type { AppServerClient } from '../../client/app-server';
 import { shallowEqual, useClientSelector } from '../../client/selectors';
+import { ModelRetries } from './ModelRetry';
 import { AgentTranscript } from './AgentTranscript';
 import { RuntimeFacts } from './Activity';
 import { ConversationStats } from './UsageStats';
@@ -65,7 +66,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, onHistoric
       latestTurn={view.attempt && view.attempt.phase.type!=='settled' ? turnAnchor({conversation_id:view.conversation_id,attempt_id:view.attempt.attempt_id}) : undefined}
       onActiveTurn={setActive}>
       {fork.error && <div role="alert"><p>{fork.error}</p><button type="button" onClick={fork.retry}>{tx('agent:fork-point.reload')}</button></div>}
-      <AgentTranscript snapshot={view} history={view.history} loadEarlier={() => void client.loadEarlier(view.id).catch(() => {})} lineageSwitchSafe={view.safe} historicalDisabled={view.disabled} onHistorical={onHistorical} forkPoint={fork.point} onOpenSource={onOpenSource} sourceDisabled={fork.point?.origin.source_session === view.id && !view.safe}/>
+      <AgentTranscript requestFeedback={attemptId => <ModelRetries client={client} sessionId={view.id} attemptId={attemptId}/>} snapshot={view} history={view.history} loadEarlier={() => void client.loadEarlier(view.id).catch(() => {})} lineageSwitchSafe={view.safe} historicalDisabled={view.disabled} onHistorical={onHistorical} forkPoint={fork.point} onOpenSource={onOpenSource} sourceDisabled={fork.point?.origin.source_session === view.id && !view.safe}/>
       <ConversationActivity client={client} sessionId={view.id}/>
     </ChatViewport>;
 }
