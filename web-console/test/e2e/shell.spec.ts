@@ -1,7 +1,6 @@
 const fixtureOrigin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 import { test, expect, type Page } from '@playwright/test';
 import { expectStableScreenshot } from './screenshot';
-import { choose } from './shell-actions';
 
 /** The shell reference owns its cold-load interleaving. Present the unclassified
  * baseline before publishing the Host reply, then await both shared consumers.
@@ -118,7 +117,7 @@ test('Harness shell reference states and presentation-only navigation', async ({
   // Global Settings opens at General, which holds Appearance.
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await expectStableScreenshot(page, 'settings-shell-light.png');
-  await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Theme', 'Dark');
+  await page.getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: 'Dark', exact: true }).click();
   await expectStableScreenshot(page, 'settings-shell-dark.png');
   await page.getByRole('button', { name: 'Close Settings' }).click();
   await expectStableScreenshot(page, 'desktop-expanded-dark.png');

@@ -1,0 +1,36 @@
+import { test, expect } from '@playwright/test';
+import { choose } from './shell-actions';
+
+for (const locale of ['en', 'zh'] as const) test(`Harness appearance cards follow system ${locale}`, async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'dark' }); await page.goto('/');
+  await expect(page.locator('body')).toHaveAttribute('data-ds-dark-theme', '');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  if (locale === 'zh') await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
+  const label = (en: string, zh: string) => locale === 'en' ? en : zh;
+  const row = page.getByRole('group', { name: label('Appearance', '外观'), exact: true });
+  const system = row.getByRole('button', { name: label('System', '跟随系统'), exact: true });
+  await expect(system).toHaveAttribute('aria-pressed', 'true');
+  await expect(system).toHaveCSS('border-radius', '20px');
+  await page.emulateMedia({ colorScheme: 'light' });
+  await expect(page.locator('body')).not.toHaveAttribute('data-ds-dark-theme', '');
+  await expect(system).toHaveAttribute('aria-pressed', 'true');
+  const dark = row.getByRole('button', { name: label('Dark', '深色'), exact: true });
+  await dark.focus(); await page.keyboard.press('Space');
+  await expect(dark).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('body')).toHaveAttribute('data-ds-dark-theme', '');
+  await page.emulateMedia({ colorScheme: 'dark' }); await page.emulateMedia({ colorScheme: 'light' });
+  await expect(page.locator('body')).toHaveAttribute('data-ds-dark-theme', '');
+  await page.reload(); await expect(page.locator('body')).toHaveAttribute('data-ds-dark-theme', '');
+  await page.getByRole('button', { name: label('Settings', '设置'), exact: true }).click();
+  await expect(dark).toHaveAttribute('aria-pressed', 'true');
+  await system.click(); await expect(page.locator('body')).not.toHaveAttribute('data-ds-dark-theme', '');
+  expect(await page.evaluate(() => localStorage.getItem('rustx-appearance-v1'))).toBe('system');
+  await page.screenshot({ path: `/tmp/rustx-appearance-${locale}-light.png` });
+  await page.setViewportSize({ width: 390, height: 1000 }); await page.emulateMedia({ colorScheme: 'dark' });
+  await expect(page.locator('body')).toHaveAttribute('data-ds-dark-theme', '');
+  await expect(system).toHaveAttribute('aria-pressed', 'true');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: `/tmp/rustx-appearance-${locale}-dark-mobile.png` });
+  await page.reload(); await expect(page.locator('body')).toHaveAttribute('data-ds-dark-theme', '');
+  await page.emulateMedia({ colorScheme: 'light' }); await expect(page.locator('body')).not.toHaveAttribute('data-ds-dark-theme', '');
+});

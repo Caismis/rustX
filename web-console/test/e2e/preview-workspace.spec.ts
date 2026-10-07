@@ -262,7 +262,7 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     expect(reads.length).toBeGreaterThan(readsBeforeSession);
 
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Theme', 'Dark');
+    await page.getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: 'Dark', exact: true }).click();
     await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
     await page.getByRole('button', { name: '关闭设置', exact: true }).click();
     const chinesePanel = page.getByRole('complementary', { name: '预览', exact: true });

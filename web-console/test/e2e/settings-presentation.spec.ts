@@ -9,7 +9,7 @@ const fixtureOrigin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 import { expectStableScreenshot } from './screenshot';
-import { choose, closeSettings, openSettingsPage, openWorkspaceSettings, selectedSettingsPage, settingsSectionMenu } from './shell-actions';
+import { closeSettings, openSettingsPage, openWorkspaceSettings, selectedSettingsPage, settingsSectionMenu } from './shell-actions';
 
 const fixture = `${fixtureOrigin}/test/fixtures/settings.html`;
 const pages = ['General', 'Models', 'Agent', 'Tools & Permissions', 'Extensions', 'Advanced'];
@@ -32,7 +32,7 @@ async function openUserSettings(page: Page) {
 }
 async function setTheme(page: Page, theme: 'Light' | 'Dark') {
   await openUserSettings(page);
-  await choose(dialog(page), 'Theme', theme);
+  await dialog(page).getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: theme, exact: true }).click();
   await closeSettings(page);
 }
 

@@ -1586,3 +1586,14 @@ and pending retry cancellation are not exposed by this API and are not invented:
 there is no countdown or maximum; a timeout alone is not labelled an active retry.
 Actual started retries shimmer while attached and running. Settled or disconnected
 observations stop the animation. No runtime, protocol or retry policy is changed.
+
+
+Appearance preferences follow local Harness `ui-theme` at
+`5badb15009ae1756c3afe0ae0cef1faafc290ccc`: `AppearanceRow.tsx`,
+`AppearanceRow.module.css`, `theme-settings.ts`, `locales.ts` and `boot-theme.ts`.
+Light, Dark and System are three icon-over-label cubes, preserving preference
+selection separately from resolved colors. The browser defaults to System and
+owns one media-query listener only while that preference is active; explicit
+Light/Dark preferences remain persisted overrides. The App applies the resolved
+palette before its layout is painted and releases the listener on replacement.
+Host theme storage and plugin lifecycle are not imported.
