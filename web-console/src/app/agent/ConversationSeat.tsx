@@ -1,5 +1,5 @@
 import { useTranslation } from '../../locale/react';
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { sameTarget, type AppServerClient } from '../../client/app-server';
 import { useClientSelector, sameValue, transportSelection } from '../../client/selectors';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
@@ -31,6 +31,15 @@ export function ConversationSeat({ client, host, authority, associations, sessio
   restored?: { conversation: string; content: UserInputBlock[] }; opened: (id: string) => (() => boolean) | void;
   onCommand: (id: CommandId) => void;
 }) {
+  const seat = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const element = seat.current!, body = element.parentElement!;
+    const measure = () => body.style.setProperty('--dsh-composer-height', `${element.getBoundingClientRect().height}px`);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => { observer.disconnect(); body.style.removeProperty('--dsh-composer-height'); };
+  }, []);
   const state = useClientSelector(client, state => ({ ...transportSelection(state), composer: composerFacts(sessionId ? state.views[sessionId] : undefined) }), sameValue);
   const view = sessionId ? client.getSnapshot().views[sessionId] : undefined;
   const owner = JSON.stringify([state.generation, sessionId, binding]);
@@ -41,7 +50,7 @@ export function ConversationSeat({ client, host, authority, associations, sessio
   const error = failure?.owner === owner ? failure.message : undefined;
   const attached = state.connection === 'connected' && !view?.deleting && view?.attachmentIntent === 'wanted' && view.attachment === 'attached';
   const disabled = !attached || !!view?.modelMutation || !!view?.snapshot?.shutting_down || !!view?.snapshot?.durability_failure;
-  return <div className={css.composerSeat} data-composer-seat="">
+  return <div ref={seat} className={css.composerSeat} data-composer-seat="">
     <div hidden={!!view?.snapshot?.pending_interactions?.length}>
       <ConversationComposer client={client} host={host} authority={authority} associations={associations} initialWorkspace={initialWorkspace} workspacePicked={workspacePicked} binding={binding} activeView={view} current={current} consumed={consumed} opened={opened}
         context={view && <><ContextSeat client={client} sessionId={view.id}/><ConversationDocks key={view.id} client={client} sessionId={view.id} disabled={disabled}/></>}

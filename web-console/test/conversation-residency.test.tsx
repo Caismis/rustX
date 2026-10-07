@@ -197,6 +197,7 @@ it('an unavailable saved selection remains visibly invalid and cannot submit a s
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Workspace A' })));
   fireEvent.change(input(), { target: { value: 'must not substitute' } });
   expect(screen.getByRole('button', { name: 'Model and reasoning' }).textContent).toContain('removed/provider-model');
+  fireEvent.click(screen.getByRole('button', { name: 'Model and reasoning' }));
   expect(screen.getByText(/removed\/provider-model is unavailable/)).toBeTruthy();
   expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', true);
   fireEvent.keyDown(input(), { key: 'Enter' });

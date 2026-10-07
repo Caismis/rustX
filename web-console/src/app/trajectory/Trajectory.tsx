@@ -157,7 +157,7 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail }: Traje
   const turnIds = projection.sections.flatMap(section => section.kind === 'turn' ? [section.nativeAttemptId] : []);
   const allTurnsCollapsed = foldableTurns.size > 0 && [...foldableTurns].every(id => collapsedTurns.has(id));
   const allCallsCollapsed = callOwners.size > 0 && [...callOwners].every(id => calls.has(id));
-  return <section className={css.root} aria-label={tx('trajectory:view.trajectory')} onFocusCapture={event => {
+  return <section className={css.root} data-conversation-composer-overlay="" aria-label={tx('trajectory:view.trajectory')} onFocusCapture={event => {
     focusedDisplay.current = (event.target as HTMLElement).closest<HTMLElement>('[data-display-key]')?.dataset.displayKey;
   }}>
     <div className={css.toolbar} role="toolbar" aria-label={tx('trajectory:toolbar.aria')}>

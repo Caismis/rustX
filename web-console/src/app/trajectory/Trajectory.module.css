@@ -188,6 +188,8 @@
 
   position: relative;
   height: 100%;
+  box-sizing: border-box;
+  padding-bottom: var(--dsh-trajectory-bottom-clearance, 0px);
   overflow-x: hidden;
   overflow-y: auto;
   color: var(--dsw-alias-label-primary);
@@ -938,6 +940,7 @@
 }
 
 .detailBody {
+  padding-bottom: var(--dsh-trajectory-bottom-clearance, 0px);
   flex: 1;
   min-height: 0;
   overflow-x: hidden;
@@ -949,7 +952,7 @@
   display: flex;
   box-sizing: border-box;
   flex-direction: column;
-  padding-bottom: 12px;
+  padding-bottom: calc(12px + var(--dsh-trajectory-bottom-clearance, 0px));
   overflow: hidden;
 }
 

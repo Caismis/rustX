@@ -66,9 +66,21 @@ export function TrajectoryLedger({ ref, rows, first, activeKey, focusKey, onFocu
       }
       prepend.current = null; followsTail.current = false;
     } else if (followsTail.current && rows.length) {
-      if (virtualized) virtualizer.scrollToIndex(rows.length - 1, { align: 'end' }); else pane.scrollTop = pane.scrollHeight;
+      // The native scroll extent includes the composer's CSS clearance.
+      pane.scrollTop = pane.scrollHeight;
     }
   }, [first, rows, virtualized, virtualizer]);
+  useLayoutEffect(() => {
+    const pane = viewport.current;
+    if (!pane) return;
+    // Observe the content box: composer clearance changes its height even
+    // though the full-height ledger's border box stays fixed.
+    const observer = new ResizeObserver(() => {
+      if (followsTail.current) pane.scrollTop = pane.scrollHeight;
+    });
+    observer.observe(pane);
+    return () => observer.disconnect();
+  }, []);
   useEffect(() => {
     if (!focusKey) return;
     const index = rows.findIndex(row => rowOwnsKey(row, focusKey));

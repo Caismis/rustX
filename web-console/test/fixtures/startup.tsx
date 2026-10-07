@@ -2,6 +2,7 @@ import { createRoot } from 'react-dom/client';
 import { App } from '../../src/app/App';
 import { Server, snapshot } from '../fixture';
 import { cfg3Source, cfg3Effective } from '../cfg3-data';
+import { traceRecord } from '../trace-fixture';
 import { RpcFailure } from '../../src/client/app-server';
 import type { Request } from '../../../protocol/app-server/v37';
 import '../../src/presentation/theme/base.css';
@@ -26,6 +27,9 @@ if (new URL(location.href).searchParams.has('models')) {
   saved.transcript.entries = Array.from({ length: 20 }, (_, index) => ({ cursor: String(index + 1), item: { type: 'message' as const, message: { id: `saved-${index}`, role: index % 2 ? 'assistant' as const : 'user' as const, source: 'human' as const, content: [{ type: 'text' as const, text: `Saved message ${index}: ` + 'Previously saved conversation content. '.repeat(12) }] } } }));
   server.handlers.set('session/models', () => ({ type: 'models', catalog: { models: [{ model: saved.model!.configured.model, protocol: 'openai_responses', contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'literal' }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, reasoningProfiles: [] }] } }));
   server.handlers.set('session/model', () => ({ type: 'model', model: saved.model! }));
+}
+if (new URL(location.href).searchParams.has('trajectory')) {
+  server.snapshots.get('A')!.trace.records = Array.from({ length: 160 }, (_, index) => traceRecord(index, { kind: 'user', request: null, location: {}, preview: { text: `Saved trace ${index}`, truncated: false } }));
 }
 let nativeDefault = 'fixture/native';
 server.handlers.set('session/create', request => {

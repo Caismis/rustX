@@ -1627,3 +1627,11 @@ of resource preparation; this is a native durable read, never a fabricated runti
 snapshot. Both clients fence late history reads against the current attachment.
 
 Model menu layout repair: compared the local DeepSeek-harness `packages/client/ui-model-selection/src/client/ModelSelect.tsx` in-menu loading/error presentation. The rustX adapter keeps catalog-loading and unavailable-selection notices inside its existing portaled menu, so opening it does not resize the Composer or history viewport. Pending root rows are disabled and initial keyboard focus waits for usable choices. Native model mutation/read authority and the pinned source baseline remain unchanged.
+
+Trajectory bottom fade: compared local Harness ConversationRoot.module.css,
+TrajectoryView.tsx, views.module.css and TrajectoryTable.module.css. The native-bound
+WebUI view now elects the resident composer overlay, retaining the fixed 36px
+bg-base fade. ConversationSeat publishes its measured height to its body; ledger
+and detail scroll areas reserve that height plus 16px, as Harness does. WebUI's
+Chat does not reserve an outer scrollbar gutter, so the overlay keeps the same
+full-width seat instead of applying Harness's outer-scroller gutter compensation.
