@@ -3,6 +3,7 @@ import { watch } from 'node:fs';
 import { mkdtemp, realpath, writeFile, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
+import { unzipSync, zipSync, strFromU8, strToU8 } from 'fflate';
 import { describe, it, expect } from 'vitest';
 import { runMacOfficeSandbox } from '../host/documents/office-macos';
 import { convertOffice } from '../host/documents/converter';
@@ -47,7 +48,12 @@ process.stdout.write(JSON.stringify({denied,network,secret:process.env.RUSTX_OFF
     } finally { watcher.close();controller.abort();await rm(root,{recursive:true,force:true}); }
   });
   it.each(['docx','pptx'] as const)('native engine renders %s as a real PDF', async extension => {
-    const bytes=await readFile(new URL(`./fixtures/documents/sample.${extension}`,import.meta.url));
+    let bytes=await readFile(new URL(`./fixtures/documents/sample.${extension}`,import.meta.url));
+    if(extension==='docx') {
+      const archive=unzipSync(bytes);
+      archive['word/document.xml']=strToU8(strFromU8(archive['word/document.xml']).replace('rustX document preview','rustX 中文文档预览'));
+      bytes=Buffer.from(zipSync(archive));
+    }
     const pdf=await convertOffice(bytes,extension,new AbortController().signal);
     expect(pdf.subarray(0,5).toString()).toBe('%PDF-');
     expect(pdf.length).toBeGreaterThan(1000);
@@ -57,7 +63,7 @@ process.stdout.write(JSON.stringify({denied,network,secret:process.env.RUSTX_OFF
       const document=await task.promise;
       const content=await(await document.getPage(1)).getTextContent();
       const text=content.items.map(item=>'str' in item?item.str:'').join(' ');
-      expect(text).toContain(extension==='docx'?'rustX document preview':'rustX presentation preview');
+      expect(text).toContain(extension==='docx'?'rustX 中文文档预览':'rustX presentation preview');
     } finally { await task.destroy(); }
   },20000);
 });

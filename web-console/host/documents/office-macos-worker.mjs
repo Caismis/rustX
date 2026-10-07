@@ -12,9 +12,7 @@ const converter = await createConverter({
   maxArchiveEntries: 256,
   maxUncompressedBytes: 16 * 1024 * 1024,
   maxImageResolution: 144,
-  maxFontFiles: 512,
-  maxFontFileBytes: 32 * 1024 * 1024,
-  maxLoadedFontBytes: 64 * 1024 * 1024,
+  // Keep the engine's bounded font defaults, including large CJK system fonts.
 });
 try {
   await converter.render({ inputPath: `${directory}/source.${extension}`, outputPath: `${directory}/result.pdf` });
