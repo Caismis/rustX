@@ -14,6 +14,9 @@ export function workbenchFixture(): Plugin {
     writeFileSync(join(root, 'docs/guide.md'), '---\ntitle: Sidebar documentation\nauthor: Example\n---\n# Rendered document\n\n| Feature | Status |\n| --- | --- |\n| Markdown | Ready |\n\n**Bold text** and $x^2$.\n\n![diagram](diagram.svg)\n\n[Read source](../src/test.py)\n');
     writeFileSync(join(root, 'docs/diagram.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="300"><rect width="800" height="300" fill="#4285f4"/></svg>');
     writeFileSync(join(root, 'docs/page.html'), '<!doctype html><style>h1{color:rgb(200,0,0)}</style><h1>HTML document</h1><script>parent.postMessage("unexpected-script", "*")</script>');
+    writeFileSync(join(root, 'docs/interactive.html'), '<!doctype html><link rel="stylesheet" href="counter.css?v=1"><button id="counter">Count 0</button><output id="boundary"></output><script src="counter.js?v=1"></script>');
+    writeFileSync(join(root, 'docs/counter.css'), '#counter{color:rgb(12,34,56)}');
+    writeFileSync(join(root, 'docs/counter.js'), 'let n=0;counter.onclick=()=>counter.textContent="Count "+(++n);try{parent.localStorage.getItem("secret");boundary.textContent="exposed"}catch{boundary.textContent="isolated"}');
     writeFileSync(join(root, 'docs/table.csv'), 'Name,Amount\nApples,12\nPears,8\n');
     for (const name of ['sample.pdf','sample.xlsx']) copyFileSync(new URL(`../fixtures/documents/${name}`,import.meta.url),join(root,'docs',name));
     const host = new LocalWorkspaceHost({ roots: [{ id: 'A', cwd: root, displayName: 'Workspace A' }], endpoint: 'ws://localhost:8080', picker: false, metadataFile: join(root, 'registry.json'), nativeFilesystem: 'shared', transportToken: 'fixture' }, undefined, async (_endpoint, _token, target) => { if (target.session_id !== 'A' || target.active_node !== 'node-A') throw new Error('Wrong native Session'); return root; });

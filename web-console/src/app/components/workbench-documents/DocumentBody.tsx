@@ -8,7 +8,7 @@ import { ZoomViewport, zoomSurfaceClass } from './zoom/ZoomViewport';
 import { FIT_WIDTH } from './zoom/types';
 import { excelFormat } from './excel/format';
 import { en, zh } from '../../../locale/dictionaries/workbench-excel';
-import { createBasicHtmlDocument } from './basic-document';
+import { HtmlBody } from './html/HtmlBody';
 import { DocumentResources } from '../../../presentation/markdown/DocumentResources';
 import { relativeDocumentPath, WorkspaceImage } from './resources';
 import type { FileTabView, WorkbenchCall } from '../WorkbenchFiles';
@@ -21,14 +21,14 @@ export function DocumentBody({ mode, text, bytes, path, view, signal, retry, cal
   const tx = useTranslation(), locale = useLocale();
   const [state,setState] = useState(view.document ?? {});
   const change = (patch: typeof state) => { view.document = {...view.document,...patch}; setState(view.document); };
-  const source = useMemo(() => mode === 'html' ? createBasicHtmlDocument(new TextEncoder().encode(text)) : '', [mode,text]);
+
   const split = useMemo(() => splitFrontmatter(text), [text]);
   const loading = <p role="status">{tx('artifacts:workbench.loading')}</p>;
   if (mode === 'markdown') return <DocumentResources.Provider value={{image:(url,alt)=>{const resolved=relativeDocumentPath(path,url);return resolved?<WorkspaceImage key={resolved} path={resolved} alt={alt} call={call}/>:<span>{alt}</span>;},link:(url,children)=>{const resolved=relativeDocumentPath(path,url);return resolved?<a href={url} onClick={event=>{event.preventDefault();onOpen(resolved);}}>{children}</a>:undefined;}}}><div className={css.document} data-document-markdown>
     {split && <div className={css.frontmatter} data-document-frontmatter><FrontmatterFields source={split.source} fallback={<pre className={css.frontmatterSource}>{split.source}</pre>}/></div>}
     <MarkdownText text={split?.body ?? text} streaming={false}/>
   </div></DocumentResources.Provider>;
-  if (mode === 'html') return <iframe style={{border:0,width:'100%',height:'100%'}} title="HTML" sandbox="" referrerPolicy="no-referrer" srcDoc={source}/>;
+  if (mode === 'html') return <HtmlBody data={bytes} path={path} call={call} signal={signal}/>;
   if (mode === 'image') return <ImageBody bytes={bytes} path={path} view={view} signal={signal}/>;
   if (mode === 'pdf' || mode === 'office') return <Suspense fallback={loading}><Pdf bytes={bytes} signal={signal} retry={retry} viewState={state} onViewStateChange={change}/></Suspense>;
   if (mode === 'excel') {

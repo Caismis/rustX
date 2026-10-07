@@ -1,3 +1,4 @@
+import { useInteractiveHtml } from '../../components/workbench-documents/html/preferences';
 import { localeController } from '../../../locale/controller';
 import { useBusyEnter } from '../../composer/preferences';
 import { useTranslation } from '../../../locale/react';
@@ -17,6 +18,7 @@ import css from '../../../presentation/settings/SettingsContent.module.css';
  * source, a Workspace has no General page at all — see `settingsPages`. */
 export function GeneralPage({ theme, setTheme }: { theme: 'light' | 'dark'; setTheme?: (theme: 'light' | 'dark') => void }) {
   const tx = useTranslation();
+  const [interactiveHtml, setInteractiveHtml] = useInteractiveHtml();
   const [busyEnter, composer] = useBusyEnter();
   return <section aria-label={tx('settings:general-page.general')}>
     <h3>{tx('settings:general-page.general')}</h3>
@@ -25,6 +27,9 @@ export function GeneralPage({ theme, setTheme }: { theme: 'light' | 'dark'; setT
     <h4>{tx('settings:general-page.appearance')}</h4>
     <Choice label={tx('settings:general-page.theme')} value={theme} options={[['light', tx('settings:copy.light')], ['dark', tx('settings:copy.dark')]]}
       onChange={value => setTheme?.(value)} />
+    <Choice label={tx('artifacts:workbench.html-interactive')} value={interactiveHtml ? 'on' : 'off'}
+      options={[["on", tx('artifacts:workbench.html-enabled')], ["off", tx('artifacts:workbench.html-static')]]}
+      onChange={value => setInteractiveHtml(value === 'on')} description={tx('artifacts:workbench.html-description')} />
     <h4>{tx('settings:general-page.conversation')}</h4>
     <Choice label={tx('settings:general-page.busy-enter')} value={busyEnter}
       options={[['queue', tx('settings:general-page.busy-enter-queue')], ['steer', tx('settings:general-page.busy-enter-steer')]]}

@@ -7,6 +7,8 @@ on:
       - 'web-console/host/**'
       - 'web-console/src/workspaces/**'
       - 'web-console/test/workbench-host.test.ts'
+      - 'web-console/test/office-macos.test.ts'
+      - 'web-console/test/document-integration.test.ts'
       - 'web-console/package.json'
       - 'web-console/pnpm-lock.yaml'
       - 'web-console/pnpm-workspace.yaml'
@@ -41,3 +43,7 @@ jobs:
       - name: Real filesystem and PTY boundaries
         working-directory: web-console
         run: pnpm exec vitest run test/workbench-host.test.ts
+      - name: Native macOS Office conversion and isolation
+        if: runner.os == 'macOS'
+        working-directory: web-console
+        run: pnpm exec vitest run test/document-integration.test.ts test/office-macos.test.ts

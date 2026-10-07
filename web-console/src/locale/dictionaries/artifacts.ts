@@ -1,5 +1,10 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
+  "workbench.html-interactive": "Interactive HTML preview",
+  "workbench.html-enabled": "Enabled",
+  "workbench.html-static": "Static only",
+  "workbench.html-description": "Run page scripts in an isolated preview. Local JavaScript and CSS are loaded from this workspace.",
+  "workbench.html-failed": "Unable to load the HTML page or its related files.",
   "workbench.markdown": "Markdown",
   "workbench.html": "HTML",
   "workbench.image": "Image",
@@ -117,6 +122,11 @@ export const en = {
 } as const;
 export type ArtifactsKey = keyof typeof en;
 export const zh = {
+  "workbench.html-interactive": "交互式 HTML 预览",
+  "workbench.html-enabled": "启用",
+  "workbench.html-static": "仅静态预览",
+  "workbench.html-description": "在隔离预览中运行页面脚本，从当前工作区加载本地 JavaScript 和 CSS。",
+  "workbench.html-failed": "无法加载 HTML 页面或其关联文件。",
   "workbench.markdown": "Markdown",
   "workbench.html": "HTML",
   "workbench.image": "图片",

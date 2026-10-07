@@ -1420,12 +1420,22 @@ The copied dockkit behavior tests remain alongside the port. Changes at seams:
   XLSX default row height remains absent instead of becoming `NaN`.
 - Markdown documents opt into Host-admitted relative images and file navigation;
   conversation Markdown's inert image policy is unchanged.
-- HTML uses the upstream static sandbox preparation. Interactive HTML and the
-  Harness remote resource/runtime APIs are not imported. PDF display continues
-  to use rustX's bounded PDF worker owner. DOCX/PPTX use the existing sandboxed
-  Office converter; converter availability remains a Host capability (Linux
-  with the required sandbox tools). Legacy DOC/PPT and macOS Office conversion
-  are unavailable rather than launched outside that boundary.
+- HTML copies the upstream packer, bootstrap and opaque `allow-scripts` iframe.
+  Inline interaction and direct local classic JS/CSS work through scoped Host
+  reads. The iframe receives no Host RPC, parent storage or same-origin access.
+  General settings can select the upstream inert/static mode. Module graphs,
+  CSS dependency traversal and dynamic relative fetch are not supported by DSH's
+  packer either. PDF display retains rustX's bounded PDF worker owner.
+- DOCX/PPTX retain OOXML admission and native source reauthorization. Linux keeps
+  its existing cgroup/Bubblewrap converter. macOS uses DSH's pinned
+  `@deepseek-ai/libreoffice-kit@0.1.5` native engine in a clean-environment
+  Seatbelt process group: private input/output, dependency and system-font reads,
+  no network or user-home access, CPU/file/descriptor and output/deadline limits.
+  macOS does not claim Linux's cgroup memory/task limits. Missing sandbox or
+  engine fails closed. Legacy DOC/PPT remain outside the OOXML admission format.
+  The package includes native engine licenses and source/build information under
+  MPL-2.0; its optional platform payload must accompany the Host installation.
+
 
 Browser coverage includes default Markdown versus explicit source/text, YAML
 frontmatter, GFM tables/math, workspace-relative images and links, static HTML,

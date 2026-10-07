@@ -16,6 +16,9 @@ const packages = new Map<string, string>();
 const declaredOnly: Record<string, { license: string | undefined; notice: string }> = {
   '@fortune-sheet/core 1.0.4': { license: 'MIT', notice: readFileSync(join(root, 'licenses/fortune-sheet-1.0.4.txt'), 'utf8') },
   '@fortune-sheet/react 1.0.4': { license: 'MIT', notice: readFileSync(join(root, 'licenses/fortune-sheet-1.0.4.txt'), 'utf8') },
+  'brotli 1.3.3': { license: 'MIT', notice: readFileSync(join(root, 'licenses/brotli-1.3.3.txt'), 'utf8') },
+  'dfa 1.2.0': { license: 'MIT', notice: 'License: MIT, as declared in the published package manifest. This distribution contains no standalone license text. Project: https://github.com/devongovett/dfa' },
+  'fontkit 2.0.4': { license: 'MIT', notice: 'License: MIT, as declared in the published package manifest and README. This distribution contains no standalone license text. Project: https://github.com/foliojs/fontkit' },
   'isarray 1.0.0': { license: 'MIT', notice: readFileSync(join(root, 'licenses/isarray-1.0.0.txt'), 'utf8') },
   'saxes 5.0.1': { license: 'ISC', notice: readFileSync(join(root, 'licenses/saxes-5.0.1.txt'), 'utf8') },
   'binary 0.3.0': { license: 'MIT', notice: readFileSync(join(root, 'licenses/binary-0.3.0.txt'), 'utf8') },
