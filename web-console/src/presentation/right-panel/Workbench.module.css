@@ -1,20 +1,128 @@
-/* Copyright (c) 2026 DeepSeek. MIT. Guide capsules adapted from GuideBody.module.css; see PROVENANCE.md. */
-.root { height:100%; min-height:0; display:flex; flex-direction:column; color:var(--dsw-alias-label-primary); }
-.root[hidden] { display:none; }
-.toolbar { display:flex; align-items:center; gap:8px; padding:8px; flex:none; }
-.guide { flex:1; min-height:200px; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:24px; gap:14px; }
-.compass { color:var(--dsw-alias-label-tertiary); font-size:56px; line-height:1; margin-bottom:20px; }
-.entry { display:flex; align-items:center; gap:18px; width:380px; max-width:100%; padding:18px 22px; border:.5px solid var(--dsw-alias-border-l3); border-radius:22px; background:var(--dsw-alias-bg-layer-2); color:inherit; text-align:left; }
-.entry > button { display:flex; align-items:center; gap:18px; flex:1; border:0; padding:0; background:none; color:inherit; text-align:left; }
-.entry strong { display:block; font-size:14px; font-weight:500; }
-.entry small { display:block; color:var(--dsw-alias-label-tertiary); font-size:11px; margin-top:4px; }
-.entry select { max-width:90px; background:transparent; color:inherit; border:0; }
-.entry:hover { background:var(--dsw-alias-interactive-bg-hover); }
-.entry:disabled,.entry button:disabled { opacity:.45; cursor:default; }
-.tabs { display:flex; gap:6px; overflow:auto; padding:0 8px; flex:none; }
-.tabs > div { display:flex; flex:none; }
-.tabs button { padding:6px; background:transparent; color:inherit; border:0; }
-.tabs [aria-selected=true] { border-bottom:2px solid var(--dsw-alias-state-business-primary); }
+/* Copyright (c) 2026 DeepSeek. MIT. Harness guide and dockkit styles adapted to rustX; see PROVENANCE.md. */
+/* The guide body's own sheet: its domain owns these rules, so the shell's
+   stylesheet does not carry them. Tokens only. */
+
+/* The capsules form one centred column at the column's own 14px gap, lifted
+   above the body's middle by the spacer below. The minimum height centres a
+   short guide while allowing a tall guide to grow into the pane's scroller. */
+.guide {
+  --dsl-guide-entry-radius: var(--dsw-radius-xl);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-height: 100%;
+  padding: 0 24px;
+}
+
+/* The lift, as a share of the pane's height (a column flex basis resolves
+   against it): the centred column rises 5% of the pane, and a short pane
+   gives it up before the capsules clip. */
+.guide::after {
+  content: '';
+  flex: 0 1 10%;
+}
+
+/* The guide tab's own compass above the capsules, at 56px on watermark ink —
+   not a control. The ink is pinned to the pure-gray static ramp per theme
+   because the label aliases all ride the bluish ramp, whose cast shows at
+   this size. Its margin over the column's gap holds the first capsule 30px
+   below it; the capsules keep the bare gap between them. */
+.hero {
+  display: flex;
+  margin-bottom: 16px;
+  color: var(--dsw-static-neutral-200);
+}
+
+:global(body[data-ds-dark-theme]) .hero {
+  color: var(--dsw-static-neutral-700);
+}
+
+/* A filled pill, 380px wide by default, its icon and text anchored at the
+   left inset; `max-width: 100%` shrinks it inside the column's own 24px
+   insets, so a narrow pane still keeps that gutter. The 56px minimum is the
+   title-only height; a capsule with a description grows on its vertical
+   padding. Long text ellipsizes inside rather than widening it. */
+.entry {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  box-sizing: border-box;
+  width: 380px;
+  max-width: 100%;
+  min-height: 56px;
+  padding: 14px 20px;
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  text-align: left;
+  background: var(--dsw-alias-bg-layer-1);
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsl-guide-entry-radius);
+  cursor: pointer;
+}
+
+.entry:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* A fixed 26px box — the described glyph's size — so an entry's glyph sits
+   centred and every capsule's words start at the same left edge while glyph
+   sizes differ. */
+.entryIcon {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* The capsule's placeholder cube on ink one step quieter than a registered
+   glyph's, marking the unclaimed slot. */
+.placeholderInk {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* The capsule's words in one column beside the glyph: the title, and the
+   description while the guide shows one. */
+.entryText {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.entryTitle {
+  overflow: hidden;
+  font-size: 14px;
+  line-height: 1.4;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* One line under the title on the quieter ink; it ellipsizes like the title. */
+.entryDescription {
+  overflow: hidden;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* The chip title's compass, beside the label the strip lays out; the glyph
+   draws on currentColor, so this ink is the chip rendering's own. */
+.titleIcon {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.entryCell { width: 380px; max-width: 100%; }
+
 .notice { margin:8px 16px; color:var(--dsw-alias-label-secondary); font-size:12px; }
 .files { display:flex; flex:1; min-height:0; flex-direction:column; }
 .path { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
@@ -22,5 +130,42 @@
 .list > button { display:flex; gap:8px; width:100%; padding:7px; text-align:left; border:0; background:transparent; color:inherit; font-size:12px; }
 .list > button:hover { background:var(--dsw-alias-interactive-bg-hover); }
 .source { overflow:auto; margin:0; padding:12px; font-size:12px; flex:1; }
-.terminal { flex:1; min-height:0; display:flex; flex-direction:column; background:#141414; color:#ededed; padding:8px; }
-.terminalBody { flex:1; min-height:0; overflow:hidden; }
+
+.root { --dsw-radius-xl:20px; --dsw-radius-sm:8px; height:100%; min-height:0; display:flex; color:var(--dsw-alias-label-primary); background:var(--dsw-alias-bg-base); }
+.root[hidden],.pane[hidden] { display:none; }
+.pane { position:relative; display:flex; flex-direction:column; min-width:0; min-height:0; }
+.body { display:flex; flex-direction:column; flex:1; min-height:0; min-width:0; overflow:auto; }
+.guide { height:100%; flex:1; }
+.strip { display:flex; flex:none; gap:4px; align-items:center; height:38px; box-sizing:border-box; padding:10px 6px 0 10px; }
+.tabs { display:flex; flex:0 1 auto; min-width:0; overflow:auto; scrollbar-width:none; gap:10px; }
+.tab { position:relative; flex:0 1 auto; min-width:80px; max-width:170px; height:28px; border-radius:var(--dsw-radius-sm); color:var(--dsw-alias-label-secondary); }
+.tab > [role=tab] { display:flex; gap:5px; align-items:center; width:100%; height:100%; border:0; background:transparent; color:inherit; font-size:13px; padding:0 30px 0 10px; white-space:nowrap; }
+.tab > [role=tab] > span { overflow:hidden; text-overflow:ellipsis; }
+.tab svg { flex:none; }
+.tab[data-active=true] { color:var(--dsw-alias-label-primary); background:var(--dsw-alias-markdown-tag); }
+.tab[data-quiet=true] { background:transparent; }
+.tab[data-quiet=true] > [role=tab] { padding-right:10px; }
+.tabClose { position:absolute; right:4px; top:4px; display:flex; align-items:center; justify-content:center; width:20px; height:20px; padding:0; background:transparent; color:var(--dsw-alias-label-tertiary); border:0; border-radius:var(--dsw-radius-sm); opacity:0; pointer-events:none; }
+.tab[data-active=true] .tabClose,.tab:hover .tabClose,.tab:focus-within .tabClose { opacity:1; pointer-events:auto; }
+.tab:hover,.tabClose:hover,.iconButton:hover { background:var(--dsw-alias-interactive-bg-hover); }
+.fill { flex:1; min-width:0; }
+.chrome { display:flex; gap:8px; margin-left:4px; flex:none; }
+.iconButton { display:flex; align-items:center; justify-content:center; flex:none; width:28px; height:28px; padding:6px; border:0; border-radius:28px; background:transparent; color:var(--dsw-alias-label-secondary); }
+.iconButton svg { width:15px; height:15px; }
+.iconButton:disabled { opacity:.35; }
+.mirrored { transform:scaleX(-1); }
+.shortcut { display:inline-flex; align-items:center; gap:3px; flex:none; color:var(--dsw-alias-label-tertiary); font-size:12px; line-height:16px; white-space:nowrap; }
+.shortcut kbd { display:inline-flex; align-items:center; justify-content:center; font:inherit; }
+.entry:disabled,.launch:disabled { opacity:.45; cursor:default; }
+.terminalEntry { position:relative; overflow:hidden; }
+.launch { position:absolute; inset:0; width:100%; height:100%; background:transparent; border:0; }
+.terminalEntry .entryIcon,.terminalEntry .entryText,.terminalEntry .shortcut { position:relative; pointer-events:none; }
+.titleRow { display:flex; gap:4px; align-items:center; }
+.titleRow > div { pointer-events:auto; }
+.shellTrigger { display:flex; align-items:center; justify-content:center; width:20px; height:20px; border:0; border-radius:4px; background:transparent; color:var(--dsw-alias-label-tertiary); pointer-events:auto; padding:0; }
+.toolbar { display:flex; align-items:center; gap:8px; padding:8px; flex:none; }
+.terminal { display:flex; flex:1; flex-direction:column; min-height:0; padding-top:8px; color:var(--dsw-alias-label-primary); font-size:13px; }
+.terminalBody { flex:1; min-height:0; min-width:0; overflow:hidden; padding:8px; color:var(--dsw-alias-label-primary); background:var(--dsw-alias-bg-base); }
+.terminalBody :global(.xterm) { height:100%; }
+.divider { position:absolute; top:0; bottom:0; right:-4px; width:8px; cursor:col-resize; touch-action:none; z-index:2; }
+.divider::before { content:''; position:absolute; top:0; bottom:0; left:4px; width:.5px; background:var(--dsw-alias-border-l4); }

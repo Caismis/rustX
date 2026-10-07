@@ -477,7 +477,11 @@ applications, authorization, launch feedback and platform limitations.
 ### Workspace panel
 
 The conversation header's right-panel button opens a Start page with Workspace
-files and New terminal. Files are read from the current native Session's cwd;
+files and New terminal. Pages and shell tabs share one header strip: “+” opens
+a Start tab, selecting an entry replaces that Start tab, and the shell menu
+launches the selected shell. Split/merge and draggable pane dividers support two
+working panes. Terminal colors track the app theme while preserving shell OSC
+palette overrides. Files are read from the current native Session's cwd;
 paths are relative, symlinks are not followed, directory pages are bounded to
 2,000 entries, and text previews to 1 MiB. Descriptor-relative browsing uses the same POSIX `openat`/`fdopendir`
 implementation on Linux and macOS. Remote/unmapped Hosts do not gain filesystem access.

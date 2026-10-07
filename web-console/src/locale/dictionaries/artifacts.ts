@@ -1,6 +1,12 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
   "workbench.start": "Start",
+  "workbench.tabs": "Workspace tabs",
+  "workbench.add-tab": "New tab",
+  "workbench.close-tab": "Close tab",
+  "workbench.split": "Split pane",
+  "workbench.merge": "Merge panes",
+  "workbench.resize": "Resize panes",
   "workbench.files": "Workspace files",
   "workbench.files-description": "Browse files in this Session’s workspace",
   "workbench.new-terminal": "New terminal",
@@ -96,6 +102,12 @@ export const en = {
 export type ArtifactsKey = keyof typeof en;
 export const zh = {
   "workbench.start": "开始",
+  "workbench.tabs": "工作区标签页",
+  "workbench.add-tab": "新建标签页",
+  "workbench.close-tab": "关闭标签页",
+  "workbench.split": "分割面板",
+  "workbench.merge": "合并面板",
+  "workbench.resize": "调整面板宽度",
   "workbench.files": "工作区文件",
   "workbench.files-description": "浏览会话工作区的文件",
   "workbench.new-terminal": "新建终端",

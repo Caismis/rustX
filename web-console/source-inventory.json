@@ -2162,7 +2162,7 @@
         "./SidebarRight.module.css",
         "react"
       ],
-      "local_sha256": "fed4a0292579feb5164cad6303b26464079a88cfeafcb8605a789dfa6eb8e8bf",
+      "local_sha256": "7bdbd3b003266c115838e2d500c59c7dfba16f11ce69d2fa93cb99b9bf33a545",
       "classification": "B"
     },
     {
@@ -3289,7 +3289,7 @@
         "dynamic language registration"
       ],
       "additional_sources": [],
-      "local_sha256": "766c19334aca087bfd6d425ed37c9e7eeb562a3562bdeed8a13218036267f819"
+      "local_sha256": "1150cf72b9881d6034cec27b20c32561d9b41d71642d5c21673a9cfab2c945ab"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/locales.ts",
@@ -3712,16 +3712,18 @@
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "1edeb3ea847d7e37b8f443741e3e270e6fcad2fd25458a20e2f1c36e967cb75b",
       "classification": "B",
-      "treatment": "Harness start-page capsule layout adapted to native Session-scoped Product Host file browsing and PTY tabs; no upstream stores, RPC or execution authority retained.",
+      "treatment": "Harness start-page capsule layout adapted to native Session-scoped Product Host file browsing and PTY tabs; no upstream stores, RPC or execution authority retained. Restored tab-strip navigation, guide replacement, shell menu and bounded two-pane controls.",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../locale/react",
         "../../presentation/primitives/Button",
+        "../../presentation/primitives/Menu",
         "../../presentation/primitives/icons",
         "../../presentation/right-panel/Workbench.module.css",
         "../../workspaces/desktop",
         "../../workspaces/host",
         "../../workspaces/workbench",
+        "./WorkbenchIcons",
         "./WorkbenchTerminal",
         "react"
       ],
@@ -3729,7 +3731,21 @@
         "Harness slot registry",
         "Harness terminal Host and Session store"
       ],
-      "local_sha256": "4d2e172306ccb04877873d1c5e1c9a54c27e1ac1645c5aab060230e582383be7"
+      "local_sha256": "d0a280470a2d65677fd5f3803a36b9148858f2173c7a2410dca33dc839da56cb",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-sidebar-terminal/src/client/TerminalGuide.tsx",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "0c8dd72ffb2de363c011243024bb277090df7d7c2fa7ff7e40843bebccce216b",
+          "treatment": "Retained Harness presentation geometry, artwork or terminal theme; rustX native ownership remains separate."
+        },
+        {
+          "upstream": "packages/client/ui-sidebar-right/src/client/shell/SidebarRight.tsx",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "05f1f7e62d9902bc194de84e02564258e5e5168a9550d3712a08e952b7cd8158",
+          "treatment": "Retained Harness presentation geometry, artwork or terminal theme; rustX native ownership remains separate."
+        }
+      ]
     },
     {
       "destination": "web-console/src/presentation/right-panel/Workbench.module.css",
@@ -3744,7 +3760,120 @@
         "Harness slot registry",
         "Harness terminal Host and Session store"
       ],
-      "local_sha256": "36c0fff08825705c5bd4e62b049c9fc00d3d2a6e3734d508751db12bfadb509a"
+      "local_sha256": "a2503b985f097683144ee84c72d42620831d9181d66f1d6186f5bad6b3cb5163",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-dockkit/src/components/dockkit.module.css",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "aa18d0e2a41bfd99babd9011f1107b26d387c30665fdbcc3d6276ec268750fdf",
+          "treatment": "Retained Harness presentation geometry, artwork or terminal theme; rustX native ownership remains separate."
+        },
+        {
+          "upstream": "packages/client/ui-sidebar-terminal/src/client/TerminalGuide.module.css",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "e0ff5cacf9fc313fb32811891ba25edbb7422a5495f9df27c9187d56c250d6f0",
+          "treatment": "Retained Harness presentation geometry, artwork or terminal theme; rustX native ownership remains separate."
+        },
+        {
+          "upstream": "packages/client/ui-sidebar-terminal/src/client/terminal.module.css",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "1609e7dad23ba726a53c3ba61f57e849ceddff36daae73fbe95b795c66f12964",
+          "treatment": "Retained Harness presentation geometry, artwork or terminal theme; rustX native ownership remains separate."
+        },
+        {
+          "upstream": "packages/client/ui-theme/src/styles/base.css",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "03704b5ac0e86d9d875c4fa5c985a7dfe5d56e20dc28a8d8221626aaf7aa482a",
+          "treatment": "Retained Harness presentation geometry, artwork or terminal theme; rustX native ownership remains separate."
+        },
+        {
+          "upstream": "packages/client/ui-primitives/src/ShortcutKeys.module.css",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "ffa9624099dafb8dfe3e76c57fe26a523cb7943fa5bedd31d3c67e16e3351139",
+          "treatment": "Retained shortcut typography and key spacing."
+        }
+      ]
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-right/src/client/tabs/guide/GuideTitle.tsx",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "992010da5b0821eef21fb36bcee04ed8828714b64c2f10c4c0f9795cbc8c3e63",
+      "treatment": "Retained Harness presentation geometry, artwork or terminal theme; rustX native ownership remains separate.",
+      "destination": "web-console/src/app/components/WorkbenchIcons.tsx",
+      "classification": "B",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "Harness resource controller and plugin hooks"
+      ],
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-primitives/src/guide-artwork.tsx",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "819844fc5c0f7396b7d6c502d14e2e337dfe52a9943f1f7c6536c784b181ee0a",
+          "treatment": "Retained Harness presentation geometry, artwork or terminal theme; rustX native ownership remains separate."
+        },
+        {
+          "upstream": "packages/client/ui-primitives/src/plugin-artwork.tsx",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "9620e9150ab8f849427fae2fd5ca5d62e319d0d69e932ef5e358b29859935e18",
+          "treatment": "Retained Harness presentation geometry, artwork or terminal theme; rustX native ownership remains separate."
+        },
+        {
+          "upstream": "packages/client/ui-sidebar-terminal/src/client/TerminalIcon.tsx",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "62e47b45856a202c4b99cb2e3af7c19e650dc8d30eca4d498edaf083ef391ea3",
+          "treatment": "Retained Harness presentation geometry, artwork or terminal theme; rustX native ownership remains separate."
+        },
+        {
+          "upstream": "packages/client/ui-sidebar-right/src/client/shell/SidebarRight.tsx",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "05f1f7e62d9902bc194de84e02564258e5e5168a9550d3712a08e952b7cd8158",
+          "treatment": "Retained Harness presentation geometry, artwork or terminal theme; rustX native ownership remains separate."
+        }
+      ],
+      "local_sha256": "39abf79b734f100e97cbce97e55bc38a6ba37b332ef3914c61a26704cb921f5f"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-terminal/src/client/terminal-theme.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "ef5931e0fef6f7422b61219cf9e1a382197a0e46cf36880d3970eb2a48d8cf90",
+      "treatment": "Retained Harness presentation geometry, artwork or terminal theme; rustX native ownership remains separate.",
+      "destination": "web-console/src/app/components/WorkbenchTerminalTheme.ts",
+      "classification": "B",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "@xterm/xterm"
+      ],
+      "excluded_dependencies": [
+        "Harness resource controller and plugin hooks"
+      ],
+      "additional_sources": [],
+      "local_sha256": "37a0244f37bab9ab2688da7a6c729b788221b42270190aed467255078e49f319"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-terminal/src/client/terminal.tsx",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "0d2e5fdd3dd91cd5f86cf5f0dc3f95d7c0e7cad5905e8aa5a9958ded98bd9051",
+      "treatment": "Retained Harness presentation geometry, artwork or terminal theme; rustX native ownership remains separate.",
+      "destination": "web-console/src/app/components/WorkbenchTerminal.tsx",
+      "classification": "B",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../../locale/react",
+        "../../presentation/right-panel/Workbench.module.css",
+        "../../workspaces/workbench",
+        "./WorkbenchTerminalTheme",
+        "@xterm/addon-fit",
+        "@xterm/xterm",
+        "@xterm/xterm/css/xterm.css",
+        "react"
+      ],
+      "excluded_dependencies": [
+        "Harness resource controller and plugin hooks"
+      ],
+      "additional_sources": [],
+      "local_sha256": "9351b1526a0946313dda6860f755f224ef9c3e404af772a995cf7482be4db097"
     }
   ],
   "inspected_only": [

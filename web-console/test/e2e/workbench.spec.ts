@@ -13,7 +13,7 @@ test('workspace panel browses real files and runs a real PTY, including collapse
   await panel.getByRole('button', { name: /^src\/$/ }).click();
   await panel.getByRole('button', { name: 'hello.txt' }).click();
   await expect(panel.locator('pre')).toHaveText('Workspace preview works.');
-  await panel.getByRole('button', { name: 'Start', exact: true }).click();
+  await panel.getByRole('button', { name: 'New tab', exact: true }).click();
   await panel.getByRole('button', { name: /New terminal/ }).click();
   await expect(panel.locator('.xterm')).toBeVisible();
   await panel.locator('.xterm-helper-textarea').fill("printf 'RUSTX_%s\\n' TERMINAL");
@@ -28,10 +28,10 @@ test('workspace panel browses real files and runs a real PTY, including collapse
   await expect.poll(async () => (await panel.boundingBox())!.x + (await panel.boundingBox())!.width).toBeLessThanOrEqual(1440);
   await page.screenshot({path: info.outputPath('workbench-terminal.png')});
   await panel.getByRole('button', { name: 'Close terminal 1' }).click();
-  await expect(panel.getByRole('tab')).toHaveCount(0);
+  await expect(panel.getByRole('button', { name: 'Close terminal 1' })).toHaveCount(0);
 });
 
-test('Chinese narrow workspace panel opens as a full-width page and closes', async ({ page }) => {
+test('Chinese narrow workspace panel opens as a full-width page and closes', async ({ page }, info) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.addInitScript(() => localStorage.setItem('rustx-locale-v1', 'zh'));
   await page.goto(`${origin}/test/fixtures/workbench.html`);
@@ -40,6 +40,63 @@ test('Chinese narrow workspace panel opens as a full-width page and closes', asy
   await expect(panel.getByRole('button', { name: /工作区文件/ })).toBeVisible();
   await expect(panel.getByRole('button', { name: /新建终端/ })).toBeEnabled();
   await expect(page.locator('[data-sidebar-right-panel]')).toHaveAttribute('data-sidebar-right-panel', 'fullscreen');
+  await page.screenshot({ path: info.outputPath('guide-zh-narrow.png') });
   await page.locator('aside[data-sidebar-right-open]').getByRole('button', { name: '切换工作区面板' }).click();
   await expect(panel).toBeHidden();
+});
+
+test('Harness guide geometry, single-row tabs, shell menu, split and terminal theme follow the source', async ({ page }, info) => {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  await page.goto(`${origin}/test/fixtures/workbench.html`);
+  await page.locator('[data-preview-toggle]').click();
+  const panel = page.locator('[data-workbench]');
+  const files = panel.getByRole('button', { name: /Workspace files/ });
+  await expect(files).toBeEnabled();
+  await expect.poll(() => files.evaluate(el => getComputedStyle(el).width)).toBe('380px');
+  expect(await files.evaluate(el => ({ padding: getComputedStyle(el).padding, fontWeight: getComputedStyle(el).fontWeight, radius: getComputedStyle(el).borderRadius }))).toEqual({ padding: '14px 20px', fontWeight: '400', radius: '20px' });
+  await expect(panel.locator('header')).toHaveCount(1);
+  expect(await panel.locator('header').evaluate(el => el.getBoundingClientRect().height)).toBe(38);
+  await panel.getByRole('button', { name: 'Terminal shell', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'sh', exact: true }).click();
+  await expect(panel.getByRole('tab', { name: 'sh', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(panel.locator('.xterm')).toBeVisible();
+  await expect.poll(() => panel.locator('.xterm').evaluate(el => getComputedStyle(el.parentElement!).backgroundColor)).toBe('rgb(255, 255, 255)');
+  await page.screenshot({ path: info.outputPath('terminal-light.png') });
+  await page.evaluate(() => document.body.setAttribute('data-ds-dark-theme', ''));
+  await expect.poll(() => panel.locator('.xterm-viewport').evaluate(el => getComputedStyle(el).backgroundColor)).not.toBe('rgb(255, 255, 255)');
+  await page.screenshot({ path: info.outputPath('terminal-dark.png') });
+  await panel.getByRole('button', { name: 'New tab', exact: true }).click();
+  await expect(panel.getByRole('tab', { name: 'Start', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(panel.locator('header')).toHaveCount(1);
+  await panel.getByRole('tab', { name: 'Start', exact: true }).press('ArrowLeft');
+  await expect(panel.getByRole('tab', { name: 'sh', exact: true })).toBeFocused();
+  await panel.getByRole('button', { name: 'Fullscreen', exact: true }).click();
+  await panel.getByRole('button', { name: 'Split pane', exact: true }).click();
+  await expect(panel.locator('[data-workbench-pane]')).toHaveCount(2);
+  await expect(panel.getByRole('button', { name: 'Restore', exact: true })).toHaveCount(1);
+  const separator = panel.getByRole('separator'); await separator.focus(); await separator.press('ArrowRight'); await expect(separator).toHaveAttribute('aria-valuenow', '52');
+  await panel.getByRole('button', { name: 'Merge panes', exact: true }).first().click();
+  await expect(panel.locator('[data-workbench-pane]')).toHaveCount(1);
+  await panel.getByRole('tab', { name: 'sh', exact: true }).click();
+  await panel.getByRole('button', { name: 'Close terminal 1' }).click();
+  await page.keyboard.press('Control+Backquote');
+  await expect(panel.locator('.xterm')).toBeVisible();
+  await page.keyboard.press('Control+Alt+p');
+  await expect(panel.getByRole('region', { name: 'Workspace files', exact: true })).toBeVisible();
+  await panel.getByRole('tab', { name: 'sh', exact: true }).click();
+  await panel.getByRole('button', { name: 'Close terminal 1' }).click();
+  expect(errors).toEqual([]);
+});
+
+test('Chinese guide keeps upstream light and dark artwork and typography', async ({ page }, info) => {
+  await page.addInitScript(() => localStorage.setItem('rustx-locale-v1', 'zh'));
+  await page.goto(`${origin}/test/fixtures/workbench.html`);
+  await page.locator('[data-preview-toggle]').click();
+  const panel = page.locator('[data-workbench]');
+  await expect(panel.getByRole('button', { name: '新建终端', exact: true })).toBeEnabled();
+  await expect.poll(async () => (await panel.boundingBox())!.x + (await panel.boundingBox())!.width).toBeLessThanOrEqual(1440);
+  await panel.screenshot({ path: info.outputPath('guide-zh-light.png') });
+  await page.evaluate(() => document.body.setAttribute('data-ds-dark-theme', ''));
+  await expect.poll(() => panel.evaluate(el => getComputedStyle(el).backgroundColor)).not.toBe('rgb(255, 255, 255)');
+  await panel.screenshot({ path: info.outputPath('guide-zh-dark.png') });
 });

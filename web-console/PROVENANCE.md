@@ -1372,3 +1372,14 @@ upstream slot registry and filesystem/terminal Host are not imported. rustX's
 Product Host resolves the exact native Session/node before browsing or PTY
 admission. Existing preview occurrences, resource leases and Inspector ownership
 remain in `PreviewWorkspaceOwner`; the new workbench is a separate display mode.
+
+Workspace sidebar fidelity repair: the Start page now retains GuideBody's 380px
+capsules, 14px/20px insets, 56px compass, neutral watermark ink and 10% bottom
+spacer. Original guide artwork, fullscreen/restore glyphs and TerminalTheme OSC
+palette handling are retained with per-file provenance. A single dockkit-style
+38px strip replaces the extra title/navigation rows; guide replacement, shell
+selection-and-launch, add/close tabs, keyboard navigation and shortcuts operate
+on rustX Session-scoped PTYs. The bounded two-pane presentation uses the original
+strip/chip/divider geometry; it does not import Harness's runtime or plugin store.
+Browser checks cover guide geometry, light/dark terminal backgrounds, actual
+shell output, focus, tabs, split/merge/resize, shortcuts and a Chinese narrow view.
