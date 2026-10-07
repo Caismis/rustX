@@ -297,7 +297,9 @@ impl Kernel {
 #[derive(Debug)]
 struct Kernel {
     queue: nix::sys::event::Kqueue,
-    files: Vec<std::fs::File>,
+    // EVFILT_VNODE registrations are removed when their descriptors close.
+    // Own them until Kernel drops; drain() does not need to read this field.
+    _files: Vec<std::fs::File>,
     paths: std::collections::HashMap<usize, (PathBuf, std::fs::Metadata)>,
 }
 
@@ -367,13 +369,12 @@ impl Kernel {
         }
         Ok(Self {
             queue,
-            files,
+            _files: files,
             paths,
         })
     }
     fn drain(&self) -> Result<(BTreeSet<PathBuf>, bool), String> {
         use nix::sys::event::{EvFlags, EventFilter, FilterFlag, KEvent};
-        let _keep_descriptors = &self.files;
         let empty = KEvent::new(
             0,
             EventFilter::EVFILT_VNODE,

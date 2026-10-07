@@ -6,7 +6,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
 use nix::fcntl::{AtFlags, OFlag, open, openat};
-use nix::sys::stat::{Mode, fstatat};
+use nix::sys::stat::{Mode, fstat, fstatat};
 use serde::{Deserialize, Serialize};
 
 /// One JSON frame is 1 MiB. 512 KiB becomes at most 699,052 base64 bytes.
@@ -172,8 +172,10 @@ impl OpenFile {
         for (index, (parent, name)) in self.chain.iter().enumerate() {
             let child = self.chain.get(index + 1).map_or(&self.file, |(fd, _)| fd);
             let stat = fstatat(parent, name.as_os_str(), AtFlags::AT_SYMLINK_NOFOLLOW)?;
-            let metadata = child.metadata()?;
-            if stat.st_dev as u64 != metadata.dev() || stat.st_ino as u64 != metadata.ino() {
+            // Compare native stat identities without converting Darwin's signed
+            // dev_t into MetadataExt's unsigned representation.
+            let opened = fstat(child)?;
+            if (stat.st_dev, stat.st_ino) != (opened.st_dev, opened.st_ino) {
                 return Err(invalid(
                     SessionFileReadFailure::Replaced,
                     "Session file replaced during open",
@@ -260,10 +262,9 @@ fn open_file(
         OFlag::O_RDONLY | OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK | OFlag::O_CLOEXEC,
         Mode::empty(),
     )?);
-    let metadata = file.metadata()?;
-    if !metadata.is_file()
-        || metadata.dev() != observed.st_dev as u64
-        || metadata.ino() != observed.st_ino as u64
+    let opened = fstat(&file)?;
+    if opened.st_mode & libc::S_IFMT != libc::S_IFREG
+        || (opened.st_dev, opened.st_ino) != (observed.st_dev, observed.st_ino)
     {
         return Err(invalid(
             SessionFileReadFailure::Replaced,
