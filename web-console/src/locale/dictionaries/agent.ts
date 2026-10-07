@@ -1,5 +1,15 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
+  "retry.active": "Retrying model request",
+  "retry.cancelled": "Model request retry cancelled",
+  "retry.started": "Model request retried",
+  "retry.timeout": "Model request timed out",
+  "retry.ordinal": " ({n})",
+  "retry.failure": "Failure: ",
+  "retry.loading": "Loading failure details…",
+  "retry.read-again": "Read failure details again",
+  "retry.truncated": "Failure details are truncated.",
+
   "failure.turn-error": "This turn failed",
   "failure.auth": "API key is invalid",
   "failure.unknown-tool": "Unknown tool: {name}",
@@ -289,6 +299,16 @@ export const en = {
 } as const;
 export type AgentKey = keyof typeof en;
 export const zh = {
+  "retry.active": "正在重试模型请求",
+  "retry.cancelled": "模型请求重试已取消",
+  "retry.started": "已重试模型请求",
+  "retry.timeout": "模型请求超时",
+  "retry.ordinal": "（{n}）",
+  "retry.failure": "失败原因：",
+  "retry.loading": "正在读取失败详情…",
+  "retry.read-again": "重新读取失败详情",
+  "retry.truncated": "失败详情已截断。",
+
   "failure.turn-error": "本轮运行失败",
   "failure.auth": "API 密钥无效",
   "failure.unknown-tool": "未知工具：{name}",

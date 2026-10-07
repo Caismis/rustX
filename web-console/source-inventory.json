@@ -3251,7 +3251,7 @@
           "treatment": "Compaction checkpoint disclosure and bilingual summary wording adapted to native Ledger messages; no Harness runtime or command authority."
         }
       ],
-      "local_sha256": "4b1c22c177ad338f2783b97170fb48707ac46d67d932612f8781c720a45bac5a"
+      "local_sha256": "9c694f20c943ea286228fb6e3b273088b370b595871b8f173432125bbef3a017"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",
@@ -5410,6 +5410,74 @@
       ],
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "local_sha256": "396b8bc43d2863a83e49736a5a509f7184b0902cbe50c21da9c6f2c84ac53c3a",
+      "classification": "A"
+    },
+    {
+      "upstream": "packages/client/ui-chat/src/client/chat/MessageItem.tsx",
+      "destination": "web-console/src/app/agent/ModelRetry.tsx",
+      "treatment": "Adapted Harness retry disclosure and activity shimmer. Uses existing native Trace request facts; no browser retry scheduling or inferred delays/limits.",
+      "upstream_sha256": "c9e3bffd724e93ffe7fcb3566d02d2300ae6ab55678bd094f26e4e58d6c24713",
+      "retained_dependencies": [
+        "../../bindings/model-retry",
+        "../../client/app-server",
+        "../../client/selectors",
+        "../../locale/react",
+        "../../presentation/primitives/TextShimmer",
+        "./ModelRetry.module.css",
+        "react"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness retry event protocol and runtime authority"
+      ],
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "local_sha256": "69161fe7488f14fc91f8000c6ae0f2b6c2e6504021b4d407ecc26ebf8f3c7804",
+      "classification": "A"
+    },
+    {
+      "upstream": "packages/client/ui-chat/src/client/chat/MessageItem.module.css",
+      "destination": "web-console/src/app/agent/ModelRetry.module.css",
+      "treatment": "Adapted Harness retry disclosure and activity shimmer. Uses existing native Trace request facts; no browser retry scheduling or inferred delays/limits.",
+      "upstream_sha256": "e52ee9df23a65396983f2f22b3186a1e6fd72e4ba4fd0f48d5bee746205870f1",
+      "retained_dependencies": [],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness retry event protocol and runtime authority"
+      ],
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "local_sha256": "19c80a18d615e7f4a819016bebf638f0d6ca9cb8de4e8fde4410c0cab973d019",
+      "classification": "A"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/TextShimmer.tsx",
+      "destination": "web-console/src/presentation/primitives/TextShimmer.tsx",
+      "treatment": "Adapted Harness retry disclosure and activity shimmer. Uses existing native Trace request facts; no browser retry scheduling or inferred delays/limits.",
+      "upstream_sha256": "ffd8cc02a2f76b73c5f1f7a4338fb5df8985a1abe3473eea974a900236b48b50",
+      "retained_dependencies": [
+        "./TextShimmer.module.css",
+        "clsx",
+        "react"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness retry event protocol and runtime authority"
+      ],
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "local_sha256": "6b0ea084da2751b349a23232bbb20803122563974af761e8c415698609a7bf06",
+      "classification": "A"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/TextShimmer.module.css",
+      "destination": "web-console/src/presentation/primitives/TextShimmer.module.css",
+      "treatment": "Adapted Harness retry disclosure and activity shimmer. Uses existing native Trace request facts; no browser retry scheduling or inferred delays/limits.",
+      "upstream_sha256": "2353d6d72be5150aee3b528e7ae081a941f508f4ee3aa17243d6b0cc3b4240c7",
+      "retained_dependencies": [],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness retry event protocol and runtime authority"
+      ],
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "local_sha256": "8b8efac648dc9d9d925674efe32e9584f0fd69d9dd23f4d32c5f4bb207413db2",
       "classification": "A"
     }
   ],

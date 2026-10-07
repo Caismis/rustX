@@ -334,3 +334,15 @@ def web_model_errors() -> Scenario:
         Step(expected, Stream(Text("Conversation recovered after model errors."), Finish())))
 
 SCENARIOS["web_model_errors"] = web_model_errors
+
+
+def web_timeout_retry() -> Scenario:
+    expected = Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model")
+    timeout = HttpError(408, {"error": {"message": "Fixture model response timeout", "type": "timeout"}})
+    return Scenario("web_timeout_retry",
+        Step(expected, timeout),
+        Step(expected, Stream(Gate("retry-started"), Text("Recovered after timeout."), Finish())),
+        Step(expected, timeout),
+        Step(expected, Stream(Gate("stop-retry"), Text("Late retry output must stay hidden."), Finish()), allow_disconnect=True))
+
+SCENARIOS["web_timeout_retry"] = web_timeout_retry

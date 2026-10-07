@@ -1,0 +1,75 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Derived from MessageItem.module.css; see PROVENANCE.md. */
+.retryRow {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: var(--dsh-content-font-size-secondary, 13px);
+  line-height: calc(20px + var(--dsh-content-font-delta-secondary, 0px));
+}
+
+.retrySummary {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  padding: 2px 0;
+  gap: 7px;
+  border-radius: var(--dsw-radius-sm);
+  color: inherit;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.retrySummary::-webkit-details-marker {
+  display: none;
+}
+
+.retrySummary::after {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin-right: 2px;
+  border-right: 1.5px solid currentcolor;
+  border-bottom: 1.5px solid currentcolor;
+  content: '';
+  transform: rotate(-45deg);
+  transition: transform 120ms ease;
+}
+
+.retrySummary:hover {
+  color: var(--dsw-alias-label-secondary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .retrySummary::after {
+    transition: none;
+  }
+}
+
+.retrySummary:focus-visible {
+  outline: 1.5px solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: 2px;
+}
+
+.retryText {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.retryRow[open] .retrySummary::after {
+  transform: rotate(45deg);
+}
+
+.retryDetails {
+  display: grid;
+  gap: 2px;
+  margin-top: 3px;
+  padding-left: 14px;
+  overflow-wrap: anywhere;
+  font-size: var(--dsh-content-font-size-secondary, 13px);
+  line-height: calc(18px + var(--dsh-content-font-delta-secondary, 0px));
+}
+
+.retryDetailLabel {
+  color: var(--dsw-alias-label-secondary);
+}
+
