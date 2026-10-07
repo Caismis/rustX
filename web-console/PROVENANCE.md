@@ -1563,3 +1563,14 @@ Tail following selects the last native region even after unowned trailing conten
 This adapts Harness's nonempty reading candidate policy without its approximate
 binary-search candidate selection: native turn identity and exact locate anchors
 remain separate, and a window containing no native region still has no selection.
+
+
+Terminal model-error feedback follows local Harness at
+`5badb15009ae1756c3afe0ae0cef1faafc290ccc`:
+`MessageItem.tsx::TurnErrorItem`, its `MessageItem.module.css` error-row styles,
+`locale.ts`, and `conversation-nodes/turn-error.ts`. The error dot, inline title,
+secondary diagnostic and code are retained. Authentication uses Harness copy.
+Native Attempt terminal evidence supplies normalized failures in transcript pages;
+the browser neither parses provider text for classifications nor starts retries.
+The row remains at the terminal cursor after partial output, later turns and
+reconnection. Manual cancellation is still Stopped, without an error row.

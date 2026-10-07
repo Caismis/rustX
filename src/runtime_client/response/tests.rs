@@ -723,6 +723,10 @@ fn terminal_turns_survive_reconstruction_later_attempts_and_paging() {
         assert_eq!(turn.attempt_id, AttemptId::new(attempt));
         assert_eq!(turn.outcome, outcome);
         assert_eq!(
+            turn.failure.is_some(),
+            outcome == TurnProcessOutcome::Failed
+        );
+        assert_eq!(
             turn.ended_at.unwrap() - turn.started_at.unwrap(),
             chrono::Duration::seconds(7)
         );
@@ -947,4 +951,46 @@ fn exact_window_decoration_keeps_attempt_tool_occurrences_and_response_identity(
     );
     assert!(window.statistics.is_none());
     assert_eq!(store.conversation_read_cut().unwrap(), outline.cut);
+}
+
+#[test]
+fn model_failure_keeps_normalized_diagnostics_without_provider_fields() {
+    use crate::events::types::AttemptFailure;
+    use crate::model::{MalformedToolProposalSource, ModelError};
+    for has_content in [false, true] {
+        let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+        append(
+            &store,
+            "invalid",
+            RuntimeEvent::AttemptStarted {
+                attempt_id: AttemptId::new("invalid"),
+            },
+        );
+        if has_content {
+            assistant(&store, "invalid", "partial");
+        }
+        append(
+            &store,
+            "invalid",
+            RuntimeEvent::AttemptFailed {
+                attempt_id: AttemptId::new("invalid"),
+                error: AttemptFailure::Model {
+                    error: ModelError {
+                        provider_code: Some("private-provider-code".into()),
+                        ..ModelError::malformed_tool_proposal(
+                            MalformedToolProposalSource::AdapterStructural,
+                            "Invalid tool arguments",
+                        )
+                    },
+                },
+            },
+        );
+        let projected = page(&store, None, 1);
+        let owner = projected.entries[0].turn_process.as_ref().unwrap();
+        let failure = serde_json::to_value(owner.failure.as_ref().unwrap()).unwrap();
+        assert_eq!(failure["kind"], "malformed_tool_proposal");
+        assert_eq!(failure["message"], "Invalid tool arguments");
+        assert!(failure.get("provider_code").is_none());
+        assert!(projected.entries[0].completed_response.is_none());
+    }
 }

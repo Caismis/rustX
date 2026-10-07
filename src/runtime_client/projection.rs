@@ -2445,7 +2445,7 @@ fn arguments_of(state: &ForegroundToolState) -> String {
 
 /// Projects one internal attempt failure into its external shape,
 /// dropping provider-specific fields.
-fn client_failure(failure: &AttemptFailure) -> RuntimeClientAttemptFailure {
+pub(super) fn client_failure(failure: &AttemptFailure) -> RuntimeClientAttemptFailure {
     match failure {
         AttemptFailure::Model { error } => RuntimeClientAttemptFailure::Model {
             kind: error.kind.clone(),

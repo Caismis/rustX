@@ -1,5 +1,9 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
+  "failure.turn-error": "This turn failed",
+  "failure.auth": "API key is invalid",
+  "failure.unknown-tool": "Unknown tool: {name}",
+  "failure.unavailable": "Failure details are unavailable.",
   "upload.paused": "Attachments retained. Continue when ready to submit.",
   "upload.continue": "Continue submission",
   "upload.drop": "Drop files to attach",
@@ -285,6 +289,10 @@ export const en = {
 } as const;
 export type AgentKey = keyof typeof en;
 export const zh = {
+  "failure.turn-error": "本轮运行失败",
+  "failure.auth": "API 密钥无效",
+  "failure.unknown-tool": "未知工具：{name}",
+  "failure.unavailable": "暂无失败详情。",
   "upload.paused": "附件已保留。准备好后可继续提交。",
   "upload.continue": "继续提交",
   "upload.drop": "拖放文件以添加附件",

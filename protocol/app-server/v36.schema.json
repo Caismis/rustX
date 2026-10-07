@@ -11215,6 +11215,17 @@
         "outcome": {
           "$ref": "#/$defs/TurnProcessOutcome"
         },
+        "failure": {
+          "description": "Normalized terminal failure, retained at its durable transcript position.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeClientAttemptFailure"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "started_at": {
           "type": [
             "string",
@@ -11254,6 +11265,303 @@
         "failed",
         "timed_out",
         "limit_exceeded"
+      ]
+    },
+    "RuntimeClientAttemptFailure": {
+      "description": "The normalized client-visible failure of one attempt.\n\nThis is the external projection of the internal [`AttemptFailure`]\n([`crate::events::types::AttemptFailure`]): provider-specific fields\n(such as the raw provider error code) never appear here.",
+      "oneOf": [
+        {
+          "description": "A model request exhausted its retry policy.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "description": "The normalized model error kind.",
+              "$ref": "#/$defs/ModelErrorKind"
+            },
+            "message": {
+              "description": "The normalized human-readable message.",
+              "type": "string"
+            },
+            "retry_after_ms": {
+              "description": "The retry hint, when the provider reported one.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "type": {
+              "type": "string",
+              "const": "model"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "kind",
+            "message"
+          ]
+        },
+        {
+          "description": "A runtime failure.",
+          "type": "object",
+          "properties": {
+            "error": {
+              "description": "The normalized runtime error.",
+              "$ref": "#/$defs/RuntimeError"
+            },
+            "type": {
+              "type": "string",
+              "const": "runtime"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "error"
+          ]
+        }
+      ]
+    },
+    "RuntimeError": {
+      "description": "A normalized runtime-owned execution error.\n\n`RuntimeError` describes failures of the runtime itself, distinct from\nnormalized model errors (`ModelError`) and tool execution statuses.",
+      "oneOf": [
+        {
+          "description": "An unexpected internal failure with no further classification.",
+          "type": "object",
+          "properties": {
+            "message": {
+              "description": "Human-readable diagnostic message.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "internal"
+            }
+          },
+          "required": [
+            "type",
+            "message"
+          ]
+        },
+        {
+          "description": "The runtime reached a state it should not be in.",
+          "type": "object",
+          "properties": {
+            "message": {
+              "description": "Human-readable diagnostic message.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "invalid_state"
+            }
+          },
+          "required": [
+            "type",
+            "message"
+          ]
+        },
+        {
+          "description": "The requested operation is not supported by this runtime.",
+          "type": "object",
+          "properties": {
+            "message": {
+              "description": "Human-readable diagnostic message.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "unsupported"
+            }
+          },
+          "required": [
+            "type",
+            "message"
+          ]
+        },
+        {
+          "description": "The model requested a tool that is not present in the attempt's\nimmutable tool registry. No tool result exists for the request, so\nthe runtime fails explicitly instead of fabricating one.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "description": "The tool name the model called.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "unknown_tool"
+            }
+          },
+          "required": [
+            "type",
+            "name"
+          ]
+        },
+        {
+          "description": "The durable canonical authority (the durable Message Ledger /\nPending Inbound Inbox) rejected a required commit of the active\nattempt. The attempt settles failed, and the owning conversation\nruntime records the durable-authority failure so it cannot return\nto a false healthy state and admit further work as though storage\nwere fine (Issue #63).",
+          "type": "object",
+          "properties": {
+            "message": {
+              "description": "Human-readable diagnostic message.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "durable_store"
+            }
+          },
+          "required": [
+            "type",
+            "message"
+          ]
+        },
+        {
+          "description": "The canonical model stream violated its contract (for example a\nnon-terminal event after the terminal event, or a tool-call delta\nreferencing an unknown call). The runtime rejects the stream\nexplicitly instead of silently accepting impossible state.",
+          "type": "object",
+          "properties": {
+            "message": {
+              "description": "Human-readable diagnostic message.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "contract_violation"
+            }
+          },
+          "required": [
+            "type",
+            "message"
+          ]
+        },
+        {
+          "description": "Context preparation failed while building the model context of a\nrequest **before any compaction started**: an invalid pending\nfresh-inbound state discovered during projection/status preparation or\na projection preparation failure that is not itself a compaction\noperation. Optional Agent Status module failures are isolated before\nthis boundary and do not produce this error. This is never mislabeled\nas a compaction failure.",
+          "type": "object",
+          "properties": {
+            "message": {
+              "description": "Human-readable diagnostic message.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "context_preparation_failed"
+            }
+          },
+          "required": [
+            "type",
+            "message"
+          ]
+        },
+        {
+          "description": "Context compaction failed. This is a runtime-owned context-plane\nfailure of an actual proactive compaction pipeline: it never\nfabricates a provider error, and it is distinct from a normalized\nmodel error even when the two coincide (for example a context\noverflow whose recovery compaction failed). Preparation failures that\noccur before compaction starts are [`RuntimeError::ContextPreparationFailed`]\ninstead.",
+          "type": "object",
+          "properties": {
+            "message": {
+              "description": "Human-readable diagnostic message.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "context_compaction_failed"
+            }
+          },
+          "required": [
+            "type",
+            "message"
+          ]
+        },
+        {
+          "description": "The attempt-level pre-step policy rejected the proposed model step\n(Issue #56). The rejection happens strictly before the admission\nlinearization point, so no proposed dynamic context became canonical,\nno Surface revision advanced because of it, no `RequestSnapshot` was\nfrozen, and no provider request started.",
+          "type": "object",
+          "properties": {
+            "reason": {
+              "description": "The policy's bounded rejection reason.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "pre_step_rejected"
+            }
+          },
+          "required": [
+            "type",
+            "reason"
+          ]
+        },
+        {
+          "description": "The attempt-level pre-step policy itself failed while evaluating the\nfinal immutable proposal batch (Issue #56). Like a rejection, this\nsettles the attempt before admission, so no partial context admission\nexists.",
+          "type": "object",
+          "properties": {
+            "message": {
+              "description": "Human-readable diagnostic message.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "pre_step_policy_failed"
+            }
+          },
+          "required": [
+            "type",
+            "message"
+          ]
+        },
+        {
+          "description": "The attempt-level tool-result observer failed (Issue #56). The\nobservation pass runs strictly **after** the owning tool batch reached\nstructural settlement, so the committed Assistant tool-call message and\nits complete canonical `ToolMessage` batch are unaffected; only the\ndeferred context of the failed observation pass is discarded.",
+          "type": "object",
+          "properties": {
+            "message": {
+              "description": "Human-readable diagnostic message.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "tool_result_observation_failed"
+            }
+          },
+          "required": [
+            "type",
+            "message"
+          ]
+        },
+        {
+          "description": "The owning runtime process restarted while this attempt was durably\nnon-terminal, so startup recovery settled it (Issue #12, M9a).\n\nThis error states exactly what rustX knows: the attempt's process-local\nexecution state is gone and the attempt can never continue. It is\n**not** a claim about any external work the attempt had started. When a\nmodel request or a tool execution had already crossed its durable start\ncommit, that external outcome stays explicitly unknown — recovery\nrecords the indeterminate outcome instead of inventing a provider\nfailure, and it never resends or re-executes anything.",
+          "type": "object",
+          "properties": {
+            "message": {
+              "description": "The bounded recovery diagnostic: which durable evidence settled\nthe attempt and what remained indeterminate.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "restart_interrupted"
+            }
+          },
+          "required": [
+            "type",
+            "message"
+          ]
+        },
+        {
+          "description": "A tool-result observation pass produced deferred context that violates\nthe bounded deferred-context contract (Issue #56).\n\nThe check runs at the observer transaction boundary, before anything is\nstaged, so the whole observation pass is discarded and no partial\ndeferred state survives. Like every observation failure this happens\nafter structural settlement, so the committed Assistant tool-call\nmessage keeps its complete canonical `ToolMessage` batch.",
+          "type": "object",
+          "properties": {
+            "message": {
+              "description": "Human-readable diagnostic message.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "deferred_context_rejected"
+            }
+          },
+          "required": [
+            "type",
+            "message"
+          ]
+        }
       ]
     },
     "CompletedResponseView": {
@@ -15849,303 +16157,6 @@
           "description": "The maximum runtime duration was exceeded.",
           "type": "string",
           "const": "max_runtime_seconds"
-        }
-      ]
-    },
-    "RuntimeClientAttemptFailure": {
-      "description": "The normalized client-visible failure of one attempt.\n\nThis is the external projection of the internal [`AttemptFailure`]\n([`crate::events::types::AttemptFailure`]): provider-specific fields\n(such as the raw provider error code) never appear here.",
-      "oneOf": [
-        {
-          "description": "A model request exhausted its retry policy.",
-          "type": "object",
-          "properties": {
-            "kind": {
-              "description": "The normalized model error kind.",
-              "$ref": "#/$defs/ModelErrorKind"
-            },
-            "message": {
-              "description": "The normalized human-readable message.",
-              "type": "string"
-            },
-            "retry_after_ms": {
-              "description": "The retry hint, when the provider reported one.",
-              "type": [
-                "integer",
-                "null"
-              ],
-              "format": "uint64",
-              "minimum": 0,
-              "maximum": 9007199254740991
-            },
-            "type": {
-              "type": "string",
-              "const": "model"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "kind",
-            "message"
-          ]
-        },
-        {
-          "description": "A runtime failure.",
-          "type": "object",
-          "properties": {
-            "error": {
-              "description": "The normalized runtime error.",
-              "$ref": "#/$defs/RuntimeError"
-            },
-            "type": {
-              "type": "string",
-              "const": "runtime"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "error"
-          ]
-        }
-      ]
-    },
-    "RuntimeError": {
-      "description": "A normalized runtime-owned execution error.\n\n`RuntimeError` describes failures of the runtime itself, distinct from\nnormalized model errors (`ModelError`) and tool execution statuses.",
-      "oneOf": [
-        {
-          "description": "An unexpected internal failure with no further classification.",
-          "type": "object",
-          "properties": {
-            "message": {
-              "description": "Human-readable diagnostic message.",
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "internal"
-            }
-          },
-          "required": [
-            "type",
-            "message"
-          ]
-        },
-        {
-          "description": "The runtime reached a state it should not be in.",
-          "type": "object",
-          "properties": {
-            "message": {
-              "description": "Human-readable diagnostic message.",
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "invalid_state"
-            }
-          },
-          "required": [
-            "type",
-            "message"
-          ]
-        },
-        {
-          "description": "The requested operation is not supported by this runtime.",
-          "type": "object",
-          "properties": {
-            "message": {
-              "description": "Human-readable diagnostic message.",
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "unsupported"
-            }
-          },
-          "required": [
-            "type",
-            "message"
-          ]
-        },
-        {
-          "description": "The model requested a tool that is not present in the attempt's\nimmutable tool registry. No tool result exists for the request, so\nthe runtime fails explicitly instead of fabricating one.",
-          "type": "object",
-          "properties": {
-            "name": {
-              "description": "The tool name the model called.",
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "unknown_tool"
-            }
-          },
-          "required": [
-            "type",
-            "name"
-          ]
-        },
-        {
-          "description": "The durable canonical authority (the durable Message Ledger /\nPending Inbound Inbox) rejected a required commit of the active\nattempt. The attempt settles failed, and the owning conversation\nruntime records the durable-authority failure so it cannot return\nto a false healthy state and admit further work as though storage\nwere fine (Issue #63).",
-          "type": "object",
-          "properties": {
-            "message": {
-              "description": "Human-readable diagnostic message.",
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "durable_store"
-            }
-          },
-          "required": [
-            "type",
-            "message"
-          ]
-        },
-        {
-          "description": "The canonical model stream violated its contract (for example a\nnon-terminal event after the terminal event, or a tool-call delta\nreferencing an unknown call). The runtime rejects the stream\nexplicitly instead of silently accepting impossible state.",
-          "type": "object",
-          "properties": {
-            "message": {
-              "description": "Human-readable diagnostic message.",
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "contract_violation"
-            }
-          },
-          "required": [
-            "type",
-            "message"
-          ]
-        },
-        {
-          "description": "Context preparation failed while building the model context of a\nrequest **before any compaction started**: an invalid pending\nfresh-inbound state discovered during projection/status preparation or\na projection preparation failure that is not itself a compaction\noperation. Optional Agent Status module failures are isolated before\nthis boundary and do not produce this error. This is never mislabeled\nas a compaction failure.",
-          "type": "object",
-          "properties": {
-            "message": {
-              "description": "Human-readable diagnostic message.",
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "context_preparation_failed"
-            }
-          },
-          "required": [
-            "type",
-            "message"
-          ]
-        },
-        {
-          "description": "Context compaction failed. This is a runtime-owned context-plane\nfailure of an actual proactive compaction pipeline: it never\nfabricates a provider error, and it is distinct from a normalized\nmodel error even when the two coincide (for example a context\noverflow whose recovery compaction failed). Preparation failures that\noccur before compaction starts are [`RuntimeError::ContextPreparationFailed`]\ninstead.",
-          "type": "object",
-          "properties": {
-            "message": {
-              "description": "Human-readable diagnostic message.",
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "context_compaction_failed"
-            }
-          },
-          "required": [
-            "type",
-            "message"
-          ]
-        },
-        {
-          "description": "The attempt-level pre-step policy rejected the proposed model step\n(Issue #56). The rejection happens strictly before the admission\nlinearization point, so no proposed dynamic context became canonical,\nno Surface revision advanced because of it, no `RequestSnapshot` was\nfrozen, and no provider request started.",
-          "type": "object",
-          "properties": {
-            "reason": {
-              "description": "The policy's bounded rejection reason.",
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "pre_step_rejected"
-            }
-          },
-          "required": [
-            "type",
-            "reason"
-          ]
-        },
-        {
-          "description": "The attempt-level pre-step policy itself failed while evaluating the\nfinal immutable proposal batch (Issue #56). Like a rejection, this\nsettles the attempt before admission, so no partial context admission\nexists.",
-          "type": "object",
-          "properties": {
-            "message": {
-              "description": "Human-readable diagnostic message.",
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "pre_step_policy_failed"
-            }
-          },
-          "required": [
-            "type",
-            "message"
-          ]
-        },
-        {
-          "description": "The attempt-level tool-result observer failed (Issue #56). The\nobservation pass runs strictly **after** the owning tool batch reached\nstructural settlement, so the committed Assistant tool-call message and\nits complete canonical `ToolMessage` batch are unaffected; only the\ndeferred context of the failed observation pass is discarded.",
-          "type": "object",
-          "properties": {
-            "message": {
-              "description": "Human-readable diagnostic message.",
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "tool_result_observation_failed"
-            }
-          },
-          "required": [
-            "type",
-            "message"
-          ]
-        },
-        {
-          "description": "The owning runtime process restarted while this attempt was durably\nnon-terminal, so startup recovery settled it (Issue #12, M9a).\n\nThis error states exactly what rustX knows: the attempt's process-local\nexecution state is gone and the attempt can never continue. It is\n**not** a claim about any external work the attempt had started. When a\nmodel request or a tool execution had already crossed its durable start\ncommit, that external outcome stays explicitly unknown — recovery\nrecords the indeterminate outcome instead of inventing a provider\nfailure, and it never resends or re-executes anything.",
-          "type": "object",
-          "properties": {
-            "message": {
-              "description": "The bounded recovery diagnostic: which durable evidence settled\nthe attempt and what remained indeterminate.",
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "restart_interrupted"
-            }
-          },
-          "required": [
-            "type",
-            "message"
-          ]
-        },
-        {
-          "description": "A tool-result observation pass produced deferred context that violates\nthe bounded deferred-context contract (Issue #56).\n\nThe check runs at the observer transaction boundary, before anything is\nstaged, so the whole observation pass is discarded and no partial\ndeferred state survives. Like every observation failure this happens\nafter structural settlement, so the committed Assistant tool-call\nmessage keeps its complete canonical `ToolMessage` batch.",
-          "type": "object",
-          "properties": {
-            "message": {
-              "description": "Human-readable diagnostic message.",
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "deferred_context_rejected"
-            }
-          },
-          "required": [
-            "type",
-            "message"
-          ]
         }
       ]
     },

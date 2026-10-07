@@ -4,6 +4,7 @@ import { turnPresentation } from '../../bindings/turn-presentation';
 import { turnProcesses } from '../../bindings/turn-process';
 import { stepGroups, type StepPiece } from '../../bindings/step-groups';
 import { StepGroup } from '../../presentation/agent/StepGroup';
+import { TurnError } from '../../presentation/agent/TurnError';
 import { TurnProcess } from '../../presentation/agent/TurnProcess';
 import type { RuntimeClientSnapshot, CompletedResponseView, RuntimeClientTranscriptEntry, MessageBlock, InFlightBlock, ForegroundToolExecution } from '../../../../protocol/app-server/v36';
 import { conversation, json } from '../../bindings/projection';
@@ -111,7 +112,20 @@ export function AgentTranscript({ snapshot, history, loadEarlier, onHistorical, 
       if (node.kind === 'process') return <div key={node.key} data-chat-turn-owner={turnAnchor(node.process)} data-chat-anchor-key={entries.some(entry => entry.cursor === node.process.control_cursor) ? turnAnchor(node.process) : undefined}><TurnProcess id={node.key} open tools={node.process.tool_call_count} messages={node.process.message_count} outcome={node.process.outcome} running={node.process.outcome === 'running'} start={node.process.started_at ?? undefined} end={node.process.ended_at ?? undefined}/></div>;
       if (node.kind === 'tail') return <TurnTail key={node.key} text={node.text} response={node.response} latest={node.response === latestResponse?.completed_response} onHistorical={onHistorical} disabled={historicalDisabled} lineageSwitchSafe={lineageSwitchSafe}/>;
       const entry = node.entry;
-      if (entry.item.type === 'attempt_terminal') return null;
+      if (entry.item.type === 'attempt_terminal') {
+        const turn = entry.item.turn;
+        if (turn.outcome !== 'failed') return null;
+        const failure = turn.failure;
+        const error = failure?.type === 'runtime' ? failure.error : undefined;
+        const code = failure?.type === 'model' ? failure.kind : error?.type;
+        const message = failure?.type === 'model'
+          ? failure.kind === 'authentication' ? tx('agent:failure.auth') : failure.message
+          : error ? 'message' in error ? error.message : 'reason' in error ? error.reason : tx('agent:failure.unknown-tool', { name: error.name })
+            : tx('agent:failure.unavailable');
+        return <div key={entryIdentity(entry)} data-chat-anchor-key={entryIdentity(entry)} data-chat-turn-owner={turnAnchor(turn)}>
+          <TurnError title={tx('agent:failure.turn-error')} message={message} code={code}/>
+        </div>;
+      }
       const statuses = statusesAt(placement, { messageId: entry.item.type === 'message' ? entry.item.message.id : undefined, cursor: entry.cursor });
       const key = process.membership.get(entry.cursor);
       const group = key ? process.groups.get(key) : undefined;

@@ -3251,7 +3251,7 @@
           "treatment": "Compaction checkpoint disclosure and bilingual summary wording adapted to native Ledger messages; no Harness runtime or command authority."
         }
       ],
-      "local_sha256": "48cbc93c924da5799ba3191daca01c4f7ba0ad25e261df60525a3701e6477b3b"
+      "local_sha256": "4b1c22c177ad338f2783b97170fb48707ac46d67d932612f8781c720a45bac5a"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",
@@ -5380,6 +5380,37 @@
           "treatment": "inspected and inlined: block/inline text projection"
         }
       ]
+    },
+    {
+      "upstream": "packages/client/ui-chat/src/client/chat/MessageItem.tsx",
+      "destination": "web-console/src/presentation/agent/TurnError.tsx",
+      "treatment": "Ported persistent terminal error row; native normalized failure owns message and code. Long native codes wrap on narrow screens.",
+      "upstream_sha256": "c9e3bffd724e93ffe7fcb3566d02d2300ae6ab55678bd094f26e4e58d6c24713",
+      "retained_dependencies": [
+        "../primitives/StateDot",
+        "./TurnError.module.css"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness runtime authority"
+      ],
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "local_sha256": "4ac27ac12f70a194d5e3b98f0376c49687e590651f9cc473464e650471bade48",
+      "classification": "A"
+    },
+    {
+      "upstream": "packages/client/ui-chat/src/client/chat/MessageItem.module.css",
+      "destination": "web-console/src/presentation/agent/TurnError.module.css",
+      "treatment": "Ported persistent terminal error row; native normalized failure owns message and code. Long native codes wrap on narrow screens.",
+      "upstream_sha256": "e52ee9df23a65396983f2f22b3186a1e6fd72e4ba4fd0f48d5bee746205870f1",
+      "retained_dependencies": [],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness runtime authority"
+      ],
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "local_sha256": "396b8bc43d2863a83e49736a5a509f7184b0902cbe50c21da9c6f2c84ac53c3a",
+      "classification": "A"
     }
   ],
   "inspected_only": [
