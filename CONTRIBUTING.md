@@ -135,7 +135,7 @@ corepack enable
 (cd tui && corepack install)
 (cd tui && pnpm install --frozen-lockfile)
 (cd tui && pnpm typecheck)
-cargo build --bin rustx
+cargo build --bins
 (cd tui && RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test)
 
 # Generated App Server protocol, development launchers and Web.

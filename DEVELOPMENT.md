@@ -16,7 +16,9 @@ Configure rustX through its native configuration commands and
 configuration or provider/MCP credentials, or merges configuration.
 Build explicitly after native changes; the launcher never builds implicitly.
 `--binary /absolute/path/rustx` selects another executable. Missing binaries produce
-an actionable error. Native paths/values pass through unchanged; native parsers own validation.
+an actionable error before any process starts. Both `bash-supervisor` and
+`interactive-supervisor` must be executable beside the resolved `rustx` binary;
+`cargo build --bin rustx` alone does not build these required helpers. Native paths/values pass through unchanged; native parsers own validation.
 User configuration and runtime-root bindings require absolute paths. Use an
 absolute Workspace path too (pnpm runs scripts in `dev/`).
 `--config` rebinds only the User document; User resources stay at `~/rustx/.agents`.

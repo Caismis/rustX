@@ -1,4 +1,4 @@
-import type { DesktopTarget } from './desktop';
+import type { DesktopTarget } from './desktop.ts';
 export type WorkbenchRequest =
   | { kind: 'files'; path: string }
   | { kind: 'resolve'; path: string }
@@ -17,7 +17,7 @@ export interface WorkbenchTerminal { id: string; shell: string; exited: boolean 
 export interface WorkbenchResult {
   /** Host-admitted, normalized workspace-relative file reference. */
   path?: string;
-  applications?: import('./desktop').DesktopCatalog;
+  applications?: import('./desktop.ts').DesktopCatalog;
   entries?: { name: string; directory: boolean; link: boolean }[];
   text?: string;
   base64?: string;

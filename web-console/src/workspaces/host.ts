@@ -68,7 +68,7 @@ export function settlementFailureKind(cause: unknown): SettlementFailureKind | u
 }
 
 export interface ProductHostWorkspaces {
-  workbench?(scope: WorkspaceAuthorityScope, call: import('./workbench').WorkbenchCall, signal?: AbortSignal): Promise<import('./workbench').WorkbenchResult>;
+  workbench?(scope: WorkspaceAuthorityScope, call: import('./workbench.ts').WorkbenchCall, signal?: AbortSignal): Promise<import('./workbench.ts').WorkbenchResult>;
   previewDocument?(scope: WorkspaceAuthorityScope, request: DocumentRequest, signal?: AbortSignal): Promise<DocumentResult>;
   desktopCatalog?(scope: WorkspaceAuthorityScope, refresh?: boolean): Promise<import('./desktop.ts').DesktopCatalog>;
   openWorkspace?(scope: WorkspaceAuthorityScope, target: import('./desktop.ts').DesktopTarget, application: import('./desktop.ts').DesktopAppId): Promise<import('./desktop.ts').DesktopLaunch>;
