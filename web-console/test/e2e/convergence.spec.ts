@@ -54,7 +54,7 @@ test('Harness New Conversation, permission, model, native process and Models con
     await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Converge the conversation');
     const residentInput = await page.getByRole('textbox', { name: 'Message', exact: true }).elementHandle();
     const residentSeat = await page.locator('[data-resident-composer]').elementHandle();
-    await page.getByRole('button', { name: 'Commands', exact: true }).click();
+    await page.getByRole('button', { name: 'Add', exact: true }).click();
     await expect(page.getByRole('listbox', { name: 'Commands' })).toBeVisible();
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toHaveValue('Converge the conversation');
     await page.getByRole('textbox', { name: 'Message', exact: true }).press('Escape');

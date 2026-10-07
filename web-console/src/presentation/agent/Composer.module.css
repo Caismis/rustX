@@ -368,21 +368,6 @@
   cursor: pointer;
 }
 
-/* File intake is a quiet accessory; + remains the command launcher. */
-.attachment {
-  display: grid;
-  place-items: center;
-  flex: none;
-  width: 28px;
-  height: 28px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--dsw-alias-label-secondary);
-  cursor: pointer;
-}
-.attachment:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
-.attachment:disabled { opacity: .5; cursor: default; }
 /* Native control popovers use fixed positioning; do not add a size container. */
 .row { container-type: normal; }
 .dock { color: var(--dsw-alias-label-tertiary); font-size: 12px; }

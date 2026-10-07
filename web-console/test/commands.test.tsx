@@ -55,7 +55,7 @@ describe('one narrow browser command grammar', () => {
     expect(command).toHaveBeenLastCalledWith('compact'); expect(document.activeElement).toBe(input);
     fireEvent.change(input, { target: { value: '/mdl' } }); fireEvent.keyDown(input, { key: 'Escape' });
     expect(screen.queryByRole('listbox')).toBeNull(); expect((input as HTMLTextAreaElement).value).toBe('/mdl');
-    fireEvent.click(screen.getByRole('button', { name: 'Commands' })); expect(screen.getByRole('listbox')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Add' })); expect(screen.getByRole('listbox')).toBeTruthy();
     fireEvent.pointerDown(document.body); expect(screen.queryByRole('listbox')).toBeNull();
     fireEvent.change(input, { target: { value: '/not-a-command' } });
     await act(async () => fireEvent.keyDown(input, { key: 'Enter' }));
@@ -356,7 +356,7 @@ describe('typed native operations and continuation fencing', () => {
       fireEvent.keyDown(document, { key: 'Escape' });
       expect(screen.getByRole('button', { name: 'Regenerate' })).toHaveProperty('disabled', true);
       fireEvent.change(screen.getByLabelText('Message'), { target: { value: '/branch' } });
-      expect(screen.queryByRole('option', { name: /Branch within/ })).toBeNull();
+      expect(screen.queryByRole('option', { name: /Branch branch/ })).toBeNull();
       await act(async () => { server.reply(request); await work; });
       expect(server.client.getSnapshot().views.A.submissions?.map(item => item.messageId)).toEqual(['accepted-user']);
       expect(server.client.getSnapshot().views.A.snapshot?.inbound.pending ?? []).toEqual([]);
@@ -372,7 +372,7 @@ describe('typed native operations and continuation fencing', () => {
     expect(screen.getByRole('button', { name: 'Regenerate' })).toHaveProperty('disabled', true);
     const input = screen.getByLabelText('Message');
     fireEvent.change(input, { target: { value: '/branch' } });
-    expect(screen.queryByRole('option', { name: /Branch within/ })).toBeNull();
+    expect(screen.queryByRole('option', { name: /Branch branch/ })).toBeNull();
     await act(async () => fireEvent.keyDown(input, { key: 'Enter' }));
     expect(screen.getByRole('alert').textContent).toContain('unavailable');
     await expect(scope.transition('branch', selection)).rejects.toThrow('accepted inbound');
@@ -392,7 +392,7 @@ describe('typed native operations and continuation fencing', () => {
     expect(screen.getByRole('menuitem', { name: 'Session tree' })).toHaveProperty('disabled', false);
     fireEvent.keyDown(document, { key: 'Escape' });
     fireEvent.change(input, { target: { value: '/' } });
-    expect(screen.getByRole('option', { name: /Branch within/ })).toBeTruthy();
+    expect(screen.getByRole('option', { name: /Branch branch/ })).toBeTruthy();
   });
   it.each(['branch', 'retry'] as const)('%s committed before concurrent acknowledgement remains discoverable without unloading accepted work', async action => {
     const { scope, selection, fixture } = await subject();
@@ -662,4 +662,21 @@ it('lineage origin labels stay deferred and bilingual without changing node IDs 
       }
     }
   }
+});
+
+it('keeps file intake available without a command host and never dispatches a file slash command', async () => {
+  const send = vi.fn(async () => true), upload = vi.fn(async () => []);
+  render(<AgentComposer disabled={false} busy={false} active={false} onSend={send} onUpload={upload} onCancel={() => {}} />);
+  const input = screen.getByLabelText('Message');
+  fireEvent.change(input, { target: { value: 'retain this draft' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+  expect(screen.getAllByRole('option')).toHaveLength(1);
+  const picker = screen.getByLabelText('Attach files');
+  const click = vi.spyOn(picker, 'click');
+  fireEvent.keyDown(input, { key: 'Tab' });
+  expect(click).toHaveBeenCalledOnce(); expect(screen.queryByRole('listbox')).toBeNull();
+  expect(input).toHaveProperty('value', 'retain this draft');
+  fireEvent.change(input, { target: { value: '/file' } });
+  await act(async () => fireEvent.keyDown(input, { key: 'Enter' }));
+  expect(send).not.toHaveBeenCalled(); expect(upload).not.toHaveBeenCalled();
 });

@@ -125,13 +125,13 @@ it.each([false, true])('one launcher grammar preserves unrelated draft and caret
   else await server.connect();
   await act(async () => { render(<App client={server.client} workspaceHost={host()}/>); });
   const message = input(); fireEvent.change(message, { target: { value: 'unrelated prose' } }); message.focus(); message.setSelectionRange(3, 6);
-  fireEvent.mouseDown(screen.getByRole('button', { name: 'Commands' })); fireEvent.click(screen.getByRole('button', { name: 'Commands' }));
+  fireEvent.mouseDown(screen.getByRole('button', { name: 'Add' })); fireEvent.click(screen.getByRole('button', { name: 'Add' }));
   const launcher = screen.getByRole('listbox');
   expect(message.value).toBe('unrelated prose'); expect(document.activeElement).toBe(message); expect([message.selectionStart, message.selectionEnd]).toEqual([3, 6]);
-  const choices = launcher.textContent;
+  const choices = [...launcher.querySelectorAll('[role=option]')].filter(row => row.id !== 'command-file').map(row => row.textContent);
   fireEvent.keyDown(message, { key: 'Escape' }); expect(screen.queryByRole('listbox')).toBeNull();
   fireEvent.change(message, { target: { value: '/' } });
-  expect(screen.getByRole('listbox').textContent).toBe(choices);
+  expect(screen.getAllByRole('option').map(row => row.textContent)).toEqual(choices);
   expect(inputTrigger(undefined, { type: 'toggle' })).toEqual({ source: 'launcher', query: '', highlight: 0 });
   expect(inputTrigger(undefined, { type: 'track', draft: '/' })).toEqual({ source: 'typed', query: '', highlight: 0 });
 });
@@ -152,7 +152,7 @@ it.each(['/model', 'unrelated prose'])('hero model selection settles the command
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Workspace A' })));
   const message = input();
   fireEvent.change(message, { target: { value: draft } });
-  if (draft !== '/model') fireEvent.click(screen.getByRole('button', { name: 'Commands' }));
+  if (draft !== '/model') { fireEvent.click(screen.getByRole('button', { name: 'Add' })); fireEvent.keyDown(message, { key: 'ArrowDown' }); }
   fireEvent.keyDown(message, { key: 'Tab' });
   fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'fixture/chosen' })));

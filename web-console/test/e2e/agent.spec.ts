@@ -108,7 +108,7 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
     await expect(input).toBeVisible(); await expect(primary).toHaveCount(1);
     if (width === 1440) {
       await expect.poll(async () => {
-        const left = (await page.getByRole('button', { name: 'Commands', exact: true }).boundingBox())!;
+        const left = (await page.getByRole('button', { name: 'Add', exact: true }).boundingBox())!;
         const right = (await primary.boundingBox())!;
         return Math.abs((left.y + left.height / 2) - (right.y + right.height / 2));
       }).toBeLessThanOrEqual(3);
@@ -130,7 +130,8 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
     await input.fill('Steer through the existing native operation.'); await input.press('Control+Enter'); await expect(input).toHaveValue('');
     expect(await page.evaluate(() => window.composerFixture.submissions())).toEqual(['turn/start', 'turn/start', 'turn/steer']);
     // A real picker gesture and receipt path; the toolbar accessory stays quiet.
-    const chooser = page.waitForEvent('filechooser'); await page.getByRole('button', { name: 'Add attachments' }).click();
+    await page.getByRole('button', { name: 'Add', exact: true }).click();
+    const chooser = page.waitForEvent('filechooser'); await page.locator('#command-file').click();
     await (await chooser).setFiles({ name: 'review.txt', mimeType: 'text/plain', buffer: Buffer.from('Review notes') });
     await expect(page.getByText('Uploaded', { exact: true })).toBeVisible();
     await input.fill('Review these notes.'); await shot('attachment');
@@ -142,7 +143,7 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
     await shot('context');
     await page.evaluate(() => window.composerFixture.docks(false));
     await expect(input).toHaveValue('Review these notes.');
-    for (const name of ['Commands', 'Add attachments', 'Model and reasoning']) await expect(page.getByRole('button', { name, exact: true })).toBeVisible();
+    for (const name of ['Add', 'Model and reasoning']) await expect(page.getByRole('button', { name, exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Approval mode', exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Model and reasoning' }).click();
     await expect(page.getByText('Reading native models…')).toHaveCount(0); await page.keyboard.press('Escape');
@@ -217,8 +218,8 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
       localStorage.removeItem('rustx-composer-busy-enter-v1');
     }, { locale, theme });
     await page.goto(composerURL); await expect(page).toHaveTitle('rustX Agent reference');
-    const names = locale === 'en' ? { input: 'Message', queue: 'Queue', steer: 'Steer', send: 'Send', commands: 'Commands', attach: 'Add attachments' }
-      : { input: '消息', queue: '排队', steer: '插话', send: '发送', commands: '命令', attach: '添加附件' };
+    const names = locale === 'en' ? { input: 'Message', queue: 'Queue', steer: 'Steer', send: 'Send', commands: 'Add', attach: 'Add' }
+      : { input: '消息', queue: '排队', steer: '插话', send: '发送', commands: '添加', attach: '添加' };
     const input = page.getByRole('textbox', { name: names.input, exact: true });
     const primary = page.locator('[data-composer-primary]');
     // The busy-Enter preference is a General Settings row; the Composer has no selector.

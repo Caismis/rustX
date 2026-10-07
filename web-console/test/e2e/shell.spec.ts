@@ -11,7 +11,7 @@ async function openClassifiedShell(page: Page, initial?: 'other-uncertain') {
   await page.goto(`${fixtureOrigin}/test/fixtures/shell.html?association-gate&initial=${initial ?? ''}`);
   const tree = page.getByRole('tree', { name: 'Session browser' });
   await expect(tree).toContainText('Workspace not yet classified');
-  await expect(page.getByRole('button', { name: 'Commands', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Add', exact: true })).toBeEnabled();
   await expect(page.getByRole('button', { name: 'Workspace permissions', exact: true })).toHaveCount(0);
   // Two frame boundaries present the asserted cold shell before the reply.
   await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));

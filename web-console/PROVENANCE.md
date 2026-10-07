@@ -1643,3 +1643,13 @@ scroll owner: upward motion exits following even within the bottom tolerance,
 queued corrections sample native movement before writing, and explicit latest
 or navigation actions acknowledge earlier scrolling. No timer or second scroll
 writer is introduced; returning downward to the floor restores following.
+
+Composer add menu (2026-10-08): compared local DeepSeek Harness `5badb15009`
+`ui-input-trigger/MenuView.tsx`, `MenuView.module.css` and `ui-conversation/skeleton/InputBar.tsx`.
+Adapted grouped, full-width icon/name/alias/description rows to RustX's existing
+command availability and dispatch; file intake is a launcher action, not a native
+slash command. Menu scrolling is confined to its own viewport. Existing Harness
+icons are reused; missing fork/tools icons use Lucide 0.468.0 `git-fork.svg` and
+`wrench.svg` (https://github.com/lucide-icons/lucide/tree/0.468.0/icons).
+The upstream ISC/Feather MIT notice is shipped in `public/LICENSE-Lucide.txt`
+and reproduced in `THIRD-PARTY-NOTICES.txt`. No runtime dependency was added.
