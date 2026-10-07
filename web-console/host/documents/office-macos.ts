@@ -40,10 +40,14 @@ export async function runMacOfficeSandbox(directory: string, command: string[], 
     const chunks: Buffer[] = []; let size = 0, failure: Error | undefined;
     let diagnostic = '';
     child.stderr.on('data', (chunk: Buffer) => { diagnostic = (diagnostic + chunk.toString()).slice(0, 8192); });
+    let terminated = false;
     const killGroup = () => {
-      if (!child.pid) return;
-      try { process.kill(-child.pid, 'SIGKILL'); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') failure = new OfficeSettlementError(); }
+      if (terminated || !child.pid) return;
+      try { process.kill(-child.pid, 'SIGKILL'); terminated = true; }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ESRCH') terminated = true;
+        else { failure = new OfficeSettlementError(); failure.cause = error; }
+      }
     };
     const stop = (error: Error) => { failure ??= error; killGroup(); };
     const abort = () => stop(new Error('obsolete'));
