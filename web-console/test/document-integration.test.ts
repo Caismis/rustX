@@ -33,7 +33,7 @@ it('real sandbox converts real DOCX and PPTX and reauthorizes all three reads', 
     expect(reads).toBe(3); expect(result.preview.kind).toBe('pdf');
     if (result.preview.kind === 'pdf') expect(Buffer.from(result.preview.data, 'base64').subarray(0, 5).toString()).toBe('%PDF-');
   }
-}, 40000);
+}, process.platform === 'darwin' ? 130000 : 40000);
 
 it('reauthorization compares Session-file fields, not their JSON property order', async () => {
   const { request, source } = fixture('xlsx');

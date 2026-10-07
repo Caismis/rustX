@@ -1431,6 +1431,8 @@ The copied dockkit behavior tests remain alongside the port. Changes at seams:
   `@deepseek-ai/libreoffice-kit@0.1.5` native engine in a clean-environment
   Seatbelt process group: private input/output, dependency and system-font reads,
   no network or user-home access, CPU/file/descriptor and output/deadline limits.
+  The native engine keeps DSH's 60-second conversion budget. Its bounded 256 MiB
+  font staging is separate from the unchanged 4 MiB published PDF limit.
   macOS does not claim Linux's cgroup memory/task limits. Missing sandbox or
   engine fails closed. Legacy DOC/PPT remain outside the OOXML admission format.
   The package includes native engine licenses and source/build information under

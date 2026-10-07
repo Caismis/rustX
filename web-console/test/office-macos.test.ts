@@ -65,5 +65,5 @@ process.stdout.write(JSON.stringify({denied,network,secret:process.env.RUSTX_OFF
       const text=content.items.map(item=>'str' in item?item.str:'').join(' ');
       expect(text).toContain(extension==='docx'?'rustX 中文文档预览':'rustX presentation preview');
     } finally { await task.destroy(); }
-  },20000);
+  },65000);
 });

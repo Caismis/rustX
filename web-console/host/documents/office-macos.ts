@@ -47,7 +47,7 @@ export async function runMacOfficeSandbox(directory: string, command: string[], 
     };
     const stop = (error: Error) => { failure ??= error; killGroup(); };
     const abort = () => stop(new Error('obsolete'));
-    const timer = setTimeout(() => stop(new Error('converter_timeout')), 15000);
+    const timer = setTimeout(() => stop(new Error('converter_timeout')), 60000);
     signal.addEventListener('abort', abort, { once: true });
     if (signal.aborted) abort();
     child.stdout.on('data', (chunk: Buffer) => {
@@ -79,8 +79,10 @@ export async function convertMacOffice(bytes: Buffer, extension: 'docx' | 'pptx'
     const worker = join(directory, 'worker.mjs');
     await copyFile(new URL('./office-macos-worker.mjs', import.meta.url), worker);
     await writeFile(join(directory, `source.${extension}`), bytes, { mode: 0o600, flag: 'wx', signal });
+    // POSIX file-size units are 512 bytes. Native font staging needs up to the
+    // engine's 256 MiB per-font limit; published PDF bytes stay capped at 4 MiB.
     const result = await runMacOfficeSandbox(directory,
-      ['/bin/sh', '-c', 'ulimit -f 8192; ulimit -n 128; ulimit -t 15; exec "$@"', 'rustx-office', node, worker, entry, directory, extension],
+      ['/bin/sh', '-c', 'ulimit -f 524288; ulimit -n 128; ulimit -t 60; exec "$@"', 'rustx-office', node, worker, entry, directory, extension],
       [modules, resolve(dirname(node), '..'), '/bin/sh'], signal);
     if (!result.subarray(0, 5).equals(Buffer.from('%PDF-'))) throw new Error('converter_failure');
     return result;

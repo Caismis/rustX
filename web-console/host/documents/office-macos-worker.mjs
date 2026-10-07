@@ -6,7 +6,7 @@ const { createConverter } = await import(pathToFileURL(entry).href);
 const converter = await createConverter({
   fontMetadataCacheDirectory: false,
   fontDirectories: ['/System/Library/Fonts', '/Library/Fonts'],
-  timeoutMs: 15000,
+  timeoutMs: 60000,
   maxInputBytes: 512 * 1024,
   maxOutputBytes: 4 * 1024 * 1024,
   maxArchiveEntries: 256,
