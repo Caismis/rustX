@@ -20,7 +20,7 @@ function fixture(read?: (endpoint: string, token: string, target: DesktopTarget)
   const adapter = new DesktopAdapter(system);
   const config = { nativeFilesystem: 'shared' as const, endpoint: 'ws://localhost:8080/', transportToken: 'private', picker: true, metadataFile: join(directory, 'registrations.json'), roots: [{ id: 'a', cwd: a, displayName: 'A' }, { id: 'b', cwd: b, displayName: 'B' }] };
   const readSession = vi.fn(read ?? (async () => a));
-  const host = new LocalWorkspaceHost(config, adapter, readSession);
+  const host = new LocalWorkspaceHost(config, adapter, async (...args) => ({ cwd: await readSession(...args), ownershipGeneration: '1' }));
   return { directory, a, b, host, config, readSession, launch, executable, adapter, system };
 }
 it('uses only exact native Session coordinates and canonical authorized cwd, independent of registration', async () => {
@@ -87,7 +87,7 @@ it('executable disappearing during native resolution fails at the final adapter 
   await expect(opening).rejects.toThrow('disappeared'); expect(f.launch).not.toHaveBeenCalled();
 });
 it('missing explicit namespace mapping and headless Hosts never resolve native state or launch', async () => {
-  const f = fixture(); const host = new LocalWorkspaceHost({ ...f.config, nativeFilesystem: undefined }, f.adapter, f.readSession);
+  const f = fixture(); const host = new LocalWorkspaceHost({ ...f.config, nativeFilesystem: undefined }, f.adapter, async (...args) => ({ cwd: await f.readSession(...args), ownershipGeneration: '1' }));
   const scope = await host.listWorkspaces();
   expect(await host.desktopCatalog(scope)).toEqual({ available: false, reason: 'mapping' });
   await expect(host.openWorkspace(scope, target, 'files')).rejects.toThrow('mapping');

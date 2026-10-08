@@ -1,7 +1,7 @@
 /** Node-only desktop adapter. Session and Workspace ownership stay elsewhere. */
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { accessSync, constants, realpathSync, statSync } from 'node:fs';
-import { delimiter, isAbsolute, join } from 'node:path';
+import { delimiter, dirname, isAbsolute, join } from 'node:path';
 import type { DesktopApplication, DesktopAppId, DesktopCatalog, DesktopLaunch } from '../src/workspaces/desktop.ts';
 
 export interface DesktopProcess { command: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv }
@@ -100,17 +100,20 @@ export class DesktopAdapter {
     }
     return entries;
   }
-  prepare(id: DesktopAppId): (cwd: string) => Promise<DesktopLaunch> {
+  /** Pathname launch only: admission is the caller's responsibility; the external
+   * application owns eventual path resolution and file-object identity. */
+  prepare(id: DesktopAppId): (cwd: string, path?: string, reveal?: boolean) => Promise<DesktopLaunch> {
     const catalog = this.catalog();
     const entry = catalog.available ? this.resolved?.find(entry => entry.application.id === id) : undefined;
     if (!entry) throw new Error('Desktop application is unavailable; refresh applications and try again');
-    return cwd => {
+    return (cwd, path = cwd, reveal = false) => {
       // No await between the last executable verification and spawn.
       if (!this.verified(entry)) {
         this.resolved = this.resolved?.filter(item => item !== entry);
         throw new Error('Desktop application disappeared; refresh applications');
       }
-      return this.system.launch({ command: entry.command, args: entry.args(cwd), cwd, env: desktopEnvironment(this.system.env) });
+      const args = reveal && id === 'files' ? this.system.platform === 'darwin' ? ['-R', '--', path] : entry.args(dirname(path)) : entry.args(path);
+      return this.system.launch({ command: entry.command, args, cwd, env: desktopEnvironment(this.system.env) });
     };
   }
 }

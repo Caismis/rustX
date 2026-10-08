@@ -1,4 +1,7 @@
 /** Disposable presentation projections; no Session or Workspace authority. */
+export interface DraftConversation {
+  workspaceId: string; binding: string; focus: () => void;
+}
 export interface SessionNode {
   id: string; title: string; pendingInteraction?: 'approval' | 'plan-review' | 'question';
   running: boolean; runningSubagentCount: number;

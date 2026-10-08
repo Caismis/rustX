@@ -39,6 +39,10 @@ localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openVie
 // Isolated fixture controls, never reachable from the production application.
 window.sessionFixture = {
   releaseAssociations,
+  async activity(id, timestamp) {
+    server.summaries.set(id, { ...server.summaries.get(id), updated_at: timestamp });
+    server.invalidateSummary(id, server.socket, true);
+  },
   async stream(text) {
     const next = structuredClone(server.snapshots.get('A')!);
     next.attempt = { attempt_id: 'attempt-A', phase: { type: 'running' }, turn: 1, in_flight: { message_id: 'stream-A', blocks: [{ type: 'text', block_index: 0, text }] } };
@@ -85,4 +89,4 @@ window.sessionFixture = {
 if (new URL(location.href).searchParams.get('initial') === 'other-uncertain') await window.sessionFixture.presentation('other-uncertain');
 createRoot(document.getElementById('root')!).render(<App client={server.client} workspaceHost={server.workspaceHost} />);
 
-declare global { interface Window { sessionFixture: { releaseAssociations(): void; stream(text: string): Promise<void>; state(mode: 'idle' | 'queued' | 'stopping' | 'reconnect' | 'uncertain'): Promise<void>; presentation(mode: 'empty' | 'preview' | 'named' | 'delete' | 'other-uncertain' | 'many'): Promise<void> } } }
+declare global { interface Window { sessionFixture: { activity(id: string, timestamp: string): Promise<void>; releaseAssociations(): void; stream(text: string): Promise<void>; state(mode: 'idle' | 'queued' | 'stopping' | 'reconnect' | 'uncertain'): Promise<void>; presentation(mode: 'empty' | 'preview' | 'named' | 'delete' | 'other-uncertain' | 'many'): Promise<void> } } }

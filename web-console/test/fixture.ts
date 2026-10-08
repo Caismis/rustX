@@ -1,6 +1,6 @@
 import type { ProductHostWorkspaces } from '../src/workspaces/host';
-import type { TraceDetail } from '../../protocol/app-server/v34';
-import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v34';
+import type { TraceDetail } from '../../protocol/app-server/v37';
+import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v37';
 import { fixtures } from '../../protocol/app-server/fixtures';
 import { cfg3Source } from './cfg3-data';
 import { AppServerClient, RpcFailure, sameTarget, type Socket } from '../src/client/app-server';
@@ -12,7 +12,7 @@ if (!rustHello || !('result' in rustHello) || rustHello.result?.type !== 'initia
 export const capabilities: ServerCapabilities = rustHello.result.capabilities;
 export function snapshot(id = 'A'): RuntimeClientSnapshot {
   return {
-    settings_evidence: 'live_session',
+    settings_evidence: 'live_session', configuration_adoption_eligibility: { status: 'eligible' },
     conversation_id: `conversation-${id}`, shutting_down: false, effective_approval_mode: 'policy',
     workflows: { revision: '0', runs: [], omitted_runs: 0 }, messages: [], transcript: { entries: [] }, trace_updates: [], trace: { records: [] },
     inbound: {}, capabilities: { configured_tools: [], revision: '0' }, pending_interactions: [],
@@ -75,12 +75,12 @@ export class Server {
   held = new Set<Request['method']>();
   requests: { request: Request; socket: FakeSocket }[] = [];
   private waiters: { method: Request['method']; count: number; resolve: (request: Request) => void }[] = [];
-  version = 34;
+  version = 37;
   /** Record details this scenario staged, keyed by Trace record identity. */
   readonly traceDetails = new Map<string, TraceDetail>();
   capabilities = capabilities;
   socketFactory = (_url: string, protocols: string[]) => {
-    if (protocols[0] !== 'rustx.app-server.v34' || protocols[1] !== `rustx-token.${TOKEN}`) throw new Error('Wrong browser admission protocol');
+    if (protocols[0] !== 'rustx.app-server.v37' || protocols[1] !== `rustx-token.${TOKEN}`) throw new Error('Wrong browser admission protocol');
     const socket = new FakeSocket((request, source) => this.receive(request, source), () => { this.targets.get(socket)?.clear(); this.reservations.get(socket)?.clear(); }); this.sockets.push(socket);
     queueMicrotask(() => socket.open()); return socket;
   };
@@ -134,7 +134,7 @@ export class Server {
   }
   summary(id: string): SessionSummary {
     if (!this.snapshots.has(id)) throw new RpcFailure({ code: -32000, message: 'Unknown Session', data: { kind: 'unknown_session', session_id: id } });
-    return { id, cwd: `/workspace/${id}`, name: `Session ${id}`, updated_at: '2026-09-14T00:00:00Z', active_node: `node-${id}`, ...this.summaries.get(id) };
+    return { ownership_generation: '1', id, cwd: `/workspace/${id}`, name: `Session ${id}`, updated_at: '2026-09-14T00:00:00Z', active_node: `node-${id}`, ...this.summaries.get(id) };
   }
   readonly uploads = new Map<string, Extract<MethodResult, { type: 'upload_status' }>['outcome']>();
   private execute(request: Request, socket: FakeSocket): MethodResult {
@@ -155,7 +155,12 @@ export class Server {
       case 'initialize': result = { type: 'initialized', authority_id: this.authorityId, protocol_version: this.version, capabilities: this.capabilities }; break;
       case 'server/info': result = { type: 'server_info', capabilities: this.capabilities }; break;
       case 'session/summary': result = { type: 'session_summary', summary: this.summary(request.params.session_id) }; break;
-      case 'session/list': if (request.params.limit > 32) throw new Error('Native Session page limit is 32'); result = { type: 'sessions', sessions: [...this.snapshots.keys()].map(id => this.summary(id)).filter(row => !request.params.query || [row.id, row.name, row.preview].some(text => text?.toLowerCase().includes(request.params.query!.toLowerCase()))).slice(request.params.offset, request.params.offset + request.params.limit) }; break;
+      case 'session/list': if (request.params.limit > 32) throw new Error('Native Session page limit is 32'); result = { type: 'sessions', sessions: [...this.snapshots.keys()].map(id => this.summary(id)).sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).filter(row => !request.params.query || [row.id, row.name, row.preview].some(text => text?.toLowerCase().includes(request.params.query!.toLowerCase()))).slice(request.params.offset, request.params.offset + request.params.limit) }; break;
+      case 'session/history': {
+        const history = (request.params.node_id ? this.nodeSnapshots.get(request.params.node_id) : undefined) ?? this.snapshots.get(request.params.session_id)!;
+        if (!history) throw new RpcFailure({ code: -32000, message: 'Unknown Session' });
+        result = { type: 'session_history', conversation_id: history.conversation_id, window: { cut: { conversation_id: 'conversation-A', journal: '1000', transcript: '1000', mutation_revision: '0' }, page: history.transcript } }; break;
+      }
       case 'session/attach': {
         this.reservations.get(socket)?.delete(id);
         if (!this.loaded.has(id)) { this.loaded.add(id); this.coldLoads.set(id, (this.coldLoads.get(id) ?? 0) + 1); }
@@ -233,4 +238,4 @@ export class Server {
   }
 }
 
-export function readingWindow(page: import('../../protocol/app-server/v34').RuntimeClientTranscriptPage, conversation_id = 'conv-A') { return { page, cut: { conversation_id, journal: '0', transcript: '0', mutation_revision: '0' }, newer_cursor: null, target: null, target_cursor: null }; }
+export function readingWindow(page: import('../../protocol/app-server/v37').RuntimeClientTranscriptPage) { return { cut: { conversation_id: 'conversation-A', journal: '1000', transcript: '1000', mutation_revision: '0' }, page }; }

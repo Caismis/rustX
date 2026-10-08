@@ -337,7 +337,12 @@ async fn snapshot_dto_round_trips() {
     else {
         panic!("initialized");
     };
-    assert_eq!(cursor, RuntimeClientCursor::new(0));
+    // Activation's first publication is the runtime's adoption eligibility.
+    assert_eq!(cursor, RuntimeClientCursor::new(1));
+    assert_eq!(
+        snapshot.configuration_adoption_eligibility,
+        rustx::local_runtime::configuration::application::AdoptionEligibility::Eligible
+    );
     let json = serde_json::to_string(&snapshot).expect("serialize snapshot");
     let decoded: rustx::runtime_client::RuntimeClientSnapshot =
         serde_json::from_str(&json).expect("deserialize snapshot");
@@ -355,7 +360,7 @@ async fn snapshot_dto_round_trips() {
     let Some(RuntimeClientResult::Snapshot { snapshot, cursor }) = response.result else {
         panic!("snapshot result");
     };
-    assert_eq!(cursor, RuntimeClientCursor::new(0));
+    assert_eq!(cursor, RuntimeClientCursor::new(1));
     assert_eq!(
         snapshot.conversation_id().as_str(),
         "conv_ab537f72-9ee5-7ccf-989d-90fbe352ca87"
@@ -402,7 +407,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     // catalog requests, is rejected.
     for requested in 0..rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION {
         assert!(matches!(host.attach(requested),
-            Err(RuntimeClientError::UnsupportedProtocolVersion { supported: 57, requested: rejected })
+            Err(RuntimeClientError::UnsupportedProtocolVersion { supported: 59, requested: rejected })
                 if rejected == requested));
     }
     // Incompatible version negotiation fails explicitly, in both
@@ -411,7 +416,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
         matches!(
             host.attach(16),
             Err(RuntimeClientError::UnsupportedProtocolVersion {
-                supported: 57,
+                supported: 59,
                 requested: 16,
             })
         ),
@@ -420,7 +425,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         host.attach(24),
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 57,
+            supported: 59,
             requested: 24,
         })
     ));
@@ -430,7 +435,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         host.attach(38),
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 57,
+            supported: 59,
             requested: 38,
         })
     ));
@@ -438,8 +443,8 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         incompatible,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 57,
-            requested: 58,
+            supported: 59,
+            requested: 60,
         })
     ));
     // v44 published a resource diagnostic's field path as its `identity`, so a
@@ -448,7 +453,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         host.attach(44),
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 57,
+            supported: 59,
             requested: 44,
         })
     ));
@@ -459,7 +464,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         host.attach(40),
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 57,
+            supported: 59,
             requested: 40,
         })
     ));
@@ -474,7 +479,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_todo_extension,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 57,
+            supported: 59,
             requested: 28,
         })
     ));
@@ -483,7 +488,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_session_deletion,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 57,
+            supported: 59,
             requested: 27,
         })
     ));
@@ -495,7 +500,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_profile_digest,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 57,
+            supported: 59,
             requested: 26,
         })
     ));
@@ -506,7 +511,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_effective_extensions,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 57,
+            supported: 59,
             requested: 25,
         })
     ));
@@ -514,7 +519,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         old_protocol,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 57,
+            supported: 59,
             requested: 7,
         })
     ));
@@ -528,7 +533,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         interrupted_status,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 57,
+            supported: 59,
             requested: 15,
         })
     ));
@@ -541,7 +546,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_disposal,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 57,
+            supported: 59,
             requested: 14,
         })
     ));
@@ -554,7 +559,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         latest_only_status,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 57,
+            supported: 59,
             requested: 13,
         })
     ));
@@ -564,7 +569,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         profile_shaped,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 57,
+            supported: 59,
             requested: 6,
         })
     ));
@@ -576,7 +581,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_workspace_boundary,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 57,
+            supported: 59,
             requested: 12,
         })
     ));

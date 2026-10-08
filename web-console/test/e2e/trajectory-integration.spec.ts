@@ -6,7 +6,7 @@ import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { closeSettings, connectRemote, openSettingsPage, openWorkspaceSettings } from './shell-actions';
 import { wireProbe } from './wire-probe';
-import type { TraceRequestDetail } from '../../../protocol/app-server/v34';
+import type { TraceRequestDetail } from '../../../protocol/app-server/v37';
 
 function immutable(request: TraceRequestDetail) {
   const { usage: _usage, failure: _failure, generation: _generation, ...input } = request;
@@ -56,13 +56,15 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy gate, exact adoption 
     expect(source.projection.user.authored?.agent?.tools?.builtin).not.toContain('read');
     const application = async (id: string) => (await remote.client.call('session/configuration', { session_id: id }, 'session_configuration')).application!;
     await expect.poll(async () => (await application(a)).candidate != null).toBe(true);
+    // Adoption eligibility is runtime state on A's Runtime Client snapshot.
+    const eligibility = async () => (await remote.client.call('session/snapshot', { target: attachedA.target }, 'snapshot')).snapshot.configuration_adoption_eligibility.status;
     const busy = await application(a);
-    expect(busy.eligibility.status).toBe('busy');
+    expect(await eligibility()).toBe('busy');
     expect(immutable(await detail(oldRecord.id))).toEqual(before);
     await expect(remote.client.call('session/adoptConfiguration', { session_id: a, candidate: busy.candidate!.identity, expected_binding: busy.candidate!.expected_binding }, 'configuration_application')).rejects.toThrow();
     expect((await f.control('requests')).requests).toHaveLength(1);
     await f.release('trace-before');
-    await expect.poll(async () => (await application(a)).eligibility.status).toBe('eligible');
+    await expect.poll(eligibility).toBe('eligible');
     const eligible = await application(a);
     await remote.client.call('session/adoptConfiguration', { session_id: a, candidate: eligible.candidate!.identity, expected_binding: eligible.candidate!.expected_binding }, 'configuration_application');
     expect(immutable(await detail(oldRecord.id))).toEqual(before);
@@ -92,7 +94,7 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy gate, exact adoption 
     await expect(boundary).toContainText('System Prompt and Tools Updated');
     await boundary.click();
     await page.getByRole('tab', { name: 'Diff', exact: true }).click();
-    await expect(page.getByRole('complementary', { name: 'Trace record inspector' }).getByRole('tabpanel')).toContainText('TRACE_NEW_INSTRUCTIONS');
+    await expect(page.getByRole('complementary', { name: 'Event details' }).getByRole('tabpanel')).toContainText('TRACE_NEW_INSTRUCTIONS');
     await page.screenshot({ path: 'test-results/trajectory-native-adoption.png' });
     passed = true;
   } finally { await remote.shutdown(); await page.close(); await f.stop(passed); }

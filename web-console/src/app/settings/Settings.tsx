@@ -1,8 +1,9 @@
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted Settings shell; see PROVENANCE.md. */
+import type { Theme } from '../appearance';
 import type { ReactNode } from 'react';
 import { shallowEqual, useSelector } from '@xstate/react';
-import type { SourceScope } from '../../../../protocol/app-server/v34';
+import type { SourceScope } from '../../../../protocol/app-server/v37';
 import type { AppServerClient } from '../../client/app-server';
 import { Button } from '../../presentation/primitives/Button';
 import { UnitForm } from './forms/bridge';
@@ -36,7 +37,7 @@ import {
 
 export interface SettingsProps {
   client: AppServerClient; host?: ProductHostWorkspaces;
-  theme?: 'light' | 'dark'; setTheme?: (theme: 'light' | 'dark') => void;
+  theme?: Theme; setTheme?: (theme: Theme) => void;
   /** The client-owned connection, rendered only where navigation admits the
    * Connection surface. Its presence authorizes nothing. */
   connection: ConnectionController;
@@ -98,7 +99,7 @@ export function Settings(props: SettingsProps) {
   return view.page && <SettingsDialog {...props} target={view.target} page={view.page} focus={view.focus} />;
 }
 
-function SettingsDialog({ client, host, theme = 'light', setTheme, connection, navigation, target, page: current, focus }: SettingsProps & {
+function SettingsDialog({ client, host, theme = 'system', setTheme, connection, navigation, target, page: current, focus }: SettingsProps & {
   target: SettingsTarget; page: SettingsPage; focus: FocusMap;
 }) {
   const tx = useTranslation();

@@ -1,28 +1,45 @@
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/TrajectoryTable.tsx and TrajectoryToolbar.tsx; see PROVENANCE.md. */
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Group, Panel, Separator } from 'react-resizable-panels';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { TRACE_LIMIT, type TraceCache } from '../../client/trace';
-import { Button } from '../../presentation/primitives/Button';
-import { Input } from '../../presentation/primitives/Input';
-import { TrajectoryInspector, TrajectoryStructureInspector } from './TrajectoryInspector';
+import { IconSearchOutline16 } from '../../presentation/primitives/icons';
+import { TrajectoryInspector, inspectorTabs } from './TrajectoryInspector';
 import { TrajectoryLedger, type LedgerHandle } from './TrajectoryLedger';
+import type { TrajectoryRowActions } from './TrajectoryRow';
 import { TrajectoryTimeline } from './TrajectoryTimeline';
-import { projectTrajectory, trajectoryItems, matchingCalls, matchedRecordIds, visibleItems, displayUniverse, preferredItem, selectionOf, isInspectable, preferredStructure, ledgerRows, rowOwnsKey, type FocusableDisplayItem, type StructuralDisplayItem, type TrajectorySelection } from './layout';
+import { projectTrajectory, trajectoryItems, matchingCalls, matchedRecordIds, visibleItems, displayUniverse, preferredItem, selectionOf, ledgerRows, rowOwnsKey, isInspectable, type InspectableDisplayItem, type StructuralDisplayItem, type TrajectoryFacet, type TrajectorySelection } from './layout';
 import { searchItems } from './search';
-import { timelineFocus, trajectoryTimeline, type TrajectoryTimeRange, type TrajectoryTimelineMode } from './timeline';
+import { timelineFocus, timelineProjectionRevision, trajectoryTimeline, type TrajectoryTimeRange, type TrajectoryTimelineMode } from './timeline';
 import css from './Trajectory.module.css';
+
+const DETAILS_MIN_WIDTH = 320;
+const DETAILS_MAX_WIDTH = 720;
+const TABLE_MIN_WIDTH = 280;
+const DETAILS_RESIZE_STEP = 16;
+const TOOL_REQUEST_SHARE = 0.58;
+const TOOL_REQUEST_MIN_WIDTH = 180;
+const TOOL_REQUEST_MAX_WIDTH = 480;
+const DEFAULT_TOOL_REQUEST_SHARE = 0.36;
+const DEFAULT_TOOL_REQUEST_OFFSET = 56;
+
+function clampDetailsWidth(width: number, splitWidth: number): number {
+  const maxWidth = Math.max(DETAILS_MIN_WIDTH, Math.min(DETAILS_MAX_WIDTH, splitWidth - TABLE_MIN_WIDTH));
+  return Math.round(Math.min(Math.max(width, DETAILS_MIN_WIDTH), maxWidth));
+}
+
+function defaultToolRequestWidth(splitWidth: number): number {
+  return Math.min(Math.max(splitWidth * DEFAULT_TOOL_REQUEST_SHARE - DEFAULT_TOOL_REQUEST_OFFSET, TOOL_REQUEST_MIN_WIDTH), TOOL_REQUEST_MAX_WIDTH);
+}
 
 export interface TrajectoryProps {
   cache: TraceCache;
   loadEarlier: () => void;
-  latest: () => void;
   onSelect: (id?: string) => void;
   onLoadDetail: (id: string) => void;
 }
 
 /** Native owner selection stays in the read cache; display/facet lives locally. */
-export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail }: TrajectoryProps) {
+export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail }: TrajectoryProps) {
   const tx = useTranslation();
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<TrajectoryTimelineMode>('sequence');
@@ -32,11 +49,12 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
     const item = cache.selection ? preferredItem(trajectoryItems(tx, projectTrajectory(tx, cache.page.records)), cache.selection.id) : undefined;
     return item ? selectionOf(item) : undefined;
   });
-  const [structure, setStructure] = useState<StructuralDisplayItem | undefined>(undefined);
-  const [focus, setFocus] = useState<{ epoch: number; ids: ReadonlySet<string> } | null>(null);
-  const [width, setWidth] = useState(0);
-  const [offTail, setOffTail] = useState(false);
-  const root = useRef<HTMLElement>(null);
+  const [focus, setFocus] = useState<{ epoch: number; ids: ReadonlySet<string>; range: TrajectoryTimeRange; revision: string } | null>(null);
+  const [detailsWidth, setDetailsWidth] = useState<number | null>(null);
+  const [toolRequestOffset, setToolRequestOffset] = useState<number | null>(null);
+  const resize = useRef<{ pointerId: number; startX: number; startWidth: number; splitWidth: number; startOffset: number } | null>(null);
+  // As in Harness, a newly selected record reopens the most recently used tab it has.
+  const tabHistory = useRef<TrajectoryFacet[]>(['overview']);
   const ledger = useRef<LedgerHandle>(null);
   const focusedDisplay = useRef<string | undefined>(undefined);
   const [pendingFocus, setPendingFocus] = useState<string | undefined>();
@@ -49,36 +67,43 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
   const selectionItems = useMemo(() => displayUniverse(allItems, visible), [allItems, visible]);
   const matchingOwners = useMemo(() => matchedRecordIds(allItems, matches), [allItems, matches]);
   const timelineModel = useMemo(() => trajectoryTimeline(tx, projection, mode), [tx, projection, mode]);
+  const executions = useMemo(() => matchingCalls(records), [records]);
+  // Loaded-window ordinals, like the Turn labels: identity stays native.
+  const requestNumbers = useMemo(() => new Map(records.filter(record => record.kind === 'request').map((record, index) => [record.id, index + 1])), [records]);
+  const foldableTurns = useMemo(() => new Set(projection.sections.flatMap(section => section.kind === 'turn'
+    && allItems.filter(item => isInspectable(item) && item.type !== 'SystemPromptCell' && item.type !== 'RequestBoundary' && item.record.location.attempt_id === section.nativeAttemptId).length > 1
+    ? [section.nativeAttemptId] : [])), [projection, allItems]);
   // Timeline focus is valid only within the Trace read domain that created it.
   // Within one epoch (prepend, lifecycle refresh) it persists as native record
   // identities, so renumbered Turns and moved coordinates keep its ownership.
   // A rebase onto a new epoch retires it: no stale set can dim the new domain.
   const focusedIds = focus?.epoch === cache.epoch ? focus.ids : null;
+  const revision = timelineProjectionRevision(timelineModel, mode);
   const range = useMemo<TrajectoryTimeRange | null>(() => {
-    const spans = timelineModel?.spans.filter(span => focusedIds?.has(span.id)) ?? [];
+    if (focus?.epoch === cache.epoch && focus.revision === revision) return focus.range;
+    const spans = timelineModel?.spans.filter(span => focusedIds?.has(span.ownerId ?? span.id)) ?? [];
     return spans.length ? { start: Math.min(...spans.map(span => span.start)), end: Math.max(...spans.map(span => span.end)) } : null;
-  }, [timelineModel, focusedIds]);
+  }, [timelineModel, focusedIds, focus, cache.epoch, revision]);
   const setRange = (range: TrajectoryTimeRange | null) => {
     const ids = timelineFocus(timelineModel, range);
-    setFocus(ids?.size ? { epoch: cache.epoch, ids } : null);
+    setFocus(ids && range ? { epoch: cache.epoch, ids, range, revision } : null);
   };
   const selectedItem = selection ? preferredItem(selectionItems, selection.owner_record_id, selection) : undefined;
   const selected = selectedItem?.record ?? (cache.selection?.id === selection?.owner_record_id ? cache.selection : undefined);
   const selectedDetail = selection ? cache.details[selection.owner_record_id] : undefined;
-  const select = useCallback((item?: FocusableDisplayItem) => {
-    const inspectable = item && isInspectable(item) ? item : undefined;
-    setStructure(item && !isInspectable(item) ? item : undefined);
-    setSelection(inspectable ? selectionOf(inspectable) : undefined);
-    onSelect(inspectable?.owner_record_id);
-    if (item) setPendingFocus(item.display_key);
+  const select = useCallback((item?: InspectableDisplayItem, facet?: TrajectoryFacet) => {
+    if (item) {
+      const tabs = inspectorTabs(item);
+      const recent = facet ?? [...tabHistory.current].reverse().find(tab => tabs.includes(tab));
+      setSelection({ ...selectionOf(item), facet: recent ?? (tabs.includes(item.facet) ? item.facet : tabs[0]!) });
+      setPendingFocus(item.display_key);
+    } else setSelection(undefined);
+    onSelect(item?.owner_record_id);
   }, [onSelect]);
-  useLayoutEffect(() => {
-    const element = root.current;
-    if (!element) return;
-    const observer = new ResizeObserver(entries => setWidth(entries[0]?.contentRect.width ?? 0));
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
+  const setFacet = (facet: TrajectoryFacet) => {
+    tabHistory.current = [...tabHistory.current.filter(tab => tab !== facet), facet];
+    setSelection(current => current ? { ...current, facet } : current);
+  };
 
   // Selection migration only follows semantic regrouping, never a detail reply.
   useLayoutEffect(() => {
@@ -88,72 +113,143 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
       if (selection.display_key !== selectedItem.display_key) setSelection({ ...selection, display_key: selectedItem.display_key });
     }
   }, [selection, selectedItem]);
-  // Structural regrouping stays within the containing native Attempt/Step.
-  // Neither a late detail response nor a new loaded anchor supplies an owner.
-  useLayoutEffect(() => {
-    if (!structure) return;
-    const next = preferredStructure(allItems, structure);
-    const active = document.activeElement as HTMLElement | null;
-    if (next?.display_key === structure.display_key && active !== document.body) return;
-    if (next && focusedDisplay.current === structure.display_key && (active === document.body || active?.closest<HTMLElement>('[data-display-key]')?.dataset.displayKey === structure.display_key)) setPendingFocus(next.display_key);
-    setStructure(next);
-  }, [allItems, structure]);
-  const activeKey = structure?.display_key ?? selection?.display_key;
-  // Structural evidence is read from the current projection, so a lifecycle
-  // refresh or renumbering of the same native Attempt/Step is never stale.
-  const structureItem = structure ? preferredStructure(allItems, structure) : undefined;
+  const activeKey = selection?.display_key;
   const canLoadEarlier = Boolean(cache.page.next_cursor) && !cache.loading && records.length < TRACE_LIMIT;
   const requestOlder = () => ledger.current?.loadEarlier();
-  const toggleTurn = (id: string) => {
-    setCollapsedTurns(current => { const next = new Set(current); if (!next.delete(id)) next.add(id); return next; });
-    const turn = allItems.find(item => item.type === 'TurnHeader' && item.attempt_id === id);
-    if (turn) setPendingFocus(`${turn.display_key}:fold`);
-  };
+  const toggleTurn = (id: string) => setCollapsedTurns(current => { const next = new Set(current); if (!next.delete(id)) next.add(id); return next; });
   const toggleCalls = (id: string) => setCalls(current => { const next = new Set(current); if (!next.delete(id)) next.add(id); return next; });
-  const turnIds = projection.sections.flatMap(section => section.kind === 'turn' ? [section.nativeAttemptId] : []);
-  const callOwners = records.filter(record => record.kind === 'assistant' && record.calls.length).map(record => record.id);
-  const narrow = width < 720;
+  const callOwners = useMemo(() => new Set([...executions].flatMap(([owner, tools]) => tools.length ? [owner] : [])), [executions]);
   const close = () => {
-    const key = structure?.display_key ?? selection?.display_key;
-    if (key) {
-      const attempt = structure ? structure.attempt_id : selected?.location.attempt_id;
-      const target = rows.find(row => rowOwnsKey(row, key))
-        ?? rows.find(row => row.turnStart && row.turn?.attempt_id === attempt);
-      setPendingFocus(target && rowOwnsKey(target, key) ? key : target?.turn?.display_key);
-    }
+    if (selection) setPendingFocus(rows.find(row => rowOwnsKey(row, selection.display_key))?.display_key);
     select();
   };
-  const inspector = structureItem
-    ? <TrajectoryStructureInspector item={structureItem} onClose={close} />
-    : selected && selection
-      ? <TrajectoryInspector record={selected} detail={selectedDetail?.detail} loading={selectedDetail?.loading} error={selectedDetail?.error} selection={selection} onFacet={facet => setSelection(current => current ? { ...current, facet } : current)} onLoadDetail={onLoadDetail} onClose={close} />
-      : null;
-  return <section ref={root} className={css.root} aria-label={tx('trajectory:trajectory.trajectory')} onFocusCapture={event => {
+  // Reveal a record from the inspector or the overview: unfold its Turn and
+  // its Assistant's calls, and drop a search or focus that would hide it.
+  const open = (item: InspectableDisplayItem, facet?: TrajectoryFacet) => {
+    const attempt = item.record.location.attempt_id;
+    if (attempt) setCollapsedTurns(current => { const next = new Set(current); next.delete(attempt); return next; });
+    setCalls(current => new Set([...current].filter(owner => !executions.get(owner)?.some(record => record.id === item.owner_record_id))));
+    if (matches && !matches.has(item.display_key)) setQuery('');
+    if (focusedIds && !focusedIds.has(item.owner_record_id)) setRange(null);
+    select(item, facet);
+  };
+  const openRecord = (id: string, facet?: TrajectoryFacet) => {
+    const item = allItems.find((candidate): candidate is InspectableDisplayItem => isInspectable(candidate) && candidate.owner_record_id === id
+      && (candidate.type === 'RequestBoundary' || candidate.type === 'RecordRow'));
+    if (item) open(item, facet);
+  };
+  const actions: TrajectoryRowActions = { select, toggleTurn, toggleCalls, foldableTurns, callOwners, requestNumbers };
+  // Harness locates a detail by its section and group: "Turn 2 · Step 1".
+  const location = (() => {
+    const attempt = selected?.location.attempt_id;
+    if (!attempt) return undefined;
+    const step = selected.location.step_id ?? undefined;
+    const turn = allItems.find((item): item is StructuralDisplayItem => item.type === 'TurnHeader' && item.attempt_id === attempt);
+    const group = allItems.find((item): item is StructuralDisplayItem => item.type === 'GroupHeader' && item.attempt_id === attempt && item.step_id === step);
+    return { turn: turn?.label, group: group?.label };
+  })();
+  const inspector = selected && selection && selectedItem
+    ? <TrajectoryInspector key={selection.display_key} item={selectedItem} detail={selectedDetail?.detail} loading={selectedDetail?.loading} error={selectedDetail?.error}
+      facet={selection.facet} onFacet={setFacet} onLoadDetail={onLoadDetail} onClose={close} location={location}
+      records={records} executions={executions} requestNumbers={requestNumbers} completeHistory={!cache.page.next_cursor} onOpen={openRecord} />
+    : null;
+  const splitStyle = toolRequestOffset === null ? undefined : { '--trajectory-tool-request-width': `calc(58cqw - ${toolRequestOffset}px)` } as CSSProperties;
+  const turnIds = projection.sections.flatMap(section => section.kind === 'turn' ? [section.nativeAttemptId] : []);
+  const allTurnsCollapsed = foldableTurns.size > 0 && [...foldableTurns].every(id => collapsedTurns.has(id));
+  const allCallsCollapsed = callOwners.size > 0 && [...callOwners].every(id => calls.has(id));
+  return <section className={css.root} data-conversation-composer-overlay="" aria-label={tx('trajectory:view.trajectory')} onFocusCapture={event => {
     focusedDisplay.current = (event.target as HTMLElement).closest<HTMLElement>('[data-display-key]')?.dataset.displayKey;
   }}>
-    <div className={css.toolbar} role="toolbar" aria-label={tx('trajectory:trajectory.trajectory-controls')}>
-      <Button size="sm" aria-pressed={mode === 'duration' || mode === 'actual'} onClick={() => { setMode(mode === 'duration' ? 'sequence' : mode === 'actual' ? 'time' : mode === 'time' ? 'actual' : 'duration'); setRange(null); }}>{tx('trajectory:trajectory.duration')}</Button>
-      <Button size="sm" aria-pressed={mode === 'time' || mode === 'actual'} onClick={() => { setMode(mode === 'actual' ? 'duration' : mode === 'time' ? 'sequence' : mode === 'duration' ? 'actual' : 'time'); setRange(null); }}>{tx('trajectory:trajectory.actual-time')}</Button>
-      <Button size="sm" aria-label={collapsedTurns.size ? tx('trajectory:copy.expand-turns') : tx('trajectory:copy.fold-turns')} aria-pressed={collapsedTurns.size > 0} onClick={() => setCollapsedTurns(collapsedTurns.size ? new Set() : new Set(turnIds))}>{tx('trajectory:copy.turns')}</Button>
-      <Button size="sm" aria-label={calls.size ? tx('trajectory:trajectory.expand-calls') : tx('trajectory:trajectory.collapse-calls')} aria-pressed={calls.size > 0} onClick={() => setCalls(calls.size ? new Set() : new Set(callOwners))}>{' '}{tx('trajectory:trajectory.calls')}</Button>
-      <Input className={css.search} aria-label={tx('trajectory:trajectory.search-loaded-trace')} value={query} onChange={event => setQuery(event.target.value)} placeholder={tx('trajectory:trajectory.search-loaded-history')} />
-      {offTail && <Button size="sm" onClick={() => { latest(); ledger.current?.latest(); }}>{tx('trajectory:trajectory.jump-to-latest')}</Button>}
+    <div className={css.toolbar} role="toolbar" aria-label={tx('trajectory:toolbar.aria')}>
+      <div className={css.toolbarActions}>
+        <button type="button" className={css.toggle} aria-label={tx('trajectory:toolbar.use-actual-duration')} aria-pressed={mode === 'duration'}
+          title={mode === 'duration' ? tx('trajectory:toolbar.use-equal-width') : tx('trajectory:toolbar.use-actual-duration')}
+          onClick={() => { setMode(mode === 'duration' ? 'sequence' : 'duration'); setRange(null); }}>
+          <svg className={css.toggleIcon} viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="5.25" /><path d="M8 4.75V8l2.25 1.5" /></svg>
+          {tx('trajectory:toolbar.duration')}
+        </button>
+        <button type="button" className={css.action} aria-label={allTurnsCollapsed ? tx('trajectory:toolbar.expand-turns') : tx('trajectory:toolbar.collapse-turns')} aria-pressed={allTurnsCollapsed}
+          title={allTurnsCollapsed ? tx('trajectory:toolbar.expand-turns') : tx('trajectory:toolbar.collapse-turns')}
+          onClick={() => setCollapsedTurns(allTurnsCollapsed ? new Set() : new Set(turnIds))}>
+          <span className={css.actionIcon} aria-hidden="true">{allTurnsCollapsed ? '⊞' : '⊟'}</span>{tx('trajectory:toolbar.turns')}
+        </button>
+        <button type="button" className={css.action} aria-label={allCallsCollapsed ? tx('trajectory:toolbar.expand-calls') : tx('trajectory:toolbar.collapse-calls')} aria-pressed={allCallsCollapsed}
+          title={allCallsCollapsed ? tx('trajectory:toolbar.expand-calls') : tx('trajectory:toolbar.collapse-calls')}
+          onClick={() => setCalls(allCallsCollapsed ? new Set() : new Set(callOwners))}>
+          <span className={css.actionIcon} aria-hidden="true">{allCallsCollapsed ? '⊞' : '⊟'}</span>{tx('trajectory:toolbar.calls')}
+        </button>
+      </div>
+      <div className={css.search}>
+        <IconSearchOutline16 size={11} className={css.searchIcon} />
+        <input type="search" className={css.searchInput} aria-label={tx('trajectory:toolbar.search')} value={query} onChange={event => setQuery(event.target.value)} placeholder={tx('trajectory:toolbar.search-placeholder')} />
+      </div>
     </div>
     {cache.error && <p role="alert" className={css.error}>{cache.error}</p>}
     {/* Epoch retires read-domain ownership; the Timeline separately fences
         coordinate interactions by its semantic projection revision. */}
-    <TrajectoryTimeline key={cache.epoch} model={timelineModel} mode={mode} range={range} selectedId={selection?.owner_record_id ?? null} searchMatches={matchingOwners} onRangeChange={setRange}
+    <TrajectoryTimeline key={cache.epoch} model={timelineModel} mode={mode} range={range}
+      selectedId={timelineModel?.spans.find(span => span.displayKey === selection?.display_key)?.id ?? null}
+      searchMatches={matches === null ? null : new Set(timelineModel?.spans.filter(span => span.displayKey ? matches.has(span.displayKey) : matchingOwners?.has(span.ownerId ?? span.id)).map(span => span.id))}
+      onRangeChange={setRange}
       hasEarlierRecords={Boolean(cache.page.next_cursor)} canLoadEarlier={canLoadEarlier} loadingEarlier={cache.loading === true} onLoadEarlier={requestOlder}
-      onSelect={id => { const item = preferredItem(allItems, id); if (!item) return; setCollapsedTurns(current => { const next = new Set(current); if (item.record.location.attempt_id) next.delete(item.record.location.attempt_id); return next; }); setCalls(current => { const matching = matchingCalls(records); return new Set([...current].filter(owner => !matching.get(owner)?.some(record => record.id === item.owner_record_id))); }); if (matches && !matches.has(item.display_key)) setQuery(''); select(item); }} />
-    <Group className={css.split} orientation={narrow ? 'vertical' : 'horizontal'}>
-      <Panel id="ledger" minSize={narrow ? '160px' : '340px'} className={css.ledgerPanel}>
+      onSelect={id => {
+        const span = timelineModel?.spans.find(span => span.id === id);
+        const item = span?.displayKey ? allItems.find((item): item is InspectableDisplayItem => item.display_key === span.displayKey && isInspectable(item)) : preferredItem(allItems, id);
+        if (item) open(item);
+      }}
+      onReveal={id => {
+        const span = timelineModel?.spans.find(span => span.id === id);
+        const key = span?.displayKey ?? preferredItem(allItems, id)?.display_key;
+        if (key) ledger.current?.reveal(key);
+      }} />
+    <div className={css.split} style={splitStyle}>
+      <div className={css.ledgerPane}>
         <TrajectoryLedger ref={ledger} rows={rows} first={records[0]?.id} activeKey={activeKey} focusKey={pendingFocus} onFocused={() => setPendingFocus(undefined)}
-          folded={collapsedTurns} calls={calls} focusedIds={focusedIds} select={select} toggleTurn={toggleTurn} toggleCalls={toggleCalls} close={close}
-          loadEarlier={loadEarlier} canLoadEarlier={canLoadEarlier} loading={cache.loading === true} searching={matches !== null} onOffTail={setOffTail} />
-      </Panel>
-      {inspector && <><Separator className={css.separator} /><Panel id="inspector" minSize={narrow ? '180px' : '320px'} defaultSize={narrow ? '48%' : `${Math.min(440, Math.max(320, width * .38))}px`} maxSize={narrow ? '70%' : `${Math.max(320, width - 346)}px`}>
+          folded={collapsedTurns} focusedIds={focusedIds} actions={actions} close={close}
+          loadEarlier={loadEarlier} canLoadEarlier={canLoadEarlier} loading={cache.loading === true} searching={matches !== null} />
+      </div>
+      {inspector && <aside className={css.details} aria-label={tx('trajectory:details.event')} style={detailsWidth === null ? undefined : { width: detailsWidth }}>
+        <div className={css.detailsResizeHandle} role="separator" aria-label={tx('trajectory:details.resize')} aria-orientation="vertical" tabIndex={0}
+          title={tx('trajectory:details.resize-title')}
+          onDoubleClick={() => { setDetailsWidth(null); setToolRequestOffset(null); }}
+          onPointerDown={event => {
+            if (event.button !== 0) return;
+            const details = event.currentTarget.parentElement;
+            const split = details?.parentElement;
+            if (!details || !split) return;
+            const splitWidth = split.getBoundingClientRect().width;
+            resize.current = { pointerId: event.pointerId, startX: event.clientX, startWidth: details.getBoundingClientRect().width, splitWidth,
+              startOffset: toolRequestOffset ?? splitWidth * TOOL_REQUEST_SHARE - defaultToolRequestWidth(splitWidth) };
+            event.currentTarget.setPointerCapture(event.pointerId);
+            event.preventDefault();
+          }}
+          onPointerMove={event => {
+            const drag = resize.current;
+            if (!drag || drag.pointerId !== event.pointerId) return;
+            const width = clampDetailsWidth(drag.startWidth + drag.startX - event.clientX, drag.splitWidth);
+            setDetailsWidth(width);
+            setToolRequestOffset(drag.startOffset + (width - drag.startWidth) * TOOL_REQUEST_SHARE);
+          }}
+          onPointerUp={event => {
+            if (resize.current?.pointerId !== event.pointerId) return;
+            resize.current = null;
+            event.currentTarget.releasePointerCapture(event.pointerId);
+          }}
+          onPointerCancel={() => { resize.current = null; }}
+          onKeyDown={event => {
+            if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+            const details = event.currentTarget.parentElement;
+            const split = details?.parentElement;
+            if (!details || !split) return;
+            const current = details.getBoundingClientRect().width;
+            const splitWidth = split.getBoundingClientRect().width;
+            const width = clampDetailsWidth(current + (event.key === 'ArrowLeft' ? 1 : -1) * DETAILS_RESIZE_STEP, splitWidth);
+            setDetailsWidth(width);
+            setToolRequestOffset((toolRequestOffset ?? splitWidth * TOOL_REQUEST_SHARE - defaultToolRequestWidth(splitWidth)) + (width - current) * TOOL_REQUEST_SHARE);
+            event.preventDefault();
+          }} />
         {inspector}
-      </Panel></>}
-    </Group>
+      </aside>}
+    </div>
   </section>;
 }

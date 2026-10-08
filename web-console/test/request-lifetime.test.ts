@@ -1,19 +1,21 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import type { MethodResult, Request1 } from '../../protocol/app-server/v34';
+import type { MethodResult, Request1 } from '../../protocol/app-server/v37';
 import { OutcomeUncertain } from '../src/client/app-server';
 import { Server, snapshot } from './fixture';
 const servers: Server[] = [];
 afterEach(() => { for (const s of servers.splice(0)) s.client.disconnect(); vi.useRealTimers(); });
 async function connected() { const s = new Server(); servers.push(s); await s.attached('A'); return s; }
-type DomainMethod = 'turn/cancel' | 'agent/wait' | 'job/wait' | 'agent/interrupt' | 'job/cancel' | 'agent/sendMessage';
+type DomainMethod = 'turn/cancel' | 'agent/wait' | 'job/wait' | 'agent/interrupt' | 'job/cancel' | 'agent/sendMessage' | 'context/compact';
 function operation(s: Server, method: DomainMethod): Request1 {
   const target = s.client.target('A');
+  if (method === 'context/compact') return { method, params: { target, request_id: 'compact-a' } };
   if (method === 'turn/cancel') return { method, params: { target } };
   return method === 'job/wait' || method === 'job/cancel' ? { method, params: { target, job_id: 'job-a' } }
     : method === 'agent/sendMessage' ? { method, params: { target, agent_id: 'agent-a', message: 'input' } }
     : { method, params: { target, agent_id: 'agent-a' } };
 }
 function result(method: DomainMethod): MethodResult {
+  if (method === 'context/compact') return { type: 'context', context: { compaction_count: 1, compaction_in_progress: false } };
   if (method === 'turn/cancel') return { type: 'cancellation_accepted', attempt_id: 'attempt-A' };
   if (method === 'job/wait' || method === 'job/cancel') return { type: 'job', job: { job_id: 'job-a', tool_id: 'bash', tool_name: 'bash', state: 'cancelled' } };
   if (method === 'agent/sendMessage') return { type: 'agent_message', agent_id: 'agent-a', activation_id: 'activation-b', resumed: true };
@@ -26,7 +28,7 @@ function result(method: DomainMethod): MethodResult {
   } };
 }
 const methods: DomainMethod[] = ['agent/wait', 'job/wait', 'agent/sendMessage', 'agent/interrupt', 'job/cancel'];
-it.each([...methods, 'turn/cancel'] as const)('%s owns its lifetime without incidental traffic', async method => {
+it.each([...methods, 'turn/cancel', 'context/compact'] as const)('%s owns its lifetime without incidental traffic', async method => {
   const s = await connected(); s.held.add(method); vi.useFakeTimers();
   const settled = vi.fn(); const response = result(method);
   const work = s.client.request(operation(s, method), response.type).then(settled);
@@ -39,7 +41,7 @@ it.each([...methods, 'turn/cancel'] as const)('%s owns its lifetime without inci
   s.socket.success(request, response); await Promise.resolve();
   expect(settled).toHaveBeenCalledExactlyOnceWith(response);
 });
-it.each(['agent/wait', 'job/wait'] as const)('%s at full capacity stays healthy with notifications and permits controls', async method => {
+it.each(['agent/wait', 'job/wait', 'context/compact'] as const)('%s at full capacity stays healthy with notifications and permits controls', async method => {
   const s = await connected(); s.held.add(method); vi.useFakeTimers();
   const response = result(method); const settled = vi.fn();
   const waits = Array.from({ length: 4 }, () => s.client.request(operation(s, method), response.type).then(settled));

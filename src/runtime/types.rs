@@ -78,6 +78,10 @@ struct LifecycleInner {
     /// total order instead of relying on a check followed by an unrelated
     /// write.
     commit_boundary: Mutex<()>,
+    /// Announces every lifecycle transition and every counted admission
+    /// entry and exit. Waiters re-check native state after each wake, so a
+    /// spurious announcement is harmless and a missed one is impossible for a
+    /// waiter that enables its `Notified` before inspecting state.
     changed: tokio::sync::Notify,
 }
 
@@ -170,7 +174,8 @@ impl ConversationLifecycle {
             .commit_boundary
             .lock()
             .expect("lifecycle commit boundary poisoned");
-        self.inner
+        let changed = self
+            .inner
             .state
             .compare_exchange(
                 ConversationLifecycleState::INACTIVE,
@@ -178,7 +183,11 @@ impl ConversationLifecycle {
                 Ordering::AcqRel,
                 Ordering::Acquire,
             )
-            .is_ok()
+            .is_ok();
+        if changed {
+            self.inner.changed.notify_waiters();
+        }
+        changed
     }
 
     /// Linearizes the one `Running -> Draining` transition.
@@ -193,7 +202,8 @@ impl ConversationLifecycle {
             .commit_boundary
             .lock()
             .expect("lifecycle commit boundary poisoned");
-        self.inner
+        let changed = self
+            .inner
             .state
             .compare_exchange(
                 ConversationLifecycleState::RUNNING,
@@ -201,7 +211,11 @@ impl ConversationLifecycle {
                 Ordering::AcqRel,
                 Ordering::Acquire,
             )
-            .is_ok()
+            .is_ok();
+        if changed {
+            self.inner.changed.notify_waiters();
+        }
+        changed
     }
 
     /// A change token, never a copy of subsystem ownership. An idle probe
@@ -231,6 +245,7 @@ impl ConversationLifecycle {
         self.inner
             .state
             .store(ConversationLifecycleState::DRAINING, Ordering::Release);
+        self.inner.changed.notify_waiters();
         true
     }
 
@@ -245,7 +260,8 @@ impl ConversationLifecycle {
             .commit_boundary
             .lock()
             .expect("lifecycle commit boundary poisoned");
-        self.inner
+        let changed = self
+            .inner
             .state
             .compare_exchange(
                 ConversationLifecycleState::INACTIVE,
@@ -253,7 +269,11 @@ impl ConversationLifecycle {
                 Ordering::AcqRel,
                 Ordering::Acquire,
             )
-            .is_ok()
+            .is_ok();
+        if changed {
+            self.inner.changed.notify_waiters();
+        }
+        changed
     }
 
     /// Runs one concrete non-coordinator semantic commit while holding the
@@ -275,6 +295,7 @@ impl ConversationLifecycle {
         }
         self.inner.activity.fetch_add(1, Ordering::AcqRel);
         self.inner.admissions.fetch_add(1, Ordering::AcqRel);
+        self.inner.changed.notify_waiters();
         let admission = LifecycleAdmission {
             inner: Arc::clone(&self.inner),
         };
@@ -307,6 +328,7 @@ impl ConversationLifecycle {
         }
         self.inner.activity.fetch_add(1, Ordering::AcqRel);
         self.inner.admissions.fetch_add(1, Ordering::AcqRel);
+        self.inner.changed.notify_waiters();
         let admission = LifecycleAdmission {
             inner: Arc::clone(&self.inner),
         };
@@ -332,6 +354,7 @@ impl ConversationLifecycle {
         self.inner.activity.fetch_add(1, Ordering::AcqRel);
         self.inner.admissions.fetch_add(1, Ordering::AcqRel);
         if self.state() == ConversationLifecycleState::Running {
+            self.inner.changed.notify_waiters();
             return Ok(LifecycleAdmission {
                 inner: Arc::clone(&self.inner),
             });
@@ -368,6 +391,7 @@ impl ConversationLifecycle {
             after,
             ConversationLifecycleState::Inactive | ConversationLifecycleState::Running
         ) {
+            self.inner.changed.notify_waiters();
             return Ok(LifecycleAdmission {
                 inner: Arc::clone(&self.inner),
             });
@@ -403,6 +427,7 @@ impl ConversationLifecycle {
         }
         self.inner.activity.fetch_add(1, Ordering::AcqRel);
         self.inner.admissions.fetch_add(1, Ordering::AcqRel);
+        self.inner.changed.notify_waiters();
         Ok(LifecycleAdmission {
             inner: Arc::clone(&self.inner),
         })
@@ -433,6 +458,13 @@ impl ConversationLifecycle {
             self.inner.changed.notify_waiters();
         }
         changed
+    }
+
+    /// One announcement of the next lifecycle transition or counted
+    /// admission entry/exit. A level-triggered waiter enables it before
+    /// inspecting native state and inspects again after it fires.
+    pub(crate) fn changed(&self) -> tokio::sync::futures::Notified<'_> {
+        self.inner.changed.notified()
     }
 
     /// Waits until no counted subsystem operation remains in flight.

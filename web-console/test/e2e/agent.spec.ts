@@ -1,7 +1,6 @@
 const fixtureOrigin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 import { test, expect } from '@playwright/test';
 import { expectStableScreenshot } from './screenshot';
-import { choose } from './shell-actions';
 // Each reference owns a fresh context/page, including its renderer paint caches.
 for (const mode of ['settled', 'streaming', 'tools', 'error', 'approval', 'questionnaire', 'selectors']) test(`Harness Agent ${mode} reference uses native snapshots`, async ({ page }) => {
  const errors: string[] = [];
@@ -16,8 +15,8 @@ for (const mode of ['settled', 'streaming', 'tools', 'error', 'approval', 'quest
      await page.locator('[data-tool-call-id="edit-1"]').getByRole('button').click();
    }
    if (mode === 'questionnaire') {
+     // A single-choice answer advances to the next question.
      await page.getByRole('radio', { name: 'Keep native' }).click();
-     await page.getByRole('button', { name: 'Next question' }).click();
      await page.getByRole('checkbox', { name: 'Native contracts' }).click();
    }
    if (mode === 'selectors') {
@@ -31,7 +30,7 @@ for (const mode of ['settled', 'streaming', 'tools', 'error', 'approval', 'quest
  if (mode === 'selectors') {
  await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
  await page.getByRole('button', { name: 'Settings', exact: true }).click();
- await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Theme', 'Dark');
+ await page.getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: 'Dark', exact: true }).click();
  await page.getByRole('button', { name: 'Close Settings' }).click();
  await expectStableScreenshot(page, 'agent-dark-desktop.png');
  await page.setViewportSize({ width: 390, height: 844 });
@@ -109,7 +108,7 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
     await expect(input).toBeVisible(); await expect(primary).toHaveCount(1);
     if (width === 1440) {
       await expect.poll(async () => {
-        const left = (await page.getByRole('button', { name: 'Commands', exact: true }).boundingBox())!;
+        const left = (await page.getByRole('button', { name: 'Add', exact: true }).boundingBox())!;
         const right = (await primary.boundingBox())!;
         return Math.abs((left.y + left.height / 2) - (right.y + right.height / 2));
       }).toBeLessThanOrEqual(3);
@@ -131,7 +130,8 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
     await input.fill('Steer through the existing native operation.'); await input.press('Control+Enter'); await expect(input).toHaveValue('');
     expect(await page.evaluate(() => window.composerFixture.submissions())).toEqual(['turn/start', 'turn/start', 'turn/steer']);
     // A real picker gesture and receipt path; the toolbar accessory stays quiet.
-    const chooser = page.waitForEvent('filechooser'); await page.getByRole('button', { name: 'Add attachments' }).click();
+    await page.getByRole('button', { name: 'Add', exact: true }).click();
+    const chooser = page.waitForEvent('filechooser'); await page.locator('#command-file').click();
     await (await chooser).setFiles({ name: 'review.txt', mimeType: 'text/plain', buffer: Buffer.from('Review notes') });
     await expect(page.getByText('Uploaded', { exact: true })).toBeVisible();
     await input.fill('Review these notes.'); await shot('attachment');
@@ -139,11 +139,11 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
     await expect(input).toHaveValue('Review these notes.');
     await page.evaluate(() => window.composerFixture.docks(true));
     const order = await stack.locator(':scope > *').evaluateAll(nodes => nodes.map(node => (node.hasAttribute('data-context-seat') ? 'Context' : node.getAttribute('aria-label')) ?? 'Composer'));
-    expect(order).toEqual(['Context', 'To-dos', 'Goal', 'Queue', 'Composer']);
+    expect(order).toEqual(['To-dos', 'Goal', 'Queue', 'Composer']);
     await shot('context');
     await page.evaluate(() => window.composerFixture.docks(false));
     await expect(input).toHaveValue('Review these notes.');
-    for (const name of ['Commands', 'Add attachments', 'Model and reasoning']) await expect(page.getByRole('button', { name, exact: true })).toBeVisible();
+    for (const name of ['Add', 'Model and reasoning']) await expect(page.getByRole('button', { name, exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Approval mode', exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Model and reasoning' }).click();
     await expect(page.getByText('Reading native models…')).toHaveCount(0); await page.keyboard.press('Escape');
@@ -218,23 +218,19 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
       localStorage.removeItem('rustx-composer-busy-enter-v1');
     }, { locale, theme });
     await page.goto(composerURL); await expect(page).toHaveTitle('rustX Agent reference');
-    const names = locale === 'en' ? { input: 'Message', preference: 'Enter while running:', preferenceQueue: 'Enter while running: Queue', preferenceSteer: 'Enter while running: Steer', queue: 'Queue', steer: 'Steer', send: 'Send', commands: 'Commands' }
-      : { input: '消息', preference: '运行时 Enter：', preferenceQueue: '运行时 Enter：排队', preferenceSteer: '运行时 Enter：插话', queue: '排队', steer: '插话', send: '发送', commands: '命令' };
+    const names = locale === 'en' ? { input: 'Message', queue: 'Queue', steer: 'Steer', send: 'Send', commands: 'Add', attach: 'Add' }
+      : { input: '消息', queue: '排队', steer: '插话', send: '发送', commands: '添加', attach: '添加' };
     const input = page.getByRole('textbox', { name: names.input, exact: true });
     const primary = page.locator('[data-composer-primary]');
-    const preference = page.getByRole('button', { name: names.preference });
-    await expect(preference).toHaveAccessibleName(names.preferenceQueue);
+    // The busy-Enter preference is a General Settings row; the Composer has no selector.
+    await expect(page.getByRole('button', { name: /Enter while running|运行时 Enter/ })).toHaveCount(0);
     await page.evaluate(() => window.composerFixture.running(true));
     await input.fill('Queue by default'); await expect(primary).toHaveAccessibleName(names.queue);
     await input.press('Enter'); await expect(input).toHaveValue('');
     await input.fill('Complementary steer'); await input.press('Control+Enter'); await expect(input).toHaveValue('');
     await input.fill('Queue from primary'); await primary.click(); await expect(input).toHaveValue('');
     expect(await page.evaluate(() => window.composerFixture.submissions())).toEqual(['turn/start', 'turn/steer', 'turn/start']);
-    // Keyboard navigation selects the compact preference and returns focus.
-    await preference.focus(); await page.keyboard.press('Enter');
-    await expect(page.getByRole('menuitem', { name: names.queue, exact: true })).toBeFocused();
-    await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter'); await expect(preference).toBeFocused();
-    await expect(preference).toHaveAccessibleName(names.preferenceSteer);
+    await page.evaluate(() => window.composerFixture.busyEnter('steer'));
     expect(await page.evaluate(() => localStorage.getItem('rustx-composer-busy-enter-v1'))).toBe('steer');
     await input.fill('Preferred steer'); await expect(primary).toHaveAccessibleName(names.steer);
     await input.press('Enter'); await expect(input).toHaveValue('');
@@ -244,8 +240,6 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
     await input.fill('Line one'); await input.press('Shift+Enter'); await page.keyboard.type('Line two');
     await expect(input).toHaveValue('Line one\nLine two'); await expect(primary).toHaveAccessibleName(names.steer);
     await input.focus(); await expect(input).toBeFocused();
-    const prefRect = await preference.boundingBox(); expect(prefRect).not.toBeNull();
-    expect(prefRect!.x).toBeGreaterThanOrEqual(0); expect(prefRect!.x + prefRect!.width).toBeLessThanOrEqual(width);
     await page.screenshot({ path: `/tmp/rustx-439-${locale}-${theme}-${width}.png` });
     await page.getByRole('button', { name: names.commands, exact: true }).click();
     await expect(page.getByRole('listbox')).toBeVisible(); await input.press('Escape');
@@ -253,7 +247,7 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
     // A dismissed menu's Escape cannot be the first press of cancellation.
     await input.press('Escape'); expect(await page.evaluate(() => window.composerFixture.cancellations())).toEqual([]);
     // Focus outside the supported editor invalidates that arm.
-    await preference.focus(); await page.keyboard.press('Escape'); await input.focus();
+    await page.getByRole('button', { name: names.attach, exact: true }).focus(); await page.keyboard.press('Escape'); await input.focus();
     await page.evaluate(() => window.composerFixture.holdCancellation());
     await input.press('Escape'); await input.press('Escape');
     await expect.poll(() => page.evaluate(() => window.composerFixture.cancellations())).toHaveLength(1);
@@ -269,13 +263,9 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
 
 test('Busy Enter preference is read from browser storage after a page reload', async ({ page }) => {
   await page.goto(composerURL);
-  const preference = page.getByRole('button', { name: 'Enter while running:' });
-  await expect(preference).toHaveAccessibleName('Enter while running: Queue');
-  await preference.click(); await page.getByRole('menuitem', { name: 'Steer', exact: true }).click();
+  await page.evaluate(() => window.composerFixture.busyEnter('steer'));
   expect(await page.evaluate(() => localStorage.getItem('rustx-composer-busy-enter-v1'))).toBe('steer');
-  await expect(preference).toHaveAccessibleName('Enter while running: Steer');
-  await page.reload(); await expect(preference).toHaveText('Enter while running: Steer');
-  await expect(preference).toHaveAccessibleName('Enter while running: Steer');
+  await page.reload();
   const primary = page.locator('[data-composer-primary]'), input = page.getByRole('textbox', { name: 'Message', exact: true });
   await input.fill('Idle after reload'); await expect(primary).toHaveAccessibleName('Send');
   await page.evaluate(() => window.composerFixture.running(true)); await expect(primary).toHaveAccessibleName('Steer');

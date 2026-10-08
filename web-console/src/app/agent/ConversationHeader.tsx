@@ -4,11 +4,11 @@ import type { WorkspaceAuthority } from '../../workspaces/authority';
 import { useTranslation } from '../../locale/react';
 import { useState, type ReactNode } from 'react';
 import type { AppServerClient, SessionView } from '../../client/app-server';
-import type { SourceTarget } from '../../../../protocol/app-server/v34';
+import type { SourceTarget } from '../../../../protocol/app-server/v37';
 import { useClientSelector, sameValue } from '../../client/selectors';
 import { Menu } from '../../presentation/primitives/Menu';
 import { Button } from '../../presentation/primitives/Button';
-import { IconInspectOutline12 } from '../../presentation/primitives/icons';
+import { IconEllipsisOutline16, IconInspectOutline12 } from '../../presentation/primitives/icons';
 import { navigateTabs } from '../../presentation/primitives/tabs';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 import { sessionDisplayTitle } from '../../bindings/session-title';
@@ -26,15 +26,22 @@ export function ConversationHeader({ host, authority, client, view, authorityRev
   const [failure, setFailure] = useState<{ owner: string; message: string }>();
   const error = failure?.owner === owner ? failure.message : undefined;
   const exportSession = () => { if (!view) return; setFailure(undefined); void client.exportSession(view.id).catch(cause => setFailure({ owner, message: String(cause) })); };
-  return <header className={`${agentCss.header} ${!view ? agentCss.headerBlank : ""}`}><div className={`${agentCss.titleRow} agent-title-row`}><div className={agentCss.titleCluster}><strong id="session-title" aria-label={view ? tx('agent:conversation-header.session-title') : tx('agent:conversation-header.product-title')}>{view ? sessionDisplayTitle(tx, view.summary) : 'rustX'}</strong></div>
-        <div className="row">{view?.summary && <OpenWorkspace client={client} host={host} authority={authority} target={{ session_id: view.id, active_node: view.summary.active_node }} disabled={!connected || !!view.deleting}/>} {view && <SessionActions client={client} sessionId={view.id} connected={connected} attached={attached} commandOpen={commandOpen} settings={() => setSessionSettingsOpen(value => !value)} tree={() => invokeCommand({ id: 'tree' })} exportSession={exportSession}/>}
-
-          {previewToggle}<Button aria-label={tx('agent:conversation-header.toggle-inspector')} aria-expanded={inspectorOpen} onClick={toggleInspector}><IconInspectOutline12 /></Button></div>
+  return <header className={`${agentCss.header} ${!view ? agentCss.headerBlank : ""}`}>
+      <div className={agentCss.titleRow}>
+        <div className={agentCss.titleCluster}>
+          <span id="session-title" className={`${agentCss.crumb} ${agentCss.crumbCurrent}`} aria-label={view ? tx('agent:conversation-header.session-title') : tx('agent:conversation-header.product-title')}>{view ? sessionDisplayTitle(tx, view.summary) : 'rustX'}</span>
+        </div>
+        <div className={agentCss.headerUtilities}>
+          {view?.summary && <OpenWorkspace client={client} host={host} authority={authority} target={{ session_id: view.id, active_node: view.summary.active_node }} disabled={!connected || !!view.deleting}/>}
+          {view && <SessionActions client={client} sessionId={view.id} connected={connected} attached={attached} commandOpen={commandOpen} settings={() => setSessionSettingsOpen(value => !value)} tree={() => invokeCommand({ id: 'tree' })} exportSession={exportSession}/>}
+          <Button size="sm" className={agentCss.iconButton} aria-label={tx('agent:conversation-header.toggle-inspector')} aria-expanded={inspectorOpen} onClick={toggleInspector}><IconInspectOutline12 /></Button>
+        </div>
+        <div className={agentCss.headerCorner}>{previewToggle}</div>
       </div>
       {view && <SessionConfiguration key={`${authorityRevision}:${view.id}`} client={client} view={view} openOwningSettings={openOwningSettings} />}
       {settingsFeedback}
       {view && sessionSettingsOpen && <section aria-label={tx('agent:conversation-header.session-settings')}><p>{tx('agent:conversation-header.workspace')}{' '}{view.settings?.cwd ?? tx('agent:conversation-header.unavailable')}</p><LiveAgentControls client={client} sessionId={view.id} /><Button onClick={() => setSessionSettingsOpen(false)}>{tx('agent:conversation-header.close-session-settings')}</Button></section>}
-      {view && <div className={agentCss.tabs} role="tablist" aria-label={tx('agent:conversation-header.conversation-view')} onKeyDown={navigateTabs}>{(['chat', 'trajectory'] as const).map(mode => <Button className={`${agentCss.tab} ${conversationMode === mode ? agentCss.tabActive : ""}`} key={mode} role="tab" id={`view-tab-${mode}`} aria-controls="conversation-view" tabIndex={conversationMode === mode ? 0 : -1} aria-selected={conversationMode === mode} onClick={() => setConversationMode(mode)}>{mode === 'chat' ? tx('agent:conversation-header.chat') : tx('agent:conversation-header.trajectory')}</Button>)}</div>}
+      {view && <div className={agentCss.tabs} role="tablist" aria-label={tx('agent:conversation-header.conversation-view')} onKeyDown={navigateTabs}>{(['chat', 'trajectory'] as const).map(mode => <button type="button" className={`${agentCss.tab} ${conversationMode === mode ? agentCss.tabActive : ""}`} key={mode} role="tab" id={`view-tab-${mode}`} aria-controls="conversation-view" tabIndex={conversationMode === mode ? 0 : -1} aria-selected={conversationMode === mode} onClick={() => setConversationMode(mode)}>{mode === 'chat' ? tx('agent:conversation-header.chat') : tx('agent:conversation-header.trajectory')}</button>)}</div>}
       {error && <p role="alert">{error}</p>}
       </header>;
 }
@@ -56,8 +63,8 @@ function SessionActions({ client, sessionId, connected, attached, commandOpen, s
   const tx = useTranslation();
   const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
   const safe = useClientSelector(client, state => lineageSwitchSafe(state.views[sessionId]));
-  return <Menu open={sessionMenuOpen} onClose={() => setSessionMenuOpen(false)} align="end" autoFocus
-          anchor={<Button aria-label={tx('agent:conversation-header.session-actions')} aria-haspopup="menu" aria-expanded={sessionMenuOpen} onClick={() => setSessionMenuOpen(value => !value)}>•••</Button>}
+  return <Menu open={sessionMenuOpen} onClose={() => setSessionMenuOpen(false)} align="end" dense autoFocus
+          anchor={<Button size="sm" className={agentCss.iconButton} aria-label={tx('agent:conversation-header.session-actions')} aria-haspopup="menu" aria-expanded={sessionMenuOpen} onClick={() => setSessionMenuOpen(value => !value)}><IconEllipsisOutline16 /></Button>}
           items={[{ id: 'settings', label: tx('agent:conversation-header.session-settings') }, { id: 'export', label: tx('agent:conversation-header.export'), disabled: !connected }, { id: 'tree', label: tx('agent:conversation-header.session-tree'), disabled: !attached || commandOpen || !safe }]}
           onSelect={id => { setSessionMenuOpen(false); if (id === 'settings') settings(); else if (id === 'tree') tree(); else if (id === 'export') exportSession(); }} />;
 }

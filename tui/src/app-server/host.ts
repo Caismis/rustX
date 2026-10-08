@@ -119,6 +119,7 @@ function sessionIdOf(notification: Notification): string {
   switch (notification.method) {
     case "configuration/changed":
       return notification.params.application.scope;
+    case "session/ownershipRetired":
     case "session/summaryInvalidated":
       return notification.params.session_id;
     default:

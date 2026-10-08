@@ -1,3 +1,43 @@
+## Interrupted Assistant presentation
+
+Behavioral reference: local `../deepseek-harness` at
+`5badb15009ae1756c3afe0ae0cef1faafc290ccc`, specifically
+`packages/client/ui-chat/src/client/chat/{AssistantNodeView,AssistantMarkdown,TurnProcessNodeView,TurnTailNodeView}.tsx`.
+Harness freezes released prose/reasoning on interruption, uses the stopped
+process label, and does not replace it with a diagnostic JSON disclosure.
+The rustX adapter renders typed publication-audit text, reasoning and refusal
+through the existing Assistant/Markdown components. Empty audits and unexecuted
+Tool proposals have no Chat body. Audits retain their native cursor; their
+message identity suppresses stale streaming duplicates. Native terminal facts
+continue to own stopped/failed labels. Copy and the native settlement time are
+available for partial prose; completed-response actions are not fabricated.
+Native audit data remains available through existing Inspector/Trajectory reads.
+The adapter and grouping changes are rustX-authored; no Harness runtime or
+interruption state machine is copied.
+
+## Compaction continuation and checkpoint UI
+
+Read-only reference: local `../deepseek-harness` at
+`5badb15009ae1756c3afe0ae0cef1faafc290ccc`.
+`packages/client/ui-chat/src/client/chat/CompactionItem.tsx` and
+`src/client/locale.ts` supply the checkpoint disclosure and bilingual wording;
+`CompactionCommandCard.tsx` was consulted for one completed marker per command.
+The existing Message stylesheet already carries the Harness geometry, sticky
+expanded header, muted title, context icon and hover disclosure. The Message
+adapter now uses those styles for native `compaction_summary` Ledger messages.
+No history count, token estimate, command row or runtime outcome is invented.
+The temporary completion notice yields only when its exact native summary is
+present in the displayed transcript page. Source hashes are in the inventory.
+
+`context/compact` awaits model generation and native maintenance release. It
+uses the existing bounded domain-wait lane rather than the ordinary 30-second
+RPC deadline that disconnected every Session on the shared socket. Native
+execution, lost-response correlation and no-replay behavior remain authoritative.
+Controlled-clock tests hold the reply beyond the RPC deadline and verify read
+and control capacity. The real App Server with a gated scripted provider covers manual compaction,
+continued input, questionnaire settlement, automatic overflow compaction and
+final response in both locales at desktop and narrow viewport widths.
+
 ## #439 Composer keyboard policy
 
 Approved read-only reference: `deepseek-ai/deepseek-harness` at
@@ -22,9 +62,9 @@ source, consulted-only files, exact upstream/local hashes and import closure.
 Native cancellation, Queue/Steer admission, upload gates and retained-first-submission
 semantics keep their existing rustX owners. See [COMPOSER.md](COMPOSER.md).
 
-PR #445's accepted Composer behavior is integrated with #447's mandatory App Server v34/file-delivery
+PR #445's accepted Composer behavior is integrated with #447's mandatory App Server v35/file-delivery
 contract. Inventory hashes and retained dependency closures describe this final
-source, including v34 imports; upstream reference pins are unchanged.
+source, including v35 imports; upstream reference pins are unchanged.
 
 ## #432 Host desktop opening
 
@@ -1165,19 +1205,29 @@ Materially adapted interaction patterns:
   explicit commit/cancel. The implementation publishes local CSS and persists
   only deliberate browser preferences.
 - `packages/client/ui-chat/src/client/chat/TurnNavigator.tsx`:
-  fixed pitch, active/pending marks, bounded hover/focus preview and keyboard
-  focus. The implementation consumes rustX's bounded native Attempt outline.
+  the fixed-pitch virtual rail of every known turn, active/busy marks, focus
+  range retention, first-size placement, follow-outside-the-fade-band and the
+  hover/focus prompt/response preview. The implementation consumes rustX's
+  native Attempt outline: its count names every mark, its one bounded page
+  supplies loaded marks, and an unloaded mark reads its native page before
+  navigating (Harness pages its event window the same way).
 - `packages/client/ui-chat/src/client/chat/turn-rail-items.ts` was inspected for
   outline/loaded-anchor reconciliation; no source was copied. Loaded anchors
   are reused only with the same native cut and exact origin/cursor.
-- `TurnNavigator.module.css` was inspected for rail geometry. The local rail
-  stylesheet is independently authored with rustX tokens.
+- `TurnNavigator.module.css` supplies the rail geometry, ticks, fades, preview
+  card and narrow-container hiding. The slot is the rustX reading surface,
+  which already excludes the composer, so the frame centers in it.
+- `tests/turn-navigator-fixture.ts` supplies the jsdom rail size observer.
+
+The preview text is native: `ConversationTurn.prompt` (the turn's first human
+prompt) and `ConversationTurn.response` (its final text once settled), bounded to
+Harness's one-line and three-line budgets. No preview is derived in the browser.
 
 No Harness runtime, Session store, semantic turn derivation, scroll coordinator
 or shell was imported. Native Attempt origins own turn identity; display ordinal
 only selects a native page. Existing derived ChatViewport and conversation CSS
 retain their original provenance with updated local hashes and dependency closure.
-The current generated imports and local dependency closure use mandatory App Server v34.
+The current generated imports and local dependency closure use mandatory App Server v35.
 
 ## #431 explicit delivery reference audit
 
@@ -1187,7 +1237,7 @@ actual files. Explicit declaration, canonical action coordinates, and one shared
 preview seat informed the design. No new Harness source was copied/adapted at that
 pin, so no conceptual-only source records are added. The existing attributed
 Markdown and RightPanel descendants are reused with their original upstream
-baselines; current local hashes/import closure are refreshed for v34 and Markdown
+baselines; current local hashes/import closure are refreshed for v35 and Markdown
 preview composition. image-size is an independently pinned MIT dependency for
 encoded raster dimensions, included in generated production dependency notices.
 
@@ -1205,10 +1255,403 @@ Read-only behavioral reference at approved pin
 - `packages/client/ui-chat/src/client/contract/snapshot.ts`
 - `packages/client/ui-conversation/src/client/skeleton/ContextMeter.tsx`
 
-These informed the non-modal lifecycle, inspectable diagnostic, checkpoint identity,
-and Composer measurement disclosure. ContextSeat is rustX-authored over native
-read state. No Harness command execution/storage, heuristic token breakdown, or
+These informed the non-modal lifecycle, inspectable diagnostic and checkpoint identity.
+The Composer occupancy disclosure was later removed for Harness parity; ContextSeat
+is rustX-authored over native read state and renders only compaction lifecycle. No Harness command execution/storage, heuristic token breakdown, or
 projected token estimate was imported. Existing canonical transcript rendering owns
 historical checkpoints; the context seat adds no history rows. The failed lookup
 of `ui-chat/src/client/chat/ContextMeter.tsx` was corrected to the actual
 `ui-conversation` path above. Source hashes are recorded under `inspected_only`.
+
+## Ask-question takeover and transcript row (UI/UX alignment)
+
+Reference pin `5badb15009ae1756c3afe0ae0cef1faafc290ccc`:
+
+- `packages/client/ui-user-questions/src/client/QuestionComposer.tsx` (QuestionFlow):
+  the takeover keeps the header-only eyebrow, the minimize and dismiss icon
+  actions, the always-visible custom answer row, single-choice advance, the
+  skip/next/submit footer and the recommended first-choice draft. Dismissing
+  the set is the native decline; a skipped question is omitted from the native
+  index submission, exactly like any unanswered one. Countdown, Remote,
+  plan-review and slot-store machinery is excluded.
+- `packages/client/ui-tool/src/client/tool/toolviews/ask-question-row.tsx`,
+  `components/QuestionToolRow.tsx` and `components/AskQuestionCard.tsx` →
+  `src/presentation/agent/QuestionRow.tsx`: the row summary is the interaction
+  verdict (waiting, answered count, cancelled, interrupted) and its expansion is
+  the read-only question/answer record. `src/bindings/ask-user.ts` reads it from
+  the persisted native `ask_user` arguments and result, pairing answers by their
+  echoed question index; anything it cannot pair keeps the generic tool card.
+- `components/AskQuestionCard.module.css` → `src/presentation/agent/AskQuestionCard.module.css`.
+
+The timed-question panel actions and the trajectory Inspect pill have no rustX
+counterpart and were not imported.
+
+## Step-process groups (UI/UX alignment)
+
+Reference pin `5badb15009ae1756c3afe0ae0cef1faafc290ccc`:
+
+- `packages/client/ui-chat/src/client/conversation-nodes/process-groups.ts` and
+  `process-activity.ts` were followed for segmentation and the category ranking;
+  `src/bindings/step-groups.ts` re-expresses them over native transcript entries
+  and rustX Tool names. No source was copied.
+- `packages/client/ui-chat/src/client/chat/ChatGroupSeat.tsx` and `step-process.ts`
+  → `src/presentation/agent/StepGroup.tsx`: the group header (activity icon
+  swapped for the chevron on hover or expansion), the closed-group title
+  composition and the capped body with scroll-edge fades.
+- `ChatGroupSeat.module.css` → `src/presentation/agent/StepGroup.module.css`.
+- `packages/client/ui-chat/src/client/presentation-policy.ts`: rustX has no work-details
+  mode and uses Harness's default `detailed` policy (history grouped, live in place).
+
+Live group titles and details, follow scrolling, presentation modes and the
+searchable-hidden reveal were not imported.
+
+## Usage pills and context meter (UI/UX alignment)
+
+Reference: `/home/caismis/Documents/codes/deepseek-harness@5badb15009ae1756c3afe0ae0cef1faafc290ccc`,
+read-only. `ui-chat` `stat-dialog.ts` / `.module.css` became the
+`StatDialog` primitive (Base UI Popover owns placement and dismissal);
+`StatsPills.tsx`, `TurnUsagePanel.tsx` and `ui-conversation` `ContextMeter.tsx`
+became `app/agent/UsageStats.tsx` with their styles combined in
+`UsageStats.module.css`; `token-format.ts` (plus `formatDuration` and
+`formatTokensPerSecond`) became `app/agent/token-format.ts`. The retired
+`ConversationStats.tsx` record is removed. Harness's Compact mode, plugin dock
+slots, cache-write bucket and browser-side token meter are not imported: every
+figure is a native rustX reading (`ConversationStatistics.timing`,
+`CompletedResponseView.usage`/`models`, `ContextOccupancy.breakdown`).
+
+## Completed-response lineage actions (UI/UX alignment)
+
+Reference: `/home/caismis/Documents/codes/deepseek-harness@5badb15009ae1756c3afe0ae0cef1faafc290ccc`,
+read-only. `ui-chat` `TurnTailNodeView.tsx`, `MessageIconActions.tsx` and the
+`forkAt` seat in `apply.ts` were consulted; no new upstream source is imported
+and no pin changes. The tail keeps one branch action, Branch into a new Session
+(`session/fork`), and rustX's Regenerate sits where Harness seats extra actions.
+Both run on the click from `App.tsx`, as `forkAt` does, instead of opening the
+`CommandPanel` chooser; the duplicate in-Session Branch tail action, the
+chooser's response-anchored rows and their copy are removed. `TurnTail.tsx`,
+`CommandPanel.tsx` and `dictionaries/agent.ts` are rehashed in the inventory.
+
+## Turn-rail reading window (UI/UX alignment)
+
+Reference: `/home/caismis/Documents/codes/deepseek-harness@5badb15009ae1756c3afe0ae0cef1faafc290ccc`,
+read-only. `ui-chat` `ChatView.tsx` and `use-chat-navigation.ts`, and
+`session-controller` `Session.loadOlder`/`loadThrough`, were consulted; no new
+upstream source is imported and no pin changes. The earlier contiguous
+load-through adaptation is superseded by PR #453's native bounded reading
+contract: direct anchor-relative windows, finite browser history, independent
+live-tail authority and explicit Return-to-latest reset. A viewport gesture now
+starts before outline I/O and fences both native window publication and the final
+layout frame. The fixed-pitch Turn rail computes ordinal ranges arithmetically;
+no total-sized mark array, index Map or virtualizer measurement cache remains.
+`ChatViewport.tsx` and `TurnNavigator.tsx` retain the same source attribution and
+are rehashed with the current dependency closure in the inventory.
+
+## Conversation header and Trajectory chrome (UI/UX alignment)
+
+Reference: `/home/caismis/Documents/codes/deepseek-harness@5badb15009ae1756c3afe0ae0cef1faafc290ccc`,
+read-only. Consulted: `ui-conversation` `ConversationSession.tsx` and
+`ConversationRoot.module.css`; `ui-open-in-app` `OpenTargetButton.tsx`/`.module.css`;
+`ui-sidebar-right` `ExpandButton.tsx`/`.module.css`; `session-log-export`
+`HeaderAction.tsx`/`.module.css`; `ui-trajectory` `TrajectoryToolbar.tsx`/`.module.css`
+and `TrajectoryTable.tsx`/`.module.css`. Each adapted file records its exact
+additional source in the inventory; the repository baseline is unchanged.
+
+The header title is Harness's current crumb; the workspace opener is the compact
+hairline split button; More, Inspector and the Previews toggle (the mirrored
+panel glyph in the corner seat) are 28px icon controls; view tabs are plain
+buttons, and the Chinese Chat tab reads 对话 as in Harness. The Trajectory
+toolbar uses Harness's 32px strip, icon toggles and trailing search field;
+Actual time stays visible as a rustX switch. Ledger role tags are label-only
+until the ledger is narrow, the Turn label hangs from the Turn's first row and is
+the only structural chrome (Steps have no chrome, seat or navigation target),
+only the selected Turn draws its rail, and the promoted initial System row sits
+outside that rail and names its change only. As in Harness, a Request is a
+gutter dot on the boundary above the first output of its own Step; a Request
+without such output keeps its own 10px seat, and folded Turns show no Request
+dots. The timeline's model span uses Harness's TTFT/decoding violets. The detail
+header shows a role tag, the native Turn/Step location and an icon close.
+Every control except the boundary dot sits inside its row.
+Menu now keeps the trigger it captured on open until the next open, so after
+a selection the keyboard returns to the split button's chevron rather than the
+anchor's first button; a menu opened from outside its anchor closes onto the
+anchor's `aria-haspopup` button. `Menu.tsx` is rehashed in the inventory. The
+Trajectory ledger anchors a prepend on its first fully visible seat.
+The search field keeps Harness's stroked hairline on its own compositing layer.
+On the page layer it straddles a raster tile, so its rounded corners were
+antialiased differently depending on which tile or partial repaint drew them:
+12 of 30 fresh pinned-browser contexts differed (Δ1 on 7 pixels) in the focused
+search capture, and other captures varied too. As its own layer it rendered
+identically in 45 of 45 targeted replays.
+
+Trace retained-input ownership repair updates generated imports to App Server v37.
+Source inventory local hashes and dependency closure reflect this mechanical
+protocol change; all Harness upstream pins remain unchanged.
+
+New-conversation Sidebar visibility follows Harness `tree.ts` at
+`5badb15009ae1756c3afe0ae0cef1faafc290ccc`: pin the current blank above history,
+exclude blanks from search, and hide them when another Session is selected.
+Harness reuses a native blank and marks it engaged on accepted input. rustX keeps
+its existing deferred creation: a separate browser draft row has no Session ID,
+timestamp, or native actions. Workspace selection moves this row without
+resetting the input; leaving the draft removes its presentation. A native create
+acknowledgement ends the draft, and the authoritative catalog supplies the real
+row. Post-create admission failures retain their existing Session-scoped recovery
+and are never hidden or deleted as abandoned drafts.
+
+Trajectory overview alignment follows Harness `TrajectoryTimeline.tsx` at
+`5badb15009ae1756c3afe0ae0cef1faafc290ccc`. Its two model colours represent
+TTFT and decoding, not a reasoning-content boundary. The equal-width sequence
+view now paints the measured TTFT/generation ratio without promoting numeric
+metrics into wall-clock coordinates. Timed projections still require the native
+provider bridge. Press/drag selection, hover cursor, outside-range dimming,
+double-click clearing and zoomed edge panning retain native record identities
+and projection-generation fencing. Exact selection edges persist until the
+projection changes; changed coordinates reproject the selected native records.
+
+The Workspace panel Start page adapts Harness `ui-sidebar-right`'s GuideBody
+and its capsule styling at `5badb15009ae1756c3afe0ae0cef1faafc290ccc`. The
+upstream slot registry and filesystem/terminal Host are not imported. rustX's
+Product Host resolves the exact native Session/node before browsing or PTY
+admission. Existing preview occurrences, resource leases and Inspector ownership
+remain in `PreviewWorkspaceOwner`; the new workbench is a separate display mode.
+
+Workspace sidebar fidelity repair: the Start page now retains GuideBody's 380px
+capsules, 14px/20px insets, 56px compass, neutral watermark ink and 10% bottom
+spacer. Original guide artwork, fullscreen/restore glyphs and TerminalTheme OSC
+palette handling are retained with per-file provenance. The upstream DockLayout
+38px strip replaces the extra title/navigation rows; guide replacement, shell
+selection-and-launch, add/close tabs, keyboard navigation and shortcuts operate
+on rustX Session-scoped PTYs. The two-pane presentation now uses the upstream dockkit engine, planner,
+geometry, gesture handlers and component tree. It does not import Harness's
+runtime or plugin store.
+Browser checks cover guide geometry, light/dark terminal backgrounds, actual
+shell output, focus, tabs, split/merge/resize, shortcuts and a Chinese narrow view.
+
+### Workspace file tree and source tabs
+
+The file browser and viewer use the Harness `5badb15009ae1756c3afe0ae0cef1faafc290ccc`
+`ui-sidebar-files` FilesBody/store, document TextPreview/CodeBody, PathLabel,
+FileTypeIcon/CodeFileIcon artwork, CodeToolbar/CodeCard, and code-language table.
+`source-inventory.json` records each immutable source and adapted dependency.
+The 38px path toolbar, 18px tree indentation, natural folder-first ordering,
+separate resource tabs, persisted tree/view preferences and icon toolbar follow
+those sources. Harness remotes, stores and Session authority are excluded: rustX's
+existing Product Host admits every listing/read/desktop open against the native
+Session and uses descriptor-relative filesystem validation. The 1 MiB text limit remains. Complete binary previews have a separate 16 MiB
+Host read limit; Office conversion retains its existing stricter source and
+sandbox limits.
+
+
+### Sidebar document and docking source port
+
+The same upstream commit supplies `ui-dockkit` (engine and presentation),
+`ui-sidebar-right` layout persistence and shell CSS, document preview registry
+matching, Markdown frontmatter/field rendering, static HTML document preparation,
+image zoom controls, and the complete read-only Excel parser/rendering pipeline.
+The copied dockkit behavior tests remain alongside the port. Changes at seams:
+
+- React 19 ref initialization and existing rustX primitive/icon/locale bindings.
+- The embedder uses upstream `planSettle` to merge emptied panes and reseed the
+  guide; files deduplicate by workspace-relative path, Files pages by pane.
+- Metadata-only layout snapshots are validated before restoration and scoped
+  to the exact Product Host authority and native Session/node. Terminal tabs
+  reconcile against Host-owned PTYs, never start a process by restoring metadata.
+- Hidden document bodies release reads, object URLs and parser workers. Live
+  native terminals retain their Host lifetime and reattach when selected.
+- The copied spreadsheet worker uses Vite's module-worker bundling. An absent
+  XLSX default row height remains absent instead of becoming `NaN`.
+- Markdown documents opt into Host-admitted relative images and file navigation;
+  conversation Markdown's inert image policy is unchanged.
+- HTML copies the upstream packer, bootstrap and opaque `allow-scripts` iframe.
+  Inline interaction and direct local classic JS/CSS work through scoped Host
+  reads. The iframe receives no Host RPC, parent storage or same-origin access.
+  General settings can select the upstream inert/static mode. Module graphs,
+  CSS dependency traversal and dynamic relative fetch are not supported by DSH's
+  packer either. PDF display retains rustX's bounded PDF worker owner.
+- DOCX/PPTX retain OOXML admission and native source reauthorization. Linux keeps
+  its existing cgroup/Bubblewrap converter. macOS uses DSH's pinned
+  `@deepseek-ai/libreoffice-kit@0.1.5` native engine in a clean-environment
+  Seatbelt process group: private input/output, dependency and system-font reads,
+  no network or user-home access, CPU/file/descriptor and output/deadline limits.
+  The native engine keeps DSH's 60-second conversion budget. Its bounded 256 MiB
+  font staging is separate from the unchanged 4 MiB published PDF limit.
+  macOS does not claim Linux's cgroup memory/task limits. Missing sandbox or
+  engine fails closed. Legacy DOC/PPT remain outside the OOXML admission format.
+  The package includes native engine licenses and source/build information under
+  MPL-2.0; its optional platform payload must accompany the Host installation.
+
+
+Browser coverage includes default Markdown versus explicit source/text, YAML
+frontmatter, GFM tables/math, workspace-relative images and links, static HTML,
+SVG, PDF, CSV/XLSX, light/dark terminal rendering, native filesystem/PTY actions,
+source DockLayout floating/docking/collapse/restoration and narrow Chinese UI.
+Install-closure notices include Node-only ExcelJS dependencies as well as browser
+modules. The upstream `buffers@0.1.1` distribution has no published license
+statement; that omission is recorded explicitly, not replaced with an inferred
+license. The ExcelJS browser entry does not import that Node-only archive reader.
+
+Conversation file references use Harness `ui-primitives/src/markdown/file-link.ts`
+and the `MarkdownFileLink` delegate from `render.tsx`, retaining its URI decoding,
+line fragment grammar, settled-message activation and existing file-link CSS.
+The rustX Session owns the delegate for Conversation and Trajectory previews;
+Product Host resolves references within the admitted native workspace with
+no-follow descriptor traversal. References open the existing Workbench dock
+content identity rather than synthesizing an Artifact or committed delivery.
+Document-local resource links retain their own base path and resource owner.
+
+Trajectory prompt inspection now follows Harness `TrajectoryTable.tsx`'s explicit
+missing-system-prompt state and direct Markdown payload. Frozen rustX request
+detail remains the sole source; current configuration never fills history.
+The timeline includes projected SystemPromptCell and ContextRow input entries,
+with independent display keys and their original request detail owner. Sequence
+mode places the initial prompt first; timed modes use zero-duration markers at
+the owning request snapshot, since no separate input clock is recorded.
+
+### Trajectory detail presentation alignment
+
+The detail facet matrix now follows the pinned Harness `TrajectoryTable.tsx`
+`SYSTEM_PROMPT_TABS`, `SYSTEM_UPDATE_TABS`, `REQUEST_TABS`, and `detailTabs`:
+prompt/catalog cells no longer inherit request summary/native tabs; request
+markers expose summary/options/usage/timing; messages and individual context
+rows expose summary/preview/raw content; tool source replaces the redundant
+input tab. Raw content is message text, not the protocol message envelope.
+Overview sections link to their corresponding facet, reasoning remains folded
+inside the message preview, and attachments stay with their content. Context
+reads still use the immutable native request owner but render only the selected
+message ID. rustX-only lifecycle records retain native evidence inspection.
+
+### Trajectory Harness parity: details, overview and ledger rows
+
+Reference: `/home/caismis/Documents/codes/deepseek-harness@5badb15009ae1756c3afe0ae0cef1faafc290ccc`,
+read-only: `ui-trajectory` `TrajectoryTable.tsx`/`.module.css`,
+`TrajectoryTimeline.tsx`/`.module.css`, `TrajectoryToolbar.tsx`, `locales.ts`,
+`trajectory-preview.ts` and `ui-primitives/src/markdown/plain-text.ts`.
+
+The details panel is ported from Harness's: role tag and Turn · group location
+(or `Request #N`), Harness tab sets per kind, the Summary fact list with source
+and hierarchy links and token rows, titled overview sections that open their tab,
+the usage (this request / session cumulative), timing, tool catalog, prompt diff,
+source-block and program views, and Harness's own copy in both locales. rustX's
+Native tab, explanatory notes, inspection-bound notices and Turn-structure
+inspector are removed; native facts that Harness has no view for (Agent identity,
+activation origin, exit code, managed-output locator, retry ordinal) are no longer
+shown in the panel. A Diff still refuses truncated or missing prompts. The panel
+uses Harness's resize handle and narrow overlay; `react-resizable-panels@4.12.4`
+is no longer a dependency and its notice is removed.
+
+The overview is ported from Harness's: a 44px lane-label column beside a track
+that clips its projected domain (zooming or panning no longer draws over the
+labels or past the edge), a delayed tooltip per block naming its role, recorded
+range and timing, Harness's minimum selection, edge pan, hover line and turn
+boundaries. The Model block shows TTFT then decoding, placed by the native phase
+bridge. rustX's keyboard zoom/pan, hover hint line and the visible Actual time
+switch (hidden in Harness) are removed with the `time`/`actual` projections.
+
+Ledger rows drop rustX-only chrome: the Turn fold caret and selectable Turn
+label, the per-row Collapse Calls button, lifecycle words and truncation marks.
+As in Harness, double-clicking a Turn's opening row or an Assistant folds it,
+and the folded summary row expands it; a tool-only Assistant reads (tool call
+only), Context rows show their content, and row text is a plain-text projection of
+the Markdown preview (`preview.ts`). The toolbar's Jump to latest control and the
+client `latestTrace` read it drove are removed.
+
+
+Manual reading highlight continuity was checked against local Harness
+`5badb15009ae1756c3afe0ae0cef1faafc290ccc`, specifically
+`use-chat-viewport.ts::readVisibleTurn` and `use-chat-reading.ts`.
+ChatViewport now selects the preceding visible native turn region across prompts,
+nested message anchors and gaps, or the first loaded region before its start.
+Tail following selects the last native region even after unowned trailing content.
+This adapts Harness's nonempty reading candidate policy without its approximate
+binary-search candidate selection: native turn identity and exact locate anchors
+remain separate, and a window containing no native region still has no selection.
+
+
+Terminal model-error feedback follows local Harness at
+`5badb15009ae1756c3afe0ae0cef1faafc290ccc`:
+`MessageItem.tsx::TurnErrorItem`, its `MessageItem.module.css` error-row styles,
+`locale.ts`, and `conversation-nodes/turn-error.ts`. The error dot, inline title,
+secondary diagnostic and code are retained. Authentication uses Harness copy.
+Native Attempt terminal evidence supplies normalized failures in transcript pages;
+the browser neither parses provider text for classifications nor starts retries.
+The row remains at the terminal cursor after partial output, later turns and
+reconnection. Manual cancellation is still Stopped, without an error row.
+
+
+Timeout retry presentation follows Harness `MessageItem.tsx::ModelRetryItem`,
+`MessageItem.module.css`, `conversation-nodes/retry.ts`, `locale.ts` and
+ui-primitives `TextShimmer` at `5badb15009ae1756c3afe0ae0cef1faafc290ccc`.
+Only Web presentation consumes existing Trace summaries and explicitly disclosed
+request detail. Exact native Attempt/Step/request/predecessor identities determine
+which timeout and subsequent request are shown. Scheduled delays, retry ceilings
+and pending retry cancellation are not exposed by this API and are not invented:
+there is no countdown or maximum; a timeout alone is not labelled an active retry.
+Actual started retries shimmer while attached and running. Settled or disconnected
+observations stop the animation. No runtime, protocol or retry policy is changed.
+
+
+Appearance preferences follow local Harness `ui-theme` at
+`5badb15009ae1756c3afe0ae0cef1faafc290ccc`: `AppearanceRow.tsx`,
+`AppearanceRow.module.css`, `theme-settings.ts`, `locales.ts` and `boot-theme.ts`.
+Light, Dark and System are three icon-over-label cubes, preserving preference
+selection separately from resolved colors. The browser defaults to System and
+owns one media-query listener only while that preference is active; explicit
+Light/Dark preferences remain persisted overrides. The App applies the resolved
+palette before its layout is painted and releases the listener on replacement.
+Host theme storage and plugin lifecycle are not imported.
+
+Sidebar recency was compared with local DeepSeek-harness commit
+`5badb15009ae1756c3afe0ae0cef1faafc290ccc`, specifically
+`packages/client/ui-workspace/src/client/tree.ts` (`orderByRecency`) and
+`packages/api/session-controller/src/list.ts` (`applySessionListMetadata`, `updatedAt`).
+The browser displays native Session summaries newest first with identity tie-breaking,
+including grouped, flat, and search views. Native `SessionSummary.updated_at` now
+projects the later of creation and committed ordinary human-message time, matching
+Harness semantics, while `SessionSnapshot.updated_at` retains metadata semantics.
+The native catalog persists `last_prompt_at`, sorts before pagination, and emits
+catalog invalidations on activity so unseen Sessions can enter the current page.
+Startup, composition, and storage recovery derive missed activity from the durable
+message ledger; no browser clock, focus event, rename, or model output moves a row.
+
+Connection-wait submission retains Harness's resident composer and one primary
+submission gesture (local `5badb15009ae1756c3afe0ae0cef1faafc290ccc`,
+`packages/client/ui-conversation/src/client/skeleton/InputBar.tsx` and
+`contract/composer-submission.ts`). RustX owns the local pending draft while its
+existing attachment prepares resources. The generic connecting notice does not
+infer MCP status. Only the completed native attachment permits upload and turn
+admission; navigation/transport replacement never replays the pending gesture.
+
+Quiet connection correction: keep the Harness resident chat/composer layout and
+render the locally submitted user bubble plus generic waiting feedback inside the
+conversation. Opening alone has no connecting notice. App Server v37 adds the
+read-only `session/history` window so cold stored history can render independently
+of resource preparation; this is a native durable read, never a fabricated runtime
+snapshot. Both clients fence late history reads against the current attachment.
+
+Model menu layout repair: compared the local DeepSeek-harness `packages/client/ui-model-selection/src/client/ModelSelect.tsx` in-menu loading/error presentation. The rustX adapter keeps catalog-loading and unavailable-selection notices inside its existing portaled menu, so opening it does not resize the Composer or history viewport. Pending root rows are disabled and initial keyboard focus waits for usable choices. Native model mutation/read authority and the pinned source baseline remain unchanged.
+
+Trajectory bottom fade: compared local Harness ConversationRoot.module.css,
+TrajectoryView.tsx, views.module.css and TrajectoryTable.module.css. The native-bound
+WebUI view now elects the resident composer overlay, retaining the fixed 36px
+bg-base fade. ConversationSeat publishes its measured height to its body; ledger
+and detail scroll areas reserve that height plus 16px, as Harness does. WebUI's
+Chat does not reserve an outer scrollbar gutter, so the overlay keeps the same
+full-width seat instead of applying Harness's outer-scroller gutter compensation.
+
+Chat bottom-follow repair: reviewed local Harness ui-chat/chat/use-chat-scroll.ts,
+use-chat-reading.ts and use-scroll-follow.ts at 5badb15009. Reader movement takes
+precedence over layout/follow work. WebUI retains its one-frame anchor-based
+scroll owner: upward motion exits following even within the bottom tolerance,
+queued corrections sample native movement before writing, and explicit latest
+or navigation actions acknowledge earlier scrolling. No timer or second scroll
+writer is introduced; returning downward to the floor restores following.
+
+Composer add menu (2026-10-08): compared local DeepSeek Harness `5badb15009`
+`ui-input-trigger/MenuView.tsx`, `MenuView.module.css` and `ui-conversation/skeleton/InputBar.tsx`.
+Adapted grouped, full-width icon/name/alias/description rows to RustX's existing
+command availability and dispatch; file intake is a launcher action, not a native
+slash command. Menu scrolling is confined to its own viewport. Existing Harness
+icons are reused; missing fork/tools icons use Lucide 0.468.0 `git-fork.svg` and
+`wrench.svg` (https://github.com/lucide-icons/lucide/tree/0.468.0/icons).
+The upstream ISC/Feather MIT notice is shipped in `public/LICENSE-Lucide.txt`
+and reproduced in `THIRD-PARTY-NOTICES.txt`. No runtime dependency was added.

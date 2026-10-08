@@ -509,9 +509,18 @@ jobs:
   desktop-macos:
     name: Desktop adapter and Host (macOS Node)
     runs-on: macos-latest
-    timeout-minutes: 10
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.98.1"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: desktop-host
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - name: Build native PTY ownership supervisor
+        run: cargo build --bin interactive-supervisor --locked
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
@@ -525,7 +534,9 @@ jobs:
       # this is not Finder/Terminal GUI smoke and does not duplicate browser E2E.
       - name: Desktop adapter and Host boundaries
         working-directory: web-console
-        run: pnpm exec vitest run test/desktop-host.test.ts test/document-archive.test.ts test/document-integration.test.ts
+        run: |
+          pnpm run build:host
+          pnpm exec vitest run test/desktop-host.test.ts test/document-archive.test.ts test/document-integration.test.ts test/workbench-host.test.ts
 
   web-console:
     name: Full Web conformance
@@ -575,20 +586,8 @@ jobs:
           --symlink usr/lib64 /lib64 -- /usr/bin/true
       - name: Verify aggregate Office resource admission
         run: node web-console/scripts/check-office-sandbox.ts
-      - name: Typecheck
-        working-directory: web-console
-        run: pnpm typecheck
-      - name: Deterministic native client and presentation tests
-        working-directory: web-console
-        run: pnpm test
-      - name: Product UI translation ownership
-        working-directory: web-console
-        run: pnpm check:i18n
-      - name: Source provenance and dependency notices
-        working-directory: web-console
-        run: pnpm check:provenance
-      # These tools serve only the browser integration fixture. Rust-only jobs
-      # above remain independent of Node and of this frontend package.
+      # PTY lifecycle tests and browser fixtures use the native supervisors.
+      # Rust-only jobs above remain independent of Node.
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.98.1"
@@ -607,6 +606,18 @@ jobs:
         run: uv sync --frozen
       - name: Build the real App Server, native Tool supervisors and Artifact fixture
         run: cargo build --bins --example document_artifact_fixture --locked
+      - name: Typecheck
+        working-directory: web-console
+        run: pnpm typecheck
+      - name: Deterministic native client and presentation tests
+        working-directory: web-console
+        run: pnpm test
+      - name: Product UI translation ownership
+        working-directory: web-console
+        run: pnpm check:i18n
+      - name: Source provenance and dependency notices
+        working-directory: web-console
+        run: pnpm check:provenance
       # `pnpm test:e2e` is `pnpm build && bash scripts/browser-tests.sh`: the one
       # production build of this job (Vite plus the artifact provenance check)
       # runs from checked-in source immediately before browser acceptance, so

@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { App } from '../src/app/App';
 import { AppServerClient } from '../src/client/app-server';
-import type { ConfigurationApplication, SourceTarget } from '../../protocol/app-server/v34';
+import type { ConfigurationApplication, SourceTarget } from '../../protocol/app-server/v37';
 import type { ProductHostWorkspaces, WorkspaceCatalog } from '../src/workspaces/host';
 import { Server, TOKEN, endpoint } from './fixture';
 import { ConnectionController } from '../src/connection/controller';
@@ -29,7 +29,7 @@ function catalog(): WorkspaceCatalog {
   ], picker: { kind: 'unavailable', reason: 'test' } };
 }
 function failing(sources: SourceTarget[]): ConfigurationApplication {
-  return { eligibility: { status: 'unavailable' }, scope: 'ses', version: '1', desired: { input_revision: 'i', attempt: '1' },
+  return { scope: 'ses', version: '1', desired: { input_revision: 'i', attempt: '1' },
     sources, units: { capabilities: { status: 'failed', diagnostic: 'boom' } }, candidate: null };
 }
 function hostWith(list: () => Promise<WorkspaceCatalog>): ProductHostWorkspaces {

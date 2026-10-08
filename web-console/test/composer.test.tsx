@@ -69,16 +69,16 @@ it('an uploaded attachment cannot be discarded by command selection', async () =
   expect(p.onCommand).not.toHaveBeenCalled(); expect(p.onSend).not.toHaveBeenCalled();
 });
 
+// The preference is a General Settings row (Harness `composer-enter`); the
+// Composer only reads it and renders no selector of its own.
 const preferSteer = () => {
-  fireEvent.click(screen.getByRole('button', { name: 'Enter while running: Queue' }));
-  fireEvent.click(screen.getByRole('menuitem', { name: 'Steer' }));
-  expect(screen.getByRole('button', { name: 'Enter while running: Steer' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /Enter while running/ })).toBeNull();
+  act(() => composerPreferences().setBusyEnter('steer'));
 };
 it.each(['button', 'Enter', 'Control', 'Meta'])('Steer preference resolves %s and persists across remounts', async gesture => {
   const p = props(); const ui = render(<AgentComposer uploadPolicy={uploadCapabilities.upload_policy} {...p} active />); preferSteer();
   expect(localStorage.getItem(COMPOSER_PREFERENCE_KEY)).toBe('steer');
   ui.unmount(); render(<AgentComposer uploadPolicy={uploadCapabilities.upload_policy} {...p} active />);
-  expect(screen.getByRole('button', { name: 'Enter while running: Steer' })).toBeTruthy();
   const input = screen.getByLabelText('Message'); fireEvent.change(input, { target: { value: 'exact draft' } });
   expect(screen.getByRole('button', { name: 'Steer' }).title).toBe('Steer · Enter (Ctrl/Cmd+Enter to Queue)');
   await act(async () => gesture === 'button' ? fireEvent.click(screen.getByRole('button', { name: 'Steer' }))

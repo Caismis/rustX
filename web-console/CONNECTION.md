@@ -4,7 +4,7 @@ The dev launcher owns the App Server, exact endpoint, transport credential, brow
 launch credential, Host config, carrier and private scratch lifetime. Carrier
 authentication hands admission material to the browser; it adds no App Server RPC,
 proxy, native configuration or Workspace authority. The browser connects directly
-with the existing AppServerClient and App Server protocol **v34**.
+with the existing AppServerClient and App Server protocol **v37**.
 
 `GET /?token=<browser-launch-token>` accepts exactly one bounded 43-character
 base64url credential on the root route. Timing-safe comparison follows format checks.
@@ -206,7 +206,7 @@ browser secret or expiry database. Existing adapted Settings provenance is retai
 
 ## Native upload data lane
 
-App Server v34 advertises ordinary file policy at initialization. Upload prepare
+App Server v37 advertises ordinary file policy at initialization. Upload prepare
 is authenticated through the exact native attachment; a short-lived single-use
 capability authorizes a separate binary socket at the same selected native origin.
 No transport key, Product Host credential or local path appears in the descriptor.

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { RuntimeClientSnapshot } from '../../protocol/app-server/v34';
+import type { RuntimeClientSnapshot } from '../../protocol/app-server/v37';
 import { interactionKey, OutcomeUncertain } from '../src/client/app-server';
 import { conversation } from '../src/bindings/projection';
 import { capabilities, endpoint, interaction, Server, snapshot, TOKEN } from './fixture';
@@ -12,7 +12,7 @@ describe('native App Server connection', () => {
     const s = server(); await s.connect();
     expect(s.client.getSnapshot().connection).toBe('connected');
     expect(s.client.getSnapshot().capabilities).toEqual(capabilities);
-    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 34 } });
+    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 37 } });
     expect(JSON.stringify(s.client.log.getSnapshot())).not.toContain(TOKEN);
   });
   it('rejects incompatible versions and missing native capabilities', async () => {
@@ -417,4 +417,41 @@ it('explicit catalog scope controls rereads even for a Session absent from local
   await s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings');
   expect(s.requests.filter(row => row.request.method === 'session/list')).toHaveLength(lists + 1);
   expect(s.client.getSnapshot().connection).toBe('connected');
+});
+
+
+it('durable preview arrives while attachment is held and cannot overwrite the live snapshot', async () => {
+  const s = server(); await s.connect();
+  s.held.add('session/attach'); s.held.add('session/history');
+  const work = s.client.attach('A');
+  const history = await s.waitFor('session/history', 1), attach = await s.waitFor('session/attach', 1);
+  s.reply(history); await Promise.resolve(); await Promise.resolve();
+  await vi.waitFor(() => expect(s.client.getSnapshot().views.A.preview?.conversationId).toBe('conversation-A'));
+  expect(s.client.getSnapshot().views.A.target).toBeUndefined();
+  s.reply(attach); await work;
+  expect(s.client.getSnapshot().views.A.preview).toBeUndefined();
+  expect(s.client.getSnapshot().views.A.snapshot).toBeTruthy();
+});
+it('late history cannot replace an attached conversation or a retired navigation', async () => {
+  for (const obsolete of [false, true]) {
+    const s = server(); await s.connect(); let current = true;
+    s.held.add('session/history');
+    await s.client.attach('A', undefined, () => current);
+    if (obsolete) current = false;
+    s.reply(await s.waitFor('session/history', 1));
+    await Promise.resolve(); await Promise.resolve();
+    expect(s.client.getSnapshot().views.A.preview).toBeUndefined();
+  }
+});
+
+it('pages durable preview while connecting without starting another attachment', async () => {
+  const s = server(); await s.connect(); s.held.add('session/attach');
+  const entry = (cursor: string) => ({ cursor, item: { type: 'message' as const, message: { id: `message-${cursor}`, role: 'user' as const, source: 'human' as const, content: [{ type: 'text' as const, text: cursor }] } } });
+  s.handlers.set('session/history', request => ({ type: 'session_history', conversation_id: 'conversation-A', window: { cut: { conversation_id: 'conversation-A', journal: '1000', transcript: '1000', mutation_revision: '0' }, page: request.method === 'session/history' && request.params.at.type === 'latest' ? { entries: [entry('2')], next_cursor: '2' } : { entries: [entry('1')], next_cursor: null } } }));
+  const work = s.client.attach('A');
+  await vi.waitFor(() => expect(s.client.getSnapshot().views.A.preview).toBeTruthy());
+  await s.client.loadEarlierPreview('A');
+  expect(s.client.getSnapshot().views.A.preview?.history.page.entries?.map(entry => entry.cursor)).toEqual(['1', '2']);
+  expect(s.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(1);
+  s.reply(await s.waitFor('session/attach', 1)); await work;
 });

@@ -1,7 +1,7 @@
 import { message } from '../../locale/translation';
 import { useTranslation, useNotice } from '../../locale/react';
 import { useEffect, useRef, useState } from 'react';
-import type { ModelCatalogView, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v34';
+import type { ModelCatalogView, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v37';
 import { AppServerClient, isOutcomeUncertain, sameTarget, type SessionView } from '../../client/app-server';
 import { ModelSelect } from '../../presentation/agent/ModelSelect';
 import { Button } from '../../presentation/primitives/Button';
@@ -47,7 +47,8 @@ export function AgentControls({ client, view, draft, blocked: pending = false }:
  const model = view?.snapshot?.model;
  const choices = draft?.source?.session_models?.kind === 'available' ? draft.source.session_models.catalog : catalog;
  const draftError = draft?.source?.session_models?.kind === 'unavailable' ? draft.source.session_models.diagnostic : undefined;
- const disabled = pending || !attached || busy;
+ // Reading choices locks selection through loading, not the menu trigger.
+ const disabled = pending || !attached;
  return <div className="agent-control"><ModelSelect binding={JSON.stringify([generation, target?.attachment_id, draft?.source?.target])} choices={catalogChoices(choices)}
    current={draft ? draft.intent?.model : model?.configured.model} profile={(draft ? draft.intent?.reasoningProfile : model?.effective.reasoningProfile) ?? undefined} disabled={draft ? draft.disabled || !choices : disabled} loading={draft ? !draft.source : blocked} error={draft ? draftError : error} load={draft ? () => {} : load}
    choose={(selected, profile) => { if (!catalogAdmits(choices, selected, profile)) return;

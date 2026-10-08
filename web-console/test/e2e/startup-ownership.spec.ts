@@ -17,7 +17,9 @@ async function begin(page: Page, language = 'en', files = false, model?: 'explic
 for (const language of ['en', 'zh']) test(`create ACK renders Conversation before attach/catalog; remount owns exactly one send (${language})`, async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', e => errors.push(e.message));
   await begin(page, language, true);
+  await expect(page.locator('[data-draft-conversation]')).toBeVisible();
   await release(page, 'session/create');
+  await expect(page.locator('[data-draft-conversation]')).toHaveCount(0);
   await expect(page.locator('#session-view')).toHaveAttribute('data-phase', 'active');
   await expect(page.locator('[data-first-submission]')).toHaveAttribute('data-first-submission', 'attaching');
   await expect.poll(() => methods(page)).toContain('session/attach');
@@ -26,10 +28,11 @@ for (const language of ['en', 'zh']) test(`create ACK renders Conversation befor
   await page.screenshot({ path: `test-results/startup-${language}-attaching.png`, fullPage: true });
   await page.evaluate(() => (window as any).startupFixture.remount());
   await expect(page.locator('#session-view')).toHaveAttribute('data-phase', 'active');
-  await expect(page.locator('textarea')).toHaveValue('Retained first input');
+  await expect(page.locator('[data-pending-message]')).toContainText('Retained first input');
   await release(page, 'session/attach');
   await expect.poll(() => methods(page)).toContain('turn/start');
-  await expect(page.getByText(language === 'en' ? 'Uploaded' : '已上传', { exact: true })).toHaveCount(2);
+  await expect(page.locator('[data-pending-message]')).toContainText('first.txt');
+  await expect(page.locator('[data-pending-message]')).toContainText('second.txt');
   const requests = await page.evaluate(() => (window as any).startupFixture.requests());
   expect(requests.filter((r: any) => r.method === 'session/attach')).toHaveLength(1);
   expect(requests.filter((r: any) => r.method === 'session/uploadPrepare').map((r: any) => r.params.files[0].name)).toEqual(['first.txt', 'second.txt']);
@@ -38,7 +41,7 @@ for (const language of ['en', 'zh']) test(`create ACK renders Conversation befor
   expect(sent.params.content).toEqual([...retained.receipts.map((receipt: any) => ({ type: 'upload', ...receipt })), { type: 'text', text: 'Retained first input' }]);
   expect(new Set(retained.receipts.map((receipt: any) => receipt.batch_id)).size).toBe(2);
   await page.evaluate(() => (window as any).startupFixture.remount());
-  await expect(page.locator('textarea')).toHaveValue('Retained first input');
+  await expect(page.locator('[data-pending-message]')).toContainText('Retained first input');
   await release(page, 'turn/start');
   await expect(page.locator('textarea')).toHaveValue('');
   expect((await methods(page)).filter(m => m === 'turn/start')).toHaveLength(1);
@@ -142,4 +145,31 @@ for (const language of ['en', 'zh']) test(`lost ready read is reconciled from th
   expect((await methods(page)).filter(m => m === 'session/uploadPrepare')).toHaveLength(2);
   expect((await methods(page)).filter(m => m === 'session/create')).toHaveLength(1);
   await release(page, 'turn/start'); await expect(page.locator('textarea')).toHaveValue('');
+});
+
+
+test('existing Session accepts text and files before connection, then sends once', async ({ page }) => {
+  await page.goto(`${fixture}?existing`);
+  await page.evaluate(() => { (window as any).startupFixture.allow('session/summary'); (window as any).startupFixture.resumeCatalog(); });
+  await page.locator('button[data-session-id=A]').click();
+  await expect.poll(() => methods(page)).toContain('session/attach');
+  await expect(page.getByText('Connecting…', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Previously saved message', { exact: true })).toBeVisible();
+  await page.locator('textarea').fill('Ready when connected');
+  await page.locator('input[type=file]').setInputFiles({ name: 'queued.txt', mimeType: 'text/plain', buffer: Buffer.from('queued attachment') });
+  await page.locator('[data-composer-primary]').click();
+  await expect(page.locator('[data-pending-message]').getByText('Connecting…', { exact: true })).toBeVisible();
+  expect((await methods(page)).filter(method => ['turn/start', 'session/uploadPrepare'].includes(method))).toEqual([]);
+  await expect(page.getByText('Retained first input outside this Conversation')).toHaveCount(0);
+  await page.screenshot({ path: 'test-results/existing-connecting.png', fullPage: true });
+  await release(page, 'session/attach');
+  await expect.poll(() => methods(page)).toContain('turn/start');
+  const requests = await page.evaluate(() => (window as any).startupFixture.requests());
+  expect(requests.filter((r: any) => r.method === 'session/attach')).toHaveLength(1);
+  expect(requests.filter((r: any) => r.method === 'turn/start')).toHaveLength(1);
+  expect(requests.filter((r: any) => r.method === 'session/create')).toHaveLength(0);
+  const sent = requests.find((r: any) => r.method === 'turn/start');
+  expect(sent.params.content).toEqual([expect.objectContaining({ type: 'upload' }), { type: 'text', text: 'Ready when connected' }]);
+  await release(page, 'turn/start');
+  await expect(page.locator('textarea')).toHaveValue('');
 });

@@ -16,6 +16,9 @@ const root = fileURLToPath(new URL('../../', import.meta.url));
 test('real executable failure preserves native stdout, stderr, exact argv and exit code', t => {
   const directory = mkdtempSync(join(tmpdir(), 'rustx-launch-test-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
+  for (const name of ['rustx', 'bash-supervisor', 'interactive-supervisor']) {
+    writeFileSync(join(directory, name), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+  }
   const binary = join(directory, 'native binary with spaces');
   writeFileSync(binary, '#!/usr/bin/env node\nconsole.log(JSON.stringify(process.argv.slice(2))); console.error("native configuration failure: original detail"); process.exitCode = 23;\n', { mode: 0o700 });
   const result = spawnSync(process.execPath, [join(root, 'dev/src/main.ts'), 'app-server', '--', '--binary', binary, '--config', '/a b', '--runtime-root', '/c d', '--listen', 'ws://127.0.0.1:8080'], { encoding: 'utf8', timeout: 15_000 });
@@ -27,6 +30,9 @@ test('real executable failure preserves native stdout, stderr, exact argv and ex
 test('real owned children: partial startup failure waits for native shutdown and removes scratch', { timeout: 20_000 }, async t => {
   const directory = mkdtempSync(join(tmpdir(), 'rustx-launch-test-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
+  for (const name of ['rustx', 'bash-supervisor', 'interactive-supervisor']) {
+    writeFileSync(join(directory, name), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+  }
   const marker = join(directory, 'native-settled');
   const native = join(directory, 'native.mjs');
   writeFileSync(native, `import {createServer} from 'node:net'; import {writeFileSync} from 'node:fs';
@@ -41,7 +47,7 @@ process.on('SIGTERM',()=>server.close(()=>writeFileSync(${JSON.stringify(marker)
     pids.push(child.pid!);
     return child;
   });
-  await launcher.start(parseArguments(['web', '--binary', process.execPath, '--workspace', directory], root));
+  await launcher.start(parseArguments(['web', '--binary', join(directory, 'rustx'), '--workspace', directory], root));
   assert.equal(await launcher.done, 37);
   assert.equal(readFileSync(marker, 'utf8'), 'reaped');
   assert.equal(existsSync(scratch), false);
@@ -52,6 +58,9 @@ process.on('SIGTERM',()=>server.close(()=>writeFileSync(${JSON.stringify(marker)
 test('real SIGTERM during native readiness settles once without launching Web', { timeout: 20_000 }, async t => {
   const directory = mkdtempSync(join(tmpdir(), 'rustx-launch-test-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
+  for (const name of ['rustx', 'bash-supervisor', 'interactive-supervisor']) {
+    writeFileSync(join(directory, name), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+  }
   const script = join(directory, 'signal-test.mjs');
   writeFileSync(script, `import {Launcher} from ${JSON.stringify(new URL('../src/launcher.ts', import.meta.url).href)};
 import {parseArguments} from ${JSON.stringify(new URL('../src/arguments.ts', import.meta.url).href)};
@@ -61,7 +70,7 @@ return {ready:new Promise(()=>{}),stop:async()=>process.send({stopped:true})};
 });
 process.on('message',()=>{});
 process.on('SIGTERM',()=>void launcher.settle(143));
-await launcher.start(parseArguments(['web','--binary',process.execPath,'--workspace',${JSON.stringify(directory)}],${JSON.stringify(root)}));
+await launcher.start(parseArguments(['web','--binary',${JSON.stringify(join(directory, 'rustx'))},'--workspace',${JSON.stringify(directory)}],${JSON.stringify(root)}));
 process.exitCode=await launcher.done; process.disconnect();`);
   const child = spawn(process.execPath, [script], { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
   t.after(() => { if (child.exitCode === null) child.kill('SIGKILL'); });
@@ -81,6 +90,9 @@ process.exitCode=await launcher.done; process.disconnect();`);
 test('owned process group settles descendants even when the leader exits without reaping them', { timeout: 20_000 }, async t => {
   const directory = mkdtempSync(join(tmpdir(), 'rustx-launch-tree-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
+  for (const name of ['rustx', 'bash-supervisor', 'interactive-supervisor']) {
+    writeFileSync(join(directory, name), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+  }
   const pidFile = join(directory, 'descendant-pid');
   const script = join(directory, 'leader.mjs');
   writeFileSync(script, `import {spawn} from 'node:child_process'; import {writeFileSync} from 'node:fs';
@@ -108,6 +120,9 @@ function lines(stream: NodeJS.ReadableStream) {
 async function nativeFixture(t: import('node:test').TestContext, mode: 'app-server' | 'web', transport?: string) {
   const directory = mkdtempSync(join(tmpdir(), 'rustx-owner-test-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
+  for (const name of ['rustx', 'bash-supervisor', 'interactive-supervisor']) {
+    writeFileSync(join(directory, name), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+  }
   const userState = join(directory, 'user-state'); writeFileSync(userState, 'keep');
   const socketPath = join(directory, 'control.sock');
   const server = createServer(); server.listen(socketPath); await once(server, 'listening');
@@ -202,6 +217,9 @@ for (const phase of ['startup', 'ready'] as const) test(`real main SIGHUP during
 test('exact native help delegation has no invented transport and exits successfully', t => {
   const directory = mkdtempSync(join(tmpdir(), 'rustx-help-test-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
+  for (const name of ['rustx', 'bash-supervisor', 'interactive-supervisor']) {
+    writeFileSync(join(directory, name), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+  }
   const binary = join(directory, 'native.mjs');
   writeFileSync(binary, `#!/usr/bin/env node
 const args=process.argv.slice(2);
@@ -218,6 +236,9 @@ else process.exitCode=2;
 test('EOF consumed before ownership still settles and removes stdin listeners across repeated use', { timeout: 20_000 }, async t => {
   const directory = mkdtempSync(join(tmpdir(), 'rustx-ended-test-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
+  for (const name of ['rustx', 'bash-supervisor', 'interactive-supervisor']) {
+    writeFileSync(join(directory, name), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+  }
   const script = join(directory, 'ended.mjs');
   writeFileSync(script, `import {once} from 'node:events';
 import {Launcher} from ${JSON.stringify(new URL('../src/launcher.ts', import.meta.url).href)};
@@ -232,7 +253,7 @@ for(let i=0;i<2;i++) {
     const child=spawnOwned({...spec,command:process.execPath,args:['-e',"require('node:net').createServer().listen(0)"]},exited,shutdown);
     pid=child.pid; return child;
   });
-  await launcher.start(parseArguments(['app-server','--binary',process.execPath],${JSON.stringify(root)}));
+  await launcher.start(parseArguments(['app-server','--binary',${JSON.stringify(join(directory, 'rustx'))}],${JSON.stringify(root)}));
   const code=await launcher.done;
   let gone=false; try{process.kill(-pid,0)}catch(error){gone=error.code==='ESRCH'}
   results.push({code,gone,listeners:process.stdin.listenerCount('end')-before});

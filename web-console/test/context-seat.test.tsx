@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { ContextSeat } from '../src/app/agent/ContextSeat';
 import { Server, snapshot } from './fixture';
-import type { RuntimeClientContextView } from '../../protocol/app-server/v34';
+import type { RuntimeClientContextView } from '../../protocol/app-server/v37';
 let server: Server;
 beforeEach(async () => { server = new Server(); await server.attached('A'); });
 afterEach(() => { cleanup(); server.client.disconnect(); });
@@ -72,15 +72,16 @@ it('observes native operations and preserves the exact pre-commit diagnostic', a
   expect(screen.getByRole('status').textContent).toContain('Summary provider rejected model fixture/exact');
   expect(count()).toBe(0);
 });
-it.each([undefined, { input_tokens: 0, context_window_tokens: 100, model: 'frozen/model' }, { input_tokens: 25, context_window_tokens: 100, model: 'frozen/model' }, { input_tokens: 25, context_window_tokens: 0, model: 'frozen/model' }])('renders measured zero separately from unavailable capacity: %j', async occupancy => {
-  render(<ContextSeat client={server.client} sessionId="A"/>);
+it.each([undefined, { input_tokens: 25, context_window_tokens: 100, model: 'frozen/model', breakdown: { system_tokens: 5, tool_tokens: 10, message_tokens: 10 } }])('an idle seat renders nothing and never discloses request occupancy: %j', async occupancy => {
+  const view = render(<ContextSeat client={server.client} sessionId="A"/>);
   await observe({ ...base, last_request_occupancy: occupancy });
-  expect(screen.getByText(occupancy?.context_window_tokens ? `Last request context ${occupancy.input_tokens}%` : 'Last request context unavailable')).toBeTruthy();
-  if (occupancy?.context_window_tokens) expect(screen.getByText(/frozen\/model/)).toBeTruthy();
-  await observe({ ...base });
-  expect(screen.getByText('Last request context unavailable')).toBeTruthy();
-  await observe({ ...base, last_request_occupancy: { input_tokens: 40, context_window_tokens: 200, model: 'later/model' } });
-  expect(screen.getByText('Last request context 20%')).toBeTruthy();
+  expect(view.container.innerHTML).toBe('');
+  await observe({ ...base, compaction_in_progress: true, last_request_occupancy: occupancy });
+  expect(screen.getByRole('status').textContent).toBe('Compacting context…');
+  expect(view.container.querySelector('meter')).toBeNull();
+  expect(view.container.textContent).not.toMatch(/Last request context|frozen\/model/);
+  await observe({ ...base, last_request_occupancy: occupancy });
+  expect(view.container.innerHTML).toBe('');
 });
 
 it('a replacement attachment rejects the held old response', async () => {

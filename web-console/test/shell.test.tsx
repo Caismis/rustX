@@ -28,8 +28,7 @@ it('collapse, rail expansion, Inspector and Settings appearance gestures emit no
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
   // Appearance lives on General, the page global Settings opens at.
   const theme = (option: string) => {
-    fireEvent.click(screen.getByRole('button', { name: (name: string) => name.endsWith('Theme') }));
-    fireEvent.click(screen.getByRole('option', { name: option }));
+    fireEvent.click(screen.getByRole('button', { name: option }));
   };
   theme('Dark');
   expect(document.body.hasAttribute('data-ds-dark-theme')).toBe(true);
@@ -52,7 +51,7 @@ it('waiting interactions outrank running; queued input alone is not a waiting in
 it('native paging sends offsets and does not create browser-owned Session membership', async () => {
   server.handlers.set('session/list', request => {
     if (request.method !== 'session/list') throw Error('wrong request');
-    return { type: 'sessions', sessions: [{ id: `page-${request.params.offset}`, name: `Page ${request.params.offset}`, cwd: '/workspace/A', active_node: 'n', updated_at: '2026-09-18T00:00:00Z' }], next_offset: request.params.offset === 0 ? 32 : null };
+    return { type: 'sessions', sessions: [{ ownership_generation: '1', id: `page-${request.params.offset}`, name: `Page ${request.params.offset}`, cwd: '/workspace/A', active_node: 'n', updated_at: '2026-09-18T00:00:00Z' }], next_offset: request.params.offset === 0 ? 32 : null };
   });
   await server.connect();
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost} />); });

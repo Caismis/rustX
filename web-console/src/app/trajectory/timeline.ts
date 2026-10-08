@@ -8,11 +8,12 @@ import type { Translate } from '../../locale/translation';
  * Journal wall spans and dispatch-origin numeric metrics cannot supply that
  * relationship. Missing bridge evidence leaves a request as a marker, with separate numeric metrics.
  */
-import type { TrajectoryProjection } from './layout';
-import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v34';
+import { trajectoryItems, isInspectable, type TrajectoryProjection } from './layout';
+import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v37';
 
-/** Horizontal projection of the overview's domain. */
-export type TrajectoryTimelineMode = 'sequence' | 'duration' | 'time' | 'actual';
+/** Horizontal projection of the overview's domain: equal-width operations, or
+ * recorded durations with idle time compressed, the two Harness exposes. */
+export type TrajectoryTimelineMode = 'sequence' | 'duration';
 
 /** Inclusive selection in the active projection's domain. */
 export interface TrajectoryTimeRange {
@@ -23,7 +24,9 @@ export interface TrajectoryTimeRange {
 /** One record projected into the active domain. */
 export interface TrajectorySpan extends TrajectoryTimeRange {
   id: string;
-  kind: TraceKind;
+  ownerId?: string;
+  displayKey?: string;
+  kind: TraceKind | 'system' | 'context';
   lane: number;
   label: string;
   error: boolean;
@@ -43,7 +46,6 @@ export interface TrajectorySpan extends TrajectoryTimeRange {
 /** One Turn boundary in the active domain. */
 export interface TrajectoryBoundary {
   nativeAttemptId: string;
-  label: string;
   at: number;
 }
 
@@ -83,37 +85,23 @@ function isError(record: TraceRecord): boolean {
 }
 
 /**
- * The span's accessible name.
- *
- * It names the record, not just its kind: two Tool spans differ only by
- * their call, so a label that omitted that would make the overview
- * ambiguous to a screen reader and to the ledger it links to. Requests are
- * named by model and separated by their exact native request identity.
- *
- * `retry_number` stays out of this label. Native counts actual requests
- * within a logical Step, so a nonzero ordinal proves only that the request
- * was not the first one — not whether it was a retry or a recovery. The
- * ordinal belongs in the inspector's native disclosure, where it is named
- * for what it is; `request_id` is the stable disambiguator here.
+ * The span's tooltip heading, as Harness names its overview blocks: the
+ * role, not the record. A Request is the Model lane's Assistant generation.
  */
 function label(tx: Translate, record: TraceRecord): string {
-  if (record.kind === 'request' && record.request) {
-    return tx('trajectory:timeline.request', { model: record.request.model, id: record.request.request_id });
-  }
-  if (record.kind === 'tool' && record.tool) {
-    return tx('trajectory:timeline.tool', { name: record.tool.name ?? record.tool.tool_id, id: record.tool.call_id });
-  }
-  return `${tx(`trajectory:kind.${record.kind}`).toLowerCase()} · ${record.id}`;
+  if (record.kind === 'request') return tx('trajectory:kind.assistant');
+  if (record.kind === 'compaction') return tx('trajectory:kind.compacted');
+  return tx(`trajectory:kind.${record.kind}`);
 }
 
-function millis(value: string | null | undefined): number | undefined {
+export function instantMillis(value: string | null | undefined): number | undefined {
   if (value == null) return undefined;
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 /** A large integer the wire carries losslessly as a string. */
-function count(value: string | number | null | undefined): number | undefined {
+export function wireCount(value: string | number | null | undefined): number | undefined {
   if (value == null) return undefined;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
@@ -123,10 +111,10 @@ function count(value: string | number | null | undefined): number | undefined {
 function timingOf(record: TraceRecord) {
   const generation = record.request?.generation ?? undefined;
   return {
-    startedAt: millis(record.timing.started_at),
-    durationMs: count(record.timing.duration_ms),
-    ttftMs: count(generation?.ttft_ms),
-    generationMs: count(generation?.generation_ms),
+    startedAt: instantMillis(record.timing.started_at),
+    durationMs: wireCount(record.timing.duration_ms),
+    ttftMs: wireCount(generation?.ttft_ms),
+    generationMs: wireCount(generation?.generation_ms),
     timeline: generation?.timeline,
   };
 }
@@ -148,6 +136,16 @@ export function trajectoryTimeline(tx: Translate,
   const records = projection.sections.flatMap(section => section.kind === 'outside'
     ? [section.record] : section.groups.flatMap(group => group.records));
   const spans: TrajectorySpan[] = [];
+  const items = trajectoryItems(tx, projection).filter(isInspectable);
+  const inputs = items.filter(item => item.type === 'SystemPromptCell' || item.type === 'ContextRow');
+  const inputSpan = (item: typeof inputs[number], at: number): TrajectorySpan => ({
+    id: item.display_key, ownerId: item.owner_record_id, displayKey: item.display_key,
+    kind: item.type === 'SystemPromptCell' ? 'system' : 'context', lane: 0,
+    label: tx(item.type === 'SystemPromptCell' ? 'trajectory:kind.system' : 'trajectory:kind.context'),
+    error: false, start: at, end: at + (mode === 'sequence' ? 1 : 0),
+  });
+  const displayKey = (id: string) => items.find(item => item.owner_record_id === id && (item.type === 'RequestBoundary' || item.type === 'RecordRow'))?.display_key;
+
   // Derive boundaries only after projection (including idle compression).
   // Membership comes from the shared Turn model, never timestamps or adjacency.
   const boundaries = (): TrajectoryBoundary[] => {
@@ -158,16 +156,18 @@ export function trajectoryTimeline(tx: Translate,
         const start = starts.get(record.id);
         return start === undefined ? [] : [start];
       });
-      return positions.length ? [{ nativeAttemptId: section.nativeAttemptId,
-        label: tx('trajectory:copy.turn-value', { p0: section.displayOrdinal }), at: Math.min(...positions) }] : [];
+      return positions.length ? [{ nativeAttemptId: section.nativeAttemptId, at: Math.min(...positions) }] : [];
     });
   };
   if (mode === 'sequence') {
+    const initial = inputs.filter(item => item.type === 'SystemPromptCell' && item.record.request?.system_prompt.state === 'initial');
+    for (const item of initial) spans.push(inputSpan(item, spans.length));
     for (const record of records) {
       if (record.kind === 'attempt' || record.kind === 'step' || record.kind === 'assistant') continue;
       const timing = timingOf(record);
+      for (const item of inputs.filter(item => item.owner_record_id === record.id && !initial.includes(item))) spans.push(inputSpan(item, spans.length));
       spans.push({
-        id: record.id,
+        id: record.id, displayKey: displayKey(record.id),
         kind: record.kind,
         lane: laneOf(record.kind),
         label: label(tx, record),
@@ -188,7 +188,7 @@ export function trajectoryTimeline(tx: Translate,
     if (timing.startedAt === undefined) continue;
     if (record.kind === 'attempt' || record.kind === 'step' || record.kind === 'assistant') continue;
     spans.push({
-      id: record.id,
+      id: record.id, displayKey: displayKey(record.id),
       kind: record.kind,
       lane: laneOf(record.kind),
       label: label(tx, record),
@@ -196,7 +196,7 @@ export function trajectoryTimeline(tx: Translate,
       start: timing.startedAt,
       // Endpoints must belong to the rendered domain. Even a Journal-terminal
       // Request stays a marker without the native provider timeline bridge.
-      end: timing.startedAt + (record.kind === 'request' ? count(timing.timeline?.terminal_ms) ?? 0 : timing.durationMs ?? 0),
+      end: timing.startedAt + (record.kind === 'request' ? wireCount(timing.timeline?.terminal_ms) ?? 0 : timing.durationMs ?? 0),
       ...phasePositions(timing.startedAt, timing.timeline),
       startedAt: timing.startedAt,
       ...(timing.durationMs === undefined ? {} : { durationMs: timing.durationMs }),
@@ -204,27 +204,24 @@ export function trajectoryTimeline(tx: Translate,
       ...(timing.generationMs === undefined ? {} : { generationMs: timing.generationMs }),
     });
   }
+  for (const item of inputs) {
+    const at = timingOf(item.record).startedAt;
+    if (at !== undefined) spans.push(inputSpan(item, at));
+  }
   if (spans.length === 0) return null;
   // One union-of-occupied-time transform for every lane. Overlapping work
   // shares coordinates; summing parent/child durations is never an aggregate.
-  if (mode === 'duration') {
-    const gaps: { start: number; end: number }[] = [];
-    let covered = Math.min(...spans.map(span => span.start));
-    for (const span of [...spans].sort((a, b) => a.start - b.start)) {
-      if (span.start > covered) gaps.push({ start: covered, end: span.start });
-      covered = Math.max(covered, span.end);
-    }
-    const project = (at: number) => at - gaps.reduce((sum, gap) => sum + Math.max(0, Math.min(at, gap.end) - gap.start), 0);
-    for (const span of spans) {
-      span.start = project(span.start); span.end = project(span.end);
-      for (const key of ['dispatchAt', 'firstOutputAt', 'lastOutputAt', 'providerTerminalAt'] as const) {
-        if (span[key] !== undefined) span[key] = project(span[key]);
-      }
-    }
-  } else if (mode === 'time') {
-    for (const span of spans) {
-      span.end = span.start;
-      delete span.dispatchAt; delete span.firstOutputAt; delete span.lastOutputAt; delete span.providerTerminalAt;
+  const gaps: { start: number; end: number }[] = [];
+  let covered = Math.min(...spans.map(span => span.start));
+  for (const span of [...spans].sort((a, b) => a.start - b.start)) {
+    if (span.start > covered) gaps.push({ start: covered, end: span.start });
+    covered = Math.max(covered, span.end);
+  }
+  const project = (at: number) => at - gaps.reduce((sum, gap) => sum + Math.max(0, Math.min(at, gap.end) - gap.start), 0);
+  for (const span of spans) {
+    span.start = project(span.start); span.end = project(span.end);
+    for (const key of ['dispatchAt', 'firstOutputAt', 'lastOutputAt', 'providerTerminalAt'] as const) {
+      if (span[key] !== undefined) span[key] = project(span[key]);
     }
   }
   return {
@@ -239,10 +236,10 @@ export function trajectoryTimeline(tx: Translate,
 function phasePositions(start: number, timeline: ReturnType<typeof timingOf>['timeline']):
   Pick<TrajectorySpan, 'dispatchAt' | 'firstOutputAt' | 'lastOutputAt' | 'providerTerminalAt'> {
   if (timeline == null) return {};
-  const dispatch = count(timeline.dispatch_ms);
-  const first = count(timeline.first_output_ms);
-  const last = count(timeline.last_output_ms);
-  const terminal = count(timeline.terminal_ms);
+  const dispatch = wireCount(timeline.dispatch_ms);
+  const first = wireCount(timeline.first_output_ms);
+  const last = wireCount(timeline.last_output_ms);
+  const terminal = wireCount(timeline.terminal_ms);
   return {
     ...(dispatch === undefined ? {} : { dispatchAt: start + dispatch }),
     ...(first === undefined ? {} : { firstOutputAt: start + first }),
@@ -260,25 +257,36 @@ export function timelineFocus(
   return new Set(
     model.spans
       .filter(span => span.start <= range.end && span.end >= range.start)
-      .map(span => span.id),
+      .map(span => span.ownerId ?? span.id),
   );
 }
 
-/** Format a duration the way the Harness overview labels one. */
-export function formatDuration(tx: Translate, milliseconds: number | null | undefined): string {
-  if (milliseconds == null || !Number.isFinite(milliseconds)) return tx('trajectory:trajectory-inspector.unavailable');
-  if (milliseconds < 1000) return tx('trajectory:copy.value-ms', { p0: Math.round(milliseconds) });
-  return tx('trajectory:copy.value-s', { p0: (milliseconds / 1000).toFixed(milliseconds < 10_000 ? 2 : 1) });
+/** Harness integer-millisecond label with thousands separators, `—` when unknown. */
+export function formatDurationMillis(tx: Translate, milliseconds: number | null | undefined): string {
+  if (milliseconds == null || !Number.isFinite(milliseconds)) return '—';
+  return tx('trajectory:unit.milliseconds', { value: String(Math.round(milliseconds)).replace(/\B(?=(\d{3})+(?!\d))/g, ',') });
 }
 
-/** Format an exact recorded instant, or say it is unavailable. */
-export function formatInstant(tx: Translate, value: string | null | undefined): string {
-  const parsed = millis(value);
-  if (parsed === undefined) return tx('trajectory:trajectory-inspector.unavailable');
-  return new Date(parsed).toLocaleTimeString(tx.language, {
+/** Harness compact duration: milliseconds below a second, then seconds. */
+export function formatDurationMs(tx: Translate, milliseconds: number): string {
+  if (milliseconds < 1_000) return tx('trajectory:unit.milliseconds', { value: Math.round(milliseconds) });
+  return tx('trajectory:unit.seconds', { value: (milliseconds / 1_000).toFixed(milliseconds < 10_000 ? 2 : 1) });
+}
+
+/** A recorded instant as the overview tooltip shows it: local time to the millisecond. */
+export function formatRecordedTime(tx: Translate, timestamp: number): string {
+  return new Date(timestamp).toLocaleTimeString(tx.language, {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
     fractionalSecondDigits: 3,
   });
+}
+
+/** A recorded instant as the inspector shows it: local date and time to the millisecond. */
+export function formatStartedAt(timestamp: number): string {
+  const date = new Date(timestamp);
+  const two = (value: number) => String(value).padStart(2, '0');
+  const three = (value: number) => String(value).padStart(3, '0');
+  return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())} ${two(date.getHours())}:${two(date.getMinutes())}:${two(date.getSeconds())}.${three(date.getMilliseconds())}`;
 }

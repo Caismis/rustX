@@ -848,7 +848,8 @@ impl SupervisedCommandRunner {
         let stream = tokio::net::UnixStream::from_std(stream_a)
             .map_err(|error| RunnerSpawnError::ControlChannel(error.to_string()))?;
 
-        let mut supervisor = tokio::process::Command::new(supervisor_binary());
+        let supervisor_path = supervisor_binary();
+        let mut supervisor = tokio::process::Command::new(&supervisor_path);
         supervisor.current_dir(&spec.cwd);
         supervisor.env_clear();
         supervisor.env(
@@ -917,7 +918,12 @@ impl SupervisedCommandRunner {
         let mut child = match supervisor.spawn() {
             Ok(child) => child,
             Err(error) => {
-                return Err(RunnerSpawnError::SupervisorSpawn(error.to_string()));
+                return Err(RunnerSpawnError::SupervisorSpawn(format!(
+                    "{} (executable: {}; working directory: {}). Build with `cargo build --bins` and keep the supervisor binaries beside rustx",
+                    error,
+                    supervisor_path.display(),
+                    spec.cwd.display(),
+                )));
             }
         };
         // The reusable Command retains its configured child-side stdio
@@ -1345,14 +1351,15 @@ pub(crate) fn supervisor_binary() -> PathBuf {
         .parent()
         .expect("current executable directory")
         .join("bash-supervisor");
-    if sibling.exists() {
-        return sibling;
+    if !sibling.exists() && exe.parent().is_some_and(|parent| parent.ends_with("deps")) {
+        return exe
+            .parent()
+            .expect("current executable directory")
+            .parent()
+            .expect("binary directory")
+            .join("bash-supervisor");
     }
-    exe.parent()
-        .expect("current executable directory")
-        .parent()
-        .expect("binary directory")
-        .join("bash-supervisor")
+    sibling
 }
 
 /// Locates the long-lived interactive supervisor beside the current binary.
@@ -1366,14 +1373,15 @@ pub(crate) fn interactive_supervisor_binary() -> PathBuf {
         .parent()
         .expect("current executable directory")
         .join("interactive-supervisor");
-    if sibling.exists() {
-        return sibling;
+    if !sibling.exists() && exe.parent().is_some_and(|parent| parent.ends_with("deps")) {
+        return exe
+            .parent()
+            .expect("current executable directory")
+            .parent()
+            .expect("binary directory")
+            .join("interactive-supervisor");
     }
-    exe.parent()
-        .expect("current executable directory")
-        .parent()
-        .expect("binary directory")
-        .join("interactive-supervisor")
+    sibling
 }
 
 /// Sends the one termination request to the invocation supervisor.

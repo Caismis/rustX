@@ -149,6 +149,7 @@ pub struct AppServerConnection {
     /// notification reader starts late, pauses, or never runs.
     summary_invalidations: Arc<crate::local_runtime::session::SessionSummaryInvalidations>,
     summary_invalidations_delivered: Arc<Mutex<u64>>,
+    ownership_invalidations_delivered: Arc<Mutex<u64>>,
 }
 
 impl AppServerConnection {
@@ -185,6 +186,7 @@ impl AppServerConnection {
         Self {
             summary_invalidations,
             summary_invalidations_delivered: Arc::new(Mutex::new(delivered)),
+            ownership_invalidations_delivered: Arc::new(Mutex::new(delivered)),
             sessions,
             host,
             initialized: Arc::new(Mutex::new(None)),
@@ -440,15 +442,19 @@ impl AppServerConnection {
                             .unload_incarnation(&target.conversation_id, target.runtime_incarnation)
                             .await
                             .map_err(manager_error)?;
+                        // Explicit selection is a catalog commit, unlike a cold
+                        // attachment/read. Publish ownership retirement before
+                        // admitting the successor runtime; failed composition
+                        // leaves the committed node selected, never resurrects A.
+                        let session = manager
+                            .session_controller()
+                            .set_current_node(&target.session_id, &node_id)
+                            .await
+                            .map_err(session_error)?;
                         manager
                             .load(&target.session_id, Some(&node_id))
                             .await
                             .map_err(manager_error)?;
-                        let session = manager
-                            .session_controller()
-                            .read_session(&target.session_id)
-                            .await
-                            .map_err(session_error)?;
                         Ok(MethodResult::Session { session })
                     }
                     .await;
@@ -502,6 +508,25 @@ impl AppServerConnection {
                     .await
                     .map_err(session_error)?,
             }),
+            Method::SessionHistory {
+                session_id,
+                node_id,
+                at,
+                limit,
+            } => {
+                if limit == 0 || limit > 256 {
+                    return Err(domain(ErrorData::InvalidParams));
+                }
+                let (conversation_id, window) = self
+                    .sessions
+                    .read_history(&session_id, node_id.as_ref(), at, limit)
+                    .await
+                    .map_err(session_error)?;
+                Ok(MethodResult::SessionHistory {
+                    conversation_id,
+                    window,
+                })
+            }
             Method::SessionRead { session_id } => Ok(MethodResult::Session {
                 session: self
                     .sessions
@@ -738,21 +763,7 @@ impl AppServerConnection {
     /// Level-triggered against the manager's current applications and this
     /// connection's per-scope version cursor.
     fn next_configuration_change(&self) -> Option<NotificationMethod> {
-        for application in self
-            .host
-            .manager()
-            .configuration_applications()
-            .into_iter()
-            .map(|application| {
-                // Session advisory eligibility is a live native fact. Enrich a
-                // notification only from an already resident runtime; parsing a
-                // scope or reading a notification never loads a cold Session.
-                crate::runtime::identity::SessionId::parse(&application.scope)
-                    .ok()
-                    .and_then(|session| self.host.manager().configuration_application(&session))
-                    .unwrap_or(application)
-            })
-        {
+        for application in self.host.manager().configuration_applications() {
             let mut versions = self
                 .configuration_versions
                 .lock()
@@ -773,6 +784,21 @@ impl AppServerConnection {
     /// applications: no per-connection queue, no durable replay, no scheduler.
     /// One Session is announced per call, in publication order, and the cursor
     /// advances only for a notification actually returned.
+    fn next_ownership_invalidation(&self) -> Option<NotificationMethod> {
+        let mut delivered = self
+            .ownership_invalidations_delivered
+            .lock()
+            .expect("ownership invalidation cursor");
+        let (sequence, session_id, retired_through) = self
+            .summary_invalidations
+            .next_ownership_after(*delivered)?;
+        *delivered = sequence;
+        Some(NotificationMethod::OwnershipRetired {
+            session_id,
+            retired_through: retired_through.to_string(),
+        })
+    }
+
     fn next_summary_invalidation(&self) -> Option<NotificationMethod> {
         let mut delivered = self
             .summary_invalidations_delivered
@@ -795,7 +821,10 @@ impl AppServerConnection {
         let mut configuration_changes = self.host.manager().configuration_changes();
         let mut summary_invalidations = self.summary_invalidations.changes();
         loop {
-            if let Some(notification) = self.next_summary_invalidation() {
+            if let Some(notification) = self
+                .next_ownership_invalidation()
+                .or_else(|| self.next_summary_invalidation())
+            {
                 return Notification {
                     jsonrpc: JsonRpcVersion::V2,
                     notification,
@@ -1022,12 +1051,11 @@ async fn dispatch_runtime(
         }),
         Method::ConversationTurns {
             target: _,
-            cut,
             offset,
             limit,
         } => Ok(MethodResult::ConversationTurns {
             page: authority
-                .conversation_turns(cut.as_ref(), offset, limit)
+                .conversation_turns(offset, limit)
                 .map_err(client_error)?,
         }),
         Method::Goal { target: _, control } => native_result(authority.goal_control(control)),

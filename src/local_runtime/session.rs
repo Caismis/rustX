@@ -255,7 +255,8 @@ pub(crate) mod create_profile {
 /// distinguished from user choices; older development schemas are refused.
 /// Version 7 co-locates live Sessions and pending-only frozen cleanup authority,
 /// with generation-checked publication. Older development schemas are rejected.
-pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 14;
+/// Version 15 persists execution ownership generations at the active-node visibility commit.
+pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 15;
 
 /// The largest display name a Session may carry.
 pub const SESSION_NAME_LIMIT: usize = 120;
@@ -364,7 +365,7 @@ pub struct SessionSnapshot {
 /// from catalog metadata alone; no conversation store is opened to build it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionListPage {
-    /// Rows in explicit Session publication-ordinal order.
+    /// Rows newest human-message first, with Session identity breaking ties.
     pub sessions: Vec<SessionSummary>,
     /// Offset for the next page, when more matching rows exist.
     pub next_offset: Option<usize>,
@@ -441,11 +442,20 @@ struct SummaryInvalidationState {
     /// publication this process made.
     sequence: u64,
     /// The sequence of each Session's latest recorded publication.
-    published: BTreeMap<SessionId, (u64, u64)>,
+    published: BTreeMap<SessionId, SessionInvalidation>,
     /// Woken on every record. A `watch` is a level-triggered wake-up, not a
     /// delivery channel: observers always reread the map above, so a coalesced
     /// wake-up can never drop an invalidation.
     changed: Option<tokio::sync::watch::Sender<u64>>,
+}
+
+#[derive(Debug, Default)]
+struct SessionInvalidation {
+    metadata_sequence: u64,
+    membership_sequence: u64,
+    retirement_sequence: u64,
+    /// Native catalog ownership, not the process-local delivery sequence above.
+    retired_through: u64,
 }
 
 impl SessionSummaryInvalidations {
@@ -460,20 +470,39 @@ impl SessionSummaryInvalidations {
         let mut state = self.state.lock().expect("summary invalidation log lock");
         state.sequence += 1;
         let sequence = state.sequence;
-        let membership = if catalog_changed {
-            sequence
-        } else {
-            state
-                .published
-                .get(session_id)
-                .map_or(0, |(_, membership)| *membership)
-        };
-        state
-            .published
-            .insert(session_id.clone(), (sequence, membership));
+        let entry = state.published.entry(session_id.clone()).or_default();
+        entry.metadata_sequence = sequence;
+        if catalog_changed {
+            entry.membership_sequence = sequence;
+        }
         if let Some(changed) = &state.changed {
             changed.send_replace(sequence);
         }
+    }
+
+    /// A committed deletion or active-node replacement retires Host execution
+    /// ownership, independently of ordinary metadata/activity invalidations.
+    fn retire_ownership(&self, id: &SessionId, retired_through: u64) {
+        let mut state = self.state.lock().expect("summary invalidation log lock");
+        state.sequence += 1;
+        let sequence = state.sequence;
+        let entry = state.published.entry(id.clone()).or_default();
+        entry.retirement_sequence = sequence;
+        entry.retired_through = entry.retired_through.max(retired_through);
+        if let Some(changed) = &state.changed {
+            changed.send_replace(sequence);
+        }
+    }
+
+    pub(crate) fn next_ownership_after(&self, delivered: u64) -> Option<(u64, SessionId, u64)> {
+        self.state
+            .lock()
+            .expect("summary invalidation log lock")
+            .published
+            .iter()
+            .filter(|(_, entry)| entry.retirement_sequence > delivered)
+            .map(|(id, entry)| (entry.retirement_sequence, id.clone(), entry.retired_through))
+            .min_by_key(|(sequence, _, _)| *sequence)
     }
 
     /// The current frontier. A new observer starts here, so publications that
@@ -493,11 +522,11 @@ impl SessionSummaryInvalidations {
         state
             .published
             .iter()
-            .filter_map(|(id, (sequence, membership))| {
-                if *membership > delivered {
-                    Some((*membership, id.clone(), true))
-                } else if *sequence > delivered {
-                    Some((*sequence, id.clone(), false))
+            .filter_map(|(id, entry)| {
+                if entry.membership_sequence > delivered {
+                    Some((entry.membership_sequence, id.clone(), true))
+                } else if entry.metadata_sequence > delivered {
+                    Some((entry.metadata_sequence, id.clone(), false))
                 } else {
                     None
                 }
@@ -527,6 +556,9 @@ impl SessionSummaryInvalidations {
 /// Native display metadata, shared by exact identity reads and catalog rows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SessionSummary {
+    /// Native execution ownership generation, encoded as an exact decimal integer.
+    /// Changes only when active-node ownership is replaced; never a display timestamp.
+    pub ownership_generation: String,
     /// Canonical durable Session cwd, projected without loading a runtime.
     pub cwd: PathBuf,
     /// Session identity.
@@ -542,7 +574,7 @@ pub struct SessionSummary {
     /// has no renderable text — and yields the client-side identity
     /// fallback.
     pub preview: Option<String>,
-    /// Last metadata/active-node publication instant.
+    /// Latest committed human-message time, or creation time for a new Session.
     pub updated_at: DateTime<Utc>,
     /// Active node in the session.
     pub active_node: SessionNodeId,
@@ -664,6 +696,7 @@ struct CatalogDocument {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 struct PersistedSession {
+    ownership_generation: u64,
     ordinal: u64,
     uploads: uploads::UploadRegistry,
     id: SessionId,
@@ -693,6 +726,8 @@ struct PersistedSession {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     display_preview: Option<String>,
     created_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_prompt_at: Option<DateTime<Utc>>,
     updated_at: DateTime<Utc>,
     active_node: SessionNodeId,
     nodes: BTreeMap<SessionNodeId, SessionNode>,
@@ -1191,12 +1226,14 @@ impl SessionCatalog {
         sessions.insert(
             session_id.clone(),
             PersistedSession {
+                ownership_generation: 0,
                 uploads: uploads::UploadRegistry::default(),
                 ordinal: 1,
                 id: session_id.clone(),
                 name: None,
                 display_preview: None,
                 created_at: now,
+                last_prompt_at: None,
                 updated_at: now,
                 active_node: node_id,
                 nodes,
@@ -1261,7 +1298,8 @@ impl SessionCatalog {
     /// Returns one bounded, searchable page of all durable Sessions.
     /// Usage classification does not filter visibility or manufacture client focus.
     ///
-    /// Ordering is ascending Session publication ordinal. The offset is a domain-specific
+    /// Ordering is descending human-message time, then ascending Session identity.
+    /// The offset is a domain-specific
     /// continuation: there is no global maximum number of Sessions, and
     /// callers can reach older matching rows by requesting the returned
     /// offset. Only the requested page is materialized for the projection.
@@ -1288,7 +1326,11 @@ impl SessionCatalog {
         let mut page = Vec::with_capacity(limit);
         let mut has_more = false;
         let mut ordered: Vec<_> = self.document.sessions.values().collect();
-        ordered.sort_by_key(|session| session.ordinal);
+        ordered.sort_by(|a, b| {
+            activity_at(b)
+                .cmp(&activity_at(a))
+                .then_with(|| a.id.cmp(&b.id))
+        });
         for session in ordered {
             // A row is searched by what it shows. An unnamed Session shows
             // its first user message, so matching only identity and name
@@ -1684,6 +1726,73 @@ impl SessionCatalog {
         committed?;
         crate::runtime::process_death::reach("after:publish_display_preview");
         Ok(true)
+    }
+
+    /// Publish a committed human-message timestamp, independent of metadata edits.
+    /// Replayed or delayed observations never move the row backwards.
+    pub(crate) fn publish_activity(
+        &mut self,
+        id: &SessionId,
+        timestamp: DateTime<Utc>,
+    ) -> Result<bool, SessionError> {
+        let mut next = self.document.clone();
+        let session = next
+            .sessions
+            .get_mut(id)
+            .ok_or_else(|| SessionError::UnknownSession {
+                session_id: id.clone(),
+            })?;
+        if timestamp <= activity_at(session) {
+            return Ok(false);
+        }
+        session.last_prompt_at = Some(timestamp);
+        let committed = self.commit(next);
+        if committed.is_ok() || committed.as_ref().is_err_and(SessionError::committed) {
+            // Ordering changes page membership even when no Session was created.
+            self.summary_invalidations.record_change(id, true);
+        }
+        committed?;
+        Ok(true)
+    }
+
+    /// Explicit recovery projection. Never called by list/summary reads.
+    pub(crate) fn activity_subject(
+        &self,
+        id: &SessionId,
+    ) -> Result<Option<DateTime<Utc>>, SessionError> {
+        let session =
+            self.document
+                .sessions
+                .get(id)
+                .ok_or_else(|| SessionError::UnknownSession {
+                    session_id: id.clone(),
+                })?;
+        let mut latest = None;
+        for node in session.nodes.values() {
+            let path = self.database_path(id, &node.conversation_id);
+            let store = self
+                .inspect_store(node.conversation_id.clone(), &path)
+                .map_err(SessionError::Store)?;
+            let mut position = None;
+            loop {
+                let page = store
+                    .load_canonical_page(position, 128)
+                    .map_err(SessionError::Store)?;
+                for message in page.messages {
+                    if let crate::message::types::MessageBlock::User(user) = message
+                        && let Some(time) = super::session_activity::human_message_time(&user)
+                    {
+                        latest =
+                            Some(latest.map_or(time, |previous: DateTime<Utc>| previous.max(time)));
+                    }
+                }
+                match page.next_position {
+                    Some(next) => position = Some(next),
+                    None => break,
+                }
+            }
+        }
+        Ok(latest)
     }
 
     /// The post-commit summary invalidation log of this product root.
@@ -2344,6 +2453,7 @@ impl SessionCatalog {
         next.sessions.insert(
             prepared.session_id.clone(),
             PersistedSession {
+                ownership_generation: 0,
                 ordinal: self.document.next_session_ordinal,
                 uploads: prepared.uploads.clone(),
                 id: prepared.session_id.clone(),
@@ -2358,6 +2468,7 @@ impl SessionCatalog {
                 // user message without ever opening its store.
                 display_preview: prepared.display_preview.clone(),
                 created_at: now,
+                last_prompt_at: None,
                 updated_at: now,
                 active_node: prepared.node_id.clone(),
                 nodes,
@@ -2457,6 +2568,16 @@ impl SessionCatalog {
             .ok_or_else(|| SessionError::Catalog {
                 detail: "catalog generation exhausted".into(),
             })?;
+        // Assign the catalog commit identity only to newly admitted ownership.
+        // Metadata-only commits and repeated selection retain the old generation.
+        for (id, session) in &mut next.sessions {
+            session.ownership_generation = self
+                .document
+                .sessions
+                .get(id)
+                .filter(|old| self.published && old.active_node == session.active_node)
+                .map_or(next.generation, |old| old.ownership_generation);
+        }
         validate_document(&next)?;
         // Membership evidence belongs to the visibility commit, including
         // uncertain directory durability. Cleanup/recovery commits with unchanged
@@ -2473,10 +2594,24 @@ impl SessionCatalog {
             )
             .cloned()
             .collect();
+        let retired: Vec<_> = self
+            .document
+            .sessions
+            .iter()
+            .filter(|(id, old)| {
+                next.sessions
+                    .get(*id)
+                    .is_none_or(|new| new.active_node != old.active_node)
+            })
+            .map(|(id, old)| (id.clone(), old.ownership_generation))
+            .collect();
         let committed = self.persist(&next);
         if committed.is_ok() || committed.as_ref().is_err_and(SessionError::committed) {
             self.document = next;
             self.published = true;
+            for (id, generation) in retired {
+                self.summary_invalidations.retire_ownership(&id, generation);
+            }
             for id in membership {
                 self.summary_invalidations.record_change(&id, true);
             }
@@ -2807,6 +2942,10 @@ pub(crate) fn remap_seed(
                 .preceding_message_id
                 .as_ref()
                 .and_then(|id| message_ids.get(id).cloned());
+            copied.prompt_message_id = turn
+                .prompt_message_id
+                .as_ref()
+                .and_then(|id| message_ids.get(id).cloned());
             Some(copied)
         })
         .collect();
@@ -2858,8 +2997,15 @@ fn remap_message(
     }
 }
 
+fn activity_at(session: &PersistedSession) -> DateTime<Utc> {
+    session
+        .created_at
+        .max(session.last_prompt_at.unwrap_or(session.created_at))
+}
+
 fn project_summary(session: &PersistedSession) -> SessionSummary {
     SessionSummary {
+        ownership_generation: session.ownership_generation.to_string(),
         cwd: session.state.cwd.clone(),
         id: session.id.clone(),
         name: session.name.clone(),
@@ -2867,7 +3013,7 @@ fn project_summary(session: &PersistedSession) -> SessionSummary {
         // (no ordinary user message yet, or none with renderable text) and
         // is projected as `None`; repair is explicit, never list-time.
         preview: session.display_preview.clone(),
-        updated_at: session.updated_at,
+        updated_at: activity_at(session),
         active_node: session.active_node.clone(),
     }
 }
@@ -2913,6 +3059,8 @@ fn validate_document(document: &CatalogDocument) -> Result<(), SessionError> {
     let mut node_ordinals = BTreeSet::new();
     for (session_id, session) in &document.sessions {
         if document.retired.sessions.contains(session_id)
+            || session.ownership_generation == 0
+            || session.ownership_generation > document.generation
             || session.ordinal == 0
             || session.ordinal >= document.next_session_ordinal
             || !session_ordinals.insert(session.ordinal)
@@ -4263,6 +4411,103 @@ model = "provider/model"
         same_revision_different_temporal_cuts(true);
     }
 
+    /// A copied turn keeps its opening human prompt under the destination's
+    /// own message identity, so the destination outline previews it unchanged.
+    #[test]
+    fn copied_turn_keeps_its_prompt_under_destination_identity() {
+        use crate::durable::inbox::InboundDraft;
+        use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
+        use crate::message::types::{InboundKind, UserContentBlock, UserSource};
+        use crate::runtime::identity::{AttemptId, EventId};
+        let (_directory, catalog, _config) = open_catalog();
+        let (conversation, session, _) = append_history(&catalog, &[]);
+        let store = store_for(&catalog, &session, &conversation);
+        let attempt = AttemptId::new("prompted-attempt");
+        let event = |kind| RuntimeEventEnvelope {
+            schema_version: 1,
+            event_id: EventId::new(format!(
+                "prompted-event-{}",
+                store.presentation_frontier().unwrap() + 1
+            )),
+            sequence: 0,
+            conversation_id: conversation.clone(),
+            attempt_id: Some(attempt.clone()),
+            turn_id: None,
+            timestamp: chrono::Utc::now(),
+            event: kind,
+        };
+        let accepted = store
+            .accept_inbound(InboundDraft {
+                message_id: None,
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: "Explain the rail".into(),
+                })],
+                timestamp: chrono::Utc::now(),
+                correlation: None,
+            })
+            .unwrap();
+        store.adopt_pending_batch(accepted.sequence, None).unwrap();
+        store
+            .append_event(event(RuntimeEvent::AttemptStarted {
+                attempt_id: attempt.clone(),
+            }))
+            .unwrap();
+        store
+            .append_canonical_with_event(
+                &MessageBlock::Assistant(AssistantMessageBlock {
+                    id: MessageId::new("rail-answer"),
+                    content: vec![AssistantContentBlock::Text(TextBlock {
+                        text: "It marks every turn".into(),
+                    })],
+                }),
+                event(RuntimeEvent::AssistantMessageCommitted {
+                    message_id: MessageId::new("rail-answer"),
+                }),
+            )
+            .unwrap();
+        store
+            .append_event(event(RuntimeEvent::AttemptTimedOut {
+                attempt_id: attempt.clone(),
+            }))
+            .unwrap();
+        let cut = store
+            .read_lineage_cut(store.load_head().unwrap().revision)
+            .unwrap();
+        assert_eq!(
+            cut.turns[0].prompt_message_id,
+            Some(accepted.message_id.clone())
+        );
+        let copy = catalog.prepare_clone_session(&state(), &cut).unwrap();
+        let destination = SqliteConversationStore::open_existing(
+            copy.conversation_id.clone(),
+            &copy.database_path,
+        )
+        .unwrap();
+        let inherited = destination
+            .read_lineage_cut(destination.load_head().unwrap().revision)
+            .unwrap();
+        let prompt = inherited.turns[0]
+            .prompt_message_id
+            .clone()
+            .expect("copied prompt");
+        assert_ne!(prompt, accepted.message_id, "destination identity");
+        assert!(
+            inherited.canonical.iter().any(
+                |message| matches!(message, MessageBlock::User(message) if message.id == prompt)
+            )
+        );
+        let outline = destination.conversation_turns(0, 64).unwrap();
+        assert_eq!(
+            (
+                outline.turns[0].prompt.as_str(),
+                outline.turns[0].response.as_str()
+            ),
+            ("Explain the rail", "It marks every turn")
+        );
+    }
+
     #[test]
     fn same_surface_revision_newer_native_cut_admits_terminal_only_turn() {
         same_revision_different_temporal_cuts(false);
@@ -4432,7 +4677,7 @@ model = "provider/model"
                         .snapshots
                         .is_empty()
                 );
-                let outline = copied_store.conversation_turns(None, 0, 64).unwrap();
+                let outline = copied_store.conversation_turns(0, 64).unwrap();
                 assert_eq!(
                     outline
                         .turns
@@ -4447,19 +4692,16 @@ model = "provider/model"
                     "equivalent destination position: member or inherited spine after U"
                 );
                 if retained {
-                    let selected_cut = outline.cut.clone();
                     let window = copied_store
                         .conversation_window(
-                            &crate::durable::reading::ConversationWindowAt::Turn {
-                                id: origin.clone(),
-                                cut: outline.cut,
+                            &crate::durable::reading::ConversationWindowAt::Older {
+                                cut: None,
+                                before: crate::durable::TranscriptCursor::new(3),
                             },
                             1,
                         )
                         .unwrap();
-                    assert_eq!(window.cut, selected_cut);
-                    assert_eq!(window.target.as_ref(), Some(&origin));
-                    assert_eq!(window.target_cursor.unwrap().get(), 2);
+                    assert_eq!(window.page.entries[0].cursor.get(), 2);
                     let mut page =
                         crate::runtime_client::snapshot::transcript_page_view(window.page).unwrap();
                     crate::runtime_client::response::decorate(copied_store, &mut page).unwrap();
@@ -4628,18 +4870,19 @@ model = "provider/model"
             if retained {
                 assert_eq!(cut.turns[0].id, frozen.turns[0].id);
                 assert_eq!(cut.turns[0].outcome, expected);
-                let outline = destination.conversation_turns(None, 0, 64).unwrap();
+                let outline = destination.conversation_turns(0, 64).unwrap();
                 assert_eq!(outline.turns[0].ordinal, 1);
                 assert_eq!(outline.turns[0].cursor.unwrap().get(), 2);
                 let window = destination
                     .conversation_window(
-                        &crate::durable::reading::ConversationWindowAt::Turn {
-                            id: outline.turns[0].id.clone(),
-                            cut: outline.cut,
+                        &crate::durable::reading::ConversationWindowAt::Older {
+                            cut: None,
+                            before: crate::durable::TranscriptCursor::new(3),
                         },
                         1,
                     )
                     .unwrap();
+                assert_eq!(window.page.entries[0].cursor.get(), 2);
                 let mut page =
                     crate::runtime_client::snapshot::transcript_page_view(window.page).unwrap();
                 crate::runtime_client::response::decorate(&destination, &mut page).unwrap();
@@ -4681,7 +4924,7 @@ model = "provider/model"
                     .map(|turn| (&turn.id, &turn.outcome))
                     .collect::<Vec<_>>()
             );
-            let outline = again.conversation_turns(None, 0, 64).unwrap();
+            let outline = again.conversation_turns(0, 64).unwrap();
             assert_eq!(
                 outline
                     .turns
@@ -4797,7 +5040,7 @@ model = "provider/model"
                 &prepared.database_path,
             )
             .unwrap();
-            let outline = copied.conversation_turns(None, 0, 64).unwrap();
+            let outline = copied.conversation_turns(0, 64).unwrap();
             assert_eq!(
                 outline
                     .turns
@@ -4817,9 +5060,11 @@ model = "provider/model"
             for turn in &outline.turns {
                 let window = copied
                     .conversation_window(
-                        &crate::durable::reading::ConversationWindowAt::Turn {
-                            id: turn.id.clone(),
-                            cut: outline.cut.clone(),
+                        &crate::durable::reading::ConversationWindowAt::Older {
+                            cut: None,
+                            before: crate::durable::TranscriptCursor::new(
+                                turn.cursor.unwrap().get() + 1,
+                            ),
                         },
                         1,
                     )
@@ -4839,7 +5084,7 @@ model = "provider/model"
         let empty =
             SqliteConversationStore::open_existing(empty.conversation_id, &empty.database_path)
                 .unwrap();
-        assert_eq!(empty.conversation_turns(None, 0, 64).unwrap().turns, []);
+        assert_eq!(empty.conversation_turns(0, 64).unwrap().turns, []);
     }
 
     /// The one Session lifecycle classification every product path shares:
@@ -4978,7 +5223,7 @@ model = "provider/model"
         );
         assert_eq!(
             visible(&catalog),
-            vec![source_session.clone(), prepared.session_id.clone()],
+            vec![prepared.session_id.clone(), source_session.clone()],
             "both independent Sessions are visible"
         );
         assert_eq!(
@@ -4996,7 +5241,7 @@ model = "provider/model"
         );
         assert_eq!(
             visible(&reopened),
-            vec![source_session, prepared.session_id]
+            vec![prepared.session_id, source_session]
         );
     }
 
@@ -5128,9 +5373,9 @@ model = "provider/model"
         );
         let page = visible(&catalog);
         assert_eq!(page.len(), 2, "both Sessions are visible");
-        assert_eq!(page[1].id, clone_id);
+        assert_eq!(page[0].id, clone_id);
         assert_eq!(
-            page[1].preview, None,
+            page[0].preview, None,
             "an empty destination has no first-message line, yet the row exists"
         );
 
@@ -5192,7 +5437,7 @@ model = "provider/model"
             .collect::<Vec<_>>();
         assert_eq!(
             ids,
-            vec![first_session(&catalog), clone_id, fork_id],
+            vec![fork_id, clone_id, first_session(&catalog)],
             "empty clone and empty fork are both resume-visible; the root shell is not"
         );
     }
@@ -5276,6 +5521,95 @@ model = "provider/model"
     }
 
     #[test]
+    fn activity_orders_before_paging_and_survives_metadata_edits_and_reopen() {
+        let (_directory, mut catalog, _) = open_catalog();
+        let oldest = first_session(&catalog);
+        for _ in 0..34 {
+            let prepared = catalog.prepare_session(&state(), &[]).unwrap();
+            catalog
+                .publish_session(&prepared, SessionNodeOrigin::New)
+                .unwrap();
+        }
+        assert!(
+            !catalog
+                .list_page(None, 0, 32)
+                .unwrap()
+                .sessions
+                .iter()
+                .any(|s| s.id == oldest)
+        );
+        let time = chrono::DateTime::parse_from_rfc3339("2100-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let invalidations = catalog.summary_invalidations();
+        let before = invalidations.frontier();
+        assert!(catalog.publish_activity(&oldest, time).unwrap());
+        assert!(invalidations.frontier() > before);
+        let page = catalog.list_page(None, 0, 32).unwrap();
+        assert_eq!(page.sessions[0].id, oldest);
+        assert_eq!(page.next_offset, Some(32));
+        assert_eq!(catalog.list_page(None, 32, 32).unwrap().sessions.len(), 3);
+        catalog.rename(&oldest, "recent chat").unwrap();
+        let revision = catalog.settings_revision(&oldest).unwrap();
+        catalog
+            .replace_settings(&oldest, revision, state())
+            .unwrap();
+        assert_eq!(catalog.summary(&oldest).unwrap().updated_at, time);
+        assert!(
+            !catalog
+                .publish_activity(&oldest, time - chrono::Duration::hours(1))
+                .unwrap()
+        );
+        let other = catalog.persisted_session_ids()[1].clone();
+        catalog.publish_activity(&other, time).unwrap();
+        let page = catalog.list_page(None, 0, 2).unwrap();
+        let mut tied = vec![oldest.clone(), other];
+        tied.sort();
+        assert_eq!(
+            page.sessions
+                .iter()
+                .map(|s| s.id.clone())
+                .collect::<Vec<_>>(),
+            tied
+        );
+        assert_eq!(
+            catalog
+                .list_page(Some("recent chat"), 0, 32)
+                .unwrap()
+                .sessions[0]
+                .id,
+            oldest
+        );
+        let reopened = SessionCatalog::read_under_guard(&catalog.product)
+            .unwrap()
+            .unwrap();
+        assert_eq!(reopened.summary(&oldest).unwrap().updated_at, time);
+    }
+
+    #[test]
+    fn activity_repair_uses_durable_human_messages_not_agent_messages() {
+        let (_directory, mut catalog, _) = open_catalog();
+        let time = chrono::DateTime::parse_from_rfc3339("2100-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let MessageBlock::User(mut human) = user("activity-human", "hello") else {
+            unreachable!()
+        };
+        human.timestamp = Some(time);
+        let mut agent = human.clone();
+        agent.id = MessageId::new("activity-agent");
+        agent.source = UserSource::Runtime;
+        agent.timestamp = Some(time + chrono::Duration::hours(1));
+        let (_, id, _) = append_history(
+            &catalog,
+            &[MessageBlock::User(human), MessageBlock::User(agent)],
+        );
+        assert_eq!(catalog.activity_subject(&id).unwrap(), Some(time));
+        catalog.publish_activity(&id, time).unwrap();
+        assert_eq!(catalog.summary(&id).unwrap().updated_at, time);
+    }
+
+    #[test]
     fn exact_summary_is_not_a_fuzzy_search_page() {
         let (_directory, mut catalog, _config) = open_catalog();
         let mut earlier = vec![first_session(&catalog)];
@@ -5286,7 +5620,7 @@ model = "provider/model"
                 .unwrap();
             earlier.push(prepared.session_id.clone());
         }
-        let target = earlier.pop().unwrap();
+        let target = earlier.remove(0);
         for id in &earlier {
             catalog
                 .rename(id, &format!("mentions {}", target.as_str()))
@@ -5347,7 +5681,7 @@ model = "provider/model"
             assert_eq!(exact.name.as_deref(), name);
             assert_eq!(exact.preview.as_deref(), text.then_some("native preview"));
             assert_eq!(exact.cwd, state().cwd);
-            assert_eq!(exact.updated_at, before.updated_at);
+            assert_eq!(exact.updated_at, before.created_at);
             assert_eq!(exact.active_node, before.active_node);
             assert_eq!(catalog.snapshot(&id).unwrap(), before);
         }
@@ -5557,10 +5891,10 @@ model = "provider/model"
         assert_eq!(page.sessions.len(), super::SESSION_LIST_PAGE_LIMIT);
         assert_eq!(page.next_offset, Some(32));
         for (index, row) in page.sessions.iter().enumerate() {
-            assert_eq!(&row.id, &sessions[index], "rows are ordinal-ordered");
+            assert_eq!(&row.id, &sessions[69 - index], "rows are newest first");
             assert_eq!(
                 row.preview.as_deref(),
-                Some(format!("topic row {index:02} unique-{index:02}").as_str()),
+                Some(format!("topic row {0:02} unique-{0:02}", 69 - index).as_str()),
                 "every row carries its persisted projection"
             );
         }
@@ -5576,7 +5910,7 @@ model = "provider/model"
         assert_eq!(page.sessions.len(), 32);
         assert_eq!(page.next_offset, Some(64));
         for (index, row) in page.sessions.iter().enumerate() {
-            assert_eq!(&row.id, &sessions[32 + index]);
+            assert_eq!(&row.id, &sessions[69 - 32 - index]);
         }
         let opens = opens_on_this_thread();
         let page = catalog.list_page(None, 64, 32).expect("last page");
@@ -5584,7 +5918,7 @@ model = "provider/model"
         assert_eq!(page.sessions.len(), 6);
         assert_eq!(page.next_offset, None);
         for (index, row) in page.sessions.iter().enumerate() {
-            assert_eq!(&row.id, &sessions[64 + index]);
+            assert_eq!(&row.id, &sessions[69 - 64 - index]);
         }
         // A filtered continuation pages the matching set the same way.
         let opens = opens_on_this_thread();
@@ -5594,7 +5928,7 @@ model = "provider/model"
         assert_eq!(opens_on_this_thread() - opens, 0);
         assert_eq!(page.sessions.len(), 32);
         assert_eq!(page.next_offset, Some(64));
-        assert_eq!(&page.sessions[0].id, &sessions[32]);
+        assert_eq!(&page.sessions[0].id, &sessions[69 - 32]);
     }
 
     // P03 (native half; the App Server half lives in the scripted protocol suite)
@@ -5738,8 +6072,9 @@ model = "provider/model"
 
     // P08 (native half; the agent-sourced-input half is scripted)
     #[test]
+    #[allow(clippy::too_many_lines)] // One commit/ABA/coalescing audit of the same native Session.
     fn branching_and_switching_the_active_node_keeps_the_root_projection() {
-        let (_directory, mut catalog, _config) = open_catalog();
+        let (directory, mut catalog, _config) = open_catalog();
         let history = source_history();
         let (conversation, session, root_node) = append_history(&catalog, &history);
         assert!(
@@ -5763,13 +6098,41 @@ model = "provider/model"
             "a branch node is never the projection subject"
         );
         let branch_node = branch.node_id.clone();
+        let ownership = catalog.summary_invalidations();
+        let frontier = ownership.frontier();
+        let a1 = catalog
+            .summary(&session)
+            .unwrap()
+            .ownership_generation
+            .parse::<u64>()
+            .unwrap();
         catalog
-            .publish_node(&session, &branch, root_node, super::SessionNodeOrigin::New)
+            .publish_node(
+                &session,
+                &branch,
+                root_node.clone(),
+                super::SessionNodeOrigin::New,
+            )
             .expect("publish branch node");
+        let published_generation = catalog.summary(&session).unwrap().ownership_generation;
         catalog
             .set_current_node(&session, Some(&branch_node))
             .expect("switch the active node");
+        let retired = ownership.next_ownership_after(frontier).unwrap();
+        assert_eq!(retired.1, session);
+        assert_eq!(retired.2, a1);
         let summary = catalog.summary(&session).expect("summary");
+        assert_eq!(
+            summary.ownership_generation, published_generation,
+            "repeated selection retains execution ownership"
+        );
+        let b = summary.ownership_generation.parse::<u64>().unwrap();
+        assert!(b > a1);
+        assert_eq!(
+            ownership.next_ownership_after(retired.0),
+            None,
+            "same-node selection does not retire ownership"
+        );
         assert_eq!(
             summary.active_node, branch_node,
             "the active selection moved to the branch"
@@ -5780,8 +6143,55 @@ model = "provider/model"
             "the row keeps the root lineage's projection"
         );
         catalog
-            .set_current_node(&session, None)
+            .set_current_node(&session, Some(&root_node))
             .expect("switch back to the root");
+        let a2 = catalog
+            .summary(&session)
+            .unwrap()
+            .ownership_generation
+            .parse::<u64>()
+            .unwrap();
+        assert!(a2 > b, "ABA must not reuse the original A generation");
+        assert_eq!(
+            ownership.next_ownership_after(frontier).unwrap().2,
+            b,
+            "coalescing retires through B, excluding A2"
+        );
+        let after_aba = ownership.frontier();
+        catalog.arm_write_fault_before_rename();
+        assert!(
+            catalog
+                .set_current_node(&session, Some(&branch_node))
+                .is_err()
+        );
+        assert_eq!(
+            catalog.summary(&session).unwrap().ownership_generation,
+            a2.to_string()
+        );
+        assert!(ownership.next_ownership_after(after_aba).is_none());
+        catalog.arm_write_fault_after_rename();
+        assert!(
+            catalog
+                .set_current_node(&session, Some(&branch_node))
+                .unwrap_err()
+                .committed()
+        );
+        let b2 = catalog
+            .summary(&session)
+            .unwrap()
+            .ownership_generation
+            .parse::<u64>()
+            .unwrap();
+        assert!(b2 > a2);
+        assert_eq!(
+            reopen_catalog(directory.path())
+                .summary(&session)
+                .unwrap()
+                .ownership_generation,
+            b2.to_string(),
+            "post-rename ownership is persisted even when directory durability is uncertain"
+        );
+        assert_eq!(ownership.next_ownership_after(after_aba).unwrap().2, a2);
         assert_eq!(
             catalog
                 .summary(&session)
@@ -6032,7 +6442,8 @@ model = "provider/model"
             .map(|summary| summary.id)
             .collect::<Vec<_>>();
         assert_eq!(
-            ids, allocated,
+            ids,
+            allocated.into_iter().rev().collect::<Vec<_>>(),
             "offsets and next_offset describe the visible set: no holes, no duplicates"
         );
 
@@ -7962,4 +8373,29 @@ model = "provider/model"
     }
     mod archive_tests;
     pub(crate) mod deletion_tests;
+}
+
+#[cfg(test)]
+mod ownership_invalidation_tests {
+    use super::*;
+    #[test]
+    fn ownership_retirement_survives_coalesced_metadata_and_is_not_inferred_from_activity() {
+        let log = SessionSummaryInvalidations::default();
+        let id = SessionId::new("ses_00000000-0000-7000-8000-000000000001");
+        log.record_change(&id, true);
+        log.record(&id);
+        assert!(log.next_ownership_after(0).is_none());
+        log.retire_ownership(&id, 7);
+        let retirement = log.next_ownership_after(0).unwrap();
+        log.record(&id);
+        log.record_change(&id, true);
+        assert_eq!(log.next_ownership_after(0), Some(retirement.clone()));
+        assert!(log.next_ownership_after(retirement.0).is_none());
+        log.retire_ownership(&id, 12);
+        let coalesced = log.next_ownership_after(0).unwrap();
+        assert!(coalesced.0 > retirement.0);
+        assert_eq!(coalesced.2, 12);
+        log.retire_ownership(&id, 7);
+        assert_eq!(log.next_ownership_after(0).unwrap().2, 12);
+    }
 }

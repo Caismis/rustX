@@ -204,6 +204,14 @@ export interface PresentationState {
    */
   durabilityFailure: import("../protocol/app-server.ts").RuntimeDurabilityFailure | null;
   /**
+   * Whether the live runtime could adopt a prepared Session configuration now.
+   *
+   * Runtime-domain advisory state the runtime publishes itself — never part of
+   * the configuration application and never derived here from attempts, jobs
+   * or interactions. `/session adopt` still meets the native gate.
+   */
+  adoptionEligibility: import("../protocol/app-server.ts").AdoptionEligibility["status"];
+  /**
    * The conversation's task list, as the runtime derived it from canonical
    * history. `undefined` before the first snapshot arrives, and whenever the
    * attached runtime composes no Todo Agent Extension — see

@@ -1,0 +1,64 @@
+name: Workspace Host platform conformance
+
+on:
+  push:
+    paths:
+      - '.github/workflows/workspace-host.yml'
+      - 'web-console/host/**'
+      - 'src/runtime/interactive_supervisor.rs'
+      - 'src/runtime/supervised_unit.rs'
+      - 'web-console/test/terminal-lifecycle.test.ts'
+      - 'web-console/src/workspaces/**'
+      - 'web-console/test/workbench-host.test.ts'
+      - 'web-console/test/office-macos*.test.ts'
+      - 'web-console/test/document-integration.test.ts'
+      - 'web-console/package.json'
+      - 'web-console/pnpm-lock.yaml'
+      - 'web-console/pnpm-workspace.yaml'
+
+permissions:
+  contents: read
+
+jobs:
+  workspace-host:
+    name: Workspace filesystem and PTY (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.98.1"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace-host
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - name: Build native PTY ownership supervisor
+        run: cargo build --bin interactive-supervisor --locked
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install pinned dependencies and compile POSIX binding
+        working-directory: web-console
+        run: |
+          corepack enable
+          corepack install
+          pnpm install --frozen-lockfile
+          pnpm build:host
+      - name: Install shared protocol decoder dependencies
+        working-directory: tui
+        run: pnpm install --frozen-lockfile
+      - name: Real filesystem and PTY boundaries
+        working-directory: web-console
+        run: pnpm exec vitest run test/workbench-host.test.ts test/terminal-lifecycle.test.ts test/office-macos-lifecycle.test.ts
+      - name: Native macOS Office conversion and isolation
+        if: runner.os == 'macOS'
+        working-directory: web-console
+        run: pnpm exec vitest run test/document-integration.test.ts test/office-macos.test.ts
+      - name: macOS sandbox diagnostics on failure
+        if: failure() && runner.os == 'macOS'
+        run: sudo log show --last 3m --style compact --predicate 'process == "sandboxd" OR eventMessage CONTAINS "deny"' | tail -150

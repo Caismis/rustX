@@ -212,10 +212,44 @@ fn trace(role: &str, event: std::fmt::Arguments<'_>) {
     let _ = std::io::stderr().write_all(line.as_bytes());
 }
 
+// A PTY's foreground group is the outer supervisor. Preserve its ownership
+// anchor when the terminal driver emits an interrupt or resize, and forward
+// those signals to the fixed child group. Caught handlers reset at exec, so
+// the command retains normal signal semantics; the inner anchor catches them.
+static TERMINAL_SIGNALS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+extern "C" fn terminal_signal(signal: i32) {
+    let bit = match signal {
+        libc::SIGINT => 1,
+        libc::SIGQUIT => 2,
+        libc::SIGWINCH => 4,
+        _ => 0,
+    };
+    TERMINAL_SIGNALS.fetch_or(bit, std::sync::atomic::Ordering::Relaxed);
+}
+#[allow(unsafe_code)] // fixed signal handlers, matching supervised_unit SIGCHLD installation
+fn capture_terminal_signals() -> Result<(), String> {
+    use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, sigaction};
+    let action = SigAction::new(
+        SigHandler::Handler(terminal_signal),
+        SaFlags::SA_RESTART,
+        SigSet::empty(),
+    );
+    for signal in [Signal::SIGINT, Signal::SIGQUIT, Signal::SIGWINCH] {
+        // SAFETY: the handler only performs a lock-free atomic operation.
+        unsafe { sigaction(signal, &action) }.map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 /// Runs the outer supervisor role; returns its exit status.
 #[must_use]
 #[allow(clippy::too_many_lines)] // one coherent outer supervise/relay/contain pipeline
 pub fn run_outer(arguments: &[String]) -> i32 {
+    if let Err(error) = capture_terminal_signals() {
+        eprintln!("terminal signal setup: {error}");
+        return 1;
+    }
+
     trace("outer", format_args!("started"));
     let Some(socket) = std::env::var_os(RUSTX_CONTROL_ENV) else {
         eprintln!("interactive supervisor: control socket path is missing");
@@ -402,6 +436,23 @@ pub fn run_outer(arguments: &[String]) -> i32 {
     let mut ack_seen = false;
     let mut ack_deadline: Option<Instant> = None;
     loop {
+        let terminal_signals = TERMINAL_SIGNALS.swap(0, std::sync::atomic::Ordering::Relaxed);
+        if matches!(anchor, AnchorState::Running) {
+            for (bit, signal) in [
+                (1, Signal::SIGINT),
+                (2, Signal::SIGQUIT),
+                (4, Signal::SIGWINCH),
+            ] {
+                if terminal_signals & bit != 0
+                    && let Err(error) = signal_group(inner_pid, signal)
+                        .or_else(|error| retire_terminal_input_failure(inner_pid, error))
+                {
+                    let _ =
+                        write_frame(&mut upstream, MSG_PROCESS_CONTROL_FAILURE, error.as_bytes());
+                }
+            }
+        }
+
         match anchor {
             AnchorState::Running => {
                 match waitid(
@@ -590,6 +641,23 @@ pub fn run_outer(arguments: &[String]) -> i32 {
             }
         }
         std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// Terminal input can race retirement of its exact inner owner. Darwin may
+/// reject a signal to the retained zombie-only group with EPERM. A retained
+/// exit makes that input obsolete, but DOES NOT prove group settlement. The
+/// outer loop still observes that exit and performs containment and the
+/// platform's independent terminal proof before releasing Host capacity.
+/// Live or lost ownership retains the input failure; containment signals do
+/// not use this function.
+fn retire_terminal_input_failure(inner_pid: i32, error: String) -> Result<(), String> {
+    match waitid(
+        Id::Pid(Pid::from_raw(inner_pid)),
+        WaitPidFlag::WNOHANG | WaitPidFlag::WEXITED | WaitPidFlag::WNOWAIT,
+    ) {
+        Ok(WaitStatus::Exited(..) | WaitStatus::Signaled(..)) => Ok(()),
+        _ => Err(error),
     }
 }
 
@@ -1181,6 +1249,9 @@ fn contain_after_abnormal_exit(
 #[must_use]
 #[allow(clippy::too_many_lines)] // one coherent inner session/spawn/reap pipeline
 pub fn run_inner(arguments: &[String]) -> i32 {
+    if capture_terminal_signals().is_err() {
+        return 1;
+    }
     trace("inner", format_args!("entered run_inner"));
     let Some(inner_socket) = std::env::var_os(INNER_CONTROL_ENV) else {
         eprintln!("interactive supervisor: inner control socket path is missing");
@@ -1528,6 +1599,68 @@ fn await_start(
             }
             Err(error) => return Err(format!("cannot read the ownership start gate: {error}")),
         }
+    }
+}
+
+#[cfg(test)]
+mod terminal_signal_tests {
+    use super::*;
+
+    #[test]
+    fn terminal_input_failure_requires_a_retained_exited_owner() {
+        let mut child = Command::new("/bin/cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn()
+            .expect("start the held child");
+        let pid = i32::try_from(child.id()).expect("pid fits i32");
+        let failure = "injected signal EPERM".to_owned();
+        assert_eq!(
+            retire_terminal_input_failure(pid, failure.clone()),
+            Err(failure.clone()),
+            "a live owner must retain its signal failure"
+        );
+        drop(child.stdin.take());
+        assert_eq!(
+            waitid(
+                Id::Pid(Pid::from_raw(pid)),
+                WaitPidFlag::WEXITED | WaitPidFlag::WNOWAIT,
+            ),
+            Ok(WaitStatus::Exited(Pid::from_raw(pid), INNER_EXIT_NORMAL))
+        );
+        assert_eq!(retire_terminal_input_failure(pid, failure.clone()), Ok(()));
+        assert!(
+            child
+                .wait()
+                .expect("the proof did not reap the anchor")
+                .success()
+        );
+        assert_eq!(
+            retire_terminal_input_failure(pid, failure.clone()),
+            Err(failure),
+            "loss of the exact waitable owner cannot authorize settlement"
+        );
+    }
+
+    #[test]
+    fn abnormal_exit_retires_input_without_reaping_the_containment_anchor() {
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "exit 17"])
+            .spawn()
+            .expect("start abnormal child");
+        let pid = i32::try_from(child.id()).expect("pid fits i32");
+        assert_eq!(
+            waitid(
+                Id::Pid(Pid::from_raw(pid)),
+                WaitPidFlag::WEXITED | WaitPidFlag::WNOWAIT,
+            ),
+            Ok(WaitStatus::Exited(Pid::from_raw(pid), 17))
+        );
+        assert_eq!(retire_terminal_input_failure(pid, "EPERM".into()), Ok(()));
+        assert_eq!(
+            child.wait().expect("retained abnormal anchor").code(),
+            Some(17)
+        );
     }
 }
 

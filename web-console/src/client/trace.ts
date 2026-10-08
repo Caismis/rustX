@@ -1,4 +1,4 @@
-import type { TraceDetail, TracePage, TraceRecord, TraceLifecycle } from '../../../protocol/app-server/v34';
+import type { TraceDetail, TracePage, TraceRecord, TraceLifecycle } from '../../../protocol/app-server/v37';
 
 /** Most summary records the browser retains for one Trace interval. */
 export const TRACE_LIMIT = 512;
@@ -146,6 +146,7 @@ export function refreshTrace(previous: TraceCache | undefined, page: TracePage, 
     if (!update) return record;
     return {
       ...record,
+      location: update.location,
       state: update.state,
       timing: update.timing,
       message_id: update.message_id,

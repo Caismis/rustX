@@ -289,7 +289,7 @@ async fn surviving_commands_keep_their_options_and_startup_effects_are_observabl
     server.kill().await.unwrap();
 }
 
-const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":34,"client":{"name":"cli-contract","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
+const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":36,"client":{"name":"cli-contract","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
 
 fn models(base_url: &str) -> String {
     format!(

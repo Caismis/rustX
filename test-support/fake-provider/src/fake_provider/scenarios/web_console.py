@@ -4,7 +4,7 @@ No rustX operation, interaction lifetime, or Tool behavior is simulated here.
 """
 import json
 from fake_provider.scenario import (
-    OPENAI_CHAT_COMPLETIONS, Expect, Finish, Gate, Scenario, Step, Stream, Text, ToolCall, Usage,
+    OPENAI_CHAT_COMPLETIONS, Expect, Finish, Gate, HttpError, Raw, Scenario, Step, Stream, Text, ToolCall, Usage,
 )
 
 
@@ -274,12 +274,24 @@ SCENARIOS['web_file_delivery'] = web_file_delivery
 
 
 def web_compaction() -> Scenario:
-    """Manual maintenance uses one gated summary request, without a model turn."""
+    """Manual compaction, a real questionnaire, then overflow compaction and continuation."""
     expected = Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
                       body_contains=("compaction-evidence-435",))
     return Scenario("web_compaction",
                     Step(expected, Stream(Text("Original context ready."), Finish(), Usage(32000, 20))),
-                    Step(expected, Stream(Gate("manual-summary"), Text("The user supplied compaction-evidence-435. Preserve that fact."), Finish())))
+                    Step(expected, Stream(Gate("manual-summary"), Text("The user supplied compaction-evidence-435. Preserve that fact."), Finish())),
+                    Step(expected, Stream(ToolCall("after-compact-question", "ask_user", json.dumps({"questions": [{
+                        "header": "Continuation", "question": "Continue after compaction?",
+                        "options": [{"label": "Continue", "description": "Keep the compacted history."},
+                                    {"label": "Inspect", "description": "Inspect the history first."}],
+                    }]})), Finish("tool_calls"))),
+                    Step(expected, HttpError(400, {"error": {"message": "context window exceeded", "type": "invalid_request_error", "code": "context_length_exceeded"}})),
+                    Step(expected, Stream(Gate("automatic-summary"), Text("Preserve compaction-evidence-435 and the user's instruction to continue."), Finish())),
+                    Step(expected, Stream(Text("Question answered after compaction."), Finish())),
+                    Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("Stop a partial reply",)),
+                         Stream(Text("## Partial answer\n\nThis text was already released."), Gate("stop-partial"), Text("This must not appear after stopping."), Finish()), allow_disconnect=True),
+                    Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("Continue after stopping",)),
+                         Stream(Text("Conversation continued after stopping."), Finish())))
 
 
 SCENARIOS["web_compaction"] = web_compaction
@@ -311,3 +323,38 @@ SCENARIOS['web_preview_workspace'] = web_preview_workspace
 
 
 SCENARIOS['web_artifact_document'] = lambda: Scenario('web_artifact_document')
+
+
+def web_model_errors() -> Scenario:
+    expected = Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model")
+    return Scenario("web_model_errors",
+        Step(expected, HttpError(401, {"error": {"message": "Fixture authentication rejected", "type": "authentication_error"}})),
+        Step(expected, Stream(Text("Partial output stays readable."), Gate("invalid-response"),
+                             Raw(b'data: {"choices":"invalid"}\n\n')), allow_disconnect=True),
+        Step(expected, Stream(Text("Conversation recovered after model errors."), Finish())))
+
+SCENARIOS["web_model_errors"] = web_model_errors
+
+
+def web_timeout_retry() -> Scenario:
+    expected = Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model")
+    timeout = HttpError(408, {"error": {"message": "Fixture model response timeout", "type": "timeout"}})
+    return Scenario("web_timeout_retry",
+        Step(expected, timeout),
+        Step(expected, Stream(Gate("retry-started"), Text("Recovered after timeout."), Finish())),
+        Step(expected, timeout),
+        Step(expected, Stream(Gate("stop-retry"), Text("Late retry output must stay hidden."), Finish()), allow_disconnect=True))
+
+SCENARIOS["web_timeout_retry"] = web_timeout_retry
+
+def web_terminal_ownership() -> Scenario:
+    """One native message supplies a branch boundary; ownership changes run no model work."""
+    return Scenario(
+        "web_terminal_ownership",
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                    body_contains=("Ownership branch seed",)),
+             Stream(Text("Committed ownership test boundary."), Finish())),
+    )
+
+
+SCENARIOS["web_terminal_ownership"] = web_terminal_ownership

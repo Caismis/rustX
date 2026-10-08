@@ -952,18 +952,31 @@ impl SessionRuntimeManager {
         resident.and_then(|resident| resident.shutdown_runtime())
     }
 
+    /// The resident Session's Runtime Client host, for observing the
+    /// projection a client attachment would observe.
+    #[cfg(test)]
+    pub(crate) fn configuration_host(
+        &self,
+        id: &SessionId,
+    ) -> Option<crate::runtime_client::RuntimeClientHost> {
+        let state = self.registry.0.lock().expect("registry mutex");
+        let conversation = state.by_session.get(id)?;
+        let Some(Entry::Loaded(resident)) = state.entries.get(conversation) else {
+            return None;
+        };
+        resident
+            .composition
+            .lock()
+            .expect("composition mutex")
+            .as_ref()
+            .map(|composition| composition.host().clone())
+    }
+
     pub(crate) fn configuration_application(
         &self,
         id: &SessionId,
     ) -> Option<super::configuration::application::ConfigurationApplication> {
-        let mut application = self.applications.lock().view(id.as_ref())?;
-        if application.candidate.is_some() {
-            application.eligibility = self.configuration_runtime(id).map_or(
-                super::configuration::application::AdoptionEligibility::Unavailable,
-                |runtime| runtime.configuration_adoption_eligibility(),
-            );
-        }
-        Some(application)
+        self.applications.lock().view(id.as_ref())
     }
 
     pub(crate) fn configuration_changes(&self) -> watch::Receiver<u64> {
@@ -1619,6 +1632,14 @@ impl SessionRuntimeManager {
         // Both are best-effort: canonical history is unaffected, and the row
         // falls back to identity until a later seam succeeds.
         let session_id = access.session.id.clone();
+        if let Err(error) = self.sessions.repair_activity(&session_id).await {
+            tracing::warn!(%session_id, %error, "Session activity repair failed during composition");
+        }
+        super::session_activity::arm_activity(
+            self.sessions.downgrade_catalog(),
+            session_id.clone(),
+            composition.runtime(),
+        );
         match self
             .sessions
             .repair_display_preview_report(&session_id)

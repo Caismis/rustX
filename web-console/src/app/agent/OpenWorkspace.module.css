@@ -1,13 +1,82 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-open-in-app/OpenTargetButton.module.css; see PROVENANCE.md. */
+/* Sized to sit in the conversation header's control row beside its round
+   icon buttons: a hairline pill with an icon main half and a narrow chevron. */
 .action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
   max-width: 22rem;
 }
+
 .action p,
 .action details {
-  margin: 4px 0;
+  margin: 0;
   font-size: 12px;
   overflow-wrap: anywhere;
 }
+
+.menuAnchor {
+  display: inline-flex;
+  flex: none;
+  align-self: center;
+}
+
+.split {
+  display: inline-flex;
+  align-items: stretch;
+  box-sizing: border-box;
+  height: 24px;
+  overflow: hidden;
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: 8px; /* Harness --dsw-radius-sm. */
+  font-family: var(--dsw-font-family);
+}
+
+.main,
+.chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: none;
+  color: var(--dsw-alias-label-primary);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.main {
+  gap: 4px;
+  padding: 3px 5px;
+}
+
+.chevron {
+  padding: 3px 4px 3px 3px;
+  border-left: 0.5px solid var(--dsw-alias-border-l4);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.main:hover:not(:disabled),
+.main:focus-visible,
+.chevron:hover:not(:disabled),
+.chevron:focus-visible {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.main:disabled,
+.chevron:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+/* Pending disables clicks without a restyle; only hover feedback pauses. */
+.split[data-state='busy'] .main,
+.split[data-state='busy'] .chevron {
+  cursor: default;
+}
+
 @media (max-width: 600px) {
   .action { max-width: 12rem; }
 }

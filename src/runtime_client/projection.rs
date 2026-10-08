@@ -363,7 +363,8 @@ fn invalidates_read_domains(observation: &ConversationObservation) -> bool {
         | ConversationObservation::Shutdown
         | ConversationObservation::InteractionRemoved { .. }
         | ConversationObservation::DurableFailure { .. }
-        | ConversationObservation::DurabilityFailed { .. } => false,
+        | ConversationObservation::DurabilityFailed { .. }
+        | ConversationObservation::AdoptionEligibility(_) => false,
     }
 }
 
@@ -400,6 +401,11 @@ impl RuntimeClientProjection {
                 conversation_id,
                 shutting_down: false,
                 effective_approval_mode: ApprovalMode::Policy,
+                // A host binds before activation, and an inspection projection
+                // has no live runtime: neither can adopt until the runtime
+                // publishes otherwise.
+                configuration_adoption_eligibility:
+                    crate::local_runtime::configuration::application::AdoptionEligibility::Unavailable,
                 durability_failure: None,
                 messages: initial_messages,
                 transcript: super::snapshot::RuntimeClientTranscriptPage::default(),
@@ -1252,6 +1258,13 @@ impl RuntimeClientProjection {
                     operation,
                     diagnostic,
                 }]
+            }
+            ConversationObservation::AdoptionEligibility(eligibility) => {
+                if self.snapshot.configuration_adoption_eligibility == eligibility {
+                    return Vec::new();
+                }
+                self.snapshot.configuration_adoption_eligibility = eligibility.clone();
+                vec![RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged { eligibility }]
             }
         }
     }
@@ -2432,7 +2445,7 @@ fn arguments_of(state: &ForegroundToolState) -> String {
 
 /// Projects one internal attempt failure into its external shape,
 /// dropping provider-specific fields.
-fn client_failure(failure: &AttemptFailure) -> RuntimeClientAttemptFailure {
+pub(super) fn client_failure(failure: &AttemptFailure) -> RuntimeClientAttemptFailure {
     match failure {
         AttemptFailure::Model { error } => RuntimeClientAttemptFailure::Model {
             kind: error.kind.clone(),
@@ -2915,6 +2928,59 @@ mod tests {
             Some(model_view()),
             64,
         )
+    }
+
+    /// Adoption eligibility is runtime-domain projection state: a published
+    /// change folds into the snapshot and publishes one event, and an
+    /// unchanged value folds into nothing. It invalidates no derived read
+    /// domain, because it is not conversation history.
+    #[test]
+    fn adoption_eligibility_publishes_only_changes() {
+        use crate::local_runtime::configuration::application::AdoptionEligibility;
+        let mut projection = projection();
+        let (snapshot, cursor) = projection.snapshot().unwrap();
+        assert_eq!(
+            snapshot.configuration_adoption_eligibility,
+            AdoptionEligibility::Unavailable
+        );
+        let (subscriber, _) = projection.subscribe(cursor).unwrap();
+        for eligibility in [
+            AdoptionEligibility::Unavailable,
+            AdoptionEligibility::Eligible,
+            AdoptionEligibility::Eligible,
+            AdoptionEligibility::Busy,
+            AdoptionEligibility::Busy,
+            AdoptionEligibility::Eligible,
+        ] {
+            projection.apply(ConversationObservation::AdoptionEligibility(eligibility));
+        }
+        assert!(projection.read_domain_cut().is_none());
+        let mut published = Vec::new();
+        while let SubscriberPoll::Event(event) = projection.poll_subscriber(subscriber) {
+            let crate::runtime_client::RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged {
+                eligibility,
+            } = event.event
+            else {
+                panic!("only eligibility changes are published: {:?}", event.event);
+            };
+            published.push(eligibility);
+        }
+        assert_eq!(
+            published,
+            vec![
+                AdoptionEligibility::Eligible,
+                AdoptionEligibility::Busy,
+                AdoptionEligibility::Eligible
+            ]
+        );
+        assert_eq!(
+            projection
+                .snapshot()
+                .unwrap()
+                .0
+                .configuration_adoption_eligibility,
+            AdoptionEligibility::Eligible
+        );
     }
 
     #[test]

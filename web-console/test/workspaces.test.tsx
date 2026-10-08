@@ -274,7 +274,7 @@ it('late metadata searches cannot replace newer results or results after Workspa
   server.handlers.set('session/list', request => {
     if (request.method !== 'session/list') throw new Error('wrong request');
     const id = request.params.query!;
-    return { type: 'sessions', sessions: [{ id, cwd: '/workspace/A', active_node: `node-${id}`, name: id, updated_at: '0' }] };
+    return { type: 'sessions', sessions: [{ ownership_generation: '1', id, cwd: '/workspace/A', active_node: `node-${id}`, name: id, updated_at: '0' }] };
   });
   fireEvent.change(screen.getByLabelText('Search Session metadata'), { target: { value: 'old' } });
   const old = await server.waitFor('session/list', 2);
@@ -532,7 +532,7 @@ it('classification belongs to exactly the native summary page that requested it'
   const pending = deferred<Awaited<ReturnType<ProductHostWorkspaces['classifyLocations']>>>();
   await mount(host);
   host.classifyLocations = vi.fn(() => pending.promise);
-  server.handlers.set('session/list', () => ({ type: 'sessions', sessions: [{ id: 'C', name: 'Fresh Session', cwd: '/workspace/B', active_node: 'c', updated_at: '2026-09-18T00:00:00Z' }], }));
+  server.handlers.set('session/list', () => ({ type: 'sessions', sessions: [{ ownership_generation: '1', id: 'C', name: 'Fresh Session', cwd: '/workspace/B', active_node: 'c', updated_at: '2026-09-18T00:00:00Z' }], }));
   await act(async () => { await server.client.listSessions(); });
   const groupContaining = () => screen.getByRole('button', { name: 'Open Fresh Session' }).closest('[data-workspace-group]')?.textContent ?? '';
   expect(groupContaining()).toBe('');
@@ -546,7 +546,7 @@ it('classification belongs to exactly the native summary page that requested it'
 // Blocking finding 2 — the whole real path: SessionConfiguration → App owner
 // navigation → the concrete Settings target. Nothing here mocks the callback or
 // inspects a fabricated `source:*` string.
-async function failedSessionConfiguration(sources: readonly import('../../protocol/app-server/v34').SourceTarget[], host = hostFixture()) {
+async function failedSessionConfiguration(sources: readonly import('../../protocol/app-server/v37').SourceTarget[], host = hostFixture()) {
   server.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: '/workspace/A' } }));
   server.handlers.set('session/configuration', () => ({
     type: 'session_configuration',
@@ -605,7 +605,7 @@ it('S1-10 Session focus changes never retarget an opened owning Settings editor'
 // Settings navigation is linearized by one App-owned epoch. A delayed owning
 // Workspace catalog lookup is preparation, never authority to override a newer
 // navigation decision.
-async function pendingOwnershipLookup(sources: readonly import('../../protocol/app-server/v34').SourceTarget[]) {
+async function pendingOwnershipLookup(sources: readonly import('../../protocol/app-server/v37').SourceTarget[]) {
   const host = await failedSessionConfiguration(sources);
   const catalog = await host.listWorkspaces();
   const gate = deferred<WorkspaceCatalog>();
@@ -792,4 +792,67 @@ it.each(['en', 'zh'] as const)('selected off-page pending and unavailable demand
   await act(async () => gate.resolve([{ authorized: false, reason: 'unavailable' }, { authorized: true, workspaceId: 'wB' }]));
   expect(screen.getByText(tx('workspace:association.unavailable'))).toBeTruthy();
   expect(screen.queryByText(tx('workspace:association.refreshing'))).toBeNull();
+});
+
+it('current blank conversation is pinned, reused, relocated and hidden on departure without native creation', async () => {
+  await mount();
+  const draft = () => document.querySelector('[data-draft-conversation]')!;
+  expect(draft()).toBeNull();
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'New conversation in Workspace A' })));
+  expect(draft().getAttribute('aria-selected')).toBe('true');
+  expect(draft().closest('[data-workspace-group]')?.textContent).toContain('Workspace A');
+  expect(draft().nextElementSibling?.querySelector('[data-session-id]')?.getAttribute('data-session-id')).toBe('A');
+  expect(draft().querySelector('[data-session-id], [data-session-actions]')).toBeNull();
+  fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'unsent draft' } });
+  await act(async () => fireEvent.click(within(draft() as HTMLElement).getByRole('button')));
+  expect(document.activeElement).toBe(screen.getByLabelText('Message'));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'New conversation in Workspace A' })));
+  expect(document.querySelectorAll('[data-draft-conversation]')).toHaveLength(1);
+  expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('unsent draft');
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Choose Workspace' })));
+  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Workspace B' })));
+  expect(draft().closest('[data-workspace-group]')?.textContent).toContain('Workspace B');
+  expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('unsent draft');
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+  expect(draft()).toBeNull();
+  expect(methods()).not.toContain('session/create');
+  expect(methods()).not.toContain('session/delete');
+});
+
+it('preserves native recency order in grouped, flat and search views', async () => {
+  server.summaries.set('A', { cwd: '/workspace/A', updated_at: '2026-10-01T00:00:00Z' });
+  server.summaries.set('B', { cwd: '/workspace/A', updated_at: '2026-10-02T00:00:00Z' });
+  await mount();
+  const order = () => within(screen.getByRole('tree', { name: 'Session browser' }))
+    .getAllByRole('button', { name: /^Open Session / }).map(node => node.getAttribute('aria-label'));
+  expect(order()).toEqual(['Open Session B', 'Open Session A']);
+  expect(server.client.getSnapshot().sessions.map(row => row.id)).toEqual(['B', 'A']);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'View options' })));
+  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Flat view' })));
+  expect(order()).toEqual(['Open Session B', 'Open Session A']);
+  server.summaries.set('A', { cwd: '/workspace/A', updated_at: '2026-10-03T00:00:00Z' });
+  await act(async () => server.invalidateSummary('A', server.socket, true));
+  await waitFor(() => expect(order()).toEqual(['Open Session A', 'Open Session B']));
+  // Equal times use identity, independent of the catalog response order.
+  server.summaries.set('B', { cwd: '/workspace/A', updated_at: '2026-10-03T00:00:00Z' });
+  await act(async () => server.invalidateSummary('B', server.socket, true));
+  expect(order()).toEqual(['Open Session A', 'Open Session B']);
+  await act(async () => fireEvent.change(screen.getByRole('textbox', { name: 'Search Session metadata' }), { target: { value: 'Session' } }));
+  expect(within(screen.getByRole('tree', { name: 'Session browser' })).getAllByRole('treeitem', { name: /^Open Session / }).map(node => node.getAttribute('aria-label'))).toEqual(['Open Session A', 'Open Session B']);
+});
+
+it('native activity invalidation replaces the current page with a recently active off-page Session', async () => {
+  let recent = false;
+  server.snapshots.set('older', snapshot('older'));
+  server.summaries.set('older', { cwd: '/workspace/A', name: 'Older conversation', updated_at: '2026-10-07T00:00:00Z' });
+  server.handlers.set('session/list', () => ({ type: 'sessions', sessions: recent
+    ? [server.summary('older'), server.summary('A')] : [server.summary('A'), server.summary('B')], next_offset: 32 }));
+  await mount();
+  expect(screen.queryByRole('button', { name: 'Open Older conversation' })).toBeNull();
+  recent = true;
+  await act(async () => server.invalidateSummary('older', server.socket, true));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Open Older conversation' })).toBeTruthy());
+  expect(server.client.getSnapshot().sessions.map(row => row.id)).toEqual(['older', 'A']);
+  expect(methods().filter(method => method === 'session/list')).toHaveLength(2);
+  expect(methods()).not.toContain('session/attach');
 });

@@ -47,6 +47,7 @@ pub mod process;
 mod resource_directory;
 pub mod schemas;
 pub mod session;
+pub(crate) mod session_activity;
 pub mod session_controller;
 pub(crate) mod session_display_projection;
 pub mod session_runtime_manager;

@@ -15,11 +15,12 @@
 //! The exact libtest name of each test is passed to the fixture child as its
 //! re-entry point; renaming a test means updating its spawn string.
 
+#![cfg(all(unix, feature = "mcp-fixture"))]
+
 use super::super::support;
 use super::super::support::runtime_client_conformance as conformance;
 
 /// The MCP capability projection, driven through both transports.
-#[cfg(all(unix, feature = "mcp-fixture"))]
 mod projection_covers_mcp_origins {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn direct() {
@@ -42,7 +43,6 @@ mod projection_covers_mcp_origins {
 
 /// The MCP origin is projected with its server identity; the MCP fixture
 /// server serves the catalog.
-#[cfg(all(unix, feature = "mcp-fixture"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)] // one complete MCP capability fixture
 async fn capability_projection_carries_mcp_origin_metadata() {

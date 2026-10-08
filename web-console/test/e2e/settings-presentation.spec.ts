@@ -9,7 +9,7 @@ const fixtureOrigin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 import { expectStableScreenshot } from './screenshot';
-import { choose, closeSettings, openSettingsPage, openWorkspaceSettings, selectedSettingsPage, settingsSectionMenu } from './shell-actions';
+import { closeSettings, openSettingsPage, openWorkspaceSettings, selectedSettingsPage, settingsSectionMenu } from './shell-actions';
 
 const fixture = `${fixtureOrigin}/test/fixtures/settings.html`;
 const pages = ['General', 'Models', 'Agent', 'Tools & Permissions', 'Extensions', 'Advanced'];
@@ -32,7 +32,7 @@ async function openUserSettings(page: Page) {
 }
 async function setTheme(page: Page, theme: 'Light' | 'Dark') {
   await openUserSettings(page);
-  await choose(dialog(page), 'Theme', theme);
+  await dialog(page).getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: theme, exact: true }).click();
   await closeSettings(page);
 }
 
@@ -535,6 +535,16 @@ const keyboard = (page: Page) => page.evaluate(() => {
   const active = document.activeElement!;
   return { body: active === document.body, disabled: active.matches(':disabled'), settings: active.closest('[role="dialog"][aria-label="Settings"]') !== null, rendered: active.getClientRects().length > 0, connected: active.isConnected };
 });
+/**
+ * Opening a Models row unmounts the focused row. Base UI's dialog then refocuses
+ * its popup in a microtask and again on the next animation frame, which would
+ * overwrite a focus moved before then. Wait for the dialog to hold focus and for
+ * a frame requested after Base UI's own to run.
+ */
+const settleDialogFocus = async (page: Page) => {
+  await page.waitForFunction(() => document.activeElement?.matches('[role="dialog"]') === true);
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => resolve(null))));
+};
 const releaseWrites = (page: Page) => page.evaluate(() => (window as unknown as { rustxReleaseWrites: () => void }).rustxReleaseWrites());
 
 test('confirming a removal settles focus on its unit while the write is in flight; dismissal returns it to the trigger', async ({ page }) => {
@@ -543,6 +553,7 @@ test('confirming a removal settles focus on its unit while the write is in fligh
   await openUserSettings(page);
   await openSettingsPage(page, 'Models');
   await settings.getByRole('row', { name: 'transport', exact: true }).click();
+  await settleDialogFocus(page);
   const unit = settings.getByRole('form', { name: 'Provider transport' });
   const remove = unit.getByRole('button', { name: 'Remove Provider transport', exact: true });
   const deletion = page.getByRole('alertdialog', { name: 'Remove Provider transport from User configuration?' });
@@ -577,6 +588,7 @@ test('confirming a removal settles focus on its unit while the write is in fligh
   await openUserSettings(page);
   await openSettingsPage(page, 'Models');
   await settings.getByRole('row', { name: 'transport', exact: true }).click();
+  await settleDialogFocus(page);
   await expect(remove).toBeEnabled(); await remove.focus(); await expect(remove).toBeFocused();
 
   // Confirm: the removal is submitted and held in flight. The unit's controls,
@@ -776,6 +788,28 @@ test('Session configuration banner: preparing, ready, blocked and failed, compac
   expect(requests.slice(adoptionAt).filter(request => request.method === 'session/configuration').length).toBeGreaterThanOrEqual(1);
   expect(requests.filter(request => request.method === 'session/configuration').length).toBeGreaterThan(before);
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
+});
+
+test('Session configuration banner neither flickers nor rereads configuration while an answer streams', async ({ page }) => {
+  const errors = await start(page, '?session=ready');
+  const ready = banner(page).locator('[data-state="ready"]');
+  await expect(ready).toContainText('Prepared configuration is waiting for this Session.');
+  // Record every DOM mutation that ever shows the unavailable line, so a single
+  // painted frame of it fails the test.
+  await page.evaluate(() => {
+    const record = window as unknown as { rustxUnavailableFrames: number };
+    record.rustxUnavailableFrames = 0;
+    new MutationObserver(() => {
+      if (document.querySelector('[aria-label="Session configuration"] [data-state="unavailable"]')) record.rustxUnavailableFrames++;
+    }).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
+  });
+  const reads = async () => (await nativeRequests(page)).filter(request => request.method === 'session/configuration').length;
+  const before = await reads();
+  await page.evaluate(() => (window as unknown as { rustxStream: (deltas: number) => Promise<void> }).rustxStream(200));
+  expect(await page.evaluate(() => (window as unknown as { rustxUnavailableFrames: number }).rustxUnavailableFrames)).toBe(0);
+  expect(await reads()).toBe(before);
+  await expect(ready.getByRole('button', { name: 'Adopt configuration' })).toBeEnabled();
+  expect(errors).toEqual([]);
 });
 
 test('Provider card Delete preserves exact unit CAS and returns focus to the surviving landing page', async ({ page }) => {

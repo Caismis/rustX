@@ -728,6 +728,112 @@ fn provider_completion_does_not_imply_canonical_assistant_acceptance() {
     );
 }
 
+/// An adoption committed while idle carries no Attempt of its own; it belongs
+/// to the first Attempt started after it, never to the previous turn.
+#[test]
+fn idle_adoption_belongs_to_the_attempt_started_after_it() {
+    let store = store("conv_5b2c8e14-7d3a-7f19-a0c6-2e9b41d7f3a8");
+    let adopt_idle = |id: &str, seconds: i64| {
+        store
+            .accept_inbound(crate::durable::InboundDraft {
+                message_id: Some(MessageId::new(id)),
+                source: crate::message::types::UserSource::Human,
+                kind: crate::message::types::InboundKind::Message,
+                content: vec![UserContentBlock::Text(TextBlock { text: id.into() })],
+                timestamp: timestamp(seconds),
+                correlation: None,
+            })
+            .unwrap();
+        let batch = store.select_pending_batch().unwrap().unwrap();
+        store.adopt_pending_batch(batch.watermark, None).unwrap();
+    };
+    let start_attempt = |attempt: &str, seconds: i64| {
+        let mut envelope = event(
+            &store,
+            E::AttemptStarted {
+                attempt_id: AttemptId::new(attempt),
+            },
+            seconds,
+        );
+        envelope.attempt_id = Some(AttemptId::new(attempt));
+        envelope.turn_id = None;
+        store.append_event(envelope).unwrap();
+    };
+    let users = || -> Vec<Option<String>> {
+        page(&store)
+            .records
+            .iter()
+            .filter(|record| record.kind == TraceKind::User)
+            .map(|record| record.location.attempt_id.as_ref().map(ToString::to_string))
+            .collect()
+    };
+
+    adopt_idle("first", 0);
+    assert_eq!(
+        users(),
+        [None],
+        "unscoped until its Attempt starts at the cut"
+    );
+    let idle_read = TraceProjection::new(&store).unwrap();
+    let first = page(&store)
+        .records
+        .into_iter()
+        .find(|row| row.kind == TraceKind::User)
+        .unwrap();
+    start_attempt("attempt-a", 1);
+    assert_eq!(users(), [Some("attempt-a".to_owned())]);
+    // The same retained input changes ownership only at the new native cut.
+    assert_eq!(
+        idle_read
+            .refresh(std::slice::from_ref(&first.position), None)
+            .unwrap()[0]
+            .location
+            .attempt_id,
+        None
+    );
+    let repair = TraceProjection::new(&store)
+        .unwrap()
+        .refresh(std::slice::from_ref(&first.position), None)
+        .unwrap();
+    assert_eq!(
+        repair[0].location.attempt_id,
+        Some(AttemptId::new("attempt-a"))
+    );
+    assert_eq!(repair[0].location.step_id, None);
+
+    adopt_idle("second", 2);
+    start_attempt("attempt-b", 3);
+    assert_eq!(
+        users(),
+        [Some("attempt-a".to_owned()), Some("attempt-b".to_owned())],
+        "the next turn's input never joins the previous turn"
+    );
+    let second = page(&store)
+        .records
+        .into_iter()
+        .filter(|record| record.kind == TraceKind::User)
+        .nth(1)
+        .unwrap();
+    assert_eq!(second.location.step_id, None);
+    // Both inputs can have left the latest page while the browser retains them.
+    let read = TraceProjection::new(&store).unwrap();
+    let latest = read.page(None, 1).unwrap();
+    assert!(latest.records.iter().all(|row| row.kind != TraceKind::User));
+    let repairs = read
+        .refresh(&[first.position, second.position], None)
+        .unwrap();
+    assert_eq!(
+        repairs
+            .iter()
+            .map(|row| row.location.attempt_id.clone())
+            .collect::<Vec<_>>(),
+        [
+            Some(AttemptId::new("attempt-a")),
+            Some(AttemptId::new("attempt-b"))
+        ]
+    );
+}
+
 /// Adopted inbound becomes a User record carrying its canonical content.
 #[test]
 fn adopted_inbound_becomes_a_user_record_with_canonical_content() {
@@ -3467,6 +3573,7 @@ fn a_lifecycle_update_restates_its_summary_rows_mutable_facts_exactly() {
     assert_eq!(updates.len(), page.records.len());
     for (record, update) in page.records.iter().zip(&updates) {
         assert_eq!(update.id, record.id);
+        assert_eq!(update.location, record.location);
         assert_eq!(update.state, record.state);
         assert_eq!(update.timing, record.timing);
         assert_eq!(update.message_id, record.message_id);
@@ -4076,4 +4183,29 @@ fn tool_summary_one_exact_proposal_and_no_lifecycle_resolution() {
         0,
         "refresh never resolves immutable arguments"
     );
+}
+
+#[test]
+fn lifecycle_location_preserves_bounded_escaped_native_identities() {
+    let store = store("conv_5b2c8e14-7d3a-7f19-a0c6-2e9b41d7f3a9");
+    let read = TraceProjection::new(&store).unwrap();
+    let anchor = event(
+        &store,
+        E::AttemptStarted {
+            attempt_id: AttemptId::new("attempt-a"),
+        },
+        0,
+    );
+    let mut facts = read.anchor_facts(&anchor).unwrap();
+    let escaped = "\u{0001}".repeat(super::bounds::TRACE_IDENTITY_BYTES);
+    facts.location.attempt_id = Some(AttemptId::new(escaped.clone()));
+    facts.location.step_id = Some(TurnId::new(escaped.clone()));
+    let update = facts.lifecycle();
+    assert_eq!(
+        update.location.attempt_id,
+        Some(AttemptId::new(escaped.clone()))
+    );
+    assert_eq!(update.location.step_id, Some(TurnId::new(escaped)));
+    assert!(serde_json::to_vec(&update).unwrap().len() <= 8192);
+    assert!(!update.truncated);
 }

@@ -1,6 +1,6 @@
 /** Pure Runtime Client read-model fold. Routing/cursor continuity belongs to
  * the attachment owner. No I/O, providers, React, or execution authority. */
-import type { RuntimeClientSnapshot as Snapshot, RuntimeClientEvent as Event, InFlightBlock, ForegroundToolExecution } from './v34.ts';
+import type { RuntimeClientSnapshot as Snapshot, RuntimeClientEvent as Event, InFlightBlock, ForegroundToolExecution } from './v37.ts';
 
 const upsert = <T>(rows: readonly T[] | undefined, value: T, key: (row: T) => string): T[] => {
   const index = (rows ?? []).findIndex(row => key(row) === key(value));
@@ -79,6 +79,8 @@ export function foldRuntimeEvent(state: Snapshot, event: Event): Snapshot {
     case 'session_model_changed': return { ...state, model: event.model };
     case 'runtime_shutdown': return { ...state, shutting_down: true };
     case 'runtime_durability_failed': return { ...state, durability_failure: { operation: event.operation, diagnostic: event.diagnostic } };
+    // Runtime-domain advisory state; never a configuration-application change.
+    case 'configuration_adoption_eligibility_changed': return { ...state, configuration_adoption_eligibility: event.eligibility };
     default: { const exhaustive: never = event; throw new Error(`Unknown Runtime Client event: ${exhaustive}`); }
   }
 }

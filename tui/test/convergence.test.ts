@@ -183,7 +183,7 @@ test("T12/T16 native application notifications reject reorder and adoption sends
   const candidate = { identity: { input_revision: "input", attempt: "4" }, expected_binding: "2", impact: "prefix_changed" as const };
   // A Session application scope is the Session identity; its authored source
   // owners are a separate native fact.
-  const application = { eligibility: { status: "eligible" as const }, scope: h.session.sessionId, sources: [{ kind: "user" as const }, { kind: "workspace" as const, directory: "/workspace/A" }], version: "9007199254740993", desired: candidate.identity,
+  const application = { scope: h.session.sessionId, sources: [{ kind: "user" as const }, { kind: "workspace" as const, directory: "/workspace/A" }], version: "9007199254740993", desired: candidate.identity,
     units: { execution_policy: { status: "applied" as const }, instructions: { status: "ready" as const, impact: "prefix_changed" as const } }, candidate };
   h.session.applyNotification({ jsonrpc: "2.0", method: "configuration/changed", params: { application } });
   h.session.applyNotification({ jsonrpc: "2.0", method: "configuration/changed", params: { application: { ...application, version: "9", candidate: null } } });

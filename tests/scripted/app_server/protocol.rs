@@ -7,6 +7,20 @@ use crate::runtime_client::event::RuntimeClientEvent;
 
 use super::app_server_conformance as conformance;
 
+// Wait on the catalog's native publication signal, not on elapsed time or retries.
+async fn activity_published(f: &Fixture, id: &crate::local_runtime::session::SessionId) {
+    let mut changes = f.manager.sessions.summary_invalidations().changes();
+    loop {
+        let catalog = f.manager.sessions.catalog.lock().await;
+        let expected = catalog.activity_subject(id).unwrap().unwrap();
+        if catalog.summary(id).unwrap().updated_at >= expected {
+            return;
+        }
+        drop(catalog);
+        changes.changed().await.unwrap();
+    }
+}
+
 async fn binary_upload(
     connection: &AppServerConnection,
     target: AttachmentTarget,
@@ -3141,7 +3155,13 @@ async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_r
             assert_eq!(tail.usage.as_ref().unwrap().total_tokens, 120);
             assert_eq!(tail.timing.as_ref().unwrap().generation_ms, Some(1280));
             assert_eq!(projected.entries.iter().filter(|entry| entry.completed_response.is_some()).count(), 2);
-            assert_eq!(projected.statistics.unwrap(), crate::runtime_client::response::ConversationStatistics::default());
+            // As a Harness fork folds its copied prefix, the child's totals and
+            // context reading include both inherited turns, without owning them.
+            let totals = projected.statistics.unwrap();
+            assert_eq!((totals.turns, totals.model_requests, totals.requests_with_usage, totals.completed_responses), (2, 2, 2, 2));
+            assert_eq!(totals.reported_usage.unwrap().total_tokens, 240);
+            assert!(totals.latest_turn.is_none());
+            assert_eq!(crate::context::occupancy::read(&copied, 0).unwrap().unwrap().input_tokens, 100);
             assert!(copied.read_events(None, 128).unwrap().events.is_empty());
             let child_id = session.id.clone(); let child_node = session.active_node.clone();
             drop(copied); drop(destination);
@@ -3176,6 +3196,12 @@ async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_r
         let destination = controller.acquire_session(&session.id, Some(&session.active_node)).await.unwrap();
         let retry = SqliteConversationStore::open_existing(session.active_conversation_id, &destination.database_path).unwrap();
         assert_eq!(retry.load_canonical().unwrap().len(), 2);
+        // Regenerate keeps only the prefix before the retried input: one turn.
+        let mut retried = crate::runtime_client::snapshot::transcript_page_view(retry.load_transcript_page(None, 64).unwrap()).unwrap();
+        crate::runtime_client::response::decorate(&retry, &mut retried).unwrap();
+        let totals = retried.statistics.unwrap();
+        assert_eq!((totals.turns, totals.model_requests, totals.completed_responses), (1, 1, 1));
+        assert_eq!(totals.reported_usage.unwrap().total_tokens, 120);
         rejected(&connection, Method::SessionBranch { session_id: source.id.clone(), node_id: source.active_node.clone(), surface_revision: crate::conversation::SurfaceRevision::new(revision.get() + 1), boundary: MessageId::new("assistant-b"), side: LineageSide::After }).await;
         rejected(&connection, Method::SessionBranch { session_id: source.id.clone(), node_id: source.active_node.clone(), surface_revision: revision, boundary: MessageId::new("user-b"), side: LineageSide::After }).await;
         assert_eq!(store.load_canonical().unwrap(), original);
@@ -3332,7 +3358,7 @@ async fn session_list_searches_by_identity_name_and_projection_open_no_store() {
 
 // P05 + P06 (runtime plane): the first turn's canonical commit publishes the
 // normalized, 120-character-bounded projection while the turn is still
-// parked; a later turn never repaints it and never commits the catalog again.
+// parked; a later turn updates activity but never repaints the first-message preview.
 #[tokio::test]
 async fn the_first_turn_publishes_the_bounded_projection_and_later_turns_never_repaint() {
     bounded(async {
@@ -3401,6 +3427,7 @@ async fn the_first_turn_publishes_the_bounded_projection_and_later_turns_never_r
             .find(|row| row.id == target.session_id)
             .unwrap();
         assert_eq!(row.preview.as_deref(), Some(expected.as_str()));
+        activity_published(&f, &target.session_id).await;
         let generation = f
             .manager
             .sessions
@@ -3412,7 +3439,7 @@ async fn the_first_turn_publishes_the_bounded_projection_and_later_turns_never_r
         await_attempt_settled(&connection, &target.session_id).await;
         // P06 (runtime plane): a second turn is an ordinary new commit, but
         // the one-shot publisher is spent — the settled first line survives
-        // byte-identically and no catalog commit happens.
+        // byte-identically while the new human activity commits separately.
         let reply = call(
             &connection,
             53,
@@ -3439,6 +3466,7 @@ async fn the_first_turn_publishes_the_bounded_projection_and_later_turns_never_r
         else {
             panic!("summary")
         };
+        activity_published(&f, &target.session_id).await;
         assert_eq!(summary.preview.as_deref(), Some(expected.as_str()));
         assert_eq!(
             f.manager
@@ -3447,8 +3475,8 @@ async fn the_first_turn_publishes_the_bounded_projection_and_later_turns_never_r
                 .lock()
                 .await
                 .document_generation(),
-            generation,
-            "a later turn never commits the catalog again"
+            generation + 1,
+            "a later human turn publishes activity without repainting the preview"
         );
         f.close().await;
     })
@@ -3552,6 +3580,7 @@ async fn an_agent_sourced_boundary_never_repaints_the_settled_projection() {
         assert!(probe.borrow().published);
         f.gates[0].release();
         await_attempt_settled(&connection, &target.session_id).await;
+        activity_published(&f, &target.session_id).await;
         let generation = f
             .manager
             .sessions
@@ -3607,15 +3636,10 @@ async fn a_failed_projection_commit_preserves_history_and_repairs_exactly_once()
         let f = Fixture::new().await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
-        // Arm before the attach so no catalog write can interleave between
-        // arming and the publisher's commit.
-        f.manager
-            .sessions
-            .catalog
-            .lock()
-            .await
-            .arm_write_fault_before_rename();
         let target = attach(&connection, &f, 0).await;
+        let gate = crate::local_runtime::session_display_projection::publication_test_support::arm(
+            &target.session_id,
+        );
         let mut probe = crate::local_runtime::session_display_projection::display_projection_probe(
             &target.session_id,
         )
@@ -3631,6 +3655,17 @@ async fn a_failed_projection_commit_preserves_history_and_repairs_exactly_once()
         .await;
         assert!(matches!(reply, MethodResult::InboundAccepted { .. }));
         f.gates[0].wait_entered().await;
+        gate.parked(1).await;
+        activity_published(&f, &target.session_id).await;
+        // The independent activity write is settled; inject the fault into
+        // exactly the parked preview publication.
+        f.manager
+            .sessions
+            .catalog
+            .lock()
+            .await
+            .arm_write_fault_before_rename();
+        gate.release();
         probe
             .wait_for(|probe| probe.finished)
             .await
@@ -3859,6 +3894,18 @@ async fn a_parked_publication_serves_a_null_summary_then_invalidates_it() {
             "canonical history exists and the projection is still unpublished"
         );
 
+        // Consume the independently committed activity invalidation while the
+        // preview is still parked, so coalescing cannot merge the two facts.
+        loop {
+            if let NotificationMethod::SummaryInvalidated {
+                session_id,
+                catalog_changed: true,
+            } = connection.next_notification().await.notification
+                && session_id == target.session_id
+            {
+                break;
+            }
+        }
         gate.release();
         probe
             .wait_for(|probe| probe.finished)
@@ -3872,11 +3919,11 @@ async fn a_parked_publication_serves_a_null_summary_then_invalidates_it() {
                 catalog_changed,
             } = connection.next_notification().await.notification
             {
-                assert!(
-                    !catalog_changed,
-                    "preview publication does not change catalog membership"
-                );
-                break session_id;
+                // The human commit separately invalidates recency. Wait for
+                // the preview-only invalidation after releasing its gate.
+                if !catalog_changed {
+                    break session_id;
+                }
             }
         };
         assert_eq!(
@@ -4224,14 +4271,26 @@ async fn issue422_multi_client_deletion_membership_converges_at_commit() {
                     }
                 ));
             }
-            loop {
-                if let NotificationMethod::SummaryInvalidated {
-                    session_id,
-                    catalog_changed: true,
-                } = a.next_notification().await.notification
-                {
-                    assert_eq!(session_id, id);
-                    break;
+            let mut membership = false;
+            let mut retired = false;
+            while !membership || !retired {
+                match a.next_notification().await.notification {
+                    NotificationMethod::SummaryInvalidated {
+                        session_id,
+                        catalog_changed: true,
+                    } => {
+                        assert_eq!(session_id, id);
+                        membership = true;
+                    }
+                    NotificationMethod::OwnershipRetired {
+                        session_id,
+                        retired_through,
+                    } => {
+                        assert_eq!(session_id, id);
+                        assert_eq!(retired_through, sessions[0].ownership_generation);
+                        retired = true;
+                    }
+                    _ => {}
                 }
             }
             let MethodResult::Sessions { sessions, .. } = call(
@@ -4475,13 +4534,13 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         let Some(Response::Failure(denied)) = browser.handle_json(&forged.to_string()).await else { panic!("ordinary file bypass succeeded") };
         assert_eq!(denied.error.code, -32601);
         assert!(product_host.open(FILE_BROWSER_TOKEN).await.is_err(), "normal transport credential cannot authenticate private file seam");
-        // Historical paging carries the same typed fact after activity folds.
+        // Older paging carries the same typed fact after activity folds.
         let MethodResult::TranscriptWindow { window } = call(&browser, 4120, Method::Transcript {
             target: target.clone(), at: crate::durable::reading::ConversationWindowAt::Latest, limit: 1,
         }).await else { panic!() };
         let MethodResult::TranscriptWindow { window: older } = call(&browser, 4121, Method::Transcript {
-            target: target.clone(), at: crate::durable::reading::ConversationWindowAt::Older {
-                before: window.page.entries[0].cursor.into(), cut: Some(window.cut),
+            target: target.clone(), at: crate::durable::reading::ConversationWindowAt::Older { cut: None,
+                before: window.page.entries[0].cursor.into(),
             }, limit: 64,
         }).await else { panic!() };
         assert!(older.page.entries.iter().any(|entry| matches!(&entry.item,
@@ -5553,6 +5612,264 @@ async fn detached_unconsumed_upload_is_absent_and_releases_supervisor_capacity()
         replacement.close();
         assert!(f.host.drain().await.is_empty());
         f.host.finish_drain().unwrap();
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn human_message_activity_reorders_live_catalog_without_focus_or_rename_activity() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let before = f
+            .manager
+            .sessions
+            .read_session_summary(&target.session_id)
+            .await
+            .unwrap()
+            .updated_at;
+        call(
+            &connection,
+            801,
+            Method::TurnStart {
+                target: target.clone(),
+                content: wire_text("activity moves this conversation"),
+            },
+        )
+        .await;
+        f.gates[0].wait_entered().await;
+        loop {
+            if let NotificationMethod::SummaryInvalidated {
+                session_id,
+                catalog_changed: true,
+            } = connection.next_notification().await.notification
+                && session_id == target.session_id
+            {
+                break;
+            }
+        }
+        let summary = f
+            .manager
+            .sessions
+            .read_session_summary(&target.session_id)
+            .await
+            .unwrap();
+        assert!(summary.updated_at > before);
+        let MethodResult::Sessions { sessions, .. } = call(
+            &connection,
+            802,
+            Method::SessionList {
+                query: None,
+                offset: 0,
+                limit: 32,
+            },
+        )
+        .await
+        else {
+            panic!("list")
+        };
+        assert_eq!(sessions[0].id, target.session_id);
+        f.manager
+            .sessions
+            .rename_session(&target.session_id, "renamed without activity")
+            .await
+            .unwrap();
+        assert_eq!(
+            f.manager
+                .sessions
+                .read_session_summary(&target.session_id)
+                .await
+                .unwrap()
+                .updated_at,
+            summary.updated_at
+        );
+        f.gates[0].release();
+        await_attempt_settled(&connection, &target.session_id).await;
+        assert_eq!(
+            f.manager
+                .sessions
+                .read_session_summary(&target.session_id)
+                .await
+                .unwrap()
+                .updated_at,
+            summary.updated_at
+        );
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn durable_history_is_readable_before_and_during_runtime_preparation() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = std::sync::Arc::new(AppServerConnection::new(f.host.clone()));
+        initialize(&connection).await;
+        let id = f.id(0).await;
+        let probe = f.manager.probe(&id);
+        let read = || Method::SessionHistory {
+            session_id: f.sessions[0].id.clone(),
+            node_id: None,
+            at: crate::durable::reading::ConversationWindowAt::Latest,
+            limit: 64,
+        };
+        let MethodResult::SessionHistory {
+            conversation_id,
+            window,
+        } = call(&connection, 500, read()).await
+        else {
+            panic!("history");
+        };
+        assert_eq!(conversation_id, id);
+        assert!(window.page.entries.is_empty());
+        assert_eq!(
+            probe.compositions.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        assert_eq!(connection.attachment_counts(), (0, 0));
+        probe.before_compose.arm();
+        let worker = connection.clone();
+        let session = f.sessions[0].clone();
+        let attaching = tokio::spawn(async move { attach_session(&worker, &session).await });
+        probe.before_compose.entered().await;
+        assert!(matches!(
+            call(&connection, 501, read()).await,
+            MethodResult::SessionHistory { .. }
+        ));
+        assert!(!attaching.is_finished());
+        assert_eq!(connection.attachment_counts(), (0, 1));
+        probe.before_compose.release();
+        attaching.await.unwrap();
+        connection.close();
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn explicit_node_switch_commits_aba_ownership_and_coalesces_exact_retirements() {
+    bounded(async {
+        use crate::durable::{ConversationStore, SqliteConversationStore};
+        use crate::local_runtime::session::LineageSide;
+        use crate::message::TextBlock;
+        use crate::message::types::{
+            InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+        };
+        use crate::runtime::identity::MessageId;
+        let f = Fixture::new().await;
+        let source = &f.sessions[0];
+        let controller = f.manager.session_controller();
+        let access = controller.acquire_session(&source.id, None).await.unwrap();
+        let store = SqliteConversationStore::open(
+            source.active_conversation_id.clone(),
+            &access.database_path,
+        )
+        .unwrap();
+        store
+            .append_canonical(&MessageBlock::User(UserMessageBlock {
+                id: MessageId::new("ownership-seed"),
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                timestamp: None,
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: "ownership seed".into(),
+                })],
+            }))
+            .unwrap();
+        let revision = store.load_head().unwrap().revision;
+        drop(store);
+        drop(access);
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let a1 = controller.read_session_summary(&source.id).await.unwrap();
+        let target_a = attach(&connection, &f, 0).await;
+        let MethodResult::SessionTransition {
+            session: branch, ..
+        } = call(
+            &connection,
+            8000,
+            Method::SessionBranch {
+                session_id: source.id.clone(),
+                node_id: source.active_node.clone(),
+                surface_revision: revision,
+                boundary: MessageId::new("ownership-seed"),
+                side: LineageSide::Before,
+            },
+        )
+        .await
+        else {
+            panic!("branch committed")
+        };
+        let b = controller.read_session_summary(&source.id).await.unwrap();
+        assert!(
+            b.ownership_generation.parse::<u64>().unwrap()
+                > a1.ownership_generation.parse::<u64>().unwrap()
+        );
+        call(
+            &connection,
+            8001,
+            Method::SessionSwitchNode {
+                target: target_a,
+                node_id: branch.active_node,
+            },
+        )
+        .await;
+        assert_eq!(
+            controller
+                .read_session_summary(&source.id)
+                .await
+                .unwrap()
+                .ownership_generation,
+            b.ownership_generation
+        );
+        let target_b = attach(&connection, &f, 0).await;
+        let MethodResult::Session { session: selected } = call(
+            &connection,
+            8002,
+            Method::SessionSwitchNode {
+                target: target_b,
+                node_id: source.active_node.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("selection committed")
+        };
+        assert_eq!(selected.active_node, source.active_node);
+        let MethodResult::SessionSummary { summary: a2 } = call(
+            &connection,
+            8003,
+            Method::SessionSummary {
+                session_id: source.id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("native ownership")
+        };
+        assert_eq!(a2.active_node, a1.active_node);
+        assert!(
+            a2.ownership_generation.parse::<u64>().unwrap()
+                > b.ownership_generation.parse::<u64>().unwrap()
+        );
+        // No notification was read during either commit: the native log must
+        // coalesce through B while the newer A2 read is already authoritative.
+        loop {
+            if let NotificationMethod::OwnershipRetired {
+                session_id,
+                retired_through,
+            } = connection.next_notification().await.notification
+            {
+                assert_eq!(session_id, source.id);
+                assert_eq!(retired_through, b.ownership_generation);
+                break;
+            }
+        }
+        assert!(f.provider.request_bodies().is_empty());
+        connection.close();
+        f.close().await;
     })
     .await;
 }

@@ -100,12 +100,14 @@ fn seed_published_sessions(catalog: &mut SessionCatalog, count: usize) {
         next.sessions.insert(
             lineage.session_id.clone(),
             PersistedSession {
+                ownership_generation: 0,
                 uploads: lineage.uploads.clone(),
                 ordinal: next.next_session_ordinal,
                 id: lineage.session_id.clone(),
                 name: None,
                 display_preview: lineage.display_preview.clone(),
                 created_at: now,
+                last_prompt_at: None,
                 updated_at: now,
                 active_node: lineage.node_id.clone(),
                 nodes,

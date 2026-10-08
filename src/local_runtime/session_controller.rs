@@ -332,6 +332,17 @@ impl SessionController {
         };
         catalog.retain_lifecycle(controller);
         catalog.recover_upload_preparations()?;
+        // Recover derived activity after a process exit, before serving catalog pages.
+        // This inspects durable messages without composing or selecting runtimes.
+        for id in catalog.persisted_session_ids() {
+            match catalog.activity_subject(&id).and_then(|time| match time {
+                Some(time) => catalog.publish_activity(&id, time).map(|_| ()),
+                None => Ok(()),
+            }) {
+                Ok(()) => {}
+                Err(error) => tracing::warn!(%id, %error, "Session activity repair failed"),
+            }
+        }
         Ok(Self::new(catalog))
     }
     pub(crate) fn new(catalog: SessionCatalog) -> Self {
@@ -369,6 +380,60 @@ impl SessionController {
     /// Unknown identities are rejected without configuration resolution.
     pub async fn read_session(&self, id: &SessionId) -> Result<SessionSnapshot, SessionError> {
         self.catalog.lock().await.snapshot(id)
+    }
+    /// Read a bounded durable window without composing a runtime or resolving tools.
+    pub(crate) async fn read_history(
+        &self,
+        id: &SessionId,
+        node: Option<&SessionNodeId>,
+        at: crate::durable::reading::ConversationWindowAt,
+        limit: usize,
+    ) -> Result<
+        (
+            crate::runtime::identity::ConversationId,
+            crate::runtime_client::snapshot::ConversationWindow,
+        ),
+        SessionError,
+    > {
+        let access = self.acquire_session(id, node).await?;
+        tokio::task::spawn_blocking(move || {
+            use crate::durable::ConversationStore as _;
+            let store = crate::durable::SqliteConversationStore::open_existing(
+                access.node.conversation_id.clone(),
+                &access.database_path,
+            )
+            .map_err(SessionError::Store)?
+            .with_lifecycle(access.allocation);
+            let read = store
+                .conversation_window(&at, limit)
+                .map_err(SessionError::Store)?;
+            let mut page = crate::runtime_client::snapshot::transcript_page_view(read.page)
+                .map_err(|detail| SessionError::Catalog { detail })?;
+            crate::runtime_client::response::decorate_window(&store, &mut page, read.cut.journal)
+                .map_err(SessionError::Store)?;
+            if !read
+                .cut
+                .reconstructible_from(&store.conversation_read_cut().map_err(SessionError::Store)?)
+            {
+                return Err(SessionError::Catalog {
+                    detail: "History changed during read".into(),
+                });
+            }
+            Ok((
+                access.node.conversation_id,
+                crate::runtime_client::snapshot::ConversationWindow {
+                    cut: read.cut,
+                    page,
+                    newer_cursor: read.newer_cursor.map(Into::into),
+                    target: read.target,
+                    target_cursor: read.target_cursor.map(Into::into),
+                },
+            ))
+        })
+        .await
+        .map_err(|error| SessionError::Catalog {
+            detail: error.to_string(),
+        })?
     }
     /// Exact durable display metadata; does not resolve configuration or compose a runtime.
     /// # Errors
@@ -505,6 +570,20 @@ impl SessionController {
             Err(error) => Err(error),
         }
     }
+    pub(crate) async fn repair_activity(&self, id: &SessionId) -> Result<(), SessionError> {
+        let snapshot = self.catalog.lock().await.clone();
+        let target = id.clone();
+        let time = tokio::task::spawn_blocking(move || snapshot.activity_subject(&target))
+            .await
+            .map_err(|error| SessionError::Catalog {
+                detail: error.to_string(),
+            })??;
+        if let Some(time) = time {
+            self.catalog.lock().await.publish_activity(id, time)?;
+        }
+        Ok(())
+    }
+
     /// Prepare valid private storage outside the metadata lock, then atomically
     /// publish. There is no reuse of another Session, even an unused one.
     /// # Errors
@@ -665,6 +744,7 @@ impl SessionController {
             .map_err(|error| SessionError::Catalog {
                 detail: error.to_string(),
             })??;
+        self.repair_activity(id).await?;
         self.repair_display_preview(id).await.map(|_| ())
     }
     /// Read a bounded graph page without loading a runtime.
@@ -1900,6 +1980,65 @@ mod tests {
         })
     }
 
+    #[tokio::test]
+    async fn activity_reopen_repairs_a_committed_message_without_changing_metadata() {
+        let root = tempfile::tempdir().unwrap();
+        let controller = SessionController::open(root.path()).unwrap();
+        let session = controller
+            .create_session(settings(root.path()))
+            .await
+            .unwrap()
+            .session;
+        let time = chrono::DateTime::parse_from_rfc3339("2100-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let crate::message::types::MessageBlock::User(mut message) = user("recovered activity")
+        else {
+            unreachable!()
+        };
+        message.timestamp = Some(time);
+        append_root_history(
+            &controller,
+            &session.id,
+            crate::message::types::MessageBlock::User(message),
+        )
+        .await;
+        assert_eq!(
+            controller
+                .read_session_summary(&session.id)
+                .await
+                .unwrap()
+                .updated_at,
+            session.created_at
+        );
+        drop(controller);
+        let reopened = SessionController::open(root.path()).unwrap();
+        assert_eq!(
+            reopened
+                .read_session_summary(&session.id)
+                .await
+                .unwrap()
+                .updated_at,
+            time
+        );
+        assert_eq!(reopened.read_session(&session.id).await.unwrap(), session);
+        let generation = reopened.catalog.lock().await.document_generation();
+        drop(reopened);
+        let reopened = SessionController::open(root.path()).unwrap();
+        assert_eq!(
+            reopened.catalog.lock().await.document_generation(),
+            generation
+        );
+        assert_eq!(
+            reopened
+                .read_session_summary(&session.id)
+                .await
+                .unwrap()
+                .updated_at,
+            time
+        );
+    }
+
     // P12
     #[tokio::test]
     async fn display_preview_repair_is_idempotent_and_never_manufactures_a_subject() {
@@ -2191,6 +2330,13 @@ mod tests {
             .await
             .unwrap()
             .session;
+        let generation = controller
+            .read_session_summary(&session.id)
+            .await
+            .unwrap()
+            .ownership_generation
+            .parse::<u64>()
+            .unwrap();
         append_root_history(&controller, &session.id, user("deleted before publication")).await;
         let invalidations = controller.summary_invalidations();
         let recorded = invalidations.recorded();
@@ -2218,12 +2364,16 @@ mod tests {
         );
         assert_eq!(
             invalidations.recorded(),
-            recorded + 1,
-            "deletion announces its membership visibility exactly once"
+            recorded + 2,
+            "deletion announces membership and ownership retirement exactly once each"
         );
         assert_eq!(
             invalidations.next_after(recorded),
-            Some((recorded + 1, session.id.clone(), true))
+            Some((recorded + 2, session.id.clone(), true))
+        );
+        assert_eq!(
+            invalidations.next_ownership_after(recorded),
+            Some((recorded + 1, session.id.clone(), generation))
         );
         gate.release();
         assert_eq!(
@@ -2237,7 +2387,7 @@ mod tests {
         ));
         assert_eq!(
             invalidations.recorded(),
-            recorded + 1,
+            recorded + 2,
             "the resumed repair adds nothing to deletion's membership invalidation"
         );
     }

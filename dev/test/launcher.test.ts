@@ -1,6 +1,6 @@
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, existsSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,6 +13,13 @@ import { parseArguments as parseTui } from '../../tui/src/cli.ts';
 import { handoff } from '../src/browser.ts';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
+const nativeDirectory = mkdtempSync(join(tmpdir(), 'rustx-native-test-'));
+const nativeBinary = join(nativeDirectory, 'rustx');
+for (const name of ['rustx', 'bash-supervisor', 'interactive-supervisor']) {
+  writeFileSync(join(nativeDirectory, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+}
+after(() => rmSync(nativeDirectory, { recursive: true, force: true }));
+
 function deferred<T>() { let resolve!: (value: T) => void, reject!: (error: Error) => void; const promise = new Promise<T>((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; }
 function harness() {
   const calls: { spec: ChildSpec; ready: ReturnType<typeof deferred<string>>; reap: ReturnType<typeof deferred<void>>; exit: (code: number) => void; ownerShutdown: () => void; stops: number }[] = [];
@@ -28,13 +35,13 @@ function fixture() {
   const directory = mkdtempSync(join(tmpdir(), 'rustx-dev-test-'));
   const a = join(directory, 'workspace with spaces'), b = join(directory, 'second');
   mkdirSync(a); mkdirSync(b); writeFileSync(join(a, 'user-owned'), 'keep');
-  const args = parseArguments(['web', '--binary', process.execPath, '--config', '/settings with spaces.toml', '--runtime-root', '/runtime with spaces', '--workspace', a, '--workspace', b], root);
+  const args = parseArguments(['web', '--binary', nativeBinary, '--config', '/settings with spaces.toml', '--runtime-root', '/runtime with spaces', '--workspace', a, '--workspace', b], root);
   return { directory, a, b, args, remove: () => rmSync(directory, { recursive: true, force: true }) };
 }
 
 test('composition grammar consumes only owned options; native values remain opaque', () => {
-  const result = parseArguments(['app-server', '--', '--binary', process.execPath, '--config', '/a b', '--model', '--binary', '--runtime-root', '/r'], root);
-  assert.equal(result.binary, process.execPath);
+  const result = parseArguments(['app-server', '--', '--binary', nativeBinary, '--config', '/a b', '--model', '--binary', '--runtime-root', '/r'], root);
+  assert.equal(result.binary, nativeBinary);
   assert.deepEqual(result.forwarded, ['--config', '/a b', '--model', '--binary', '--runtime-root', '/r']);
   assert.equal(parseArguments(['app-server'], root).binary, join(root, 'target/debug/rustx'));
   for (const argv of [[], ['invalid'], ['web'], ['web', '--workspace'], ['web', '--workspace', 'relative'], ['web', '--listen', 'ws://x'], ['web', '--token-file', '/x'], ['app-server', '--binary'], ['app-server', '--binary', '/a', '--binary', '/b']]) {
@@ -45,9 +52,9 @@ test('composition grammar consumes only owned options; native values remain opaq
 test('App Server invokes the selected native executable with exact configuration arguments and propagates failure', async () => {
   const h = harness(), launcher = new Launcher(root, h.spawn);
   const forwarded = ['--config', '/path with spaces', '--model', 'default', '--runtime-root', '/runtime', '--listen', 'stdio'];
-  await launcher.start(parseArguments(['app-server', '--binary', process.execPath, ...forwarded], root));
+  await launcher.start(parseArguments(['app-server', '--binary', nativeBinary, ...forwarded], root));
   const child = h.calls[0];
-  assert.equal(child.spec.command, process.execPath);
+  assert.equal(child.spec.command, nativeBinary);
   assert.deepEqual(child.spec.args, ['app-server', ...forwarded]);
   child.exit(27);
   child.reap.resolve();
@@ -58,16 +65,16 @@ test('App Server invokes the selected native executable with exact configuration
 test('TUI delegates unchanged arguments to the existing composition root and native host contract', async () => {
   const h = harness(), launcher = new Launcher(root, h.spawn);
   const forwarded = ['--config', '/user/rustx.toml', '--model', 'default', '--runtime-root', '/runtime', '--workspace', '/workspace with spaces', '--resume'];
-  await launcher.start(parseArguments(['tui', '--binary', process.execPath, ...forwarded], root));
+  await launcher.start(parseArguments(['tui', '--binary', nativeBinary, ...forwarded], root));
   const child = h.calls[0];
   assert.equal(child.spec.command, process.execPath);
-  assert.deepEqual(child.spec.args, [join(root, 'tui/src/main.ts'), '--binary', process.execPath, ...forwarded]);
+  assert.deepEqual(child.spec.args, [join(root, 'tui/src/main.ts'), '--binary', nativeBinary, ...forwarded]);
   const parsed = parseTui(child.spec.args.slice(1));
-  assert.deepEqual(parsed.mode, { kind: 'local', binary: process.execPath, launch: { config: '/user/rustx.toml', runtimeRoot: '/runtime' } });
+  assert.deepEqual(parsed.mode, { kind: 'local', binary: nativeBinary, launch: { config: '/user/rustx.toml', runtimeRoot: '/runtime' } });
   assert.equal(parsed.sessionSettings.cwd, '/workspace with spaces');
   assert.deepEqual(parsed.sessionSettings.model, { model: 'default' });
-  assert.throws(() => parseTui(['--binary', process.execPath, '--unknown']), /unknown/);
-  assert.throws(() => parseTui(['--binary', process.execPath, '--cwd', '/obsolete']), /unknown/);
+  assert.throws(() => parseTui(['--binary', nativeBinary, '--unknown']), /unknown/);
+  assert.throws(() => parseTui(['--binary', nativeBinary, '--cwd', '/obsolete']), /unknown/);
   const stopping = launcher.settle(0); child.reap.resolve(); await stopping;
 });
 
@@ -92,7 +99,7 @@ test('Web creates one token/config, passes the bound endpoint, and cleanup waits
   await h.count(2);
   const web = h.calls[1], configFile = web.spec.env!.RUSTX_WORKSPACE_HOST_CONFIG!;
   const config = JSON.parse(readFileSync(configFile, 'utf8'));
-  assert.deepEqual(config, { nativeFilesystem: 'shared' as const, endpoint: 'ws://127.0.0.1:4242/', transportToken: readFileSync(tokenFile, 'utf8'), productHostToken: readFileSync(productHostTokenFile, 'utf8'), picker: true, metadataFile: join(scratch, 'workspaces.json'), roots: [
+  assert.deepEqual(config, { nativeFilesystem: 'shared' as const, terminalSupervisor: join(nativeDirectory, 'interactive-supervisor'), endpoint: 'ws://127.0.0.1:4242/', transportToken: readFileSync(tokenFile, 'utf8'), productHostToken: readFileSync(productHostTokenFile, 'utf8'), picker: true, metadataFile: join(scratch, 'workspaces.json'), roots: [
     { id: 'root-1', cwd: f.a, displayName: 'workspace with spaces' }, { id: 'root-2', cwd: f.b, displayName: 'second' },
   ] });
   assert.deepEqual(readdirSync(scratch).sort(), ['host-config.json', 'product-host-token', 'transport-token', 'web-bootstrap.json']);
@@ -170,7 +177,7 @@ test('signal fence wins over late readiness: no Host config or second child afte
 test('terminal fence before start creates nothing, and missing binary is actionable', async () => {
   const h = harness(), launcher = new Launcher(root, h.spawn);
   await launcher.settle(130);
-  await launcher.start(parseArguments(['app-server', '--binary', process.execPath], root));
+  await launcher.start(parseArguments(['app-server', '--binary', nativeBinary], root));
   assert.equal(h.calls.length, 0);
   const missing = new Launcher(root, h.spawn);
   await missing.start(parseArguments(['app-server', '--binary', '/missing/rustx'], root));
@@ -248,7 +255,7 @@ for (const [forwarded, expected] of [
   [['--model', '--listen'], 'shutdown-on-eof'],
 ] as const) test(`standalone transport ownership is explicit for ${JSON.stringify(forwarded)}`, async () => {
   const h = harness(), launcher = new Launcher(root, h.spawn);
-  await launcher.start(parseArguments(['app-server', '--binary', process.execPath, ...forwarded], root));
+  await launcher.start(parseArguments(['app-server', '--binary', nativeBinary, ...forwarded], root));
   assert.equal(h.calls[0].spec.ownerStdin, expected);
   assert.equal(h.calls[0].spec.protocolStdio, true);
   if (forwarded.length === 0) assert.deepEqual(h.calls[0].spec.args, ['app-server', '--listen', 'stdio']);
@@ -257,7 +264,7 @@ for (const [forwarded, expected] of [
 
 for (const first of ['eof', 'child', 'SIGINT', 'SIGHUP', 'SIGTERM'] as const) test(`standalone terminal race preserves ${first} and reaps once`, async () => {
   const h = harness(), launcher = new Launcher(root, h.spawn);
-  await launcher.start(parseArguments(['app-server', '--binary', process.execPath], root));
+  await launcher.start(parseArguments(['app-server', '--binary', nativeBinary], root));
   const child = h.calls[0];
   const codes = { eof: 0, child: 27, SIGINT: 130, SIGHUP: 129, SIGTERM: 143 };
   if (first === 'eof') child.ownerShutdown();
@@ -271,4 +278,33 @@ for (const first of ['eof', 'child', 'SIGINT', 'SIGHUP', 'SIGTERM'] as const) te
   assert.equal(await terminal, codes[first]);
   assert.equal(await launcher.done, codes[first]);
   assert.equal(child.stops, 1);
+});
+
+for (const missing of ['bash-supervisor', 'interactive-supervisor']) {
+  test(`missing ${missing} prevents launch before any child starts`, async t => {
+    const directory = mkdtempSync(join(tmpdir(), 'rustx-incomplete-'));
+    t.after(() => rmSync(directory, { recursive: true, force: true }));
+    for (const name of ['rustx', 'bash-supervisor', 'interactive-supervisor']) {
+      if (name !== missing) writeFileSync(join(directory, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    }
+    const h = harness(), launcher = new Launcher(root, h.spawn);
+    const messages: string[] = [];
+    t.mock.method(process.stderr, 'write', (message: string) => { messages.push(message); return true; });
+    await launcher.start(parseArguments(['app-server', '--binary', join(directory, 'rustx')], root));
+    assert.equal(await launcher.done, 1);
+    assert.equal(h.calls.length, 0);
+    assert.ok(messages.join('').includes(join(directory, missing)));
+    assert.ok(messages.join('').includes('cargo build --bins'));
+  });
+}
+
+test('symlinked native binary resolves helpers beside its real executable', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'rustx-link-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const binary = join(directory, 'rustx');
+  symlinkSync(nativeBinary, binary);
+  const h = harness(), launcher = new Launcher(root, h.spawn);
+  await launcher.start(parseArguments(['app-server', '--binary', binary], root));
+  assert.equal(h.calls.length, 1);
+  const stopping = launcher.settle(0); h.calls[0].reap.resolve(); await stopping;
 });

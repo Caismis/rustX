@@ -349,10 +349,14 @@ The observation region is the transport/read obligation, expressed as states:
 
 ```text
 offline                     the transport cannot read: nothing reads, nothing polls,
-                            nothing is authoritative; triggers are absorbed
-connected.loading           exactly one authoritative read in flight
-connected.ready             the current connected span's authoritative observation
-connected.failed            a read of this connected span failed; the next trigger retries
+                            nothing is authoritative
+connected.loading           exactly one authoritative read in flight: the span's owed
+                            read, or the reread an adoption response owes
+connected.ready             the current connected span's observation is current
+connected.failed            the span's read failed; a newer native publication or an
+                            adoption reread answers it
+context.observed            the span has observed native authority (possibly "no
+                            application") — explicit, never inferred from a value
 context.staleApplication    an ended span's observation, stale presentation data only
 ```
 
@@ -371,11 +375,29 @@ Replacing the generation (or losing the ability to read) ends the span at that
 transition: its observation becomes stale presentation data, its read failure is
 cleared, and its read in flight is stopped, so an old-generation reply can
 publish neither an application nor a read failure. Inside one connected span a
-native publication for the Session, a Session snapshot change or an explicit
-`REFRESH` re-enters `loading`, which stops the read in flight: one read owner,
-and a superseded read has no completion path. A trigger delivered while
-`offline` — or together with the transition into `connected` — is answered by
-the span's owed read, never by a second one. Nothing polls.
+native `configuration/changed` publication for the Session carries the same
+complete application `session/configuration` returns, so it is folded as the
+observation itself — monotonically by version, with no read, and without ending a
+read in flight (which may be an adoption's owed reread). A publication delivered
+while `offline` — or together with the transition into `connected` — is answered
+by the span's owed read, never by a second one. Nothing polls.
+
+The Session's Runtime Client snapshot is not part of this transport. Its
+identity changes with every streamed delta and is never a configuration
+invalidation signal: a client publication caused only by runtime traffic
+changes nothing the actor observes and is no transition at all. Adoption
+eligibility is runtime-domain state the runtime publishes on that snapshot
+(`configuration_adoption_eligibility`); the banner reads it as published and
+never derives it from attempts, Jobs, Agents or interactions.
+
+Knownness, currency and actionability are separate facts. The span *knows*
+native authority once it has observed it and no later read failure is
+outstanding, so an owed reread never presents as "unavailable"; the observation
+is *current* only in `ready`; adoption is *actionable* only for a current
+observation, a connected transport and the runtime's published `eligible`. The
+unavailable line appears only while the transport cannot read, for a genuine
+read failure, or for a retained stale observation — a connected span's first
+read in flight claims nothing.
 
 The span-ending transition is deliberately not `reenter`: a re-entering
 transition from a region to its own descendant takes the machine root as its

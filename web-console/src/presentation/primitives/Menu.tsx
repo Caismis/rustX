@@ -223,13 +223,15 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
 
   /**
    * Hand the keyboard back to the trigger that opened the menu — or, when the
-   * anchor never held it, to the anchor's first button. When neither can take
-   * it (a selection disabled it), it settles on the host's focus owner.
+   * anchor never held it, to the anchor's own menu button (the first button
+   * when none declares the popup). When neither can take it (a selection
+   * disabled it), it settles on the host's focus owner.
    */
   const refocusAnchor = (): void => {
     const root = rootRef.current
     if (root === null) return
-    if (takesFocus(triggerRef.current) || takesFocus(root.querySelector<HTMLButtonElement>('button:not(:disabled)'))) return
+    if (takesFocus(triggerRef.current)
+      || takesFocus(root.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]:not(:disabled)') ?? root.querySelector<HTMLButtonElement>('button:not(:disabled)'))) return
     settleOnFocusOwner()
   }
 
@@ -383,12 +385,10 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
   // Opening remembers where the keyboard was, so closing can hand it back to
   // that control — an anchor wrapping several (a split button) cannot be asked
   // for it by position. Declared before the autoFocus effect so the capture
-  // sees the trigger, not the row autoFocus is about to focus.
+  // sees the trigger, not the row autoFocus is about to focus. Closing keeps it:
+  // the post-selection hand-back runs after the close has rendered.
   useEffect(() => {
-    if (!open) {
-      triggerRef.current = null
-      return
-    }
+    if (!open) return
     const active = document.activeElement
     triggerRef.current = active instanceof HTMLElement && rootRef.current?.contains(active) === true ? active : null
   }, [open])

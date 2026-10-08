@@ -1,3 +1,5 @@
+import { FileLinks } from '../presentation/markdown/FileLinks';
+import { Workbench, type WorkbenchHandle } from './components/Workbench';
 import { DetachedFirstSubmissions } from './new-conversation/DetachedFirstSubmissions';
 import { message } from '../locale/translation';
 import { useTranslation, useNotice } from '../locale/react';
@@ -18,8 +20,9 @@ import { WorkspaceSessionNavigation } from '../workspaces/navigation';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useActorRef } from '@xstate/react';
 import type { AppServerClient } from '../client/app-server';
-import type { SourceTarget, UserInputBlock } from '../../../protocol/app-server/v34';
+import type { CompletedResponseView, SourceTarget, UserInputBlock } from '../../../protocol/app-server/v37';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
+import { CommandSession, type ResponseAction } from './commands/native';
 import { available, commands } from './commands/registry';
 import { activeAttempt, lineageSwitchSafe, json } from '../bindings/projection';
 import { goalDock } from '../bindings/composer-context';
@@ -36,6 +39,7 @@ import { ConnectionController } from '../connection/controller';
 import { RightPanel } from '../presentation/right-panel/RightPanel';
 import agentCss from '../presentation/agent/Conversation.module.css';
 import { Button } from '../presentation/primitives/Button';
+import { IconPanelLeftOutline16 } from '../presentation/primitives/icons';
 import { sessionDisplayTitle } from '../bindings/session-title';
 import { sessionDeletionNotice } from '../bindings/session-deletion';
 import { LiveInspector } from './Inspector';
@@ -53,6 +57,7 @@ function readPreferences(): { endpoint?: string; openViews: string[] } {
 }
 const defaultWorkspaceHost = new HttpWorkspaceHost();
 export function App({ client, workspaceHost = defaultWorkspaceHost, connection: providedConnection }: { client: AppServerClient; workspaceHost?: ProductHostWorkspaces; connection?: ConnectionController }) {
+  const fileWorkbench = useRef<WorkbenchHandle>(null);
   const tx = useTranslation();
   const state = useClientSelector(client, selectShell, sameValue);
   const connection = useMemo(() => providedConnection ?? new ConnectionController(client), [providedConnection, client]);
@@ -78,6 +83,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   useEffect(() => previewOwner.start(), [previewOwner]);
   const [previewFocus, setPreviewFocus] = useState(0);
   const previewOpener = useRef<HTMLElement | null>(null);
+  const [workbenchFullscreen, setWorkbenchFullscreen] = useState(false);
   const inspectorOpen = previews.mode === 'inspector';
   const returnPreviewFocus = () => {
     const opener = previewOpener.current;
@@ -86,7 +92,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   };
   const collapsePanel = () => { previewOwner.collapse(); returnPreviewFocus(); };
   const [theme, setTheme] = useState(readTheme);
-  useEffect(() => applyTheme(theme), [theme]);
+  useLayoutEffect(() => applyTheme(theme), [theme]);
   const [conversationMode, setConversationMode] = useState<'chat' | 'trajectory'>('chat');
   const [preferences] = useState(readPreferences);
   const endpoint = state.endpoint ?? '';
@@ -105,6 +111,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   const [command, setCommand] = useState<{ request: CommandRequest; current: () => boolean; generation: number; sessionId: string; conversationId?: string }>();
   const [restored, setRestored] = useState<{ conversation: string; content: UserInputBlock[] }>();
   const [consumed, setConsumed] = useState<{ id: string; sequence: number }>();
+  const [transitioning, setTransitioning] = useState<string>();
   const workspaceNavigation = useMemo(() => new WorkspaceSessionNavigation(workspaceAuthority, client, navigation), [workspaceAuthority, client, navigation]);
   useEffect(() => client.setAttachmentAdmission(workspaceNavigation.admit), [client, workspaceNavigation]);
   // Existing navigation hints may restore wanted views, never a released claim.
@@ -135,11 +142,17 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   const connected = state.connection === 'connected';
   const attached = !view?.deleting && connected && view?.attachmentIntent === 'wanted' && view.attachment === 'attached';
   const commandOpen = !!command && command.sessionId === selected && command.generation === state.generation && command.current();
-  const invokeCommand = (request: CommandRequest | { id: 'new' } | { id: 'compact' }) => {
+  /** The selected view when it can take a Session command right now. */
+  const commandable = () => {
     const currentState = client.getSnapshot();
     const view = selected ? currentState.views[selected] : undefined;
     if (view && client.firstSubmissions.session(view.id) && !['admitted', 'discarded'].includes(client.firstSubmissions.session(view.id)!.phase)) return;
     if (!view || currentState.connection !== 'connected' || view.attachment !== 'attached' || view.attachmentIntent !== 'wanted' || view.modelMutation || view.snapshot?.shutting_down || view.snapshot?.durability_failure) return;
+    return view;
+  };
+  const invokeCommand = (request: CommandRequest | { id: 'new' } | { id: 'compact' }) => {
+    const view = commandable();
+    if (!view) return;
     const definition = commands.find(item => item.id === request.id);
     if (definition && !available(definition, activeAttempt(view.snapshot), !!goalDock(view.snapshot), lineageSwitchSafe(view))) return;
     if (request.id === 'new') { createInWorkspace(workspace); return; }
@@ -155,6 +168,25 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     }
     navigation.invalidate();
     setCommand({ request, current: navigation.capture(), generation: state.generation, sessionId: view.id, conversationId: view.target?.conversation_id });
+  };
+  // A completed response already names its exact boundary, so its Fork and
+  // Retry run on the click, as Harness forkAt does: no confirming chooser.
+  const transitionResponse = (action: ResponseAction, response: CompletedResponseView) => {
+    const view = commandable();
+    if (!view || transitioning) return;
+    navigation.invalidate(); setCommand(undefined);
+    const current = navigation.capture(), generation = client.getSnapshot().generation;
+    const valid = () => current() && client.getSnapshot().generation === generation;
+    const scope = new CommandSession(client, view.id, valid);
+    setTransitioning(view.id);
+    runGlobal(async () => {
+      try {
+        const result = await scope.transition(action, await scope.responseSelection(response));
+        if (!result || !valid()) return;
+        focusSession(result.session.id, { ready: () => setRestored({ conversation: result.session.active_conversation_id, content: result.content }) });
+        setOpenViews(open => open.includes(result.session.id) ? open : [...open, result.session.id]);
+      } finally { setTransitioning(undefined); }
+    });
   };
   const runGlobal = (action: () => Promise<unknown>) => {
     const generation = client.getSnapshot().generation; setError('');
@@ -221,7 +253,9 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     setOpenViews([]); focusSession();
     runGlobal(() => Promise.all(closing.map(id => client.release(id))));
   };
+  const focusDraft = () => document.querySelector<HTMLTextAreaElement>('[data-resident-composer] textarea')?.focus();
   const createInWorkspace = (id?: string) => {
+    if (center.kind === 'new-conversation' && center.workspaceId === id && newConversationCurrent()) { focusDraft(); return; }
     setDraftBinding(value => value + 1);
     navigation.invalidate(); setCommand(undefined); setRestored(undefined); setFocus({});
     setCenter({ kind: 'new-conversation', workspaceId: id });
@@ -242,13 +276,16 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     panels={[]}
     browser={(wide, expand) => <WorkspaceNavigation associations={associations} key={state.authorityRevision ?? 0} wide={wide} expand={expand} host={workspaceHost} client={client} state={state} endpoint={endpoint} navigation={navigation}
       metadataChanged={removed => { if (removed) setCenter(value => value.kind === 'new-conversation' && value.workspaceId === removed ? { kind: 'new-conversation' } : value); }}
-      workspaceSettings={(id, label) => openSettings(workspaceSettingsTarget(id, label))} workspace={workspace} selected={selected} selectWorkspace={createInWorkspace}
+      workspaceSettings={(id, label) => openSettings(workspaceSettingsTarget(id, label))} workspace={workspace} selected={selected}
+      draft={center.kind === 'new-conversation' && workspace ? { workspaceId: workspace, binding: String(draftBinding), focus: focusDraft } : undefined} selectWorkspace={createInWorkspace}
       openSession={open} openViews={openViews} closeView={closeView} closeAllViews={closeAllViews} createSession={createInWorkspace} deleteSession={setDeletingSession}
       forkSession={id => open(id, () => {
         setCommand({ request: { id: 'fork' }, current: navigation.capture(), generation: client.getSnapshot().generation, sessionId: id, conversationId: client.getSnapshot().views[id]?.target?.conversation_id });
       })} />}
     settings={wide => <SettingsTrigger wide={wide} onClick={() => openSettings(userSettingsTarget)} />} />}
-    rightOpen={previews.mode !== 'collapsed'} rightPanel={geometry => <RightPanel closeLabel={previews.mode === 'preview' ? tx('artifacts:workspace.collapse') : tx('common:right-panel.close-inspector')} {...geometry} fullscreen={previews.mode === 'preview' && previews.workspace?.fullscreen} open={previews.mode !== 'collapsed'} close={collapsePanel} title={previews.mode === 'preview' ? tx('artifacts:workspace.title') : tx('common:app.developer-inspector')}>
+    rightOpen={previews.mode !== 'collapsed'} rightPanel={geometry => <RightPanel headerless={previews.mode === 'workbench' || previews.mode === 'collapsed'} closeLabel={previews.mode === 'workbench' ? tx('artifacts:workbench.toggle') : previews.mode === 'preview' ? tx('artifacts:workspace.collapse') : tx('common:right-panel.close-inspector')} {...geometry} fullscreen={previews.mode === 'workbench' ? workbenchFullscreen : previews.mode === 'preview' && previews.workspace?.fullscreen} open={previews.mode !== 'collapsed'} close={collapsePanel} title={previews.mode === 'workbench' ? tx('artifacts:workbench.start') : previews.mode === 'preview' ? tx('artifacts:workspace.title') : tx('common:app.developer-inspector')}>
+      <Workbench fileRef={fileWorkbench} key={JSON.stringify([state.generation, selected, view?.summary?.active_node, workspaceAuthority.getRevision()])} closePanel={collapsePanel} host={workspaceHost} scope={workspaceAuthority.getCatalog()} target={view?.summary ? { session_id: view.id, active_node: view.summary.active_node } : undefined} visible={previews.mode === 'workbench'} floatingVisible={previews.mode === 'workbench' || previews.mode === 'collapsed'} fullscreen={workbenchFullscreen || !geometry.canShow} toggleFullscreen={() => { if (!geometry.canShow) collapsePanel(); else setWorkbenchFullscreen(value => !value); }}/>
+      {previews.mode === 'preview' && <Button size="sm" onClick={() => previewOwner.showWorkbench()}>{tx('artifacts:workbench.start')}</Button>}
       <PreviewWorkspace owner={previewOwner} snapshot={previews} focusRequest={previewFocus} returnFocus={returnPreviewFocus}/>
       {inspectorOpen && <LiveInspector client={client} sessionId={view?.id} />}
     </RightPanel>}
@@ -281,10 +318,10 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
         if (next) open(next); else focusSession();
       }
     }}/>}
-    <section className={`session-panel ${agentCss.root}`} data-phase={view ? 'active' : 'hero'} id="session-view" role="region" aria-labelledby="session-title">
+    <FileLinks.Provider value={file => { previewOwner.showWorkbench(); void fileWorkbench.current?.openFile(file.path, file.line); }}><section className={`session-panel ${agentCss.root}`} data-phase={view ? 'active' : 'hero'} id="session-view" role="region" aria-labelledby="session-title">
       <ConversationHeader host={workspaceHost} authority={workspaceAuthority} client={client} view={view && { ...view, summary: state.sessions.find(session => session.id === view.id) ?? view.summary }} authorityRevision={state.authorityRevision}
         connected={connected} attached={attached} commandOpen={commandOpen} inspectorOpen={inspectorOpen}
-        toggleInspector={() => previewOwner.toggleInspector()} previewToggle={previews.workspace && <Button data-preview-toggle aria-label={tx('artifacts:workspace.reopen')} aria-expanded={previews.mode === 'preview'} onClick={() => { if (previews.mode === 'preview') collapsePanel(); else { previewOwner.reveal(); setPreviewFocus(value => value + 1); } }}>{tx('artifacts:workspace.title')}</Button>} invokeCommand={invokeCommand}
+        toggleInspector={() => previewOwner.toggleInspector()} previewToggle={<Button size="sm" className={agentCss.iconButton} data-preview-toggle aria-label={tx(previews.workspace ? 'artifacts:workspace.reopen' : 'artifacts:workbench.toggle')} title={tx('artifacts:workbench.toggle')} aria-expanded={previews.mode === 'preview' || previews.mode === 'workbench'} onClick={event => { previewOpener.current = event.currentTarget; if (previews.mode === 'preview' || previews.mode === 'workbench') collapsePanel(); else { if (previews.workspace) previewOwner.reveal(); else previewOwner.showWorkbench(); setPreviewFocus(value => value + 1); } }}><IconPanelLeftOutline16 className={agentCss.mirrored} /></Button>} invokeCommand={invokeCommand}
         settingsFeedback={<SettingsNavigationFeedback navigation={navigationActor}/>} openOwningSettings={openOwningSettings} conversationMode={conversationMode} setConversationMode={setConversationMode}/>
 
       {view && <ConversationStatus client={client} sessionId={view.id} recover={action => {
@@ -296,9 +333,10 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
 
       <section className={`conversation-panel ${agentCss.body}`} id="conversation-view" role={view ? 'tabpanel' : undefined} aria-labelledby={view ? `view-tab-${conversationMode}` : undefined} tabIndex={0}>
       <ConversationWidthControls active={!!view && conversationMode === 'chat'}/>
-      <PreviewContext value={{ openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><ArtifactContext.Provider value={artifacts}><ConversationLive client={client} sessionId={view?.id} mode={conversationMode} disabled={commandOpen} onHistorical={(id, response) => invokeCommand({ id, response })}/></ArtifactContext.Provider></PreviewContext>
+      <PreviewContext value={{ openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><ArtifactContext.Provider value={artifacts}><ConversationLive client={client} sessionId={view?.id} mode={conversationMode} disabled={commandOpen || transitioning === view?.id} onHistorical={transitionResponse}/></ArtifactContext.Provider></PreviewContext>
       <ConversationSeat client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} sessionId={view?.id}
         initialWorkspace={workspace ?? (center.kind === 'new-conversation' ? center.workspaceId : undefined)}
+        workspacePicked={id => { if (newConversationCurrent()) setCenter({ kind: 'new-conversation', workspaceId: id }); }}
         binding={String(draftBinding)} current={newConversationCurrent} consumed={consumed} restored={restored}
         onCommand={id => invokeCommand({ id })}
         opened={id => { setOpenViews(current => current.includes(id) ? current : [...current, id]); focusSession(id, { commitDraft: true }); return navigation.capture(); }}/>
@@ -315,6 +353,6 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
           setOpenViews(current => current.includes(result.session.id) ? current : [...current, result.session.id]);
         }} />}
 
-    </section>
+    </section></FileLinks.Provider>
   </AppFrame>;
 }

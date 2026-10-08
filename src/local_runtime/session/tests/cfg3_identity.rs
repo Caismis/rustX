@@ -60,7 +60,7 @@ fn injected_collisions_retry_and_publication_order_does_not_follow_uuid_order() 
             .iter()
             .map(|row| &row.id)
             .collect::<Vec<_>>(),
-        [&first.session_id, &second.session_id]
+        [&second.session_id, &first.session_id]
     );
     let retained = fs::read(&first.database_path).unwrap();
     let reconstructed = SessionCatalog::open_existing(directory.path())

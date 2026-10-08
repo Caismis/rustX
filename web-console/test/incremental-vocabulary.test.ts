@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { foldRuntimeEvent as fold } from '../../protocol/app-server/projection';
-import type { RuntimeClientEvent as Event, RuntimeClientSnapshot as Snapshot } from '../../protocol/app-server/v34';
+import type { RuntimeClientEvent as Event, RuntimeClientSnapshot as Snapshot } from '../../protocol/app-server/v37';
 import capture from './fixtures/incremental-native.json';
 import { interaction } from './fixture';
 
@@ -45,6 +45,7 @@ it('every Session event variant has an explicit transition or documented domain 
   expect(state.attempt?.foreground?.at(-1)?.state).toMatchObject({ type: 'running', progress: { completed: 1, total: 2 } });
   apply({ type: 'assistant_publication_settled', attempt_id, transcript_cursor: '10', audit: { stream_id: 's', attempt_id, turn_id: 't', request_id: 'r', message_id: 'unaccepted', kind: 'unaccepted', content: [], settled_at: audit.timestamp } }); expect(state.attempt?.in_flight).toBeUndefined();
   apply({ type: 'runtime_durability_failed', operation: 'commit', diagnostic: 'failure' }); expect(state.durability_failure).toEqual({ operation: 'commit', diagnostic: 'failure' });
+  apply({ type: 'configuration_adoption_eligibility_changed', eligibility: { status: 'busy' } }); expect(state.configuration_adoption_eligibility).toEqual({ status: 'busy' });
   apply({ type: 'runtime_shutdown' }); expect(state.shutting_down).toBe(true);
   const vocabulary: Record<Event['type'], true> = {
     read_domains_updated: true, trace_changed: true, goal_changed: true, workflows_updated: true,
@@ -57,6 +58,7 @@ it('every Session event variant has an explicit transition or documented domain 
     agent_status_composed: true, pending_inbound_changed: true, inbound_enqueued: true, inbound_drained: true,
     job_updated: true, agent_updated: true, capability_updated: true, resource_generation_updated: true,
     session_model_changed: true, runtime_shutdown: true, runtime_durability_failed: true,
+    configuration_adoption_eligibility_changed: true,
   };
   expect([...covered].sort()).toEqual(Object.keys(vocabulary).sort());
 });

@@ -17,7 +17,15 @@ export const en = {
   "copy.signal-value": "Signal {p0}",
   "copy.exit-value": "Exit {p0}",
   "copy.value-file-s": "{p0} file(s)",
-  "copy.value-of-value-lines": "{p0} of {p1} lines"
+  "copy.value-of-value-lines": "{p0} of {p1} lines",
+  "ask.row-title": "Ask question",
+  "ask.waiting": "waiting",
+  "ask.answered": "{answered}/{total} answered",
+  "ask.skipped": "Not answered",
+  "ask.cancelled": "cancelled",
+  "ask.cancelled-detail": "This question set was cancelled before answers were submitted.",
+  "ask.interrupted": "interrupted",
+  "ask.interrupted-detail": "This question set was interrupted before answers were submitted."
 } as const;
 export type ToolsKey = keyof typeof en;
 export const zh = {
@@ -38,5 +46,13 @@ export const zh = {
   "copy.signal-value": "信号 {p0}",
   "copy.exit-value": "退出码 {p0}",
   "copy.value-file-s": "{p0} 个文件",
-  "copy.value-of-value-lines": "{p1} 行中的 {p0} 行"
+  "copy.value-of-value-lines": "{p1} 行中的 {p0} 行",
+  "ask.row-title": "提问",
+  "ask.waiting": "等待回答",
+  "ask.answered": "{answered}/{total} 已回答",
+  "ask.skipped": "未回答",
+  "ask.cancelled": "已取消",
+  "ask.cancelled-detail": "本轮已取消，未提交回答",
+  "ask.interrupted": "已中断",
+  "ask.interrupted-detail": "本轮已中断，未提交回答"
 } satisfies Record<ToolsKey, string>;

@@ -919,6 +919,10 @@ struct WakeGate {
     exited: AtomicBool,
     /// Wakes a drain waiter after worker exit.
     exit_notify: tokio::sync::Notify,
+    /// Asks the worker to re-derive configuration-adoption eligibility only.
+    /// It never admits work: it covers coordinator-owned eligibility inputs
+    /// that change without a lifecycle announcement.
+    eligibility: tokio::sync::Notify,
     /// Test-only worker-exit signal.
     #[cfg(test)]
     worker_exit: Mutex<Option<std::sync::mpsc::Sender<()>>>,
@@ -931,6 +935,7 @@ impl WakeGate {
             closed: AtomicBool::new(false),
             exited: AtomicBool::new(false),
             exit_notify: tokio::sync::Notify::new(),
+            eligibility: tokio::sync::Notify::new(),
             #[cfg(test)]
             worker_exit: Mutex::new(None),
         }
@@ -1032,6 +1037,15 @@ pub(crate) enum IdleBusyReason {
     Background,
     Subagent,
     AdmissionChanged,
+}
+
+/// Which owners one evaluation of the native idle rule consults.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IdleProbe {
+    /// Every owner, including the durable pending-inbox and Goal probes.
+    Durable,
+    /// Only in-memory owners; never reads the durable store.
+    InMemory,
 }
 
 /// The narrow set of operations that can start the one runtime drain.
@@ -1395,6 +1409,11 @@ pub(crate) struct RuntimeInner {
     wake: Arc<WakeGate>,
     /// Whether the admission worker task was spawned.
     worker_started: AtomicBool,
+    /// The configuration-adoption eligibility this runtime last published. Its
+    /// lock orders every derivation with its publication (taken before the
+    /// coordinator lock, never after it).
+    published_eligibility:
+        Mutex<Option<crate::local_runtime::configuration::application::AdoptionEligibility>>,
     /// The one shared semantic drain completion.
     drain: std::sync::OnceLock<Arc<DrainCompletion>>,
     /// Guards creation of the one drain task.
@@ -1458,6 +1477,21 @@ impl RuntimeInner {
     /// lifecycle admission guards serialize it with background ownership and
     /// capability commits that have their own native synchronization owner.
     fn idle_epoch_locked(&self, state: &CoordinatorState) -> Result<u64, IdleBusyReason> {
+        self.idle_epoch_probed(state, IdleProbe::Durable)
+    }
+
+    /// The one native idle rule. `IdleProbe::Durable` is exact and is what
+    /// residency and the adoption gate use. `IdleProbe::InMemory` omits the two
+    /// durable-store probes — pending inbox and Goal continuation authority —
+    /// for the advisory eligibility publisher, which must never become a
+    /// second consumer of durable reads: whenever either holds while the
+    /// runtime is otherwise idle, the admission pass that follows admits an
+    /// attempt, and that admission is itself an announced busy owner.
+    fn idle_epoch_probed(
+        &self,
+        state: &CoordinatorState,
+        probe: IdleProbe,
+    ) -> Result<u64, IdleBusyReason> {
         use IdleBusyReason as Busy;
         let epoch = self.lifecycle.idle_epoch().ok_or(Busy::LifecycleOwner)?;
         if state.current_attempt.is_some() || state.manual_compaction.is_some() {
@@ -1478,13 +1512,16 @@ impl RuntimeInner {
         // Paused, Blocked, Complete, absent, an uncomposed extension, and an
         // Active Goal whose budget is exhausted all own nothing — an
         // exhausted Goal therefore cannot spin to pin residency forever.
-        if self
-            .goal_owns_future_work(state)
-            .map_err(|_| Busy::Durability)?
+        if probe == IdleProbe::Durable
+            && self
+                .goal_owns_future_work(state)
+                .map_err(|_| Busy::Durability)?
         {
             return Err(Busy::AutonomousExtension);
         }
-        if self.mailbox.has_pending().map_err(|_| Busy::Durability)? {
+        if probe == IdleProbe::Durable
+            && self.mailbox.has_pending().map_err(|_| Busy::Durability)?
+        {
             return Err(Busy::Inbound);
         }
         if !self.interaction.pending_snapshot().is_empty() {
@@ -1504,6 +1541,48 @@ impl RuntimeInner {
             return Err(Busy::AdmissionChanged);
         }
         Ok(epoch)
+    }
+
+    /// Whether this live runtime could adopt a prepared configuration now.
+    ///
+    /// Runtime-domain advisory state derived by the adoption gate's own idle
+    /// rule over its in-memory owners (see [`IdleProbe::InMemory`]); it says
+    /// nothing about any candidate, and the gate still evaluates the exact rule
+    /// at its commit boundary.
+    fn adoption_eligibility(
+        &self,
+    ) -> crate::local_runtime::configuration::application::AdoptionEligibility {
+        use crate::local_runtime::configuration::application::AdoptionEligibility;
+        let state = self.lock_state();
+        if !self.lifecycle.is_running() {
+            AdoptionEligibility::Unavailable
+        } else if self.idle_epoch_probed(&state, IdleProbe::InMemory).is_err()
+            || self.tool_runtime.background().configuration_busy()
+            || self
+                .subagents
+                .as_ref()
+                .is_some_and(crate::runtime::subagent::SubagentRegistry::configuration_busy)
+        {
+            AdoptionEligibility::Busy
+        } else {
+            AdoptionEligibility::Eligible
+        }
+    }
+
+    /// Publishes the current adoption eligibility when it differs from the
+    /// last publication. Derivation and publication happen under one lock, so
+    /// publications are totally ordered, the latest always reflects the latest
+    /// derivation, and an unchanged value is never republished.
+    fn publish_adoption_eligibility(&self) {
+        let mut published = self
+            .published_eligibility
+            .lock()
+            .expect("published eligibility lock poisoned");
+        let eligibility = self.adoption_eligibility();
+        if published.as_ref() != Some(&eligibility) {
+            *published = Some(eligibility.clone());
+            self.observe(ConversationObservation::AdoptionEligibility(eligibility));
+        }
     }
 
     /// Whether a composed Goal still owns future autonomous work.
@@ -2056,6 +2135,9 @@ impl RuntimeInner {
                 operation: failure.operation.as_str().to_owned(),
                 diagnostic: failure.diagnostic,
             });
+            // The absorbing failure is an eligibility input with no
+            // lifecycle announcement of its own.
+            self.wake.eligibility.notify_one();
         }
     }
 
@@ -2315,6 +2397,7 @@ impl RuntimeInner {
         }
         let weak = Arc::downgrade(self);
         let wake = Arc::clone(&self.wake);
+        let lifecycle = self.lifecycle.clone();
         // The mailbox's shared admission wake: every ordinary inbound
         // enqueue notifies it at its publication linearization point, so an
         // idle conversation admits asynchronous inbound without any client
@@ -2324,24 +2407,47 @@ impl RuntimeInner {
         // spawns the worker unconditionally: it can neither panic on a
         // missing runtime nor silently leave a conversation that never
         // admits anything.
+        //
+        // The worker is also the publisher of configuration-adoption
+        // eligibility after activation. Every eligibility input either crosses a counted
+        // lifecycle admission (attempts, compaction, inbound, interactions,
+        // background and subagent ownership, Goal writes), moves the lifecycle
+        // itself, or changes inside an admission pass this worker runs or is
+        // woken for. The lifecycle announcement is enabled before each
+        // derivation, so a change that lands after it re-derives: the
+        // publication is level-triggered, not inferred from event traffic.
         self.executor.spawn(async move {
+            let mut admit = false;
             loop {
-                tokio::select! {
-                    biased;
-                    () = wake.notify.notified() => {}
-                    () = mailbox_wake.notified() => {}
-                }
-                if wake.is_closed() {
-                    break;
-                }
+                let lifecycle_changed = lifecycle.changed();
+                tokio::pin!(lifecycle_changed);
+                lifecycle_changed.as_mut().enable();
                 // The strong handle exists only inside this block, so it is
-                // never held across the await above.
+                // never held across the await below.
                 {
                     let Some(inner) = weak.upgrade() else {
                         break;
                     };
-                    inner.admit_next_attempt();
+                    if admit {
+                        inner.admit_next_attempt();
+                    }
+                    inner.publish_adoption_eligibility();
                 }
+                admit = tokio::select! {
+                    biased;
+                    () = wake.notify.notified() => true,
+                    () = mailbox_wake.notified() => true,
+                    () = wake.eligibility.notified() => false,
+                    () = &mut lifecycle_changed => false,
+                };
+                if wake.is_closed() {
+                    break;
+                }
+            }
+            // The lifecycle has left `Running`; publish that before the exit
+            // boundary drain waits on, so no publication follows quiescence.
+            if let Some(inner) = weak.upgrade() {
+                inner.publish_adoption_eligibility();
             }
             wake.mark_exited();
             #[cfg(test)]
@@ -3719,6 +3825,7 @@ impl ConversationRuntime {
             }),
             wake: Arc::new(WakeGate::new()),
             worker_started: AtomicBool::new(false),
+            published_eligibility: Mutex::new(None),
             drain: std::sync::OnceLock::new(),
             drain_started: AtomicBool::new(false),
             pending: std::sync::OnceLock::new(),
@@ -4241,6 +4348,10 @@ impl ConversationRuntime {
         // mailbox refused it) and any inbound racing this activation is
         // admitted here rather than depending on a wake permit.
         self.inner.admit_next_attempt();
+        // Activation publishes the first eligibility synchronously: once
+        // `activate` returns, the projection's `unavailable` bootstrap value has
+        // been answered, independent of when the worker first runs.
+        self.inner.publish_adoption_eligibility();
     }
 
     /// Whether this runtime has left the inactive lifecycle, including an
@@ -4475,25 +4586,14 @@ impl ConversationRuntime {
         true
     }
 
+    /// The live runtime's current configuration-adoption eligibility,
+    /// derived from its native owners. Advisory only: adoption revalidates
+    /// the real gate at its commit boundary.
+    #[cfg(test)]
     pub(crate) fn configuration_adoption_eligibility(
         &self,
     ) -> crate::local_runtime::configuration::application::AdoptionEligibility {
-        use crate::local_runtime::configuration::application::AdoptionEligibility;
-        let state = self.inner.lock_state();
-        if !self.inner.lifecycle.is_running() {
-            AdoptionEligibility::Unavailable
-        } else if self.inner.idle_epoch_locked(&state).is_err()
-            || self.inner.tool_runtime.background().configuration_busy()
-            || self
-                .inner
-                .subagents
-                .as_ref()
-                .is_some_and(crate::runtime::subagent::SubagentRegistry::configuration_busy)
-        {
-            AdoptionEligibility::Busy
-        } else {
-            AdoptionEligibility::Eligible
-        }
+        self.inner.adoption_eligibility()
     }
 
     /// Final commit primitive used by the native configuration owner. It holds
@@ -8313,6 +8413,7 @@ mod tests {
     /// without an attempt identity, and returns the conversation to the
     /// coordinator before reporting success.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)] // one linear ownership scenario
     async fn manual_compaction_commits_and_restores_the_idle_conversation() {
         let dir = tempfile::tempdir().expect("temp dir");
         let (runtime, model) = headless_runtime(
@@ -8372,7 +8473,15 @@ mod tests {
                 .compaction_generation,
             1
         );
-        let before_release = pending.drain();
+        // Adoption eligibility is runtime state the admission worker publishes
+        // on its own schedule; the semantic stream before release is exact.
+        let before_release: Vec<_> = pending
+            .drain()
+            .into_iter()
+            .filter(|observation| {
+                !matches!(observation, ConversationObservation::AdoptionEligibility(_))
+            })
+            .collect();
         assert!(
             matches!(before_release.as_slice(), [ConversationObservation::ManualCompactionEvent {
             request_id: Some(id), event: RuntimeEvent::CompactionStarted,
@@ -8398,7 +8507,15 @@ mod tests {
         }));
         assert_eq!(model.requests().len(), 2, "turn plus summary request");
 
-        let observations = pending.drain();
+        // The released compaction admission restores eligibility on the
+        // worker's schedule; the semantic completion is still the last fact.
+        let observations: Vec<_> = pending
+            .drain()
+            .into_iter()
+            .filter(|observation| {
+                !matches!(observation, ConversationObservation::AdoptionEligibility(_))
+            })
+            .collect();
         assert!(observations.iter().any(|observation| {
             matches!(
                 observation,
@@ -11602,6 +11719,36 @@ mod tests {
         ));
     }
 
+    /// Drains `pending` until the runtime's latest published configuration-
+    /// adoption eligibility is `expected`. Consecutive publications must
+    /// differ: the runtime never republishes an unchanged value. The queue's
+    /// wake permit makes the drain/wait pair lossless, so nothing polls.
+    async fn published_eligibility_until(
+        pending: &PendingObservations,
+        latest: &mut Option<crate::local_runtime::configuration::application::AdoptionEligibility>,
+        expected: crate::local_runtime::configuration::application::AdoptionEligibility,
+    ) {
+        within_liveness_guard("published adoption eligibility", async {
+            loop {
+                for observation in pending.drain() {
+                    if let ConversationObservation::AdoptionEligibility(eligibility) = observation {
+                        assert_ne!(
+                            latest.as_ref(),
+                            Some(&eligibility),
+                            "eligibility republished unchanged"
+                        );
+                        *latest = Some(eligibility);
+                    }
+                }
+                if latest.as_ref() == Some(&expected) {
+                    return;
+                }
+                pending.wait().await;
+            }
+        })
+        .await;
+    }
+
     /// Issue #385: a running subagent is the busy owner of the native
     /// configuration-adoption gate. The gate reports Busy from the real
     /// registry lifecycle, explicit adoption is refused typed, and the exact
@@ -11653,6 +11800,8 @@ mod tests {
             runtime.configuration_adoption_eligibility(),
             AdoptionEligibility::Eligible
         );
+        let mut published = None;
+        published_eligibility_until(&pending, &mut published, AdoptionEligibility::Eligible).await;
 
         // The busy owner is a real Running child record: committed through
         // the registry and delegated over the staged control channel.
@@ -11708,6 +11857,8 @@ mod tests {
             runtime.configuration_adoption_eligibility(),
             AdoptionEligibility::Busy
         );
+        // The running child's admission made the runtime publish Busy.
+        published_eligibility_until(&pending, &mut published, AdoptionEligibility::Busy).await;
         assert_eq!(
             runtime.adopt_configuration(&mut prepared, baseline, true, || Ok(())),
             Err(AdoptionError::Busy)
@@ -11738,19 +11889,11 @@ mod tests {
             crate::runtime::subagent::SubagentState::Succeeded
         );
         assert!(!subagents.configuration_busy());
-        // No notification fires for busy -> idle: eligibility is computed at
-        // read time, and the settling child releases its lifecycle admission
-        // guard after the record is already terminal, so poll the read inside
-        // the liveness guard.
-        within_liveness_guard("eligibility after subagent settlement", async {
-            loop {
-                if runtime.configuration_adoption_eligibility() == AdoptionEligibility::Eligible {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await;
+        // The settling child releases its lifecycle admission guard after the
+        // record is already terminal, and the terminal notice's continuation
+        // attempt holds its own admission. The runtime publishes Eligible
+        // only once the last of those owners releases; nothing polls.
+        published_eligibility_until(&pending, &mut published, AdoptionEligibility::Eligible).await;
         assert!(runtime.idle_epoch().is_ok());
 
         // The pending candidate survived untouched: the binding baseline

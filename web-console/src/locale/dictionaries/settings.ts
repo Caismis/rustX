@@ -1,5 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
+  "appearance.system": "System",
   "policy.foreground_only": "Foreground only",
   "policy.background_only": "Background only",
   "policy.model_selectable": "Model selectable",
@@ -271,6 +272,11 @@ export const en = {
   "general-page.preferences-this-browser-client-owns-they-are-stored-by-the-clie": "Preferences this browser client owns. They are stored by the client and are never written to a native configuration source.",
   "general-page.appearance": "Appearance",
   "general-page.theme": "Theme",
+  "general-page.conversation": "Conversation",
+  "general-page.busy-enter": "Send behavior while busy",
+  "general-page.busy-enter-description": "What Enter and the Send button do while the agent is running; Cmd/Ctrl+Enter uses the other behavior",
+  "general-page.busy-enter-queue": "Queue",
+  "general-page.busy-enter-steer": "Steer",
   "general-page.connection-is-also-client-owned-it-is-kept-with-the-other-diagno": "Connection is also client-owned; it is kept with the other diagnostics on Advanced.",
   "models-page.models": "Models",
   "models-page.find-a-provider": "Find a Provider",
@@ -383,7 +389,7 @@ export const en = {
   "tools-page.execution": "execution",
   "tools-page.concurrency": "concurrency",
   "tools-page.approval-2": "approval",
-  "copy.app-server-v34": "· App Server v34",
+  "copy.app-server-v37": "· App Server v37",
   "copy.language": "Language",
   "copy.light": "Light",
   "copy.dark": "Dark",
@@ -517,6 +523,7 @@ export const en = {
 } as const;
 export type SettingsKey = keyof typeof en;
 export const zh = {
+  "appearance.system": "跟随系统",
   "policy.foreground_only": "仅前台",
   "policy.background_only": "仅后台",
   "policy.model_selectable": "由模型选择",
@@ -788,6 +795,11 @@ export const zh = {
   "general-page.preferences-this-browser-client-owns-they-are-stored-by-the-clie": "此浏览器客户端拥有的偏好设置。它们由客户端保存，绝不会写入原生配置源。",
   "general-page.appearance": "外观",
   "general-page.theme": "主题",
+  "general-page.conversation": "对话",
+  "general-page.busy-enter": "繁忙时的发送行为",
+  "general-page.busy-enter-description": "智能体运行时 Enter 键和发送按钮的行为；Cmd/Ctrl+Enter 使用另一行为",
+  "general-page.busy-enter-queue": "排队发送",
+  "general-page.busy-enter-steer": "插话发送",
   "general-page.connection-is-also-client-owned-it-is-kept-with-the-other-diagno": "连接也由客户端拥有；它与其他诊断一起位于高级设置中。",
   "models-page.models": "模型",
   "models-page.find-a-provider": "查找提供方",
@@ -900,7 +912,7 @@ export const zh = {
   "tools-page.execution": "执行",
   "tools-page.concurrency": "并发",
   "tools-page.approval-2": "审批",
-  "copy.app-server-v34": "· App Server v34",
+  "copy.app-server-v37": "· App Server v37",
   "copy.language": "语言",
   "copy.light": "浅色",
   "copy.dark": "深色",

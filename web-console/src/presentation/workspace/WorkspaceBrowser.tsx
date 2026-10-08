@@ -1,17 +1,18 @@
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted WorkspaceBrowser composition; see PROVENANCE.md. */
-import { useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import clsx from 'clsx';
 import { IconSearchOutline16, IconCloseFill14, IconProjectAddOutline16, IconEllipsisOutline16 } from '../primitives/icons';
 import { Menu } from '../primitives/Menu';
 import { Tooltip } from '../primitives/Tooltip';
-import { ProjectRowItem, SessionNodeItem, SearchResultItem } from './Rows';
-import type { GroupNode, SessionNode } from './types';
+import { ProjectRowItem, SessionNodeItem, SearchResultItem, DraftConversationRow } from './Rows';
+import type { DraftConversation, GroupNode, SessionNode } from './types';
 import css from './WorkspaceBrowser.module.css';
 
 /** Native adapters supply facts/gestures. This component owns only visual state. */
-export function WorkspaceBrowser({ unclassified = [], wide, expand, groups, sessions, selected, query, search, open, rename, fork, remove, closeView, closeAllViews,
+export function WorkspaceBrowser({ unclassified = [], wide, expand, groups, sessions, selected, draft, query, search, open, rename, fork, remove, closeView, closeAllViews,
   selectWorkspace, create, renameWorkspace, removeWorkspace, workspaceSettings, addWorkspace, refresh, previous, next, notices, renderSession = (_node, render) => render(_node) }: {
+  draft?: DraftConversation;
   unclassified?: readonly string[];
   renderSession?: (node: SessionNode, render: (node: SessionNode) => ReactNode) => ReactNode;
   workspaceSettings?: (id: string, label: string) => void;
@@ -26,6 +27,11 @@ export function WorkspaceBrowser({ unclassified = [], wide, expand, groups, sess
   const tx = useTranslation();
   const [searchExpanded, setSearchExpanded] = useState(false), [flat, setFlat] = useState(false), [menu, setMenu] = useState(false);
   const [collapsed, setCollapsed] = useState<string[]>([]);
+  const draftGroup = groups.find(group => group.workspaceId === draft?.workspaceId)?.key;
+  useEffect(() => {
+    if (draftGroup) setCollapsed(value => value.filter(key => key !== draftGroup));
+  }, [draftGroup, draft?.binding]);
+  const draftRow = draft && <DraftConversationRow focus={draft.focus} flat={flat}/>;
   const searchInput = useRef<HTMLInputElement>(null);
   // The Session tree is where keyboard navigation continues when a row's
   // actions menu loses its anchor: the row scrolled out of the tree, which
@@ -51,16 +57,16 @@ export function WorkspaceBrowser({ unclassified = [], wide, expand, groups, sess
     {!wide && <button type="button" className={css.searchButton} aria-label={tx('workspace:workspace-browser.search-sessions')} onClick={() => { expand(); setSearchExpanded(true); }}><IconSearchOutline16 size={18} /></button>}
     <div className={css.listArea}>{wide && <div className={clsx(css.treeBody, css.wide)}><div ref={tree} className={css.list} role="tree" aria-label={tx('workspace:workspace-browser.session-browser')} tabIndex={-1}>
       {notices}
-      {query ? sessions.map(node => renderSession(node, node => <SearchResultItem key={node.id} result={{ ...node, workspace: groups.find(group => group.sessions.some(session => session.id === node.id))?.label ?? '' }} currentId={selected} onOpen={open} t={tx} />)) : flat || groups.length === 0 ? sessions.map(row) : groups.map(group => <div className={css.groupSection} key={group.key} data-workspace-group={group.key}>
+      {query ? sessions.map(node => renderSession(node, node => <SearchResultItem key={node.id} result={{ ...node, workspace: groups.find(group => group.sessions.some(session => session.id === node.id))?.label ?? '' }} currentId={selected} onOpen={open} t={tx} />)) : flat || groups.length === 0 ? <>{draftRow}{sessions.map(row)}</> : groups.map(group => <div className={css.groupSection} key={group.key} data-workspace-group={group.key}>
         <ProjectRowItem group={{ ...group, expanded: !collapsed.includes(group.key) }} menuFocusOwner={tree} t={tx}
           onToggle={() => setCollapsed(value => value.includes(group.key) ? value.filter(id => id !== group.key) : [...value, group.key])}
           onSelect={() => group.workspaceId && selectWorkspace(group.workspaceId)} onCreate={() => group.workspaceId && create(group.workspaceId)}
           actions={group.workspaceId ? { settings: workspaceSettings ? () => workspaceSettings(group.workspaceId!, group.label) : undefined, rename: () => renameWorkspace(group.workspaceId!, group.label), delete: () => removeWorkspace(group.workspaceId!, group.label) } : undefined} />
-        {!collapsed.includes(group.key) && group.sessions.map(row)}
+        {!collapsed.includes(group.key) && <>{group.key === draftGroup && draftRow}{group.sessions.map(row)}</>}
       </div>)}
       {!flat && !query && groups.length > 0 && sessions.some(session => !unclassified.includes(session.id) && !groups.some(group => group.sessions.some(member => member.id === session.id))) && <details><summary>{tx('workspace:workspace-browser.sessions-outside-registered-workspaces')}</summary>{sessions.filter(session => !unclassified.includes(session.id) && !groups.some(group => group.sessions.some(member => member.id === session.id))).map(row)}</details>}
       {!flat && !query && groups.length > 0 && unclassified.length > 0 && <section aria-label={tx('workspace:association.unclassified')}><p>{tx('workspace:association.unclassified')}</p>{sessions.filter(session => unclassified.includes(session.id)).map(row)}</section>}
-      {!sessions.length && <p className={css.empty}>{query ? tx('workspace:workspace-browser.no-matching-sessions') : tx('workspace:workspace-browser.no-sessions-yet')}</p>}
+      {!sessions.length && (!draft || !!query) && <p className={css.empty}>{query ? tx('workspace:workspace-browser.no-matching-sessions') : tx('workspace:workspace-browser.no-sessions-yet')}</p>}
     </div><div className={css.fade} /></div>}</div>
     {wide && (previous || next) && <div><button className={css.sessionOverflowButton} disabled={!previous} onClick={previous}>{tx('workspace:workspace-browser.previous')}</button><button className={css.sessionOverflowButton} disabled={!next} onClick={next}>{tx('workspace:workspace-browser.next')}</button></div>}
   </section>;

@@ -1,7 +1,7 @@
 import { expandModelAuthoring } from './shell-actions';
 import { openEmptySession } from './shell-actions';
 import {
-  choose, closeSettings, connectRemote, openSettingsPage, openWorkspaceSettings, selectedSettingsPage,
+  closeSettings, connectRemote, openSettingsPage, openWorkspaceSettings, selectedSettingsPage,
 } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { appendFileSync, existsSync } from 'node:fs';
@@ -101,7 +101,7 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     await page.setViewportSize({ width: 1440, height: 1000 });
     await closeSettings(page);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    await choose(settings, 'Theme', 'Dark');
+    await settings.getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: 'Dark', exact: true }).click();
     await closeSettings(page);
     await openWorkspaceSettings(page, 'Workspace A'); await expandModelAuthoring(page);
     await openSettingsPage(page, 'Extensions');

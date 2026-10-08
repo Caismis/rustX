@@ -23,10 +23,9 @@
 //! uses [`fixture::legacy`], a minimal hand-written pre-2026 wire fixture,
 //! to cover rustX's own legacy-path behavior end to end.
 
-use crate::launch_fixture::LaunchFixture;
 #[cfg(all(unix, feature = "mcp-fixture"))]
 mod unix_tests {
-    use super::LaunchFixture;
+    use crate::launch_fixture::LaunchFixture;
     use std::collections::BTreeMap;
     use std::sync::Arc;
 

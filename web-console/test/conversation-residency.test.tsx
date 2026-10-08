@@ -9,9 +9,9 @@ import { AgentComposer } from '../src/app/agent/AgentComposer';
 import { AppFrame } from '../src/presentation/layout/AppFrame';
 import { modelPreferences, NewSessionModelPreference, selectSessionModel } from '../src/app/model-preference';
 import { inputTrigger } from '../src/app/composer/input-trigger';
-import { cfg3Source } from './cfg3-data';
+import { cfg3Source, cfg3Effective } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
-import type { CatalogModelView, RuntimeClientEvent, RuntimeClientSnapshot, SessionModelConfig, SourceSettings } from '../../protocol/app-server/v34';
+import type { CatalogModelView, RuntimeClientEvent, RuntimeClientSnapshot, SessionModelConfig, SourceSettings } from '../../protocol/app-server/v37';
 
 // These spies execute the actual functions, including their hooks. Calls count
 // render invocations, not merely DOM mutation or wrapper/parent renders.
@@ -111,7 +111,8 @@ it('hero and committed Session retain the exact composer card/input; internal ph
   expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(0);
   await act(async () => server.reply(attached));
   const sent = await server.waitFor('turn/start', 1);
-  expect(input()).toBe(message); expect(message.selectionStart).toBe(4);
+  expect(input()).toBe(message); expect(message.value).toBe('');
+  expect(document.querySelector('[data-pending-message]')?.textContent).toContain('first task');
   await act(async () => server.reply(sent));
   expect(screen.getByLabelText('Session title')).toBeTruthy();
   expect(input()).toBe(message); expect(message.closest('[data-composer-seat]')).toBe(seat);
@@ -124,13 +125,13 @@ it.each([false, true])('one launcher grammar preserves unrelated draft and caret
   else await server.connect();
   await act(async () => { render(<App client={server.client} workspaceHost={host()}/>); });
   const message = input(); fireEvent.change(message, { target: { value: 'unrelated prose' } }); message.focus(); message.setSelectionRange(3, 6);
-  fireEvent.mouseDown(screen.getByRole('button', { name: 'Commands' })); fireEvent.click(screen.getByRole('button', { name: 'Commands' }));
+  fireEvent.mouseDown(screen.getByRole('button', { name: 'Add' })); fireEvent.click(screen.getByRole('button', { name: 'Add' }));
   const launcher = screen.getByRole('listbox');
   expect(message.value).toBe('unrelated prose'); expect(document.activeElement).toBe(message); expect([message.selectionStart, message.selectionEnd]).toEqual([3, 6]);
-  const choices = launcher.textContent;
+  const choices = [...launcher.querySelectorAll('[role=option]')].filter(row => row.id !== 'command-file').map(row => row.textContent);
   fireEvent.keyDown(message, { key: 'Escape' }); expect(screen.queryByRole('listbox')).toBeNull();
   fireEvent.change(message, { target: { value: '/' } });
-  expect(screen.getByRole('listbox').textContent).toBe(choices);
+  expect(screen.getAllByRole('option').map(row => row.textContent)).toEqual(choices);
   expect(inputTrigger(undefined, { type: 'toggle' })).toEqual({ source: 'launcher', query: '', highlight: 0 });
   expect(inputTrigger(undefined, { type: 'track', draft: '/' })).toEqual({ source: 'typed', query: '', highlight: 0 });
 });
@@ -151,7 +152,7 @@ it.each(['/model', 'unrelated prose'])('hero model selection settles the command
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Workspace A' })));
   const message = input();
   fireEvent.change(message, { target: { value: draft } });
-  if (draft !== '/model') fireEvent.click(screen.getByRole('button', { name: 'Commands' }));
+  if (draft !== '/model') { fireEvent.click(screen.getByRole('button', { name: 'Add' })); fireEvent.keyDown(message, { key: 'ArrowDown' }); }
   fireEvent.keyDown(message, { key: 'Tab' });
   fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'fixture/chosen' })));
@@ -196,6 +197,7 @@ it('an unavailable saved selection remains visibly invalid and cannot submit a s
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Workspace A' })));
   fireEvent.change(input(), { target: { value: 'must not substitute' } });
   expect(screen.getByRole('button', { name: 'Model and reasoning' }).textContent).toContain('removed/provider-model');
+  fireEvent.click(screen.getByRole('button', { name: 'Model and reasoning' }));
   expect(screen.getByText(/removed\/provider-model is unavailable/)).toBeTruthy();
   expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', true);
   fireEvent.keyDown(input(), { key: 'Enter' });
@@ -282,4 +284,48 @@ it('a settled live Attempt without a journal projection cannot manufacture termi
   render(<AgentTranscript snapshot={value}/>);
   expect(screen.queryByRole('button', { name: 'Stopped' })).toBeNull();
   expect(document.querySelector('[data-turn-process]')).toBeNull();
+});
+
+it('typing while attachment is held cannot offer native commands before admission', async () => {
+  await server.connect(); nativeModel(); server.held.add('session/attach');
+  server.handlers.set('session/models',()=>({type:'models',catalog:{models:[model('fixture/root')]}}));
+  server.handlers.set('session/model',()=>({type:'model',model:cfg3Effective().effective_model}));
+  await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+  const opening=await server.waitFor('session/attach',1),message=input();
+  expect(message.disabled).toBe(false);
+  fireEvent.change(message,{target:{value:'/mdl'}});
+  expect(screen.queryByRole('option',{name:/Model/})).toBeNull();
+  expect(server.requests.filter(row=>row.request.method==='session/model')).toHaveLength(0);
+  await act(async()=>server.reply(opening));
+  expect(screen.getByRole('option',{name:/Model/})).toBeTruthy();
+  expect(input()).toBe(message);expect(message.value).toBe('/mdl');
+  await act(async()=>fireEvent.keyDown(message,{key:'Enter'}));
+  expect(screen.getByRole('dialog',{name:'/model'})).toBeTruthy();
+});
+
+it('files selected before first attachment retain exact draft identity and submit once after attachment', async () => {
+  await server.connect(); nativeModel(); server.held.add('session/attach');server.held.add('turn/start');
+  const file=new File(['original bytes'],'note.txt',{type:'text/plain'});
+  const upload=vi.spyOn(server.client,'upload').mockImplementation(async(session,files,_gate,operation)=>{
+    expect(session).toBe('A');expect(files).toEqual([file]);
+    return [{receipt:{session_id:session,batch_id:operation!,token:'file-0'},file:{name:file.name,batch_id:operation!},path:'/workspace/A/note.txt'}];
+  });
+  await act(async()=>{render(<App client={server.client} workspaceHost={server.workspaceHost}/>);});
+  await act(async()=>fireEvent.click(screen.getByRole('button',{name:'Open Session A'})));
+  const opening=await server.waitFor('session/attach',1),message=input();
+  fireEvent.change(message,{target:{value:'exact draft'}});
+  await act(async()=>fireEvent.change(screen.getByLabelText('Attach files'),{target:{files:[file]}}));
+  const owner=vi.mocked(AgentComposer).mock.calls.at(-1)![0].intakeOwner!,before=owner.snapshot()[0];
+  expect(before.file).toBe(file);expect(before.status).toBe('draft');expect(upload).not.toHaveBeenCalled();
+  await act(async()=>server.reply(opening));
+  expect(vi.mocked(AgentComposer).mock.calls.at(-1)![0].intakeOwner).toBe(owner);
+  expect(owner.snapshot()[0]).toBe(before);expect(input()).toBe(message);expect(message.value).toBe('exact draft');
+  expect(upload).not.toHaveBeenCalled();
+  await act(async()=>fireEvent.click(screen.getByRole('button',{name:'Send'})));
+  const start=await server.waitFor('turn/start',1);expect(upload).toHaveBeenCalledOnce();
+  expect(server.requests.filter(row=>row.request.method==='session/create')).toHaveLength(0);
+  expect(JSON.stringify(start.params)).toContain('exact draft');expect(JSON.stringify(start.params)).toContain('file-0');
+  await act(async()=>server.reply(start));
+  expect(owner.snapshot()).toHaveLength(0);upload.mockRestore();
 });

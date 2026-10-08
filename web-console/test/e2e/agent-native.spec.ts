@@ -79,12 +79,13 @@ test('native interrupt and wait capture one activation; the same Agent resumes w
     const trajectory = page.getByRole('region', { name: 'Trajectory', exact: true });
     const activations = trajectory.locator('[data-display-type="RecordRow"][data-kind="subagent"]');
     await expect(activations).toHaveCount(2);
-    const inspector = trajectory.getByLabel('Trace record inspector');
+    const inspector = trajectory.getByRole('complementary', { name: 'Event details' });
+    // Each activation is its own selectable record with Harness's generic tabs.
+    expect(agentId).toBeTruthy();
     for (let index = 0; index < 2; index++) {
       await activations.nth(index).click();
-      await inspector.getByRole('tab', { name: 'Native', exact: true }).click();
-      await expect(inspector.getByText(agentId!, { exact: true })).toBeVisible();
-      await expect(inspector.getByText(index === 0 ? 'Creation Tool' : 'Client control', { exact: true })).toBeVisible();
+      await expect(activations.nth(index)).toHaveAttribute('aria-selected', 'true');
+      await expect(inspector.getByRole('tab')).toHaveText(['Summary', 'Preview', 'Timing']);
     }
     expect(errors).toEqual([]);
     passed = true;

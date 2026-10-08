@@ -2,7 +2,7 @@ import { expect, it, vi } from 'vitest';
 import { FirstSubmissions, type FirstSubmitPort, type FirstDraft, type CreatedSession } from '../src/app/new-conversation/first-submit';
 import { UploadFailure } from '../src/client/uploads';
 import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
-import type { UploadReceipt } from '../../protocol/app-server/v34';
+import type { UploadReceipt } from '../../protocol/app-server/v37';
 function gate<T>() { let resolve!: (value: T) => void, reject!: (reason: unknown) => void; const promise = new Promise<T>((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; }
 const session: CreatedSession = { id: 'native-session', node: 'native-node', conversation: 'native-conversation' };
 const draft: FirstDraft = { workspaceId: 'registered', text: 'Task', files: [], model: { model: 'explicit' } };
@@ -101,7 +101,7 @@ it('repairs the retained exact upload without create/upload/send replay, then co
   const { owner, port, start } = fixture({ upload: vi.fn(async () => { throw new OutcomeUncertain(); }) });
   await start({ ...draft, files: [new File(['first'], 'first.md'), new File(['second'], 'second.md')] });
   const lost = owner.session(session.id)!;
-  const reply = gate<import('../../protocol/app-server/v34').UploadOutcome>();
+  const reply = gate<import('../../protocol/app-server/v37').UploadOutcome>();
   port.status = vi.fn(() => reply.promise);
   const repair = owner.recoverUpload(lost, port, false);
   await owner.recoverUpload(lost, port, false);

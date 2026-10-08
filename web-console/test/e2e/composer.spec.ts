@@ -48,15 +48,16 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     await expect(page.getByText('No current tasks')).toHaveCount(0);
     await expect(page.locator('[data-todo-state]')).toHaveCount(0);
     await expect(goal).toHaveCount(0); await expect(queue).toHaveCount(0);
-    await expect(page.locator('[data-composer-context-stack] > *')).toHaveCount(2);
-    await expect(page.locator('[data-composer-context-stack] > [data-context-seat]')).toHaveCount(1);
+    await expect(page.locator('[data-composer-context-stack] > *')).toHaveCount(1);
+    await expect(page.locator('[data-composer-context-stack] > [data-context-seat]')).toHaveCount(0);
     const stackGeometry = async () => {
       const stack = (await page.locator('[data-composer-context-stack]').boundingBox())!;
       const seats = page.locator('[data-composer-context-stack] > *');
       const first = (await seats.first().boundingBox())!, last = (await seats.last().boundingBox())!;
       return { lead: Math.round(first.y - stack.y), trail: Math.round(stack.y + stack.height - last.y - last.height) };
     };
-    // The stack contains only the Context and Composer seats, with its 6px
+    // The stack contains only the Composer seat (an idle Context seat renders
+    // nothing), with its 6px
     // leading rhythm; no empty Todo wrapper or trailing height remains.
     expect(await stackGeometry()).toEqual({ lead: 6, trail: 0 });
     await page.screenshot({ path: 'test-results/composer-no-todo-dock.png', fullPage: true });
@@ -110,7 +111,13 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     // historical owner only after its activity has arrived.
     const process = activity.locator('xpath=ancestor::*[@data-turn-process-owner][1]').locator(':scope > [data-turn-process]');
     await expect(process).toHaveCount(1);
+    // That attempt has settled durably, but its process view publishes on its
+    // own read. Only a settled process is toggleable, and only then are its
+    // steps grouped (collapsed) as in Harness, so reveal both once it settles.
+    await expect(process).toBeEnabled();
     if (await process.getAttribute('aria-expanded') === 'false') await process.click();
+    const step = page.locator('[data-step-process]').filter({ has: activity }).last().locator(':scope > button');
+    if (await step.getAttribute('aria-expanded') === 'false') await step.click();
     await expect(activity).toBeVisible();
     const details = activity.getByText('Execution details', { exact: true });
     await expect(details).toBeVisible();
@@ -126,7 +133,7 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     await expect(queue.locator('[data-inbound-sequence]')).toContainText('Queued during the Goal round');
     await expect(queue.locator('[data-submission-echo]')).toHaveCount(0);
     const order = () => page.locator('[data-composer-context-stack] > *').evaluateAll(nodes => nodes.map(node => node.getAttribute('aria-label') ?? (node.hasAttribute('data-context-seat') ? 'Context' : node.querySelector('[data-composer-card]') ? 'Composer' : 'unknown')));
-    expect(await order()).toEqual(['Context', 'To-dos', 'Goal', 'Queue', 'Composer']);
+    expect(await order()).toEqual(['To-dos', 'Goal', 'Queue', 'Composer']);
     await aligned([todo, goal, queue]);
 
     // Native mutation while the provider gate prevents claim. Both controls
@@ -226,11 +233,11 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     const history = wire.responses.filter(row => row.result?.snapshot?.trace).at(-1)!.result.snapshot.trace.records;
     const request = history.find((row: any) => row.request?.context_additions.some((context: any) => context.context_kind === 'agent_status'));
     expect(request).toBeTruthy();
-    await trajectory.getByLabel('Search loaded Trace').fill(request.request.model);
+    await trajectory.getByLabel('Search trajectory').fill(request.request.model);
     await trajectory.locator(`[data-request-owner="${request.id}"]`).click();
-    const inspector = trajectory.getByLabel('Trace record inspector');
-    await inspector.getByRole('tab', { name: 'Context', exact: true }).click();
-    await expect(inspector).toContainText('Accepted contribution');
+    const inspector = trajectory.getByRole('complementary', { name: 'Event details' });
+    await inspector.getByRole('tab', { name: 'Options', exact: true }).click();
+    await expect(inspector).toContainText(request.request.model);
     await expect.poll(() => wire.responses.filter(row => row.method === 'session/traceDetail').length).toBeGreaterThan(0);
     const detail = wire.responses.filter(row => row.method === 'session/traceDetail').at(-1)!.result.detail.request;
     const status = detail.contributions.find((entry: any) => entry.producer.Native === 'agent_status');

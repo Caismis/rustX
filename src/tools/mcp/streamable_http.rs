@@ -333,6 +333,7 @@ pub(crate) struct McpHttpRequestOwnership {
 #[cfg(test)]
 pub(crate) struct HttpReleaseProbe {
     method: &'static str,
+    #[cfg(feature = "mcp-fixture")]
     ownership: std::sync::Weak<McpHttpRequestOwnership>,
     state: tokio::sync::watch::Sender<ReleaseProbeState>,
 }
@@ -346,7 +347,7 @@ struct ReleaseProbeState {
     released: bool,
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "mcp-fixture"))]
 impl HttpReleaseProbe {
     pub(crate) async fn wait_held_and_observed(&self) {
         self.state
@@ -365,14 +366,17 @@ impl HttpReleaseProbe {
         self.state.send_modify(|s| {
             s.released = true;
             if s.held {
-                held = s.id.clone();
+                held.clone_from(&s.id);
             }
         });
         if let (Some(id), Some(ownership)) = (held, self.ownership.upgrade()) {
             ownership.release_http(&id);
         }
     }
+}
 
+#[cfg(test)]
+impl HttpReleaseProbe {
     fn hold(&self, id: &RequestId) -> bool {
         let mut held = false;
         self.state.send_modify(|s| {
@@ -387,19 +391,6 @@ impl HttpReleaseProbe {
 
 #[cfg(test)]
 impl McpHttpRequestOwnership {
-    pub(crate) fn hold_http_release(
-        self: &Arc<Self>,
-        method: &'static str,
-    ) -> Arc<HttpReleaseProbe> {
-        let probe = Arc::new(HttpReleaseProbe {
-            method,
-            ownership: Arc::downgrade(self),
-            state: tokio::sync::watch::channel(ReleaseProbeState::default()).0,
-        });
-        *self.release_probe.lock().expect("probe lock") = Some(Arc::clone(&probe));
-        probe
-    }
-
     fn note_http_request(&self, id: &RequestId, message: &ClientJsonRpcMessage) {
         let method = serde_json::to_value(message).expect("fixture request")["method"]
             .as_str()
@@ -431,6 +422,22 @@ impl McpHttpRequestOwnership {
                 }
             });
         }
+    }
+}
+
+#[cfg(all(test, feature = "mcp-fixture"))]
+impl McpHttpRequestOwnership {
+    pub(crate) fn hold_http_release(
+        self: &Arc<Self>,
+        method: &'static str,
+    ) -> Arc<HttpReleaseProbe> {
+        let probe = Arc::new(HttpReleaseProbe {
+            method,
+            ownership: Arc::downgrade(self),
+            state: tokio::sync::watch::channel(ReleaseProbeState::default()).0,
+        });
+        *self.release_probe.lock().expect("probe lock") = Some(Arc::clone(&probe));
+        probe
     }
 
     pub(crate) fn request_states(&self) -> Vec<(RequestId, Option<String>, String, bool)> {

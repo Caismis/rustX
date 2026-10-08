@@ -2,10 +2,11 @@ import { translator } from '../src/locale/translation';
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { RightPanel } from '../src/presentation/right-panel/RightPanel';
 import { ArtifactPreview } from '../src/presentation/right-panel/ArtifactPreview';
 import { readTheme, applyTheme } from '../src/app/appearance';
 import { goalActivityLabel } from '../src/app/agent/GoalActivity';
-import type { ForegroundToolExecution } from '../../protocol/app-server/v34';
+import type { ForegroundToolExecution } from '../../protocol/app-server/v37';
 import { useState } from 'react';
 import type { PreviewViewState } from '../src/presentation/right-panel/preview-view-state';
 afterEach(() => { cleanup(); localStorage.clear(); document.body.removeAttribute('data-ds-dark-theme'); });
@@ -22,12 +23,21 @@ it('keeps preview content inert, wrapping local, and error retries explicit', ()
  expect(retry).not.toHaveBeenCalled(); fireEvent.click(screen.getByRole('button', { name: 'Retry preview' })); expect(retry).toHaveBeenCalledOnce();
 });
 it('persists only the safe Web appearance preference', () => {
- expect(readTheme()).toBe('light'); applyTheme('dark'); expect(readTheme()).toBe('dark'); expect(document.body.hasAttribute('data-ds-dark-theme')).toBe(true);
+ expect(readTheme()).toBe('system'); applyTheme('dark'); expect(readTheme()).toBe('dark'); expect(document.body.hasAttribute('data-ds-dark-theme')).toBe(true);
  expect({ ...localStorage }).toEqual({ 'rustx-appearance-v1': 'dark', 'rustx-locale-v1': 'en' });
- localStorage.setItem('rustx-appearance-v1', 'unexpected'); expect(readTheme()).toBe('light');
+ localStorage.setItem('rustx-appearance-v1', 'unexpected'); expect(readTheme()).toBe('system');
 });
 it('Goal Tool labels describe native outcomes while preserving exact tool identity', () => {
  const tool: ForegroundToolExecution = { call_id: 'goal-call', tool_id: 'native.create_goal', name: 'create_goal', state: { type: 'assembled', arguments: '{}' } } as ForegroundToolExecution;
  expect(goalActivityLabel(translator('en'), tool)).toBe('Starting Goal');
  expect(goalActivityLabel(translator('en'), { ...tool, state: { type: 'settled', arguments: '{}', result: { status: { type: 'success' }, content: [], duration_ms: 1 } } })).toBe('Goal started');
+});
+
+it('a collapsed shell seat keeps floating content without exposing an empty Inspector landmark', () => {
+ const props={close:vi.fn(),width:320,canShow:true,title:'Developer inspector',closeLabel:'Close Inspector'};
+ const ui=render(<RightPanel {...props} open={false} headerless><button>Floating document</button></RightPanel>);
+ expect(screen.queryByRole('complementary',{name:'Developer inspector'})).toBeNull();
+ expect(screen.getByRole('button',{name:'Floating document'})).toBeTruthy();
+ ui.rerender(<RightPanel {...props} open><p>Native facts</p></RightPanel>);
+ expect(screen.getByRole('complementary',{name:'Developer inspector'})).toBeTruthy();
 });

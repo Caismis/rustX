@@ -546,6 +546,7 @@ mod tests {
             sessions: rows
                 .iter()
                 .map(|row| SessionSummary {
+                    ownership_generation: "1".into(),
                     cwd: PathBuf::from("/workspace"),
                     id: row.id.clone(),
                     name: row.name.clone(),

@@ -269,6 +269,24 @@ async fn wait_for_group_death(pgid: i32) {
     panic!("process group {pgid} is still alive after the deadline");
 }
 
+/// Polls until a shell's `echo <pid> > file` has completed, with a strict
+/// deadlock guard. The redirection creates the file before `echo` writes,
+/// so existence alone races an empty read; `echo`'s single write ends with
+/// the newline.
+#[cfg(unix)]
+async fn written_pid(path: &std::path::Path) -> i32 {
+    for _ in 0..1000 {
+        if let Some(pid) = std::fs::read_to_string(path)
+            .ok()
+            .and_then(|text| text.strip_suffix('\n').map(str::to_owned))
+        {
+            return pid.parse().expect("pid");
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("{} never received a pid", path.display());
+}
+
 /// A spill write failure is represented explicitly: the invocation fails
 /// instead of reporting ordinary success while losing the promised retained
 /// output. The command provably crosses the preview bound, so the lazy
@@ -895,15 +913,11 @@ async fn signal_failure_settles_as_an_explicit_failed_result() {
         workspace.clone(),
         None,
     ));
-    // The shell provably started (its pid file exists) before the
-    // cancellation becomes observable.
-    for _ in 0..1000 {
-        if shell_pid_file.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert!(shell_pid_file.exists(), "the shell pid file never appeared");
+    // The shell and its descendant provably started before the
+    // cancellation becomes observable. The shell writes the descendant's
+    // pid strictly after its own, so waiting only for the shell's would
+    // race the descendant's `echo $!`.
+    let descendant_pid = written_pid(&desc_pid_file).await;
     cancelling.cancel();
     let result = tokio::time::timeout(Duration::from_secs(20), task)
         .await
@@ -923,11 +937,6 @@ async fn signal_failure_settles_as_an_explicit_failed_result() {
         .trim()
         .parse()
         .expect("anchor pid");
-    let descendant_pid: i32 = std::fs::read_to_string(&desc_pid_file)
-        .expect("descendant pid file")
-        .trim()
-        .parse()
-        .expect("descendant pid");
     let shell_pid: i32 = std::fs::read_to_string(&shell_pid_file)
         .expect("shell pid file")
         .trim()
@@ -1135,14 +1144,9 @@ async fn no_signals_are_issued_after_ownership_loss() {
         workspace.clone(),
         None,
     ));
-    // 2. The owned group provably exists: the shell is running.
-    for _ in 0..1000 {
-        if shell_pid_file.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert!(shell_pid_file.exists(), "the shell pid file never appeared");
+    // 2. The owned group provably exists: the shell is running and has
+    //    started its descendant (whose pid it writes after its own).
+    let descendant_pid = written_pid(&desc_pid_file).await;
     // 3. Cancellation becomes observable; the inner supervisor refuses
     //    to signal the (per its seam, possibly foreign) numeric pgid.
     cancelling.cancel();
@@ -1196,11 +1200,6 @@ async fn no_signals_are_issued_after_ownership_loss() {
     // 5. The owned group was contained and is terminal: the group and
     //    the descendant are provably gone without any test-side kill.
     wait_for_group_death(anchor_pid).await;
-    let descendant_pid: i32 = std::fs::read_to_string(&desc_pid_file)
-        .expect("descendant pid file")
-        .trim()
-        .parse()
-        .expect("descendant pid");
     wait_for_process_death(descendant_pid).await;
     let _ = dir;
 }
@@ -1236,30 +1235,15 @@ async fn control_channel_abandonment_contains_the_owned_tree() {
         None,
     ));
     // The owned tree provably exists before the owner disappears. The
-    // descendant pid file is part of the readiness condition: the shell
-    // writes it strictly after its own pid file, so waiting only for the
-    // latter would race the descendant's `echo $!`.
-    for _ in 0..1000 {
-        if shell_pid_file.exists() && anchor_pid_file.exists() && desc_pid_file.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert!(shell_pid_file.exists(), "the shell pid file never appeared");
-    assert!(
-        desc_pid_file.exists(),
-        "the descendant pid file never appeared"
-    );
+    // descendant pid is the readiness condition: the shell writes it
+    // strictly after its own pid, and the inner supervisor publishes the
+    // anchor before it spawns the shell.
+    let descendant_pid = written_pid(&desc_pid_file).await;
     let anchor_pid: i32 = std::fs::read_to_string(&anchor_pid_file)
         .expect("anchor pid file")
         .trim()
         .parse()
         .expect("anchor pid");
-    let descendant_pid: i32 = std::fs::read_to_string(&desc_pid_file)
-        .expect("descendant pid file")
-        .trim()
-        .parse()
-        .expect("descendant pid");
     assert!(
         process_alive(descendant_pid),
         "the descendant must be alive when the owner disappears"
@@ -1648,14 +1632,10 @@ async fn setsid_escape_attempt_cancels_with_the_owned_group() {
         workspace.clone(),
         None,
     ));
-    // The shell provably started before cancellation becomes observable.
-    for _ in 0..1000 {
-        if shell_pid_file.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert!(shell_pid_file.exists(), "the shell pid file never appeared");
+    // The shell and its rejected setsid attempt provably started before
+    // cancellation becomes observable (the shell writes the attempt's pid
+    // strictly after its own).
+    let attempt_pid = written_pid(&attempt_pid_file).await;
     cancelling.cancel();
     let result = tokio::time::timeout(Duration::from_secs(20), task)
         .await
@@ -1671,11 +1651,6 @@ async fn setsid_escape_attempt_cancels_with_the_owned_group() {
         .trim()
         .parse()
         .expect("anchor pid");
-    let attempt_pid: i32 = std::fs::read_to_string(&attempt_pid_file)
-        .expect("attempt pid file")
-        .trim()
-        .parse()
-        .expect("attempt pid");
     wait_for_group_death(anchor_pid).await;
     wait_for_process_death(attempt_pid).await;
     let _ = dir;
@@ -1724,29 +1699,15 @@ async fn hidden_group_descendant_cannot_be_hidden_by_a_setsid_escape_attempt() {
         .await
         .expect("the shell-exit boundary is observed");
     // 2. A and B provably exist (A creates B before its own escape
-    //    attempt). The poll queries the fixture's own pid files — the
-    //    authoritative process state — with a strict deadlock guard.
-    for _ in 0..1000 {
-        if a_pid_file.exists() && b_pid_file.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    //    attempt). The poll waits for the fixture's own pid files to be
+    //    completely written, with a strict deadlock guard.
+    let a_pid = written_pid(&a_pid_file).await;
+    let b_pid = written_pid(&b_pid_file).await;
     let shell_pid: i32 = std::fs::read_to_string(&shell_pid_file)
         .expect("shell pid file")
         .trim()
         .parse()
         .expect("shell pid");
-    let a_pid: i32 = std::fs::read_to_string(&a_pid_file)
-        .expect("a pid file")
-        .trim()
-        .parse()
-        .expect("a pid");
-    let b_pid: i32 = std::fs::read_to_string(&b_pid_file)
-        .expect("b pid file")
-        .trim()
-        .parse()
-        .expect("b pid");
     let anchor_pid: i32 = std::fs::read_to_string(&anchor_pid_file)
         .expect("anchor pid file")
         .trim()

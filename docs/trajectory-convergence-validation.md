@@ -37,8 +37,9 @@ reuse the Request cache entry. Semantic tuple keys drive virtual rows/focus and
 pixel anchors. Structural headers have separate native structure IDs, segment anchors and local focus, with no detail owner. Step segments can merge without changing a logical Turn or moving
 records. Calls match exact conversation-cache/Attempt/Turn/ToolCall/Tool scope,
 with separate proposed/loaded/started/state counts. Search never fetches. The
-local Inspector uses React Aria and `react-resizable-panels@4.12.4`; jsdiff
-`diff@9.0.0` only renders complete native-classified text differences. Existing
+local Inspector now follows the Harness details panel with its own resize handle
+(see [Trace](trace.md)); jsdiff `diff@9.0.0` only renders complete
+native-classified text differences. Existing
 TanStack Virtual, Markdown, Shiki, JSON, artifact and authorization code remain.
 
 ## T1 matrix: concrete executable tests

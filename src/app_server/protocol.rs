@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v34 envelope and method vocabulary.
+//! Rust authority for the App Server v37 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 34;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 37;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -129,7 +129,6 @@ pub enum Method {
     #[serde(rename = "session/turns")]
     ConversationTurns {
         target: AttachmentTarget,
-        cut: Option<crate::durable::reading::ConversationReadCut>,
         /// Absent selects the newest native outline page.
         offset: Option<usize>,
         #[schemars(range(min = 1, max = 64))]
@@ -228,6 +227,14 @@ pub enum Method {
     SessionCreate { settings: SessionPersistentState },
     #[serde(rename = "session/read")]
     SessionRead { session_id: SessionId },
+    /// Read durable history without loading runtime resources or acquiring control.
+    #[serde(rename = "session/history")]
+    SessionHistory {
+        session_id: SessionId,
+        node_id: Option<SessionNodeId>,
+        at: crate::durable::reading::ConversationWindowAt,
+        limit: usize,
+    },
     #[serde(rename = "session/summary")]
     SessionSummary { session_id: SessionId },
     #[serde(rename = "session/name")]
@@ -519,6 +526,10 @@ pub enum MethodResult {
     Transcript {
         page: crate::runtime_client::snapshot::RuntimeClientTranscriptPage,
     },
+    SessionHistory {
+        conversation_id: ConversationId,
+        window: crate::runtime_client::snapshot::ConversationWindow,
+    },
     TranscriptWindow {
         window: crate::runtime_client::snapshot::ConversationWindow,
     },
@@ -681,6 +692,13 @@ pub struct Notification {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "method", content = "params", deny_unknown_fields)]
 pub enum NotificationMethod {
+    /// Retire this Session's execution generations through the inclusive native watermark.
+    #[serde(rename = "session/ownershipRetired")]
+    OwnershipRetired {
+        session_id: SessionId,
+        /// Exact decimal integer; independent of notification delivery sequence.
+        retired_through: String,
+    },
     #[serde(rename = "configuration/changed")]
     ConfigurationChanged {
         application: crate::local_runtime::configuration::application::ConfigurationApplication,
@@ -700,7 +718,7 @@ pub enum NotificationMethod {
     #[serde(rename = "session/closed")]
     Closed { target: AttachmentTarget },
     /// Invalidate the named Session summary. When `catalog_changed` is true,
-    /// membership may also have changed; reread `session/list` from native authority.
+    /// membership or recency order may have changed; reread `session/list` from native authority.
     ///
     /// It is an *invalidation*, not a value: it carries no metadata, makes no
     /// durability claim beyond the catalog commit that produced it, and is not

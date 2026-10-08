@@ -41,7 +41,7 @@ export function deriveSessionProductState(tx: Translate, state: Pick<ClientView,
     detail: tx('common:copy.use-matching-web-and-server-versions-review-connection-settings-before-connecting-again') };
   if (recovery) return { status: 'reconnect', label: tx('common:session-product.connection-interrupted'), severity: 'warning', recovery,
     detail: recovery.action === 'open' ? tx('common:copy.open-this-session-to-continue-your-previous-requests-will-not-be-sent-again') : tx('common:copy.reconnect-to-see-current-work-your-previous-requests-will-not-be-sent-again') };
-  if (connecting || view?.attachment === 'attaching' || view?.attachment === 'resynchronizing') return { status: 'connecting', label: tx('common:app.connecting'), severity: 'quiet' };
+  if (connecting || view?.attachment === 'attaching' || view?.attachment === 'resynchronizing') return { status: 'connecting', severity: 'quiet' };
   if (!view?.snapshot) return { status: 'idle', severity: 'quiet' };
   const snapshot = view.snapshot;
   if (snapshot.shutting_down) return { status: 'stopping', label: tx('common:session-product.session-is-closing'), severity: 'warning' };

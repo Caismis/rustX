@@ -12,7 +12,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 const endpoint = 'ws://localhost:8080/';
-const row = (id: string, cwd = `/${id}`) => ({ id, cwd, updated_at: '0', active_node: `node-${id}` });
+const row = (id: string, cwd = `/${id}`) => ({ ownership_generation: '1', id, cwd, updated_at: '0', active_node: `node-${id}` });
 const catalog = (authorityId = 'host-1'): WorkspaceCatalog => ({ authorityId, endpoint, workspaces: ['A', 'B'].map(id => ({ id, location: id, displayName: id, displayPath: `/${id}` })), picker: { kind: 'unavailable', reason: 'test' } });
 async function fixture(listWorkspaces: ProductHostWorkspaces['listWorkspaces'] = async () => catalog(), ready = true) {
   let state: ClientView = { connection: 'connected', authorityId: 'native-1', authorityRevision: 0, endpoint, generation: 1, sessions: [row('A'), row('B')], views: {}, uncertain: [], interactionOperations: {} };

@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { AttachmentIntake, AttachmentIntakes, intake, pasteText, transferInputs, type UploadPort } from '../src/client/uploads';
 import { AgentComposer } from '../src/app/agent/AgentComposer';
 import { capabilities } from './fixture';
-import type { UploadedFile, UploadOutcome } from '../../protocol/app-server/v34';
+import type { UploadedFile, UploadOutcome } from '../../protocol/app-server/v37';
 const policy = capabilities.upload_policy;
 const file = (name = 'document.md', size = 1) => new File([new Uint8Array(size)], name);
 const ready: UploadedFile = { receipt: { session_id: 'A', batch_id: 'original', token: 'original' }, file: { batch_id: 'original', name: 'document.md' }, path: '/native/document.md' };
@@ -45,7 +45,11 @@ it('preserves exact text and selection when inserting a file-plus-text paste', (
   fireEvent.paste(input, { clipboardData: { files: [file()], items: [], getData: () => 'x\ny' } });
   expect(input.value).toBe('α x\ny ω'); expect(input.selectionStart).toBe(5); expect(input.selectionEnd).toBe(5);
   expect(owner.snapshot()).toHaveLength(1);
-  expect(ui.getByTitle(/2097152 bytes per file/)).toBeTruthy();
+  fireEvent.click(ui.getByRole('button', { name: 'Add' }));
+  const option = ui.getByRole('option', { name: /file$/ });
+  expect(document.getElementById(option.getAttribute('aria-describedby')!)?.textContent).toContain('2097152 bytes per file');
+  expect(input.value).toBe('α x\ny ω');
+  expect(input.selectionStart).toBe(5); expect(input.selectionEnd).toBe(5);
 });
 it('uncertain reconciliation reuses original receipts and performs no second upload', async () => {
   const owner = new AttachmentIntake();

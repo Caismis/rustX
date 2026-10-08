@@ -2,7 +2,7 @@ import { message, displayText, searchVocabulary, type DisplayText } from '../../
 import { useTranslation, useNotice } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Rewritten from ui-commands/PopupSelectView.tsx; see PROVENANCE.md. */
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { CompletedResponseView, UserInputBlock, SessionSnapshot } from '../../../../protocol/app-server/v34';
+import type { UserInputBlock, SessionSnapshot } from '../../../../protocol/app-server/v37';
 import type { AppServerClient } from '../../client/app-server';
 import { lineageSwitchSafe } from '../../bindings/projection';
 import { Modal } from '../../presentation/primitives/Modal';
@@ -13,7 +13,7 @@ import css from './Commands.module.css';
 
 type Choice = { kind: 'model'; model: string; profile?: string } | { kind: 'history'; action: HistoryAction; selection: HistoricalSelection } | { kind: 'node'; nodeId: string; conversationId: string };
 interface Row { id: string; label: DisplayText; detail?: DisplayText; choice: Choice }
-export interface CommandRequest { id: Exclude<CommandId, 'new' | 'compact'> | 'retry' | 'tree'; messageId?: string; response?: CompletedResponseView }
+export interface CommandRequest { id: Exclude<CommandId, 'new' | 'compact'> | 'tree'; messageId?: string }
 export function CommandPanel({ request, client, sessionId, current, close, succeeded, opened }: {
   request: CommandRequest; client: AppServerClient; sessionId: string; current: () => boolean;
   close: () => void; succeeded: () => void; opened: (result: { session: SessionSnapshot; content: UserInputBlock[] }) => void;
@@ -27,19 +27,13 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
   const options = useRef<HTMLDivElement>(null);
   const [scope] = useState(() => new CommandSession(client, sessionId, () => alive.current && current()));
   const view = useSyncExternalStore(client.subscribe, client.getSnapshot).views[sessionId];
-  const blocked = ['branch', 'retry', 'tree'].includes(request.id) && !lineageSwitchSafe(view);
+  const blocked = ['branch', 'tree'].includes(request.id) && !lineageSwitchSafe(view);
   const valid = () => alive.current && current();
-  const historical = request.id === 'fork' || request.id === 'branch' || request.id === 'retry';
+  const historical = request.id === 'fork' || request.id === 'branch';
   const loadBoundaries = async (offset: number) => {
     const action = request.id;
-    if (action !== 'fork' && action !== 'branch' && action !== 'retry') { setError(message('commands:copy.not-a-historical-command')); return; }
+    if (action !== 'fork' && action !== 'branch') { setError(message('commands:copy.not-a-historical-command')); return; }
     setRows([]);
-    if (request.response) {
-      const selection = await scope.responseSelection(request.response);
-      if (!valid()) return;
-      setRows([{ id: request.response.closing_message_id, label: action === 'retry' ? message('commands:command-panel.replay-the-original-input-once') : message('commands:command-panel.continue-after-this-response'), choice: { kind: 'history', action, selection } }]);
-      setNext(null); setActive(0); return;
-    }
     const page = await scope.boundaries(offset);
     if (!valid()) return;
     setRows(page.selections.filter(selection => !request.messageId || selection.boundary.message.id === request.messageId).map(selection => ({ id: selection.boundary.message.id,
@@ -70,8 +64,8 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
             ...(model.reasoningProfiles ?? []).map(profile => ({ id: `${model.model}:${profile.id}`, label: message('commands:command-panel.value-value', { p0: model.model, p1: profile.id }), detail: message('commands:copy.reasoning-profile'), choice: { kind: 'model' as const, model: model.model, profile: profile.id } })),
           ])); break;
         }
-        case 'fork': case 'branch': case 'retry':
-          setDetail(request.response && request.id !== 'retry' ? message('commands:copy.the-new-lineage-includes-this-completed-response-and-opens-with-an-empty-composer') : request.id === 'fork' ? message('commands:copy.independent-session-choose-the-exact-user-boundary-its-prompt-returns-to-the-composer') : request.id === 'retry' ? message('commands:copy.create-a-native-branch-switch-the-idle-session-to-it-and-execute-the-selected-prompt-once-') : message('commands:copy.create-a-native-branch-and-switch-the-idle-session-to-it-the-selected-prompt-returns-to-th'));
+        case 'fork': case 'branch':
+          setDetail(request.id === 'fork' ? message('commands:copy.independent-session-choose-the-exact-user-boundary-its-prompt-returns-to-the-composer') : message('commands:copy.create-a-native-branch-and-switch-the-idle-session-to-it-the-selected-prompt-returns-to-th'));
           await loadBoundaries(0); break;
         case 'tools': { const result = await scope.tools(); if (valid()) { setDetail(JSON.stringify(result, null, 2)); succeeded(); } break; }
         case 'tree': setDetail(message('commands:copy.native-session-lineage-opening-another-node-switches-the-idle-resident-runtime-the-origina')); await loadTree(0); break;
@@ -101,7 +95,7 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
   const filtered = rows.filter(row => `${searchVocabulary(row.label)} ${searchVocabulary(row.detail ?? '')}`.toLowerCase().includes(query.toLowerCase()));
   useEffect(() => { options.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest' }); }, [active, query]);
   const stale = !scope.current();
-  return <Modal closeLabel={tx('commands:command-panel.close-dialog')} open title={request.id === 'tree' ? tx('commands:command-panel.session-tree') : request.id === 'retry' ? tx('commands:command-panel.retry-regenerate') : tx('commands:command-panel.value', { p0: request.id })} onClose={close}>
+  return <Modal closeLabel={tx('commands:command-panel.close-dialog')} open title={request.id === 'tree' ? tx('commands:command-panel.session-tree') : tx('commands:command-panel.value', { p0: request.id })} onClose={close}>
     <p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{detail}</p>
     {error && <p role="alert">{error}</p>}
     {blocked && <p role="status">{tx('commands:command-panel.waiting-for-native-execution-and-accepted-inbound-to-settle')}</p>}

@@ -4,7 +4,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub const TURN_PAGE_MAX: usize = 64;
-pub const TURN_PREVIEW_MAX: usize = 240;
+/// One rail-card line of the turn's opening human prompt.
+pub const TURN_PROMPT_PREVIEW_MAX: usize = 50;
+/// Three rail-card lines of the turn's final response.
+pub const TURN_RESPONSE_PREVIEW_MAX: usize = 120;
 
 /// Origin survives lineage copying; ordinal never participates in identity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -14,14 +17,14 @@ pub struct ConversationTurnId {
     pub attempt_id: AttemptId,
 }
 
-/// Frozen inclusive Journal/transcript upper bounds plus a semantic mutation epoch.
+/// Inclusive Journal/transcript bounds a read was captured at, plus its semantic mutation epoch.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationReadCut {
     pub conversation_id: ConversationId,
     pub journal: u64,
     pub transcript: u64,
-    /// Edits/removals of mutable transcript bodies retire unreconstructible cuts.
+    /// Advances on every edit/removal of a mutable pending transcript body.
     pub mutation_revision: u64,
 }
 
@@ -43,8 +46,12 @@ pub struct ConversationTurn {
     pub ordinal: usize,
     /// None until native work has a visible member or terminal position.
     pub cursor: Option<super::TranscriptCursor>,
-    #[schemars(length(max = 240))]
-    pub preview: String,
+    /// The turn's first human prompt; empty when none was adopted for it.
+    #[schemars(length(max = 50))]
+    pub prompt: String,
+    /// The turn's final text-bearing response; empty until the turn settles.
+    #[schemars(length(max = 120))]
+    pub response: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -57,7 +64,8 @@ pub struct ConversationTurnPage {
     pub turns: Vec<ConversationTurn>,
 }
 
-/// A single transcript read vocabulary; every selector replaces a finite window.
+/// Bounded windows positioned by native Turn identity or by a captured read cut.
+/// Append-only live growth preserves a cut; mutation invalidates it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ConversationWindowAt {
@@ -94,9 +102,48 @@ pub struct TurnReadingProvenance {
     pub process_message_ids: Vec<crate::runtime::identity::MessageId>,
     /// Canonical predecessor of a terminal-only location; None precedes all content.
     pub preceding_message_id: Option<crate::runtime::identity::MessageId>,
+    /// The canonical human prompt that opened the turn, when one was retained.
+    pub prompt_message_id: Option<crate::runtime::identity::MessageId>,
     pub outcome: InheritedTurnOutcome,
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
     pub ended_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// The origin Attempt's execution totals at the lineage cut. A seed written
+    /// before this evidence existed has none, and contributes no totals.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<TurnExecution>,
+}
+
+/// Additive execution evidence of one native Attempt through a lineage cut.
+///
+/// As a `DeepSeek` Harness fork folds its copied event prefix, a lineage child's
+/// whole-conversation statistics and context occupancy include the turns it
+/// inherited. These are the Attempt's own facts, never destination execution:
+/// they own no request, Tool, settlement or live clock.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TurnExecution {
+    /// Logical model steps (`TurnStarted`).
+    pub steps: u64,
+    pub model_requests: u64,
+    pub requests_with_usage: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reported_usage: Option<crate::model::types::ModelUsage>,
+    /// Whether the Attempt closed with a finalized response.
+    pub completed_response: bool,
+    /// Summed request generation work, as `ActivityFold` measures it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_ms: Option<u64>,
+    pub ttft_ms: u64,
+    pub ttft_requests: u64,
+    pub decode_ms: u64,
+    pub decode_tokens: u64,
+    /// Summed settled foreground Tool time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_ms: Option<u64>,
+    /// The context reading after the Attempt's last request, absent when that
+    /// request reported none or a later compaction invalidated it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub occupancy: Option<crate::context::occupancy::ContextOccupancy>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

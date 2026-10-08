@@ -635,13 +635,13 @@ describe("CommandDispatcher", () => {
           id: "ses_84097828-fc31-78c8-9292-10df48901a85",
           name: "current",
           updated_at: "2026-08-21T00:00:00Z",
-          cwd: "/server/work", active_node: "node_35971be6-e9bb-724a-8955-82fe0e42e048",
+          cwd: "/server/work", ownership_generation: "1", active_node: "node_35971be6-e9bb-724a-8955-82fe0e42e048",
         },
         {
           id: "ses_5d906140-8048-712d-8539-25aed45333a1",
           name: "saved review",
           updated_at: "2026-08-20T00:00:00Z",
-          cwd: "/server/work", active_node: "node_1779f59f-4df2-71f6-b81a-eb08fb52a5d8",
+          cwd: "/server/work", ownership_generation: "1", active_node: "node_1779f59f-4df2-71f6-b81a-eb08fb52a5d8",
         },
       ],
     });
@@ -1191,7 +1191,7 @@ describe("CommandDispatcher", () => {
       user_resource_root: "/ur", workspace_resource_root: "/wr", runtime_root: "/r", user_mcp: { path: "/um", revision: "um" }, workspace_mcp: { path: "/wm", revision: "wm" }, agents: [],
     } });
     const reconcile = await nextRequest(h, "configuration/reconcile");
-    h.transport.respond(reconcile.id, { type: "configuration_application", application: { eligibility: { status: "unavailable" }, scope: h.session.sessionId, sources: [{ kind: "user" }], version: "2", desired: { input_revision: "u", attempt: "1" }, units: { execution_policy: { status: "applied" } } } });
+    h.transport.respond(reconcile.id, { type: "configuration_application", application: { scope: h.session.sessionId, sources: [{ kind: "user" }], version: "2", desired: { input_revision: "u", attempt: "1" }, units: { execution_policy: { status: "applied" } } } });
     const reread = await nextRequest(h, "configuration/sourcesRead", 1);
     h.transport.respond(reread.id, { type: "source_settings", projection: { target: { kind: "user" }, provenance: {}, process_policy_impacts: {}, absent_resource_revision: "absent", resource_revisions: {}, user: { path: "/user", revision: "u" }, user_resource_root: "/ur", runtime_root: "/r", user_mcp: { path: "/um", revision: "um" }, agents: [] } });
     assert.equal((await operation).kind, "inspect");

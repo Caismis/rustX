@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConversationComposer } from '../src/app/new-conversation/ConversationComposer';
@@ -7,7 +8,7 @@ import { NavigationEpoch } from '../src/client/navigation';
 import { RpcFailure } from '../src/client/app-server';
 import { sameEndpoint } from '../src/workspaces/endpoint';
 import { WorkspaceHostError, type WorkspaceCatalog, type ProductHostWorkspaces } from '../src/workspaces/host';
-import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v34';
+import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v37';
 import { cfg3Source } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
 import { modelPreferences, NewSessionModelPreference } from '../src/app/model-preference';
@@ -44,7 +45,7 @@ async function mount({ current = () => true, source = workspaceSource(), configu
   return { host, opened, authority, associations };
 }
 const methods = () => server.requests.map(r => r.request.method);
-const modelChoices = () => screen.queryAllByRole('menuitem').map(item => item.textContent ?? '').filter(label => label.startsWith('fixture/'));
+const modelChoices = () => screen.queryAllByRole('menuitem').filter(item => !(item as HTMLButtonElement).disabled).map(item => item.textContent ?? '').filter(label => label.startsWith('fixture/'));
 async function openModelMenu() {
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Model and reasoning' })));
   fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
@@ -193,8 +194,10 @@ it('an obsolete Workspace catalog read cannot replace the current Workspace cata
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Workspace B' })));
   await openModelMenu();
   expect(modelChoices()).toEqual(['fixture/current-workspace']);
+  expect((screen.getByRole('menuitem', { name: /fixture\/native .*unavailable/ }) as HTMLButtonElement).disabled).toBe(true);
   await act(async () => obsolete.resolve({ kind: 'read', projection: workspaceSource({ kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: [nativeModel('fixture/obsolete-workspace')] } }) }));
   expect(modelChoices()).toEqual(['fixture/current-workspace']);
+  expect((screen.getByRole('menuitem', { name: /fixture\/native .*unavailable/ }) as HTMLButtonElement).disabled).toBe(true);
   expect(screen.queryByRole('menuitem', { name: 'fixture/obsolete-workspace' })).toBeNull();
 });
 it('a draft model the native catalog stops publishing blocks Send instead of reaching Session creation', async () => {
@@ -206,7 +209,7 @@ it('a draft model the native catalog stops publishing blocks Send instead of rea
   projection = workspaceSource({ kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: [nativeModel('fixture/native', ['low', 'high'], 'high')] } });
   await act(async () => { server.socket.deliver({ jsonrpc: '2.0', method: 'configuration/changed', params: { application: {
     scope: 'source:workspace:/workspace', sources: [{ kind: 'workspace', directory: '/workspace' }], version: '2',
-    desired: { input_revision: 'input-2', attempt: '2' }, units: {}, candidate: null, eligibility: { status: 'unavailable' } } } }); });
+    desired: { input_revision: 'input-2', attempt: '2' }, units: {}, candidate: null } } }); });
   await waitFor(() => expect(host.configureWorkspace.mock.calls.length).toBeGreaterThan(reads));
   await waitFor(() => expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true));
   expect(screen.getByText(/not in this Workspace's native model catalog/)).toBeTruthy();
@@ -227,4 +230,46 @@ it('a transport drop keeps the draft mounted with no Product Host traffic, and t
   server.held.add('session/create');
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
   expect((await server.waitFor('session/create', 1)).params).toEqual({ settings: { cwd: '/workspace' } });
+});
+
+it.each(['ready', 'navigation', 'disconnect', 'rejection', 'branch'] as const)('existing conversation accepts a prompt during connection: %s', async outcome => {
+  server = new Server(); await server.connect();
+  const host = server.workspaceHost, authority = new WorkspaceAuthority(host), associations = new WorkspaceAssociations(server.client, authority);
+  const navigation = new NavigationEpoch(), current = navigation.capture(), opened = vi.fn();
+  server.held.add('session/attach');
+  if (outcome === 'rejection') server.handlers.set('session/attach', () => { throw new RpcFailure({ code: -32000, message: 'Connection failed' }); });
+  if (outcome === 'branch') server.nodeSnapshots.set('chosen-node', { ...snapshot('A'), conversation_id: 'chosen-conversation' });
+  const attaching = server.client.attach('A', outcome === 'branch' ? 'chosen-node' : undefined).catch(() => {});
+  const request = await server.waitFor('session/attach', 1);
+  function Seat() {
+    const state = useSyncExternalStore(server.client.subscribe, server.client.getSnapshot);
+    return <ConversationComposer client={server.client} host={host} authority={authority} associations={associations} binding="existing-A" current={current} opened={opened} activeView={state.views.A}
+      active={{ disabled: state.views.A?.attachment !== 'attached', submitDisabled: false, busy: false, active: false, onSend: async () => false, onUpload: async () => [], onCancel: () => {} }}/>;
+  }
+  await act(async () => { render(<Seat/>); });
+  const input = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
+  expect(input.disabled).toBe(false);
+  fireEvent.change(input, { target: { value: 'Send after connecting' } });
+  await act(async () => fireEvent.change(document.querySelector('input[type=file]')!, { target: { files: [new File(['queued'], 'queued.txt', { type: 'text/plain' })] } }));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
+  expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).value).toBe('');
+  expect(methods().filter(method => method === 'turn/start')).toHaveLength(0);
+  if (outcome === 'navigation') navigation.invalidate();
+  await act(async () => {
+    if (outcome === 'disconnect') server.socket.close(); else server.reply(request);
+    await attaching;
+  });
+  await waitFor(() => expect(server.client.firstSubmissions.draft('existing-A')?.phase).toBe(['ready', 'branch'].includes(outcome) ? 'admitted' : 'failed'));
+  expect(methods().filter(method => method === 'turn/start')).toHaveLength(['ready', 'branch'].includes(outcome) ? 1 : 0);
+  expect(methods().filter(method => method === 'session/attach')).toHaveLength(1);
+  expect(methods()).not.toContain('session/create');
+  expect(opened).not.toHaveBeenCalled();
+  if (!['ready', 'branch'].includes(outcome)) {
+    expect(input.value).toBe('Send after connecting');
+    expect(screen.getByText('queued.txt')).toBeTruthy();
+  }
+  if (outcome === 'branch') {
+    const sent = server.requests.find(row => row.request.method === 'turn/start')!.request;
+    if (sent.method === 'turn/start') expect(sent.params.target.conversation_id).toBe('chosen-conversation');
+  }
 });

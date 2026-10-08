@@ -1,6 +1,7 @@
 # Open workspace on the Host desktop
 
-The current Session header provides **Open workspace** and an application menu.
+The current Session header provides **Open workspace** as a compact split button:
+the folder icon opens the workspace and the chevron opens the application menu.
 The primary action uses the first available application in this fixed order:
 file manager, terminal, Visual Studio Code. The menu offers only discovered apps.
 No Agent starts and no model or Tool request is issued by this action. Drafts,
@@ -102,3 +103,17 @@ native console/bootstrap eligibility check. Deterministic fakes cover GUI argv,
 missing apps and session evidence. The full Linux Web job runs the same tests and
 browser acceptance. Neither lane opens Finder/Terminal or proves GUI completion;
 real interactive GUI smoke remains a separate, unexecuted check.
+
+### External file-opening identity
+
+Opening a Workspace file in a desktop application is a best-effort pathname
+operation. The Host authorizes the native Session location and validates the
+relative path using descriptor-relative traversal at admission: absolute escapes,
+`..`, and symlink traversal are rejected. This guarantees admission of an
+allowed Workspace location, not the identity of the file eventually used by the
+external application. Another local process can rename or replace the path after
+admission; the application may resolve that path after the launcher returns.
+Keeping a descriptor open or rechecking the pathname cannot guarantee identity
+through that external boundary. No file-object identity or desktop sandbox is
+promised. A new opening request independently repeats Host admission. Descriptor
+based Workspace reads retain their stronger object-bound read contract.

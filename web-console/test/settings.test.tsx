@@ -7,10 +7,11 @@ import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings
 import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
 import { cfg3Application, cfg3Source } from './cfg3-data';
 import {
-  confirmAction, openResourceRow, openSettingsPage, renderEditor, sameRevision,
+  chooseOption, confirmAction, openResourceRow, openSettingsPage, renderEditor, sameRevision,
   settingsReady, SettingsSurface,
 } from './settings-harness';
 import { cfg3Client, cfg3Host } from './cfg3-fixture';
+import { composerPreferences, COMPOSER_PREFERENCE_KEY } from '../src/app/composer/preferences';
 afterEach(cleanup);
 
 /** The native source path and revision are diagnostics: they live on Advanced,
@@ -72,8 +73,8 @@ it('C10 Workspace revocation disables mutation and preserves local draft', async
 });
 
 it.each(['target', 'connection'] as const)('C10 late response after %s replacement cannot overwrite new authority', async invalidation => {
- let release!: (result: import('../../protocol/app-server/v34').MethodResult) => void;
- const pending = new Promise<import('../../protocol/app-server/v34').MethodResult>(resolve => { release = resolve; });
+ let release!: (result: import('../../protocol/app-server/v37').MethodResult) => void;
+ const pending = new Promise<import('../../protocol/app-server/v37').MethodResult>(resolve => { release = resolve; });
  let reads = 0;
  const s = cfg3Client(async op => { if (op.method === 'configuration/sourcesRead' && ++reads === 1) return pending; });
  const host = cfg3Host(s); const ui = render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host}/>);
@@ -107,6 +108,21 @@ it('S2-01 global Settings has exactly six product pages and opens at General', a
   ]);
   expect(screen.getByRole('tab', { name: 'General', selected: true })).toBeTruthy();
   for (const gone of obsoletePages) expect(screen.queryByRole('tab', { name: gone })).toBeNull();
+});
+
+it('General owns the busy-state Enter behavior the Composer reads (Harness composer-enter row)', async () => {
+  localStorage.clear(); composerPreferences().setBusyEnter('queue');
+  const subject = cfg3Client();
+  render(<SettingsSurface client={subject.client} target={userSettingsTarget} />);
+  const general = screen.getByRole('region', { name: 'General' });
+  const trigger = within(general).getByRole('button', { name: (name: string) => name.endsWith('Send behavior while busy') });
+  expect(trigger.textContent).toContain('Queue');
+  expect(trigger.getAttribute('aria-describedby')).toBeTruthy();
+  expect(within(general).getByText(/Cmd\/Ctrl\+Enter uses the other behavior/)).toBeTruthy();
+  await chooseOption('Send behavior while busy', 'Steer', within(general));
+  expect(composerPreferences().getSnapshot()).toBe('steer');
+  expect(localStorage.getItem(COMPOSER_PREFERENCE_KEY)).toBe('steer');
+  act(() => composerPreferences().setBusyEnter('queue'));
 });
 
 it('S2-01 Workspace Settings is a constrained page set that lands on Models', async () => {
@@ -331,7 +347,7 @@ it('reconnect rereads native sources without replaying a dirty draft', async () 
 });
 
 it('an older authoritative read cannot replace a newer read', async () => {
-  let release: (value: import('../../protocol/app-server/v34').MethodResult) => void = () => {};
+  let release: (value: import('../../protocol/app-server/v37').MethodResult) => void = () => {};
   let count = 0;
   const subject = cfg3Client(async op => { if (op.method === 'configuration/sourcesRead' && ++count === 2) return new Promise(resolve => { release = resolve; }); });
   render(<SettingsSurface client={subject.client} target={workspaceSettingsTarget('A', 'A')} host={subject.host ??= cfg3Host(subject)} />);
@@ -429,7 +445,7 @@ it.each([
   ['effect', 'refresh'], ['refresh', 'refresh'], ['refresh', 'write'],
 ] as const)('fences an obsolete %s read rejection after a newer %s', async (readKind, successor) => {
   let rejectRead!: (error: Error) => void;
-  const pending = new Promise<import('../../protocol/app-server/v34').MethodResult>((_, reject) => { rejectRead = reject; });
+  const pending = new Promise<import('../../protocol/app-server/v37').MethodResult>((_, reject) => { rejectRead = reject; });
   let reads = 0;
   const subject = cfg3Client(async op => {
     if (op.method === 'configuration/sourcesRead' && ++reads === 2) return pending;
@@ -460,8 +476,8 @@ it.each([
 
 it.each(['before acknowledgement', 'after acknowledgement', 'after the next edit'] as const)('T12/T16 source projection %s preserves subsequent drafts', async order => {
   // The acknowledgement is held explicitly; nothing here depends on timing.
-  let acknowledge!: (outcome: { acknowledgement: import('../../protocol/app-server/v34').SourceSettings }) => void;
-  const held = new Promise<{ acknowledgement: import('../../protocol/app-server/v34').SourceSettings }>(resolve => { acknowledge = resolve; });
+  let acknowledge!: (outcome: { acknowledgement: import('../../protocol/app-server/v37').SourceSettings }) => void;
+  const held = new Promise<{ acknowledgement: import('../../protocol/app-server/v37').SourceSettings }>(resolve => { acknowledge = resolve; });
   const source = cfg3Source();
   const form = (authored: { command: string }, revision: string) => <UnitForm<{ command: string }>
     title="MCP acknowledgement" authored={authored} blank={{ command: '' }} revision={revision}
@@ -506,8 +522,8 @@ it('T17 a post-commit read that observes the exact pre-save revision asks for re
 });
 
 it('retires a confirmed Provider save, including its literal credential, after the editor unmounts', async () => {
-  let release!: (result: import('../../protocol/app-server/v34').MethodResult) => void;
-  const heldWrite = new Promise<import('../../protocol/app-server/v34').MethodResult>(resolve => { release = resolve; });
+  let release!: (result: import('../../protocol/app-server/v37').MethodResult) => void;
+  const heldWrite = new Promise<import('../../protocol/app-server/v37').MethodResult>(resolve => { release = resolve; });
   const subject = cfg3Client(async operation => { if (operation.method === 'configuration/sourceWrite') return heldWrite; });
   const host = cfg3Host(subject); subject.host = host;
   render(<SettingsSurface client={subject.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
@@ -541,8 +557,8 @@ it('retires a confirmed Provider save, including its literal credential, after t
 });
 
 it('a late acknowledgement advances the CAS base without erasing a newer draft submitted after it', async () => {
-  let release!: (result: import('../../protocol/app-server/v34').MethodResult) => void;
-  const heldWrite = new Promise<import('../../protocol/app-server/v34').MethodResult>(resolve => { release = resolve; });
+  let release!: (result: import('../../protocol/app-server/v37').MethodResult) => void;
+  const heldWrite = new Promise<import('../../protocol/app-server/v37').MethodResult>(resolve => { release = resolve; });
   const subject = cfg3Client(async operation => { if (operation.method === 'configuration/sourceWrite') return heldWrite; });
   const host = cfg3Host(subject); subject.host = host;
   render(<SettingsSurface client={subject.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);

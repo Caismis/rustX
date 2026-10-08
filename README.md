@@ -53,7 +53,7 @@ prospective resolution. Default durable storage is `~/rustx/runtime`.
 See [Local development](DEVELOPMENT.md) for the canonical App Server, TUI, and complete Web launchers. Build the runtime and install the reference TUI:
 
 ```sh
-cargo build --bin rustx
+cargo build --bins
 pnpm --dir dev install --frozen-lockfile
 pnpm --dir tui install --frozen-lockfile
 pnpm --dir dev tui -- --workspace /absolute/path/to/project

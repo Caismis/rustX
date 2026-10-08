@@ -6,16 +6,15 @@ import { useTranslation, useNotice } from '../../locale/react';
 // Native textarea replaces Lexical. Commands are client grammar; effects are typed.
 import { useEffect, useLayoutEffect, useState, useRef, useSyncExternalStore, type ReactNode } from 'react';
 import { AttachmentIntake, transferInputs, pasteText, type IntakeInput, type IntakeFile, type UploadPort } from '../../client/uploads';
-import type { UploadPolicy, UploadReceipt, UploadedFile, UserInputBlock } from '../../../../protocol/app-server/v34';
+import type { UploadPolicy, UploadReceipt, UploadedFile, UserInputBlock } from '../../../../protocol/app-server/v37';
 import { commands, available, parseCommand, type CommandId } from '../commands/registry';
 import { matchCommands } from '../commands/matching';
-import { CommandMenu } from '../commands/CommandMenu';
+import { CommandMenu, type MenuAction } from '../commands/CommandMenu';
 import { useInputTrigger } from '../composer/input-trigger';
 import { editableContent } from '../composer/editor-content';
 import { composerSubmissionPolicy, type SubmitGesture } from '../composer/submission-policy';
 import { useBusyEnter } from '../composer/preferences';
 import { StopSequence, type StopScope } from '../composer/stop-sequence';
-import { Menu } from '../../presentation/primitives/Menu';
 import { useTextareaAutosize } from '../composer/useTextareaAutosize';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 import { Button } from '../../presentation/primitives/Button';
@@ -32,8 +31,7 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
   consumed?: { id: string; sequence: number };
 }) {
   const tx = useTranslation();
-  const [busyEnter, preference] = useBusyEnter();
-  const [preferenceOpen, setPreferenceOpen] = useState(false);
+  const [busyEnter] = useBusyEnter();
   const [stopSequence] = useState(() => new StopSequence());
   const composing = useRef(false);
   const escapePress = useRef<{ event: KeyboardEvent; accept: ReturnType<StopSequence['prepare']> } | undefined>(undefined);
@@ -43,7 +41,9 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
   const intake = intakeOwner ?? localIntake;
   const selections = useSyncExternalStore(intake.subscribe, intake.snapshot);
   const retained = firstSubmission && !['rejected', 'discarded', 'admitted'].includes(firstSubmission.phase) ? firstSubmission : undefined;
-  const files: readonly Pick<IntakeFile, "id" | "file" | "name" | "receipt" | "status" | "reason" | "error">[] = retained ? retained.draft.files.map((file, index) => ({ id: retained.attachmentIds[index], name: file.name, file, receipt: retained.receipts[index], status: retained.receipts[index] ? 'ready' : index === retained.uploadIndex && retained.failedPhase === 'uploading' && retained.phase === 'uncertain' ? 'uncertain' : index === retained.uploadIndex && retained.failedPhase === 'uploading' && retained.phase === 'failed' ? 'failed' : index === retained.uploadIndex && retained.phase === 'uploading' ? 'uploading' : 'draft', reason: undefined, error: undefined })) : selections;
+  const inTranscript = !!retained && !!(retained.session || retained.existingSessionId) && ['attaching', 'uploading', 'admitting'].includes(retained.phase);
+  const shownText = inTranscript ? '' : retained?.draft.text;
+  const files: readonly Pick<IntakeFile, "id" | "file" | "name" | "receipt" | "status" | "reason" | "error">[] = inTranscript ? [] : retained ? retained.draft.files.map((file, index) => ({ id: retained.attachmentIds[index], name: file.name, file, receipt: retained.receipts[index], status: retained.receipts[index] ? 'ready' : index === retained.uploadIndex && retained.failedPhase === 'uploading' && retained.phase === 'uncertain' ? 'uncertain' : index === retained.uploadIndex && retained.failedPhase === 'uploading' && retained.phase === 'failed' ? 'failed' : index === retained.uploadIndex && retained.phase === 'uploading' ? 'uploading' : 'draft', reason: undefined, error: undefined })) : selections;
   const [error, setError] = useNotice();
   const [dragging, setDragging] = useState(false);
   const pending = files.some(file => file.status !== 'ready' && !(onDraftSend && file.status === 'draft'));
@@ -51,13 +51,13 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
   const pick = (picked: IntakeInput[]) => {
     if (!disabled && !busy) intake.add(picked, uploadPolicy, onDraftSend ? undefined : port);
   };
-  const [draft, setDraft] = useState(() => firstSubmission?.draft.text ?? (restoreSupported ? initialContent.flatMap(block => block.type === 'text' ? [block.text] : []).join('') : ''));
+  const [draft, setDraft] = useState(() => (inTranscript ? '' : firstSubmission?.draft.text) ?? (restoreSupported ? initialContent.flatMap(block => block.type === 'text' ? [block.text] : []).join('') : ''));
   const draftBinding = useRef(binding);
   const restoredInput = useRef(initialContent);
   const retainedInput = useRef(retained);
-  if (retained && (retainedInput.current !== retained || draft !== retained.draft.text)) {
+  if (retained && (retainedInput.current !== retained || draft !== shownText)) {
     retainedInput.current = retained;
-    setDraft(retained.draft.text);
+    setDraft(shownText ?? '');
 
   }
   const invocation = useRef<{ id: CommandId; draft: string } | undefined>(undefined);
@@ -73,7 +73,6 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
   const pastedCaret = useRef<{ binding: string; caret: number } | undefined>(undefined);
   useLayoutEffect(() => { const next = pastedCaret.current; pastedCaret.current = undefined; if (next?.binding === binding) input.current?.setSelectionRange(next.caret, next.caret); }, [draft, binding]);
   const trigger = useInputTrigger(input);
-  const highlight = trigger.state?.highlight ?? 0;
   if (draftBinding.current !== binding || restoredInput.current !== initialContent) {
     draftBinding.current = binding;
     restoredInput.current = initialContent;
@@ -86,15 +85,22 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
   }
   useTextareaAutosize(input, draft);
   const query = trigger.state?.query;
-  const menu = onCommand && !!trigger.state && !disabled && !busy;
-  const rows = matchCommands(query ?? '', commands.filter(command => available(command, active, hasGoal, lineageSwitchSafe) && (commandAvailable?.(command.id) ?? true)));
+  const menu = !!trigger.state && !disabled && !busy;
+  const commandRows = onCommand ? matchCommands(query ?? '', commands.filter(command => available(command, active, hasGoal, lineageSwitchSafe) && (commandAvailable?.(command.id) ?? true))) : [];
+  const rows: readonly { id: MenuAction }[] = [
+    ...(trigger.state?.source === 'launcher' ? [{ id: 'file' as const }] : []),
+    ...commandRows.filter(command => command.id === 'goal'),
+    ...commandRows.filter(command => command.id !== 'goal'),
+  ];
+  const highlight = Math.min(trigger.state?.highlight ?? 0, Math.max(0, rows.length - 1));
   const parsed = parseCommand(draft);
-  const selectedCommand = menu && rows[highlight] ? rows[highlight].id : parsed.type === 'command' ? parsed.id : undefined;
+  const selected = menu ? rows[highlight]?.id : undefined;
+  const selectedCommand = selected && selected !== 'file' ? selected : parsed.type === 'command' ? parsed.id : undefined;
   const facts = { running: active, busyEnter, actionable: !!draft.trim() || files.length > 0 || restored.length > 0,
     draftKind: parsed.type === 'text' ? 'message' as const : selectedCommand ? 'command' as const : 'unsupported-command' as const,
     blocked: disabled || submitDisabled, acknowledging: busy, uploadsPending: pending, cancellationAvailable };
   const primary = composerSubmissionPolicy(facts);
-  useEffect(() => { stopSequence.reset(); }, [stopSequence, binding, cancellationScope?.authority, cancellationScope?.identity, active, cancellationAvailable, menu, preferenceOpen]);
+  useEffect(() => { stopSequence.reset(); }, [stopSequence, binding, cancellationScope?.authority, cancellationScope?.identity, active, cancellationAvailable, menu]);
   useEffect(() => {
     // Window blur only resets; keyboard recognition stays on the focused editor.
     window.addEventListener('blur', stopSequence.reset);
@@ -108,6 +114,11 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
     invocation.current = { id, draft: trigger.state?.source === 'launcher' ? '' : draft };
     trigger.dismiss(); setError(''); trigger.restore(); onCommand(id);
   };
+  const selectMenu = (id: MenuAction) => {
+    if (disabled || busy) return;
+    if (id === 'file') { trigger.dismiss(); trigger.restore(); picker.current?.click(); }
+    else invoke(id);
+  };
   useEffect(() => {
     if (!menu) return;
     const outside = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) trigger.dismiss(); };
@@ -115,7 +126,7 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
     return () => document.removeEventListener('pointerdown', outside);
   }, [menu]);
   const submit = async (gesture: SubmitGesture = 'enter') => {
-    if (menu && rows[highlight]) { invoke(rows[highlight].id); return; }
+    if (menu && rows[highlight]) { selectMenu(rows[highlight].id); return; }
     const action = composerSubmissionPolicy(facts, gesture);
     // Enter submits a draft; it never cancels an empty running Session.
     if (action.disabled || action.kind === 'stop') return;
@@ -139,7 +150,8 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
     {error && <p role="alert">{error}</p>}
     {!restoreSupported && <p role="alert">{tx('agent:agent-composer.cannot-restore-this-ordered-native-input-in-the-flat-web-editor')}</p>}
     <div className={css.card} data-composer-card aria-busy={busy}>
-      {menu && <CommandMenu rows={rows} active={highlight} select={invoke} highlight={trigger.highlight} />}
+      {menu && <CommandMenu rows={rows} active={highlight} select={selectMenu} highlight={trigger.highlight}
+        fileDescription={uploadPolicy ? tx('agent:upload.limits', { count: uploadPolicy.max_uploads_per_user_input, file: uploadPolicy.max_file_bytes, batch: uploadPolicy.max_upload_bytes_per_user_input }) : tx('agent:upload.policy')} />}
       {restored.map((receipt, index) => <div key={JSON.stringify([receipt.batch_id, receipt.token])}><span>{tx('agent:agent-composer.native-restored-upload-batch')}{' '}{receipt.batch_id}</span><Button disabled={disabled || busy} onClick={() => setRestored(current => current.filter((_, at) => at !== index))}>{tx('agent:agent-composer.remove-draft-upload')}</Button></div>)}
       <div className={css.attachments} aria-label={tx('agent:agent-composer.draft-attachments')}>{files.map(item => <div key={item.id}>
         <DraftAttachment name={item.name} file={item.file} remove={firstSubmission && onRetainedRemove ? () => onRetainedRemove(item.id) : disabled || busy ? undefined : () => intake.remove(item.id)} />
@@ -180,7 +192,7 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
               event.preventDefault(); if (press?.event === event.nativeEvent) press.accept(cancellationScope, onCancel); return;
             }
             if (event.defaultPrevented || composing.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
-            if (menu && event.key === 'Tab') { event.preventDefault(); if (event.shiftKey) trigger.dismiss(); else if (rows[highlight]) invoke(rows[highlight].id); return; }
+            if (menu && event.key === 'Tab') { event.preventDefault(); if (event.shiftKey) trigger.dismiss(); else if (rows[highlight]) selectMenu(rows[highlight].id); return; }
             if (menu && rows.length && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) { event.preventDefault(); trigger.highlight((highlight + (event.key === 'ArrowDown' ? 1 : rows.length - 1)) % rows.length); return; }
             if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) {
               event.preventDefault(); void submit(event.ctrlKey || event.metaKey ? 'accelerated' : 'enter');
@@ -189,9 +201,8 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
       </div>
       <div className={css.row}>
         <div className={css.tools}>
-          {onCommand && <button type="button" className={css.add} aria-label={tx('agent:agent-composer.commands')} title={tx('agent:agent-composer.commands')} aria-haspopup="listbox" aria-expanded={!!menu} disabled={disabled || busy} onMouseDown={event => event.preventDefault()} onClick={trigger.toggle}>+</button>}
+          <button type="button" className={css.add} aria-label={tx('commands:menu.add')} title={tx('commands:menu.add')} aria-haspopup="listbox" aria-expanded={!!menu} disabled={disabled || busy} onMouseDown={event => event.preventDefault()} onClick={trigger.toggle}>+</button>
           <input ref={picker} type="file" hidden multiple aria-label={tx('agent:agent-composer.attach-files')} disabled={disabled || busy} onChange={event => { pick(Array.from(event.target.files ?? []).map(file => ({ file }))); event.target.value = ''; }}/>
-          <button type="button" className={css.attachment} aria-label={tx('agent:agent-composer.add-attachments')} title={uploadPolicy ? tx('agent:upload.limits', { count: uploadPolicy.max_uploads_per_user_input, file: uploadPolicy.max_file_bytes, batch: uploadPolicy.max_upload_bytes_per_user_input }) : tx('agent:upload.policy')} disabled={disabled || busy} onClick={() => picker.current?.click()}><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden><path d="m8 12 6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l9-9M6 14l8-8" /></svg></button>
           {permission}
         </div>
         <div className={css.trailing}>
@@ -204,15 +215,6 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
           </button>
         </div>
       </div>
-    </div>
-    <div className={css.busyEnter}>
-      <Menu open={preferenceOpen} autoFocus onClose={() => setPreferenceOpen(false)} selectedId={busyEnter}
-        items={['queue', 'steer'].map(id => ({ id, label: tx(id === 'queue' ? 'agent:submission.queue' : 'agent:submission.steer') }))}
-        onSelect={id => { preference.setBusyEnter(id as 'queue' | 'steer'); setPreferenceOpen(false); }}
-        anchor={<button type="button" className={css.select} title={tx('agent:submission.enter-while-running')}
-          aria-haspopup="menu" aria-expanded={preferenceOpen} onClick={() => setPreferenceOpen(value => !value)}>
-          {tx('agent:submission.enter-preference', { behavior: tx(busyEnter === 'queue' ? 'agent:submission.queue' : 'agent:submission.steer') })}
-        </button>} />
     </div>
   </div>;
 }

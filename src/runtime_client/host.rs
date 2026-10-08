@@ -1206,12 +1206,11 @@ impl ClientInner {
 
     pub(crate) fn conversation_turns(
         &self,
-        cut: Option<&crate::durable::reading::ConversationReadCut>,
         offset: Option<usize>,
         limit: usize,
     ) -> Result<crate::durable::reading::ConversationTurnPage, RuntimeClientError> {
         self.store
-            .conversation_turns(cut, offset.unwrap_or(usize::MAX), limit)
+            .conversation_turns(offset.unwrap_or(usize::MAX), limit)
             .map_err(|error| RuntimeClientError::InvalidState {
                 message: error.to_string(),
             })
@@ -1236,7 +1235,7 @@ impl ClientInner {
             .reconstructible_from(&self.store.conversation_read_cut().map_err(failed)?)
         {
             return Err(RuntimeClientError::InvalidState {
-                message: "stale conversation read cut; reload the turn outline".into(),
+                message: "conversation history was edited during the read; read it again".into(),
             });
         }
         Ok(crate::runtime_client::snapshot::ConversationWindow {
@@ -4024,7 +4023,8 @@ mod tests {
             panic!("initialized result");
         };
         let first_id = attachment_id.clone();
-        assert_eq!(*cursor, RuntimeClientCursor::new(0));
+        // Activation's first publication is the runtime's adoption eligibility.
+        assert_eq!(*cursor, RuntimeClientCursor::new(1));
 
         let second = fixture
             .host
@@ -5782,10 +5782,24 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)] // one two-cut native publication and terminal settlement contract
     async fn background_durable_commit_cannot_publish_a_half_semantic_snapshot() {
+        struct ReleaseOnDrop(Arc<crate::tools::background::test_sync::CommitBoundaryHook>);
+        impl Drop for ReleaseOnDrop {
+            fn drop(&mut self) {
+                self.0.proceed();
+            }
+        }
         let (_, fixture) =
             host_fixture_with_native_tools(Vec::new(), ToolRegistry::new(), status_engine(), true)
                 .await;
+        let (attachment, _) = fixture
+            .host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .unwrap();
+        let subscription = attachment
+            .subscribe_events(RuntimeClientCursor::new(0))
+            .unwrap();
         let registry = fixture.runtime.tool_runtime().background().clone();
         let (tool, mut started, release) = ParkingBackgroundTool::new();
         let executor: Arc<dyn ToolExecutor> = Arc::new(tool);
@@ -5796,7 +5810,21 @@ mod tests {
                 crate::tools::environment::ToolEnvironment::new(),
             )
             .unwrap();
+        // Preparation independently publishes Busy. Include that semantic fact
+        // in the baseline before parking the next Job publication; otherwise it
+        // can advance the cursor while this test expects an unchanged cut.
+        receive_until(&subscription, |event| {
+            matches!(
+                event.event,
+                RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged {
+                    eligibility:
+                        crate::local_runtime::configuration::application::AdoptionEligibility::Busy
+                }
+            )
+        })
+        .await;
         let hook = Arc::new(crate::tools::background::test_sync::CommitBoundaryHook::default());
+        let _release_commit = ReleaseOnDrop(hook.clone());
         registry.install_publication_hook(hook.clone());
         let (baseline, cursor) = fixture.host.snapshot().unwrap();
         let commit_registry = registry.clone();
@@ -5805,7 +5833,15 @@ mod tests {
                 .commit_dispatch(prepared, &CancellationSignal::new())
                 .unwrap()
         });
-        hook.wait_entered(); // SQLite COMMIT complete; native registry installation deliberately paused.
+        // Condvar waits belong to the blocking pool, including during failure
+        // teardown. The guards release parked producers if an assertion panics.
+        tokio::task::spawn_blocking({
+            let hook = hook.clone();
+            move || hook.wait_entered()
+        })
+        .await
+        .unwrap();
+        // SQLite COMMIT complete; native registry installation deliberately paused.
         let (during, during_cursor) = fixture.host.snapshot().unwrap();
         assert_eq!(during_cursor, cursor);
         assert_eq!(during.jobs, baseline.jobs);
@@ -5840,9 +5876,16 @@ mod tests {
             .clone();
         let terminal_hook =
             Arc::new(crate::tools::background::test_sync::CommitBoundaryHook::default());
+        let _release_terminal = ReleaseOnDrop(terminal_hook.clone());
         registry.install_publication_hook(terminal_hook.clone());
         release.send(true).unwrap();
-        terminal_hook.wait_entered(); // Terminal COMMIT complete; native lifecycle still running.
+        tokio::task::spawn_blocking({
+            let hook = terminal_hook.clone();
+            move || hook.wait_entered()
+        })
+        .await
+        .unwrap();
+        // Terminal COMMIT complete; native lifecycle still running.
         let inner = fixture.host.weak_inner().upgrade().unwrap();
         let (during_terminal, terminal_cursor) = inner
             .snapshot_with_trace(std::slice::from_ref(&position))

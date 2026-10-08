@@ -1,56 +1,158 @@
-/* Copyright (c) 2026 DeepSeek. MIT. Rail interaction patterns adapted; see PROVENANCE.md. */
-import { useEffect, useId, useState } from 'react';
-import type { ConversationTurn } from '../../../../protocol/app-server/v34';
+/* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
+// Adapted from DeepSeek Harness ui-chat TurnNavigator: a fixed-pitch virtual
+// rail of every known turn with hover/focus previews. rustX supplies the
+// native Attempt outline; an unloaded mark pages its native outline page in
+// before navigating.
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import type { ConversationTurn } from '../../../../protocol/app-server/v37';
 import type { AppServerClient } from '../../client/app-server';
 import { shallowEqual, useClientSelector } from '../../client/selectors';
 import { turnKey } from '../../client/transcript';
 import { useTranslation } from '../../locale/react';
 import css from './TurnNavigator.module.css';
-import { currentTurnLocation, turnRailItems } from './turn-rail-items';
+import { currentTurnLocation, turnRail, turnRailRange, TURN_SPACING_PX, RAIL_INSET_PX, type TurnRailItem } from './turn-rail-items';
 
-/** One bounded native page, with direct ordinal access to any distant page. */
-export function TurnNavigator({ client, sessionId, onNavigate, active }: { client: AppServerClient; sessionId: string; onNavigate: (turn: ConversationTurn) => void; active?: string | null }) {
-  const tx=useTranslation(), previewId=useId(), [preview,setPreview]=useState<string>(), [ordinal,setOrdinal]=useState('');
-  const view=useClientSelector(client,state=>{
-    const view=state.views[sessionId];
-    return {target:view?.target,attachment:view?.attachment,outline:view?.turnOutline,navigation:view?.turnNavigation,
-      attempt:view?.snapshot?.attempt?.attempt_id,phase:view?.snapshot?.attempt?.phase.type,
-      conversation:view?.snapshot?.conversation_id,running:!!view?.snapshot?.attempt && view.snapshot.attempt.phase.type!=='settled',
-      location:currentTurnLocation(view?.snapshot),generation:state.generation};
-  },shallowEqual);
-  useEffect(()=>{
-    if(view.attachment==='attached')void client.refreshTurns(sessionId);
-  },[client,sessionId,view.target,view.attachment,view.attempt,view.phase,view.generation]);
-  const currentId=view.running && view.conversation && view.attempt ? {conversation_id:view.conversation,attempt_id:view.attempt} : undefined;
-  const page=view.outline?.page, turns=turnRailItems(page,currentId,view.location), selected=turns.find(turn=>turnKey(turn.id)===preview);
-  const missingLocation=!!page && !!view.location && BigInt(page.cut.transcript)<BigInt(view.location);
-  useEffect(()=>{if(missingLocation && !view.outline?.loading && !view.outline?.error && view.attachment==='attached')void client.refreshTurns(sessionId);},[client,sessionId,missingLocation,view.outline?.loading,view.outline?.error,view.attachment,page?.offset]);
-  const error=view.navigation?.error ?? view.outline?.error;
-  if(page?.total===0 && !currentId && !view.outline?.loading && !error)return null;
-  return <aside className={css.root} aria-label={tx('agent:reading.turn-navigation')} data-turn-navigator>
-    <button type="button" aria-label={tx('agent:reading.older-turns')} disabled={!page || page.offset===0 || view.outline?.loading} onClick={()=>void client.readTurns(sessionId,Math.max(0,page!.offset-64))}>↑</button>
-    <div className={css.marks} aria-busy={view.outline?.loading || undefined} onPointerLeave={event=>setPreview(event.currentTarget.querySelector<HTMLElement>(':focus')?.dataset.turnId)}>
-      {turns.map(turn=>{
-        const key=turnKey(turn.id), current=active !== undefined ? active===`turn:${key}` : view.navigation?.active===key || !view.navigation?.active && turnKey(currentId ?? {conversation_id:'',attempt_id:''})===key;
-        return <button key={key} type="button" className={css.mark} data-turn-id={key} data-turn-ordinal={turn.ordinal}
-          aria-label={turn.ordinal ? tx('agent:reading.jump-turn',{n:turn.ordinal}) : tx('agent:reading.current-turn')} aria-current={current?'true':undefined}
-          aria-busy={view.navigation?.pending===key || undefined} aria-describedby={selected===turn?previewId:undefined}
-          disabled={turn.cursor==null || view.attachment!=='attached'} onClick={()=>onNavigate(turn)} onPointerEnter={()=>setPreview(key)} onFocus={()=>setPreview(key)} onBlur={()=>setPreview(undefined)}
-          onKeyDown={event=>{
-            if(!['ArrowUp','ArrowDown','Home','End'].includes(event.key))return;
-            event.preventDefault(); const buttons=[...event.currentTarget.parentElement!.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
-            const index=buttons.indexOf(event.currentTarget), next=event.key==='Home'?0:event.key==='End'?buttons.length-1:index+(event.key==='ArrowDown'?1:-1);
-            buttons[Math.max(0,Math.min(buttons.length-1,next))]?.focus();
-          }}><span/></button>;
-      })}
+/** Fade band the mask reserves at a scrollable end. */
+const FADE_PX = 24;
+
+function preferredScrollBehavior(): 'auto' | 'smooth' {
+  return typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+}
+
+const TurnMark = memo(function TurnMark({ item, index, start, label, active, busy, unavailable, previewId, onNavigate, onPreview, onFocusChange }: {
+  item: TurnRailItem; index: number; start: number; label: string; active: boolean; busy: boolean; unavailable: boolean; previewId: string | undefined;
+  onNavigate: (item: TurnRailItem) => void;
+  onPreview: (key: string | null) => void; onFocusChange: (key: string | null) => void;
+}) {
+  const classes = [css.mark];
+  if (!item.turn) classes.push(css.markUnloaded);
+  if (active) classes.push(css.markActive);
+  else if (previewId !== undefined) classes.push(css.markPreview);
+  if (busy) classes.push(css.markBusy);
+  return <button data-index={index} type="button" className={classes.join(' ')} style={{ transform: `translateY(${start}px)` }}
+    data-turn-id={item.id} data-turn-ordinal={item.ordinal || undefined}
+    aria-label={label} aria-current={active ? 'true' : undefined} aria-busy={busy ? 'true' : undefined}
+    aria-disabled={unavailable ? 'true' : undefined} aria-describedby={previewId}
+    onPointerMove={() => { onPreview(item.key); }} onClick={() => { if (!unavailable) onNavigate(item); }}
+    onFocus={() => { onFocusChange(item.key); }} onBlur={() => { onFocusChange(null); }} />;
+});
+
+/** Every turn of one native outline: loaded marks scroll to their exact
+ * native anchor, unloaded marks read their outline page first. Overflow
+ * scrolls inside the frame with gradient fades at each scrollable end; the
+ * active mark centers only outside the fade-free band while the pointer is
+ * elsewhere. Previews follow pointer movement or focus, never scrolling. */
+export function TurnNavigator({ client, sessionId, onNavigate, active }: { client: AppServerClient; sessionId: string; onNavigate: (turn: ConversationTurn | number) => void; active?: string | null }) {
+  const tx = useTranslation(), previewId = useId();
+  const [previewKey, setPreviewKey] = useState<string | null>(null);
+  const [focusedKey, setFocusedKey] = useState<string | null>(null);
+  const view = useClientSelector(client, state => {
+    const view = state.views[sessionId];
+    return { target: view?.target, attachment: view?.attachment, outline: view?.turnOutline, navigation: view?.turnNavigation,
+      attempt: view?.snapshot?.attempt?.attempt_id, phase: view?.snapshot?.attempt?.phase.type,
+      conversation: view?.snapshot?.conversation_id, running: !!view?.snapshot?.attempt && view.snapshot.attempt.phase.type !== 'settled',
+      location: currentTurnLocation(view?.snapshot), generation: state.generation };
+  }, shallowEqual);
+  useEffect(() => {
+    if (view.attachment === 'attached') void client.refreshTurns(sessionId);
+  }, [client, sessionId, view.target, view.attachment, view.attempt, view.phase, view.generation]);
+  const currentId = useMemo(() => view.running && view.conversation && view.attempt ? { conversation_id: view.conversation, attempt_id: view.attempt } : undefined,
+    [view.running, view.conversation, view.attempt]);
+  const page = view.outline?.page;
+  const items = useMemo(() => turnRail(page, currentId, view.location), [page, currentId, view.location]);
+  const missingLocation = !!page && !!view.location && BigInt(page.cut.transcript) < BigInt(view.location);
+  useEffect(() => { if (missingLocation && !view.outline?.loading && !view.outline?.error && view.attachment === 'attached') void client.refreshTurns(sessionId); },
+    [client, sessionId, missingLocation, view.outline?.loading, view.outline?.error, view.attachment, page?.offset]);
+  const attached = view.attachment === 'attached';
+  const isActive = (item: TurnRailItem) => !!item.id && (active !== undefined ? active === `turn:${item.id}` : !!currentId && turnKey(currentId) === item.id);
+  // The owning viewport starts its gesture immediately, before outline I/O.
+  const navigate = (item: TurnRailItem) => onNavigate(item.turn ?? item.ordinal);
+  const error = view.navigation?.error ?? view.outline?.error;
+  // No rail and nothing to recover: no slot layer over the reading surface.
+  if (items.count < 2 && !error) return null;
+  return <div className={css.slot} data-turn-navigator>
+    <TurnRail navigationLabel={tx('agent:reading.turn-navigation')} loading={!!view.outline?.loading} items={items} activeId={active !== undefined ? active?.slice(5) : currentId && turnKey(currentId)} isActive={isActive}
+      isBusy={item => view.navigation?.pending === item.key || !!item.id && view.navigation?.pending === item.id} attached={attached} onNavigate={navigate}
+      previewKey={previewKey} setPreviewKey={setPreviewKey} focusedKey={focusedKey} setFocusedKey={setFocusedKey} previewId={previewId}
+      label={item => item.ordinal === 0 ? tx('agent:reading.current-turn') : tx(item.turn ? 'agent:reading.jump-turn' : 'agent:reading.jump-load-turn', { n: item.ordinal })}
+      title={item => item.turn?.prompt || (item.ordinal === 0 ? tx('agent:reading.current-turn') : tx('agent:reading.turn', { n: item.ordinal }))} />
+    {error && <div className={css.feedback} role="alert"><p>{error}</p><button type="button" onClick={() => { client.invalidateReading(sessionId); void client.refreshTurns(sessionId); }}>{tx('agent:reading.reload-turns')}</button></div>}
+  </div>;
+}
+
+function TurnRail({ navigationLabel, loading, items, activeId, isActive, isBusy, attached, onNavigate, previewKey, setPreviewKey, focusedKey, setFocusedKey, previewId, label, title }: {
+  navigationLabel: string; loading: boolean; items: ReturnType<typeof turnRail>; activeId?: string | null; isActive: (item: TurnRailItem) => boolean; isBusy: (item: TurnRailItem) => boolean; attached: boolean;
+  onNavigate: (item: TurnRailItem) => void; previewKey: string | null; setPreviewKey: (key: string | null) => void;
+  focusedKey: string | null; setFocusedKey: (key: string | null) => void; previewId: string;
+  label: (item: TurnRailItem) => string; title: (item: TurnRailItem) => string;
+}) {
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const initialization = useRef({ placed: false, index: 0, follow: null as { index: number; count: number; height: number } | null });
+  const pointerInsideRef = useRef(false);
+  const [geometry, setGeometry] = useState({ top: 0, height: 0 });
+  const activeAt = items.indexOfTurn(activeId ?? undefined);
+  useLayoutEffect(() => { initialization.current.index = activeAt ?? items.count - 1; }, [activeAt, items.count]);
+  const totalSize = items.count * TURN_SPACING_PX + 2 * RAIL_INSET_PX - TURN_SPACING_PX;
+  const focusedIndex = items.indexOfKey(focusedKey), previewIndex = items.indexOfKey(previewKey);
+  const onFocusChange = useCallback((key: string | null) => { setFocusedKey(key); setPreviewKey(key); }, [setFocusedKey, setPreviewKey]);
+  useLayoutEffect(() => {
+    const element = scrollerRef.current;
+    if (!element || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(([entry]) => {
+      if (!entry) return;
+      const height = Math.round(entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height);
+      const initial = initialization.current;
+      if (!initial.placed && height > 0) {
+        const max = Math.max(0, totalSize - height), center = initial.index * TURN_SPACING_PX + RAIL_INSET_PX;
+        initial.placed = true;
+        initial.follow = { index: initial.index, count: items.count, height };
+        element.scrollTop = Math.max(0, Math.min(max, center - height / 2));
+      }
+      setGeometry({ top: element.scrollTop, height });
+    });
+    observer.observe(element, { box: 'border-box' });
+    return () => observer.disconnect();
+  }, [items.count, totalSize]);
+  const scrollTop = geometry.top, viewHeight = geometry.height;
+  const virtualItems = turnRailRange(items.count, scrollTop, viewHeight, focusedIndex).map(index => ({ index, key: items.item(index)!.key, start: index * TURN_SPACING_PX + RAIL_INSET_PX - TURN_SPACING_PX / 2, size: TURN_SPACING_PX }));
+  useEffect(() => {
+    if (viewHeight <= 0) { initialization.current.follow = null; return; }
+    if (activeAt === undefined || pointerInsideRef.current) return;
+    const previous = initialization.current.follow;
+    if (previous?.index === activeAt && previous.count === items.count && previous.height === viewHeight) return;
+    initialization.current.follow = { index: activeAt, count: items.count, height: viewHeight };
+    const element = scrollerRef.current, center = activeAt * TURN_SPACING_PX + RAIL_INSET_PX;
+    if (!element || center >= element.scrollTop + FADE_PX && center <= element.scrollTop + viewHeight - FADE_PX) return;
+    const top = Math.max(0, Math.min(Math.max(0, totalSize - viewHeight), center - viewHeight / 2));
+    if (top === element.scrollTop) return;
+    element.scrollTo({ top,
+      behavior: previous?.count === items.count && previous.height === viewHeight ? preferredScrollBehavior() : 'instant' });
+  }, [activeAt, items.count, viewHeight, totalSize]);
+  if (items.count < 2) return null;
+  const preview = previewIndex === undefined ? undefined : items.item(previewIndex);
+  const previewPosition = virtualItems.find(item => item.index === previewIndex);
+  const scroller = [css.scroller];
+  if (scrollTop > 1) scroller.push(css.fadeTop);
+  if (scrollTop < totalSize - viewHeight - 1) scroller.push(css.fadeBottom);
+  return <nav className={css.frame} aria-label={navigationLabel} aria-busy={loading || undefined}
+    onPointerEnter={() => { pointerInsideRef.current = true; }}
+    onPointerLeave={() => { pointerInsideRef.current = false; setPreviewKey(null); }}>
+    <div ref={scrollerRef} className={scroller.join(' ')} onScroll={event => { const top = event.currentTarget.scrollTop; setGeometry(value => ({ ...value, top })); }}>
+      <div className={css.marks} style={{ height: totalSize }}>
+        {virtualItems.map(({ index, key, start }) => {
+          const item = items.item(index);
+          if (item === undefined) return null;
+          return <TurnMark key={key} item={item} index={index} start={start} label={label(item)} active={isActive(item)} busy={isBusy(item)}
+              unavailable={!!item.turn && (item.turn.cursor == null || !attached) || !item.turn && !attached}
+              previewId={item.key === previewKey ? previewId : undefined}
+              onNavigate={onNavigate} onPreview={setPreviewKey} onFocusChange={onFocusChange} />;
+        })}
+      </div>
     </div>
-    <button type="button" aria-label={tx('agent:reading.newer-turns')} disabled={!page || view.outline?.paging.type==='latest' && page.offset+page.turns.length>=page.total || view.outline?.loading} onClick={()=>void (page!.offset+64>=Math.floor((page!.total-1)/64)*64 ? client.readTurns(sessionId) : client.readTurns(sessionId,page!.offset+64))}>↓</button>
-    <form className={css.index} onSubmit={event=>{event.preventDefault();const value=Number(ordinal);if(page && Number.isInteger(value) && value>=1 && value<=page.total)void client.readTurns(sessionId,Math.floor((value-1)/64)*64);}}>
-      <input type="number" min={1} max={page?.total ?? 1} value={ordinal} onChange={event=>setOrdinal(event.target.value)} aria-label={tx('agent:reading.turn-number')}/>
-      <button type="submit" disabled={!page || view.outline?.loading} aria-label={tx('agent:reading.show-turn-page')}>↵</button>
-    </form>
-    {selected && <div id={previewId} role="tooltip" className={css.preview}><strong>{selected.ordinal ? tx('agent:reading.jump-turn',{n:selected.ordinal}) : tx('agent:reading.current-turn')}</strong><p>{selected.preview || tx('agent:reading.no-preview')}</p></div>}
-    {view.outline?.loading && <span className={css.feedback} role="status">{tx('agent:reading.loading-turns')}</span>}
-    {error && <div className={css.feedback} role="alert"><p>{error}</p><button type="button" onClick={()=>{client.invalidateReading(sessionId);void client.refreshTurns(sessionId);}}>{tx('agent:reading.reload-turns')}</button></div>}
-  </aside>;
+    {preview !== undefined && previewPosition !== undefined && <div id={previewId} role="tooltip" className={css.preview}
+      style={{ '--turn-preview-center': `${previewPosition.start + previewPosition.size / 2 - scrollTop}px` } as CSSProperties}>
+      <div className={css.previewPrompt}>{title(preview)}</div>
+      {preview.turn?.response ? <div className={css.previewResponse}>{preview.turn.response}</div> : null}
+    </div>}
+  </nav>;
 }

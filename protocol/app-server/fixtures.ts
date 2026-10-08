@@ -1,5 +1,5 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v34.js';
+import type {ProtocolMessage} from './v37.js';
 export const fixtures = [
   {
     "jsonrpc": "2.0",
@@ -56,6 +56,7 @@ export const fixtures = [
     "result": {
       "type": "session_summary",
       "summary": {
+        "ownership_generation": "1",
         "cwd": "/workspace",
         "id": "ses_00000000-0000-7000-8000-000000000001",
         "name": null,
@@ -114,7 +115,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 34,
+      "protocol_version": 37,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -132,7 +133,7 @@ export const fixtures = [
     "result": {
       "type": "initialized",
       "authority_id": "fixture-app-server-authority",
-      "protocol_version": 34,
+      "protocol_version": 37,
       "capabilities": {
         "upload_policy": {
           "max_file_bytes": 2097152,
@@ -428,40 +429,7 @@ export const fixtures = [
         "runtime_incarnation": "9007199254740993",
         "attachment_id": "attachment-fixture"
       },
-      "cut": {
-        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
-        "journal": "9007199254740993",
-        "transcript": "9007199254740993",
-        "mutation_revision": "9007199254740993"
-      },
       "offset": 64,
-      "limit": 64
-    }
-  },
-  {
-    "jsonrpc": "2.0",
-    "id": "exact-u64",
-    "method": "session/transcript",
-    "params": {
-      "target": {
-        "session_id": "ses_00000000-0000-7000-8000-000000000001",
-        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
-        "runtime_incarnation": "9007199254740993",
-        "attachment_id": "attachment-fixture"
-      },
-      "at": {
-        "type": "turn",
-        "id": {
-          "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
-          "attempt_id": "attempt-fixture"
-        },
-        "cut": {
-          "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
-          "journal": "9007199254740993",
-          "transcript": "9007199254740993",
-          "mutation_revision": "9007199254740993"
-        }
-      },
       "limit": 64
     }
   },
@@ -669,10 +637,7 @@ export const fixtures = [
           "attempt": "9007199254740993"
         },
         "units": {},
-        "candidate": null,
-        "eligibility": {
-          "status": "unavailable"
-        }
+        "candidate": null
       }
     }
   },
@@ -698,7 +663,8 @@ export const fixtures = [
             },
             "ordinal": 1,
             "cursor": "9007199254740993",
-            "preview": "Native preview"
+            "prompt": "Native prompt",
+            "response": "Native response"
           }
         ]
       }
@@ -712,19 +678,16 @@ export const fixtures = [
       "window": {
         "cut": {
           "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
-          "journal": "9007199254740993",
-          "transcript": "9007199254740993",
-          "mutation_revision": "9007199254740993"
+          "journal": "0",
+          "transcript": "0",
+          "mutation_revision": "0"
         },
         "page": {
           "entries": []
         },
         "newer_cursor": null,
-        "target": {
-          "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
-          "attempt_id": "attempt-fixture"
-        },
-        "target_cursor": "9007199254740993"
+        "target": null,
+        "target_cursor": null
       }
     }
   },

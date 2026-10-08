@@ -76,6 +76,34 @@ impl TraceProjection<'_> {
         }
     }
 
+    /// The Attempt that answers an adoption committed while idle: the first
+    /// Attempt started after it at this cut, or `None` before it starts.
+    /// The conversation turn outline reads a turn's prompt by the same rule.
+    pub(super) fn answering_attempt(
+        &self,
+        adoption_sequence: u64,
+    ) -> Result<Option<crate::runtime::identity::AttemptId>, ConversationStoreError> {
+        let next = self
+            .store
+            .read_presentation_events(&FactQuery {
+                scope: FactScope::All,
+                kinds: vec!["attempt_started"],
+                before: None,
+                after: adoption_sequence,
+                ascending: true,
+                through: self.through,
+                limit: 1,
+            })?
+            .pop();
+        next.map(|start| match start.event {
+            E::AttemptStarted { attempt_id } => Ok(attempt_id),
+            _ => Err(ConversationStoreError::InvalidReference(
+                "non-attempt answering start".into(),
+            )),
+        })
+        .transpose()
+    }
+
     /// The canonical Context this exact request introduced, in frozen order.
     ///
     /// `RequestSnapshot.request_context_ids` is the identity and ordering

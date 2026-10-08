@@ -236,7 +236,7 @@ export class AppServerSession {
       this.#installConfiguration(application);
       return true;
     }
-    if (notification.method === "session/summaryInvalidated") {
+    if (notification.method === "session/summaryInvalidated" || notification.method === "session/ownershipRetired") {
       // Both explicit catalog_changed values are valid. The TUI holds
       // no live catalog/summary cache: `/resume` reads the catalog afresh every
       // time it opens, so there is nothing here to repair. The notification is
@@ -374,7 +374,7 @@ export class AppServerSession {
   ): Promise<RuntimeClientTranscriptPage> {
     const page = await this.#client.call(
       "session/transcript",
-      { target: this.#target, at: beforeCursor ? { type: 'older', before: beforeCursor, cut: null } : { type: 'latest' }, limit },
+      { target: this.#target, at: beforeCursor ? { type: 'older', before: beforeCursor } : { type: 'latest' }, limit },
       "transcript_window",
     );
     return page.window.page;

@@ -2,20 +2,26 @@
 import { useMemo, useImperativeHandle, useLayoutEffect, useEffect, useRef, type Ref } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from '../../locale/react';
-import { Button } from '../../presentation/primitives/Button';
-import { TrajectoryRow } from './TrajectoryRow';
-import { ledgerFocusTargets, rowOwnsKey, type FocusableDisplayItem, type TrajectoryLedgerRow } from './layout';
+import { StateDot } from '../../presentation/primitives/StateDot';
+import { TrajectoryRow, type TrajectoryRowActions } from './TrajectoryRow';
+import { ledgerFocusTargets, rowOwnsKey, type TrajectoryLedgerRow } from './layout';
 import css from './Trajectory.module.css';
 
-export interface LedgerHandle { loadEarlier: () => void; latest: () => void }
-export function TrajectoryLedger({ ref, rows, first, activeKey, focusKey, onFocused, folded, calls, focusedIds, select, toggleTurn, toggleCalls, close, loadEarlier, canLoadEarlier, loading, searching, onOffTail }: {
+export interface LedgerHandle {
+  loadEarlier: () => void;
+  /** Scroll a record's row into view without moving focus or selection. */
+  reveal: (key: string) => void;
+}
+export function TrajectoryLedger({ ref, rows, first, activeKey, focusKey, onFocused, folded, focusedIds, actions, close, loadEarlier, canLoadEarlier, loading, searching }: {
   ref: Ref<LedgerHandle>; rows: TrajectoryLedgerRow[]; first?: string; activeKey?: string; focusKey?: string; onFocused: () => void;
-  folded: ReadonlySet<string>; calls: ReadonlySet<string>; focusedIds: ReadonlySet<string> | null;
-  select: (item: FocusableDisplayItem) => void; toggleTurn: (id: string) => void; toggleCalls: (id: string) => void; close: () => void;
-  loadEarlier: () => void; canLoadEarlier: boolean; loading: boolean; searching: boolean; onOffTail: (off: boolean) => void;
+  folded: ReadonlySet<string>; focusedIds: ReadonlySet<string> | null;
+  actions: TrajectoryRowActions; close: () => void;
+  loadEarlier: () => void; canLoadEarlier: boolean; loading: boolean; searching: boolean;
 }) {
   const tx = useTranslation();
   const targets = useMemo(() => ledgerFocusTargets(rows), [rows]);
+  // As in Harness, only the Turn that owns the current selection draws its rail.
+  const activeTurn = useMemo(() => activeKey === undefined ? undefined : rows.find(row => rowOwnsKey(row, activeKey))?.turn?.attempt_id, [rows, activeKey]);
   const viewport = useRef<HTMLDivElement>(null);
   const followsTail = useRef(true);
   const prepend = useRef<{ first?: string; key: string; offset: number } | null>(null);
@@ -25,23 +31,28 @@ export function TrajectoryLedger({ ref, rows, first, activeKey, focusKey, onFocu
     getItemKey: index => rows[index]!.display_key, overscan: 12, initialRect: { width: 800, height: 500 },
     anchorTo: 'end', followOnAppend: 'auto', scrollEndThreshold: 2,
   });
-  const latest = () => {
-    followsTail.current = true; onOffTail(false);
-    if (virtualized && rows.length) virtualizer.scrollToIndex(rows.length - 1, { align: 'end' });
-    else if (viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight;
+  const reveal = (key: string) => {
+    const index = rows.findIndex(row => rowOwnsKey(row, key));
+    if (index < 0) return;
+    followsTail.current = false;
+    if (virtualized) { virtualizer.scrollToIndex(index, { align: 'center', behavior: 'smooth' }); return; }
+    Array.from(viewport.current?.querySelectorAll<HTMLElement>('[role="row"][data-display-key]') ?? [])
+      .find(node => rowOwnsKey(rows[index]!, node.dataset.displayKey!))?.scrollIntoView({ block: 'center', behavior: 'smooth' });
   };
   const requestOlder = () => {
     if (!canLoadEarlier) return;
     const pane = viewport.current;
     if (pane) {
       const bounds = pane.getBoundingClientRect();
-      const focused = document.activeElement instanceof HTMLElement && pane.contains(document.activeElement) && document.activeElement.matches('[data-structural]') ? document.activeElement : null;
-      const node = focused ?? Array.from(pane.querySelectorAll<HTMLElement>('[role="row"][data-display-key]')).find(node => node.getBoundingClientRect().bottom > bounds.top);
+      // Keep the first fully visible row still: a partly hidden seat above it
+      // may shrink when its Turn chrome moves to a prepended row.
+      const visible = Array.from(pane.querySelectorAll<HTMLElement>('[role="row"][data-display-key]'));
+      const node = visible.find(node => node.getBoundingClientRect().top >= bounds.top) ?? visible.find(node => node.getBoundingClientRect().bottom > bounds.top);
       if (node) prepend.current = { first, key: node.dataset.displayKey!, offset: node.getBoundingClientRect().top - bounds.top };
     }
     followsTail.current = false; loadEarlier();
   };
-  useImperativeHandle(ref, () => ({ loadEarlier: requestOlder, latest }));
+  useImperativeHandle(ref, () => ({ loadEarlier: requestOlder, reveal }));
   useLayoutEffect(() => {
     const pane = viewport.current;
     if (!pane) return;
@@ -55,9 +66,21 @@ export function TrajectoryLedger({ ref, rows, first, activeKey, focusKey, onFocu
       }
       prepend.current = null; followsTail.current = false;
     } else if (followsTail.current && rows.length) {
-      if (virtualized) virtualizer.scrollToIndex(rows.length - 1, { align: 'end' }); else pane.scrollTop = pane.scrollHeight;
+      // The native scroll extent includes the composer's CSS clearance.
+      pane.scrollTop = pane.scrollHeight;
     }
   }, [first, rows, virtualized, virtualizer]);
+  useLayoutEffect(() => {
+    const pane = viewport.current;
+    if (!pane) return;
+    // Observe the content box: composer clearance changes its height even
+    // though the full-height ledger's border box stays fixed.
+    const observer = new ResizeObserver(() => {
+      if (followsTail.current) pane.scrollTop = pane.scrollHeight;
+    });
+    observer.observe(pane);
+    return () => observer.disconnect();
+  }, []);
   useEffect(() => {
     if (!focusKey) return;
     const index = rows.findIndex(row => rowOwnsKey(row, focusKey));
@@ -73,21 +96,26 @@ export function TrajectoryLedger({ ref, rows, first, activeKey, focusKey, onFocu
   });
   const rendered = virtualized ? virtualizer.getVirtualItems().map(item => ({ row: rows[item.index]!, index: item.index, start: item.start })) : rows.map((row, index) => ({ row, index, start: 0 }));
   return <div ref={viewport} className={css.ledger} data-trajectory-scroll="" role="table" aria-label={tx('trajectory:trajectory.trace-ledger')} aria-rowcount={rows.length} style={{ overflowAnchor: 'none' }} onScroll={event => {
-    const pane = event.currentTarget; followsTail.current = pane.scrollHeight - pane.clientHeight - pane.scrollTop <= 2; onOffTail(!followsTail.current);
-  }}>
+    const pane = event.currentTarget; followsTail.current = pane.scrollHeight - pane.clientHeight - pane.scrollTop <= 2;
+  }} onClick={event => { if (event.target === event.currentTarget) close(); }}>
     <div style={{ position: 'relative', ...(virtualized ? { height: virtualizer.getTotalSize() } : {}) }}>
       {rendered.map(({ row, index, start }) => {
         const style = { height: row.height, ...(virtualized ? { position: 'absolute' as const, top: 0, left: 0, width: '100%', transform: `translateY(${start}px)` } : {}) };
-        if (row.kind === 'history') return <div key={row.display_key} data-display-key={row.display_key} className={css.loadRow} style={style}><Button size="sm" disabled={!canLoadEarlier} onClick={requestOlder}>{loading ? tx('trajectory:trajectory.loading-earlier-records') : tx('trajectory:trajectory.load-earlier-records')}</Button></div>;
-        return <TrajectoryRow key={row.display_key} {...{ row, index, style, activeKey, folded, calls, focusedIds, select, toggleTurn, toggleCalls }} onKeyDown={(event, key) => {
+        if (row.kind === 'history') return <div key={row.display_key} data-display-key={row.display_key} data-history-load="" className={css.loadRow} style={style}>
+          <button type="button" className={css.historyLoadButton} disabled={loading || !canLoadEarlier} aria-label={loading ? tx('trajectory:history.loading-earlier') : tx('trajectory:history.load-earlier')} onClick={requestOlder}>
+            {loading && <StateDot state="ongoing" />}
+            <span aria-hidden="true">{loading ? tx('trajectory:history.loading-earlier') : tx('trajectory:history.load-earlier')}</span>
+          </button>
+        </div>;
+        return <TrajectoryRow key={row.display_key} {...{ row, index, style, activeKey, activeTurn, folded, focusedIds, actions }} onKeyDown={(event, key) => {
           if (event.key === 'Escape') { event.stopPropagation(); close(); return; }
           const current = targets.findIndex(target => target.display_key === key);
           if (current < 0) return;
-          if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); select(targets[current]!.item); }
+          if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); actions.select(targets[current]!.item); }
           if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
             event.preventDefault(); event.stopPropagation();
             const next = targets[current + (event.key === 'ArrowDown' ? 1 : -1)];
-            if (next) select(next.item);
+            if (next) actions.select(next.item);
           }
         }} />;
       })}

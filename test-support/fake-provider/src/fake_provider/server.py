@@ -359,13 +359,17 @@ class ProviderServer:
             return
         if method == "POST" and path == "/shutdown":
             await _write_json(writer, 200, self.run.report())
-            # The report is already flushed. Drop this connection from the
-            # cancellation set so shutdown does not tear down the very
-            # response that requested it.
-            task = asyncio.current_task()
-            if task is not None:
-                self._connections.discard(task)
-            self.run.shutdown_requested.set()
+            # drain() only hands bytes to the transport. Settle this response's
+            # transport before allowing the process entry point to return and
+            # asyncio.run() to cancel all remaining handlers.
+            writer.close()
+            try:
+                await writer.wait_closed()
+            finally:
+                task = asyncio.current_task()
+                if task is not None:
+                    self._connections.discard(task)
+                self.run.shutdown_requested.set()
             return
         await _write_json(writer, 404, {"error": f"no control route {method} {path}"})
 

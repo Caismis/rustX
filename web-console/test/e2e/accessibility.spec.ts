@@ -76,7 +76,9 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     await expect(page.getByRole('menuitem', { name: 'Close New session view', exact: true })).toBeFocused();
     await page.keyboard.press('Escape'); await expect(rowActions).toBeFocused();
     if (wasCollapsed) { await tabTo(page.getByRole('button', { name: 'Collapse Sidebar', exact: true })); await page.keyboard.press('Enter'); }
-    await tabTo(message); await page.keyboard.type('/mdl'); await page.keyboard.press('Enter');
+    await tabTo(message); await page.keyboard.type('/mdl');
+    await expect(page.getByRole('option', { name: /Model/ })).toBeVisible();
+    await page.keyboard.press('Enter');
     const dialog = page.getByRole('dialog', { name: '/model', exact: true }); await expect(dialog).toBeVisible();
     await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0); await expect(message).toBeFocused();
     // The composer paints keyboard focus on its rounded card, not a second

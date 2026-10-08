@@ -358,6 +358,15 @@ export function SearchResultItem({ result, currentId, onOpen, t }: {
  * @param props.t - the browser root's locale seat.
  * @returns the session row.
  */
+/** The current composer draft has no native Session identity or actions. */
+export function DraftConversationRow({ focus, flat = false }: { focus: () => void; flat?: boolean }) {
+  const tx = useTranslation();
+  return <div className={clsx(css.sessionRow, css.selected, flat && css.flatSessionRowWithoutStatus)} role="treeitem" aria-selected="true" data-draft-conversation="" onClick={focus}>
+    {!flat && <span className={css.slot}/>}
+    <button type="button" className={clsx(css.title, css.titleButton)} aria-current="page">{tx('sidebar:session.new')}</button>
+  </div>;
+}
+
 export function SessionNodeItem({
   node, currentId, now, onOpen, onRename, onFork, onDelete, onClose, flat = false, menuFocusOwner, t,
 }: {

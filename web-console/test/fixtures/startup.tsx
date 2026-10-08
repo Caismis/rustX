@@ -2,8 +2,9 @@ import { createRoot } from 'react-dom/client';
 import { App } from '../../src/app/App';
 import { Server, snapshot } from '../fixture';
 import { cfg3Source, cfg3Effective } from '../cfg3-data';
+import { traceRecord } from '../trace-fixture';
 import { RpcFailure } from '../../src/client/app-server';
-import type { Request } from '../../../protocol/app-server/v34';
+import type { Request } from '../../../protocol/app-server/v37';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -13,11 +14,23 @@ import '../../src/app/console.css';
 
 // Only the transport is controlled. App, navigation, first-submit owner, client,
 // Product Host admission and all presentation are the production implementations.
-const server = new Server(); server.snapshots.clear();
+const server = new Server();
+if (!new URL(location.href).searchParams.has('existing')) server.snapshots.clear();
+else server.snapshots.get('A')!.transcript.entries = [{ cursor: '1', item: { type: 'message', message: { id: 'saved-user', role: 'user', source: 'human', content: [{ type: 'text', text: 'Previously saved message' }] } } }];
 server.workspaceHost.resolveWorkspace = async () => ({ cwd: '/workspace/A' });
 server.workspaceHost.classifyLocations = async paths => paths.map(() => ({ authorized: true, workspaceId: 'workspace-a' }));
 const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], toolCalls: true, reasoning: false };
 server.workspaceHost.configureWorkspace = async () => ({ kind: 'read', projection: { ...cfg3Source(), session_models: { kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: ['fixture/native', 'fixture/second'].map(model => ({ model, protocol: 'openai_responses', contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'environment', variable: 'KEY' }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, reasoningProfiles: [] })) } }, prospective_approval_mode: 'policy', target: { kind: 'workspace', directory: '/workspace/A' } } });
+if (new URL(location.href).searchParams.has('models')) {
+  const saved = server.snapshots.get('A')!;
+  saved.model = cfg3Effective().effective_model;
+  saved.transcript.entries = Array.from({ length: 20 }, (_, index) => ({ cursor: String(index + 1), item: { type: 'message' as const, message: { id: `saved-${index}`, role: index % 2 ? 'assistant' as const : 'user' as const, source: 'human' as const, content: [{ type: 'text' as const, text: `Saved message ${index}: ` + 'Previously saved conversation content. '.repeat(12) }] } } }));
+  server.handlers.set('session/models', () => ({ type: 'models', catalog: { models: [{ model: saved.model!.configured.model, protocol: 'openai_responses', contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'literal' }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, reasoningProfiles: [] }] } }));
+  server.handlers.set('session/model', () => ({ type: 'model', model: saved.model! }));
+}
+if (new URL(location.href).searchParams.has('trajectory')) {
+  server.snapshots.get('A')!.trace.records = Array.from({ length: 160 }, (_, index) => traceRecord(index, { kind: 'user', request: null, location: {}, preview: { text: `Saved trace ${index}`, truncated: false } }));
+}
 let nativeDefault = 'fixture/native';
 server.handlers.set('session/create', request => {
   if (request.method !== 'session/create') throw Error('Wrong method');
@@ -34,6 +47,12 @@ render();
 const handled = new Set<Request>(server.requests.filter(row => row.request.method === 'initialize' || row.request.method === 'session/list').map(row => row.request));
 (window as any).startupFixture = {
   requests: () => server.requests.map(({ request }) => request),
+  async appendSavedReply() {
+    const entry = server.snapshots.get('A')!.transcript.entries!.at(-1)!;
+    if (entry.item.type !== 'message' || entry.item.message.role !== 'assistant') throw Error('Expected saved reply');
+    entry.item.message.content.push({ type: 'text', text: '\n\nLive continuation. ' + 'More response content. '.repeat(80) });
+    await server.client.refresh('A');
+  },
   defaultModel(model: string) { nativeDefault = model; },
   model: () => server.client.getSnapshot().views.created?.snapshot?.model,
   operation: () => server.client.firstSubmissions.session('created'),

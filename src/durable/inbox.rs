@@ -512,13 +512,23 @@ impl LineageSeed {
                     .iter()
                     .any(|message| crate::conversation::message_id_of(message) == *id)
             });
+            let valid_prompt = turn.prompt_message_id.as_ref().is_none_or(|id| {
+                self.canonical.iter().any(
+                    |message| matches!(message, MessageBlock::User(message) if &message.id == id),
+                )
+            });
             let valid_location = !turn.process_message_ids.is_empty()
                 || !matches!(
                     turn.outcome,
                     super::reading::InheritedTurnOutcome::IncompleteAtCut
                         | super::reading::InheritedTurnOutcome::Completed
                 );
-            if !unique_owner || !valid_members || !valid_predecessor || !valid_location {
+            if !unique_owner
+                || !valid_members
+                || !valid_predecessor
+                || !valid_prompt
+                || !valid_location
+            {
                 return Err(ConversationStoreError::InvalidReference(
                     "invalid inherited turn provenance".into(),
                 ));
@@ -1460,11 +1470,10 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// Bounded native Attempt outline, including immutable copied origins.
     fn conversation_turns(
         &self,
-        cut: Option<&super::reading::ConversationReadCut>,
         offset: usize,
         limit: usize,
     ) -> Result<super::reading::ConversationTurnPage, ConversationStoreError>;
-    /// Direct native location/adjacency read, with no intervening history walk.
+    /// The newest transcript page, or the page before a boundary, at the current cut.
     fn conversation_window(
         &self,
         at: &super::reading::ConversationWindowAt,

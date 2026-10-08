@@ -106,8 +106,8 @@ describe("initialization", () => {
   it("negotiates the protocol version once and records server capabilities", async () => {
     const { client, transport } = await initialized();
     const params = paramsOf(transport.log.matching("initialize")[0]!, "initialize");
-    assert.equal(APP_SERVER_PROTOCOL_VERSION, 34);
-    assert.equal(params.protocol_version, 34);
+    assert.equal(APP_SERVER_PROTOCOL_VERSION, 37);
+    assert.equal(params.protocol_version, 37);
     assert.equal(params.client.name, "rustx-tui");
     assert.deepEqual(client.capabilities, CAPABILITIES);
     assert.equal(transport.log.count("initialize"), 1);
@@ -143,7 +143,7 @@ describe("initialization", () => {
       protocol_version: 28,
       capabilities: CAPABILITIES,
     });
-    await assert.rejects(pending, /negotiated protocol 28, this client speaks 34/);
+    await assert.rejects(pending, /negotiated protocol 28, this client speaks 37/);
   });
 });
 
@@ -620,6 +620,8 @@ describe("generated-contract ingress", () => {
   });
   const malformed: [string, unknown][] = [
     ["unknown notification", { jsonrpc: "2.0", method: "session/unknown", params: {} }],
+    ["obsolete Session-only retirement", { jsonrpc: "2.0", method: "session/ownershipRetired", params: { session_id: "ses_00000000-0000-7000-8000-000000000001" } }],
+    ["inexact ownership watermark", { jsonrpc: "2.0", method: "session/ownershipRetired", params: { session_id: "ses_00000000-0000-7000-8000-000000000001", retired_through: 1 } }],
     ["missing params", { jsonrpc: "2.0", method: "session/event" }],
     ["malformed target", { ...event(), params: { ...event().params, target: { session_id: "a" } } }],
     ["nested exact integer", { ...event(), params: { ...event().params, target: { ...target(), runtime_incarnation: "01" } } }],

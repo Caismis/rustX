@@ -5,7 +5,7 @@ import { snapshot, assistantMessage, userMessage } from "./support/fixtures.ts";
 import { reduce, replaceFromSnapshot } from "../src/presentation/projection.ts";
 import type { RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from "../src/protocol/app-server.ts";
 const entry = (cursor: string, assistant = false): RuntimeClientTranscriptEntry => ({ cursor, item: { type: "message", message: assistant ? assistantMessage(cursor, "answer") : userMessage(cursor, "older") } });
-const window = (page: RuntimeClientTranscriptPage) => ({ page, cut: { conversation_id: snapshot().conversation_id, journal: "0", transcript: "0", mutation_revision: "0" }, newer_cursor: null, target: null, target_cursor: null });
+const window = (page: RuntimeClientTranscriptPage) => ({ cut: { conversation_id: snapshot().conversation_id, journal: "100", transcript: "100", mutation_revision: "0" }, page });
 const publish = (h: Awaited<ReturnType<typeof harness>>, cursor: string, transcript: RuntimeClientTranscriptPage) => h.session.applyNotification({ jsonrpc: "2.0", method: "session/event", params: { target: h.target, cursor, event: { type: "read_domains_updated", transcript, occupancy: null, todos: null } } });
 
 test("native read-domain events preserve joined history, totals and presentation ownership without snapshots", async () => {

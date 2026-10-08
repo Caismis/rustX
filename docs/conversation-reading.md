@@ -14,9 +14,23 @@ Local order is indexed `AttemptStarted` Journal order. Failed, cancelled,
 interrupted, timed-out and limited Attempts retain that identity. A location is
 the first committed assistant process member, or the exact Attempt terminal when
 there is no assistant member. A just-started Attempt with neither has no location;
-the live Runtime Client still supplies its current identity; historical locate
-remains disabled. Preview is the first text/refusal block at that location,
-limited to 240 Unicode characters; no preview is fabricated for a terminal.
+the live Runtime Client still supplies its current identity; navigation to it
+remains disabled.
+
+Each turn carries two native previews, matching DeepSeek Harness's turn outline.
+`prompt` is the turn's first human prompt: the earliest User message with Human
+source and ordinary Message kind adopted with this Attempt, or adopted while idle
+after the previous Attempt started and before this one did. Steering of the
+previous turn carries that turn's identity and never opens this one; automatic
+continuation has no prompt. Queued inbound reserves its transcript position at
+acceptance, so transcript adjacency is never used to find a prompt. `response`
+is the newest text/refusal-bearing Assistant member, present only once the turn
+has a terminal at the cut. Both join text blocks with single spaces, collapse
+whitespace and end with an ellipsis when clipped: at most 50 and 120 Unicode
+characters (one and three rail-card lines). Inherited turns carry their prompt as
+`TurnReadingProvenance.prompt_message_id`, remapped to destination identity on
+copy and dropped when the prompt is outside the retained cut; their response is
+the newest text-bearing retained member of a settled inherited turn.
 
 `TurnReadingProvenance` is a separate immutable lineage/bootstrap domain from
 `CompletedResponseProvenance` (finalized response, Retry, timing and usage).
@@ -63,7 +77,8 @@ Attempt still running at C retains its origin and mapped location with
 state remains incomplete after source settlement, reopen and repeated lineage.
 It projects as `TurnProcessOutcome::IncompleteAtCut`, with no live timer or
 failure/cancellation claim. Destination execution owns no inherited Attempt,
-request, Tool or settlement. Genuine terminal outcomes before C remain unchanged.
+request, Tool or settlement; each inherited turn only carries its origin Attempt's
+recorded execution totals for whole-conversation statistics and occupancy. Genuine terminal outcomes before C remain unchanged.
 
 Clone copies all selected structure through R and temporal evidence through C.
 A later clone of the same R may differ because it captures a newer C. Fork and
@@ -85,66 +100,51 @@ Compaction changes the canonical Surface, not these durable origins/order.
 
 ## Typed native reads
 
-`session/turns {target, cut?, offset?, limit}` returns `ConversationTurnPage`:
-exact cut, total, offset and at most 64 ordered native turns. Omitted offset selects
-the final page; an explicit offset directly indexes history. Each mark carries its
-origin, ordinal, bounded preview and optional exact transcript cursor.
+`session/turns {target, offset?, limit}` returns `ConversationTurnPage`: the
+cut it was captured at, total, offset and at most 64 ordered native turns.
+Omitted offset selects the final page; an explicit offset directly indexes
+history. Each mark carries its origin, ordinal, bounded prompt and response
+previews and optional exact transcript cursor.
 
-`session/transcript {target, at, limit}` replaces the old root `before` request
-with one selector vocabulary and returns `transcript_window`:
+`session/transcript {target, at, limit}` reads one contiguous transcript
+vocabulary and returns `transcript_window { cut, page, newer_cursor, target, target_cursor }`:
 
-- `latest`: newest finite page at the current cut;
-- `older {before, cut?}`: ordinary older read, or cut-bound historical adjacency;
-- `newer {after, cut}`: first finite page after a historical window;
-- `turn {id, cut}`: first finite page starting at the exact native turn location.
+- `latest`: the newest finite page;
+- `older {before, cut}`: the finite page strictly before an already-read cursor; a missing cut captures current authority;
+- `newer {after, cut}`: the finite page strictly after the cursor at the same cut;
+- `turn {id, cut}`: native resolves the canonical Turn anchor and reads forward from it.
 
-All root windows are 1–64 entries. The result carries the cut, page, actual
-older/newer cursors and optional exact target identity/cursor. A direct locate
-reads no intervening transcript pages. Agent/internal transcript APIs retain their
-separate registry and read-model ownership.
+All root pages are 1–64 entries; `next_cursor` is present while older history
+exists. A distant Turn takes exactly one native window read, independently of its
+distance from the live tail. Native identity and the captured cut select its
+position; the browser never walks the intervening conversation. Agent/internal transcript APIs retain their separate registry and
+read-model ownership.
 
-A read cut C is `(ConversationId, journal, transcript, mutation_revision)`.
-`journal` and `transcript` are inclusive historical upper bounds: only Attempt
-starts/locations and projection facts at or below C may be read. They are not
-requirements that today's frontiers equal C. `mutation_revision` is the native
-monotonic epoch of successful pending-body edits/removals. Pending adoption
-preserves its accepted body and position; new admissions and ordinary execution
-append facts. Surface compaction preserves immutable Ledger/Journal meaning.
-These append-only transitions do not invalidate C, even during a running Attempt.
+A read cut C is `(ConversationId, journal, transcript, mutation_revision)`, the
+inclusive upper bounds one read was captured at. `mutation_revision` is the
+native monotonic epoch of successful pending-body edits/removals. Pending
+adoption preserves its accepted body and position; new admissions and ordinary
+execution append facts. Surface compaction preserves immutable Ledger/Journal
+meaning. Latest reads capture a fresh C. Anchor and continuation reads name C and reject
+foreign, future or mutated cuts; append-only growth remains reconstructible.
 
-SQLite accepts C when its Conversation matches, its upper bounds are no later
-than current frontiers and its mutation epoch equals the current epoch. The
-store cannot reconstruct an edited/removed pending body after a mutation, so
-that semantic change rejects the old cut rather than silently substituting a
-new body. Future/foreign cuts, a target absent at C, a target whose first native
-location did not yet exist at C, and unavailable/corrupt native references fail
-explicitly without nearest-target fallback. Attachment/runtime replacement is
-separately rejected by App Server's `AttachmentTarget` and browser authority
-fences; a read cut never grants control authority.
-
-Target and outline reads can be reconstructed after later appends. Selection
-happens in one SQLite transaction, bounded to `transcript`; Tool results are
-included only if their own canonical transcript position belongs to C. Runtime
-Client folds only the selected native Attempts through `journal` for response,
-process, terminal, timing and usage decorations. A final compatibility check
-rejects a concurrent semantic mutation while accepting concurrent appends.
-The result returns C exactly. Neither current response settlement nor later
-Tool results can leak backward into that window.
-
-`older` and `newer` with C page exclusively inside that same frozen prefix;
-older/newer availability also excludes appended positions above C. Reaching
-C's tail ends newer paging even if current execution has advanced. `latest`
-and `older` without a cut capture fresh bounds. A fresh outline is required to
-see new identities/locations or recover from an invalid mutation epoch or
-replacement authority, not to navigate a known historical address after each
-streamed event. Reads execute no model/Tool work and create no request snapshots
-or durable writes.
+Selection happens in one SQLite transaction, bounded to C's `transcript`; Tool
+results are included only if their own canonical transcript position belongs to
+C. Runtime Client folds only the selected native Attempts through C's `journal`
+for response, process, terminal, timing and usage decorations. A final
+compatibility check rejects a semantic mutation that landed during the read,
+while accepting concurrent appends. Reads execute no model/Tool work and create
+no request snapshots or durable writes.
 
 ## Browser reading and scrolling
 
-The browser retains one outline page of at most 64 marks/previews, plus at most
-one pinned current identity from live Runtime Client state. `turn-rail-items.ts`
-merges these native sources; a current identity can have no historical cursor.
+The browser retains one outline page of at most 64 previews, plus at most one
+pinned current identity from live Runtime Client state. The rail draws a
+fixed-pitch virtual mark for every turn the outline counts: marks inside the
+retained page are loaded, the rest are known by ordinal only and read their
+native page before navigating. The pinned identity is drawn only while the
+retained page is the newest one. `turn-rail-items.ts`
+merges these native sources; a current identity can have no cursor yet.
 Loaded transcript/process anchors remain a separate presentation capability.
 The first native process `control_cursor` absent from the outline cut triggers
 one refresh to make the current turn locatable before settlement. Subsequent
@@ -159,30 +159,76 @@ reaches the reading position. The final owned region stays active beyond its sta
 marker. Genuinely unowned rows publish explicitly unknown detached ownership;
 the rail cannot substitute a stale navigation target or unrelated live Attempt.
 Only an exact native anchor satisfies a navigation scroll. Return to latest
-restores the current live identity and follow mode through ChatViewport. Paging and an
-ordinal input reach distant pages without accumulating outline history. Transcript
-cache limits remain 512 entries / 8 MiB; ordinary prepend reads are 64 entries.
-Historical jumps and adjacent pages replace a finite window. Two outstanding
-window reads per Session are permitted; further intents retire older work without
-queuing another read. A same-cut loaded exact anchor avoids another locate read.
+restores the current live identity and follow mode through ChatViewport. An
+unloaded mark reaches a distant page without accumulating outline history.
 
-Outline paging intent is explicitly `latest` or `page(offset)`, independently of
-the native response's offset. Initial load and automatic start/location/settlement
-refreshes in latest mode omit the offset, so 64→65 and 128→129 select the new final
-page. Older, intermediate newer and ordinal selections establish an explicit
-page; automatic refresh preserves it as live turns arrive. Selecting the newest
-page explicitly restores latest intent. One refresh demand arriving during an
-in-flight outline read is retained and serviced after its reply; streaming text
-deltas create no demand. The cache still holds only one outline page.
+The browser keeps at most 256 historical entries and 8 MiB of serialized UTF-16
+entry data, independently of the native live tail (at most 64 entries). A jump to
+an already loaded exact anchor needs no read; any other jump requests one native
+64-entry window. Older and later actions each request one page and trim the
+opposite end of the finite cache. The transcript explicitly identifies historical
+inspection and leaves the intervening history unloaded. Live streaming continues
+from the independent runtime snapshot; overlapping cursors render exactly once
+using the current native entry. Return to latest releases the historical window.
+
+A new navigation intent retires the previous read's commit authority immediately.
+An older page never joins or broadens a newer jump. Failed reads preserve the last
+valid presentation and expose recovery; pending-body invalidation retires the cut
+and returns to current native authority with an explanation. No retries or timeout
+heuristics determine ordering.
+
+Committed outline paging is explicitly `latest` or `page(offset)`, independently
+of the native response's offset. Only an authoritative demand's successful
+response commits both page and paging in one `setSession`. Enqueueing, deferring,
+canceling or failing a demand never commits its requested mode.
+
+A selected ordinal N always resolves through the fixed offset
+`floor((N - 1) / 64) * 64`, even if N belonged to the latest page at the click.
+Append-only growth cannot move that identity lookup. The returned native identity
+and cut then own the single direct transcript window read. Rail mode is separate:
+selecting the newest page restores `latest`; selecting another page commits
+`page(offset)` when its response is accepted. Automatic refresh uses the surviving
+committed mode, so latest refreshes omit the offset and follow 64→65, 128→129, etc.
+Missing ordinals report unavailability rather than synthesizing an identity.
+
+Per Session, one RPC and one replaceable explicit pending demand are retained.
+Equivalent explicit demands share a read but retain only the newest gesture.
+Automatic reads keep independent ownership instead of lending their validity to
+a cancelable gesture. An active response is fenced by native authority, its own
+intent and any *still-valid* pending demand. Canceling the pending gesture before
+the active reply restores no state: committed paging never changed, and the
+independently valid active reply may publish directly without a replacement RPC.
+
+A boolean coalesces automatic refresh obligations arriving during a read. Pending
+replacement, cancellation and explicit read failure do not clear that obligation.
+A suppressed automatic response also retains its obligation. After explicit work
+settles, one automatic read uses the final committed mode; this is demanded refresh,
+not a failure retry. Authoritative failures preserve page/paging and publish an
+error; obsolete successes and failures publish neither. Native invalidation,
+resync and attachment/connection replacement retire the entire read owner,
+including active/pending promises and its queued refresh obligation.
+
+The viewport gesture starts at the click, before outline resolution; only its
+still-current continuation may request the single direct transcript window.
+Streaming text deltas create no outline demand. The cache still holds one page.
+
+The rail uses native ordinal minus one as its fixed-pitch virtual index. Its model
+retains that native page and at most one pinned live identity; unloaded marks are
+computed on demand. It has no total-sized mark array, index Map or measurement
+cache. Only visible indexes plus three-mark overscan and focused neighbours are
+materialized. Hover/focus keys map to ordinals arithmetically; native identity
+lookup inspects only the retained page.
 
 Every window read captures the attachment target, connection generation,
-attachment epoch, resync authority, cache epoch and monotonic user reading intent.
-Only the newest still-valid reply installs a window/active mark or requests a
-scroll commit. Session/node/runtime changes, resync and user scrolling retire old
-replacement work. Ordinary prepend can finish after user detachment: it merges
-native rows while ChatViewport preserves the newer reading position. A new
-navigation/action still retires that prepend. Outline reads have independent paging intent and survive window changes;
-resync retires both domains.
+attachment epoch, resync authority and navigation intent. Node/runtime changes,
+reattachment, resync and a window rebase orphan it. Only the newest navigation
+intent lands, and only while ChatViewport's intent ticket is current: user
+scrolling synchronously retires both the client reading intent and the landing.
+Both native authority and the initiating viewport ticket must remain valid at
+`setSession` window installation. A stale success or failure leaves the last valid
+window unchanged. The layout frame independently checks the same ticket again,
+so a scroll after installation still wins over the deferred viewport movement. Outline reads have
+independent paging intent and survive window changes; resync retires both domains.
 
 ChatViewport is the sole automatic Chat scroll writer. The rail and Return to
 latest share its existing overlay surface, without a second flex wrapper or
@@ -194,12 +240,10 @@ stable rendered anchors across prepend, width/sidebar/panel reflow, Tool disclos
 and image/content growth. Missing anchors use retained adjacent reading anchors
 then a clamped absolute position; they never restore follow mode.
 
-Ordinary scrolling away from the live bottom exposes Return to latest even for
-short history. Historical navigation also exposes it and suppresses live output
-within that historical window. The explicit action restores the latest snapshot
-window and frame-owned bottom/follow mode; subsequent streaming follows until
-another user scroll or navigation detaches. The HISTORY_LIMIT recovery remains
-an independent bounded-cache case.
+Ordinary scrolling away from the live bottom or a turn jump exposes Return to
+latest even for short history; live output keeps rendering in the window. The
+explicit action restores frame-owned bottom/follow mode and releases the historical window; subsequent streaming follows until another user scroll or navigation
+detaches.
 
 ## Width preference
 

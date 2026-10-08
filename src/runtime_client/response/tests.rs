@@ -215,6 +215,49 @@ fn conversation_totals_and_clock_are_native_and_independent_of_loaded_rows() {
         );
         append(&store, attempt, RuntimeEvent::TurnStarted);
         request(&store, attempt, 0, Some(usage(Some(20))));
+        let call = crate::runtime::identity::ToolCallId::new("call");
+        let tool_id = crate::runtime::identity::ToolId::new("tool-bash");
+        let proposal = MessageId::new(format!("proposal-{attempt}"));
+        store
+            .append_canonical_with_event(
+                &MessageBlock::Assistant(AssistantMessageBlock {
+                    id: proposal.clone(),
+                    content: vec![AssistantContentBlock::ToolCall(crate::tools::ToolCall {
+                        id: call.clone(),
+                        tool_id: tool_id.clone(),
+                        name: "bash".into(),
+                        arguments: serde_json::json!({}),
+                    })],
+                }),
+                event(
+                    &store,
+                    attempt,
+                    RuntimeEvent::AssistantMessageCommitted {
+                        message_id: proposal,
+                    },
+                ),
+            )
+            .unwrap();
+        append(
+            &store,
+            attempt,
+            RuntimeEvent::ToolExecutionStarted {
+                tool_call_id: call.clone(),
+                tool_id: tool_id.clone(),
+            },
+        );
+        // Calls pair within their Attempt; each Attempt reuses the provider call id.
+        let mut settled = event(
+            &store,
+            attempt,
+            RuntimeEvent::ToolExecutionFailed {
+                tool_call_id: call,
+                tool_id,
+                error: "controlled".into(),
+            },
+        );
+        settled.timestamp += chrono::Duration::milliseconds(1500);
+        store.append_event(settled).unwrap();
         assistant(&store, attempt, &format!("answer-{attempt}"));
         finish(&store, attempt);
     }
@@ -223,15 +266,21 @@ fn conversation_totals_and_clock_are_native_and_independent_of_loaded_rows() {
     let earlier = page(&store, latest.next_cursor.map(Into::into), 1);
     assert_eq!(full.statistics, latest.statistics);
     assert_eq!(full.statistics, earlier.statistics);
-    let totals = full.statistics.unwrap();
+    let totals = full.statistics.clone().unwrap();
     assert_eq!(totals.turns, 2);
     assert_eq!(totals.steps, 2);
     assert_eq!(totals.model_requests, 2);
     assert_eq!(totals.reported_usage.unwrap().total_tokens, 240);
     assert_eq!(
-        totals.timing.unwrap().output_tokens_per_second,
-        Some(15.625)
+        totals.timing.unwrap(),
+        crate::durable::response::ConversationTiming {
+            model_ms: Some(3200),
+            tool_ms: Some(3000),
+            mean_ttft_ms: Some(320),
+            output_tokens_per_second: Some(15.625),
+        }
     );
+    assert_eq!(tails(&full)[0].models, ["historical-model"]);
     let clock = totals.latest_turn.unwrap();
     assert_eq!(clock.attempt_id, AttemptId::new("b"));
     assert_eq!(clock.ended_at, Some(clock.started_at));
@@ -434,6 +483,15 @@ fn context_measurement_is_native_and_is_invalidated_by_compaction() {
     assert_eq!(read.input_tokens, 100);
     assert_eq!(read.context_window_tokens, 4096);
     assert_eq!(read.model, "historical-model");
+    // The `"system"` prompt prices at ceil(8 / 4); messages are the measured remainder.
+    assert_eq!(
+        read.breakdown,
+        crate::context::occupancy::ContextBreakdown {
+            system_tokens: 2,
+            tool_tokens: 0,
+            message_tokens: 98
+        }
+    );
     request(&store, "a", 1, None);
     assert_eq!(
         crate::context::occupancy::read(&store, store.presentation_frontier().unwrap()).unwrap(),
@@ -477,7 +535,7 @@ fn real_compaction_preserves_response_identity_cut_and_cumulative_usage() {
     request(&store, "a", 0, Some(usage(Some(80))));
     assistant(&store, "a", "response-a");
     finish(&store, "a");
-    let outline_before = store.conversation_turns(None, 0, 64).unwrap();
+    let outline_before = store.conversation_turns(0, 64).unwrap();
     let before = page(&store, None, 64);
     let tail = tails(&before)[0].clone();
     store
@@ -508,15 +566,9 @@ fn real_compaction_preserves_response_identity_cut_and_cumulative_usage() {
             timestamp: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
         })
         .unwrap();
-    let outline_after = store.conversation_turns(None, 0, 64).unwrap();
+    let outline_after = store.conversation_turns(0, 64).unwrap();
     assert_eq!(outline_before.turns, outline_after.turns);
     assert_ne!(outline_before.cut, outline_after.cut);
-    assert_eq!(
-        store
-            .conversation_turns(Some(&outline_before.cut), 0, 64)
-            .unwrap(),
-        outline_before
-    );
     let after = page(&store, None, 64);
     assert_eq!(tails(&after)[0], &tail);
     assert_eq!(after.statistics, before.statistics);
@@ -557,9 +609,18 @@ fn real_compaction_preserves_response_identity_cut_and_cumulative_usage() {
     assert_eq!(inherited_tail.origin, tail.origin);
     assert_eq!(inherited_tail.usage, tail.usage);
     assert!(is_completed_response(&child, &inherited_tail.closing_message_id).unwrap());
+    // Totals travel with the inherited turn; its pre-compaction context
+    // reading does not, because the retained Surface compacted after it.
     assert_eq!(
         inherited.statistics,
-        Some(ConversationStatistics::default())
+        Some(ConversationStatistics {
+            latest_turn: None,
+            ..after.statistics.clone().unwrap()
+        })
+    );
+    assert_eq!(
+        crate::context::occupancy::read(&child, child.presentation_frontier().unwrap()).unwrap(),
+        None
     );
 }
 
@@ -661,6 +722,10 @@ fn terminal_turns_survive_reconstruction_later_attempts_and_paging() {
         assert_eq!(turn.conversation_id, id);
         assert_eq!(turn.attempt_id, AttemptId::new(attempt));
         assert_eq!(turn.outcome, outcome);
+        assert_eq!(
+            turn.failure.is_some(),
+            outcome == TurnProcessOutcome::Failed
+        );
         assert_eq!(
             turn.ended_at.unwrap() - turn.started_at.unwrap(),
             chrono::Duration::seconds(7)
@@ -859,12 +924,13 @@ fn exact_window_decoration_keeps_attempt_tool_occurrences_and_response_identity(
         assistant(&store, attempt, &format!("{attempt}-final"));
         finish(&store, attempt);
     }
-    let outline = store.conversation_turns(None, 0, 64).unwrap();
+    let outline = store.conversation_turns(0, 64).unwrap();
+    // The four rows of Attempt a: the page before Attempt b's location.
     let read = store
         .conversation_window(
-            &crate::durable::reading::ConversationWindowAt::Turn {
-                id: outline.turns[0].id.clone(),
-                cut: outline.cut.clone(),
+            &crate::durable::reading::ConversationWindowAt::Older {
+                cut: None,
+                before: outline.turns[1].cursor.unwrap(),
             },
             4,
         )
@@ -889,115 +955,43 @@ fn exact_window_decoration_keeps_attempt_tool_occurrences_and_response_identity(
 }
 
 #[test]
-#[allow(clippy::too_many_lines)] // One exact before/after cut, including mutable Tool and response decorations.
-fn historical_window_cut_survives_live_appends_and_bounds_tool_and_response_decorations() {
-    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
-    for name in ["old-a", "old-b"] {
+fn model_failure_keeps_normalized_diagnostics_without_provider_fields() {
+    use crate::events::types::AttemptFailure;
+    use crate::model::{MalformedToolProposalSource, ModelError};
+    for has_content in [false, true] {
+        let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
         append(
             &store,
-            name,
+            "invalid",
             RuntimeEvent::AttemptStarted {
-                attempt_id: AttemptId::new(name),
+                attempt_id: AttemptId::new("invalid"),
             },
         );
-        assistant(&store, name, name);
-        finish(&store, name);
-    }
-    append(
-        &store,
-        "live",
-        RuntimeEvent::AttemptStarted {
-            attempt_id: AttemptId::new("live"),
-        },
-    );
-    // Split the fixture's exact canonical Tool transition at C; no execution.
-    let fixture = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
-    process_content(&fixture, "live");
-    let facts = fixture.load_canonical().unwrap();
-    let first = &facts[0];
-    store
-        .append_canonical_with_event(
-            first,
-            event(
-                &store,
-                "live",
-                RuntimeEvent::AssistantMessageCommitted {
-                    message_id: crate::conversation::message_id_of(first),
+        if has_content {
+            assistant(&store, "invalid", "partial");
+        }
+        append(
+            &store,
+            "invalid",
+            RuntimeEvent::AttemptFailed {
+                attempt_id: AttemptId::new("invalid"),
+                error: AttemptFailure::Model {
+                    error: ModelError {
+                        provider_code: Some("private-provider-code".into()),
+                        ..ModelError::malformed_tool_proposal(
+                            MalformedToolProposalSource::AdapterStructural,
+                            "Invalid tool arguments",
+                        )
+                    },
                 },
-            ),
-        )
-        .unwrap();
-    let outline = store.conversation_turns(None, 0, 64).unwrap();
-    let before = store
-        .conversation_window(
-            &crate::durable::reading::ConversationWindowAt::Turn {
-                id: outline.turns[0].id.clone(),
-                cut: outline.cut.clone(),
             },
-            64,
-        )
-        .unwrap();
-    let mut frozen = transcript_page_view(before.page).unwrap();
-    decorate_window(&store, &mut frozen, outline.cut.journal).unwrap();
-    store.append_canonical(&facts[1]).unwrap();
-    assistant(&store, "live", "later-assistant");
-    append(&store, "live", RuntimeEvent::TurnStarted);
-    let after = store.conversation_read_cut().unwrap();
-    assert!(after.journal > outline.cut.journal && after.transcript > outline.cut.transcript);
-    let read = store
-        .conversation_window(
-            &crate::durable::reading::ConversationWindowAt::Turn {
-                id: outline.turns[0].id.clone(),
-                cut: outline.cut.clone(),
-            },
-            64,
-        )
-        .unwrap();
-    assert_eq!(read.cut, outline.cut);
-    let mut page = transcript_page_view(read.page).unwrap();
-    decorate_window(&store, &mut page, read.cut.journal).unwrap();
-    assert_eq!(
-        page, frozen,
-        "no later Tool result, Assistant or native fact is spliced into C"
-    );
-    let live = page.entries.last().unwrap();
-    assert_eq!(
-        live.turn_process.as_ref().unwrap().outcome,
-        TurnProcessOutcome::Running
-    );
-    assert!(live.completed_response.is_none());
-    assert!(!matches!(
-        live.tool_calls[0].state,
-        crate::runtime_client::snapshot::ForegroundToolState::Settled { .. }
-    ));
-    assert_eq!(store.conversation_read_cut().unwrap(), after);
-    assert_eq!(store.read_request_snapshots(None, 1).unwrap().snapshots, []);
-    // Newer and older stay inside C even after live growth.
-    let window = store
-        .conversation_window(
-            &crate::durable::reading::ConversationWindowAt::Turn {
-                id: outline.turns[0].id.clone(),
-                cut: outline.cut.clone(),
-            },
-            1,
-        )
-        .unwrap();
-    let newer = store
-        .conversation_window(
-            &crate::durable::reading::ConversationWindowAt::Newer {
-                after: window.newer_cursor.unwrap(),
-                cut: outline.cut.clone(),
-            },
-            64,
-        )
-        .unwrap();
-    assert_eq!(newer.cut, outline.cut);
-    assert!(newer.newer_cursor.is_none());
-    assert!(
-        newer
-            .page
-            .entries
-            .iter()
-            .all(|row| row.cursor.get() <= outline.cut.transcript)
-    );
+        );
+        let projected = page(&store, None, 1);
+        let owner = projected.entries[0].turn_process.as_ref().unwrap();
+        let failure = serde_json::to_value(owner.failure.as_ref().unwrap()).unwrap();
+        assert_eq!(failure["kind"], "malformed_tool_proposal");
+        assert_eq!(failure["message"], "Invalid tool arguments");
+        assert!(failure.get("provider_code").is_none());
+        assert!(projected.entries[0].completed_response.is_none());
+    }
 }

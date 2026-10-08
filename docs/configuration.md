@@ -428,7 +428,7 @@ selection, policies, Plugins, MCP definitions and complete named-Agent profiles.
 The User config pathname and fixed User resource root are shown separately.
 Save starts native application automatically. Settings presents independent
 application, failure/retry and actual-versus-desired process state. The only ordinary
-Web adoption surface is below the focused Session title, using native eligibility.
+Web adoption surface is below the focused Session title, using the runtime's published adoption eligibility.
 CAS conflicts preserve drafts. Rescan is a diagnostics action.
 
 TUI `/settings` authors explicit User/Workspace sources; `/session settings` inspects

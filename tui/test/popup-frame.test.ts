@@ -459,7 +459,7 @@ describe("framed feature surfaces", () => {
           id: "ses_84097828-fc31-78c8-9292-10df48901a85",
           name: "current work",
           updated_at: "2026-08-21T00:00:00Z",
-          cwd: "/server/work", active_node: "node_35971be6-e9bb-724a-8955-82fe0e42e048",
+          cwd: "/server/work", ownership_generation: "1", active_node: "node_35971be6-e9bb-724a-8955-82fe0e42e048",
 
         },
       ],

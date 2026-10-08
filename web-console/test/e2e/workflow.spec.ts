@@ -36,12 +36,12 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     await expect(run).toHaveAttribute('data-workflow-run-id', runId!);
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
     const trajectory = page.getByRole('region', { name: 'Trajectory', exact: true });
-    await trajectory.getByLabel('Search loaded Trace').fill('workflow');
+    await trajectory.getByLabel('Search trajectory').fill('workflow');
     await expect(trajectory.locator('[data-display-type="RecordRow"][data-kind="workflow"]')).toHaveCount(1);
     await trajectory.locator('[data-display-type="RecordRow"][data-kind="workflow"]').click();
-    const inspector = trajectory.getByLabel('Trace record inspector');
+    const inspector = trajectory.getByRole('complementary', { name: 'Event details' });
     await inspector.getByRole('tab', { name: 'Timing', exact: true }).click();
-    await expect(inspector).toContainText('Unavailable');
+    await expect(inspector).toContainText('Not available');
     await fixture.release('workflow-child-admitted');
     await closeSettings(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
     await expect(page.getByText('workflow conformance complete', { exact: true })).toBeVisible();

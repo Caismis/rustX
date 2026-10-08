@@ -512,7 +512,7 @@ describe("startup and context", () => {
       }),
     });
     assert.equal(contextLabel(state), "context unreported", "latest Attempt usage is not context authority");
-    state.context.last_request_occupancy = { input_tokens: 25600, context_window_tokens: 256000, model: "historical/model" };
+    state.context.last_request_occupancy = { input_tokens: 25600, context_window_tokens: 256000, model: "historical/model", breakdown: { system_tokens: 600, tool_tokens: 5000, message_tokens: 20000 } };
     assert.equal(contextLabel(state), "last context 25.6k/256k");
   });
 });

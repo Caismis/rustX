@@ -5,9 +5,10 @@ use super::{
 };
 use crate::durable::reading::{
     ConversationReadCut, ConversationTurn, ConversationTurnId, ConversationTurnPage,
-    ConversationWindowAt, DurableConversationWindow, TURN_PAGE_MAX, TURN_PREVIEW_MAX,
+    ConversationWindowAt, DurableConversationWindow, InheritedTurnOutcome, TURN_PAGE_MAX,
+    TURN_PROMPT_PREVIEW_MAX, TURN_RESPONSE_PREVIEW_MAX, TurnExecution, TurnReadingProvenance,
 };
-use crate::runtime::identity::{AttemptId, ConversationId};
+use crate::runtime::identity::{AttemptId, ConversationId, MessageId};
 
 pub(super) fn cut(
     connection: &Connection,
@@ -77,33 +78,179 @@ fn location(
         .transpose()
 }
 
-fn preview(connection: &Connection, cursor: Option<u64>) -> Result<String, ConversationStoreError> {
-    let Some(cursor) = cursor else {
-        return Ok(String::new());
+/// Space-joined text blocks with collapsed whitespace, capped at `limit`
+/// characters with a trailing ellipsis when clipped. The same rule shapes the
+/// prompt and the response, so a preview never depends on block layout.
+fn message_preview(
+    connection: &Connection,
+    message_id: &MessageId,
+    limit: usize,
+) -> Result<String, ConversationStoreError> {
+    // Each block is read bounded: a multi-megabyte body never enters a preview.
+    let mut statement = connection
+        .prepare_cached(
+            "SELECT substr(json_extract(block.value,'$.text'),1,?2),length(json_extract(block.value,'$.text'))>?2
+             FROM message_ledger m,json_each(m.message_json,'$.content') block
+             WHERE m.message_id=?1 AND json_extract(block.value,'$.type') IN ('text','refusal') ORDER BY block.key",
+        )
+        .map_err(|error| storage(format!("turn preview: {error}")))?;
+    let blocks = statement
+        .query_map(params![message_id.as_str(), limit * 2], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?))
+        })
+        .map_err(|error| storage(format!("turn preview: {error}")))?;
+    let mut text = String::new();
+    let mut unread = false;
+    for block in blocks {
+        let (chunk, clipped) = block.map_err(|error| storage(format!("turn preview: {error}")))?;
+        if text.chars().count() >= limit * 2 {
+            unread = true;
+            break;
+        }
+        if !text.is_empty() {
+            text.push(' ');
+        }
+        text.push_str(&chunk);
+        if clipped {
+            unread = true;
+            break;
+        }
+    }
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.chars().count() > limit - 1 {
+        let head: String = normalized.chars().take(limit - 1).collect();
+        return Ok(format!("{}…", head.trim_end()));
+    }
+    Ok(if unread {
+        format!("{normalized}…")
+    } else {
+        normalized
+    })
+}
+
+/// The first human prompt of a local turn: the earliest eligible message
+/// adopted with this Attempt, or adopted while idle after the previous Attempt
+/// started and before this one did. Steering of the previous turn carries that
+/// turn's identity and never opens this one.
+fn local_prompt(
+    connection: &Connection,
+    attempt: &AttemptId,
+    start: i64,
+    through: u64,
+) -> Result<Option<(MessageId, String)>, ConversationStoreError> {
+    let mut statement = connection
+        .prepare_cached(
+            "SELECT m.value FROM events e INDEXED BY events_kind_idx,json_each(e.event_json,'$.event.message_ids') m
+             JOIN message_ledger l ON l.message_id=m.value
+             WHERE json_extract(e.event_json,'$.event.type')='inbound_turn_adopted' AND e.sequence<=?3
+               AND e.sequence>(SELECT COALESCE(MAX(sequence),0) FROM events INDEXED BY events_kind_idx
+                 WHERE sequence<?2 AND json_extract(event_json,'$.event.type')='attempt_started')
+               AND (e.attempt_id=?1 OR (e.attempt_id IS NULL AND e.sequence<?2))
+               AND json_extract(l.message_json,'$.role')='user' AND json_extract(l.message_json,'$.source')='human'
+               AND COALESCE(json_extract(l.message_json,'$.kind'),'message')='message'
+             ORDER BY e.sequence,CAST(m.key AS INTEGER)",
+        )
+        .map_err(|error| storage(format!("turn prompt: {error}")))?;
+    let ids = statement
+        .query_map(
+            params![attempt.as_str(), start, seq_to_i64(through)?],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(|error| storage(format!("turn prompt: {error}")))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| storage(format!("turn prompt: {error}")))?;
+    for id in ids.into_iter().map(MessageId::new) {
+        let preview = message_preview(connection, &id, TURN_PROMPT_PREVIEW_MAX)?;
+        if !preview.is_empty() {
+            return Ok(Some((id, preview)));
+        }
+    }
+    Ok(None)
+}
+
+/// The newest text-bearing Assistant message of a settled turn, newest first.
+fn final_response(
+    connection: &Connection,
+    members: impl Iterator<Item = MessageId>,
+) -> Result<String, ConversationStoreError> {
+    for id in members {
+        let preview = message_preview(connection, &id, TURN_RESPONSE_PREVIEW_MAX)?;
+        if !preview.is_empty() {
+            return Ok(preview);
+        }
+    }
+    Ok(String::new())
+}
+
+/// Prompt and response of a local turn at the cut. A turn still running at
+/// the cut has no final response yet.
+fn local_previews(
+    connection: &Connection,
+    attempt: &AttemptId,
+    start: i64,
+    cut: &ConversationReadCut,
+) -> Result<(String, String), ConversationStoreError> {
+    let prompt = local_prompt(connection, attempt, start, cut.journal)?
+        .map(|(_, preview)| preview)
+        .unwrap_or_default();
+    let settled: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_attempt_idx WHERE attempt_id=?1 AND sequence<=?2
+             AND json_extract(event_json,'$.event.type') IN ('attempt_completed','attempt_cancelled','attempt_failed','attempt_timed_out','attempt_limit_exceeded'))",
+            params![attempt.as_str(), seq_to_i64(cut.journal)?],
+            |row| row.get(0),
+        )
+        .map_err(|error| storage(format!("turn settlement: {error}")))?;
+    if !settled {
+        return Ok((prompt, String::new()));
+    }
+    let mut statement = connection
+        .prepare_cached(
+            "SELECT json_extract(event_json,'$.event.message_id') FROM events INDEXED BY events_attempt_idx
+             WHERE attempt_id=?1 AND sequence<=?2 AND json_extract(event_json,'$.event.type')='assistant_message_committed'
+             ORDER BY sequence DESC",
+        )
+        .map_err(|error| storage(format!("turn response: {error}")))?;
+    let members = statement
+        .query_map(params![attempt.as_str(), seq_to_i64(cut.journal)?], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|error| storage(format!("turn response: {error}")))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| storage(format!("turn response: {error}")))?;
+    Ok((
+        prompt,
+        final_response(connection, members.into_iter().map(MessageId::new))?,
+    ))
+}
+
+/// Prompt and response of an inherited turn from its immutable provenance.
+fn inherited_previews(
+    connection: &Connection,
+    turn: &TurnReadingProvenance,
+) -> Result<(String, String), ConversationStoreError> {
+    let prompt = match &turn.prompt_message_id {
+        Some(id) => message_preview(connection, id, TURN_PROMPT_PREVIEW_MAX)?,
+        None => String::new(),
     };
-    let text: Option<String> = connection.query_row(
-        "SELECT substr(json_extract(block.value,'$.text'),1,?2)
-         FROM transcript_order t JOIN message_ledger m ON t.reference_kind='message' AND t.reference_id=m.message_id,
-         json_each(m.message_json,'$.content') block
-         WHERE t.position=?1 AND json_extract(block.value,'$.type') IN ('text','refusal') ORDER BY block.key LIMIT 1",
-        params![seq_to_i64(cursor)?, TURN_PREVIEW_MAX], |row| row.get(0),
-    ).optional().map_err(|error| storage(format!("turn preview: {error}")))?;
-    Ok(text.unwrap_or_default())
+    let response = if matches!(turn.outcome, InheritedTurnOutcome::IncompleteAtCut) {
+        String::new()
+    } else {
+        final_response(connection, turn.process_message_ids.iter().rev().cloned())?
+    };
+    Ok((prompt, response))
 }
 
 pub(super) fn turns(
     connection: &Connection,
     conversation: &ConversationId,
-    expected: Option<&ConversationReadCut>,
     offset: usize,
     limit: usize,
 ) -> Result<ConversationTurnPage, ConversationStoreError> {
     if limit == 0 || limit > TURN_PAGE_MAX {
         return Err(storage("turn page limit must be between 1 and 64"));
     }
-    let actual = cut(connection, conversation)?;
-    require_cut(&actual, expected)?;
-    let cut = expected.cloned().unwrap_or(actual);
+    let cut = cut(connection, conversation)?;
     let total: usize = connection
         .query_row(
             &format!("{OWNERS}SELECT COUNT(*) FROM owners"),
@@ -112,29 +259,39 @@ pub(super) fn turns(
         )
         .map_err(|error| storage(error.to_string()))?;
     let offset = offset.min(total.saturating_sub(1) / limit * limit);
-    let mut statement = connection.prepare(&format!("{OWNERS}SELECT conversation,attempt,inherited FROM owners ORDER BY source,ordering LIMIT ?2 OFFSET ?3")).map_err(|error| storage(error.to_string()))?;
+    let mut statement = connection.prepare(&format!("{OWNERS}SELECT conversation,attempt,inherited,ordering FROM owners ORDER BY source,ordering LIMIT ?2 OFFSET ?3")).map_err(|error| storage(error.to_string()))?;
     let rows = statement
         .query_map(params![seq_to_i64(cut.journal)?, limit, offset], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, Option<String>>(2)?,
+                row.get::<_, i64>(3)?,
             ))
         })
         .map_err(|error| storage(error.to_string()))?;
     let mut turns = Vec::with_capacity(limit);
     for (index, row) in rows.enumerate() {
-        let (origin, attempt, inherited) = row.map_err(|error| storage(error.to_string()))?;
+        let (origin, attempt, inherited, start) =
+            row.map_err(|error| storage(error.to_string()))?;
         let id = ConversationTurnId {
             conversation_id: ConversationId::new(origin),
             attempt_id: AttemptId::new(attempt),
         };
         let cursor = location(connection, &id, inherited.as_deref(), &cut)?;
+        let (prompt, response) = match inherited.as_deref() {
+            Some(inherited) => inherited_previews(
+                connection,
+                &super::decode::<TurnReadingProvenance>(inherited, "turn previews")?,
+            )?,
+            None => local_previews(connection, &id.attempt_id, start, &cut)?,
+        };
         turns.push(ConversationTurn {
             id,
             ordinal: offset + index + 1,
-            preview: preview(connection, cursor)?,
             cursor: cursor.map(crate::durable::TranscriptCursor::new),
+            prompt,
+            response,
         });
     }
     Ok(ConversationTurnPage {
@@ -184,7 +341,10 @@ pub(super) fn window(
         }
         ConversationWindowAt::Turn { id, .. } => {
             let inherited: Option<Option<String>> = connection.query_row(
-                &format!("{OWNERS}SELECT inherited FROM owners WHERE conversation=?2 AND attempt=?3 LIMIT 1"),
+                "SELECT NULL FROM events INDEXED BY events_attempt_idx
+                 WHERE attempt_id=?3 AND conversation_id=?2 AND sequence<=?1 AND json_extract(event_json,'$.event.type')='attempt_started'
+                 UNION ALL SELECT p.value FROM bootstrap_identity b,json_each(b.turn_provenance) p
+                 WHERE json_extract(p.value,'$.id.conversation_id')=?2 AND json_extract(p.value,'$.id.attempt_id')=?3 LIMIT 1",
                 params![seq_to_i64(cut.journal)?,id.conversation_id.as_str(),id.attempt_id.as_str()], |row| row.get(0),
             ).optional().map_err(|error| storage(error.to_string()))?;
             let inherited = inherited.ok_or_else(|| {
@@ -289,6 +449,91 @@ fn bound_tool_results(
     Ok(())
 }
 
+/// One local Attempt's additive execution totals through the lineage cut,
+/// folded exactly as whole-conversation statistics and occupancy fold them.
+fn turn_execution(
+    connection: &Connection,
+    conversation: &ConversationId,
+    attempt: &AttemptId,
+    through: u64,
+) -> Result<TurnExecution, ConversationStoreError> {
+    use crate::events::types::{RuntimeEvent as E, RuntimeEventEnvelope};
+    use crate::model::finish::ModelFinishReason;
+    let mut execution = TurnExecution::default();
+    let mut activity = crate::durable::response::timing::ActivityFold::default();
+    // The newest occupancy boundary: a request and its reported usage, or a
+    // compaction that invalidates the previous reading.
+    let mut boundary: Option<(
+        crate::runtime::identity::RequestId,
+        Option<crate::model::types::ModelUsage>,
+    )> = None;
+    let mut closing = false;
+    let mut statement = connection.prepare("SELECT event_json FROM events INDEXED BY events_attempt_idx WHERE attempt_id=?1 AND sequence<=?2 AND json_extract(event_json,'$.event.type') IN ('turn_started','model_request_started','model_request_completed','model_request_failed','tool_execution_started','tool_execution_completed','tool_execution_failed','compaction_started','compaction_completed','assistant_message_committed','attempt_completed') ORDER BY sequence").map_err(|error| storage(error.to_string()))?;
+    let rows = statement
+        .query_map(params![attempt.as_str(), seq_to_i64(through)?], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|error| storage(error.to_string()))?;
+    for json in rows {
+        let event: RuntimeEventEnvelope = super::decode(
+            &json.map_err(|error| storage(error.to_string()))?,
+            "turn execution fact",
+        )?;
+        match event.event {
+            E::TurnStarted => execution.steps += 1,
+            E::ModelRequestStarted { request_id, .. } => {
+                execution.model_requests += 1;
+                boundary = Some((request_id, None));
+            }
+            E::ModelRequestCompleted {
+                request_id,
+                usage,
+                generation,
+                ..
+            }
+            | E::ModelRequestFailed {
+                request_id,
+                usage,
+                generation,
+                ..
+            } => {
+                activity.request(generation.as_ref(), usage.as_ref());
+                if let Some(usage) = usage {
+                    execution.requests_with_usage += 1;
+                    crate::durable::response::add_usage(&mut execution.reported_usage, &usage);
+                    if let Some((current, reading)) = &mut boundary
+                        && *current == request_id
+                    {
+                        *reading = Some(usage);
+                    }
+                }
+            }
+            E::ToolExecutionStarted { tool_call_id, .. } => {
+                activity.tool_started(attempt.clone(), tool_call_id, event.timestamp);
+            }
+            E::ToolExecutionCompleted { tool_call_id, .. }
+            | E::ToolExecutionFailed { tool_call_id, .. } => {
+                activity.tool_settled(attempt.clone(), tool_call_id, event.timestamp);
+            }
+            E::CompactionStarted | E::CompactionCompleted { .. } => boundary = None,
+            E::AssistantMessageCommitted { .. } => closing = true,
+            E::AttemptCompleted {
+                finish_reason: ModelFinishReason::Stop | ModelFinishReason::Refusal,
+                ..
+            } => execution.completed_response = closing,
+            _ => {}
+        }
+    }
+    activity.record(&mut execution);
+    if let Some((request, Some(usage))) = boundary {
+        execution.occupancy = crate::context::occupancy::measure(
+            &usage,
+            &super::load_request_snapshot(connection, conversation, &request)?,
+        )?;
+    }
+    Ok(execution)
+}
+
 /// Lineage carries immutable summaries and member references, never executable facts.
 pub(super) fn inherited_turns(
     connection: &Connection,
@@ -311,17 +556,17 @@ pub(super) fn lineage_turns(
     conversation: &ConversationId,
     through: u64,
 ) -> Result<Vec<crate::durable::reading::TurnReadingProvenance>, ConversationStoreError> {
-    use crate::durable::reading::{InheritedTurnOutcome, TurnReadingProvenance};
     use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
-    use crate::runtime::identity::MessageId;
     let mut turns = inherited_turns(connection)?;
-    let mut statement = connection.prepare("SELECT event_json FROM events WHERE sequence<=?1 AND json_extract(event_json,'$.event.type')='attempt_started' ORDER BY sequence").map_err(|error| storage(error.to_string()))?;
+    let mut statement = connection.prepare("SELECT event_json,sequence FROM events WHERE sequence<=?1 AND json_extract(event_json,'$.event.type')='attempt_started' ORDER BY sequence").map_err(|error| storage(error.to_string()))?;
     let starts = statement
-        .query_map([seq_to_i64(through)?], |row| row.get::<_, String>(0))
+        .query_map([seq_to_i64(through)?], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
         .map_err(|error| storage(error.to_string()))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| storage(error.to_string()))?;
-    for json in starts {
+    for (json, sequence) in starts {
         let start: RuntimeEventEnvelope = super::decode(&json, "turn start")?;
         let id = start
             .attempt_id
@@ -333,9 +578,11 @@ pub(super) fn lineage_turns(
             },
             process_message_ids: Vec::new(),
             preceding_message_id: None,
+            prompt_message_id: local_prompt(connection, &id, sequence, through)?.map(|(id, _)| id),
             outcome: InheritedTurnOutcome::IncompleteAtCut,
             started_at: Some(start.timestamp),
             ended_at: None,
+            execution: Some(turn_execution(connection, conversation, &id, through)?),
         };
         let mut facts = connection.prepare("SELECT event_json FROM events INDEXED BY events_attempt_idx WHERE attempt_id=?1 AND sequence<=?2 AND json_extract(event_json,'$.event.type') IN ('assistant_message_committed','attempt_completed','attempt_cancelled','attempt_failed','attempt_timed_out','attempt_limit_exceeded') ORDER BY sequence").map_err(|error| storage(error.to_string()))?;
         let events = facts

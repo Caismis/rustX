@@ -21,13 +21,13 @@ const SESSION_B = "ses_01900000-0000-7000-8000-000000001002";
 const SESSION_NEW = "ses_01900000-0000-7000-8000-000000001003";
 const SESSION_CREATED = "ses_01900000-0000-7000-8000-000000001004";
 const parsedResume = () => parseArguments(["--binary", "rustx", "--resume", "--workspace", "/server/work"]);
-const rows = [SESSION_A, SESSION_B].map((id) => ({ id, name: `Session ${id}`, cwd: "/server/work", active_node: `node_${id.slice(4)}`, updated_at: "2026-09-14T00:00:00Z" }));
+const rows = [SESSION_A, SESSION_B].map((id) => ({ id, name: `Session ${id}`, cwd: "/server/work", ownership_generation: "1", active_node: `node_${id.slice(4)}`, updated_at: "2026-09-14T00:00:00Z" }));
 
 async function connected() {
   const transport = new FakeTransport();
   const pending = AppServerClient.initialize({ transport });
   const [request] = await transport.log.awaitMethod("initialize");
-  transport.respond(request!.id, { type: "initialized", authority_id: 'fixture-app-server-authority', protocol_version: 34, capabilities: SERVER_CAPABILITIES });
+  transport.respond(request!.id, { type: "initialized", authority_id: 'fixture-app-server-authority', protocol_version: 37, capabilities: SERVER_CAPABILITIES });
   return { transport, host: new AppServerHost({ client: await pending, ownership: "external" }) };
 }
 async function catalog(transport: FakeTransport, sessions = rows, count = 1) {
@@ -62,10 +62,11 @@ function appFor(t: TestContext, host: AppServerHost, focus: StartupFocus, reconn
   t.mock.method(Editor.prototype, "setAutocompleteProvider", function(this: Editor, provider: Parameters<Editor["setAutocompleteProvider"]>[0]) {
     editor = this; return autocomplete.call(this, provider);
   });
+  let surface!: TUI;
   let input!: Parameters<TUI["addInputListener"]>[0];
   const addInput = TUI.prototype.addInputListener;
   t.mock.method(TUI.prototype, "addInputListener", function(this: TUI, listener: typeof input) {
-    input = listener; return addInput.call(this, listener);
+    surface = this; input = listener; return addInput.call(this, listener);
   });
   const hidden: ResumeSelector[] = [];
   const surfaces: ResumeSelector[] = [];
@@ -88,7 +89,7 @@ function appFor(t: TestContext, host: AppServerHost, focus: StartupFocus, reconn
   const app = new RustxTuiApp({ host, ...focus, reconnect, sessionSettings: parsedResume().sessionSettings });
   const running = app.run();
   t.after(async () => { await app.quit(); await running; });
-  return { app, surfaces, hidden, feedback, editor, input: (data: string) => input(data) };
+  return { app, surfaces, hidden, feedback, editor, render: () => surface.render(100).join("\n"), input: (data: string) => input(data) };
 }
 
 it("remote missing cwd fails at argument parsing before token reading or connection", () => {
@@ -137,7 +138,7 @@ it("a controlled A does not block browsing; its conflict occurs only on selectio
   assert.equal(paramsOf(request!, "session/attach").session_id, SESSION_A);
   transport.respondError(request!.id, { code: -32000, message: "A is controlled", data: { kind: "controller_in_use" } });
   await tick();
-  assert.equal(h.feedback.at(-1), `could not open Session ${SESSION_A}: another client already controls this Session`);
+  assert.equal(h.feedback.at(-1), `could not open Session ${SESSION_A}: another client already controls this Session · Input retained; nothing sent.`);
   assert.equal(host.client.closed, undefined);
   assert.equal(host.attached.length, 0);
   assert.equal(h.surfaces.at(-1), selector, "the same picker remains recoverable");
@@ -149,7 +150,7 @@ it("a controlled A does not block browsing; its conflict occurs only on selectio
 });
 
 for (const resume of [true, false]) for (const model of [undefined, "local/initial"]) {
-  it(`${resume ? "empty-catalog resume" : "ordinary startup"} creates and attaches exactly one Session with unchanged remote cwd (model=${model ?? "native default"})`, async () => {
+  it(`${resume ? "empty-catalog resume" : "ordinary startup"} creates and attaches exactly one Session with unchanged remote cwd (model=${model ?? "native default"})`, async (t) => {
     const { host, transport } = await connected();
     const parsed = parseArguments(["--connect", "wss://server.test", "--token-file", "/client/token", "--workspace", "/server/work/../project", ...(resume ? ["--resume"] : []), ...(model ? ["--model", model] : [])]);
     const starting = prepareStartup(host, parsed);
@@ -158,8 +159,11 @@ for (const resume of [true, false]) for (const model of [undefined, "local/initi
     assert.equal(paramsOf(create!, "session/create").settings.cwd, "/server/work/../project");
     assert.deepEqual(paramsOf(create!, "session/create").settings.model, model ? { model } : null);
     transport.respond(create!.id, { type: "session_transition", session: sessionView({ id: SESSION_NEW }) });
+    const focus = await starting;
+    assert.equal(transport.log.count("session/attach"), 0);
+    appFor(t, host, focus);
     await attachment(transport, SESSION_NEW);
-    assert.equal((await starting).session?.sessionId, SESSION_NEW);
+    await finishFocus(transport);
     assert.equal(transport.log.count("session/create"), 1);
     assert.equal(transport.log.count("session/attach"), 1);
     assert.equal(transport.log.count("session/list"), resume ? 1 : 0);
@@ -168,12 +172,13 @@ for (const resume of [true, false]) for (const model of [undefined, "local/initi
   });
 }
 
-it("explicit --session/--node attaches that identity directly without browsing or creating", async () => {
+it("explicit --session/--node attaches that identity directly without browsing or creating", async (t) => {
   const { host, transport } = await connected();
   const starting = prepareStartup(host, parseArguments(["--binary", "rustx", "--session", SESSION_B, "--node", "node_46e1cc43-3b60-768f-a449-f55af17cbce3"]));
+  appFor(t, host, await starting);
   const request = await attachment(transport, SESSION_B);
+  await finishFocus(transport);
   assert.equal(paramsOf(request, "session/attach").node_id, "node_46e1cc43-3b60-768f-a449-f55af17cbce3");
-  assert.equal((await starting).session?.sessionId, SESSION_B);
   assert.equal(transport.log.count("session/list"), 0);
   assert.equal(transport.log.count("session/create"), 0);
   await host.shutdown();
@@ -375,5 +380,46 @@ for (const stage of ["create", "attach"] as const) {
     assert.match(h.feedback.at(-1)!, /no unanswered mutations were resent/);
     await old.onCreate!();
     noControl(next.transport);
+  });
+}
+
+for (const outcome of ["ready", "withdraw", "disconnect", "rejection"] as const) {
+  it(`startup accepts input before attachment and handles ${outcome} without replay`, async (t) => {
+    const { host, transport } = await connected();
+    const focus = await prepareStartup(host, parseArguments(["--binary", "rustx", "--session", SESSION_A]));
+    const h = appFor(t, host, focus);
+    await transport.log.awaitMethod("session/attach");
+    assert.equal(h.editor.disableSubmit, false);
+    assert.doesNotMatch(h.render(), /Connecting/);
+    const [history] = await transport.log.awaitMethod("session/history");
+    transport.respond(history!.id, { type: "session_history", conversation_id: "conv_01900000-0000-7000-8000-000000000002", window: { cut: { conversation_id: 'conv_01900000-0000-7000-8000-000000000002', journal: '1000', transcript: '1000', mutation_revision: '0' }, page: { entries: [{ cursor: "1", item: { type: "message", message: { id: "saved", role: "user", source: "human", content: [{ type: "text", text: "Previously saved message" }] } } }] } } });
+    await tick();
+    assert.match(h.render(), /Previously saved message/);
+    assert.doesNotMatch(h.render(), /Connecting/);
+    h.editor.setText("queued while connecting");
+    h.editor.handleInput("\r");
+    assert.equal(transport.log.count("turn/start"), 0);
+    assert.equal(h.editor.disableSubmit, true);
+    assert.match(h.render(), /Connecting/);
+    assert.match(h.render(), /Previously saved message/);
+    if (outcome === "rejection") {
+      const [request] = await transport.log.awaitMethod("session/attach");
+      transport.respondError(request!.id, { code: -32000, message: "Preparation failed" });
+      await tick();
+      assert.equal(h.editor.getText(), "queued while connecting");
+    } else if (outcome === "disconnect") {
+      transport.fail("socket_error"); await tick();
+      assert.equal(h.editor.getText(), "queued while connecting");
+    } else {
+      if (outcome === "withdraw") h.input("\x1b");
+      await attachment(transport, SESSION_A);
+      await finishFocus(transport);
+      if (outcome === "ready") {
+        const [request] = await transport.log.awaitMethod("turn/start");
+        assert.deepEqual(paramsOf(request!, "turn/start").content, [{ type: "text", text: "queued while connecting" }]);
+      } else assert.equal(h.editor.getText(), "queued while connecting");
+    }
+    assert.equal(transport.log.count("turn/start"), outcome === "ready" ? 1 : 0);
+    assert.equal(transport.log.count("session/attach"), 1);
   });
 }

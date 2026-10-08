@@ -12,7 +12,7 @@
 //! the canonical content it already had to read to know its own outcome —
 //! are resolved here, once, and shared.
 //!
-//! Nothing resolved here is a relationship between records. The System
+//! Adoption ownership can resolve after its initial read and is refreshed here. The System
 //! Prompt predecessor, the canonical Context a request introduced and the
 //! recorded model-facing Tool name are historical presentation joins: they
 //! belong to [`super::record`], they are resolved only when a summary page
@@ -156,6 +156,11 @@ impl TraceProjection<'_> {
                 // both in the anchor itself, so no message is loaded for a
                 // lifecycle fact — the preview that needs one belongs to the
                 // summary projection.
+                // Idle adoption precedes its answering Attempt. Resolve at this
+                // read cut for both summaries and retained-record refreshes.
+                if facts.location.attempt_id.is_none() {
+                    facts.location.attempt_id = self.answering_attempt(anchor.sequence)?;
+                }
                 facts.kind = TraceKind::User;
                 facts.state = TraceState::Completed;
                 facts.has_detail = !message_ids.is_empty();
