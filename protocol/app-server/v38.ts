@@ -161,6 +161,13 @@ export type Request1 =
       };
     }
   | {
+      method: 'agent/statistics';
+      params: {
+        target: AttachmentTarget;
+        agent_id: AgentId;
+      };
+    }
+  | {
       method: 'agent/sendMessage';
       params: {
         target: AttachmentTarget;
@@ -1160,6 +1167,10 @@ export type MethodResult =
   | {
       agent: RuntimeClientAgent;
       type: 'agent';
+    }
+  | {
+      metrics: AgentStatistics;
+      type: 'agent_statistics';
     }
   | {
       agents: RuntimeClientAgent[];
@@ -7733,6 +7744,32 @@ export interface RuntimeClientWorkspaceHandoff {
    * `head_commit` and `base_commit`.
    */
   dirty: boolean;
+}
+export interface AgentStatistics {
+  statistics: ConversationStatistics;
+  occupancy?: ContextOccupancy | null;
+  duration: AgentDuration;
+}
+export interface AgentDuration {
+  /**
+   * Sum of this child's closed working intervals, excluding inactive gaps.
+   */
+  settled_ms: string;
+  /**
+   * Last interval, if its terminal event has not been observed.
+   */
+  active?: AgentActiveInterval | null;
+}
+export interface AgentActiveInterval {
+  started_at: string;
+  /**
+   * Last durable evidence. Non-running children freeze here, including recovery.
+   */
+  observed_at: string;
+  /**
+   * Authoritative live lifecycle, never inferred from a missing terminal.
+   */
+  running: boolean;
 }
 /**
  * User-recoverable facts about the project workspace authority of one

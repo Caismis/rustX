@@ -1,12 +1,13 @@
-import { act, cleanup, fireEvent, render } from '@testing-library/react';
+import { agentMetrics } from './agent-statistics-fixture';
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
 import { Message } from '../src/app/agent/Message';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { RuntimeFacts } from '../src/app/agent/Activity';
-import { SubagentScope, SubagentHeader, SubagentSurface } from '../src/app/agent/Subagents';
+import { agentDuration, SubagentScope, SubagentHeader, SubagentSurface } from '../src/app/agent/Subagents';
 import { cellKind } from '../src/app/trajectory/TrajectoryCell';
 import { Server, snapshot } from './fixture';
-import type { RuntimeClientAgent, MessageBlock } from '../../protocol/app-server/v37';
+import type { RuntimeClientAgent, MessageBlock } from '../../protocol/app-server/v38';
 const servers: Server[] = [];
 afterEach(() => { cleanup(); for (const server of servers.splice(0)) server.client.disconnect(); });
 const agent: RuntimeClientAgent = { agent_id: 'child', agent: 'Research', parent_agent_id: 'root', child_conversation_id: 'child-conversation', activation_id: 'activation', state: 'inactive', activation_state: 'succeeded', definition_digest: 'd', profile_digest: 'p', started_at: '2026-10-08T00:00:00Z', observation: { revision: '1', activity: { type: 'awaiting_activity' }, counters: { model_requests: 1, model_retries: 0, tool_executions: 0 } }, workspace: { logical_workspace: '/workspace', isolation: { type: 'shared' }, resource_state: 'none' } };
@@ -24,16 +25,44 @@ it('agent return is a context disclosure, while a human message remains a user b
 });
 it('agents move out of the message footer and open through the header without losing parent draft', async () => {
   const server = new Server(); servers.push(server); await server.attached('A');
+  server.handlers.set('agent/statistics', () => ({ type: 'agent_statistics', metrics: agentMetrics }));
   server.snapshots.get('A')!.agents = [agent]; await server.client.refresh('A');
   const ui = render(<SubagentScope client={server.client} sessionId="A"><SubagentHeader title="Parent"/><SubagentSurface><input aria-label="Root draft" defaultValue="keep me"/><RuntimeFacts snapshot={server.snapshots.get('A')!}/></SubagentSurface></SubagentScope>);
   expect(ui.queryByLabelText('Agent Research')).toBeNull();
   fireEvent.click(ui.getByRole('button', { name: 'Subagents' }));
   await act(async () => { fireEvent.click(ui.getByRole('menuitem', { name: /Research/ })); });
   expect(ui.getByLabelText('Agent Research')).toBeTruthy();
+  expect(await ui.findByRole('button', { name: /12K tok/ })).toBeTruthy();
+  expect(ui.container.querySelector('[data-composer-dock]')).toBeTruthy();
+  expect(ui.getByText('10%')).toBeTruthy();
   expect(ui.queryByRole('textbox', { name: 'Root draft' })).toBeNull();
   fireEvent.click(ui.getByRole('button', { name: 'Parent' }));
   expect((ui.getByRole('textbox', { name: 'Root draft' }) as HTMLInputElement).value).toBe('keep me');
 });
 it('trajectory classifies native agent inbound records as context', () => {
   expect(cellKind({ type: 'RecordRow', record: { kind: 'user', agent_id: 'child' } } as Parameters<typeof cellKind>[0])).toBe('context');
+});
+
+it('native active clocks freeze when inactive and exclude idle time', () => {
+  const metrics = { ...agentMetrics, duration: { settled_ms: '15000', active: { started_at: '2026-10-08T00:00:00Z', observed_at: '2026-10-08T00:00:02Z', running: false } } };
+  expect(agentDuration(metrics, Date.parse('2026-10-08T00:10:00Z'))).toBe(17000);
+  metrics.duration.active.running = true;
+  expect(agentDuration(metrics, Date.parse('2026-10-08T00:00:05Z'))).toBe(20000);
+});
+
+it('large child lists bound background meter requests without blocking the parent', async () => {
+  const server = new Server(); servers.push(server); await server.attached('A');
+  server.snapshots.get('A')!.agents = Array.from({ length: 80 }, (_, index) => ({ ...agent, agent_id: `child-${index}` }));
+  await server.client.refresh('A');
+  server.held.add('agent/statistics');
+  const ui = render(<SubagentScope client={server.client} sessionId="A"><input aria-label="Parent input"/></SubagentScope>);
+  const reads = () => server.requests.filter(row => row.request.method === 'agent/statistics');
+  await waitFor(() => expect(reads()).toHaveLength(2));
+  fireEvent.change(ui.getByRole('textbox'), { target: { value: 'Still usable' } });
+  expect((ui.getByRole('textbox') as HTMLInputElement).value).toBe('Still usable');
+  await act(async () => {
+    server.held.delete('agent/statistics');
+    for (const row of reads()) server.reply(row.request);
+  });
+  await waitFor(() => expect(reads()).toHaveLength(80));
 });

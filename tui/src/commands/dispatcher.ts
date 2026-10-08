@@ -177,7 +177,7 @@ export class CommandDispatcher {
   // A retained command is one submission until its response is classified.
   // Other controls and commands (including on a replacement attachment) remain usable.
   readonly #agentMessageSubmissions = new WeakSet<AppServerSession>();
-  #inspected = new Map<string, import('../../../protocol/app-server/v37.ts').AvailableConfiguration>();
+  #inspected = new Map<string, import('../../../protocol/app-server/v38.ts').AvailableConfiguration>();
 
   constructor(context: DispatcherContext) {
     this.#context = context;
@@ -501,7 +501,7 @@ export class CommandDispatcher {
   async #mcp(argument: string): Promise<CommandOutcome> {
     const words = argument.match(/"(?:[^"\\]|\\.)*"|\S+/g)?.map(word => word.startsWith('"') ? JSON.parse(word) as string : word) ?? [];
     const owner=words.shift() ?? 'user';
-    let target: import('../../../protocol/app-server/v37.ts').SourceTarget;
+    let target: import('../../../protocol/app-server/v38.ts').SourceTarget;
     if(owner==='user')target={kind:'user'};
     else if(owner==='workspace'&&words[0])target={kind:'workspace',directory:words.shift()!};
     else return transient('error','usage: /mcp [user | workspace "<canonical path>"] [connect <name> | disconnect <name>]');
@@ -526,7 +526,7 @@ export class CommandDispatcher {
   async #settings(argument: string): Promise<CommandOutcome> {
     const words = argument.match(/"(?:[^"\\]|\\.)*"|\S+/g)?.map(word => word.startsWith('"') ? JSON.parse(word) as string : word) ?? [];
     const owner = words.shift() ?? "user";
-    let target: import("../../../protocol/app-server/v37.ts").SourceTarget;
+    let target: import("../../../protocol/app-server/v38.ts").SourceTarget;
     if (owner === "user") target = { kind: "user" };
     else if (owner === "workspace" && words[0]) target = { kind: "workspace", directory: words.shift()! };
     else return transient("error", 'usage: /settings [user | workspace "<canonical absolute path>"] [rescan | approval policy|full_access|inherit]');

@@ -320,6 +320,7 @@ pub(crate) struct ClientInner {
     /// live and read-only hosts.
     store: Arc<dyn ConversationStore>,
     read_store: Arc<dyn ConversationStore>,
+    agent_statistics: Mutex<BTreeMap<ConversationId, super::agent_statistics::StatisticsFold>>,
     /// Whether this host is a read-only attachment to durable conversation
     /// state rather than a control adapter over a live runtime.
     read_only: bool,
@@ -1716,6 +1717,46 @@ impl ClientInner {
         Ok(super::projection::agent_view(&agent, &activation))
     }
 
+    pub(crate) fn agent_statistics(
+        &self,
+        id: &crate::runtime::identity::AgentId,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        let agent = self.agent_view(id)?;
+        let store = self
+            .agent_registry()?
+            .transcript_store(&agent.activation_id)
+            .map_err(|error| match error {
+                crate::runtime::subagent::SubagentTranscriptError::Unknown(subagent_id) => {
+                    RuntimeClientError::UnknownSubagent { subagent_id }
+                }
+                crate::runtime::subagent::SubagentTranscriptError::Unavailable(message) => {
+                    RuntimeClientError::RuntimeFailure { message }
+                }
+            })?;
+        let failed =
+            |error: crate::durable::ConversationStoreError| RuntimeClientError::RuntimeFailure {
+                message: error.to_string(),
+            };
+        let through = store.presentation_frontier().map_err(failed)?;
+        // This lock belongs only to meter reads, never the parent projection or
+        // execution. Statistics cannot delay snapshot/attach or sending input.
+        let mut cache = self
+            .agent_statistics
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let metrics = cache
+            .entry(agent.child_conversation_id)
+            .or_default()
+            .read(
+                &store,
+                through,
+                (agent.state == crate::runtime::subagent::AgentState::Active)
+                    .then_some(agent.started_at),
+            )
+            .map_err(failed)?;
+        Ok(RuntimeClientResult::AgentStatistics { metrics })
+    }
+
     pub(crate) fn agent_status(
         &self,
         id: &crate::runtime::identity::AgentId,
@@ -2118,6 +2159,7 @@ impl RuntimeClientHost {
                 store.conversation_id()
             )),
             runtime: None,
+            agent_statistics: Mutex::new(BTreeMap::new()),
             read_store: store.presentation_reader(),
             store,
             read_only: true,
@@ -2231,6 +2273,7 @@ impl RuntimeClientHost {
             conversation_id: seed.conversation_id,
             agent_id: config.runtime.agent_id().clone(),
             runtime: Some(config.runtime),
+            agent_statistics: Mutex::new(BTreeMap::new()),
             read_store: store.presentation_reader(),
             store,
             read_only: false,

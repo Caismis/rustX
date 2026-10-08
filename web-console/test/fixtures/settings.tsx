@@ -4,7 +4,7 @@ import { App } from '../../src/app/App';
 import { Server, endpoint, snapshot } from '../fixture';
 import { cfg3Application, cfg3Effective, cfg3Source } from '../cfg3-data';
 import { RpcFailure } from '../../src/client/app-server';
-import type { ConfigurationApplication, RuntimeClientEvent, SourceMutation } from '../../../protocol/app-server/v37';
+import type { ConfigurationApplication, RuntimeClientEvent, SourceMutation } from '../../../protocol/app-server/v38';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -111,7 +111,7 @@ server.handlers.set('mcp/status',()=>({type:'mcp_connections',connections:[]}));
 server.handlers.set('mcp/connect',()=>({type:'mcp_connections',connections:[]}));
 server.handlers.set('mcp/disconnect',()=>({type:'mcp_connections',connections:[]}));
 if (variant.get('scenario') === 'mcp-status') {
-  const states: Record<string, import('../../../protocol/app-server/v37').McpConnectionStatus> = {ready:{status:'connected',tool_count:2}, unavailable:{status:'failed'}, pending:{status:'connecting'}};
+  const states: Record<string, import('../../../protocol/app-server/v38').McpConnectionStatus> = {ready:{status:'connected',tool_count:2}, unavailable:{status:'failed'}, pending:{status:'connecting'}};
   source.user.authored!.agent={tools:{sources:{ready:'all',unavailable:'all',pending:'all'}}};
   source.user_mcp.authored = Object.fromEntries(Object.keys(states).map(name => [name, {definition:{type:'stdio' as const,command:'mcp-server'},retained_env:[],retained_headers:[]}]));
   source.prospective_resources = {...effective.resources,

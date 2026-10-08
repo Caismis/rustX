@@ -1041,6 +1041,7 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
         | Method::JobCancel { target, .. }
         | Method::AgentStatus { target, .. }
         | Method::AgentList { target, .. }
+        | Method::AgentStatistics { target, .. }
         | Method::AgentSendMessage { target, .. }
         | Method::AgentWait { target, .. }
         | Method::AgentInterrupt { target, .. }
@@ -1163,6 +1164,9 @@ async fn dispatch_runtime(
         }
         Method::AgentInterrupt { agent_id, .. } => {
             native_result(authority.agent_wait(&agent_id, true).await)
+        }
+        Method::AgentStatistics { agent_id, .. } => {
+            native_result(authority.agent_statistics(&agent_id))
         }
         Method::AgentTranscript {
             agent_id,
@@ -1319,6 +1323,9 @@ fn native_result(
         RuntimeClientResult::Agent { agent } => MethodResult::Agent {
             agent: Box::new(agent),
         },
+        RuntimeClientResult::AgentStatistics { metrics } => {
+            MethodResult::AgentStatistics { metrics }
+        }
         RuntimeClientResult::Agents {
             agents,
             returned,

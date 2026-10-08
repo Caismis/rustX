@@ -4,7 +4,7 @@ import { StateDot } from '../../presentation/primitives/StateDot';
 import { displayText, message as uiMessage, type DisplayText } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
 import { useEffect, useState } from 'react';
-import type { RuntimeClientAgent, RuntimeClientJob, RuntimeClientTranscriptPage, MethodResult, WorkflowRunView, WorkflowRunId } from '../../../../protocol/app-server/v37';
+import type { AgentStatistics, RuntimeClientAgent, RuntimeClientJob, RuntimeClientTranscriptPage, MethodResult, WorkflowRunView, WorkflowRunId } from '../../../../protocol/app-server/v38';
 import { AppServerClient, RpcFailure, sameTarget } from '../../client/app-server';
 import { json } from '../../bindings/projection';
 import { Badge, SettingsCard } from '../../presentation/settings/SettingsContent';
@@ -13,7 +13,8 @@ import { ToolCard } from '../../presentation/agent/ToolCard';
 import { ArtifactContext, ToolArtifacts } from './Artifact';
 import { PreviewContext } from './ArtifactPreview';
 import css from './ActivityCards.module.css';
-import { Message } from '../agent/Message';
+import { AgentTranscript } from '../agent/AgentTranscript';
+import { ConversationStats } from '../agent/UsageStats';
 
 const detail = (value: string) => value.length > 1024 ? `${value.slice(0, 1024)}…` : value;
 export const workflowKey = (id: WorkflowRunId) => JSON.stringify([id.conversation_id, id.attempt_id, id.invocation]);
@@ -52,7 +53,7 @@ function useActivityRequest({ client, sessionId }: Controls) {
 }
 
 /** Durable identity is the React key; the selected transcript survives resume. */
-export function AgentCard({ agent, ...controls }: { agent: RuntimeClientAgent } & Controls) {
+export function AgentCard({ agent, metrics, metricsError, ...controls }: { agent: RuntimeClientAgent; metrics?: AgentStatistics; metricsError?: string } & Controls) {
   const tx = useTranslation();
   const request = useActivityRequest(controls);
   const waitRequest = useActivityRequest(controls);
@@ -103,9 +104,10 @@ export function AgentCard({ agent, ...controls }: { agent: RuntimeClientAgent } 
     </div>
     <ChatViewport latestLabel={tx('agent:agent-transcript.return-to-latest')}><div className={chatCss.column}>
       {transcript?.next_cursor && <Button size="sm" disabled={request.disabled} onClick={() => void readTranscript(transcript.next_cursor!)}>{tx('common:activity.older')}</Button>}
-      <ArtifactContext.Provider value={undefined}><PreviewContext.Provider value={undefined}>{(transcript?.entries ?? []).map(entry => entry.item.type === 'message' ? <Message key={entry.cursor} message={entry.item.message} tools={entry.tool_calls ?? []}/> : null)}</PreviewContext.Provider></ArtifactContext.Provider>
+      <ArtifactContext.Provider value={undefined}><PreviewContext.Provider value={undefined}>{transcript && <AgentTranscript snapshot={{ conversation_id: agent.child_conversation_id, messages: [], statuses: [], attempt: null, transcript }} historicalDisabled/>}</PreviewContext.Provider></ArtifactContext.Provider>
       {transcriptLoading && !transcript && <p role="status">{tx('common:activity.reading')}</p>}
       {transcript && !transcript.entries?.length && <p>{tx('common:activity.empty')}</p>}
+      {metricsError && <p role="alert">{metricsError}</p>}
       {transcriptError && <p role="alert">{transcriptError}</p>}
       {agent.detail && <p>{detail(agent.detail)}</p>}
       {settledActivation && <small role="status">{settledActivation.outcome ? tx(`common:state.${settledActivation.outcome}`) : tx('common:activity.observed-inactive')}</small>}
@@ -115,6 +117,7 @@ export function AgentCard({ agent, ...controls }: { agent: RuntimeClientAgent } 
       <textarea aria-label={tx('common:activity.message-label', { name: agent.agent })} placeholder={agent.state === 'inactive' ? tx('common:activity.resume') : tx('common:activity.message')} value={message} onChange={event => setMessage(event.target.value)} disabled={request.disabled || !acceptsMessage}/>
       <div><small>{request.pending ? tx('common:activity.waiting-runtime') : agent.agent}</small><Button size="sm" type="submit" disabled={request.disabled || !acceptsMessage || !message.trim()}>{tx('common:activity.send')}</Button></div>
     </form>}
+    <ConversationStats statistics={metrics?.statistics} occupancy={metrics?.occupancy}/>
   </section>;
 }
 

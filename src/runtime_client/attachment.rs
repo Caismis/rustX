@@ -79,6 +79,7 @@ impl RuntimeAttachment {
     }
     native_control!(agent_status, false, id: &crate::runtime::identity::AgentId);
     native_control!(agent_list, false);
+    native_control!(agent_statistics, false, id: &crate::runtime::identity::AgentId);
     native_control!(agent_transcript_page, false, id: &crate::runtime::identity::AgentId, before: Option<super::snapshot::RuntimeClientTranscriptCursor>, limit: usize);
 
     /// Wait for this exact finite Job's physical settlement.
@@ -318,6 +319,9 @@ impl RuntimeAttachment {
             RuntimeClientRequest::JobList { .. } => Ok(inner.job_list()),
             RuntimeClientRequest::AgentStatus { agent_id, .. } => inner.agent_status(&agent_id),
             RuntimeClientRequest::AgentList { .. } => inner.agent_list(),
+            RuntimeClientRequest::AgentStatistics { agent_id, .. } => {
+                inner.agent_statistics(&agent_id)
+            }
             RuntimeClientRequest::AgentTranscript {
                 agent_id,
                 before,

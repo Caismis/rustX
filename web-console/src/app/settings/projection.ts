@@ -2,7 +2,7 @@ import type { Translate } from '../../locale/translation';
 import type {
   ConfigurationApplication, McpView, McpWrite, Origin, ProcessPolicyImpact, ResourceFamily, RuntimeLayer,
   SourceMutation, SourceScope, SourceSettings, SourceTarget, SourceView, UnitApplication,
-} from '../../../../protocol/app-server/v37';
+} from '../../../../protocol/app-server/v38';
 import type { ConnectionState } from '../../client/app-server';
 
 /** Each Settings target names one exact configuration owner. The catalog scope

@@ -1,5 +1,5 @@
-import type { SourceMutation, SourceSettings } from '../../../protocol/app-server/v37.ts';
-import type { AttachmentTarget, SessionFileReference } from '../../../protocol/app-server/v37.ts';
+import type { SourceMutation, SourceSettings } from '../../../protocol/app-server/v38.ts';
+import type { AttachmentTarget, SessionFileReference } from '../../../protocol/app-server/v38.ts';
 import type { DocumentRequest, DocumentResult } from '../../shared/documents.ts';
 export interface DeliveryRead { target: AttachmentTarget; message_id: string; delivery_index: number }
 export interface DeliveryBytes { file: SessionFileReference; data: string }
@@ -21,7 +21,7 @@ export interface WorkspaceConfigurationCommit {
  * authoritative reread stay distinct facts for a write, so a failed reread can
  * never be mistaken for an uncommitted write. */
 export type WorkspaceConfigurationResult =
-  | { kind: "mcp"; connections: import("../../../protocol/app-server/v37.ts").McpConnectionSnapshot[] }
+  | { kind: "mcp"; connections: import("../../../protocol/app-server/v38.ts").McpConnectionSnapshot[] }
   | { kind: 'read' | 'reconcile'; projection: SourceSettings }
   | { kind: 'write'; commit: WorkspaceConfigurationCommit };
 /** Product Host contract. No rustX trust, configuration, or Session ownership. */

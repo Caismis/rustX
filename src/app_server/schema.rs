@@ -325,6 +325,10 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                 revision: EXACT,
             },
         },
+        Method::AgentStatistics {
+            target: target.clone(),
+            agent_id: crate::runtime::identity::AgentId::new("agent-fixture"),
+        },
         Method::AgentTranscript {
             target: target.clone(),
             agent_id: crate::runtime::identity::AgentId::new("agent-fixture"),
@@ -392,6 +396,9 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             matched: 0,
             limit: crate::tools::background::MAX_JOB_LIST_LIMIT,
             truncated: false,
+        },
+        MethodResult::AgentStatistics {
+            metrics: crate::runtime_client::agent_statistics::AgentStatistics::default(),
         },
         MethodResult::InboundMutation {
             outcome: crate::durable::inbox::PendingMutationOutcome::Conflict,
@@ -793,9 +800,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v37.schema.json", "v37.ts"]);
+        assert_eq!(generations, ["v38.schema.json", "v38.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v37.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v38.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

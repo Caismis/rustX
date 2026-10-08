@@ -1,4 +1,4 @@
-import type { McpConnectionSnapshot } from '../../../../../protocol/app-server/v37';
+import type { McpConnectionSnapshot } from '../../../../../protocol/app-server/v38';
 import { useTranslation } from '../../../locale/react';
 import { Tooltip } from '../../../presentation/primitives/Tooltip';
 import type { ExtensionEntry } from '../extensions/inventory';

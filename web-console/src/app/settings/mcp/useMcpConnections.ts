@@ -1,5 +1,5 @@
 import {useEffect, useRef, useState} from 'react';
-import type {McpConnectionSnapshot, SourceSettings} from '../../../../../protocol/app-server/v37';
+import type {McpConnectionSnapshot, SourceSettings} from '../../../../../protocol/app-server/v38';
 import type {AppServerClient} from '../../../client/app-server';
 import type {McpOperation, ProductHostWorkspaces} from '../../../workspaces/host';
 import {extensionEntries} from '../extensions/inventory';

@@ -7,7 +7,7 @@ import css from '../../presentation/agent/Tool.module.css';
 import own from './InboundMessage.module.css';
 import { useTranslation } from '../../locale/react';
 import type { TranslationKey } from '../../locale/translation';
-import type { ForegroundToolExecution } from '../../../../protocol/app-server/v37';
+import type { ForegroundToolExecution } from '../../../../protocol/app-server/v38';
 import { ToolCard } from '../../presentation/agent/ToolCard';
 import { toolCard } from '../../bindings/tools';
 

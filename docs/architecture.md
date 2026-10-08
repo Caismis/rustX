@@ -6918,3 +6918,24 @@ Chat multimodal Tool messages. Request projection, bounded artifact resolution
 and image context cost are shared; adapters own only encoding and placement.
 Model declarations remain explicit. Endpoint incompatibility is a provider error,
 without placement capability splits, provider-name checks or synthetic User fallback.
+
+### Child Agent meters (Runtime Client 60 / App Server 38)
+
+`agent/statistics` resolves a stable Agent identity exclusively through its
+parent registry and opens the existing child store read-only. It returns the
+same `ConversationStatistics` and request-owned `ContextOccupancy` used by the
+main conversation, plus a child working-interval clock. It neither activates a
+child nor waits for its next response. The WebUI reuses the main conversation's
+statistics dock and completed-response presentation in the child reader.
+
+The native host caches a finite, incremental fold per child Conversation. Only
+new durable facts are folded; failed reads do not advance the cache. Reopening
+reconstructs the same reading. Usage counts only requests executed by that child,
+including reported failed/retried request usage, excluding inherited transcript
+execution. Missing provider reports stay explicit through usage coverage.
+Timing uses the existing native generation evidence and foreground tool spans.
+Elapsed working time sums Attempt intervals across activations, excluding idle
+gaps. An unfinished interval advances in the UI only when its start belongs to
+the currently active activation; otherwise it freezes at the last observed
+fact. Native statistics reads use their own lock and do not gate parent attach,
+snapshots or input admission. The TUI transport recognizes the same read method.

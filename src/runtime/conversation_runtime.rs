@@ -12283,6 +12283,12 @@ mod tests {
                 .load(std::sync::atomic::Ordering::Relaxed)
         };
         let unknown = crate::runtime::identity::AgentId::new("unknown-child");
+        assert!(matches!(attachment.agent_statistics(&unknown),
+            Err(RuntimeClientError::UnknownAgent { agent_id }) if agent_id == unknown));
+        assert!(matches!(
+            attachment.agent_statistics(&accepted.child_agent_id),
+            Err(RuntimeClientError::RuntimeFailure { .. })
+        ));
         for id in [&accepted.child_agent_id, &unknown] {
             for limit in [0, crate::durable::TRANSCRIPT_PAGE_LIMIT_MAX + 1] {
                 assert!(matches!(

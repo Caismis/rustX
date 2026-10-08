@@ -1701,3 +1701,11 @@ the version pinned by ZCode's lockfile:
 https://unpkg.com/lucide-react@1.17.0/dist/esm/icons/cable.mjs
 The ISC license is shipped in `public/LICENSE-Lucide-1.17.txt` and the generated
 third-party notices. Only the React SVG wrapper is local.
+
+
+Child statistics now use App Server v38's native `agent/statistics` reading.
+The Harness SubagentHeaderLineage token/duration columns accompany the existing
+state rows; the child reader reuses the main conversation's statistics dock,
+context meter and completed-response presentation. Native event folds retain
+request usage coverage, generation evidence and activation timing. Browser code
+only formats those readings and interpolates explicitly running intervals.

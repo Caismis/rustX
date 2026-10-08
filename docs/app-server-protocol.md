@@ -1,4 +1,16 @@
-# App Server protocol v37
+# App Server protocol v38
+
+App Server v38 / Runtime Client v60 add `agent/statistics { target, agent_id }`.
+The result is `agent_statistics { metrics }`: child-owned `ConversationStatistics`,
+request-owned context occupancy, and cumulative working intervals (`settled_ms`
+plus an optional active interval). Usage, cache hit, request coverage, turns,
+steps, model/tool time, TTFT and decode speed share the main conversation's
+native definitions. Historical inherited execution is excluded from child usage.
+The read uses only the parent's owned child store, never starts or resumes a
+child, and is independent of transcript pagination. Repeated reads fold only
+new facts; recovery replays durable evidence. Active clocks carry native
+`started_at`, `observed_at` and `running`; non-running clocks freeze at the last
+observed fact. Clients must upgrade together; previous versions are rejected.
 
 App Server v37 / Runtime Client v59 refresh retained Trace input ownership at the
 current read cut. See [Trace retained-input ownership](#trace-retained-input-ownership-v37).
@@ -411,6 +423,7 @@ explicitly rejected as an invalid request before any action occurs.
 | `session/effectiveConfiguration`, `configuration/reconcile`, `session/adoptConfiguration` | Authoritative application state, native rescan/retry, and fenced explicit Session adoption |
 | `context/compact`, `goal/control` | Existing maintenance and Goal owners |
 | `job/list`, `job/status`, `job/wait`, `job/cancel` | ConversationBackgroundRegistry: bounded finite Jobs, immediate snapshot, exact terminal wait and cancellation through physical settlement or typed publication abandonment |
+| `agent/statistics` | Parent `AttachmentTarget` → exact parent registry Agent ownership → existing child store → incremental native usage, timing and occupancy; read-only, no child activation |
 | `agent/transcript` | Parent `AttachmentTarget` → current parent Runtime Client authority → exact parent `SubagentRegistry` ownership resolution of caller-supplied `AgentId` (never arbitrary child `ConversationId`) → exact owned child Conversation, which remains history authority → bounded read-only durable transcript projection; grants no execution, control, or HITL authority |
 | `agent/list`, `agent/status`, `agent/sendMessage`, `agent/wait`, `agent/interrupt` | Durable Agent owner: atomic message/resume arbitration, captured activation wait and activation-only interruption |
 | `subagent/disposeWorkspace` | Activation-specific retained resource owner; no caller-supplied filesystem cleanup paths |
@@ -604,8 +617,8 @@ DTO's standalone serde/schema representation.
 
 Generated client-neutral artifacts are in `protocol/app-server/`:
 
-- `v37.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
-- `v37.ts`: TypeScript generated from that schema using pinned
+- `v38.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
+- `v38.ts`: TypeScript generated from that schema using pinned
   `json-schema-to-typescript` and its committed pnpm lockfile.
 - `fixtures.json`: serialized Rust messages, including nulls, string/numeric
   request IDs, timestamps, exact domains above 2^53 and lossless Questionnaire
@@ -1250,7 +1263,7 @@ the authored unit in that scope. Clients never write whole config documents.
 
 Initialization requires exactly v37 and WebSocket requires `rustx.app-server.v37`.
 v36 and all earlier versions are rejected without fallback. Rust DTOs generate
-`v37.ts`, `v37.schema.json`, and the serialized fixtures; only the current version is kept.
+`v38.ts`, `v38.schema.json`, and the serialized fixtures; only the current version is kept.
 Manual runtime unload is absent from the public method/result vocabulary.
 Session lists have no residency field. Deletion blockers have no current-Session
 or ordinary-residency case: external allocation exclusion is `resource_conflict`.

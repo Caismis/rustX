@@ -16,3 +16,5 @@
 .parentSurface { display: contents; }
 .parentSurface[hidden] { display: none; }
 @media (max-width: 640px) { .title, .parent { max-width: 150px; } }
+
+.metrics { display: flex; flex-direction: column; align-items: flex-end; flex: none; color: var(--dsw-alias-label-tertiary); font-size: 10px; line-height: 15px; }

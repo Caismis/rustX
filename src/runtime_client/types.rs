@@ -259,7 +259,8 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// eligibility to the snapshot and its change event; ordinary streaming never
 /// publishes it. Version 57 clients are rejected without a compatibility path.
 /// Version 59 refreshes retained Trace records with their resolved native location.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 59;
+/// Version 60 adds child-owned incremental statistics and active-interval clocks.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 60;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -508,6 +509,10 @@ pub enum RuntimeClientRequest {
     AgentList {
         id: RequestId,
     },
+    AgentStatistics {
+        id: RequestId,
+        agent_id: crate::runtime::identity::AgentId,
+    },
     AgentSendMessage {
         id: RequestId,
         agent_id: crate::runtime::identity::AgentId,
@@ -576,6 +581,7 @@ impl RuntimeClientRequest {
             | Self::JobCancel { id, .. }
             | Self::AgentStatus { id, .. }
             | Self::AgentList { id, .. }
+            | Self::AgentStatistics { id, .. }
             | Self::AgentSendMessage { id, .. }
             | Self::AgentWait { id, .. }
             | Self::AgentInterrupt { id, .. }
@@ -609,6 +615,7 @@ impl RuntimeClientRequest {
             Self::JobCancel { .. } => "job_cancel",
             Self::AgentStatus { .. } => "agent_status",
             Self::AgentList { .. } => "agent_list",
+            Self::AgentStatistics { .. } => "agent_statistics",
             Self::AgentSendMessage { .. } => "agent_send_message",
             Self::AgentWait { .. } => "agent_wait",
             Self::AgentInterrupt { .. } => "agent_interrupt",
@@ -804,6 +811,9 @@ pub enum RuntimeClientResult {
     },
     Agent {
         agent: RuntimeClientAgent,
+    },
+    AgentStatistics {
+        metrics: super::agent_statistics::AgentStatistics,
     },
     Agents {
         agents: Vec<RuntimeClientAgent>,
@@ -1069,7 +1079,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 59);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 60);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {
