@@ -4,7 +4,7 @@ const listeners = new Set<() => void>();
 let value: boolean | undefined;
 function snapshot() {
   if (value === undefined) {
-    try { value = localStorage.getItem(key) !== 'false'; } catch { value = true; }
+    try { value = localStorage.getItem(key) === 'true'; } catch { value = false; }
   }
   return value;
 }

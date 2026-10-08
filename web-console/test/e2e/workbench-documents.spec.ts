@@ -70,6 +70,7 @@ test('source dockkit floats, docks, restores and collapses the last content tab'
 });
 
 test('interactive HTML packs local assets and executes inside an opaque sandbox',async({page})=>{
+  await page.addInitScript(()=>{ if(localStorage.getItem('rustx-html-interactive-v1')===null)localStorage.setItem('rustx-html-interactive-v1','true'); });
   await page.goto(`${origin}/test/fixtures/workbench.html`);
   await page.locator('[data-preview-toggle]').click();
   const panel=page.locator('[data-workbench]');
@@ -89,4 +90,20 @@ test('interactive HTML packs local assets and executes inside an opaque sandbox'
   await frame.getByRole('button',{name:'Count 0'}).click();
   await expect(frame.getByRole('button',{name:'Count 0'})).toBeVisible();
   await expect(frame.locator('#boundary')).toHaveText('');
+});
+
+test('workspace HTML stays static until the user explicitly opts into scripts',async({page})=>{
+  const dependencies:string[]=[];
+  page.on('request',request=>{const body=request.postData();if(body&&/counter\.js|counter\.css/.test(body))dependencies.push(body);});
+  await page.goto(`${origin}/test/fixtures/workbench.html`);
+  await page.locator('[data-preview-toggle]').click();const panel=page.locator('[data-workbench]');
+  await panel.getByRole('button',{name:/Workspace files/}).click();
+  await panel.getByRole('button',{name:'docs',exact:true}).click();
+  await panel.getByRole('button',{name:'interactive.html',exact:true}).click();
+  await expect(panel.locator('iframe')).toHaveAttribute('sandbox','');
+  const frame=panel.frameLocator('iframe');
+  await frame.getByRole('button',{name:'Count 0'}).click();
+  await expect(frame.getByRole('button',{name:'Count 0'})).toBeVisible();
+  await expect(frame.locator('#boundary')).toHaveText('');
+  expect(dependencies).toEqual([]);
 });
