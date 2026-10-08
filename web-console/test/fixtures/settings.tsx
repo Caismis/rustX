@@ -110,6 +110,10 @@ if (variant.get('scenario') === 'mcp') {
 server.handlers.set('mcp/status',()=>({type:'mcp_connections',connections:[]}));
 server.handlers.set('mcp/connect',()=>({type:'mcp_connections',connections:[]}));
 server.handlers.set('mcp/disconnect',()=>({type:'mcp_connections',connections:[]}));
+if (variant.get('scenario') === 'mcp-scope') {
+  source.user_mcp.authored={exa:{definition:{type:'http',url:'https://mcp.exa.ai/mcp'},retained_env:[],retained_headers:[]}};
+  source.prospective_resources={...effective.resources,definitions:[{family:'mcp',name:'exa',valid:true,location:{scope:'user',path:source.user_mcp.path}}]};
+}
 if (variant.get('scenario') === 'mcp-status') {
   const states: Record<string, import('../../../protocol/app-server/v38').McpConnectionStatus> = {ready:{status:'connected',tool_count:2}, unavailable:{status:'failed'}, pending:{status:'connecting'}};
   source.user.authored!.agent={tools:{sources:{ready:'all',unavailable:'all',pending:'all'}}};

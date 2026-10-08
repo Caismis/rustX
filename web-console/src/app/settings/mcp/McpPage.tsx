@@ -25,7 +25,8 @@ export function McpPage({ source, scope, revision, focus, onFocus, scopeControl,
   const [query, setQuery] = useState('');
   const [menu, setMenu] = useState(false);
   const document = documentAuthoring(scope === 'user' ? source.user_mcp : source.workspace_mcp);
-  const entries = extensionEntries(source, scope, 'mcp');
+  // Management follows ZCode's scopedServers, not the runtime's merged inventory.
+  const entries = extensionEntries(source, scope, 'mcp').filter(entry => entry.owner === scope);
   const description = (name: string, owner: SourceScope, path: string) => {
     const config = (owner === 'user' ? source.user_mcp : source.workspace_mcp)?.authored?.[name]?.definition;
     return config ? config.url ? `http · ${config.url}` : `stdio · ${[config.command, ...(config.args ?? [])].join(' ')}` : path;
@@ -35,17 +36,16 @@ export function McpPage({ source, scope, revision, focus, onFocus, scopeControl,
   const create = () => onFocus({kind:'mcp'});
   const importConfig = () => onFocus({kind:'mcp',mode:'json'});
   const editable = document.state === 'structured';
-  const group = (owner: SourceScope) => {
-    const rows = filtered.filter(entry => entry.owner === owner);
-    if (owner !== scope && !rows.length) return null;
-    return <div className={css.group} role="group" aria-label={owner === scope ? tx('settings:mcp.installed') : tx(owner === 'user' ? 'settings:catalog.inherited' : 'settings:catalog.shadowed')}>
-      <div className={css.groupHeader}><span>{owner === scope ? tx('settings:mcp.installed') : tx(owner === 'user' ? 'settings:catalog.inherited' : 'settings:catalog.shadowed')} <small>{rows.length}</small></span>
-        {owner === scope && <div className={css.actions}>
+  const group = () => {
+    const rows = filtered;
+    return <div className={css.group} role="group" aria-label={tx('settings:mcp.installed')}>
+      <div className={css.groupHeader}><span>{tx('settings:mcp.installed')} <small>{rows.length}</small></span>
+        <div className={css.actions}>
           <Menu open={menu} onClose={() => setMenu(false)} items={[{id:'import',label:tx('settings:mcp.import'),disabled:!editable}]} onSelect={() => {setMenu(false);importConfig();}}
             anchor={<button className={css.iconButton} type="button" aria-label={tx('settings:mcp.more')} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>···</button>}/>
           <button className={css.iconButton} type="button" title={tx('settings:mcp.refresh')} aria-label={tx('settings:mcp.refresh')} disabled={refreshing} onClick={() => {refresh();runtime.refresh();}}><IconRefreshOutline16/></button>
           <Button size="sm" variant="primary" disabled={!editable} onClick={create}>＋ {tx('settings:catalog.new')}</Button>
-        </div>}
+        </div>
       </div>
       {rows.length ? <div role="list" className={css.list}>{rows.map(entry => <div key={entry.name} role="listitem" aria-label={entry.name} className={css.row}>
         <button className={css.open} type="button" aria-label={tx('settings:extension-detail.mcp-value',{p0:entry.name})} onClick={() => onFocus({kind:'mcp',name:entry.name})}>
@@ -61,9 +61,9 @@ export function McpPage({ source, scope, revision, focus, onFocus, scopeControl,
   };
   return <div className={css.page} data-mcp-page="">
     <h3>{tx('settings:catalog.mcp')}</h3>
-    <div className={css.toolbar}>{scopeControl}<span className={css.total}>MCP <small>{entries.length}</small></span><Search label={tx('settings:mcp.search')} placeholder={tx('settings:mcp.search')} value={query} onChange={setQuery}/></div>
+    <div className={css.toolbar}>{scopeControl}<span className={css.total}>MCP <small>{filtered.length}</small></span><Search label={tx('settings:mcp.search')} placeholder={tx('settings:mcp.search')} value={query} onChange={setQuery}/></div>
     {runtime.error && <p role="alert">{tx('settings:mcp.connection-error')}</p>}
     {document.state !== 'structured' && <p role="alert">{document.state === 'malformed' ? document.diagnostic : tx('settings:source.not-loaded')}</p>}
-    {group(scope)}{group(scope === 'user' ? 'workspace' : 'user')}<CollectionDiagnostics source={source} families={['mcp']}/>
+    {group()}<CollectionDiagnostics source={source} families={['mcp']}/>
   </div>;
 }

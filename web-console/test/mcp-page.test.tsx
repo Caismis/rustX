@@ -58,3 +58,32 @@ it('HTTP exposes request headers directly and saves the entered map',async()=>{
  await screen.findByRole('listitem',{name:'headers-server'});
  expect(writes(s)[0].mutation).toMatchObject({kind:'mcp',authored:{definition:{headers:{Authorization:'Bearer test-token'}}}});
 });
+
+it('workspace MCP management excludes user definitions from rows, counts, search and connection actions',async()=>{
+ const s=cfg3Client();
+ s.source.target={kind:'workspace',directory:'/workspace/A'};
+ s.source.user_mcp.authored={exa:{definition:{type:'http',url:'https://mcp.exa.ai/mcp'},retained_env:[],retained_headers:[]}};
+ s.source.prospective_resources={...s.effective.resources,definitions:[]};
+ s.source.prospective_resources.definitions.push({family:'mcp',name:'exa',valid:true,location:{scope:'user',path:s.source.user_mcp.path}});
+ const {McpPage}=await import('../src/app/settings/mcp/McpPage');
+ const {vi}=await import('vitest');
+ const onFocus=vi.fn();
+ const props={source:s.source,scope:'workspace' as const,onFocus,scopeControl:<span>Workspace A</span>,refresh:vi.fn(),refreshing:false,connection:{client:s.client,endpoint:'',active:true}};
+ const ui=render(<McpPage {...props}/>);
+ expect(screen.getByText('No MCP servers installed')).toBeTruthy();
+ expect(screen.queryByRole('listitem',{name:'exa'})).toBeNull();
+ expect(screen.queryByText('Inherited from user')).toBeNull();
+ expect(ui.container.querySelector('[class*="total"]')?.textContent).toBe('MCP 0');
+ fireEvent.change(screen.getByRole('searchbox'),{target:{value:'exa'}});
+ expect(screen.queryByRole('listitem',{name:'exa'})).toBeNull();
+ await screen.findByText('No matching resources');
+ expect(s.request.mock.calls.some(([op])=>op.method==='mcp/connect'||op.method==='mcp/disconnect')).toBe(false);
+ // Switching scope reveals the same user definition without copying or editing it.
+ s.source.target={kind:'user'};
+ ui.rerender(<McpPage {...props} source={{...s.source}} scope="user"/>);
+ expect(screen.getByRole('listitem',{name:'exa'})).toBeTruthy();
+ expect(ui.container.querySelector('[class*="total"]')?.textContent).toBe('MCP 1');
+ expect(writes(s)).toHaveLength(0);
+ fireEvent.change(screen.getByRole('searchbox'),{target:{value:'missing'}});
+ expect(ui.container.querySelector('[class*="total"]')?.textContent).toBe('MCP 0');
+});

@@ -12,7 +12,7 @@ export function useMcpConnections(source: SourceSettings, context: McpConnection
   const latest=useRef(context);latest.current=context;
   const scope=source.target.kind;
   const selection=source[scope]?.authored?.agent?.tools?.sources;
-  const entries=extensionEntries(source,scope,'mcp').map(entry=>({id:entry.name,revision:(entry.owner==='user'?source.user_mcp:source.workspace_mcp)?.revision,
+  const entries=extensionEntries(source,scope,'mcp').filter(entry=>entry.owner===scope).map(entry=>({id:entry.name,revision:(entry.owner==='user'?source.user_mcp:source.workspace_mcp)?.revision,
     enabled:entry.valid!==false && (selection?.[entry.name]==='all' || Array.isArray(selection?.[entry.name]) && (selection![entry.name] as string[]).length>0)}));
   const signature=JSON.stringify({target:source.target,entries,configuration:[source.user.revision,source.workspace?.revision]});
   useEffect(()=>{
@@ -21,6 +21,7 @@ export function useMcpConnections(source: SourceSettings, context: McpConnection
     let timer:ReturnType<typeof setTimeout> | undefined;
     setSnapshots({});setError('');
     const {target,entries:servers}=JSON.parse(signature) as {target:SourceSettings['target'];entries:typeof entries};
+    if(servers.length===0)return;
     const request=async(operation:McpOperation):Promise<McpConnectionSnapshot[]>=>{
       const current=latest.current;
       if(current.workspaceId!==undefined){
