@@ -500,7 +500,7 @@ paths are relative, symlinks are not followed, directory pages are bounded to
 implementation on Linux and macOS. Remote/unmapped Hosts do not gain filesystem access.
 
 Workspace HTML defaults to the static, script-disabled preview. Script execution
-requires explicit opt-in in the workspace panel. The current opaque iframe does
+requires explicit opt-in in General settings. The current opaque iframe does
 not provide a zero-network execution boundary: browser WebRTC can transmit even
 with a restrictive CSP. Interactive execution must not be described as network
 isolated; completing that contract requires an isolated execution environment or
@@ -522,7 +522,9 @@ input/resize/create still revalidates the exact native Session/node.
 reported all children reaped and its outer supervisor exited. Explicit close,
 natural exit, retirement and shutdown share one settlement. Termination failure
 rejects close and retains capacity; a PTY leader exit alone is not proof of
-cleanup. Capacity is released only on successful settlement. Linux uses the
+cleanup. Late terminal input is retired only after observing its exact retained
+owner exit; it does not bypass process-group containment or absence proof.
+Capacity is released only on successful settlement. Linux uses the
 existing fixed process-group membership and subreaper boundary; macOS uses the
 existing supervisor process-group contract. Terminals are not persisted across
 Host restarts. These are user-operated shells with the Host
