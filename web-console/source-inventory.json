@@ -2393,9 +2393,9 @@
     {
       "destination": "web-console/src/presentation/theme/scrollbar.css",
       "upstream": "packages/client/ui-theme/src/styles/scrollbar.css",
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
-      "upstream_sha256": "16d27a2a4600d6439b9ed6c5cfb504885bb5e9d0a7d8a5120c23e7516bf1c1d5",
+      "upstream_sha256": "673450184fe82a679b5759a7f93ceab17895b9f12e1196f7efb281304afd8398",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
         "Cordis/slot registry",
@@ -2403,7 +2403,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "2c39c9597d541eb40bd49f4ad6f54cf6af18a46e576a49c97facc041a0d7f8d5",
+      "local_sha256": "a6f9bda0d1024de6db782231dec11030cd0b0c42e4a6e39afaf7d74bb818c844",
       "retained_dependencies": [],
       "classification": "A"
     },

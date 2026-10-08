@@ -14,7 +14,10 @@ label { display: grid; gap: 5px; font-size: 12px; }
 .row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .status { display: flex; gap: 8px; align-items: center; font-size: 13px; margin-bottom: 8px; }.status small { margin-left: auto; }
 .connection-form { display: grid; gap: 10px; padding-bottom: 20px; border-bottom: 1px solid var(--dsw-alias-border-l3); }
-.conversation-scroll { flex: 1; min-height: 150px; overflow: auto; padding-bottom: 18px; }
+/* Harness scrollBody geometry on the actual chat scroll owner. Reserve the
+   themed bar so arriving content does not shift the conversation sideways. */
+.conversation-scroll { flex: 1; min-height: 150px; overflow: auto; padding-bottom: 18px; margin-right: 2px; scrollbar-gutter: stable; }
+.conversation-scroll::-webkit-scrollbar-track { margin: 2px; }
 .empty { padding: 60px 30px; text-align: center; color: var(--dsw-alias-label-tertiary); }.empty h2 { color: var(--dsw-alias-label-primary); margin-bottom: 10px; font-size: 24px; }
 .runtime-facts { margin: 12px 26px; border-top: 1px solid var(--dsw-alias-border-l3); }.runtime-facts > details { display: block; }
 .session-status { margin: 8px 26px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
