@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, symlinkSync, realpathSync, renameSync, openSync, closeSync, constants, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -8,7 +9,7 @@ import { workspaceFile, workspaceDescriptors, WorkspaceTerminals } from '../host
 import { LocalWorkspaceHost } from '../host/workspaces';
 const directories: string[] = [];
 const services: WorkspaceTerminals[] = [];
-afterEach(() => { vi.unstubAllEnvs(); services.splice(0).forEach(service => service.close()); directories.splice(0).forEach(path => rmSync(path, { recursive: true, force: true })); });
+afterEach(async () => { vi.unstubAllEnvs(); await Promise.all(services.splice(0).map(service => service.close())); directories.splice(0).forEach(path => rmSync(path, { recursive: true, force: true })); });
 function directory() { const path = realpathSync(mkdtempSync(join(tmpdir(), 'rustx-workbench-'))); directories.push(path); return path; }
 it('lists and reads relative files, rejects traversal, symlinks, binary and oversized content', () => {
   const root = directory(), outside = directory(); mkdirSync(join(root, 'nested')); writeFileSync(join(root, 'nested/a.txt'), 'hello'); writeFileSync(join(outside, 'secret'), 'outside'); symlinkSync(outside, join(root, 'escape'));
@@ -22,7 +23,7 @@ it('lists and reads relative files, rejects traversal, symlinks, binary and over
 });
 it('a real PTY uses the requested cwd, resizes, reattaches output and rejects foreign ownership', async () => {
   vi.stubEnv('RUSTX_WORKBENCH_SENTINEL', 'private-host-value');
-  const service = new WorkspaceTerminals(); services.push(service); const root = directory(), id = randomUUID();
+  const service = new WorkspaceTerminals(fileURLToPath(new URL('../../target/debug/interactive-supervisor', import.meta.url))); services.push(service); const root = directory(), id = randomUUID();
   const create = { kind: 'create' as const, id, shell: '/bin/sh' };
   expect((await service.request('A', root, create)).terminals).toHaveLength(1);
   expect((await service.request('A', root, create)).terminals).toHaveLength(1);
@@ -42,7 +43,7 @@ it('Host rereads the exact native target and rejects a replaced authority before
     const scope = await host.listWorkspaces(); const call = { target: { session_id: 'A', active_node: 'node-A' }, request: { kind: 'read' as const, path: 'a.txt' } };
     expect(await host.workbench(scope, call)).toEqual({ cwd: root, text: 'A' }); expect(calls).toBe(1);
     await expect(host.workbench({ ...scope, authorityId: 'retired' }, call)).rejects.toThrow(); expect(calls).toBe(1);
-  } finally { host.close(); }
+  } finally { await host.close(); }
 });
 
 it('held directory descriptors survive path replacement without following its replacement symlink', () => {
@@ -85,7 +86,7 @@ it.each(['linux', 'darwin'] as const)('opens an admitted file on %s with literal
     await expect(host.workbench(scope, { target: { ...target, active_node: 'retired' }, request: { kind: 'open', path: name, directory: false, application: 'code' } })).rejects.toThrow('Retired');
     await expect(host.workbench({ ...scope, authorityId: 'retired' }, { target, request: { kind: 'open', path: name, directory: false, application: 'files' } })).rejects.toThrow();
     expect(launch).not.toHaveBeenCalled();
-  } finally { host.close(); }
+  } finally { await host.close(); }
 });
 it('binary previews retain descriptor admission and enforce a bounded byte read', async () => {
   const root=directory(),outside=directory(),bytes=Buffer.from([0,255,1,2]);
@@ -96,7 +97,7 @@ it('binary previews retain descriptor admission and enforce a bounded byte read'
   expect(()=>workspaceFile(root,'../private',true,true)).toThrow();
   writeFileSync(join(root,'large'),Buffer.alloc(16*1024*1024+1));
   expect(()=>workspaceFile(root,'large',true,true)).toThrow('16 MiB');
-  const service=new WorkspaceTerminals();services.push(service);
+  const service=new WorkspaceTerminals(fileURLToPath(new URL('../../target/debug/interactive-supervisor', import.meta.url)));services.push(service);
   expect(await service.request('owner',root,{kind:'bytes',path:'image.png'})).toEqual({cwd:root,base64:bytes.toString('base64')});
 });
 
@@ -112,5 +113,48 @@ it('resolves file references within the admitted native workspace without follow
     for (const path of [join(outside, 'secret'), '../secret', 'escape/secret', 'missing.md', 'docs', 'a\0b'])
       await expect(host.workbench(scope, { target, request: { kind: 'resolve', path } })).rejects.toThrow();
     await expect(host.workbench({ ...scope, authorityId: 'retired' }, { target, request: { kind: 'resolve', path: 'docs/モルガン 解説.md' } })).rejects.toThrow();
-  } finally { host.close(); }
+  } finally { await host.close(); }
+});
+
+it('successful close proves subprocesses reaped, not just the PTY leader killed', async () => {
+  const service = new WorkspaceTerminals(fileURLToPath(new URL('../../target/debug/interactive-supervisor', import.meta.url)));
+  services.push(service); const root=directory(),id=randomUUID();
+  await service.request('A',root,{kind:'create',id,shell:'/bin/sh'});
+  await service.request('A',root,{kind:'input',id,data:"sh -c 'trap \"\" TERM; printf \"CHILD_%s_READY\\n\" \"$$\"; read value'\r"});
+  let cursor=0,output='',pid:number|undefined;
+  while(pid===undefined){const result=await service.request('A',root,{kind:'poll',id,cursor});cursor=result.cursor!;output+=result.output;const match=/CHILD_(\d+)_READY/.exec(output);if(match)pid=Number(match[1]);if(result.exited)throw new Error('Child did not reach its input barrier');}
+  await service.request('A',root,{kind:'close',id});
+  expect(()=>process.kill(pid!,0)).toThrow();
+});
+it('PTY interrupt reaches managed foreground work while the supervisor and shell stay owned', async () => {
+  const service = new WorkspaceTerminals(fileURLToPath(new URL('../../target/debug/interactive-supervisor', import.meta.url)));
+  services.push(service); const root=directory(),id=randomUUID();
+  await service.request('A',root,{kind:'create',id,shell:'/bin/sh'});
+  await service.request('A',root,{kind:'input',id,data:"trap 'printf \"SHELL_%s\\n\" INTERRUPTED' INT; sh -c 'printf \"INTERRUPT_%s\\n\" READY; read value'\r"});
+  let cursor=0,output='';
+  while(!output.includes('INTERRUPT_READY')){const result=await service.request('A',root,{kind:'poll',id,cursor});cursor=result.cursor!;output+=result.output;if(result.exited)throw new Error('Terminal ended before interrupt');}
+  await service.request('A',root,{kind:'input',id,data:'\x03'});
+  while(!output.includes('SHELL_INTERRUPTED')){const result=await service.request('A',root,{kind:'poll',id,cursor});cursor=result.cursor!;output+=result.output;if(result.exited)throw new Error('Interrupt destroyed terminal ownership');}
+  await service.request('A',root,{kind:'input',id,data:"printf 'AFTER_%s\\n' INTERRUPT\r"});
+  while(!output.includes('AFTER_INTERRUPT')){const result=await service.request('A',root,{kind:'poll',id,cursor});cursor=result.cursor!;output+=result.output;if(result.exited)throw new Error('Interrupt destroyed terminal ownership');}
+  await service.request('A',root,{kind:'close',id});
+});
+
+it.each(['Session deletion', 'active-node retirement'])('%s settles the owned real PTY through the native ownership event', async reason => {
+  const root=directory(),id=randomUUID(),target={session_id:'A',active_node:'node-A'};
+  let retire!: (session:string)=>void, current=true;
+  const retired=vi.spyOn(WorkspaceTerminals.prototype,'retireSession');
+  const host=new LocalWorkspaceHost({roots:[{id:'root',cwd:root,displayName:'Root'}],picker:false,metadataFile:join(root,'metadata.json'),nativeFilesystem:'shared',transportToken:'test',endpoint:'ws://localhost:8080',terminalSupervisor:fileURLToPath(new URL('../../target/debug/interactive-supervisor',import.meta.url))},undefined,async()=>{if(!current)throw new Error(reason);return root;},async(_endpoint,_token,onRetired)=>{retire=onRetired;return async()=>{};});
+  try {
+    const scope=await host.listWorkspaces();
+    await host.workbench(scope,{target,request:{kind:'create',id,shell:'/bin/sh'}});
+    await host.workbench(scope,{target,request:{kind:'input',id,data:"printf 'OWNED_%s_READY\\n' \"$$\"\r"}});
+    let cursor=0,output='',pid:number|undefined;
+    while(pid===undefined){const result=await host.workbench(scope,{target,request:{kind:'poll',id,cursor}});if(!('cursor' in result))throw new Error('Missing terminal poll result');cursor=result.cursor!;output+=result.output;const match=/OWNED_(\d+)_READY/.exec(output);if(match)pid=Number(match[1]);}
+    current=false;retire('A');expect(retired).toHaveBeenCalledWith('A');
+    await retired.mock.results.at(-1)!.value;
+    expect(()=>process.kill(pid!,0)).toThrow();
+    await expect(host.workbench(scope,{target,request:{kind:'input',id,data:'echo stale\r'}})).rejects.toThrow(reason);
+    await host.workbench(scope,{target,request:{kind:'close',id}});
+  } finally {retired.mockRestore();await host.close();}
 });

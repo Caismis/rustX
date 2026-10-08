@@ -212,10 +212,44 @@ fn trace(role: &str, event: std::fmt::Arguments<'_>) {
     let _ = std::io::stderr().write_all(line.as_bytes());
 }
 
+// A PTY's foreground group is the outer supervisor. Preserve its ownership
+// anchor when the terminal driver emits an interrupt or resize, and forward
+// those signals to the fixed child group. Caught handlers reset at exec, so
+// the command retains normal signal semantics; the inner anchor catches them.
+static TERMINAL_SIGNALS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+extern "C" fn terminal_signal(signal: i32) {
+    let bit = match signal {
+        libc::SIGINT => 1,
+        libc::SIGQUIT => 2,
+        libc::SIGWINCH => 4,
+        _ => 0,
+    };
+    TERMINAL_SIGNALS.fetch_or(bit, std::sync::atomic::Ordering::Relaxed);
+}
+#[allow(unsafe_code)] // fixed signal handlers, matching supervised_unit SIGCHLD installation
+fn capture_terminal_signals() -> Result<(), String> {
+    use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, sigaction};
+    let action = SigAction::new(
+        SigHandler::Handler(terminal_signal),
+        SaFlags::SA_RESTART,
+        SigSet::empty(),
+    );
+    for signal in [Signal::SIGINT, Signal::SIGQUIT, Signal::SIGWINCH] {
+        // SAFETY: the handler only performs a lock-free atomic operation.
+        unsafe { sigaction(signal, &action) }.map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 /// Runs the outer supervisor role; returns its exit status.
 #[must_use]
 #[allow(clippy::too_many_lines)] // one coherent outer supervise/relay/contain pipeline
 pub fn run_outer(arguments: &[String]) -> i32 {
+    if let Err(error) = capture_terminal_signals() {
+        eprintln!("terminal signal setup: {error}");
+        return 1;
+    }
+
     trace("outer", format_args!("started"));
     let Some(socket) = std::env::var_os(RUSTX_CONTROL_ENV) else {
         eprintln!("interactive supervisor: control socket path is missing");
@@ -402,6 +436,22 @@ pub fn run_outer(arguments: &[String]) -> i32 {
     let mut ack_seen = false;
     let mut ack_deadline: Option<Instant> = None;
     loop {
+        let terminal_signals = TERMINAL_SIGNALS.swap(0, std::sync::atomic::Ordering::Relaxed);
+        if matches!(anchor, AnchorState::Running) {
+            for (bit, signal) in [
+                (1, Signal::SIGINT),
+                (2, Signal::SIGQUIT),
+                (4, Signal::SIGWINCH),
+            ] {
+                if terminal_signals & bit != 0
+                    && let Err(error) = signal_group(inner_pid, signal)
+                {
+                    let _ =
+                        write_frame(&mut upstream, MSG_PROCESS_CONTROL_FAILURE, error.as_bytes());
+                }
+            }
+        }
+
         match anchor {
             AnchorState::Running => {
                 match waitid(
@@ -1181,6 +1231,9 @@ fn contain_after_abnormal_exit(
 #[must_use]
 #[allow(clippy::too_many_lines)] // one coherent inner session/spawn/reap pipeline
 pub fn run_inner(arguments: &[String]) -> i32 {
+    if capture_terminal_signals().is_err() {
+        return 1;
+    }
     trace("inner", format_args!("entered run_inner"));
     let Some(inner_socket) = std::env::var_os(INNER_CONTROL_ENV) else {
         eprintln!("interactive supervisor: inner control socket path is missing");

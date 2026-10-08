@@ -498,17 +498,33 @@ paths are relative, symlinks are not followed, directory pages are bounded to
 2,000 entries, and text previews to 1 MiB. Descriptor-relative browsing uses the same POSIX `openat`/`fdopendir`
 implementation on Linux and macOS. Remote/unmapped Hosts do not gain filesystem access.
 
-Terminals use Host-owned `node-pty` processes and lazy-loaded xterm.js. Choose an
+Terminals use Host-owned native `interactive-supervisor` units through `node-pty`
+and lazy-loaded xterm.js. Choose an
 installed shell on Start, open up to eight terminals per Host, switch tabs, or
 explicitly close a terminal to terminate it. Collapsing the panel detaches the
 renderer while the shell continues; reopening reads its bounded 256K-character output
 window. Terminal creation is idempotent by operation ID. Input is never replayed
-after a transport failure. Host shutdown closes all PTYs; terminals are not
-persisted across Host restarts. These are user-operated shells with the Host
+after a transport failure. Native `session/ownershipRetired` notifications settle
+all terminals for a deleted Session or replaced active node, even after native
+enumeration is unavailable. The Host observes this connection before validating
+the target; disconnect closes admission and settles all its terminals. Every
+input/resize/create still revalidates the exact native Session/node.
+
+`LocalWorkspaceHost.close()` is asynchronous: success means every owned unit
+reported all children reaped and its outer supervisor exited. Explicit close,
+natural exit, retirement and shutdown share one settlement. Termination failure
+rejects close and retains capacity; a PTY leader exit alone is not proof of
+cleanup. Capacity is released only on successful settlement. Linux uses the
+existing fixed process-group membership and subreaper boundary; macOS uses the
+existing supervisor process-group contract. Terminals are not persisted across
+Host restarts. These are user-operated shells with the Host
 user's filesystem permissions, independent of agent approval policies. Host
 transport/provider secrets are not copied into the shell environment.
 
-Run `pnpm install --frozen-lockfile` and `pnpm build:host` after updating. The reviewed `node-pty` build
+Run `cargo build --bins --locked`, `pnpm install --frozen-lockfile` and
+`pnpm build:host` after updating. The Product Host launcher supplies the
+`interactive-supervisor` sibling of its selected native binary; an unconfigured
+Host cannot admit terminal execution. The reviewed `node-pty` build
 is enabled in `pnpm-workspace.yaml`; Linux needs Python, make, a C++ compiler and
 Node headers for native addons; macOS needs Python and Xcode Command Line Tools.
 The small Node-API workspace filesystem binding exposes descriptor operations

@@ -96,7 +96,7 @@ export class Launcher {
       const productHostTokenFile = this.#write('product-host-token', productHostToken);
       const endpoint = await this.#ready(this.#child({ component: 'app-server', command: args.binary,
         args: ['app-server', ...args.forwarded, '--listen', 'ws://127.0.0.1:0', '--token-file', tokenFile, '--product-host-token-file', productHostTokenFile], cwd: process.cwd(), readiness: 'app-server' }));
-      const config: LocalHostConfig = { nativeFilesystem: 'shared', endpoint, transportToken, productHostToken, picker: true, metadataFile: join(this.#scratch(), 'workspaces.json'),
+      const config: LocalHostConfig = { nativeFilesystem: 'shared', terminalSupervisor: join(dirname(args.binary), 'interactive-supervisor'), endpoint, transportToken, productHostToken, picker: true, metadataFile: join(this.#scratch(), 'workspaces.json'),
         roots: args.workspaces.map((cwd, index) => ({ id: `root-${index + 1}`, cwd, displayName: basename(cwd) || cwd })) };
       const hostConfigFile = this.#write('host-config.json', JSON.stringify(config));
       let browserLaunchToken: string;

@@ -1,5 +1,6 @@
 /** Local trusted Product Host. This module runs in Node, never in the browser. */
 import { deriveWorkspaceOffice } from './documents/operation.ts';
+import { observeTerminalOwnership } from './terminal-ownership.ts';
 import { WorkspaceTerminals, workspaceFile, withWorkspacePath } from './workbench.ts';
 import { OfficeSettlementError } from './documents/office-cgroup.ts';
 import { readFileSync, writeFileSync, renameSync, realpathSync, statSync, fstatSync, existsSync } from 'node:fs';
@@ -21,6 +22,8 @@ import type { DocumentRequest, DocumentResult } from '../shared/documents.ts';
 export interface LocalHostConfig {
   /** Operator attests native runtime and Host share the same filesystem namespace. */
   nativeFilesystem?: 'shared';
+  /** Explicit launcher-owned native process supervisor, never browser input. */
+  terminalSupervisor?: string;
   transportToken?: string;
   /** Launcher-provisioned secret for native file reads. Never sent to browser. */
   productHostToken?: string;
@@ -32,7 +35,11 @@ export interface LocalHostConfig {
 }
 type Registration = { id: string; location: string; displayName: string };
 export class LocalWorkspaceHost implements ProductHostWorkspaces {
-  private readonly terminals = new WorkspaceTerminals();
+  private readonly terminals: WorkspaceTerminals;
+  private terminalObserver?: Promise<() => Promise<void>>;
+  private terminalEpoch = 0;
+  private terminalFailure?: unknown;
+  private closing?: Promise<void>;
   private documentReads = new Set<AbortController>();
   private fileReads = new Set<AbortController>();
   private closed = false;
@@ -42,7 +49,10 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   private readonly config: LocalHostConfig;
   private readonly desktop: DesktopAdapter;
   private readonly readSession: typeof readDesktopSession;
-  constructor(config: LocalHostConfig, desktop = new DesktopAdapter(), readSession = readDesktopSession) {
+  private readonly observeTerminals: typeof observeTerminalOwnership;
+  constructor(config: LocalHostConfig, desktop = new DesktopAdapter(), readSession = readDesktopSession, observeTerminals = observeTerminalOwnership) {
+    this.observeTerminals = observeTerminals;
+    this.terminals = new WorkspaceTerminals(config.terminalSupervisor);
     this.desktop = desktop; this.readSession = readSession;
     this.config = config;
     if (!isAbsolute(config.metadataFile)) throw new Error('Host metadataFile must be absolute');
@@ -90,7 +100,27 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       throw new WorkspaceHostError('Workspace Host authority replaced', 'authority_replaced');
     }
   }
-  close() { this.closed = true; this.terminals.close(); for (const read of [...this.fileReads, ...this.documentReads]) read.abort(); }
+  close(): Promise<void> {
+    this.closed = true;
+    for (const read of [...this.fileReads, ...this.documentReads]) read.abort();
+    return this.closing ??= (async () => {
+      const result = await Promise.allSettled([this.terminals.close(), this.terminalObserver?.then(close => close())]);
+      const failures = result.flatMap(item => item.status === 'rejected' ? [item.reason] : []);
+      if (this.terminalFailure) failures.push(this.terminalFailure);
+      if (failures.length) throw new AggregateError(failures, 'Host terminal settlement failed');
+    })();
+  }
+  private async watchTerminals() {
+    if (this.terminalFailure) throw this.terminalFailure;
+    await (this.terminalObserver ??= this.observeTerminals(this.config.endpoint, this.config.transportToken!, session => {
+      ++this.terminalEpoch;
+      void this.terminals.retireSession(session).catch(error => { this.terminalFailure = error; });
+    }, () => {
+      ++this.terminalEpoch;
+      this.terminalFailure = new Error('Native terminal ownership connection ended');
+      void this.terminals.close().catch(error => { this.terminalFailure = error; });
+    }));
+  }
   /** Only currently registered Workspaces authorize bytes. Configured picker
    * locations alone authorize neither an initial nor a historical file read. */
   async readDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, signal?: AbortSignal): Promise<import('../src/workspaces/host.ts').DeliveryBytes> {
@@ -172,7 +202,11 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     // Explicit close only needs the original Host-owned terminal identity, even
     // when its native node has since retired; it cannot admit new execution.
     if (call.request.kind === 'close') return this.terminals.request(JSON.stringify([target.session_id, target.active_node]), '', call.request, signal);
+    const terminal = ['create', 'input', 'resize', 'poll', 'terminals'].includes(call.request.kind);
+    if (terminal) await this.watchTerminals();
+    const epoch = this.terminalEpoch;
     const cwd = await this.readSession(this.config.endpoint, this.config.transportToken, target);
+    if (terminal && (epoch !== this.terminalEpoch || this.terminalFailure)) throw new Error('Native terminal ownership changed');
     this.mutationScope(scope); signal?.throwIfAborted();
     if (!this.classifyLocation(cwd).authorized) throw new Error('Workspace is not authorized');
     const root = realpathSync(cwd);

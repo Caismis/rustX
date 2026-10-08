@@ -5,6 +5,9 @@ on:
     paths:
       - '.github/workflows/workspace-host.yml'
       - 'web-console/host/**'
+      - 'src/runtime/interactive_supervisor.rs'
+      - 'src/runtime/supervised_unit.rs'
+      - 'web-console/test/terminal-lifecycle.test.ts'
       - 'web-console/src/workspaces/**'
       - 'web-console/test/workbench-host.test.ts'
       - 'web-console/test/office-macos*.test.ts'
@@ -24,9 +27,18 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.98.1"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace-host
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - name: Build native PTY ownership supervisor
+        run: cargo build --bin interactive-supervisor --locked
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
@@ -42,7 +54,7 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Real filesystem and PTY boundaries
         working-directory: web-console
-        run: pnpm exec vitest run test/workbench-host.test.ts test/office-macos-lifecycle.test.ts
+        run: pnpm exec vitest run test/workbench-host.test.ts test/terminal-lifecycle.test.ts test/office-macos-lifecycle.test.ts
       - name: Native macOS Office conversion and isolation
         if: runner.os == 'macOS'
         working-directory: web-console

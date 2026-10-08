@@ -1,5 +1,6 @@
 /** Browser fixture uses real Host filesystem and PTY; only native cwd lookup is controlled. */
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, copyFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Plugin } from 'vite';
@@ -21,9 +22,9 @@ export function workbenchFixture(): Plugin {
     writeFileSync(join(root, 'docs/counter.js'), 'let n=0;counter.onclick=()=>counter.textContent="Count "+(++n);try{parent.localStorage.getItem("secret");boundary.textContent="exposed"}catch{boundary.textContent="isolated"}');
     writeFileSync(join(root, 'docs/table.csv'), 'Name,Amount\nApples,12\nPears,8\n');
     for (const name of ['sample.pdf','sample.xlsx']) copyFileSync(new URL(`../fixtures/documents/${name}`,import.meta.url),join(root,'docs',name));
-    const host = new LocalWorkspaceHost({ roots: [{ id: 'A', cwd: root, displayName: 'Workspace A' }], endpoint: 'ws://localhost:8080', picker: false, metadataFile: join(root, 'registry.json'), nativeFilesystem: 'shared', transportToken: 'fixture' }, undefined, async (_endpoint, _token, target) => { if (target.session_id !== 'A' || target.active_node !== 'node-A') throw new Error('Wrong native Session'); return root; });
+    const host = new LocalWorkspaceHost({ roots: [{ id: 'A', cwd: root, displayName: 'Workspace A' }], endpoint: 'ws://localhost:8080', picker: false, metadataFile: join(root, 'registry.json'), nativeFilesystem: 'shared', terminalSupervisor: fileURLToPath(new URL('../../../target/debug/interactive-supervisor', import.meta.url)), transportToken: 'fixture' }, undefined, async (_endpoint, _token, target) => { if (target.session_id !== 'A' || target.active_node !== 'node-A') throw new Error('Wrong native Session'); return root; }, async () => async () => {});
     const handler = workspaceHandler(host);
     server.middlewares.use('/product-host/workbench-fixture', (request, response, next) => { request.url = '/product-host' + request.url; void handler(request, response, next); });
-    server.httpServer?.on('close', () => { host.close(); rmSync(root, { recursive: true, force: true }); });
+    server.httpServer?.on('close', () => { void host.close().then(() => rmSync(root, { recursive: true, force: true })); });
   } };
 }
