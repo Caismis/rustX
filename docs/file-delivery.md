@@ -112,6 +112,26 @@ credential removal cancels every grant, so admitted reads fail at their next fen
 and publish nothing. Reads share the two native permits, which are released only
 when the descriptor read physically settles.
 
+Each request is one operation owned by its connection, registered under its exact
+JSON-RPC id before native admission:
+
+```text
+register (id) -> admission -> fences -> physical settlement -> response queued
+  -> transport writer: publication commit -> physical write
+delivery/cancel (same connection, same id): Running -> Cancelled, request token cancelled
+```
+
+`delivery/cancel` is accepted only while the request is running here. The request's
+token, a child of the connection's delivery authority, then fails its next native
+fence. The request still answers exactly once, with `delivery_cancelled`, after its
+native work settled. The serialized response waits in the ordinary bounded
+outbound queue with its publication owner. The writer commits it immediately before
+the physical write, where an accepted cancellation, revoked authority (credential
+removal, close, process shutdown) or a detached attachment replaces a success with
+the same id's typed failure. A response already committed is in transmission and
+stands; a late `delivery/cancel` returns `accepted: false`. Cancelling or revoking
+never closes the connection or affects unrelated responses.
+
 `delivery/locate` walks the same descriptors, runs the same fences and returns the
 absolute server path plus the verified leaf device/inode, without bytes or a size
 bound. A location is a server path, never a client path. A client may open it
@@ -167,7 +187,8 @@ native owner seam, never a public RPC; a restarted native process uses a new sec
 
 Native fences run at authenticated admission, before canonical lookup/allocation,
 before open, after leaf open immediately before bytes, after byte/edge verification,
-and before response serialization/delivery. They check captured host authority,
+and at publication (the Product Host socket send, or the ordinary transport writer's
+commit). They check captured host authority,
 attachment read authority, original mapping, exact root and recorded device/inode.
 Publication retires with its owning socket; the Host rechecks its scope, operation
 abort and root availability before returning to the browser. Allocation ownership
@@ -296,24 +317,39 @@ definitions never touch the filesystem.
 
 - **Save** calls `delivery/read` and checks the base64 bound before decoding. It
   writes the bytes to an explicitly typed client-local path with `open(..., 'wx')`,
-  which never truncates existing data. A cancelled or failed write removes the file
-  it created.
+  which never truncates existing data, in 64 KiB chunks. The local publication
+  commit follows `sync` and `close`: a cancellation observed before it removes the
+  partial file, but only while the destination is still the device/inode this
+  save created. A file that replaced it is left alone, and residue that cannot be
+  removed is reported. After the commit the save stands.
+- **Destination.** The delivered name is the server's identity for the file and is
+  never altered. It prefills the editable destination only when it renders as
+  itself; a name carrying a terminal control, C1 or bidi character leaves the field
+  empty and asks for an explicit path. The destination Input holds only renderable
+  text: a paste that would add such a character is refused whole.
 - **Open** is offered only when this TUI spawned the App Server (ownership
   `owned_child`, established at construction) and the connection holds delivery
   access. `delivery/locate` returns the verified leaf, and the TUI requires its own
   `lstat` of that path to report the same regular-file device/inode before it
-  launches the platform opener (`xdg-open`/`open`, argv only, no shell). Success is
-  reported as the opener accepting the request, never as an application opening.
+  launches the platform opener (`xdg-open`/`open`, argv only, no shell). The commit
+  is the spawn: cancellation before it launches nothing, and after it the launch
+  is not reported as undone. Success is reported as the opener accepting the
+  request, never as an application opening.
   The opener resolves the path again after this check, so a replacement in that
   window is not prevented, as in any file manager.
 - **Remote** (`--connect`) never interprets a server path locally. With
   `--delivery-access-token-file`, Save writes bytes on the client machine. Without
   it, `/files` shows metadata and reports both actions as unavailable.
 
-Every outcome belongs to one selector-owned operation token. Escape aborts it. A
-selector never shows a stale or duplicate outcome. If another overlay replaced the
-selector, the outcome of an explicitly started action appears once on the
-transient surface instead. Missing,
+Each `/files` overlay owns one abort scope. Every way the interaction ends goes
+through the app's overlay close: Escape on the list, another overlay replacing it,
+Session focus change, attachment or snapshot replacement, disconnect, terminal
+failure and quit. Closing aborts the scope, which cancels the native request
+(`delivery/cancel`) and every uncommitted local effect. Escape during an action
+aborts just that action. Each outcome belongs to one operation token, so a
+selector never shows a stale or duplicate outcome. After retirement, only an effect
+that happened (a committed save or launch, or residue left behind) is reported, once,
+on the transient surface. Outcome text is sanitized before it is drawn. Missing,
 unauthorized, unavailable, replaced, oversized (>512 KiB), capacity and disconnected
 failures are reported explicitly. No action starts an Agent, Tool or model request.
 

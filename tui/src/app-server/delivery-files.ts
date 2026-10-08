@@ -6,8 +6,9 @@
  * these functions with an explicit destination or an explicit open request.
  *
  * ```text
- * Save   native delivery/read (authorized, ≤ 512 KiB) -> bounded decode
+ * Save   native delivery/read (authorized, ≤ 512 KiB, cancellable) -> bounded decode
  *        -> new client-local file ('wx': never truncates existing data)
+ *        -> local publication commit after sync + close
  * Open   native delivery/locate (authorized, verified leaf identity)
  *        -> this TUI spawned the server  AND  local lstat(dev, ino) matches
  *        -> argv-only OS opener; success means the opener accepted the request
@@ -20,11 +21,12 @@
  */
 
 import { spawn } from "node:child_process";
-import { lstat, open, unlink } from "node:fs/promises";
+import { lstat, open, unlink, type FileHandle } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 
 import type { DeliveryLocation } from "../presentation/deliveries.ts";
+import { isRenderableField } from "../sanitize.ts";
 
 /** The native Session-file read limit, inclusive. */
 export const DELIVERY_MAX_BYTES = 512 * 1024;
@@ -40,13 +42,14 @@ export class DeliveryActionError extends Error {
 }
 
 /**
- * A client-local save destination: `~` expands to this user's home, relative
- * paths resolve against the TUI's own cwd. An empty argument means the
- * delivered file's own name in that cwd.
+ * A client-local save destination the user typed. `~` expands to this
+ * user's home and relative paths resolve against the TUI's own cwd. There is
+ * no default: the delivered name is the server's identity for the file, not
+ * a path this client chose.
  */
-export function deliveryDestination(name: string, argument: string, cwd = process.cwd(), home = homedir()): string {
-  const input = argument.trim() || name;
-  if (input.includes("\0") || /[\r\n]/.test(input)) throw new DeliveryActionError("Invalid save destination");
+export function deliveryDestination(argument: string, cwd = process.cwd(), home = homedir()): string {
+  const input = argument.trim();
+  if (input === "" || !isRenderableField(input)) throw new DeliveryActionError("Invalid save destination");
   return resolve(cwd, input === "~" ? home : input.startsWith("~/") ? `${home}/${input.slice(2)}` : input);
 }
 
@@ -60,43 +63,87 @@ export function decodeDelivery(data: string): Uint8Array {
   return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.length);
 }
 
+/** A save failure that left this operation's partial output in place. */
+export class DeliveryResidueError extends DeliveryActionError {
+  readonly path: string;
+  constructor(path: string, cause: unknown) {
+    super(`Save failed and its partial output remains at ${path}`);
+    this.path = path;
+    this.name = "DeliveryResidueError";
+    this.cause = cause;
+  }
+}
+
+/** Bytes per write; cancellation is observed between chunks. */
+export const SAVE_CHUNK_BYTES = 64 * 1024;
+
+/** The filesystem seam of {@link saveDelivery}; tests interpose on writes. */
+export interface SaveFiles {
+  open: (path: string, flags: "wx", mode: number) => Promise<FileHandle>;
+}
+const NODE_FILES: SaveFiles = { open };
+
 /**
  * Reads authorized original bytes and writes them to a new client-local file.
  *
- * Existing data is never truncated. A file this function created is removed
- * again when the write fails or the operation is cancelled before it
- * completes, so no partial output is left behind.
+ * ```text
+ * read (cancellable on the server) -> abort? -> create 'wx' (never truncates)
+ *   -> chunked writes, abort? between chunks -> sync -> close
+ *   -> abort?  <- local publication commit: resolving means saved
+ * ```
+ *
+ * Cancellation observed before the commit leaves no file of this operation
+ * behind: the created file is removed only while the destination is still
+ * the device/inode this operation created, never a file that replaced it.
+ * After the commit the save stands, whatever is cancelled later.
  */
 export async function saveDelivery(
   read: () => Promise<{ data: string }>,
   destination: string,
   signal?: AbortSignal,
+  files: SaveFiles = NODE_FILES,
 ): Promise<string> {
   signal?.throwIfAborted();
   const bytes = decodeDelivery((await read()).data);
   signal?.throwIfAborted();
-  let file: Awaited<ReturnType<typeof open>> | undefined;
+  const file = await files.open(destination, "wx", 0o666);
+  let unclosed = true;
+  let created: { dev: bigint; ino: bigint } | undefined;
   try {
-    file = await open(destination, "wx", 0o666);
-    let offset = 0;
-    while (offset < bytes.length) {
+    created = await file.stat({ bigint: true });
+    for (let offset = 0; offset < bytes.length;) {
       signal?.throwIfAborted();
-      const { bytesWritten } = await file.write(bytes, offset, bytes.length - offset);
+      const length = Math.min(SAVE_CHUNK_BYTES, bytes.length - offset);
+      const { bytesWritten } = await file.write(bytes, offset, length);
       if (bytesWritten === 0) throw new DeliveryActionError("Save destination stopped accepting bytes");
       offset += bytesWritten;
     }
     await file.sync();
-    signal?.throwIfAborted();
+    unclosed = false;
     await file.close();
-    file = undefined;
+    signal?.throwIfAborted();
     return destination;
   } catch (error) {
-    if (file) {
-      await file.close().catch(() => {});
-      try { await unlink(destination); }
-      catch (cleanup) { throw new AggregateError([error, cleanup], `Save failed; partial output remains at ${destination}`); }
-    }
+    if (unclosed) await file.close().catch(() => {});
+    if (!await removeOwned(destination, created)) throw new DeliveryResidueError(destination, error);
     throw error;
+  }
+}
+
+/**
+ * Removes `path` only while it is still the file this operation created.
+ * True when nothing of this operation remains under that name.
+ */
+async function removeOwned(path: string, created: { dev: bigint; ino: bigint } | undefined): Promise<boolean> {
+  const current = await lstat(path, { bigint: true }).catch(() => undefined);
+  if (current === undefined) return true;
+  if (created === undefined) return false;
+  if (current.dev !== created.dev || current.ino !== created.ino) return true;
+  try {
+    await unlink(path);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -145,6 +192,8 @@ export async function openDelivery(
   ) {
     throw new DeliveryActionError("Open is unavailable: the local path is not the delivered file");
   }
+  // The launch commit: once the opener is spawned the request belongs to the
+  // OS, and a later cancellation does not withdraw or misreport it.
   options.signal?.throwIfAborted();
   const status = await (options.launch ?? launchOpener)(opener, location.path);
   if (status !== 0) throw new DeliveryActionError(`${opener} did not accept the open request (exit ${status ?? "signal"})`);

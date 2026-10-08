@@ -1125,7 +1125,9 @@ a model request.
 
 - **Save** writes the original bytes (at most 512 KiB) to a path you type on the
   **TUI machine**. Existing files are never overwritten, and a cancelled or failed
-  save leaves no partial file.
+  save leaves no partial file. A filename containing terminal control characters
+  is not prefilled; type the destination yourself. Closing `/files` (or switching
+  Session, reconnecting or quitting) cancels a running action on the server too.
 - **Open** is offered only for the App Server child this TUI spawned. It works only
   after the native side verifies the file and this machine's own path is proven to
   be the same file. It reports that the system opener accepted the request, not

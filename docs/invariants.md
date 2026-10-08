@@ -26,6 +26,22 @@ only on physical settlement. A client interprets a native location locally only 
 a demonstrably shared filesystem; a remote server path is never a client path. See
 [file delivery](file-delivery.md#delivery-access-for-app-server-clients).
 
+Each ordinary-lane delivery request has one owner on its connection, from
+registration under its exact request id to its publication commit at the transport
+writer. Cancellation (`delivery/cancel`, only for that connection's own id) or
+revocation (credential removal, close, shutdown, detach) that wins before the commit
+prevents that response from publishing bytes or a native path; the request still
+answers exactly once, with a typed failure for the same id, after its native work
+physically settled. A response committed before cancellation or revocation stands
+and is never reported as unpublished. In the TUI each `/files` interaction owns its
+Save/Open: retiring it (Escape, overlay close or replacement, Session focus change,
+snapshot replacement, disconnect, shutdown) cancels the native request and every
+uncommitted local effect. A Save commits only after its complete file is synced and
+closed, and cleanup removes only the file it created. An Open commits when the OS
+opener is spawned. Externally derived names, paths, descriptions and errors never
+reach the terminal unsanitized, and a delivered name becomes an editable destination
+only when it renders as itself.
+
 Pending Inbound owns accepted queue mutation. `(ConversationId, InboundSequence,
 MessageId)` identifies one occurrence, and its native revision is a compare-and-set
 precondition. Mutation and canonical claim are ordered by the durable transaction.

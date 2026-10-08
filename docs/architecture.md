@@ -20,11 +20,19 @@ descriptor containment, mutable history, bounds, and resource lifetimes.
 and locations (#454). Two transport-authenticated callers enter it: the private
 Product Host lane (`product_host`, which also supplies registered roots) and an
 `AppServerConnection` whose transport granted delivery access (`delivery/read`,
-`delivery/locate`). Transports mint the cancellation authority; `connection`
-only routes to its own attachments. Clients consume the same typed committed
+`delivery/locate`). Transports mint the delivery authority; `connection`
+only routes to its own attachments and registers each request as a
+`delivery_access::Operation` keyed by its exact request id, which
+`delivery/cancel` on the same connection can cancel. The response travels with its
+`Publication` through the bounded outbound queue, and the transport writer
+(`transport::Outgoing`) commits it immediately before the physical write,
+rechecking cancellation, delivery authority and the attachment. Clients consume the same typed committed
 facts. The Web binds them to Harness-derived presentation over its PreviewWorkspace
 owners. The TUI's pure `tool-present` renderer and `/files` selector dispatch
-intents to its own client-local action owner (`delivery-files.ts`).
+intents to its own client-local action owner (`delivery-files.ts`). Each
+`/files` overlay owns one abort scope that the app retires through `#closeOverlay`.
+Every way the interaction ends goes through that path, so retiring it cancels the
+native request and any uncommitted local effect.
 
 ## Session preview workspaces (#441)
 

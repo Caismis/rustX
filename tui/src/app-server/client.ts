@@ -150,6 +150,8 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   // Bounded pure reads under transport-granted delivery access.
   "delivery/read": "read",
   "delivery/locate": "read",
+  // Names an in-flight request of this connection only.
+  "delivery/cancel": "connection_local",
   "session/uploadPrepare": "side_effecting",
   "session/uploadStatus": "read",
   "configuration/sourcesRead": "read",
@@ -207,6 +209,9 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   "session/adoptConfiguration": "side_effecting",
 } satisfies Record<MethodName, ResponseLossClass>);
 
+/** The requests a client may cancel by id on its own connection. */
+export type DeliveryMethod = "delivery/read" | "delivery/locate";
+
 interface PendingRequest {
   readonly method: MethodName;
   readonly expect: ResultType;
@@ -223,7 +228,8 @@ function requestLane(method: MethodName): keyof typeof REQUEST_CAPACITY {
     case "agent/wait": case "job/wait": return "wait";
     case "agent/sendMessage": return "admission";
     case "agent/interrupt": case "job/cancel": case "turn/cancel":
-    case "interaction/respond": case "interaction/cancel": return "control";
+    case "interaction/respond": case "interaction/cancel":
+    case "delivery/cancel": return "control";
     default: return "rpc";
   }
 }
@@ -323,6 +329,26 @@ export class AppServerClient {
     return result as ResultOf<T>;
   }
 
+  /**
+   * Issues one delivery request whose cancellation `signal` owns.
+   *
+   * Aborting sends `delivery/cancel` for exactly this request id, once. The
+   * request still settles exactly once, with the server's terminal outcome:
+   * its result when publication committed first, otherwise
+   * `delivery_cancelled`. Its correlation entry stays until then, so the late
+   * response is never an unknown id. A signal aborted before sending sends
+   * nothing.
+   */
+  async callDelivery<M extends DeliveryMethod, T extends ResultType>(
+    method: M,
+    params: MethodParams<M>,
+    expect: T,
+    signal: AbortSignal,
+  ): Promise<ResultOf<T>> {
+    const result = await this.#request(method, params, expect, signal);
+    return result as ResultOf<T>;
+  }
+
   /** Subscribes to server notifications. Returns an unsubscribe function. */
   onNotification(listener: NotificationListener): () => void {
     this.#notificationListeners.add(listener);
@@ -349,13 +375,14 @@ export class AppServerClient {
     return this.#transport.close();
   }
 
-  #request(method: MethodName, params: unknown, expect: ResultType): Promise<MethodResult> {
+  #request(method: MethodName, params: unknown, expect: ResultType, signal?: AbortSignal): Promise<MethodResult> {
     if (this.#closed !== undefined) {
       // After termination a new request fails immediately rather than waiting
       // for a peer that will never answer. Nothing was sent, so nothing is
       // uncertain.
       return Promise.reject(this.#closed);
     }
+    if (signal?.aborted) return Promise.reject(signal.reason);
 
     const lane = requestLane(method);
     if ([...this.#pending.values()].filter(request => requestLane(request.method) === lane).length >= REQUEST_CAPACITY[lane]) {
@@ -366,7 +393,20 @@ export class AppServerClient {
     this.#nextRequestId += 1;
 
     return new Promise<MethodResult>((resolve, reject) => {
-      this.#pending.set(id, { method, expect, resolve, reject });
+      const cancel = () => {
+        if (!this.#pending.has(id)) return;
+        // The cancel's own answer is advisory; the request's terminal
+        // response is the outcome.
+        this.#request("delivery/cancel", { request_id: id }, "delivery_cancel").catch(() => {});
+      };
+      const release = () => signal?.removeEventListener("abort", cancel);
+      this.#pending.set(id, {
+        method,
+        expect,
+        resolve: (result) => { release(); resolve(result); },
+        reject: (error) => { release(); reject(error); },
+      });
+      signal?.addEventListener("abort", cancel, { once: true });
       void this.#transport
         .send({ jsonrpc: "2.0", id, method, params })
         .catch(() => {
@@ -469,6 +509,11 @@ export function isConnectionClosed(error: unknown): boolean {
   return (
     error instanceof TransportClosedError || error instanceof UncertainOutcomeError
   );
+}
+
+/** Whether a delivery request answered that its cancellation won. */
+export function isDeliveryCancelled(error: unknown): boolean {
+  return error instanceof AppServerRequestError && error.kind === "delivery_cancelled";
 }
 
 /** Whether a side-effecting request's outcome is genuinely unknown. */

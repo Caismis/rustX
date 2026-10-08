@@ -1553,6 +1553,30 @@ vocabulary are the Product Host lane's, without its registered-root list. A
 client interprets a location locally only when it demonstrably shares the
 server's filesystem; see [file-delivery.md](file-delivery.md).
 
+**Cancellation.** `delivery/cancel { request_id }` names one of **this
+connection's** in-flight `delivery/read` / `delivery/locate` requests by its exact
+JSON-RPC id and returns `delivery_cancel { accepted }`. Each such request is
+registered under its id before native admission (a second in-flight request with
+the same id is `invalid_params`). `accepted: true` means the cancellation won
+before that request's publication commit: its native fences fail from then on,
+and its one response is the typed failure `delivery_cancelled`, sent only after
+its native work physically settled and released its permit. `accepted: false`
+means no such request is running here (unknown id, or its response was already
+committed) and that response stands as produced. Without delivery access the
+method is `unauthorized`; another connection's ids are never visible. Cancelling
+one request never affects another request or the connection.
+
+**Publication commit.** A delivery response is serialized (and size-checked)
+into the ordinary bounded outbound queue together with its publication owner.
+The transport writer commits it immediately before the physical write. At that
+point an accepted cancellation yields `delivery_cancelled`, and a success
+(bytes or a native path) additionally requires the connection's delivery
+authority and the exact attachment to be current: credential revocation,
+connection close or process shutdown yields `session_file_read` /
+`unauthorized`, detachment yields `stale_attachment`, always for the same id.
+Failures carry nothing sensitive and keep their own reason. Once committed, a
+response is being transmitted and later revocation does not retract it.
+
 The internal Runtime Client vocabulary is v59. Only App Server v38 clients
 are generated; earlier versions are rejected, with no aliases or compatibility
 decoder. Event envelope 1, SQLite 49, Session catalog 13 and subagent IPC v29

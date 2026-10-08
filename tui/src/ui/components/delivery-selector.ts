@@ -22,7 +22,7 @@ import {
   type DeliveryPage,
   type DeliveryRecord,
 } from "../../presentation/deliveries.ts";
-import { sanitizeField } from "../../sanitize.ts";
+import { isRenderableField, sanitizeField } from "../../sanitize.ts";
 import { role, style } from "../theme.ts";
 import { windowAroundSelected, type PopupContent } from "./popup-frame.ts";
 
@@ -42,7 +42,29 @@ export type DeliveryAction = "open" | "save";
 type Mode =
   | { kind: "list" }
   | { kind: "actions"; record: DeliveryRecord; selected: number }
-  | { kind: "destination"; record: DeliveryRecord };
+  | { kind: "destination"; record: DeliveryRecord; prefilled: boolean };
+
+/**
+ * The editable client-local save destination.
+ *
+ * Every value it holds is drawn as typed, so it holds only renderable text:
+ * pi-tui's Input refuses typed control characters but keeps them in a
+ * bracketed paste and in `setValue`. A paste that would add a terminal
+ * control or bidi character is refused whole; a programmatic value must
+ * already be renderable.
+ */
+export class DestinationInput extends Input {
+  override setValue(value: string): void {
+    if (!isRenderableField(value)) throw new Error("destination must be renderable text");
+    super.setValue(value);
+  }
+
+  override handleInput(data: string): void {
+    const before = this.getValue();
+    super.handleInput(data);
+    if (!isRenderableField(this.getValue())) super.setValue(before);
+  }
+}
 
 export class DeliverySelector implements PopupContent, Focusable {
   focused = false;
@@ -60,7 +82,7 @@ export class DeliverySelector implements PopupContent, Focusable {
   #loading = false;
   #selected = 0;
   #mode: Mode = { kind: "list" };
-  #destination = new Input();
+  #destination = new DestinationInput();
   #operation = 0;
   #busy = false;
   #status: { level: "info" | "error"; text: string } | undefined;
@@ -95,7 +117,7 @@ export class DeliverySelector implements PopupContent, Focusable {
   settle(operation: number, level: "info" | "error", text: string): void {
     if (operation !== this.#operation || !this.#busy) return;
     this.#busy = false;
-    this.#status = { level, text };
+    this.#status = { level, text: sanitizeField(text) };
     this.onChange?.();
   }
 
@@ -176,7 +198,9 @@ export class DeliverySelector implements PopupContent, Focusable {
     if (mode.kind === "destination") {
       lines.push(...this.#entry(mode.record, true));
       lines.push("");
-      lines.push(role.meta("Save to (client-local path; existing files are never overwritten):"));
+      lines.push(role.meta(mode.prefilled
+        ? "Save to (client-local path; existing files are never overwritten):"
+        : "The delivered name cannot be shown as typed; enter a client-local path (existing files are never overwritten):"));
       this.#destination.focused = this.focused && !this.#busy;
       lines.push(...this.#destination.render(width));
       return lines.map((line) => truncateToWidth(line, width));
@@ -207,7 +231,7 @@ export class DeliverySelector implements PopupContent, Focusable {
     const description = file.description ? `  ${sanitizeField(file.description)}` : "";
     return [
       `${selected ? role.accent("›") : " "} ${style.bold(name)}  ${role.meta(sanitizeField(deliveryType(file)))}${description}`,
-      `   ${role.meta(`${sanitizeField(file.path)} · ${sanitizeField(file.scope.conversation_id)} · ${deliveryIdentity(record)} · ${this.#summary()}`)}`,
+      `   ${role.meta(`${sanitizeField(file.path)} · ${sanitizeField(file.scope.conversation_id)} · ${sanitizeField(deliveryIdentity(record))} · ${this.#summary()}`)}`,
     ];
   }
 
@@ -232,8 +256,11 @@ export class DeliverySelector implements PopupContent, Focusable {
       return;
     }
     if (action === "save") {
-      this.#destination.setValue(record.file.name);
-      this.#setMode({ kind: "destination", record });
+      // The original name becomes an editable path only when it renders as
+      // itself; a sanitized display string never silently names a file.
+      const prefilled = isRenderableField(record.file.name);
+      this.#destination.setValue(prefilled ? record.file.name : "");
+      this.#setMode({ kind: "destination", record, prefilled });
       return;
     }
     this.#start("open", record);

@@ -77,7 +77,7 @@ import {
 import { correlateTools } from "../presentation/tools.ts";
 import { selectTodos } from "../presentation/todos.ts";
 import type { PresentationState } from "../presentation/state.ts";
-import { AppServerRequestError } from "../app-server/client.ts";
+import { AppServerRequestError, isDeliveryCancelled } from "../app-server/client.ts";
 import type { AppServerHost } from "../app-server/host.ts";
 import type { AppServerSession } from "../app-server/session.ts";
 import type {
@@ -101,6 +101,7 @@ import {
 } from "./components/delivery-selector.ts";
 import type { DeliveryPage } from "../presentation/deliveries.ts";
 import {
+  DeliveryResidueError,
   deliveryDestination,
   openDelivery,
   saveDelivery,
@@ -232,6 +233,8 @@ export class RustxTuiApp {
 
   #preferences: PresentationPreferences = defaultPreferences();
   #overlay: OverlayHandle | undefined;
+  /** Retires the work the current overlay owns when it closes or is replaced. */
+  #overlayRetire: (() => void) | undefined;
   #hitlOverlay: HumanInteractionOverlay | undefined;
   /**
    * Presentation-only focus over `pendingInteractions`, reconciled against
@@ -1262,8 +1265,10 @@ export class RustxTuiApp {
   #showPopup(
     content: PopupContent,
     options: { width: SizeValue; heightPercent: number; minWidth?: number },
+    retire?: () => void,
   ): OverlayHandle {
     this.#closeOverlay(true);
+    this.#overlayRetire = retire;
     const frame = new PopupFrame(content);
     const handle = this.#tui.showOverlay(frame, {
       width: options.width,
@@ -1558,8 +1563,8 @@ export class RustxTuiApp {
    * paths: delivery access is the connection's transport grant, and a shared
    * filesystem requires that this TUI spawned the server (Open additionally
    * verifies the leaf identity before launching anything). Each action is
-   * one owned operation; closing the surface aborts it, and an outcome for an
-   * operation the surface no longer owns is dropped.
+   * one owned operation under the interaction's owner: retiring the surface
+   * aborts it, and only an effect that already happened outlives it.
    */
   #showDeliverySelector(page: DeliveryPage, lease: PresentationLease): void {
     const session = lease.session;
@@ -1576,14 +1581,19 @@ export class RustxTuiApp {
           : opener === undefined ? "no system opener on this platform" : undefined,
     };
     const selector = new DeliverySelector(page, availability);
-    const handle = this.#showPopup(selector, { width: "80%", heightPercent: 70 });
+    // The one owner of this interaction's work. Every way it ends — Escape,
+    // another overlay replacing it, Session focus change, attachment or
+    // snapshot replacement, reconnect, terminal failure, quit — closes the
+    // overlay, and closing aborts it: uncommitted local effects stop and the
+    // native read or locate is cancelled on the server.
+    const interaction = new AbortController();
+    const handle = this.#showPopup(selector, { width: "80%", heightPercent: 70 }, () => interaction.abort());
     let inFlight: { operation: number; abort: AbortController } | undefined;
     const current = () => this.#isCurrentPresentationLease(lease) && this.#overlay === handle;
     selector.onChange = () => {
       if (current()) this.#tui.requestRender();
     };
     selector.onCancel = () => {
-      inFlight?.abort.abort();
       if (current()) this.#closeOverlay();
     };
     selector.onAbort = (operation) => {
@@ -1602,32 +1612,41 @@ export class RustxTuiApp {
     };
     selector.onAction = (operation, action, record, destination) => {
       const abort = new AbortController();
+      const signal = AbortSignal.any([interaction.signal, abort.signal]);
       inFlight = { operation, abort };
       const task = (async () => {
         if (action === "save") {
           const path = await saveDelivery(
-            () => session.readDelivery(record),
-            deliveryDestination(record.file.name, destination ?? ""),
-            abort.signal,
+            () => session.readDelivery(record, signal),
+            deliveryDestination(destination ?? ""),
+            signal,
           );
-          return `Saved ${sanitizeField(record.file.name)} to ${sanitizeField(path)}`;
+          return `Saved ${record.file.name} to ${path}`;
         }
-        const requested = await openDelivery(() => session.locateDelivery(record), {
+        const requested = await openDelivery(() => session.locateDelivery(record, signal), {
           sharedHost,
           opener,
-          signal: abort.signal,
+          signal,
         });
-        return `${requested.opener} accepted the request to open ${sanitizeField(requested.path)}`;
+        return `${requested.opener} accepted the request to open ${requested.path}`;
       })();
-      // An explicitly requested action that outlives its surface (another
-      // overlay replaced it) still reports, once, on the transient surface.
-      const report = (level: "info" | "error", text: string) => {
-        if (current()) selector.settle(operation, level, text);
-        else if (this.#isCurrentPresentationLease(lease)) this.#showTransient(level, text);
+      // One terminal report per operation. A live surface shows every
+      // outcome. Once the interaction is retired, only an effect that
+      // happened (a committed save or launch, or residue left behind) is
+      // still reported, once, on the transient surface; a cancelled or
+      // failed uncommitted action is not reported to a successor.
+      const report = (level: "info" | "error", text: string, happened: boolean) => {
+        const safe = sanitizeField(text);
+        if (current()) selector.settle(operation, level, safe);
+        else if (happened) this.#showTransient(level, safe);
       };
       void task.then(
-        (text) => report("info", text),
-        (error: unknown) => report("error", deliveryFailure(error, abort.signal.aborted)),
+        (text) => report("info", text, true),
+        (error: unknown) => report(
+          "error",
+          deliveryFailure(error, signal),
+          error instanceof DeliveryResidueError,
+        ),
       ).finally(() => {
         if (inFlight?.operation === operation) inFlight = undefined;
       });
@@ -1641,6 +1660,9 @@ export class RustxTuiApp {
       this.#childInspection = undefined;
       this.#subagentListFocused = false;
     }
+    const retire = this.#overlayRetire;
+    this.#overlayRetire = undefined;
+    retire?.();
     const handle = this.#overlay;
     if (handle === undefined) return;
     if (this.#resumePresentation) this.#resumeQuery = this.#resumePresentation.reconciliationContext().query;
@@ -2156,8 +2178,12 @@ function nextTick(): Promise<void> {
 }
 
 /** One bounded line for a failed or cancelled delivery action. */
-function deliveryFailure(error: unknown, aborted: boolean): string {
-  if (aborted) return "Cancelled; no file was written or opened";
+function deliveryFailure(error: unknown, signal: AbortSignal): string {
+  if (error instanceof DeliveryResidueError) return error.message;
+  // Cancellation won before the local commit (or the server's publication).
+  if ((signal.aborted && error === signal.reason) || isDeliveryCancelled(error)) {
+    return "Cancelled; no file was written or opened";
+  }
   if (error instanceof TransportClosedError) return "Disconnected from the App Server; nothing was written";
   if (error instanceof AppServerRequestError && error.error.data?.kind === "session_file_read") {
     const reason = error.error.data.reason;

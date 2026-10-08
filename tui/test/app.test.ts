@@ -500,6 +500,83 @@ describe("RustxTuiApp lifecycle", () => {
     }
   });
 
+  it("retiring /files cancels its owned Save on the server and writes nothing", { timeout: 10_000 }, async () => {
+    const { existsSync, mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const file = {
+      scope: { conversation_id: "conv-original", device: "1", inode: "2" },
+      path: "out/报告 final.md", name: "报告 final.md", description: null, mime_type: "text/markdown",
+    };
+    const record = { messageId: "tool-msg", index: 0, count: 1, file };
+    const body = { file, data: Buffer.from("bytes\r\n").toString("base64") };
+    for (const retirement of ["escape", "replacement", "snapshot", "disconnect", "quit"] as const) {
+      const dir = mkdtempSync(join(tmpdir(), "rustx-files-retire-"));
+      let teardown = async () => {};
+      const served = deferred<typeof body>();
+      try {
+        const destination = join(dir, "copy.md");
+        const state = { ...emptyPresentationState(sessionModel("alpha/model-a")), attempt: attemptView() };
+        const session = fakeSession(state) as unknown as Record<string, unknown> & { publishState(state: unknown): void; publishSnapshot(): void };
+        const page = deferred<void>();
+        const reading = deferred<AbortSignal>();
+        Object.assign(session, {
+          deliveryAccess: true,
+          deliveryPage: async () => { page.resolve(); return { records: [record] }; },
+          readDelivery: async (_requested: unknown, signal: AbortSignal) => { reading.resolve(signal); return served.promise; },
+        });
+        let disconnect: ((error: TransportClosedError) => void) | undefined;
+        const app = appOver(
+          session as unknown as AppServerSession,
+          fakeHost({ onClose: (listener) => { disconnect = listener; } }),
+        );
+        const running = app.run();
+        teardown = async () => { await app.quit(); await running; };
+        process.stdin.emit("data", "/files\r");
+        await page.promise;
+        await waitForApplicationContinuation();
+        process.stdin.emit("data", "s");
+        process.stdin.emit("data", "\u0005"); // end of the prefilled name
+        process.stdin.emit("data", "\u0015"); // delete it: the destination is explicit
+        process.stdin.emit("data", destination);
+        process.stdin.emit("data", "\r");
+        const signal = await reading.promise;
+        assert.equal(signal.aborted, false);
+        let quitting: Promise<void> | undefined;
+        switch (retirement) {
+          case "escape":
+            process.stdin.emit("data", "\u001b");
+            await waitForPiEscapeDisambiguation();
+            break;
+          case "replacement":
+            session.publishState({ ...state, pendingInteractions: [approvalInteraction()] });
+            break;
+          case "snapshot":
+            session.publishSnapshot();
+            break;
+          case "disconnect":
+            disconnect!(new TransportClosedError("input_eof", "the App Server went away"));
+            break;
+          case "quit":
+            quitting = app.quit();
+            break;
+        }
+        await waitForApplicationContinuation();
+        assert.equal(signal.aborted, true, `${retirement} cancels the native read`);
+        // The server's publication won the race anyway: the bytes arrive late.
+        served.resolve(body);
+        await waitForApplicationContinuation();
+        await waitForApplicationContinuation();
+        assert.equal(existsSync(destination), false, `${retirement}: no stale local file`);
+        await quitting;
+      } finally {
+        served.resolve(body);
+        await teardown();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
   it("keeps Esc precedence at the app input-routing boundary", async () => {
     let cancelled = 0;
     const runningState = {

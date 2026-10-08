@@ -403,23 +403,36 @@ export class AppServerSession {
   /**
    * Original bytes (≤ 512 KiB, base64) of one committed delivery, through
    * this attachment. Native authority resolves the address every time; no
-   * model request, Agent, or Tool execution starts.
+   * model request, Agent, or Tool execution starts. Aborting `signal`
+   * cancels this exact native request on the server; the call then settles
+   * with the server's terminal outcome (bytes only if publication won).
    */
-  async readDelivery(record: Pick<DeliveryRecord, "messageId" | "index">): Promise<{ file: SessionFileReference; data: string }> {
-    const { file, data } = await this.#client.call(
+  async readDelivery(
+    record: Pick<DeliveryRecord, "messageId" | "index">,
+    signal: AbortSignal = new AbortController().signal,
+  ): Promise<{ file: SessionFileReference; data: string }> {
+    const { file, data } = await this.#client.callDelivery(
       "delivery/read",
       { target: this.#target, message_id: record.messageId, delivery_index: record.index },
       "session_file_bytes",
+      signal,
     );
     return { file, data };
   }
 
-  /** The verified server-side path and leaf identity of one delivery. */
-  async locateDelivery(record: Pick<DeliveryRecord, "messageId" | "index">): Promise<DeliveryLocation> {
-    const { file, path, device, inode } = await this.#client.call(
+  /**
+   * The verified server-side path and leaf identity of one delivery.
+   * Aborting `signal` cancels the native request (see `readDelivery`).
+   */
+  async locateDelivery(
+    record: Pick<DeliveryRecord, "messageId" | "index">,
+    signal: AbortSignal = new AbortController().signal,
+  ): Promise<DeliveryLocation> {
+    const { file, path, device, inode } = await this.#client.callDelivery(
       "delivery/locate",
       { target: this.#target, message_id: record.messageId, delivery_index: record.index },
       "session_file_location",
+      signal,
     );
     return { file, path, device, inode };
   }

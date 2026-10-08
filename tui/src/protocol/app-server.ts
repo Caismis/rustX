@@ -518,6 +518,8 @@ export function describeRpcError(error: RpcError): string {
       return "the connection has not completed initialize";
     case "already_initialized":
       return "the connection has already completed initialize";
+    case "delivery_cancelled":
+      return "the delivery request was cancelled before publication";
     case "stale_attachment":
       return "this attachment has been replaced";
     case "stale_runtime":

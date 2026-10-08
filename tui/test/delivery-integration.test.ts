@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 
 import { AppServerHost } from "../src/app-server/host.ts";
-import { AppServerRequestError } from "../src/app-server/client.ts";
+import { AppServerRequestError, isDeliveryCancelled } from "../src/app-server/client.ts";
 import type { AppServerSession } from "../src/app-server/session.ts";
 import { TransportClosedError } from "../src/app-server/transport.ts";
 import {
@@ -151,11 +151,11 @@ describe("committed deliveries through an owned stdio child", { skip: SKIP }, ()
       // Save: original bytes, Unicode/spaces name, client-local destination.
       const saved = await saveDelivery(
         () => session.readDelivery(report),
-        deliveryDestination(report.file.name, `saved/${report.file.name}`, fixture.temp.path(".")),
+        deliveryDestination(`saved/${report.file.name}`, fixture.temp.path(".")),
       ).catch((error: unknown) => error);
       assert.ok(saved instanceof Error, "a missing destination directory fails before writing");
       mkdirSync(fixture.temp.path("saved"));
-      const destination = deliveryDestination(report.file.name, `saved/${report.file.name}`, fixture.temp.path("."));
+      const destination = deliveryDestination(`saved/${report.file.name}`, fixture.temp.path("."));
       assert.equal(await saveDelivery(() => session.readDelivery(report), destination), destination);
       assert.deepEqual(readFileSync(destination), REPORT_BYTES);
       await assert.rejects(saveDelivery(() => session.readDelivery(data), destination), /EEXIST/);
@@ -184,6 +184,18 @@ describe("committed deliveries through an owned stdio child", { skip: SKIP }, ()
         return body;
       }, cancelled, abort.signal), { name: "AbortError" });
       assert.equal(existsSync(cancelled), false);
+
+      // Request-scoped cancellation over the real protocol: the native
+      // request answers exactly once (bytes only if its publication won),
+      // and the connection stays healthy for the next read.
+      const owner = new AbortController();
+      const racing = session.readDelivery(report, owner.signal).then(
+        () => "published",
+        (error: unknown) => isDeliveryCancelled(error) ? "cancelled" : error,
+      );
+      owner.abort();
+      assert.ok(["published", "cancelled"].includes(await racing as string));
+      assert.deepEqual(Buffer.from((await session.readDelivery(report)).data, "base64"), REPORT_BYTES);
 
       // Open: native location, verified against this client's own leaf.
       const launches: string[][] = [];

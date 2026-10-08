@@ -25,6 +25,7 @@ import {
   METHOD_RESPONSE_LOSS_CLASS,
   type ResponseLossClass,
   UncertainOutcomeError,
+  isDeliveryCancelled,
   isResyncRequired,
   isStaleAttachment,
   isUncertainOutcome,
@@ -774,3 +775,57 @@ describe("bounded request ownership", () => {
   });
 
 });
+
+describe("request-scoped delivery cancellation", () => {
+  const read = { target: target(), message_id: "tool-msg", delivery_index: 0 };
+  const cancelled: RpcError = {
+    code: -32000, message: "Delivery request was cancelled before publication",
+    data: { kind: "delivery_cancelled" },
+  };
+
+  it("cancels exactly its own request and settles it once with the server's terminal outcome", async t => {
+    const { client, transport } = await initialized(); t.after(() => client.close());
+    const owner = new AbortController();
+    const sibling = new AbortController();
+    const outcome = client.callDelivery("delivery/read", read, "session_file_bytes", owner.signal).catch((error: unknown) => error);
+    const other = client.callDelivery("delivery/read", read, "session_file_bytes", sibling.signal);
+    const [first, second] = await transport.log.awaitMethod("delivery/read", 2);
+    owner.abort();
+    owner.abort();
+    const [cancel] = await transport.log.awaitMethod("delivery/cancel");
+    assert.deepEqual(paramsOf(cancel!, "delivery/cancel"), { request_id: first!.id }, "names the exact in-flight id");
+    assert.equal(transport.log.count("delivery/cancel"), 1, "one cancel per owner");
+    assert.equal(client.pendingCount, 3, "the cancelled request keeps its correlation until answered");
+    transport.respond(cancel!.id, { type: "delivery_cancel", accepted: true });
+    transport.respondError(first!.id, cancelled);
+    const error = await outcome;
+    assert.ok(isDeliveryCancelled(error));
+    transport.respond(second!.id, { type: "session_file_bytes", file: REPORT_FILE, data: "QQ==" });
+    assert.equal((await other).data, "QQ==", "an unrelated request is untouched");
+    assert.equal(client.pendingCount, 0);
+    assert.equal(client.closed, undefined, "the late answer is a known id, never a protocol failure");
+  });
+
+  it("keeps a result whose publication won the race, and sends nothing when already aborted", async t => {
+    const { client, transport } = await initialized(); t.after(() => client.close());
+    const owner = new AbortController();
+    const outcome = client.callDelivery("delivery/locate", read, "session_file_location", owner.signal);
+    const [request] = await transport.log.awaitMethod("delivery/locate");
+    owner.abort();
+    const [cancel] = await transport.log.awaitMethod("delivery/cancel");
+    transport.respond(request!.id, { type: "session_file_location", file: REPORT_FILE, path: "/w/r.md", device: "1", inode: "2" });
+    transport.respond(cancel!.id, { type: "delivery_cancel", accepted: false });
+    assert.equal((await outcome).path, "/w/r.md", "a committed response is not represented as unpublished");
+    const aborted = new AbortController();
+    aborted.abort();
+    await assert.rejects(client.callDelivery("delivery/read", read, "session_file_bytes", aborted.signal));
+    assert.equal(transport.log.count("delivery/read"), 0, "nothing sent before admission");
+    assert.equal(client.pendingCount, 0);
+    assert.equal(client.closed, undefined);
+  });
+});
+
+const REPORT_FILE = {
+  scope: { conversation_id: "conv_bf9033a7-86e2-71aa-8314-b791ebfdbfec", device: "1", inode: "2" },
+  path: "out/r.md", name: "r.md", description: null, mime_type: "text/markdown",
+};
