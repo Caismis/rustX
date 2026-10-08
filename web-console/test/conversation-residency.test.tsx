@@ -9,7 +9,7 @@ import { AgentComposer } from '../src/app/agent/AgentComposer';
 import { AppFrame } from '../src/presentation/layout/AppFrame';
 import { modelPreferences, NewSessionModelPreference, selectSessionModel } from '../src/app/model-preference';
 import { inputTrigger } from '../src/app/composer/input-trigger';
-import { cfg3Source } from './cfg3-data';
+import { cfg3Source, cfg3Effective } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
 import type { CatalogModelView, RuntimeClientEvent, RuntimeClientSnapshot, SessionModelConfig, SourceSettings } from '../../protocol/app-server/v37';
 
@@ -284,4 +284,22 @@ it('a settled live Attempt without a journal projection cannot manufacture termi
   render(<AgentTranscript snapshot={value}/>);
   expect(screen.queryByRole('button', { name: 'Stopped' })).toBeNull();
   expect(document.querySelector('[data-turn-process]')).toBeNull();
+});
+
+it('typing while attachment is held cannot offer native commands before admission', async () => {
+  await server.connect(); nativeModel(); server.held.add('session/attach');
+  server.handlers.set('session/models',()=>({type:'models',catalog:{models:[model('fixture/root')]}}));
+  server.handlers.set('session/model',()=>({type:'model',model:cfg3Effective().effective_model}));
+  await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+  const opening=await server.waitFor('session/attach',1),message=input();
+  expect(message.disabled).toBe(false);
+  fireEvent.change(message,{target:{value:'/mdl'}});
+  expect(screen.queryByRole('option',{name:/Model/})).toBeNull();
+  expect(server.requests.filter(row=>row.request.method==='session/model')).toHaveLength(0);
+  await act(async()=>server.reply(opening));
+  expect(screen.getByRole('option',{name:/Model/})).toBeTruthy();
+  expect(input()).toBe(message);expect(message.value).toBe('/mdl');
+  await act(async()=>fireEvent.keyDown(message,{key:'Enter'}));
+  expect(screen.getByRole('dialog',{name:'/model'})).toBeTruthy();
 });

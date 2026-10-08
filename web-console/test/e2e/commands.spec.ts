@@ -19,7 +19,7 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   const message = page.getByRole('textbox', { name: 'Message', exact: true });
   const facts = page.getByLabel('Native diagnostic JSON', { exact: true });
-  const command = async (name: string) => { await message.fill(`/${name}`); await message.press('Enter'); return page.getByRole('dialog', { name: `/${name}`, exact: true }); };
+  const command = async (name: string) => { await message.fill(`/${name}`); await expect(page.getByRole('listbox', { name: 'Commands' }).getByRole('option').first()).toBeVisible(); await message.press('Enter'); return page.getByRole('dialog', { name: `/${name}`, exact: true }); };
   const settled = () => expectSettled(page);
   try {
     await routeWorkspaceHost(page, fixture);
@@ -28,9 +28,10 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await expect(page.getByLabel('Transport token')).toHaveCount(0); await showInspector(page);
     await openEmptySession(page, fixture, 'Workspace A');
     await expect(message).toBeEnabled();
+    await expect(facts).toContainText(/"ConversationId": "conv_/);
     const originalId = JSON.parse(await facts.innerText()).SessionId as string;
     const originalConversation = JSON.parse(await facts.innerText()).ConversationId as string;
-    await message.fill('/model'); await message.press('Enter');
+    await message.fill('/model'); await expect(page.getByRole('option', { name: 'Model model', exact: true })).toBeVisible(); await message.press('Enter');
     let popup = page.getByRole('dialog', { name: '/model', exact: true });
     await popup.getByLabel('Filter options').fill('second');
     await popup.getByRole('option', { name: /fixture\/second-model/ }).click();

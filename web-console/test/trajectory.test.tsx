@@ -1505,3 +1505,9 @@ it('tool result attachments remain available in summary and result without an ex
   fireEvent.click(screen.getByRole('tab', { name: 'Result' }));
   expect(within(screen.getByRole('tabpanel')).getByText('report.md')).toBeTruthy();
 });
+
+it('Request markers retain canonical native state independently of error decoration', () => {
+  show(cacheOf([traceRecord(0, { state: 'running' }), traceRecord(1, { state: 'completed' })]));
+  expect(document.querySelector('[data-request-owner="trace:0"]')?.getAttribute('data-state')).toBe('running');
+  expect(document.querySelector('[data-request-owner="trace:1"]')?.getAttribute('data-state')).toBe('completed');
+});

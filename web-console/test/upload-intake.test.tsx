@@ -45,7 +45,11 @@ it('preserves exact text and selection when inserting a file-plus-text paste', (
   fireEvent.paste(input, { clipboardData: { files: [file()], items: [], getData: () => 'x\ny' } });
   expect(input.value).toBe('α x\ny ω'); expect(input.selectionStart).toBe(5); expect(input.selectionEnd).toBe(5);
   expect(owner.snapshot()).toHaveLength(1);
-  expect(ui.getByTitle(/2097152 bytes per file/)).toBeTruthy();
+  fireEvent.click(ui.getByRole('button', { name: 'Add' }));
+  const option = ui.getByRole('option', { name: /file$/ });
+  expect(document.getElementById(option.getAttribute('aria-describedby')!)?.textContent).toContain('2097152 bytes per file');
+  expect(input.value).toBe('α x\ny ω');
+  expect(input.selectionStart).toBe(5); expect(input.selectionEnd).toBe(5);
 });
 it('uncertain reconciliation reuses original receipts and performs no second upload', async () => {
   const owner = new AttachmentIntake();

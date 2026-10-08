@@ -45,7 +45,7 @@ async function mount({ current = () => true, source = workspaceSource(), configu
   return { host, opened, authority, associations };
 }
 const methods = () => server.requests.map(r => r.request.method);
-const modelChoices = () => screen.queryAllByRole('menuitem').map(item => item.textContent ?? '').filter(label => label.startsWith('fixture/'));
+const modelChoices = () => screen.queryAllByRole('menuitem').filter(item => !(item as HTMLButtonElement).disabled).map(item => item.textContent ?? '').filter(label => label.startsWith('fixture/'));
 async function openModelMenu() {
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Model and reasoning' })));
   fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
@@ -194,8 +194,10 @@ it('an obsolete Workspace catalog read cannot replace the current Workspace cata
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Workspace B' })));
   await openModelMenu();
   expect(modelChoices()).toEqual(['fixture/current-workspace']);
+  expect((screen.getByRole('menuitem', { name: /fixture\/native .*unavailable/ }) as HTMLButtonElement).disabled).toBe(true);
   await act(async () => obsolete.resolve({ kind: 'read', projection: workspaceSource({ kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: [nativeModel('fixture/obsolete-workspace')] } }) }));
   expect(modelChoices()).toEqual(['fixture/current-workspace']);
+  expect((screen.getByRole('menuitem', { name: /fixture\/native .*unavailable/ }) as HTMLButtonElement).disabled).toBe(true);
   expect(screen.queryByRole('menuitem', { name: 'fixture/obsolete-workspace' })).toBeNull();
 });
 it('a draft model the native catalog stops publishing blocks Send instead of reaching Session creation', async () => {

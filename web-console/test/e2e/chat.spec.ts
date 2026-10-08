@@ -129,21 +129,21 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
 
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
     await expect.poll(() => ledger.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(2);
-    await expect(trajectory.locator('[data-request-owner][data-status="running"]').first()).toBeVisible();
+    await expect(trajectory.locator('[data-request-owner][data-state="running"]').first()).toBeVisible();
     // A reader away from the tail owns their position while live repair runs.
     await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
     await connectionAction(page, 'Reconnect');
     await expect(page.getByLabel('Transport token')).toHaveCount(0);
     await ledger.evaluate(el => { el.scrollTop = el.scrollHeight; el.dispatchEvent(new Event('scroll')); });
-    await expect(trajectory.locator('[data-request-owner][data-status="running"]').first()).toBeVisible();
+    await expect(trajectory.locator('[data-request-owner][data-state="running"]').first()).toBeVisible();
     await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
     // Settlement appends the running Request's Assistant output, which then
     // hosts its marker in place of the Request's own seat.
-    const running = trajectory.locator('[data-request-owner][data-status="running"]');
+    const running = trajectory.locator('[data-request-owner][data-state="running"]');
     await expect(running).toHaveCount(1);
     const settling = trajectory.locator(`[data-request-owner="${await running.getAttribute('data-request-owner')}"]`);
     await fixture.release('settle-chat');
-    await expect(settling).toHaveAttribute('data-status', 'completed');
+    await expect(settling).toHaveAttribute('data-state', 'completed');
     await expect(settling.locator('xpath=ancestor::*[@role="row"]')).toHaveAttribute('data-kind', 'assistant');
     expect(await ledger.evaluate(el => el.scrollTop)).toBe(0);
     await closeSettings(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
@@ -222,7 +222,10 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await expect(tool).toHaveCount(1);
     const stableToolId = await tool.getAttribute('data-trace-id');
     await tool.click();
-    await expect(inspector).toContainText('chat-image');
+    // The selected native Tool owns the result; opaque call IDs are searchable
+    // identity, not human-facing Inspector labels.
+    await expect(inspector).toContainText('render_image');
+    await expect(inspector.getByRole('button', { name: 'Preview artifact_1', exact: true })).toBeVisible();
     await page.screenshot({ path: 'test-results/trajectory-inspector.png', fullPage: true });
     await connectionAction(page, 'Reconnect');
     await expect(page.getByLabel('Transport token')).toHaveCount(0);

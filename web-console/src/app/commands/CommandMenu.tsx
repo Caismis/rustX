@@ -6,8 +6,9 @@ import { CommandIcon } from './CommandIcons';
 import css from './Commands.module.css';
 export type MenuAction = CommandId | 'file';
 const section = (id: MenuAction) => id === 'file' || id === 'goal' ? 'add' : 'commands';
-export function CommandMenu({ rows, active, select, highlight }: {
+export function CommandMenu({ rows, active, select, highlight, fileDescription }: {
   rows: readonly { id: MenuAction }[]; active: number; select: (id: MenuAction) => void; highlight: (index: number) => void;
+  fileDescription?: string;
 }) {
   const tx = useTranslation();
   const root = useRef<HTMLDivElement>(null);
@@ -39,7 +40,7 @@ export function CommandMenu({ rows, active, select, highlight }: {
         <span className={css.icon} aria-hidden="true"><CommandIcon id={command.id}/></span>
         <span className={css.name}>{tx(`commands:menu.${command.id}`)}</span>
         <small className={css.alias}>{command.id}</small>
-        <span id={`command-description-${command.id}`} className={css.description}>{tx(`commands:menu.description.${command.id}`)}</span>
+        <span id={`command-description-${command.id}`} className={css.description}>{command.id === 'file' && fileDescription ? fileDescription : tx(`commands:menu.description.${command.id}`)}</span>
       </button>
     </Fragment>) : <p role="status">{tx('commands:command-menu.unsupported-command-edit-the-draft-it-will-not-be-sent-as-a-prom')}</p>}
   </div>;

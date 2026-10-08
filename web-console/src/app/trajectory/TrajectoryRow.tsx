@@ -70,7 +70,7 @@ export function TrajectoryRow({ row, index, style, activeKey, activeTurn, folded
     <span role="cell" className={css.event}>
       {request && <button type="button" onKeyDown={event => onKeyDown(event, request.display_key)} className={css.requestChrome} data-display-key={request.display_key}
         aria-label={requestLabel} aria-pressed={activeKey === request.display_key} data-label={requestLabel}
-        data-request-owner={request.owner_record_id} data-request-id={request.record.request?.request_id}
+        data-state={request.record.state} data-request-owner={request.owner_record_id} data-request-id={request.record.request?.request_id}
         data-selected={activeKey === request.display_key || undefined} data-status={isErrorRecord(request.record) ? 'error' : undefined}
         style={row.requestRun ? { '--request-boundary-offset': `${row.requestRun * 8}px` } as CSSProperties : undefined}
         onClick={event => { event.stopPropagation(); actions.select(request); }}

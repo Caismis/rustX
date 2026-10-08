@@ -39,7 +39,9 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
       const input = page.getByRole('textbox', { name: copy('Message', '消息'), exact: true });
       // An idle Context seat renders nothing; no request occupancy is disclosed.
       await expect(page.locator('[data-context-seat]')).toHaveCount(0);
-      await input.fill('/compact'); await input.press('Enter');
+      await input.fill('/compact');
+      await expect(page.getByRole('option', { name: copy('Compact compact', '压缩 compact'), exact: true })).toBeVisible();
+      await input.press('Enter');
       await expect(page.getByText(copy('Compaction failed', '上下文压缩失败'), { exact: true })).toBeVisible();
       const diagnostic = page.getByText(copy('Compaction details', '上下文压缩详情'), { exact: true });
       await diagnostic.focus(); await diagnostic.press('Enter');
