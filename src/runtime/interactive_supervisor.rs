@@ -445,6 +445,7 @@ pub fn run_outer(arguments: &[String]) -> i32 {
             ] {
                 if terminal_signals & bit != 0
                     && let Err(error) = signal_group(inner_pid, signal)
+                        .or_else(|error| retire_terminal_input_failure(inner_pid, error))
                 {
                     let _ =
                         write_frame(&mut upstream, MSG_PROCESS_CONTROL_FAILURE, error.as_bytes());
@@ -640,6 +641,23 @@ pub fn run_outer(arguments: &[String]) -> i32 {
             }
         }
         std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// Terminal input can race retirement of its exact inner owner. Darwin may
+/// reject a signal to the retained zombie-only group with EPERM. A retained
+/// exit makes that input obsolete, but DOES NOT prove group settlement. The
+/// outer loop still observes that exit and performs containment and the
+/// platform's independent terminal proof before releasing Host capacity.
+/// Live or lost ownership retains the input failure; containment signals do
+/// not use this function.
+fn retire_terminal_input_failure(inner_pid: i32, error: String) -> Result<(), String> {
+    match waitid(
+        Id::Pid(Pid::from_raw(inner_pid)),
+        WaitPidFlag::WNOHANG | WaitPidFlag::WEXITED | WaitPidFlag::WNOWAIT,
+    ) {
+        Ok(WaitStatus::Exited(..) | WaitStatus::Signaled(..)) => Ok(()),
+        _ => Err(error),
     }
 }
 
@@ -1581,6 +1599,68 @@ fn await_start(
             }
             Err(error) => return Err(format!("cannot read the ownership start gate: {error}")),
         }
+    }
+}
+
+#[cfg(test)]
+mod terminal_signal_tests {
+    use super::*;
+
+    #[test]
+    fn terminal_input_failure_requires_a_retained_exited_owner() {
+        let mut child = Command::new("/bin/cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn()
+            .expect("start the held child");
+        let pid = i32::try_from(child.id()).expect("pid fits i32");
+        let failure = "injected signal EPERM".to_owned();
+        assert_eq!(
+            retire_terminal_input_failure(pid, failure.clone()),
+            Err(failure.clone()),
+            "a live owner must retain its signal failure"
+        );
+        drop(child.stdin.take());
+        assert_eq!(
+            waitid(
+                Id::Pid(Pid::from_raw(pid)),
+                WaitPidFlag::WEXITED | WaitPidFlag::WNOWAIT,
+            ),
+            Ok(WaitStatus::Exited(Pid::from_raw(pid), INNER_EXIT_NORMAL))
+        );
+        assert_eq!(retire_terminal_input_failure(pid, failure.clone()), Ok(()));
+        assert!(
+            child
+                .wait()
+                .expect("the proof did not reap the anchor")
+                .success()
+        );
+        assert_eq!(
+            retire_terminal_input_failure(pid, failure.clone()),
+            Err(failure),
+            "loss of the exact waitable owner cannot authorize settlement"
+        );
+    }
+
+    #[test]
+    fn abnormal_exit_retires_input_without_reaping_the_containment_anchor() {
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "exit 17"])
+            .spawn()
+            .expect("start abnormal child");
+        let pid = i32::try_from(child.id()).expect("pid fits i32");
+        assert_eq!(
+            waitid(
+                Id::Pid(Pid::from_raw(pid)),
+                WaitPidFlag::WEXITED | WaitPidFlag::WNOWAIT,
+            ),
+            Ok(WaitStatus::Exited(Pid::from_raw(pid), 17))
+        );
+        assert_eq!(retire_terminal_input_failure(pid, "EPERM".into()), Ok(()));
+        assert_eq!(
+            child.wait().expect("retained abnormal anchor").code(),
+            Some(17)
+        );
     }
 }
 
