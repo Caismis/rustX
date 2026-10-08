@@ -170,7 +170,9 @@ it.each(['replacement', 'ABA', 'coalesced'] as const)('delayed %s retirement pre
   const start = async () => {
     const target={session_id:'A',active_node:native.active_node},id=randomUUID();
     await host.workbench(scope,{target,request:{kind:'create',id,shell:'/bin/sh'}});
-    await host.workbench(scope,{target,request:{kind:'input',id,data:"printf 'OWNER_%s_READY\\n' \"$$\"\r"}});
+    // Exercise ownership retirement with a cooperative shell. TERM-resistant
+    // descendants are covered above; serial grace periods are not a race barrier.
+    await host.workbench(scope,{target,request:{kind:'input',id,data:"trap 'exit 0' TERM; printf 'OWNER_%s_READY\\n' \"$$\"\r"}});
     let cursor=0,output='';
     for(;;){const result=await host.workbench(scope,{target,request:{kind:'poll',id,cursor}});if(!('cursor' in result))throw Error('Missing poll');cursor=result.cursor!;output+=result.output;const match=/OWNER_(\d+)_READY/.exec(output);if(match)return {target,id,pid:Number(match[1]),cursor};}
   };
