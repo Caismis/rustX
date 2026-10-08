@@ -44,7 +44,7 @@ async function openModels() {
 }
 it('model/profile menu advertises only exact native values and acknowledgement alone never changes selection', async () => {
  modelFixture(); await server.attached('A'); render(<Control/>); await openModels();
- expect(count('session/models')).toBe(1); expect(count('session/model')).toBe(1);
+ expect(count('session/models')).toBe(1); expect(count('session/model')).toBe(0); expect(count('session/snapshot')).toBe(0);
  fireEvent.click(screen.getByRole('menuitem', { name: 'Reasoning profile' }));
  expect(screen.getByRole('menuitem', { name: 'brief' })).toBeTruthy();
  expect(screen.queryByText('high')).toBeNull(); expect(screen.queryByText('off')).toBeNull();
@@ -58,7 +58,7 @@ it('model/profile menu advertises only exact native values and acknowledgement a
  expect(server.client.getSnapshot().views.A.modelMutation?.status).toBe('acknowledged');
  await expect(server.client.send('A', 'dependent turn')).rejects.toThrow('Reread native model state');
  expect(count('turn/start')).toBe(0);
- const read = await server.waitFor('session/snapshot', 2);
+ const read = await server.waitFor('session/snapshot', 1);
  await act(async () => server.reply(read));
  expect(screen.getByRole('button', { name: 'Model and reasoning' }).textContent).toContain('brief');
  expect(server.client.getSnapshot().views.A.modelMutation).toBeUndefined();
@@ -226,8 +226,11 @@ it('image reads have a dedicated renderer and retain managed image references af
 
 
 it('preloads the model catalog and reopens the menu without another read or loading state', async () => {
-  modelFixture(); await server.attached('A'); render(<Control/>);
-  await waitFor(() => expect(count('session/model')).toBe(1));
+  modelFixture(); server.held.add('session/models'); await server.attached('A'); render(<Control/>);
+  const preload = await server.waitFor('session/models', 1);
+  await act(async () => server.reply(preload));
+  expect(count('session/models')).toBe(1);
+  expect(count('session/model')).toBe(0); expect(count('session/snapshot')).toBe(0);
   await openModels();
   fireEvent.click(screen.getByRole('button', { name: 'Model and reasoning' }));
   server.held.add('session/models');

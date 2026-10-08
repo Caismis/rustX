@@ -417,11 +417,11 @@ it('K: a dimension change fails, for strict and noise-policy references alike', 
   expect(heightResult.report).toContain(`dimensions: expected 390x844, actual 390x843`);
 });
 
-// The Composer card and send circle rasterize on their own layers, so no
-// reference that draws them carries measured noise: one changed pixel fails.
+// Composer references without measured rasterizer evidence remain strict.
 it.each([
   ...['idle-empty', 'idle-draft', 'running-empty', 'running-draft', 'attachment', 'context']
-    .flatMap(state => ['light', 'dark'].map(theme => `composer-${state}-${theme}-390-linux.png`)),
+    .flatMap(state => ['light', 'dark'].map(theme => `composer-${state}-${theme}-390-linux.png`))
+    .filter(name => !['running-empty', 'running-draft', 'attachment', 'context'].some(state => name === `composer-${state}-light-390-linux.png`)),
   'mobile-expanded-dark-linux.png',
 ])('%s is strict', name => {
   expect(noisePolicy.some(entry => entry.reference === name)).toBe(false);
@@ -432,4 +432,20 @@ it.each([
     const result = compare(changed, name, expected, noisePolicy);
     expect(result.ok).toBe(false); expect(result.report).toContain('no noise regions are registered');
   }
+});
+
+it.each(['running-empty', 'running-draft', 'attachment', 'context'])('Composer %s noise rejects every adjacent unmeasured pixel', state => {
+  const name = `composer-${state}-light-390-linux.png`, expected = reference(name);
+  const entry = noisePolicy.find(entry => entry.reference === name)!;
+  const measured = new Set(entry.pixels!.map(([x, y]) => `${x},${y}`));
+  for (const region of entry.regions) for (const [x, y] of cells(region)) expect(measured.has(`${x},${y}`)).toBe(true);
+  const neighbours = new Set<string>();
+  for (const [x, y] of entry.pixels!) for (const [nx, ny] of [[x-1,y],[x+1,y],[x,y-1],[x,y+1]]) {
+    if (nx >= 0 && ny >= 0 && nx < expected.width && ny < expected.height && !measured.has(`${nx},${ny}`)) neighbours.add(`${nx},${ny}`);
+  }
+  expect(neighbours.size).toBeGreaterThan(0);
+  const changed = copy(expected);
+  for (const key of neighbours) { const [x, y] = key.split(',').map(Number); nudge(changed, x, y, 1); }
+  const result = compare(changed, name, expected, noisePolicy);
+  expect(result.ok).toBe(false); expect(result.changedOutsideRegions).toBe(neighbours.size);
 });

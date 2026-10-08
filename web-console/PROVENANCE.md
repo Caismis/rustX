@@ -1738,7 +1738,7 @@ Repair browser acceptance follows the new Settings page order, the shared slash
 model picker, and the actual `data-conversation-scroll` owner. Agent, Shell,
 Settings and localized General screenshot references are refreshed for the PR's intentional
 reserved scroll gutter, lineage header, running-status seat and new conversation
-preferences. The strict comparator and its noise budgets are unchanged. A hidden
+preferences. The strict comparator is unchanged; reference-local raster evidence is described below. A hidden
 StepGroup title now stays hidden in detailed mode, and stream-to-canonical
 message seats retain their disclosure identity instead of remounting.
 
@@ -1748,3 +1748,18 @@ a readable label with an error-colored underline. Skill visibility retains its
 selection-versus-filesystem explanation. The four updated Shell references
 with registered corner-arc noise retain every historical evidence pixel within
 its recorded alternatives; their regions and budgets are unchanged.
+
+Composer screenshot fixtures explicitly establish the latest-reading position
+before capture: an earlier control click can otherwise leave a half-pixel
+scroll offset. Dimensions remain exact. Four narrow light-theme references
+have new measured raster evidence: repeated pinned-browser captures retain
+byte-identical DOM geometry and computed paint styles, while shadows differ by
+1–3 channel levels and eight attachment-corner pixels differ by up to 7.
+The manifest contains raw pixels, capture hashes and exact row spans; tests
+reject changes at every adjacent unmeasured pixel. Other references remain
+strict, and neither a product CSS workaround nor a global tolerance was added.
+
+Automatic model catalog preloading now uses the attached native snapshot for
+the current selection. Only an outstanding model mutation or failed intent
+requires model/snapshot reconciliation; merely mounting the control performs
+no snapshot repair. Existing write acknowledgement and reread fencing remain.

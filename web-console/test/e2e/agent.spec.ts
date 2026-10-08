@@ -104,7 +104,14 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
     const input = page.getByRole('textbox', { name: 'Message', exact: true });
     const stack = page.locator('[data-composer-context-stack]');
     const primary = page.locator('[data-composer-primary]');
-    const shot = async (state: string) => expectStableScreenshot(stack, `composer-${state}-${theme}-${width}.png`);
+    const shot = async (state: string) => {
+      // This fixture compares dock geometry in the latest-reading pose. A
+      // prior button's automatic scroll can leave a half-pixel reader offset.
+      const reader = page.locator('[data-conversation-scroll]').first();
+      await reader.evaluate(element => { element.scrollTop = element.scrollHeight; });
+      await expect.poll(() => reader.evaluate(element => element.scrollTop === element.scrollHeight - element.clientHeight)).toBe(true);
+      await expectStableScreenshot(stack, `composer-${state}-${theme}-${width}.png`);
+    };
     await expect(input).toBeVisible(); await expect(primary).toHaveCount(1);
     if (width === 1440) {
       await expect.poll(async () => {

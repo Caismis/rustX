@@ -28,8 +28,11 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
  const read = async (at: number) => {
    if (!target || !current(at)) return;
      const result = await client.request({ method: 'session/models', params: { target } }, 'models');
-     if (result.catalog.models?.length || view?.snapshot?.model) {
+     if (!current(at)) return;
+     const observed = client.getSnapshot().views[view!.id];
+     if (observed?.modelMutation || observed?.modelIntent?.phase === 'failed') {
        await client.request({ method: 'session/model', params: { target } }, 'model');
+       if (!current(at)) return;
        await client.repairAgentModel(view!.id);
      }
      if (current(at)) setCatalog(result.catalog);
