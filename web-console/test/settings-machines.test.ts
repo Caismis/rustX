@@ -1924,7 +1924,7 @@ it('R13b publications delivered while the transport cannot read are answered by 
   expect(reads).toHaveLength(1);
 });
 
-it('R13b inside one connected span a native publication is the observation itself: it is folded without a read, and an obsolete read cannot regress it', async () => {
+it.each(['older', 'absent', 'failed'] as const)('R13b a publication supersedes an outstanding %s read without another read', async outcome => {
   const { actor, reads } = scriptedSession();
   expect(reads).toHaveLength(1);
   // A delivery that changes nothing this actor observes is no transition.
@@ -1946,11 +1946,13 @@ it('R13b inside one connected span a native publication is the observation itsel
   expect(actor.getSnapshot()).toBe(folded);
   // The owed read answers with an older version: it settles the read, never
   // the observation.
-  reads[0].resolve({ ...cfg3SourceApplication(), version: '4', candidate });
+  if (outcome === 'failed') reads[0].reject(new Error('obsolete failure'));
+  else reads[0].resolve(outcome === 'absent' ? null : { ...cfg3SourceApplication(), version: '4', candidate });
   await flush();
   expect(actor.getSnapshot().context.application?.version).toBe('5');
   expect(actor.getSnapshot().context.application?.candidate).toBeNull();
   expect(applicationCurrent(actor.getSnapshot())).toBe(true);
+  expect(actor.getSnapshot().context.readError).toBe('');
   expect(reads).toHaveLength(1);
 });
 
@@ -3441,4 +3443,42 @@ it.each([new OutcomeUncertain(), new RpcFailure({ code: -32000, message: 'Confli
   expect(workspaceApprovalBlock(actor)).toMatch(/^workspace:approval\.(uncertain|conflict)$/);
   expect(actor.getSnapshot().context.units[approvalIdentity]?.getSnapshot().context.draft?.value).toBe('full_access');
   expect(scripted.writes).toHaveLength(1); actor.stop();
+});
+
+it.each(['older', 'absent', 'failed'] as const)('R35 adoption reread settles after a concurrent publication and a %s completion', async outcome => {
+  const { actor, reads, adoptions } = scriptedSession();
+  reads[0].resolve({ ...cfg3SourceApplication(), version: '1', candidate });
+  await flush();
+  actor.send({ type: 'ADOPT', candidate });
+  adoptions[0].resolve();
+  await flush();
+  expect(reads).toHaveLength(2);
+  const publication = { ...cfg3SourceApplication(), version: '5' };
+  published(actor, publication);
+  expect(adoptionInFlight(actor.getSnapshot())).toBe(true);
+  if (outcome === 'failed') reads[1].reject(new Error('superseded reread'));
+  else reads[1].resolve(outcome === 'absent' ? null : { ...publication, version: '4' });
+  await flush();
+  expect(actor.getSnapshot().context.application).toBe(publication);
+  expect(actor.getSnapshot().context.readError).toBe('');
+  expect(applicationCurrent(actor.getSnapshot())).toBe(true);
+  expect(adoptionInFlight(actor.getSnapshot())).toBe(false);
+  expect(adoptions).toHaveLength(1);
+  expect(reads).toHaveLength(2);
+  actor.stop();
+});
+
+it('equal-version native delivery still supersedes an earlier adoption reread failure', async () => {
+  const { actor, reads, adoptions } = scriptedSession();
+  const application = { ...cfg3SourceApplication(), version: '5', candidate };
+  reads[0].resolve(application); await flush();
+  actor.send({ type: 'ADOPT', candidate }); adoptions[0].resolve(); await flush();
+  const publication = { ...application };
+  published(actor, publication);
+  reads[1].reject(new Error('older read failed')); await flush();
+  expect(actor.getSnapshot().context.application).toBe(publication);
+  expect(applicationCurrent(actor.getSnapshot())).toBe(true);
+  expect(adoptionInFlight(actor.getSnapshot())).toBe(false);
+  expect(actor.getSnapshot().context.readError).toBe('');
+  expect(reads).toHaveLength(2); expect(adoptions).toHaveLength(1); actor.stop();
 });

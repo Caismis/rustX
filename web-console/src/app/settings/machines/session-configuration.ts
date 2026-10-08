@@ -48,6 +48,10 @@ export interface SessionConfigurationContext extends SessionTransport {
    * authoritatively answer that the Session has no application, so this is
    * never inferred from `application` being present. */
   observed: boolean;
+  /** Publication order inside this actor; read ownership captures it on entry.
+   * Versions alone cannot order absence or failure against a publication. */
+  publicationOrder: number;
+  readPublicationOrder: number;
   /** The native application observed for this Session in the current
    * connected span of the current connection generation, and the only value
    * the monotonic version comparison ever runs against. `undefined` after an
@@ -156,16 +160,19 @@ export const sessionConfigurationMachine = setup({
       input.port.adopt(input.candidate)),
   },
   guards: {
+    readSuperseded: ({ context }) => context.readPublicationOrder !== context.publicationOrder,
     canRead: ({ context }) => context.connection === 'connected',
     /** The connected span that owns the current observation ends: the
      * connection generation is replaced, or the transport can no longer read. */
     spanEnds: ({ context, event }) => event.type === 'TRANSPORT'
       && (event.generation !== context.generation || (context.connection === 'connected' && event.connection !== 'connected')),
-    /** Inside one connected span, native published a newer application for
-     * this Session than the span has observed. */
+    /** Inside one connected span, native delivered a distinct publication that
+     * is not older than the span's application. Equal versions still establish
+     * authority over a read started before that delivery. */
     publicationAdvances: ({ context, event }) => event.type === 'TRANSPORT'
       && event.generation === context.generation && context.connection === 'connected' && event.connection === 'connected'
-      && !!event.publication && newer(event.publication, context.application),
+      && !!event.publication && event.publication !== context.publication
+      && (!context.application || !newer(context.application, event.publication)),
     /** A delivery that changes nothing this actor observes is not a transition:
      * client publications for unrelated state never touch this actor. */
     transportChanged: ({ context, event }) => event.type === 'TRANSPORT'
@@ -177,6 +184,7 @@ export const sessionConfigurationMachine = setup({
     adoptionUncertain: ({ event }) => isOutcomeUncertain((event as unknown as { error: unknown }).error),
   },
   actions: {
+    ownRead: assign({ readPublicationOrder: ({ context }) => context.publicationOrder }),
     applyTransport: assign(({ event }) => event.type !== 'TRANSPORT' ? {} : {
       connection: event.connection, generation: event.generation, publication: event.publication,
     }),
@@ -206,8 +214,9 @@ export const sessionConfigurationMachine = setup({
       readError: () => '',
     }),
     /** Fold one native publication of the current span; the guard proved it
-     * newer than anything the span observed. */
+     * not older than anything the span observed. */
     foldPublication: assign({
+      publicationOrder: ({ context }) => context.publicationOrder + 1,
       application: ({ event }) => (event as Extract<SessionConfigurationEvent, { type: 'TRANSPORT' }>).publication,
       observed: () => true,
       staleApplication: () => undefined,
@@ -228,6 +237,7 @@ export const sessionConfigurationMachine = setup({
   context: ({ input }) => ({
     port: input.port, connection: input.connection, generation: input.generation,
     publication: input.publication, observed: false, readError: '', adoptionError: '',
+    publicationOrder: 0, readPublicationOrder: 0,
   }),
   type: 'parallel',
   states: {
@@ -266,12 +276,19 @@ export const sessionConfigurationMachine = setup({
           },
           states: {
             loading: {
+              entry: 'ownRead',
               initial: 'owed',
               invoke: {
                 src: 'readConfiguration',
                 input: ({ context }) => ({ port: context.port }),
-                onDone: { target: 'ready', actions: 'adoptObservation' },
-                onError: { target: 'failed', actions: 'recordReadFailure' },
+                onDone: [
+                  { guard: 'readSuperseded', target: 'ready' },
+                  { target: 'ready', actions: 'adoptObservation' },
+                ],
+                onError: [
+                  { guard: 'readSuperseded', target: 'ready' },
+                  { target: 'failed', actions: 'recordReadFailure' },
+                ],
               },
               states: {
                 /** The read this span owes. */

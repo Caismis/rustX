@@ -439,3 +439,20 @@ a narrow adjacent `i18n-raw` explanation; translation dictionaries own product
 copy. The compiler checks exact built-in dictionary key sets. Browser E2E starts
 with an explicit English preference; dedicated Chinese tests cover live switching,
 persistence, composer commands and approval behavior.
+
+### Observation ordering within one connection
+
+Each Session actor orders native configuration publications independently of
+application versions. A read captures the publication order when it starts; its
+success (including absence) or failure may commit only if that order remains
+current. A newer publication supersedes all earlier read completions, including
+null and error. Leaving the connection generation cancels its read authority.
+Known absence is a successful observation, not failed/unavailable authority.
+
+Adoption retains its own settlement obligation while an authoritative reread is
+in flight. A concurrent publication can establish current observation without
+releasing that obligation early; the superseded read still settles the transaction
+without overwriting the publication. A relevant failed reread remains visibly
+failed and cannot authorize adoption. Native gate revalidation is mandatory;
+uncertain adoption is never replayed. Streaming deltas and configuration
+publications issue zero additional configuration reads.
