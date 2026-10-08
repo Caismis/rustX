@@ -77,3 +77,25 @@ it('a rejected quick write exposes its retained draft through detail rather than
   await screen.findByText(/catalog rejected/);
   expect(writes(s)).toHaveLength(1);
 });
+
+it.each([
+  { status: 'ready', valid: true, color: 'ready', label: 'MCP server is ready.' },
+  { status: 'unavailable', valid: true, color: 'error', label: 'MCP server is unavailable.' },
+  { status: 'unprepared', valid: true, color: 'unprepared', label: 'MCP server has not been initialized.' },
+  { status: undefined, valid: true, color: 'unknown', label: 'MCP server status is not yet available.' },
+  { status: 'ready', valid: false, color: 'invalid', label: 'The server configuration is invalid.' },
+] as const)('MCP status uses native $status/$valid independently of its permission switch', async ({status,valid,color,label}) => {
+  const s = cfg3Client();
+  s.source.prospective_resources = { ...s.effective.resources,
+    definitions: [{family:'mcp',name:'search',valid,location:{scope:'user',path:'/user/mcp.json'}}],
+    sources: status ? {search:{status}} : {},
+  };
+  await catalog(s);
+  const card = within(screen.getByRole('listitem',{name:'search'}));
+  expect(card.getByRole('switch').getAttribute('aria-checked')).toBe('false');
+  const icon = card.getByRole('img',{name:label});
+  expect(icon.querySelector('[data-status]')?.getAttribute('data-status')).toBe(color);
+  fireEvent.mouseEnter(icon);
+  expect((await screen.findByRole('tooltip')).textContent).toContain(label);
+  expect(writes(s)).toHaveLength(0);
+});

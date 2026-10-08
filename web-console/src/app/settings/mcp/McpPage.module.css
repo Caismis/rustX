@@ -16,7 +16,7 @@
 .icon {width:36px;height:36px;display:grid;place-items:center;flex:none;position:relative;border-radius:12px;background:var(--dsw-alias-bg-base);}
 .dot {position:absolute;right:-3px;bottom:-3px;width:10px;height:10px;border:3px solid var(--dsw-alias-bg-layer-1);border-radius:50%;background:var(--dsw-alias-label-tertiary);box-sizing:content-box;}
 .dot[data-status=ready] {background:var(--dsw-alias-state-success-primary);}
-.dot[data-status=error] {background:var(--dsw-alias-state-error-primary);}
+.dot[data-status=invalid], .dot[data-status=error] {background:var(--dsw-alias-state-error-primary);}
 .content {display:flex;flex-direction:column;gap:4px;min-width:0;}
 .content > * {overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .empty {border:1px dashed var(--dsw-alias-border-l2);border-radius:12px;min-height:168px;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:8px;padding:24px;text-align:center;font-size:14px;}
@@ -37,3 +37,5 @@
 .form textarea.json {min-height:300px;font-family:monospace;}
 @media(max-width:600px) {.toolbar > :last-child {width:100%;margin-left:0;}.top,.editorHeader{flex-wrap:wrap;}.page h3{font-size:24px;}.scope{flex-wrap:wrap;}.row{padding:12px;}.page{padding-top:0;}}
 .actions > button, .footer > button { border-radius:6px; }
+
+.dot[data-status=warning] {background:var(--dsw-alias-state-warn-primary);}

@@ -1,5 +1,12 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
+  "mcp.status-ready": "MCP server is ready.",
+  "mcp.status-error": "MCP server is unavailable.",
+  "mcp.status-invalid": "The server configuration is invalid.",
+  "mcp.status-unprepared": "MCP server has not been initialized.",
+  "mcp.status-unknown": "MCP server status is not yet available.",
+  "mcp.status-warning": "MCP server needs attention.",
+
   "mcp.name-mismatch": "The imported name differs from the server being edited.",
   "mcp.back": "← MCP servers",
   "mcp.name-placeholder": "my-mcp-server",
@@ -598,6 +605,13 @@ export const en = {
 } as const;
 export type SettingsKey = keyof typeof en;
 export const zh = {
+  "mcp.status-ready": "MCP 服务器已就绪。",
+  "mcp.status-error": "MCP 服务器不可用。",
+  "mcp.status-invalid": "服务器配置无效。",
+  "mcp.status-unprepared": "MCP 服务器尚未初始化。",
+  "mcp.status-unknown": "暂时无法获取 MCP 服务器状态。",
+  "mcp.status-warning": "MCP 服务器需要处理。",
+
   "mcp.name-mismatch": "导入的名称与正在编辑的服务器不一致。",
   "mcp.back": "← MCP 服务器",
   "mcp.name-placeholder": "my-mcp-server",

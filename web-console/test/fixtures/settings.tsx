@@ -105,6 +105,15 @@ if (variant.get('scenario') === 'mcp') {
     return {type:'source_settings',projection:structuredClone(source)};
   });
 }
+// Native preparation snapshots for MCP status indicator visual checks.
+if (variant.get('scenario') === 'mcp-status') {
+  const states = {ready: 'ready', unavailable: 'unavailable', unprepared: 'unprepared'} as const;
+  source.user_mcp.authored = Object.fromEntries(Object.keys(states).map(name => [name, {definition:{type:'stdio' as const,command:'mcp-server'},retained_env:[],retained_headers:[]}]));
+  source.prospective_resources = {...effective.resources,
+    definitions:Object.keys(states).map(name=>({family:'mcp',name,valid:true,location:{scope:'user',path:'/user/mcp.json'}})),
+    sources:Object.fromEntries(Object.entries(states).map(([name,status])=>[name,{status}])),
+  };
+}
 // A held write stays in flight — the User request unanswered, the Workspace
 // host call unresolved — until the test releases it. Only then does native
 // commit it: the removal is applied, the revision advances and the projection
