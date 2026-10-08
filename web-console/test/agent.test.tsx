@@ -223,3 +223,19 @@ it('image reads have a dedicated renderer and retain managed image references af
  fireEvent.click(screen.getByText('read_image'));
  expect(ui.container.textContent).toContain('artifact_1');
 });
+
+
+it('preloads the model catalog and reopens the menu without another read or loading state', async () => {
+  modelFixture(); await server.attached('A'); render(<Control/>);
+  await waitFor(() => expect(count('session/model')).toBe(1));
+  await openModels();
+  fireEvent.click(screen.getByRole('button', { name: 'Model and reasoning' }));
+  server.held.add('session/models');
+  for (let i = 0; i < 3; i++) {
+    fireEvent.click(screen.getByRole('button', { name: 'Model and reasoning' }));
+    expect(screen.queryByText('Reading native models…')).toBeNull();
+    expect(screen.getByRole('menuitem', { name: 'Model' }).getAttribute('aria-disabled')).not.toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: 'Model and reasoning' }));
+  }
+  expect(count('session/models')).toBe(1);
+});

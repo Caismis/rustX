@@ -338,7 +338,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
         initialWorkspace={workspace ?? (center.kind === 'new-conversation' ? center.workspaceId : undefined)}
         workspacePicked={id => { if (newConversationCurrent()) setCenter({ kind: 'new-conversation', workspaceId: id }); }}
         binding={String(draftBinding)} current={newConversationCurrent} consumed={consumed} restored={restored}
-        onCommand={id => invokeCommand({ id })}
+        onCommand={id => { if (id !== 'model') invokeCommand({ id }); }}
         opened={id => { setOpenViews(current => current.includes(id) ? current : [...current, id]); focusSession(id, { commitDraft: true }); return navigation.capture(); }}/>
 
       </section>

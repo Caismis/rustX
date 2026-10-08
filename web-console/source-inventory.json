@@ -32,6 +32,7 @@
         "../commands/CommandMenu",
         "../commands/matching",
         "../commands/registry",
+        "../composer/ModelPicker",
         "../composer/editor-content",
         "../composer/input-trigger",
         "../composer/preferences",
@@ -47,7 +48,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "9cc9850bdebb1167b1e1c7e49838fc4fe6cae83d8d271ed8c9e788a5a68b6b83",
+      "local_sha256": "22eef21c7bd16b06da7228c9fbfe7563da8cdc66dfb99a268002a295fafbab5c",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
@@ -132,7 +133,7 @@
         "Harness queue and retry authority"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "eee007c836de120cdad267462854af45a89d3503ebd1592ee6c692882bae9913"
+      "local_sha256": "87c9a881e8e87e9649a15b88eb8cdbf91d559cb4b13eedb373a11b223d736bcc"
     },
     {
       "upstream": "packages/client/ui-commands/src/client/PopupSelectView.module.css",
@@ -2785,6 +2786,7 @@
         "../agent/AgentComposer",
         "../agent/AgentControls",
         "../composer/ComposerContextStack",
+        "../composer/ModelPicker",
         "../composer/use-attachment-intake",
         "../model-preference",
         "./FirstSubmission.module.css",
@@ -2797,7 +2799,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "123b47b30f3f5fb3a14723c023e75fed490e3c62e4d156be54ced7e807249ed9",
+      "local_sha256": "887610fb33fe816088434308401e5b725cb28f172ea8a793ef53240f4505890a",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-workspace/src/client/WorkspacePicker.tsx",
@@ -3261,7 +3263,7 @@
           "treatment": "Compaction checkpoint disclosure and bilingual summary wording adapted to native Ledger messages; no Harness runtime or command authority."
         }
       ],
-      "local_sha256": "e87d6d43e303f54f0d7f18e38e11f09d1b6ce81366b2b09804abd38ed52c39af"
+      "local_sha256": "95b6fa904a991bcfa434c01f58698962e115dbed8ee784c414ba389c4208db61"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",

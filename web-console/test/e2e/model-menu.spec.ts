@@ -21,6 +21,7 @@ for (const width of [1440, 390]) test(`saved conversation model menu keeps compo
     });
   }
   await expect(page.getByText(/Saved message 19:/)).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as any).startupFixture.requests().filter((request: any) => request.method === 'session/model').length)).toBe(1);
   await page.evaluate(() => (window as any).startupFixture.hold('session/models'));
   const geometry = () => page.locator('textarea').evaluate(element => {
     const rect = element.getBoundingClientRect();
@@ -30,14 +31,13 @@ for (const width of [1440, 390]) test(`saved conversation model menu keeps compo
   const before = await geometry();
   for (let opening = 0; opening < 3; opening++) {
     await trigger.click();
-    await expect(page.getByText('Reading native models…')).toBeVisible();
+    await expect(page.getByText('Reading native models…')).toHaveCount(0);
     expect(await geometry()).toEqual(before);
     await expect(trigger).toBeEnabled();
     await trigger.click();
     await expect(page.getByRole('menu')).toHaveCount(0);
     await trigger.click();
-    await expect(page.getByText('Reading native models…')).toBeVisible();
-    await page.evaluate(() => (window as any).startupFixture.release('session/models'));
+    await expect(page.getByText('Reading native models…')).toHaveCount(0);
     await expect(page.getByText('Reading native models…')).toHaveCount(0);
     await expect(page.getByRole('menuitem', { name: 'Model', exact: true })).toBeVisible();
     expect(await geometry()).toEqual(before);
@@ -52,6 +52,6 @@ for (const width of [1440, 390]) test(`saved conversation model menu keeps compo
     expect(await geometry()).toEqual(before);
   }
   const reads = await page.evaluate(() => (window as any).startupFixture.requests().filter((request: any) => request.method === 'session/models').length);
-  expect(reads).toBe(3);
+  expect(reads).toBe(1);
   expect(errors).toEqual([]);
 });

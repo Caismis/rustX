@@ -1,0 +1,6 @@
+.root { overflow: hidden; }
+.search { display: block; width: 100%; padding: 8px; border: 0; outline: none; background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 13px; }
+.search::placeholder { color: var(--dsw-alias-label-tertiary); }
+.options { position: relative; max-height: min(320px, 40vh); overflow-y: auto; overscroll-behavior: contain; }
+
+.search:focus-visible { outline: none; }

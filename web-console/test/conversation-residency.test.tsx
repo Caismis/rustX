@@ -63,7 +63,7 @@ it('streaming publications update the transcript but do not render AppFrame or c
   await act(async () => emit({ type: 'read_domains_updated', transcript: clock.transcript, todos: clock.todos }));
   const before = [vi.mocked(AppFrame).mock.calls.length, vi.mocked(AgentComposer).mock.calls.length];
   await act(async () => vi.advanceTimersByTime(5000));
-  expect(screen.getByRole('button', { name: 'Deep diving for 5s' })).toBeTruthy();
+  expect(screen.getByText('Deep diving for 5s ···')).toBeTruthy();
   expect([vi.mocked(AppFrame).mock.calls.length, vi.mocked(AgentComposer).mock.calls.length]).toEqual(before);
   expect(screen.queryByText('Working…')).toBeNull();
 });
@@ -74,6 +74,8 @@ function host() {
   return { ...server.workspaceHost, configureWorkspace: async () => ({ kind: 'read' as const, projection: source }), resolveWorkspace: async () => ({ cwd: '/workspace/A' }), classifyLocations: async (paths: string[]) => paths.map(() => ({ authorized: true as const, workspaceId: 'workspace-a' })) };
 }
 function nativeModel() {
+  server.handlers.set('session/models', () => ({ type: 'models', catalog: { models: [model('fixture/root'), model('fixture/chosen')] } }));
+  server.handlers.set('session/model', () => ({ type: 'model', model: server.snapshots.get('A')!.model! }));
   server.handlers.set('session/create', request => {
     if (request.method !== 'session/create') throw Error('wrong method');
     const selection = request.params.settings.model ?? { model: 'fixture/root' };
@@ -153,9 +155,8 @@ it.each(['/model', 'unrelated prose'])('hero model selection settles the command
   const message = input();
   fireEvent.change(message, { target: { value: draft } });
   if (draft !== '/model') { fireEvent.click(screen.getByRole('button', { name: 'Add' })); fireEvent.keyDown(message, { key: 'ArrowDown' }); }
-  fireEvent.keyDown(message, { key: 'Tab' });
-  fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
-  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'fixture/chosen' })));
+  if (draft !== '/model') fireEvent.keyDown(message, { key: 'Tab' });
+  await act(async () => fireEvent.click(screen.getByRole('option', { name: 'fixture/chosen' })));
   await waitFor(() => expect(message.value).toBe(draft === '/model' ? '' : draft));
   expect(screen.queryByRole('menu')).toBeNull();
   expect(document.activeElement).toBe(message);
@@ -246,7 +247,7 @@ it.each(['cancelled', 'failed', 'timed_out', 'limit_exceeded'] as const)('execut
     const next = live(); next.attempt!.phase = { type: phase };
     await act(async () => server.update('A', next));
     expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Deep diving/ })).toBeTruthy();
+    expect(document.querySelector('[data-chat-running]')).toBeTruthy();
     expect(calls()).toEqual(before);
   }
   await act(async () => server.update('A', live('streamed transition')));
@@ -301,7 +302,7 @@ it('typing while attachment is held cannot offer native commands before admissio
   expect(screen.getByRole('option',{name:/Model/})).toBeTruthy();
   expect(input()).toBe(message);expect(message.value).toBe('/mdl');
   await act(async()=>fireEvent.keyDown(message,{key:'Enter'}));
-  expect(screen.getByRole('dialog',{name:'/model'})).toBeTruthy();
+  expect(screen.getByRole('combobox',{name:'Search models…'})).toBeTruthy();
 });
 
 it('files selected before first attachment retain exact draft identity and submit once after attachment', async () => {

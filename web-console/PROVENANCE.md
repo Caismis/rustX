@@ -1,3 +1,13 @@
+## Shared model selection surfaces
+
+Behavioral reference: Harness `5badb15009ae1756c3afe0ae0cef1faafc290ccc`,
+`packages/client/ui-model-selection/src/client/index.ts`: the composer selector
+and `/model` popup share one loaded model directory. The rustX attachment owns
+its catalog and invalidates it on attachment, transport or resource revision
+changes. `/model` now uses the existing composer popup styling, with provider
+sections, search and keyboard selection; the obsolete model dialog is removed.
+Native model mutation and authoritative rereads remain unchanged.
+
 ## Running Turn indicator
 
 The running status, whale-tail APNG and static SVG come from
