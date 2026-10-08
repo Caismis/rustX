@@ -5784,6 +5784,12 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(clippy::too_many_lines)] // one two-cut native publication and terminal settlement contract
     async fn background_durable_commit_cannot_publish_a_half_semantic_snapshot() {
+        struct ReleaseOnDrop(Arc<crate::tools::background::test_sync::CommitBoundaryHook>);
+        impl Drop for ReleaseOnDrop {
+            fn drop(&mut self) {
+                self.0.proceed();
+            }
+        }
         let (_, fixture) =
             host_fixture_with_native_tools(Vec::new(), ToolRegistry::new(), status_engine(), true)
                 .await;
@@ -5817,12 +5823,6 @@ mod tests {
             )
         })
         .await;
-        struct ReleaseOnDrop(Arc<crate::tools::background::test_sync::CommitBoundaryHook>);
-        impl Drop for ReleaseOnDrop {
-            fn drop(&mut self) {
-                self.0.proceed();
-            }
-        }
         let hook = Arc::new(crate::tools::background::test_sync::CommitBoundaryHook::default());
         let _release_commit = ReleaseOnDrop(hook.clone());
         registry.install_publication_hook(hook.clone());

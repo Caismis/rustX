@@ -826,6 +826,23 @@ impl PendingObservations {
         state.reliable.len() + state.latest_activity.len() + state.latest_progress.len()
     }
 
+    /// Test-only: separate runtime adoption authority from the child activity
+    /// backpressure lane. A child admission can publish Busy asynchronously.
+    #[cfg(test)]
+    pub(crate) fn queued_without_adoption(&self) -> usize {
+        let state = self
+            .state
+            .lock()
+            .expect("pending observation queue lock poisoned");
+        state
+            .reliable
+            .iter()
+            .filter(|entry| !matches!(entry, ConversationObservation::AdoptionEligibility(_)))
+            .count()
+            + state.latest_activity.len()
+            + state.latest_progress.len()
+    }
+
     /// Installs the test-only worker-exit signal.
     #[cfg(test)]
     pub(crate) fn install_worker_exit_probe(&self, sender: std::sync::mpsc::Sender<()>) {
