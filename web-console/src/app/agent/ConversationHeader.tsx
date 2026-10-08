@@ -1,3 +1,5 @@
+import { SubagentHeader } from './Subagents';
+import { useSubagents } from './subagent-context';
 import { useConversationPreferences } from '../conversation-preferences';
 import { OpenWorkspace } from './OpenWorkspace';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
@@ -24,6 +26,7 @@ export function ConversationHeader({ host, authority, client, view, workspaceId,
 }) {
   const tx = useTranslation();
   const [displayPreferences] = useConversationPreferences();
+  const subagents = useSubagents();
   const [sessionSettingsOpen, setSessionSettingsOpen] = useState(false);
   const owner = JSON.stringify([client.getSnapshot().generation, view?.id]);
   const [failure, setFailure] = useState<{ owner: string; message: string }>();
@@ -32,19 +35,19 @@ export function ConversationHeader({ host, authority, client, view, workspaceId,
   return <header className={`${agentCss.header} ${!view ? agentCss.headerBlank : ""}`}>
       <div className={agentCss.titleRow}>
         <div className={agentCss.titleCluster}>
-          <span id="session-title" className={`${agentCss.crumb} ${agentCss.crumbCurrent}`} aria-label={view ? tx('agent:conversation-header.session-title') : tx('agent:conversation-header.product-title')}>{view ? sessionDisplayTitle(tx, view.summary) : 'rustX'}</span>
+          <SubagentHeader title={view ? sessionDisplayTitle(tx, view.summary) : 'rustX'}/>
         </div>
         <div className={agentCss.headerUtilities}>
           {view?.summary && <OpenWorkspace client={client} host={host} authority={authority} target={{ session_id: view.id, active_node: view.summary.active_node }} disabled={!connected || !!view.deleting}/>}
-          {view && <SessionActions client={client} sessionId={view.id} connected={connected} attached={attached} commandOpen={commandOpen} settings={() => setSessionSettingsOpen(value => !value)} tree={() => invokeCommand({ id: 'tree' })} exportSession={exportSession}/>}
+          {view && !subagents?.selected && <SessionActions client={client} sessionId={view.id} connected={connected} attached={attached} commandOpen={commandOpen} settings={() => setSessionSettingsOpen(value => !value)} tree={() => invokeCommand({ id: 'tree' })} exportSession={exportSession}/>}
           <Button size="sm" className={agentCss.iconButton} aria-label={tx('agent:conversation-header.toggle-inspector')} aria-expanded={inspectorOpen} onClick={toggleInspector}><IconInspectOutline12 /></Button>
         </div>
         <div className={agentCss.headerCorner}>{previewToggle}</div>
       </div>
-      {view && <SessionConfiguration key={`${authorityRevision}:${view.id}`} client={client} view={view} openOwningSettings={openOwningSettings} />}
+      {view && !subagents?.selected && <SessionConfiguration key={`${authorityRevision}:${view.id}`} client={client} view={view} openOwningSettings={openOwningSettings} />}
       {settingsFeedback}
-      {view && sessionSettingsOpen && <section aria-label={tx('agent:conversation-header.session-settings')}><p>{tx('agent:conversation-header.workspace')}{' '}{view.settings?.cwd ?? tx('agent:conversation-header.unavailable')}</p><WorkspaceControls client={client} host={host} workspaceId={workspaceId}>{source => <LiveAgentControls client={client} sessionId={view.id} coldSource={source}/>}</WorkspaceControls><Button onClick={() => setSessionSettingsOpen(false)}>{tx('agent:conversation-header.close-session-settings')}</Button></section>}
-      {view && displayPreferences.codingView && <div className={agentCss.tabs} role="tablist" aria-label={tx('agent:conversation-header.conversation-view')} onKeyDown={navigateTabs}>{(['chat', 'trajectory'] as const).map(mode => <button type="button" className={`${agentCss.tab} ${conversationMode === mode ? agentCss.tabActive : ""}`} key={mode} role="tab" id={`view-tab-${mode}`} aria-controls="conversation-view" tabIndex={conversationMode === mode ? 0 : -1} aria-selected={conversationMode === mode} onClick={() => setConversationMode(mode)}>{mode === 'chat' ? tx('agent:conversation-header.chat') : tx('agent:conversation-header.trajectory')}</button>)}</div>}
+      {view && !subagents?.selected && sessionSettingsOpen && <section aria-label={tx('agent:conversation-header.session-settings')}><p>{tx('agent:conversation-header.workspace')}{' '}{view.settings?.cwd ?? tx('agent:conversation-header.unavailable')}</p><WorkspaceControls client={client} host={host} workspaceId={workspaceId}>{source => <LiveAgentControls client={client} sessionId={view.id} coldSource={source}/>}</WorkspaceControls><Button onClick={() => setSessionSettingsOpen(false)}>{tx('agent:conversation-header.close-session-settings')}</Button></section>}
+      {view && !subagents?.selected && displayPreferences.codingView && <div className={agentCss.tabs} role="tablist" aria-label={tx('agent:conversation-header.conversation-view')} onKeyDown={navigateTabs}>{(['chat', 'trajectory'] as const).map(mode => <button type="button" className={`${agentCss.tab} ${conversationMode === mode ? agentCss.tabActive : ""}`} key={mode} role="tab" id={`view-tab-${mode}`} aria-controls="conversation-view" tabIndex={conversationMode === mode ? 0 : -1} aria-selected={conversationMode === mode} onClick={() => setConversationMode(mode)}>{mode === 'chat' ? tx('agent:conversation-header.chat') : tx('agent:conversation-header.trajectory')}</button>)}</div>}
       {error && <p role="alert">{error}</p>}
       </header>;
 }

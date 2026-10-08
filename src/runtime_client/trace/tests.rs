@@ -4209,3 +4209,50 @@ fn lifecycle_location_preserves_bounded_escaped_native_identities() {
     assert!(serde_json::to_vec(&update).unwrap().len() <= 8192);
     assert!(!update.truncated);
 }
+
+#[test]
+fn adopted_agent_messages_expose_sender_without_mislabeling_human_or_mixed_batches() {
+    let store = store("conv_5b2c8e14-7d3a-7f19-a0c6-2e9b41d7f3a8");
+    let sender = crate::runtime::identity::AgentId::new("child-research");
+    for (batch, sources) in [
+        vec![UserSource::Agent {
+            agent_id: sender.clone(),
+        }],
+        vec![UserSource::Human],
+        vec![
+            UserSource::Agent {
+                agent_id: sender.clone(),
+            },
+            UserSource::Human,
+        ],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        for (index, source) in sources.into_iter().enumerate() {
+            store
+                .accept_inbound(crate::durable::InboundDraft {
+                    message_id: Some(MessageId::new(format!("input-{batch}-{index}"))),
+                    source,
+                    kind: InboundKind::Message,
+                    content: vec![UserContentBlock::Text(TextBlock {
+                        text: "identical preview".into(),
+                    })],
+                    timestamp: timestamp(0),
+                    correlation: None,
+                })
+                .unwrap();
+        }
+        let pending = store.select_pending_batch().unwrap().unwrap();
+        store.adopt_pending_batch(pending.watermark, None).unwrap();
+    }
+    let records: Vec<_> = page(&store)
+        .records
+        .into_iter()
+        .filter(|record| record.kind == TraceKind::User)
+        .collect();
+    assert_eq!(records.len(), 3);
+    assert_eq!(records[0].agent_id.as_ref(), Some(&sender));
+    assert!(records[1].agent_id.is_none());
+    assert!(records[2].agent_id.is_none());
+}

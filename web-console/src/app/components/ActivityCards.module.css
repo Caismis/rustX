@@ -1,6 +1,10 @@
 .identity { display: block; overflow-wrap: anywhere; color: var(--dsw-alias-label-tertiary); }
 .controls { display: flex; flex-wrap: wrap; gap: 8px; margin-block: 12px; }
-.message { display: flex; flex-wrap: wrap; gap: 8px; margin-block: 12px; }
-.message > span { min-width: 140px; flex: 1; }
-.message > button { flex-shrink: 0; white-space: nowrap; }
-.transcript { max-height: 420px; overflow: auto; overscroll-behavior: contain; padding-inline: 8px; }
+.agentConversation { display: flex; flex-direction: column; flex: 1; min-height: 0; height: 100%; }
+.agentToolbar { display: flex; align-items: center; gap: 8px; padding: 8px 24px; color: var(--dsw-alias-label-tertiary); font-size: 12px; }
+.agentActions { display: flex; gap: 4px; margin-left: auto; }
+.agentComposer { flex: none; width: min(880px, calc(100% - 32px)); margin: 8px auto 16px; padding: 12px 14px; border-radius: 24px; background: var(--dsw-specific-input-major); }
+.agentComposer textarea { box-sizing: border-box; width: 100%; min-height: 46px; max-height: 180px; resize: vertical; border: 0; outline: none; background: transparent; color: var(--dsw-alias-label-primary); font: inherit; }
+.agentComposer > div { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.agentComposer small { color: var(--dsw-alias-label-tertiary); }
+@media (max-width: 640px) { .agentToolbar { padding: 8px; flex-wrap: wrap; } .agentActions { flex-wrap: wrap; } }

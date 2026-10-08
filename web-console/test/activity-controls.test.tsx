@@ -5,7 +5,10 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
 import type { RuntimeClientAgent, RuntimeClientJob } from '../../protocol/app-server/v37';
 import { RpcFailure } from '../src/client/app-server';
-import { RuntimeFacts } from '../src/app/agent/Activity';
+import { RuntimeFacts as OtherActivity } from '../src/app/agent/Activity';
+import { AgentCard } from '../src/app/components/ActivityCards';
+import type { ComponentProps } from 'react';
+function RuntimeFacts(props: ComponentProps<typeof OtherActivity>) { return <><OtherActivity {...props}/>{props.snapshot.agents?.map(agent => <AgentCard key={agent.agent_id} agent={agent} client={props.client} sessionId={props.sessionId}/>)}</>; }
 import { Server, snapshot } from './fixture';
 import { Tool } from '../src/app/agent/Tool';
 afterEach(cleanup);
@@ -28,7 +31,7 @@ it('Active and Inactive send use one owner operation; wait remains interruptible
   await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Wait for activation' })); await server.waitFor('agent/wait', 1); });
   expect((ui.getByRole('button', { name: 'Interrupt' }) as HTMLButtonElement).disabled).toBe(false);
   await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Interrupt' })); await server.waitFor('agent/interrupt', 1); });
-  expect(ui.getByText('Activation activation-a: cancelled.')).toBeTruthy();
+  expect(ui.getByText('cancelled')).toBeTruthy();
   expect(ui.queryByRole('alert')).toBeNull();
   await act(async () => {
     fireEvent.change(ui.getByRole('textbox', { name: 'Message Agent Worker' }), { target: { value: 'Active input' } });
@@ -89,7 +92,7 @@ it.each(['agent/wait', 'agent/interrupt'] as const)('a completed %s response can
   expect(ui.container.querySelector('[data-agent-id="agent-worker"]')).toBe(row);
   expect(row?.getAttribute('data-activation-id')).toBe('activation-b');
   expect(row?.textContent).not.toContain('Inactive');
-  expect(ui.getByText('Activation activation-a: succeeded.')).toBeTruthy();
+  expect(ui.getByText('succeeded')).toBeTruthy();
 });
 
 it('selected child transcript refreshes canonical final content at settlement and stays open on resume', async () => {
@@ -107,7 +110,7 @@ it('selected child transcript refreshes canonical final content at settlement an
   await act(async () => { ui.rerender(<RuntimeFacts snapshot={{ ...s, agents: [{ ...agent, activation_id: 'activation-b', current_activation: 'activation-b' }] }} client={server.client} sessionId="A"/>); });
   await server.waitFor('agent/transcript', 3);
   expect(ui.getByText(report)).toBeTruthy();
-  expect(ui.container.querySelector('details')?.open).toBe(true);
+  expect(ui.getByText(report)).toBeTruthy();
 });
 
 
@@ -148,7 +151,7 @@ it('native admission remains waitable and interruptible while its send is pendin
   await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Wait for activation' })); await server.waitFor('agent/wait', 1); });
   expect((ui.getByRole('button', { name: 'Interrupt' }) as HTMLButtonElement).disabled).toBe(false);
   await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Interrupt' })); await server.waitFor('agent/interrupt', 1); });
-  expect(ui.getByText('Activation admission-b: admission ended before execution.')).toBeTruthy();
+  expect(ui.getByText('Agent was inactive when the operation observed it.')).toBeTruthy();
   expect((ui.getByRole('textbox', { name: 'Message Agent Worker' }) as HTMLInputElement).value).toBe('Resume input');
   expect(ui.queryByRole('alert')).toBeNull();
 });

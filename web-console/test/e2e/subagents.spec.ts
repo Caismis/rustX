@@ -1,0 +1,28 @@
+import { test, expect } from '@playwright/test';
+
+test('header child navigation preserves the parent draft and renders agent returns as context', async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  await page.addInitScript(() => localStorage.setItem('rustx-locale-v1', 'en'));
+  await page.goto(`http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}/test/fixtures/startup.html?existing&models&subagents`);
+  await page.waitForFunction(() => (window as any).startupFixture);
+  await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.allow('session/attach'); f.resumeCatalog(); });
+  await page.locator('button[data-session-id="A"]').click();
+  const draft = page.getByRole('textbox', { name: 'Message', exact: true });
+  await draft.fill('Preserved root draft');
+  const rootScroll = page.locator('[data-conversation-scroll]').first();
+  await rootScroll.evaluate(element => { element.scrollTop = 320; });
+  const position = await rootScroll.evaluate(element => element.scrollTop);
+  await page.getByRole('button', { name: 'Subagents', exact: true }).click();
+  await page.getByRole('menuitem', { name: /Verify findings/ }).click();
+  await expect(page.getByRole('heading', { name: 'Child research report' })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Message Agent Verify findings' })).toBeVisible();
+  await page.getByRole('button', { name: 'Session A', exact: true }).click();
+  await expect(draft).toHaveValue('Preserved root draft');
+  await expect.poll(() => rootScroll.evaluate(element => element.scrollTop)).toBe(position);
+  const inbound = page.locator('[data-inbound-source="agent"]');
+  await inbound.getByRole('button').click();
+  await expect(inbound.getByText('Evidence', { exact: true })).toBeVisible();
+  await inbound.getByRole('button', { name: 'View agent', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Child research report' })).toBeVisible();
+  expect(errors).toEqual([]);
+});

@@ -2761,7 +2761,7 @@
           "treatment": "Issue #421 semantic ledger adaptation; exact rustX native ownership replaces Harness runtime relationships."
         }
       ],
-      "local_sha256": "aee74ef586d377337b20089ae4ce7273ba878e90bc4e2a90ad1c1d39edb6d04b"
+      "local_sha256": "9379f56897642bc6af498978273eb842309d085d4932699d7aa4f2f75fb07d92"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -3243,7 +3243,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "e3d14817730a15d0c2041325a93795a24a39063ae3ba37ee56dd49ac706eb684"
+      "local_sha256": "856e7370a5822e35e398bc99e062fa81b2f236e72b58c169a0086601b2a978fc"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -5627,6 +5627,43 @@
         }
       ],
       "local_sha256": "30aa7f9e4e64dc3ddc01c5ac65f44fc1463e138cf82e4aa04d430f8737b680e0"
+    },
+    {
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream": "packages/client/ui-subagent/src/client/SubagentHeaderLineage.tsx",
+      "destination": "web-console/src/app/agent/Subagents.tsx",
+      "classification": "B",
+      "treatment": "Compact header catalog, status dots, two-line entries and parent breadcrumb adapted to native durable Agent roster and agent/transcript; Harness session runtime and metrics projection excluded.",
+      "upstream_sha256": "a071eba1e77ee78bc4d7d90e0fd774f7242c200b4b39aa88f7424df41a95db4b",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../../../../protocol/app-server/v37",
+        "../../client/app-server",
+        "../../client/selectors",
+        "../../locale/react",
+        "../../presentation/agent/Conversation.module.css",
+        "../../presentation/primitives/Menu",
+        "../../presentation/primitives/StateDot",
+        "../../presentation/primitives/icons",
+        "../components/ActivityCards",
+        "./Subagents.module.css",
+        "./subagent-context",
+        "react"
+      ],
+      "excluded_dependencies": [],
+      "local_sha256": "0d571376da5bd9e77c4979e75cd081cba87f2a0c9c281c1ffd1386877934dcd8"
+    },
+    {
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream": "packages/client/ui-subagent/src/client/SubagentHeaderLineage.module.css",
+      "destination": "web-console/src/app/agent/Subagents.module.css",
+      "classification": "B",
+      "treatment": "Compact header catalog, status dots, two-line entries and parent breadcrumb adapted to native durable Agent roster and agent/transcript; Harness session runtime and metrics projection excluded.",
+      "upstream_sha256": "888a73eb6014ee29cc2dd9f4e9692fb4719cfd62e8798af3009f1b2ec3d82609",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [],
+      "local_sha256": "143962cb544d86b23b7b53d14907140abafb2a403ae57128535b280e1f4000d7"
     }
   ],
   "inspected_only": [

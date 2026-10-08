@@ -1,3 +1,4 @@
+import { InboundMessage } from './InboundMessage';
 import { useConversationPreferences } from '../conversation-preferences';
 import { useTranslation } from '../../locale/react';
 import type { MessageBlock, UserContentBlock, AssistantContentBlock, InFlightBlock } from '../../../../protocol/app-server/v37';
@@ -34,6 +35,7 @@ export function Message({ message, tools = [], actions, streaming = false, block
   if (message.role === 'tool') return null; // Results belong to the native call projection, never paired here.
   if (message.role === 'user' && typeof message.kind === 'object' && 'compaction_summary' in message.kind) return <CompactionMessage title={tx('agent:context.succeeded')} summary={tx('agent:context.expand')}><Content blocks={message.content} markdown/></CompactionMessage>;
   if (message.role === 'user' && message.kind && message.kind !== 'message') return <details><summary>{tx('agent:message.context')}{' '}{Object.keys(message.kind)[0]}</summary><Content blocks={message.content} markdown/></details>;
+  if (message.role === 'user' && message.source !== 'human') return <InboundMessage message={message}/>;
   return message.role === 'user' ? <UserMessage label={tx('agent:message.your-message')} actions={actions}><Content blocks={message.content}/></UserMessage>
     : <AssistantMessage label={tx(streaming ? 'agent:agent-transcript.streaming-response' : 'agent:message.assistant-response')}><Content blocks={blocks ?? message.content} markdown tools={tools} streaming={streaming} reasoningHidden={reasoningHidden} include={include}/></AssistantMessage>;
 }

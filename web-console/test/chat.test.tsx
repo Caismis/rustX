@@ -2,7 +2,10 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { RunningStatus } from '../src/presentation/agent/RunningStatus';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
-import { RuntimeFacts } from '../src/app/agent/Activity';
+import { RuntimeFacts as OtherActivity } from '../src/app/agent/Activity';
+import { AgentCard } from '../src/app/components/ActivityCards';
+import type { ComponentProps } from 'react';
+function RuntimeFacts(props: ComponentProps<typeof OtherActivity>) { return <><OtherActivity {...props}/>{props.snapshot.agents?.map(agent => <AgentCard key={agent.agent_id} agent={agent} client={props.client} sessionId={props.sessionId}/>)}</>; }
 import { snapshot } from './fixture';
 afterEach(cleanup);
 const rich = '## Answer\n\n| Key | Value |\n| --- | --- |\n| one | two |\n\n- **Strong**\n\n```rust\nfn main() {}\n```\n\n$x^2$';
@@ -114,14 +117,14 @@ it('one Agent row survives inactive settlement and a later activation, including
   expect(row?.getAttribute('data-activation-id')).toBe('activation-a');
   ui.rerender(<RuntimeFacts snapshot={{ ...s, agents: [{ ...agent, state: 'inactive', activation_state: 'succeeded', current_activation: null, detail: 'Final report committed' }] }}/>);
   expect(ui.container.querySelector('[data-agent-id="durable-child"]')).toBe(row);
-  expect(row?.textContent).toContain('Inactive');
+  expect(row?.textContent).toContain('succeeded');
   expect(row?.textContent).toContain('Final report committed');
   expect(row?.hasAttribute('data-activation-id')).toBe(false);
   const resumed = { ...s, agents: [{ ...agent, activation_id: 'activation-b', current_activation: 'activation-b' }] };
   ui.rerender(<RuntimeFacts snapshot={resumed}/>);
   expect(ui.container.querySelector('[data-agent-id="durable-child"]')).toBe(row);
   expect(row?.getAttribute('data-activation-id')).toBe('activation-b');
-  expect(row?.textContent).toContain('child-conversation');
+  expect(row?.textContent).not.toContain('child-conversation');
   ui.rerender(<RuntimeFacts snapshot={structuredClone(resumed)}/>);
   expect(ui.container.querySelectorAll('[data-agent-id="durable-child"]')).toHaveLength(1);
   expect(ui.container.querySelector('[data-agent-id="durable-child"]')).toBe(row);

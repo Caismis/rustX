@@ -220,6 +220,7 @@ export class Server {
         this.snapshots.set(id, next); this.cursor++;
         result = { type: 'interaction_settled', interaction: request.params.interaction }; break;
       }
+      case 'agent/transcript': return { type: 'transcript', page: { entries: [] } };
       case 'session/models': return { type: 'models', catalog: { models: [] } };
       default: throw new Error(`Fixture needs an explicit native result for ${request.method}`);
     }
