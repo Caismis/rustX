@@ -516,3 +516,39 @@ def test_an_unknown_control_route_is_rejected():
         assert (await harness.control("GET", "/nope")).status == 404
 
     asyncio.run(scenario())
+
+
+def test_shutdown_process_exit_waits_for_report_transport_settlement():
+    async def scenario() -> None:
+        run = ScenarioRun(Scenario("one", chat_step()))
+        server = ProviderServer(run)
+        closing = asyncio.Event()
+        settled = asyncio.Event()
+
+        class Writer:
+            def __init__(self) -> None:
+                self.output = bytearray()
+
+            def write(self, data: bytes) -> None:
+                self.output.extend(data)
+
+            async def drain(self) -> None:
+                pass
+
+            def close(self) -> None:
+                closing.set()
+
+            async def wait_closed(self) -> None:
+                await settled.wait()
+
+        writer = Writer()
+        request = asyncio.create_task(server._control("POST", "/__control/shutdown", writer))
+        await asyncio.wait_for(closing.wait(), 5)
+        assert b"HTTP/1.1 200" in writer.output
+        assert not run.shutdown_requested.is_set()
+        assert not request.done()
+        settled.set()
+        await request
+        assert run.shutdown_requested.is_set()
+
+    asyncio.run(scenario())
