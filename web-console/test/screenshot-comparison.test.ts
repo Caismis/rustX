@@ -200,6 +200,30 @@ it('composer corner evidence grants tolerance to exactly its 16 measured sites a
   }
 });
 
+it('Timeline gradient evidence admits only its exact sixteen measured sites and one-level deltas', () => {
+  const name = 'ledger-order-inspector-390-zh-linux.png';
+  const expected = reference(name), entry = noisePolicy.find(entry => entry.reference === name)!;
+  const measured = entry.pixels as MeasuredNoisePixel[];
+  expect(measured).toHaveLength(16);
+  expect(entry.regions.flatMap(cells)).toEqual(measured.map(([x, y]) => [x, y]));
+  const observed = copy(expected);
+  for (const [x, y, , after] of measured) paint(observed, x, y, after);
+  expect(compare(observed, name, expected, noisePolicy).ok).toBe(true);
+  expect(compare(observed, 'ledger-order-inspector-390-en-linux.png', expected, noisePolicy).ok).toBe(false);
+  const sites = new Set(measured.map(([x, y]) => `${x},${y}`));
+  for (const region of entry.regions) {
+    expect(region).toMatchObject({ width: 1, height: 1, maxChangedPixels: 1, maxChannelDelta: 1 });
+    const excessive = copy(expected); nudge(excessive, region.x, region.y, 2);
+    expect(compare(excessive, name, expected, noisePolicy).ok).toBe(false);
+    for (const [x, y] of [[region.x - 1, region.y], [region.x + 1, region.y], [region.x, region.y - 1], [region.x, region.y + 1]]) {
+      if (sites.has(`${x},${y}`)) continue;
+      const neighbor = copy(observed); nudge(neighbor, x, y, 1);
+      const result = compare(neighbor, name, expected, noisePolicy);
+      expect(result.ok).toBe(false); expect(result.changedOutsideRegions).toBe(1);
+    }
+  }
+});
+
 it('composer corner noise cannot conceal text, focus contrast, theme or layout changes', () => {
   const name = 'composer-running-draft-dark-390-linux.png';
   const expected = fixture(name);

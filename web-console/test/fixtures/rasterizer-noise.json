@@ -98,5 +98,413 @@
         [263,108,[225,225,225,255],[224,225,225,255]],
         [264,108,[245,246,247,255],[244,245,246,255]]
     ]
-  }
+  },
+{
+  "reference": "ledger-order-inspector-390-zh-linux.png",
+  "evidence": "PR #453 fixed-source pinned-browser measurement: docs/evidence/pr453-timeline-gradient-rasterizer.json. 60 fresh contexts, identical complete DOM/style/geometry; local gradient repaint reproduces the exact full-suite 16-pixel variant. Only these measured 1x1 sites, channel delta at most 1.",
+  "regions": [
+    {
+      "label": "earlier-history gradient at 57,93",
+      "x": 57,
+      "y": 93,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "earlier-history gradient at 71,93",
+      "x": 71,
+      "y": 93,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "earlier-history gradient at 68,94",
+      "x": 68,
+      "y": 94,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "earlier-history gradient at 70,94",
+      "x": 70,
+      "y": 94,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "earlier-history gradient at 57,95",
+      "x": 57,
+      "y": 95,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "earlier-history gradient at 59,95",
+      "x": 59,
+      "y": 95,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "earlier-history gradient at 69,95",
+      "x": 69,
+      "y": 95,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "earlier-history gradient at 68,96",
+      "x": 68,
+      "y": 96,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "earlier-history gradient at 57,97",
+      "x": 57,
+      "y": 97,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "earlier-history gradient at 59,97",
+      "x": 59,
+      "y": 97,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "earlier-history gradient at 69,97",
+      "x": 69,
+      "y": 97,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "earlier-history gradient at 68,98",
+      "x": 68,
+      "y": 98,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "earlier-history gradient at 59,99",
+      "x": 59,
+      "y": 99,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "earlier-history gradient at 69,99",
+      "x": 69,
+      "y": 99,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "earlier-history gradient at 60,100",
+      "x": 60,
+      "y": 100,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "earlier-history gradient at 68,100",
+      "x": 68,
+      "y": 100,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    }
+  ],
+  "pixels": [
+    [
+      57,
+      93,
+      [
+        219,
+        211,
+        230,
+        255
+      ],
+      [
+        219,
+        210,
+        230,
+        255
+      ]
+    ],
+    [
+      71,
+      93,
+      [
+        167,
+        146,
+        195,
+        255
+      ],
+      [
+        168,
+        146,
+        195,
+        255
+      ]
+    ],
+    [
+      68,
+      94,
+      [
+        153,
+        127,
+        185,
+        255
+      ],
+      [
+        153,
+        128,
+        185,
+        255
+      ]
+    ],
+    [
+      70,
+      94,
+      [
+        143,
+        116,
+        179,
+        255
+      ],
+      [
+        143,
+        115,
+        179,
+        255
+      ]
+    ],
+    [
+      57,
+      95,
+      [
+        207,
+        195,
+        222,
+        255
+      ],
+      [
+        207,
+        196,
+        223,
+        255
+      ]
+    ],
+    [
+      59,
+      95,
+      [
+        198,
+        184,
+        215,
+        255
+      ],
+      [
+        198,
+        183,
+        215,
+        255
+      ]
+    ],
+    [
+      69,
+      95,
+      [
+        148,
+        122,
+        181,
+        255
+      ],
+      [
+        148,
+        122,
+        182,
+        255
+      ]
+    ],
+    [
+      68,
+      96,
+      [
+        153,
+        128,
+        185,
+        255
+      ],
+      [
+        152,
+        127,
+        185,
+        255
+      ]
+    ],
+    [
+      57,
+      97,
+      [
+        207,
+        196,
+        223,
+        255
+      ],
+      [
+        207,
+        195,
+        222,
+        255
+      ]
+    ],
+    [
+      59,
+      97,
+      [
+        198,
+        183,
+        215,
+        255
+      ],
+      [
+        198,
+        184,
+        215,
+        255
+      ]
+    ],
+    [
+      69,
+      97,
+      [
+        148,
+        122,
+        182,
+        255
+      ],
+      [
+        148,
+        122,
+        181,
+        255
+      ]
+    ],
+    [
+      68,
+      98,
+      [
+        152,
+        127,
+        185,
+        255
+      ],
+      [
+        153,
+        127,
+        185,
+        255
+      ]
+    ],
+    [
+      59,
+      99,
+      [
+        198,
+        184,
+        215,
+        255
+      ],
+      [
+        198,
+        183,
+        215,
+        255
+      ]
+    ],
+    [
+      69,
+      99,
+      [
+        148,
+        122,
+        181,
+        255
+      ],
+      [
+        148,
+        122,
+        182,
+        255
+      ]
+    ],
+    [
+      60,
+      100,
+      [
+        208,
+        196,
+        222,
+        255
+      ],
+      [
+        207,
+        196,
+        222,
+        255
+      ]
+    ],
+    [
+      68,
+      100,
+      [
+        179,
+        159,
+        202,
+        255
+      ],
+      [
+        178,
+        159,
+        202,
+        255
+      ]
+    ]
+  ]
+}
 ]
