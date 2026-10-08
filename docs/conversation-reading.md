@@ -177,20 +177,40 @@ valid presentation and expose recovery; pending-body invalidation retires the cu
 and returns to current native authority with an explanation. No retries or timeout
 heuristics determine ordering.
 
-Outline paging intent is explicitly `latest` or `page(offset)`, independently of
-the native response's offset. Initial load and automatic start/location/settlement
-refreshes in latest mode omit the offset, so 64→65 and 128→129 select the new final
-page. Selecting an unloaded mark on any other page establishes an explicit
-page; automatic refresh preserves it as live turns arrive. Selecting a mark on
-the newest page explicitly restores latest intent. One refresh demand arriving during an
-in-flight outline read is retained and serviced after its reply; streaming text
-deltas create no demand. Per Session, one RPC and one replaceable latest demand
-are retained. Equivalent pages share a read; a distinct newer explicit page fences
-the older reply and replaces the pending demand. Superseded/retired demand promises
-resolve without a page, never as successful completion. The viewport gesture starts
-at the click, before outline resolution; only its still-current continuation may
-request the single direct transcript window. Attachment replacement retires both
-active and deferred demands. The cache still holds only one outline page.
+Committed outline paging is explicitly `latest` or `page(offset)`, independently
+of the native response's offset. Only an authoritative demand's successful
+response commits both page and paging in one `setSession`. Enqueueing, deferring,
+canceling or failing a demand never commits its requested mode.
+
+A selected ordinal N always resolves through the fixed offset
+`floor((N - 1) / 64) * 64`, even if N belonged to the latest page at the click.
+Append-only growth cannot move that identity lookup. The returned native identity
+and cut then own the single direct transcript window read. Rail mode is separate:
+selecting the newest page restores `latest`; selecting another page commits
+`page(offset)` when its response is accepted. Automatic refresh uses the surviving
+committed mode, so latest refreshes omit the offset and follow 64→65, 128→129, etc.
+Missing ordinals report unavailability rather than synthesizing an identity.
+
+Per Session, one RPC and one replaceable explicit pending demand are retained.
+Equivalent explicit demands share a read but retain only the newest gesture.
+Automatic reads keep independent ownership instead of lending their validity to
+a cancelable gesture. An active response is fenced by native authority, its own
+intent and any *still-valid* pending demand. Canceling the pending gesture before
+the active reply restores no state: committed paging never changed, and the
+independently valid active reply may publish directly without a replacement RPC.
+
+A boolean coalesces automatic refresh obligations arriving during a read. Pending
+replacement, cancellation and explicit read failure do not clear that obligation.
+A suppressed automatic response also retains its obligation. After explicit work
+settles, one automatic read uses the final committed mode; this is demanded refresh,
+not a failure retry. Authoritative failures preserve page/paging and publish an
+error; obsolete successes and failures publish neither. Native invalidation,
+resync and attachment/connection replacement retire the entire read owner,
+including active/pending promises and its queued refresh obligation.
+
+The viewport gesture starts at the click, before outline resolution; only its
+still-current continuation may request the single direct transcript window.
+Streaming text deltas create no outline demand. The cache still holds one page.
 
 The rail uses native ordinal minus one as its fixed-pitch virtual index. Its model
 retains that native page and at most one pinned live identity; unloaded marks are

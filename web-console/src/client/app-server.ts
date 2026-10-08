@@ -16,6 +16,8 @@ import { ProtocolLog, type WireContext } from './protocol-log';
 
 interface OutlineDemand {
   offset?: number;
+  paging: OutlinePagingIntent;
+  automatic: boolean;
   current: () => boolean;
   work: Promise<ConversationTurnPage | undefined>;
   resolve: (page?: ConversationTurnPage) => void;
@@ -1261,59 +1263,63 @@ export class AppServerClient {
     const read = this.outlineReads.get(id);
     if (read?.authority()) { read.refresh = true; return Promise.resolve(undefined); }
     const paging = this.state.views[id]?.turnOutline?.paging;
-    return this.readTurns(id, paging?.type === 'page' ? paging.offset : undefined);
+    return this.demandOutline(id, paging?.type === 'page' ? paging.offset : undefined, paging ?? { type: 'latest' }, () => true, true);
   }
   /** One in-flight RPC plus one replaceable latest demand. A skipped demand never
    * masquerades as a completed page. Equivalent demands share the native read. */
   readTurns(id: string, offset?: number, userCurrent: () => boolean = () => true): Promise<ConversationTurnPage | undefined> {
+    return this.demandOutline(id, offset, offset === undefined ? { type: 'latest' } : { type: 'page', offset }, userCurrent);
+  }
+  private demandOutline(id: string, offset: number | undefined, paging: OutlinePagingIntent, userCurrent: () => boolean, automatic = false): Promise<ConversationTurnPage | undefined> {
     const view = this.state.views[id];
     if (!view?.target || view.attachment !== 'attached' || view.attachmentIntent !== 'wanted' || !userCurrent()) return Promise.resolve(undefined);
     let read = this.outlineReads.get(id);
     if (read && !read.authority()) { this.retireOutline(id); read = undefined; }
-    const paging: OutlinePagingIntent = offset === undefined ? { type: 'latest' } : { type: 'page', offset };
     if (read) {
-      const equivalent = read.active.offset === offset ? read.active : read.pending?.offset === offset ? read.pending : undefined;
+      const equivalent = !read.active.automatic && read.active.offset === offset ? read.active : read.pending?.offset === offset ? read.pending : undefined;
       if (equivalent) {
         if (equivalent === read.active) { read.pending?.resolve(); read.pending = undefined; }
-        equivalent.current = userCurrent;
-        this.setSession(id, { turnOutline: { ...view.turnOutline, paging, loading: true, error: undefined } });
+        equivalent.current = userCurrent; equivalent.paging = paging;
+        this.setSession(id, { turnOutline: { paging: { type: 'latest' }, ...view.turnOutline, loading: true, error: undefined } });
         return equivalent.work;
       }
     }
     let resolve!: OutlineDemand['resolve'];
-    const demand: OutlineDemand = { offset, current: userCurrent, work: new Promise(done => { resolve = done; }), resolve: page => resolve(page) };
+    const demand: OutlineDemand = { offset, paging, automatic, current: userCurrent, work: new Promise(done => { resolve = done; }), resolve: page => resolve(page) };
     const start = !read;
     if (read) { read.pending?.resolve(); read.pending = demand; }
     else {
       read = { authority: this.readingAuthority(id), active: demand, refresh: false };
       this.outlineReads.set(id, read);
     }
-    this.setSession(id, { turnOutline: { ...view.turnOutline, paging, loading: true, error: undefined } });
+    this.setSession(id, { turnOutline: { paging: { type: 'latest' }, ...view.turnOutline, loading: true, error: undefined } });
     if (start) void this.runOutline(id, read);
     return demand.work;
   }
   private async runOutline(id: string, read: OutlineRead) {
     const demand = read.active;
-    const current = () => this.outlineReads.get(id) === read && read.authority() && !read.pending && demand.current();
-    const paging: OutlinePagingIntent = demand.offset === undefined ? { type: 'latest' } : { type: 'page', offset: demand.offset };
+    const owned = () => this.outlineReads.get(id) === read && read.authority();
+    const current = () => owned() && !read.pending?.current() && demand.current();
     let page: ConversationTurnPage | undefined;
     try {
       if (!current()) return;
       const target = this.target(id);
-      const result = await this.request({ method: 'session/turns', params: { target, offset: demand.offset ?? null, limit: HISTORY_PAGE_SIZE } }, 'conversation_turns', undefined, current);
+      const result = await this.request({ method: 'session/turns', params: { target, offset: demand.offset ?? null, limit: HISTORY_PAGE_SIZE } }, 'conversation_turns', undefined, owned);
       if (current()) {
         if (result.page.cut.conversation_id !== target.conversation_id || result.page.turns.length > HISTORY_PAGE_SIZE) throw new Error('Invalid native turn outline.');
         page = result.page;
-        this.setSession(id, { turnOutline: { paging, page } });
+        this.setSession(id, { turnOutline: { paging: demand.paging, page } });
       }
     } catch (error) {
-      if (current()) { read.refresh = false; this.setSession(id, { turnOutline: { ...this.state.views[id]?.turnOutline, paging, loading: false, error: String(error) } }); }
+      if (current()) this.setSession(id, { turnOutline: { paging: { type: 'latest' }, ...this.state.views[id]?.turnOutline, loading: false, error: String(error) } });
     } finally {
+      // A superseded automatic read still owes a refresh of the surviving presentation.
+      if (owned() && demand.automatic && !current()) read.refresh = true;
       demand.resolve(page);
       if (this.outlineReads.get(id) === read) {
         const pending = read.pending;
         if (read.authority() && pending?.current()) {
-          read.active = pending; read.pending = undefined; read.refresh = false;
+          read.active = pending; read.pending = undefined;
           void this.runOutline(id, read);
         } else {
           this.outlineReads.delete(id); pending?.resolve();
@@ -1337,7 +1343,9 @@ export class AppServerClient {
       this.setSession(id, { turnNavigation: { intent, pending: `ordinal:${selection}` } });
       const total = view.turnOutline?.page?.total ?? 0;
       const offset = Math.floor((selection - 1) / HISTORY_PAGE_SIZE) * HISTORY_PAGE_SIZE;
-      const page = await this.readTurns(id, offset >= Math.floor((total - 1) / HISTORY_PAGE_SIZE) * HISTORY_PAGE_SIZE ? undefined : offset, current);
+      // Identity lookup is fixed even when presentation should continue following latest.
+      const paging: OutlinePagingIntent = offset >= Math.floor((total - 1) / HISTORY_PAGE_SIZE) * HISTORY_PAGE_SIZE ? { type: 'latest' } : { type: 'page', offset };
+      const page = await this.demandOutline(id, offset, paging, current);
       if (!current()) return false;
       if (!page) { this.setSession(id, { turnNavigation: { intent } }); return false; }
       const found = page.turns.find(row => row.ordinal === selection);

@@ -86,7 +86,7 @@ it('an unloaded mark reads its native page before navigating; the newest page re
   expect(ui.getByRole('button', { name: 'Jump to turn 960' }).hasAttribute('aria-busy')).toBe(false);
   fireEvent.click(ui.getByRole('button', { name: 'Load and jump to turn 1000' }));
   const latest = await server.waitFor('session/turns', 3);
-  expect(latest.params).toMatchObject({ offset: null });
+  expect(latest.params).toMatchObject({ offset: 960 });
   await act(async () => server.reply(latest));
   expect(navigate).toHaveBeenLastCalledWith(1000);
   expect(server.client.getSnapshot().views.A.history?.window?.target).toEqual(native(1000).id);
@@ -192,7 +192,7 @@ it('an explicit historical page survives live growth; an unloaded newest mark re
  await act(async()=>{fireEvent.click(fixture.ui.getByRole('button',{name:'Load and jump to turn 129'}));});
  expect(server.client.getSnapshot().views.A.turnOutline?.paging).toEqual({type:'latest'});expect(fixture.mark(129)!.dataset.turnOrdinal).toBe('129');
  await fixture.start(130);await fixture.locate(130);await fixture.settle(130);
- expect(fixture.mark(130)!.dataset.turnOrdinal).toBe('130');expect(fixture.offsets().slice(-4)).toEqual([null,null,null,null]);
+ expect(fixture.mark(130)!.dataset.turnOrdinal).toBe('130');expect(fixture.offsets().slice(-4)).toEqual([128,null,null,null]);
 });
 
 it('settlement during a gated outline reply preserves one latest refresh demand',async()=>{

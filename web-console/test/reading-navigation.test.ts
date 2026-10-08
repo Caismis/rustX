@@ -170,7 +170,8 @@ for(const source of ['gesture','refresh'] as const)it(`latest unloaded navigatio
  expect(server.client.getSnapshot().views.A.turnOutline?.page).toBe(original);
  server.reply(fresh);const window=await server.waitFor('session/transcript',1);expect(window.params).toMatchObject({at:{type:'turn',id:turn(300).id}});
  server.reply(window);expect(await latest).toEqual(turn(300));expect(reads()).toHaveLength(1);expect(cursors()![0]).toBe(300);
- expect(server.requests.filter(row=>row.request.method==='session/turns')).toHaveLength(3);
+ if(source==='refresh'){const owed=await server.waitFor('session/turns',4);expect(owed.params).toMatchObject({offset:256});server.reply(owed);}
+ expect(server.requests.filter(row=>row.request.method==='session/turns')).toHaveLength(source==='refresh'?4:3);
 });
 it('equivalent pending outline demands coalesce but only the last gesture lands',async()=>{
  await ready();server.held.add('session/turns');
@@ -210,4 +211,95 @@ it('failed latest outline settles its pending mark without replacing history or 
  expect(await work).toBe(false);expect(server.client.getSnapshot().views.A.history).toBe(before);
  expect(server.client.getSnapshot().views.A.turnOutline?.error).toContain('outline unavailable');
  expect(server.client.getSnapshot().views.A.turnNavigation?.pending).toBeUndefined();expect(reads()).toHaveLength(0);
+});
+
+it.each([64,128,192])('ordinal %i stays fixed across growth into the next latest page',async ordinal=>{
+ await ready();let total=ordinal;
+ server.handlers.set('session/turns',request=>{
+  if(request.method!=='session/turns')throw Error();
+  const offset=request.params.offset??Math.floor((total-1)/64)*64;
+  return {type:'conversation_turns',page:{...outline,total,offset,turns:Array.from({length:Math.min(64,total-offset)},(_,i)=>turn(offset+i+1))}};
+ });
+ await server.client.readTurns('A');server.held.add('session/turns');
+ const navigation=server.client.navigateTurn('A',ordinal),held=await server.waitFor('session/turns',3);
+ expect(held.params).toMatchObject({offset:ordinal-64,limit:64});
+ total=ordinal+1;server.reply(held);
+ const window=await server.waitFor('session/transcript',1);
+ expect(window.params).toMatchObject({at:{type:'turn',id:turn(ordinal).id,cut},limit:64});
+ server.reply(window);expect(await navigation).toEqual(turn(ordinal));expect(reads()).toHaveLength(1);
+ expect(cursors()![0]).toBe(ordinal);expect(server.client.getSnapshot().views.A.turnOutline?.paging).toEqual({type:'latest'});
+ const refresh=server.client.refreshTurns('A'),latest=await server.waitFor('session/turns',4);
+ expect(latest.params).toMatchObject({offset:null});server.reply(latest);await refresh;
+ expect(server.client.getSnapshot().views.A.turnOutline?.page?.turns.map(t=>t.ordinal)).toEqual([ordinal+1]);
+});
+
+it.each(['success','failure'] as const)('canceled pending navigation preserves active automatic %s and committed paging',async outcome=>{
+ await ready();server.held.add('session/turns');
+ const original=server.client.getSnapshot().views.A.turnOutline!;
+ const refresh=server.client.refreshTurns('A'),held=await server.waitFor('session/turns',2);
+ const navigation=server.client.navigateTurn('A',300);
+ expect(server.client.getSnapshot().views.A.turnOutline?.paging).toEqual(original.paging);
+ server.client.invalidateReading('A'); // The production viewport retirement boundary.
+ const page={...outline,cut:{...cut,journal:'7000'}};
+ if(outcome==='success')server.socket.success(held,{type:'conversation_turns',page});
+ else server.socket.deliver({jsonrpc:'2.0',id:held.id,error:{code:-32000,message:'authoritative refresh failure'}});
+ await refresh;expect(await navigation).toBe(false);
+ const result=server.client.getSnapshot().views.A.turnOutline!;
+ expect(result.paging).toEqual(original.paging);
+ if(outcome==='success'){expect(result.page).toEqual(page);expect(result.error).toBeUndefined();}
+ else {expect(result.page).toBe(original.page);expect(result.error).toContain('authoritative refresh failure');}
+ expect(server.requests.filter(row=>row.request.method==='session/turns')).toHaveLength(2);expect(reads()).toHaveLength(0);
+ const next=server.client.refreshTurns('A'),request=await server.waitFor('session/turns',3);
+ expect(request.params).toMatchObject({offset:null});server.reply(request);await next;
+});
+
+it('coalesced automatic refresh survives canceled explicit reads and pending replacements',async()=>{
+ await ready();server.held.add('session/turns');
+ const a=server.client.navigateTurn('A',100),held=await server.waitFor('session/turns',2);
+ await server.client.refreshTurns('A');await server.client.refreshTurns('A');
+ const b=server.client.navigateTurn('A',200),c=server.client.navigateTurn('A',300);
+ expect(await b).toBe(false);server.client.invalidateReading('A');
+ server.socket.deliver({jsonrpc:'2.0',id:held.id,error:{code:-32000,message:'obsolete explicit failure'}});
+ expect(await a).toBe(false);expect(await c).toBe(false);
+ const refresh=await server.waitFor('session/turns',3);expect(refresh.params).toMatchObject({offset:null});
+ expect(server.client.getSnapshot().views.A.turnOutline?.error).toBeUndefined();
+ expect(server.client.getSnapshot().views.A.turnOutline?.paging).toEqual({type:'latest'});
+ const done=new Promise<void>(resolve=>{const stop=server.client.subscribe(()=>{if(!server.client.getSnapshot().views.A.turnOutline?.loading){stop();resolve();}});});
+ server.reply(refresh);await done;
+ expect(server.requests.filter(row=>row.request.method==='session/turns')).toHaveLength(3);expect(reads()).toHaveLength(0);
+});
+
+it.each(['resync','mutation','attachment','disconnect'] as const)('%s retires active refresh, pending selection and queued refresh together',async reason=>{
+ await ready();server.held.add('session/turns');
+ const active=server.client.refreshTurns('A'),held=await server.waitFor('session/turns',2),socket=server.socket;
+ const pending=server.client.navigateTurn('A',300);await server.client.refreshTurns('A');
+ if(reason==='resync'){server.held.add('session/snapshot');socket.deliver({jsonrpc:'2.0',method:'session/resyncRequired',params:{target:server.target('A'),after_cursor:'0',earliest_serviceable:'1'}});}
+ if(reason==='mutation'){server.cursor++;socket.deliver({jsonrpc:'2.0',method:'session/event',params:{target:server.target('A'),cursor:String(server.cursor),event:{type:'pending_inbound_changed',pending:[]}}});}
+ if(reason==='attachment'){await server.client.release('A');await server.client.attach('A');}
+ if(reason==='disconnect')server.client.disconnect();
+ await active;expect(await pending).toBe(false);const before=server.client.getSnapshot().views.A;
+ socket.deliver(server.commit(held,socket));
+ expect(server.client.getSnapshot().views.A.turnOutline).toBe(before.turnOutline);expect(server.client.getSnapshot().views.A.history).toBe(before.history);
+ expect(server.requests.filter(row=>row.request.method==='session/turns')).toHaveLength(2);expect(reads()).toHaveLength(0);
+});
+
+it('an automatic refresh queued during pending replacement survives and uses the committed explicit page',async()=>{
+ await ready();server.held.add('session/turns');
+ const a=server.client.navigateTurn('A',100),first=await server.waitFor('session/turns',2);
+ const b=server.client.navigateTurn('A',200);await server.client.refreshTurns('A');
+ const c=server.client.navigateTurn('A',300);expect(await b).toBe(false);
+ server.reply(first);expect(await a).toBe(false);
+ const selected=await server.waitFor('session/turns',3);expect(selected.params).toMatchObject({offset:256});
+ server.socket.success(selected,{type:'conversation_turns',page:{...outline,offset:256,turns:Array.from({length:64},(_,i)=>turn(257+i))}});
+ const owed=await server.waitFor('session/turns',4);expect(owed.params).toMatchObject({offset:256});
+ await serve();expect(await c).toEqual(turn(300));expect(reads()).toHaveLength(1);
+ server.reply(owed);expect(server.requests.filter(row=>row.request.method==='session/turns')).toHaveLength(4);
+});
+
+it('a genuinely missing ordinal reports unavailability without a transcript read',async()=>{
+ await ready();server.held.add('session/turns');
+ const work=server.client.navigateTurn('A',128),held=await server.waitFor('session/turns',2);
+ server.socket.success(held,{type:'conversation_turns',page:{...outline,total:64,offset:0,turns:outline.turns}});
+ expect(await work).toBe(false);expect(reads()).toHaveLength(0);
+ expect(server.client.getSnapshot().views.A.turnNavigation?.error).toBe('This Turn is no longer in the native outline.');
 });
