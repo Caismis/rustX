@@ -287,7 +287,7 @@ it('a settled live Attempt without a journal projection cannot manufacture termi
   expect(document.querySelector('[data-turn-process]')).toBeNull();
 });
 
-it('typing while attachment is held cannot offer native commands before admission', async () => {
+it('typing while attachment is held offers the model picker without calling native session commands', async () => {
   await server.connect(); nativeModel(); server.held.add('session/attach');
   server.handlers.set('session/models',()=>({type:'models',catalog:{models:[model('fixture/root')]}}));
   server.handlers.set('session/model',()=>({type:'model',model:cfg3Effective().effective_model}));
@@ -296,7 +296,7 @@ it('typing while attachment is held cannot offer native commands before admissio
   const opening=await server.waitFor('session/attach',1),message=input();
   expect(message.disabled).toBe(false);
   fireEvent.change(message,{target:{value:'/mdl'}});
-  expect(screen.queryByRole('option',{name:/Model/})).toBeNull();
+  expect(screen.getByRole('option',{name:/Model/})).toBeTruthy();
   expect(server.requests.filter(row=>row.request.method==='session/model')).toHaveLength(0);
   await act(async()=>server.reply(opening));
   expect(screen.getByRole('option',{name:/Model/})).toBeTruthy();
@@ -395,4 +395,29 @@ it('cold composer reads native model and whole-conversation usage before runtime
   expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', false);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
   expect(document.querySelector('[data-first-submission="attaching"]')).toBeTruthy();
+});
+
+it('cold /model uses the workspace catalog and applies the last choice before the queued prompt', async () => {
+  await server.connect(); nativeModel(); server.held.add('session/attach'); server.held.add('session/setModel'); server.held.add('turn/start');
+  await act(async () => { render(<App client={server.client} workspaceHost={host()}/>); });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+  const opening = await server.waitFor('session/attach', 1);
+  await waitFor(() => expect(document.querySelector('[data-model-select]')).toHaveProperty('disabled', false));
+  fireEvent.change(input(), { target: { value: '/model' } });
+  await waitFor(() => expect(screen.getByRole('combobox', { name: 'Search models…' })).toBeTruthy());
+  await act(async () => fireEvent.click(screen.getByRole('option', { name: 'fixture/chosen' })));
+  expect(server.client.getSnapshot().views.A.modelIntent?.config.model).toBe('fixture/chosen');
+  expect(server.requests.filter(row => row.request.method === 'session/setModel')).toHaveLength(0);
+  fireEvent.change(input(), { target: { value: 'use my selected model' } });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
+  expect(document.querySelector('[data-first-submission="attaching"]')).toBeTruthy();
+  await act(async () => server.reply(opening));
+  const selection = await server.waitFor('session/setModel', 1);
+  expect(selection.params).toMatchObject({ config: { model: 'fixture/chosen' } });
+  expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(0);
+  await act(async () => server.reply(selection));
+  const start = await server.waitFor('turn/start', 1);
+  expect(server.client.getSnapshot().views.A.snapshot?.model?.configured.model).toBe('fixture/chosen');
+  expect(server.client.getSnapshot().views.A.modelIntent).toBeUndefined();
+  await act(async () => server.reply(start));
 });

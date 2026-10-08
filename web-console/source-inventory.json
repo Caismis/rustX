@@ -2803,7 +2803,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "074b214239956f844d3f23bd0c7bb0c49d0f9ed060ef4c6d15af72471ad93833",
+      "local_sha256": "6e2a891580344124019798b0898de94163c4a3863d09f060dae4d310c3d7a354",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-workspace/src/client/WorkspacePicker.tsx",

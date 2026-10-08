@@ -86,6 +86,7 @@ export interface SessionView {
   /** Current-generation turn/start or turn/steer requests awaiting an outcome.
    * Transport ownership only, including unsent requests in the bounded pipeline. */
   inboundRequests?: number;
+  modelIntent?: { config: import('../../../protocol/app-server/v37').SessionModelConfig; phase: 'waiting' | 'applying' | 'failed'; error?: string };
   modelMutation?: { generation: number; status: 'in-flight' | 'acknowledged' | 'uncertain' };
   cancellation?: { attemptId: string; status: 'in-flight' | 'acknowledged' | 'uncertain' };
   error?: string;
@@ -490,13 +491,15 @@ export class AppServerClient {
         : new RequestNotDispatched('Disconnected before a response. Unsent operations were discarded.'));
     }
     this.pending.clear();
+    for (const pending of this.modelPreparations.values()) pending.retire();
+    this.modelPreparations.clear();
     this.refreshes.clear(); this.traceReads.clear(); this.traceAuthorities.clear(); this.acquiring.clear(); this.dirty.clear(); this.resubscribe.clear(); this.attachmentChanges.clear();
     const operations = { ...this.state.interactionOperations };
     for (const [key, operation] of Object.entries(operations)) if (operation.status === 'in-flight') delete operations[key];
     for (const item of uncertain) if (item.interactionKey) operations[item.interactionKey] = { sessionId: item.sessionId!, status: 'uncertain' };
     this.publish({ connection, generation: this.state.generation + 1, uncertain, interactionOperations: operations,
       views: Object.fromEntries(Object.entries(this.state.views).map(([id, view]) => [id, {
-        ...view, ...(view.recoveringDeletion ? { recoveringDeletion: false, deletionRecovery: undefined } : {}), history: undefined, turnOutline: undefined, turnNavigation: undefined, target: undefined, submissions: undefined, inboundRequests: undefined, attachment: view.target || ['attaching', 'attached', 'resynchronizing'].includes(view.attachment) ? 'stale' : view.attachment,
+        ...view, modelIntent: undefined, ...(view.recoveringDeletion ? { recoveringDeletion: false, deletionRecovery: undefined } : {}), history: undefined, turnOutline: undefined, turnNavigation: undefined, target: undefined, submissions: undefined, inboundRequests: undefined, attachment: view.target || ['attaching', 'attached', 'resynchronizing'].includes(view.attachment) ? 'stale' : view.attachment,
       }])),
     });
     if (oldSocket && !this.closedSockets.has(oldSocket)) {
@@ -974,7 +977,7 @@ export class AppServerClient {
       if (!navigationCurrent() || this.state.views[id]?.attachmentIntent !== 'wanted') return;
       const existing = this.state.views[id]?.target;
       if (existing) { attached?.(existing); return this.refresh(id); }
-      this.setSession(id, { attachment: 'attaching', preview: undefined, statisticsPreview: undefined, tracePreview: undefined, error: undefined });
+      this.setSession(id, { attachment: 'attaching', modelIntent: undefined, preview: undefined, statisticsPreview: undefined, tracePreview: undefined, error: undefined });
       const epoch = (this.attachmentEpochs.get(id) ?? 0) + 1;
       this.attachmentEpochs.set(id, epoch);
       this.summarySettled.delete(id);
@@ -1572,6 +1575,11 @@ export class AppServerClient {
     return this.sendContent(id, content, delivery, acknowledged, dispatchCurrent);
   }
   async sendContent(id: string, content: UserInputBlock[], delivery: 'send' | 'steer' = 'send', acknowledged?: () => void, dispatchCurrent?: () => boolean) {
+    const generation = this.state.generation;
+    const preparation = this.modelPreparations.get(id);
+    if (preparation) await preparation.work;
+    if (!this.current(generation)) throw new Error('Connection changed before sending.');
+    if (this.state.views[id]?.modelIntent) throw new Error(this.state.views[id].modelIntent?.error ?? 'Model selection is not ready.');
     const target = this.target(id);
     if (this.state.views[id].modelMutation) throw new Error('Reread native model state before sending.');
     // `turn/start` and `turn/steer` share one native inbound owner: an idle runtime
@@ -1660,6 +1668,45 @@ export class AppServerClient {
     if (observed && view?.snapshot) this.setSession(id, { history: replaceTranscript(view.snapshot.transcript, view.history) });
     return observed;
   }
+  private modelPreparations = new Map<string, { work: Promise<import('../../../protocol/app-server/v37').SessionModelConfig>; retire: () => void }>();
+  /** Client-owned selection while native resources initialize. Last unsent choice
+   * wins; the existing native mutation and authoritative reread still own apply. */
+  prepareAgentModel(id: string, config: import('../../../protocol/app-server/v37').SessionModelConfig) {
+    const view = this.state.views[id];
+    if (view?.attachment !== 'attaching' || view.attachmentIntent !== 'wanted' || view.deleting)
+      return Promise.reject(new Error('Conversation is no longer connecting.'));
+    this.setSession(id, { modelIntent: { config, phase: 'waiting' } });
+    const previous = this.modelPreparations.get(id);
+    if (previous) return previous.work;
+    let live = true;
+    const generation = this.state.generation, epoch = this.attachmentEpochs.get(id);
+    const current = () => live && this.current(generation) && this.attachmentEpochs.get(id) === epoch
+      && this.state.views[id]?.attachmentIntent === 'wanted' && !this.state.views[id]?.deleting;
+    const work = (async () => {
+      try {
+        await this.waitForAttachment(id, current);
+        if (!current()) throw new Error('Model selection retired with its connection.');
+        const selection = this.state.views[id].modelIntent!.config;
+        this.setSession(id, { modelIntent: { config: selection, phase: 'applying' } });
+        await this.setAgentModel(id, selection);
+        if (!current()) throw new Error('Model selection retired with its connection.');
+        await this.repairAgentModel(id);
+        if (!current()) throw new Error('Model selection retired with its connection.');
+        const observed = this.state.views[id].snapshot?.model?.configured;
+        if (observed?.model !== selection.model || (observed.reasoningProfile ?? undefined) !== (selection.reasoningProfile ?? undefined))
+          throw new Error('Selected model has not been confirmed. Reread model configuration before sending.');
+        this.setSession(id, { modelIntent: undefined });
+        return selection;
+      } catch (error) {
+        const intent = this.state.views[id]?.modelIntent;
+        if (current() && intent) this.setSession(id, { modelIntent: { ...intent, phase: 'failed', error: String(error) } });
+        throw error;
+      }
+    })();
+    this.modelPreparations.set(id, { work, retire: () => { live = false; } });
+    void work.finally(() => { if (this.modelPreparations.get(id)?.work === work) this.modelPreparations.delete(id); }).catch(() => {});
+    return work;
+  }
   /** Transport continuation guard, not Session model authority. A successful
    * mutation response alone cannot enable a dependent Send. */
   async setAgentModel(id: string, config: import('../../../protocol/app-server/v37').SessionModelConfig) {
@@ -1671,7 +1718,7 @@ export class AppServerClient {
     try {
       await this.request({ method: 'session/setModel', params: { target, config } }, 'model');
       if (!current()) return;
-      this.setSession(id, { modelMutation: { generation, status: 'acknowledged' } });
+      this.setSession(id, { modelMutation: { generation, status: 'acknowledged' }, ...(this.state.views[id]?.modelIntent?.phase === 'failed' ? { modelIntent: undefined } : {}) });
     } catch (error) {
       if (this.getSnapshot().views[id]?.modelMutation === operation) this.setSession(id, { modelMutation: { generation, status: isOutcomeUncertain(error) ? 'uncertain' : 'acknowledged' } });
       throw error;
@@ -1709,7 +1756,12 @@ export class AppServerClient {
   async repairAgentModel(id: string) {
     const target = this.target(id), generation = this.state.generation;
     await this.refresh(id);
-    if (this.current(generation) && sameTarget(this.state.views[id]?.target, target) && this.state.views[id].modelMutation?.status !== 'in-flight') this.setSession(id, { modelMutation: undefined });
+    if (this.current(generation) && sameTarget(this.state.views[id]?.target, target) && this.state.views[id].modelMutation?.status !== 'in-flight') {
+      const view = this.state.views[id], intent = view.modelIntent, observed = view.snapshot?.model?.configured;
+      const confirmed = intent?.phase === 'failed' && observed?.model === intent.config.model
+        && (observed.reasoningProfile ?? undefined) === (intent.config.reasoningProfile ?? undefined);
+      this.setSession(id, { modelMutation: undefined, ...(confirmed ? { modelIntent: undefined } : {}) });
+    }
   }
   cancellationTarget(id: string): CancellationTarget | undefined {
     const view = this.state.views[id], attempt = view?.snapshot?.attempt;
@@ -1773,7 +1825,8 @@ export class AppServerClient {
   }
   /** Closing a view releases only this client relationship. */
   release(id: string): Promise<void> {
-    this.setSession(id, { attachmentIntent: 'released' });
+    this.modelPreparations.get(id)?.retire(); this.modelPreparations.delete(id);
+    this.setSession(id, { attachmentIntent: 'released', modelIntent: undefined });
     return this.changeAttachment(id, 'detach', async generation => {
       const target = this.state.views[id]?.target;
       if (!target) return;

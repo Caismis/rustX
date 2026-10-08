@@ -1,0 +1,33 @@
+import { test, expect } from '@playwright/test';
+
+test('connecting conversation accepts dropdown and slash model choices before queued send', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.addInitScript(() => localStorage.setItem('rustx-locale-v1', 'en'));
+  await page.goto(`http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}/test/fixtures/startup.html?existing&models&cold-model`);
+  await page.waitForFunction(() => (window as any).startupFixture);
+  await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.resumeCatalog(); });
+  await page.locator('button[data-session-id="A"]').click();
+  const model = page.locator('[data-model-select]');
+  await model.click();
+  await page.getByRole('menuitem', { name: 'fixture/second', exact: true }).click();
+  await expect(model).toContainText('fixture/second');
+  const input = page.getByRole('textbox', { name: 'Message', exact: true });
+  await input.fill('/model');
+  await page.getByRole('option', { name: 'fixture/native', exact: true }).click();
+  await model.click();
+  await page.getByRole('menuitem', { name: 'Reasoning profile', exact: true }).hover();
+  await page.getByRole('menuitem', { name: 'low', exact: true }).click();
+  await expect(model).toContainText('low');
+  await page.evaluate(() => (window as any).startupFixture.hold('session/setModel'));
+  await input.fill('Send with my selected model'); await input.press('Enter');
+  await page.evaluate(() => (window as any).startupFixture.release('session/attach'));
+  await page.waitForFunction(() => (window as any).startupFixture.requests().some((r: any) => r.method === 'session/setModel'));
+  const before = await page.evaluate(() => (window as any).startupFixture.requests().filter((r: any) => ['session/setModel', 'turn/start'].includes(r.method)));
+  expect(before).toHaveLength(1);
+  expect(before[0].params.config).toEqual({ model: 'fixture/native', reasoningProfile: 'low' });
+  await page.evaluate(() => (window as any).startupFixture.release('session/setModel'));
+  await page.waitForFunction(() => (window as any).startupFixture.requests().some((r: any) => r.method === 'turn/start'));
+  expect(await page.evaluate(() => (window as any).startupFixture.model('A').configured)).toEqual({ model: 'fixture/native', reasoningProfile: 'low' });
+  expect(errors).toEqual([]);
+});
