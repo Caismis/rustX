@@ -10,16 +10,18 @@ import type { PageFocus } from '../machines/navigation';
 import { extensionEntries } from '../extensions/inventory';
 import { CollectionDiagnostics } from '../extensions/ExtensionsPage';
 import { ResourceAvailability } from '../extensions/ResourceAvailability';
+import { useMcpConnections, type McpConnectionContext } from './useMcpConnections';
 import { McpStatusIcon } from './McpStatusIcon';
 import { McpEditor } from './McpEditor';
 import css from './McpPage.module.css';
 
 /** ZCode's dedicated catalog layout, backed by rustX's exact-scope authority. */
-export function McpPage({ source, scope, revision, focus, onFocus, scopeControl, refresh, refreshing }: {
-  source: SourceSettings; scope: SourceScope; revision?: string; focus?: PageFocus['mcp'];
+export function McpPage({ source, scope, revision, focus, onFocus, scopeControl, refresh, refreshing, connection }: {
+  connection: McpConnectionContext; source: SourceSettings; scope: SourceScope; revision?: string; focus?: PageFocus['mcp'];
   onFocus: (focus?: PageFocus['mcp']) => void; scopeControl: ReactNode; refresh: () => void; refreshing: boolean;
 }) {
   const tx = useTranslation();
+  const runtime = useMcpConnections(source, connection);
   const [query, setQuery] = useState('');
   const [menu, setMenu] = useState(false);
   const document = documentAuthoring(scope === 'user' ? source.user_mcp : source.workspace_mcp);
@@ -41,13 +43,13 @@ export function McpPage({ source, scope, revision, focus, onFocus, scopeControl,
         {owner === scope && <div className={css.actions}>
           <Menu open={menu} onClose={() => setMenu(false)} items={[{id:'import',label:tx('settings:mcp.import'),disabled:!editable}]} onSelect={() => {setMenu(false);importConfig();}}
             anchor={<button className={css.iconButton} type="button" aria-label={tx('settings:mcp.more')} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>···</button>}/>
-          <button className={css.iconButton} type="button" title={tx('settings:mcp.refresh')} aria-label={tx('settings:mcp.refresh')} disabled={refreshing} onClick={refresh}><IconRefreshOutline16/></button>
+          <button className={css.iconButton} type="button" title={tx('settings:mcp.refresh')} aria-label={tx('settings:mcp.refresh')} disabled={refreshing} onClick={() => {refresh();runtime.refresh();}}><IconRefreshOutline16/></button>
           <Button size="sm" variant="primary" disabled={!editable} onClick={create}>＋ {tx('settings:catalog.new')}</Button>
         </div>}
       </div>
       {rows.length ? <div role="list" className={css.list}>{rows.map(entry => <div key={entry.name} role="listitem" aria-label={entry.name} className={css.row}>
         <button className={css.open} type="button" aria-label={tx('settings:extension-detail.mcp-value',{p0:entry.name})} onClick={() => onFocus({kind:'mcp',name:entry.name})}>
-          <McpStatusIcon entry={entry}/>
+          <McpStatusIcon entry={entry} snapshot={runtime.snapshots[entry.name]} enabled={runtime.enabled.has(entry.name)}/>
           <span className={css.content}><span>{entry.name}</span><small>{entry.diagnostics[0] ?? description(entry.name,entry.owner,entry.path)}</small></span>
         </button>
         {revision && <ResourceAvailability family="mcp" name={entry.name} valid={entry.valid} source={source} scope={scope} revision={revision} inspect={() => onFocus({kind:'mcp',name:entry.name,mode:'permissions'})}/>}
@@ -60,6 +62,7 @@ export function McpPage({ source, scope, revision, focus, onFocus, scopeControl,
   return <div className={css.page} data-mcp-page="">
     <h3>{tx('settings:catalog.mcp')}</h3>
     <div className={css.toolbar}>{scopeControl}<span className={css.total}>MCP <small>{entries.length}</small></span><Search label={tx('settings:mcp.search')} placeholder={tx('settings:mcp.search')} value={query} onChange={setQuery}/></div>
+    {runtime.error && <p role="alert">{tx('settings:mcp.connection-error')}</p>}
     {document.state !== 'structured' && <p role="alert">{document.state === 'malformed' ? document.diagnostic : tx('settings:source.not-loaded')}</p>}
     {group(scope)}{group(scope === 'user' ? 'workspace' : 'user')}<CollectionDiagnostics source={source} families={['mcp']}/>
   </div>;

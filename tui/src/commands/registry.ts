@@ -24,6 +24,7 @@ export interface CommandSpec {
  * native capabilities. Explicit /attach uploads selected bytes to the Session.
  */
 export const COMMANDS: readonly CommandSpec[] = [
+  {name:"/mcp", description:"Inspect or connect native MCP settings connections.", argumentHint:'[user | workspace "<path>"] [connect <name> | disconnect <name>]'},
   { name: "/capabilities", description: "Inspect all native Agent capabilities in a scrollable view." },
   { name: "/attach", description: "Upload a selected local file to this Session.", argumentHint: "<local-path>" },
   { name: "/queue", description: "Edit or remove exact observed queued Human input." },

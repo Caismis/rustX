@@ -87,6 +87,7 @@ if (variant.get('conversation') === 'ready') {
   }] } };
 }
 server.workspaceHost.configureWorkspace = async (_id, _endpoint, operation) => {
+ if(operation.kind === "mcp_status" || operation.kind === "mcp_connect" || operation.kind === "mcp_disconnect") return {kind:"mcp",connections:[]};
   const projection = { ...source, target: { kind: 'workspace' as const, directory: '/workspace' } };
   if (operation.kind === 'write') return { kind: 'write', commit: { acknowledgement: projection, reread: { status: 'observed', projection } } };
   return { kind: operation.kind, projection };
@@ -105,14 +106,21 @@ if (variant.get('scenario') === 'mcp') {
     return {type:'source_settings',projection:structuredClone(source)};
   });
 }
-// Native preparation snapshots for MCP status indicator visual checks.
+// Native settings-connection snapshots for deterministic browser validation.
+server.handlers.set('mcp/status',()=>({type:'mcp_connections',connections:[]}));
+server.handlers.set('mcp/connect',()=>({type:'mcp_connections',connections:[]}));
+server.handlers.set('mcp/disconnect',()=>({type:'mcp_connections',connections:[]}));
 if (variant.get('scenario') === 'mcp-status') {
-  const states = {ready: 'ready', unavailable: 'unavailable', unprepared: 'unprepared'} as const;
+  const states: Record<string, import('../../../protocol/app-server/v37').McpConnectionStatus> = {ready:{status:'connected',tool_count:2}, unavailable:{status:'failed'}, pending:{status:'connecting'}};
+  source.user.authored!.agent={tools:{sources:{ready:'all',unavailable:'all',pending:'all'}}};
   source.user_mcp.authored = Object.fromEntries(Object.keys(states).map(name => [name, {definition:{type:'stdio' as const,command:'mcp-server'},retained_env:[],retained_headers:[]}]));
   source.prospective_resources = {...effective.resources,
-    definitions:Object.keys(states).map(name=>({family:'mcp',name,valid:true,location:{scope:'user',path:'/user/mcp.json'}})),
-    sources:Object.fromEntries(Object.entries(states).map(([name,status])=>[name,{status}])),
+    definitions:Object.keys(states).map(name=>({family:'mcp',name,valid:true,location:{scope:'user',path:'/user/mcp.json'}})),sources:{},
   };
+  const result=()=>({type:'mcp_connections' as const,connections:Object.entries(states).map(([id,state])=>({id,revision:source.user_mcp.revision,state}))});
+  server.handlers.set('mcp/status',result);
+  server.handlers.set('mcp/connect',result);
+  Object.assign(window,{rustxMcpFinish:()=>{states.pending={status:'connected',tool_count:3};}});
 }
 // A held write stays in flight — the User request unanswered, the Workspace
 // host call unresolved — until the test releases it. Only then does native
@@ -140,6 +148,7 @@ if (variant.get('write') === 'held') {
   (window as unknown as { rustxHeldWorkspaceWrites: () => number }).rustxHeldWorkspaceWrites = () => workspaceWrites;
   const configure = server.workspaceHost.configureWorkspace!;
   server.workspaceHost.configureWorkspace = async (id, at, operation) => {
+ if(operation.kind === "mcp_status" || operation.kind === "mcp_connect" || operation.kind === "mcp_disconnect") return {kind:"mcp",connections:[]};
     if (operation.kind === 'write') {
       workspaceWrites++;
       await new Promise<void>(resolve => releases.push(resolve));

@@ -219,7 +219,7 @@ const READS = new Set<Request1['method']>([
   'session/turns', 'session/uploadStatus',
   'artifact/read', 'initialize', 'server/info', 'session/list', 'session/read', 'session/summary', 'session/tree', 'session/deletePreview',
   'session/history', 'session/configuration', 'session/snapshot', 'session/transcript', 'session/trace', 'session/traceDetail', 'session/settings', 'session/model', 'session/models',
-  'configuration/sourcesRead', 'session/effectiveConfiguration', 'resources/read', 'job/status', 'job/list', 'job/wait', 'agent/status', 'agent/list', 'agent/wait', 'agent/transcript', 'session/boundaries',
+  'mcp/status', 'configuration/sourcesRead', 'session/effectiveConfiguration', 'resources/read', 'job/status', 'job/list', 'job/wait', 'agent/status', 'agent/list', 'agent/wait', 'agent/transcript', 'session/boundaries',
 ]);
 /** Domain settlement has no RPC response deadline. Separate bounded lanes keep
  * observation/admission from occupying the slots needed to stop or inspect work. */
@@ -227,7 +227,7 @@ function requestLane(method: Request1['method']): 'wait' | 'admission' | 'contro
   switch (method) {
     // Compaction awaits native summary generation and release, just like other
     // long-lived domain waits. It must not expire the shared socket's RPC clock.
-    case 'context/compact': case 'agent/wait': case 'job/wait': return 'wait';
+    case 'mcp/connect': case 'mcp/disconnect': case 'context/compact': case 'agent/wait': case 'job/wait': return 'wait';
     case 'agent/sendMessage': return 'admission';
     case 'agent/interrupt': case 'job/cancel': case 'turn/cancel': return 'control';
     default: return 'rpc';

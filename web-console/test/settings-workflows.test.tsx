@@ -190,8 +190,8 @@ it('S2-05 every extension row reports kind, scope, validity, preparation and roo
   // A valid Workflow can still be refused admission, and is still not selected.
   expect(await facts('nightly')).toEqual(expect.arrayContaining(['Workflow', 'Valid definition', 'Not admitted', 'Not allowed for the root Agent']));
   expect(await facts('analysis')).toEqual(expect.arrayContaining(['Managed Python', 'Valid definition', 'Preparation unavailable']));
-  // Opening the page probed nothing.
-  expect(methods(s).every(method => method === 'configuration/sourcesRead')).toBe(true);
+  // Disabled MCP entries only read status or release an existing settings connection.
+  expect(methods(s).every(method => ['configuration/sourcesRead','mcp/status','mcp/disconnect'].includes(method))).toBe(true);
 });
 
 /** Two MCP identities authored in one `mcp.toml`, one valid and one not. */

@@ -292,6 +292,8 @@ impl AppServerConnection {
                 | Method::SessionRecoverDeletion { .. }
                 | Method::SourcesWrite { .. }
                 | Method::ConfigurationReconcile { .. }
+                | Method::McpConnect { .. }
+                | Method::McpDisconnect { .. }
                 | Method::AdoptConfiguration { .. }
         ) {
             let connection = self.clone();
@@ -648,6 +650,38 @@ impl AppServerConnection {
                     .map_err(session_error)?;
                 Ok(MethodResult::SessionConfiguration {
                     application: self.host.manager().configuration_application(&session_id),
+                })
+            }
+            Method::McpConnect {
+                target,
+                id,
+                expected_revision,
+                refresh,
+            } => Ok(MethodResult::McpConnections {
+                connections: vec![
+                    self.host
+                        .manager()
+                        .connect_mcp(target, id, expected_revision, refresh)
+                        .await
+                        .map_err(source_error)?,
+                ],
+            }),
+            Method::McpStatus { target } => Ok(MethodResult::McpConnections {
+                connections: self
+                    .host
+                    .manager()
+                    .mcp_status(&target)
+                    .map_err(source_error)?,
+            }),
+            Method::McpDisconnect { target, id } => {
+                target.validate().map_err(source_error)?;
+                self.host.manager().disconnect_mcp(&target, &id).await;
+                Ok(MethodResult::McpConnections {
+                    connections: self
+                        .host
+                        .manager()
+                        .mcp_status(&target)
+                        .map_err(source_error)?,
                 })
             }
             Method::SourcesRead { target } => {

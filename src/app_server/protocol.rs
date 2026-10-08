@@ -332,6 +332,22 @@ pub enum Method {
     },
     #[serde(rename = "session/effectiveConfiguration")]
     ConfigurationGet { target: AttachmentTarget },
+    #[serde(rename = "mcp/connect")]
+    McpConnect {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        id: crate::runtime::identity::McpServerId,
+        expected_revision: String,
+        refresh: bool,
+    },
+    #[serde(rename = "mcp/status")]
+    McpStatus {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+    },
+    #[serde(rename = "mcp/disconnect")]
+    McpDisconnect {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        id: crate::runtime::identity::McpServerId,
+    },
     #[serde(rename = "configuration/sourcesRead")]
     SourcesRead {
         target: crate::local_runtime::configuration::settings::SourceTarget,
@@ -643,6 +659,10 @@ pub enum MethodResult {
     },
     EffectiveConfiguration {
         projection: Box<crate::local_runtime::configuration::settings::EffectiveConfiguration>,
+    },
+    McpConnections {
+        connections:
+            Vec<crate::local_runtime::configuration::mcp_connections::McpConnectionSnapshot>,
     },
     SourceSettings {
         projection: Box<crate::local_runtime::configuration::settings::SourceSettings>,

@@ -3,7 +3,8 @@ import type { AttachmentTarget, SessionFileReference } from '../../../protocol/a
 import type { DocumentRequest, DocumentResult } from '../../shared/documents.ts';
 export interface DeliveryRead { target: AttachmentTarget; message_id: string; delivery_index: number }
 export interface DeliveryBytes { file: SessionFileReference; data: string }
-export type WorkspaceConfigurationOperation = { kind: 'read' | 'reconcile' } | { kind: 'write'; expected_revision: string; mutation: SourceMutation };
+export type McpOperation = { kind: 'mcp_status' } | { kind: 'mcp_connect'; id: string; expected_revision: string; refresh: boolean } | { kind: 'mcp_disconnect'; id: string };
+export type WorkspaceConfigurationOperation = McpOperation | { kind: 'read' | 'reconcile' } | { kind: 'write'; expected_revision: string; mutation: SourceMutation };
 /** The separate authoritative read attempted after a confirmed write. It may
  * succeed or fail without changing the fact that the write committed. */
 export type WorkspaceConfigurationReread =
@@ -20,6 +21,7 @@ export interface WorkspaceConfigurationCommit {
  * authoritative reread stay distinct facts for a write, so a failed reread can
  * never be mistaken for an uncommitted write. */
 export type WorkspaceConfigurationResult =
+  | { kind: "mcp"; connections: import("../../../protocol/app-server/v37.ts").McpConnectionSnapshot[] }
   | { kind: 'read' | 'reconcile'; projection: SourceSettings }
   | { kind: 'write'; commit: WorkspaceConfigurationCommit };
 /** Product Host contract. No rustX trust, configuration, or Session ownership. */

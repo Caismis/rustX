@@ -305,6 +305,7 @@ it('S10 target replacement fences stale reads, acknowledgements and the stale wo
     // The Host registration resolution that names every operation's source.
     resolveWorkspace: async id => ({ cwd: `/workspace/${id === 'workspace-a' ? 'A' : 'B'}` }),
     configureWorkspace: async (id, _endpoint, operation) => {
+ if(operation.kind === "mcp_status" || operation.kind === "mcp_connect" || operation.kind === "mcp_disconnect") return {kind:"mcp",connections:[]};
       const target: SourceTarget = { kind: 'workspace', directory: `/workspace/${id === 'workspace-a' ? 'A' : 'B'}` };
       if (operation.kind === 'write') {
         const acknowledgement = (await s.client.request({ method: 'configuration/sourceWrite', params: { target, expected_revision: operation.expected_revision, mutation: operation.mutation } }, 'source_settings')).projection;
@@ -433,6 +434,7 @@ it('S12 a held Workspace post-write reread cannot regress a newer authoritative 
     ...s.workspaceHost,
     resolveWorkspace: async () => ({ cwd: target.directory }),
     configureWorkspace: async (_id, _endpoint, operation) => {
+ if(operation.kind === "mcp_status" || operation.kind === "mcp_connect" || operation.kind === "mcp_disconnect") return {kind:"mcp",connections:[]};
       if (operation.kind === 'write') {
         const acknowledgement = (await s.client.request({ method: 'configuration/sourceWrite', params: { target, expected_revision: operation.expected_revision, mutation: operation.mutation } }, 'source_settings')).projection;
         const reread: WorkspaceConfigurationReread = { status: 'observed', projection: (await s.client.request({ method: 'configuration/sourcesRead', params: { target } }, 'source_settings')).projection };
@@ -513,6 +515,7 @@ it('S13 a write-owned reread cannot commit over a newer read that was only initi
     ...s.workspaceHost,
     resolveWorkspace: async () => ({ cwd: native.target.directory }),
     configureWorkspace: async (_id, _endpoint, operation) => {
+ if(operation.kind === "mcp_status" || operation.kind === "mcp_connect" || operation.kind === "mcp_disconnect") return {kind:"mcp",connections:[]};
       if (operation.kind === 'write') {
         const acknowledgement = (await s.client.request({ method: 'configuration/sourceWrite', params: { target: native.target, expected_revision: operation.expected_revision, mutation: operation.mutation } }, 'source_settings')).projection;
         // Native has committed B and this operation owns its authoritative
@@ -584,6 +587,7 @@ it('S14 a superseded write-owned reread failure publishes no read error and leav
     ...s.workspaceHost,
     resolveWorkspace: async () => ({ cwd: native.target.directory }),
     configureWorkspace: async (_id, _endpoint, operation) => {
+ if(operation.kind === "mcp_status" || operation.kind === "mcp_connect" || operation.kind === "mcp_disconnect") return {kind:"mcp",connections:[]};
       if (operation.kind === 'write') {
         const acknowledgement = (await s.client.request({ method: 'configuration/sourceWrite', params: { target: native.target, expected_revision: operation.expected_revision, mutation: operation.mutation } }, 'source_settings')).projection;
         // The commit is definitive; only this operation's own reread failed.

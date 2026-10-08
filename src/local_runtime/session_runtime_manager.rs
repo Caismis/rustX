@@ -544,6 +544,7 @@ pub struct SessionRuntimeManager {
     pub(super) sessions: SessionController,
     registry: Arc<RuntimeRegistry>,
     pub(super) configuration: UserConfigManager,
+    mcp_connections: super::configuration::mcp_connections::McpConnections,
     pub(super) credentials: CredentialSnapshot,
     pub(super) process_policy: Arc<std::sync::RwLock<super::app_server_policy::AppServerPolicy>>,
     pub(super) applications: super::configuration::application::ConfigurationApplications,
@@ -657,6 +658,7 @@ impl SessionRuntimeManager {
     /// # Panics
     /// Panics if the residency mutex is poisoned.
     pub async fn drain_all_runtimes(&self) -> Vec<String> {
+        let mut mcp_failures = self.mcp_connections.shutdown().await;
         let ids: Vec<_> = self
             .registry
             .0
@@ -674,6 +676,7 @@ impl SessionRuntimeManager {
         }))
         .await;
         let mut failures: Vec<_> = results.into_iter().flatten().collect();
+        failures.append(&mut mcp_failures);
         failures.sort();
         failures
     }
@@ -846,6 +849,7 @@ impl SessionRuntimeManager {
                 configuration.app_server_policy().map_err(error)?,
             )),
             configuration,
+            mcp_connections: Default::default(),
             credentials,
             applications: super::configuration::application::ConfigurationApplications::default(),
             dependencies: Arc::new(dependencies),
@@ -1196,6 +1200,38 @@ impl SessionRuntimeManager {
         }
     }
 
+    pub(crate) async fn connect_mcp(
+        &self,
+        target: super::configuration::settings::SourceTarget,
+        id: crate::runtime::identity::McpServerId,
+        revision: String,
+        refresh: bool,
+    ) -> Result<
+        super::configuration::mcp_connections::McpConnectionSnapshot,
+        super::configuration::settings::SettingsError,
+    > {
+        self.mcp_connections
+            .connect(self.configuration.clone(), target, id, revision, refresh)
+            .await
+    }
+    pub(crate) fn mcp_status(
+        &self,
+        target: &super::configuration::settings::SourceTarget,
+    ) -> Result<
+        Vec<super::configuration::mcp_connections::McpConnectionSnapshot>,
+        super::configuration::settings::SettingsError,
+    > {
+        target.validate()?;
+        Ok(self.mcp_connections.status(target))
+    }
+    pub(crate) async fn disconnect_mcp(
+        &self,
+        target: &super::configuration::settings::SourceTarget,
+        id: &crate::runtime::identity::McpServerId,
+    ) {
+        self.mcp_connections.disconnect(target, id).await;
+    }
+
     /// Source authoring never loads, creates, or derives authority from a Session.
     /// Writes transfer to a native-owned task before persistence begins. Source
     /// publication and coordinator capture are serialized by the application lock.
@@ -1228,6 +1264,7 @@ impl SessionRuntimeManager {
             {
                 // Linearization: persisted source belongs to native coordination
                 // before releasing the publication lock or replying to the client.
+                owner.mcp_connections.invalidate(&target);
                 owner.capture_source_consumers(&mut application, &target);
                 owner.applications.notify(&application);
             }

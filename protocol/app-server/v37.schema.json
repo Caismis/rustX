@@ -1691,6 +1691,97 @@
           "properties": {
             "method": {
               "type": "string",
+              "const": "mcp/connect"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/SourceTarget"
+                },
+                "id": {
+                  "$ref": "#/$defs/McpServerId"
+                },
+                "expected_revision": {
+                  "type": "string"
+                },
+                "refresh": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "id",
+                "expected_revision",
+                "refresh"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "mcp/status"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/SourceTarget"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "mcp/disconnect"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/SourceTarget"
+                },
+                "id": {
+                  "$ref": "#/$defs/McpServerId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
               "const": "configuration/sourcesRead"
             },
             "params": {
@@ -3264,6 +3355,10 @@
         }
       ]
     },
+    "McpServerId": {
+      "description": "Identifies an MCP server bound to the runtime.",
+      "type": "string"
+    },
     "SourceMutation": {
       "oneOf": [
         {
@@ -3356,10 +3451,6 @@
           ]
         }
       ]
-    },
-    "McpServerId": {
-      "description": "Identifies an MCP server bound to the runtime.",
-      "type": "string"
     },
     "McpWrite": {
       "type": "object",
@@ -6252,6 +6343,26 @@
           "required": [
             "type",
             "projection"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "connections": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/McpConnectionSnapshot"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "mcp_connections"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "connections"
           ]
         },
         {
@@ -19113,6 +19224,96 @@
         "generation",
         "model",
         "resources"
+      ]
+    },
+    "McpConnectionSnapshot": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/McpServerId"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/McpConnectionStatus"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "state"
+      ]
+    },
+    "McpConnectionStatus": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "connecting"
+            }
+          },
+          "required": [
+            "status"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "tool_count": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "status": {
+              "type": "string",
+              "const": "connected"
+            }
+          },
+          "required": [
+            "status",
+            "tool_count"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "failed"
+            }
+          },
+          "required": [
+            "status"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "timed_out"
+            }
+          },
+          "required": [
+            "status"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "disconnected"
+            }
+          },
+          "required": [
+            "status"
+          ]
+        }
       ]
     },
     "SourceSettings": {

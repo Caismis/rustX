@@ -29,6 +29,7 @@ server.workspaceHost.classifyLocations = async cwds => { await associationGate; 
 // The shell's registered Workspace supplies the same generated source contract
 // as the permission seat. User Settings retains its explicit error fixture.
 server.workspaceHost.configureWorkspace = async (_id, _endpoint, operation) => {
+ if(operation.kind === "mcp_status" || operation.kind === "mcp_connect" || operation.kind === "mcp_disconnect") return {kind:"mcp",connections:[]};
   const projection = { ...cfg3Source(), target: { kind: 'workspace' as const, directory: '/workspace' } };
   if (operation.kind === 'write') return { kind: 'write', commit: { acknowledgement: projection, reread: { status: 'observed', projection } } };
   return { kind: operation.kind, projection };

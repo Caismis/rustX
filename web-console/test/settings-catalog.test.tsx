@@ -79,23 +79,26 @@ it('a rejected quick write exposes its retained draft through detail rather than
 });
 
 it.each([
-  { status: 'ready', valid: true, color: 'ready', label: 'MCP server is ready.' },
-  { status: 'unavailable', valid: true, color: 'error', label: 'MCP server is unavailable.' },
-  { status: 'unprepared', valid: true, color: 'unprepared', label: 'MCP server has not been initialized.' },
-  { status: undefined, valid: true, color: 'unknown', label: 'MCP server status is not yet available.' },
-  { status: 'ready', valid: false, color: 'invalid', label: 'The server configuration is invalid.' },
-] as const)('MCP status uses native $status/$valid independently of its permission switch', async ({status,valid,color,label}) => {
-  const s = cfg3Client();
-  s.source.prospective_resources = { ...s.effective.resources,
-    definitions: [{family:'mcp',name:'search',valid,location:{scope:'user',path:'/user/mcp.json'}}],
-    sources: status ? {search:{status}} : {},
-  };
+  {state:{status:'connecting'},color:'connecting',label:'Connecting to MCP server…'},
+  {state:{status:'connected',tool_count:2},color:'connected',label:'MCP server is connected and available.'},
+  {state:{status:'failed'},color:'error',label:'MCP server is unavailable.'},
+  {state:{status:'timed_out'},color:'timeout',label:'MCP connection timed out.'},
+  {state:{status:'disconnected'},color:'disconnected',label:'MCP server is disconnected.'},
+] as const)('MCP displays native $color and the matching tooltip',async({state,color,label})=>{
+  const s=cfg3Client(async op=>{
+    if(op.method==='mcp/connect'||op.method==='mcp/status')return {type:'mcp_connections',connections:[{id:'search',revision:'mcp-1',state}]};
+  });
+  s.source.user.authored!.agent={tools:{sources:{search:'all'}}};
   await catalog(s);
-  const card = within(screen.getByRole('listitem',{name:'search'}));
-  expect(card.getByRole('switch').getAttribute('aria-checked')).toBe('false');
-  const icon = card.getByRole('img',{name:label});
+  const icon=await screen.findByRole('img',{name:label});
   expect(icon.querySelector('[data-status]')?.getAttribute('data-status')).toBe(color);
   fireEvent.mouseEnter(icon);
   expect((await screen.findByRole('tooltip')).textContent).toContain(label);
+  expect(s.request.mock.calls.some(([op])=>op.method==='mcp/connect'&&op.params.expected_revision==='mcp-1')).toBe(true);
   expect(writes(s)).toHaveLength(0);
+});
+it('disabled MCP never starts a connection',async()=>{
+ const s=cfg3Client();await catalog(s);
+ await screen.findByRole('img',{name:'MCP server is disabled.'});
+ expect(s.request.mock.calls.some(([op])=>op.method==='mcp/connect')).toBe(false);
 });

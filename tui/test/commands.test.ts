@@ -130,6 +130,7 @@ describe("command registry", () => {
     assert.deepEqual(
       COMMANDS.map((command) => command.name),
       [
+        "/mcp",
         "/capabilities", "/attach", "/queue",
         "/export",
         "/settings",
@@ -1592,4 +1593,18 @@ it("a replacement attachment does not inherit an old Agent-message submission fe
   assert.equal(h.transport.log.count('agent/sendMessage'), 2, 'old completion cannot release the replacement fence');
   h.transport.respond(second.id, { type: 'agent_message', agent_id: 'agent-child', activation_id: 'new', resumed: false });
   await next;
+});
+
+
+describe('native MCP settings connections',()=>{
+ it('reads native connecting and connected states without a model turn',async()=>{
+  const h=await harness();
+  for(const state of [{status:'connecting' as const},{status:'connected' as const,tool_count:2}]){
+   const pending=h.dispatcher.submit('/mcp user');
+   const request=await nextRequest(h,'mcp/status',state.status==='connecting'?0:1);
+   h.transport.respond(request.id,{type:'mcp_connections',connections:[{id:'search',revision:'mcp-1',state}]});
+   const outcome=await pending;assert.equal(outcome.kind,'inspect');
+   if(outcome.kind==='inspect')assert.match(outcome.body,new RegExp(state.status));
+  }
+ });
 });
