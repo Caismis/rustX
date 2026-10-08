@@ -3267,7 +3267,7 @@
           "treatment": "Compaction checkpoint disclosure and bilingual summary wording adapted to native Ledger messages; no Harness runtime or command authority."
         }
       ],
-      "local_sha256": "bef6b4f1c7811982e6b30ee6f4ff1edd432d83c61fa35adcbb6d3e850b725ca7"
+      "local_sha256": "9fc114c54b8cb383a6f0fa900f349b3b1df4030fe9a244709061460703d6de23"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",
@@ -5638,6 +5638,7 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../../../protocol/app-server/v38",
+        "../../client/agent-meters",
         "../../client/app-server",
         "../../client/selectors",
         "../../locale/react",
@@ -5647,13 +5648,12 @@
         "../../presentation/primitives/icons",
         "../components/ActivityCards",
         "./Subagents.module.css",
-        "./meter-queue",
         "./subagent-context",
         "./token-format",
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "96bb2233fb694b9233fb3b5c364707418e0c9686b47feee5802c8c70d75c1ed3"
+      "local_sha256": "ac3e7974d7695fe42d815cb5e54266db517e9456dc051f2ee3addc520eb0f943"
     },
     {
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",

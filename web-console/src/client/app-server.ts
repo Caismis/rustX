@@ -1,3 +1,4 @@
+import { AgentMeters } from './agent-meters';
 import { UploadFailure, AttachmentIntakes } from './uploads';
 import { foldRuntimeEvent } from '../../../protocol/app-server/projection';
 import { NavigationEpoch } from './navigation';
@@ -252,6 +253,18 @@ export const sameTarget = (a?: AttachmentTarget, b?: AttachmentTarget) => !!a &&
 /** One native rustX connection. All retained snapshots are replaceable read caches.
  * Runtime events fold below React; snapshots initialize or repair exact attachments. */
 export class AppServerClient {
+  readonly agentMeters = new AgentMeters(async (target, id, current) => {
+    let acknowledged = false;
+    try {
+      const result = await this.request({ method: 'agent/statistics', params: { target, agent_id: id } }, 'agent_statistics', () => { acknowledged = true; }, current);
+      return { settled: true, metrics: result.metrics };
+    } catch (error) {
+      // A correlated native rejection settles the read; an unsent refusal
+      // started none. Timeout/disconnect only retires the browser waiter.
+      return { settled: acknowledged || error instanceof RpcFailure || error instanceof RequestNotDispatched,
+        error: error instanceof Error ? error.message : String(error) };
+    }
+  });
   readonly attachmentIntakes = new AttachmentIntakes();
   readonly log = new ProtocolLog();
   readonly navigation = new NavigationEpoch();

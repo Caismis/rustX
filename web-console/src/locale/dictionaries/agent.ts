@@ -1,5 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
+  "usage.reads-unresolved": "Statistics unavailable while previous reads remain unresolved.",
   "step-process.live.thinking": "Analyzing request",
   "step-process.live.read": "Reading files",
   "step-process.live.readImage": "Reading images",
@@ -316,6 +317,7 @@ export const en = {
 } as const;
 export type AgentKey = keyof typeof en;
 export const zh = {
+  "usage.reads-unresolved": "先前的统计读取尚未确认结束，当前统计暂不可用。",
   "step-process.live.thinking": "正在分析请求",
   "step-process.live.read": "正在读取文件",
   "step-process.live.readImage": "正在读取图片",

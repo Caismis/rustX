@@ -1,5 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Header layout adapted from ui-subagent/SubagentHeaderLineage; see PROVENANCE.md. */
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
 import type { RuntimeClientAgent, AgentStatistics } from '../../../../protocol/app-server/v38';
 import { sameTarget, type AppServerClient } from '../../client/app-server';
 import { useClientSelector } from '../../client/selectors';
@@ -13,52 +13,44 @@ import conversationCss from '../../presentation/agent/Conversation.module.css';
 
 import { formatDuration, formatTokens } from './token-format';
 import { SubagentContext as Context, useSubagents } from './subagent-context';
-import { meterQueue } from './meter-queue';
-
-/** Fetch independent native meters without delaying parent attach or child history. */
-function AgentMeter({ client, sessionId, agent, schedule, receive }: { schedule: ReturnType<typeof meterQueue>; client: AppServerClient; sessionId: string; agent: RuntimeClientAgent; receive: (id: string, metrics?: AgentStatistics, error?: string) => void }) {
-  const target = useClientSelector(client, state => state.views[sessionId]?.target);
-  const attached = useClientSelector(client, state => state.views[sessionId]?.attachment === 'attached');
-  useEffect(() => {
-    if (!attached || !target) return;
-    let current = true;
-    const generation = client.getSnapshot().generation;
-    const valid = () => current && client.getSnapshot().views[sessionId]?.attachment === 'attached' && client.getSnapshot().generation === generation && sameTarget(client.getSnapshot().views[sessionId]?.target, target);
-    const cancel = schedule(JSON.stringify([generation, target, agent.agent_id]), async () => {
-      if (!valid()) return;
-      try {
-        const result = await client.request({ method: 'agent/statistics', params: { target, agent_id: agent.agent_id } }, 'agent_statistics');
-        if (valid()) receive(agent.agent_id, result.metrics);
-      } catch (error) { if (valid()) receive(agent.agent_id, undefined, error instanceof Error ? error.message : String(error)); }
-    });
-    return () => { current = false; cancel(); };
-  }, [client, sessionId, target, attached, agent.agent_id, agent.activation_id, agent.state, agent.observation.revision, schedule, receive]);
-  return null;
-}
+import { meterDemand, type MeterScope } from '../../client/agent-meters';
 
 export function agentDuration(metrics: AgentStatistics, now: number) {
   const { settled_ms, active } = metrics.duration;
   return Number(settled_ms) + (active ? Math.max(0, (active.running ? now : Date.parse(active.observed_at)) - Date.parse(active.started_at)) : 0);
 }
+const NO_AGENTS: RuntimeClientAgent[] = [];
 export function SubagentScope({ client, sessionId, children }: { client: AppServerClient; sessionId?: string; children: ReactNode }) {
-  const agents = useClientSelector(client, state => sessionId ? state.views[sessionId]?.snapshot?.agents : undefined) ?? [];
+  const tx = useTranslation();
+  const agents = useClientSelector(client, state => sessionId ? state.views[sessionId]?.snapshot?.agents : undefined) ?? NO_AGENTS;
   const generation = useClientSelector(client, state => state.generation);
   const target = useClientSelector(client, state => sessionId ? state.views[sessionId]?.target : undefined);
   const owner = JSON.stringify([generation, sessionId, target]);
-  const schedule = useMemo(meterQueue, [client]);
-  const [readings, setReadings] = useState<{ owner: string; metrics: Record<string, AgentStatistics>; errors: Record<string, string> }>({ owner, metrics: {}, errors: {} });
-  const receive = useCallback((id: string, metrics?: AgentStatistics, error?: string) => setReadings(previous => {
-    const next = previous.owner === owner ? previous : { owner, metrics: {}, errors: {} };
-    const errors = { ...next.errors };
-    if (error) errors[id] = error; else delete errors[id];
-    return { owner, metrics: metrics ? { ...next.metrics, [id]: metrics } : next.metrics, errors };
-  }), [owner]);
-  const metrics = readings.owner === owner ? readings.metrics : {};
-  const metricErrors = readings.owner === owner ? readings.errors : {};
+  const scope = useMemo<MeterScope>(() => ({
+    target,
+    current: () => {
+      const state = client.getSnapshot(), view = sessionId ? state.views[sessionId] : undefined;
+      return !!target && state.generation === generation && view?.attachment === 'attached' && !view.deleting && sameTarget(view.target, target);
+    },
+    inventory: () => (sessionId ? client.getSnapshot().views[sessionId]?.snapshot?.agents : undefined) ?? [],
+  }), [client, owner]);
   const [selection, setSelection] = useState<{ owner: string; id?: string }>();
   const id = selection?.owner === owner ? selection.id : undefined;
   const open = (id?: string) => setSelection({ owner, id });
-  return <Context value={{ client, sessionId, agents, metrics, metricErrors, selected: agents.find(agent => agent.agent_id === id), open }}>{sessionId && agents.map(agent => <AgentMeter key={`${owner}:${agent.agent_id}`} client={client} sessionId={sessionId} agent={agent} schedule={schedule} receive={receive}/>)}{children}</Context>;
+  const attached = useClientSelector(client, state => sessionId ? state.views[sessionId]?.attachment : undefined);
+  const deleting = useClientSelector(client, state => sessionId ? state.views[sessionId]?.deleting : undefined);
+  useLayoutEffect(() => () => client.agentMeters.retire(scope), [client, scope]);
+  useLayoutEffect(() => { client.agentMeters.update(scope, id); }, [client, scope, agents, attached, deleting, id]);
+  const readings = useSyncExternalStore(client.agentMeters.subscribe, client.agentMeters.getSnapshot);
+  const metrics: Record<string, AgentStatistics> = {}, metricErrors: Record<string, string> = {};
+  if (readings.scope === scope && scope.current()) for (const agent of agents) {
+    const reading = readings.readings.get(agent.agent_id);
+    if (reading?.demand === meterDemand(agent)) {
+      if (reading.metrics) metrics[agent.agent_id] = reading.metrics;
+      if (reading.error) metricErrors[agent.agent_id] = reading.error;
+    } else if (readings.blocked) metricErrors[agent.agent_id] = tx('agent:usage.reads-unresolved');
+  }
+  return <Context value={{ client, sessionId, agents, metrics, metricErrors, selected: agents.find(agent => agent.agent_id === id), open }}>{children}</Context>;
 }
 export function agentDot(agent: RuntimeClientAgent): StateDotState {
   if (agent.state === 'unavailable') return 'error';

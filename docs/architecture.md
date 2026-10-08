@@ -6942,11 +6942,37 @@ blocking pool. The cache map lock only locates a per-Conversation fold; each fol
 has its own lock, so a blocked child does not serialize unrelated meter reads or
 hold up async dispatch. The TUI transport recognizes the same read method.
 
-The Web meter scheduler retains at most two in-flight reads and 32 pending
-identities, with one latest observation requirement per exact connection,
-attachment and Agent identity. Cleanup deletes obsolete queued work before
-dispatch; response publication checks the same identity. Excess oldest queued
-observations are discarded and their meters remain unknown until a subsequent
-observation requests them. Presentation-only rerenders and child selection do
-not create requests. Live observation revisions only invalidate a reading and
-never contribute usage or durable timing evidence.
+The Web `AppServerClient.agentMeters` owner survives Session changes and React
+unmounts. It discovers demand from the current finite native Agent inventory;
+there is no pending closure per revision and no drop-oldest queue. It retains
+at most one reading/error per current inventory identity, prunes removed or
+superseded entries, and forgets old-scope readings on retirement. Demand identity
+includes connection generation, exact Session/attachment target, Agent and child
+Conversation, activation, state and observation revision. Both the transport's
+existing pre-send admission proof and response publication verify this identity.
+
+At most two current-scope reads run. A round-robin cursor serves all valid
+inventory demands; selected unread demand can take at most every other admission,
+so selection and a busy Agent cannot starve independent Agents. Presentation-only
+rerenders do not dispatch redundant reads. A native rejection is a terminal error
+for that demand, not zero usage or an automatic retry. Live revisions invalidate
+readings and never contribute durable usage or timing evidence.
+
+Across every scope and connection generation of one client, at most four meter
+requests remain unconfirmed: two current slots plus a bounded retirement allowance.
+A switch from two stalled A reads can admit two B reads immediately. Further
+switches do not allocate another allowance. Undispatched obsolete RPCs fail the
+existing admission proof. Sent reads stay charged until a correlated native
+response proves completion; an unsent rejection proves no work began. The native
+blocking read has no cancellation/settlement API. Timeout, disconnect, component
+cleanup and ignored responses therefore **do not** release its accounting slot.
+Lost acknowledgements remain charged for the client lifetime, even after reconnect.
+Only four minimal flight records survive; old inventory/callback queues do not.
+
+This is a truthful bounded-progress contract, not a cancellation guarantee: if
+all four acknowledgements remain unavailable, current demand stays discoverable
+but cannot dispatch, and the UI explicitly reports statistics unavailable while
+previous reads remain unresolved. Unlimited switching past permanently stalled
+work cannot guarantee progress without native cancellable-read settlement; this
+repair does not invent that protocol or release physical capacity on a timer.
+Other client instances have independent budgets; this is not a server-wide quota.

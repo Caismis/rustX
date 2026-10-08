@@ -1731,8 +1731,14 @@ Settings transaction actor. JSON import only accepts environment references;
 Header/Env literals are retained by key or removed, never introduced by Web
 configuration writes. Settings inspection and refresh are read-only. The native
 capability lifecycle owns all MCP connections; no settings connection/probe is
-created. Meter scheduling is local presentation code with two in-flight and 32
-pending observation bounds, separate from native durable folding authority.
+created. Meter scheduling remains separate from native durable folding authority.
+The client owns two current observations and a total budget of four unconfirmed
+reads across scope changes. Current inventory plus a fair cursor replaces the
+lossy 32-entry pending queue; selected demand gets alternating priority. Exact
+activation/revision fences guard admission and publication. Unknown transport
+settlement keeps its charged slot across reconnects, with an explicit unavailable
+state if the bounded retirement allowance is exhausted. No native cancellation
+or durable statistics authority is implemented in the browser.
 
 Repair browser acceptance follows the new Settings page order, the shared slash
 model picker, and the actual `data-conversation-scroll` owner. Agent, Shell,

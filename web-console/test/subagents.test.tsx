@@ -55,16 +55,23 @@ it('large child lists bound background meter requests without blocking the paren
   server.snapshots.get('A')!.agents = Array.from({ length: 80 }, (_, index) => ({ ...agent, agent_id: `child-${index}` }));
   await server.client.refresh('A');
   server.held.add('agent/statistics');
-  const ui = render(<SubagentScope client={server.client} sessionId="A"><input aria-label="Parent input"/></SubagentScope>);
+  const { useSubagents } = await import('../src/app/agent/subagent-context');
+  function PickLast() { const scope = useSubagents()!; return <button onClick={() => scope.open('child-79')}>Pick last child</button>; }
+  const ui = render(<SubagentScope client={server.client} sessionId="A"><input aria-label="Parent input"/><PickLast/></SubagentScope>);
   const reads = () => server.requests.filter(row => row.request.method === 'agent/statistics');
   await waitFor(() => expect(reads()).toHaveLength(2));
   fireEvent.change(ui.getByRole('textbox'), { target: { value: 'Still usable' } });
   expect((ui.getByRole('textbox') as HTMLInputElement).value).toBe('Still usable');
+  fireEvent.click(ui.getByText('Pick last child'));
+  expect(reads()).toHaveLength(2);
   await act(async () => {
     server.held.delete('agent/statistics');
     for (const row of reads()) server.reply(row.request);
   });
-  await waitFor(() => expect(reads()).toHaveLength(34));
+  await waitFor(() => expect(reads()).toHaveLength(80));
+  expect((reads()[2].request.params as { agent_id: string }).agent_id).toBe('child-79');
+  expect(new Set(reads().map(row => (row.request.params as { agent_id: string }).agent_id)).size).toBe(80);
+  await waitFor(() => expect(server.client.agentMeters.getSnapshot().readings.size).toBe(80));
 });
 
 it('an obsolete attachment cannot publish late meters or overwrite its successor', async () => {
@@ -88,4 +95,69 @@ it('an obsolete attachment cannot publish late meters or overwrite its successor
   expect(ui.getByText('999')).toBeTruthy();expect(calls).toBe(2);
   ui.rerender(<SubagentScope client={s.client} sessionId={cfg3Session}><Meter/></SubagentScope>);
   expect(calls).toBe(2);
+});
+
+it('two stalled A reads do not block B; repeated scope switches retain a four-request bound and late A cannot publish', async () => {
+  const server = new Server(); servers.push(server); await server.attached('A', 'B');
+  server.handlers.set('agent/statistics', () => ({ type: 'agent_statistics', metrics: agentMetrics }));
+  for (const id of ['A', 'B']) { server.snapshots.get(id)!.agents = Array.from({ length: 5 }, (_, i) => ({ ...agent, agent_id: `child-${i}` })); await server.client.refresh(id); }
+  server.held.add('agent/statistics');
+  const { useSubagents } = await import('../src/app/agent/subagent-context');
+  function Readings() { return <output>{Object.keys(useSubagents()!.metrics).join(',') || 'unknown'}</output>; }
+  const view = (id: string) => <SubagentScope client={server.client} sessionId={id}><Readings/></SubagentScope>;
+  const ui = render(view('A')); await server.waitFor('agent/statistics', 2);
+  ui.rerender(view('B')); await server.waitFor('agent/statistics', 4);
+  const reads = () => server.requests.filter(row => row.request.method === 'agent/statistics');
+  expect(reads().map(row => (row.request.params as { target: { session_id: string } }).target.session_id)).toEqual(['A', 'A', 'B', 'B']);
+  for (let i = 0; i < 20; i++) { ui.rerender(view('A')); ui.rerender(view('B')); }
+  expect(reads()).toHaveLength(4);
+  await act(async () => { server.reply(reads()[0].request); await server.waitFor('agent/statistics', 5); });
+  expect(ui.getByText('unknown')).toBeTruthy();
+  expect((reads()[4].request.params as { target: { session_id: string } }).target.session_id).toBe('B');
+  await act(async () => { server.reply(reads()[4].request); });
+  await ui.findByText('child-0');
+});
+
+it('connection replacement invalidates observations without releasing unacknowledged native work', async () => {
+  const server = new Server(); servers.push(server);
+  server.snapshots.get('A')!.agents = [agent, { ...agent, agent_id: 'second' }];
+  await server.attached('A'); server.held.add('agent/statistics');
+  const ui = render(<SubagentScope client={server.client} sessionId="A"><SubagentHeader title="Parent"/></SubagentScope>);
+  await server.waitFor('agent/statistics', 2);
+  await act(async () => { await server.client.disconnect(); await server.attached('A'); });
+  await server.waitFor('agent/statistics', 4);
+  await act(async () => { await server.client.disconnect(); await server.attached('A'); });
+  expect(server.requests.filter(row => row.request.method === 'agent/statistics')).toHaveLength(4);
+  expect(server.client.agentMeters.getSnapshot().blocked).toBe(true);
+  ui.unmount();
+  render(<SubagentScope client={server.client} sessionId="A"><SubagentHeader title="Parent"/></SubagentScope>);
+  expect(server.requests.filter(row => row.request.method === 'agent/statistics')).toHaveLength(4);
+});
+
+it('obsolete queued meter reads fail the existing transport admission proof before any RPC is sent', async () => {
+  const server = new Server(); servers.push(server);
+  for (const id of ['A', 'B']) server.snapshots.get(id)!.agents = [agent, { ...agent, agent_id: 'second' }];
+  await server.attached('A', 'B'); server.held.add('session/statistics'); server.held.add('agent/statistics');
+  const pending = Array.from({ length: 8 }, () => server.client.request({ method: 'session/statistics', params: { session_id: 'A' } }, 'session_statistics').catch(() => {}));
+  const blockers = server.requests.filter(row => row.request.method === 'session/statistics').slice(-8);
+  expect(blockers).toHaveLength(8);
+  const view = (id: string) => <SubagentScope client={server.client} sessionId={id}><span/></SubagentScope>;
+  const ui = render(view('A')); ui.rerender(view('B'));
+  expect(server.requests.filter(row => row.request.method === 'agent/statistics')).toHaveLength(0);
+  await act(async () => { for (const blocker of blockers) server.reply(blocker.request); await Promise.all(pending); });
+  await server.waitFor('agent/statistics', 2);
+  expect(server.requests.filter(row => row.request.method === 'agent/statistics').map(row => (row.request.params as { target: { session_id: string } }).target.session_id)).toEqual(['B', 'B']);
+});
+
+it('a correlated native failure frees capacity, renders an error without zero usage and is not retried by rerenders', async () => {
+  const { RpcFailure } = await import('../src/client/app-server');
+  const { useSubagents } = await import('../src/app/agent/subagent-context');
+  const server = new Server(); servers.push(server); server.snapshots.get('A')!.agents = [agent]; await server.attached('A');
+  server.handlers.set('agent/statistics', () => { throw new RpcFailure({ code: -32000, message: 'durable read unavailable' }); });
+  function Reading() { const scope = useSubagents()!; return <output>{scope.metrics.child ? 'metrics' : 'unknown'}:{scope.metricErrors.child}</output>; }
+  const view = <SubagentScope client={server.client} sessionId="A"><Reading/></SubagentScope>;
+  const ui = render(view); await ui.findByText(/unknown:durable read unavailable/);
+  ui.rerender(view);
+  expect(server.requests.filter(row => row.request.method === 'agent/statistics')).toHaveLength(1);
+  expect(server.client.agentMeters.getSnapshot().blocked).toBe(false);
 });
