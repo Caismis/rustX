@@ -30,7 +30,7 @@ arguments (including `init` declarations). Streams and exit status are forwarded
 All [configuration semantics](../docs/configuration-diagnostics.md) stay in Rust.
 
 Foreground Workflow Tool cards expose expandable native execution details under
-App Server protocol v37. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
+App Server protocol v38. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
 execution settlement, business checks and human Review are separate. Responses
 use the root HITL queue and children expose authoritative subagent status. See the
 [native projection contract](../docs/workflow-run-projection.md).
@@ -124,6 +124,9 @@ Connect to an externally managed App Server with:
 pnpm --dir tui start --connect ws://127.0.0.1:8080 --token-file /private/user/socket-token --workspace /srv/project --session SESSION_ID
 ```
 
+Add `--delivery-access-token-file /private/user/delivery-token` when the server
+operator provisioned committed-delivery access for this client (see `/files`).
+
 Both modes use App Server V7. `--config` and `--runtime-root` bind the owned
 local child process; they do not become Session settings. `--workspace` supplies
 the Session cwd and `--model` supplies explicit Session intent. Remote Workspace
@@ -160,7 +163,7 @@ application to the native coordinator; context adoption remains explicit.
 
 ```text
 bind stdio child or external WebSocket
-  -> initialize (App Server protocol v37)
+  -> initialize (App Server protocol v38)
   -> session/create or choose a durable Session
   -> session/attach (authoritative snapshot, cursor, subscription)
   -> interactive
@@ -1108,6 +1111,32 @@ even when connected to a remote App Server. Existing files are not overwritten;
 parent directories must exist. Failed transfers remove the partial output when
 possible and report failure. The server receives only the Session ID.
 See [archive format and transport](../docs/session-archive.md).
+
+### Delivered files
+
+A `present` call renders as a `Present` card with the declared paths. After the
+canonical Tool result commits, the card lists the delivered files in their
+committed order. `/files` lists the committed deliveries of the focused Session,
+newest first, one bounded history page at a time (`Load older history`). Each entry
+shows the filename, type, description, original path and Conversation, its
+`message#i/n` address, and whether Save and Open are available. Press Enter for
+actions, or `s`/`o` directly. Escape cancels a running action. No file action sends
+a model request.
+
+- **Save** writes the original bytes (at most 512 KiB) to a path you type on the
+  **TUI machine**. Existing files are never overwritten, and a cancelled or failed
+  save leaves no partial file.
+- **Open** is offered only for the App Server child this TUI spawned. It works only
+  after the native side verifies the file and this machine's own path is proven to
+  be the same file. It reports that the system opener accepted the request, not
+  that an application opened.
+
+The owned stdio child grants delivery access to this TUI by explicit delegation.
+A remote (`--connect`) App Server grants it only for the operator's separate
+credential, passed with `--delivery-access-token-file <path>`. Without that
+credential, `/files` shows metadata only and reports both actions as unavailable.
+Remote server paths are never opened as local paths. See
+[file delivery](../docs/file-delivery.md#tui-consumption).
 
 Upload policy distinguishes per-file and per-transfer bounds from per-User-input
 receipt count/byte bounds. `/attach` uses one file per transfer; native

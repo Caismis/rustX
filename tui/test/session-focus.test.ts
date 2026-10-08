@@ -39,7 +39,7 @@ import { attemptView, runtimeCursor, snapshot } from "./support/fixtures.ts";
 const CAPABILITIES = {
   upload_policy: nativeUploadPolicy, multi_session: true,
   single_writable_controller: true,
-  headless_interactions: true,
+  headless_interactions: true, delivery_access: false,
   experimental_methods: [],
 };
 

@@ -154,6 +154,7 @@ describe("command registry", () => {
         "/cancel",
         "/agents", "/send-message", "/wait-agent", "/interrupt-agent",
         "/jobs", "/job-status", "/job-wait", "/job-cancel",
+        "/files",
         "/quit",
       ],
     );
@@ -1470,6 +1471,27 @@ describe("CLI arguments", () => {
     assert.throws(
       () =>
         parseArguments(["--binary", "/usr/bin/rustx", "--token-file", "/t"]),
+      /applies only to --connect/,
+    );
+  });
+
+  it("accepts a separate delivery-access credential only for an external App Server", () => {
+    const remote = parseArguments([
+      "--connect", "ws://127.0.0.1:8080", "--token-file", "/t",
+      "--delivery-access-token-file", "/d", "--workspace", "/srv/project",
+    ]);
+    assert.deepEqual(remote.mode, {
+      kind: "remote", endpoint: "ws://127.0.0.1:8080", tokenFile: "/t", deliveryAccessTokenFile: "/d",
+    });
+    assert.equal(
+      "deliveryAccessTokenFile" in parseArguments(["--connect", "ws://127.0.0.1:8080", "--token-file", "/t", "--workspace", "/srv"]).mode,
+      false,
+      "without it the connection holds metadata visibility only",
+    );
+    // The owned stdio child receives delivery access by explicit delegation,
+    // so a credential file there would be a flag that grants nothing.
+    assert.throws(
+      () => parseArguments(["--binary", "/usr/bin/rustx", "--delivery-access-token-file", "/d"]),
       /applies only to --connect/,
     );
   });

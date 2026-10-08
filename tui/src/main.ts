@@ -43,10 +43,14 @@ async function connect(parsed: TuiArguments, signal?: AbortSignal): Promise<AppS
   // At most one trailing newline, exactly as the server's own token file
   // contract allows. Nothing else about the value is interpreted here.
   const token = (await readFile(parsed.mode.tokenFile, "utf8")).replace(/\n$/, "");
+  const deliveryAccessToken = parsed.mode.deliveryAccessTokenFile === undefined
+    ? undefined
+    : (await readFile(parsed.mode.deliveryAccessTokenFile, "utf8")).replace(/\n$/, "");
   signal?.throwIfAborted();
   return AppServerHost.connectRemote({
     endpoint: parsed.mode.endpoint,
     token,
+    deliveryAccessToken,
   });
 }
 

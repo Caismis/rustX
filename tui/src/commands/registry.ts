@@ -116,6 +116,11 @@ export const COMMANDS: readonly CommandSpec[] = [
   { name: "/job-status", description: "Read one Job without waiting.", argumentHint: "<job-id>" },
   { name: "/job-wait", description: "Wait for one exact Job to physically settle.", argumentHint: "<job-id>" },
   { name: "/job-cancel", description: "Cancel one finite Job through runtime settlement.", argumentHint: "<job-id>" },
+  {
+    name: "/files",
+    description:
+      "Browse files delivered by `present` in this Session's committed history; save or open them when this connection holds delivery access. Starts no model request.",
+  },
   { name: "/quit", description: "Shut down the runtime and exit cleanly." },
 ];
 

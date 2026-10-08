@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v37 envelope and method vocabulary.
+//! Rust authority for the App Server v38 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 37;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 38;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -82,6 +82,30 @@ pub enum Method {
     ArtifactRead {
         target: AttachmentTarget,
         artifact_id: crate::runtime::identity::ArtifactId,
+    },
+    /// Original bytes (at most 512 KiB) of one committed `present` delivery.
+    ///
+    /// Requires delivery access, which only transport authentication grants
+    /// (an explicitly delegated stdio owner, or the separate WebSocket
+    /// delivery credential). Without it this fails `session_file_read`
+    /// `unauthorized` before any lookup, whatever the coordinates.
+    #[serde(rename = "delivery/read")]
+    DeliveryRead {
+        target: AttachmentTarget,
+        message_id: MessageId,
+        #[schemars(range(max = 7))]
+        delivery_index: usize,
+    },
+    /// The verified absolute native path and current leaf identity of one
+    /// committed delivery, under the same authority as `delivery/read`.
+    /// Transfers no bytes. Only a client that demonstrably shares the
+    /// server's filesystem may interpret the path locally.
+    #[serde(rename = "delivery/locate")]
+    DeliveryLocate {
+        target: AttachmentTarget,
+        message_id: MessageId,
+        #[schemars(range(max = 7))]
+        delivery_index: usize,
     },
     #[serde(rename = "session/uploadPrepare")]
     SessionUploadPrepare {
@@ -483,6 +507,14 @@ pub enum MethodResult {
         file: crate::tools::session_files::SessionFileReference,
         data: String,
     },
+    SessionFileLocation {
+        file: crate::tools::session_files::SessionFileReference,
+        /// Absolute path in the server's filesystem namespace.
+        path: String,
+        /// Lossless decimal device/inode of the verified regular leaf.
+        device: String,
+        inode: String,
+    },
     SessionArchive {
         download: super::archive_download::ArchiveDownloadDescriptor,
     },
@@ -659,6 +691,7 @@ pub enum MethodResult {
     },
 }
 
+#[allow(clippy::struct_excessive_bools)] // independent wire capability facts
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ServerCapabilities {
@@ -666,6 +699,9 @@ pub struct ServerCapabilities {
     pub multi_session: bool,
     pub single_writable_controller: bool,
     pub headless_interactions: bool,
+    /// Whether this connection holds transport-granted delivery access.
+    /// Reporting it grants nothing; the native seam checks the capability.
+    pub delivery_access: bool,
     pub experimental_methods: Vec<String>,
 }
 
@@ -676,6 +712,7 @@ impl Default for ServerCapabilities {
             multi_session: true,
             single_writable_controller: true,
             headless_interactions: true,
+            delivery_access: false,
             experimental_methods: Vec::new(),
         }
     }

@@ -4,3 +4,7 @@
 async fn committed_present_reads_exact_native_scope_through_current_authorized_attachment() {
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::committed_present_read_boundary_scenario()).await;
 }
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn transport_granted_delivery_access_reads_and_locates_only_through_own_attachment() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::delivery_access_boundary_scenario()).await;
+}

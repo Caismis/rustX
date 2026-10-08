@@ -12,6 +12,20 @@ socket joins its canceled read before acknowledging clean close; unknown transpo
 settlement keeps admission unavailable. The public authority/protocol contract is
 unchanged. See [preview workspace invariants](preview-workspace.md).
 
+A `present` delivery exists only in the typed `deliveries` of a successfully
+committed canonical Tool-result message (#431/#454). Arguments, Tool output text,
+generic JSON, prose and foreground settlements never become deliveries in any
+client. Delivery metadata is not file authority: Session-file bytes or a native
+location cross the App Server only for a transport-authenticated authority, either
+the Product Host secret lane or a connection's delivery access granted by stdio-owner
+delegation or the separate WebSocket delivery credential. No request field, client
+name, coordinate, path or root list creates or widens it. A connection reaches only
+its own attachments. Close, native credential removal, attachment detach or mapping
+change revoke it at the next fence, and an admitted read releases its native permit
+only on physical settlement. A client interprets a native location locally only on
+a demonstrably shared filesystem; a remote server path is never a client path. See
+[file delivery](file-delivery.md#delivery-access-for-app-server-clients).
+
 Pending Inbound owns accepted queue mutation. `(ConversationId, InboundSequence,
 MessageId)` identifies one occurrence, and its native revision is a compare-and-set
 precondition. Mutation and canonical claim are ordered by the durable transaction.
@@ -337,7 +351,7 @@ spine; clients merge live and older pages by durable transcript cursor. Entry
 identity only detects the same durable fact, and page reads do not move the
 live event cursor.
 
-App Server v37 navigation adds native Turn-relative finite windows at a captured
+App Server v38 navigation adds native Turn-relative finite windows at a captured
 `ConversationReadCut`. It owns positioning and mutation rejection. Web presentation
 retains at most 256 historical entries / 8 MiB plus the independent finite live
 snapshot; it never walks from a distant Turn to the live tail. New navigation,

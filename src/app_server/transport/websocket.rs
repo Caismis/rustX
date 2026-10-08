@@ -20,7 +20,7 @@ pub const MAX_CLIENTS: usize = 32;
 /// Incomplete/authentication handshakes cannot retain slots indefinitely.
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Browser clients offer this protocol plus `rustx-token.<dedicated token>`.
-pub const SUBPROTOCOL: &str = "rustx.app-server.v37";
+pub const SUBPROTOCOL: &str = "rustx.app-server.v38";
 
 /// Dedicated transport credential. Deliberately has no Debug/Serialize.
 #[derive(Clone)]
@@ -123,6 +123,44 @@ pub(crate) async fn serve_listener(
     result
 }
 
+/// What one authenticated handshake admitted. Only transport credentials
+/// produce these; nothing in a later JSON payload can.
+enum Admission {
+    /// The private one-read Product Host lane and its native authority.
+    ProductHost(CancellationToken),
+    /// The ordinary lane, with delivery access when its separate credential was offered.
+    Ordinary(Option<CancellationToken>),
+}
+
+fn admit(host: &AppServerHost, credential: &Credential, request: &Request) -> Option<Admission> {
+    let offered: Vec<_> = request
+        .headers()
+        .get_all("sec-websocket-protocol")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(',').map(str::trim))
+        .collect();
+    if request.uri().query().is_some() {
+        return None;
+    }
+    if request.uri().path() == crate::app_server::product_host::PATH {
+        return host
+            .authenticate_product_host(&offered)
+            .map(Admission::ProductHost);
+    }
+    if request.uri().path() != "/"
+        || !offered.contains(&SUBPROTOCOL)
+        || !credential.offered(&offered, "rustx-token.")
+    {
+        return None;
+    }
+    // Delivery access is additive to, never a substitute for, the ordinary
+    // transport credential. A wrong one fails closed instead of downgrading.
+    host.authenticate_delivery_access(&offered)
+        .ok()
+        .map(Admission::Ordinary)
+}
+
 pub(crate) async fn connection<S>(
     socket: S,
     host: AppServerHost,
@@ -137,43 +175,23 @@ where
         .max_frame_size(Some(MAX_MESSAGE_BYTES))
         .write_buffer_size(0)
         .max_write_buffer_size(MAX_MESSAGE_BYTES + 1024);
-    let trusted = Arc::new(std::sync::Mutex::new(None));
-    let admitted = trusted.clone();
+    let admission = Arc::new(std::sync::Mutex::new(None));
+    let admitted = admission.clone();
     let handshake_host = host.clone();
     #[allow(clippy::result_large_err)]
     // tungstenite requires this concrete handshake response type.
     let callback = move |request: &Request, mut response: Response| {
-        let offered: Vec<_> = request
-            .headers()
-            .get_all("sec-websocket-protocol")
-            .iter()
-            .filter_map(|value| value.to_str().ok())
-            .flat_map(|value| value.split(',').map(str::trim))
-            .collect();
-        let selected = if request.uri().query().is_none()
-            && request.uri().path() == crate::app_server::product_host::PATH
-        {
-            if let Some(authority) = handshake_host.authenticate_product_host(&offered) {
-                *admitted.lock().expect("host handshake") = Some(authority);
-                Some(crate::app_server::product_host::SUBPROTOCOL)
-            } else {
-                None
-            }
-        } else if request.uri().path() == "/"
-            && request.uri().query().is_none()
-            && offered.contains(&SUBPROTOCOL)
-            && credential.offered(&offered, "rustx-token.")
-        {
-            Some(SUBPROTOCOL)
-        } else {
-            None
-        };
-        let Some(selected) = selected else {
+        let Some(admission) = admit(&handshake_host, &credential, request) else {
             return Err(http::Response::builder()
                 .status(401)
                 .body(Some("Unauthorized".into()))
                 .expect("constant response"));
         };
+        let selected = match admission {
+            Admission::ProductHost(_) => crate::app_server::product_host::SUBPROTOCOL,
+            Admission::Ordinary(_) => SUBPROTOCOL,
+        };
+        *admitted.lock().expect("handshake admission") = Some(admission);
         response.headers_mut().insert(
             "sec-websocket-protocol",
             http::HeaderValue::from_static(selected),
@@ -190,10 +208,14 @@ where
     .map_err(|_| failure("WebSocket handshake deadline exceeded"))?
     .map_err(io::Error::other) } => socket?,
     };
-    let authority = trusted.lock().expect("host handshake").take();
-    if let Some(authority) = authority {
-        return crate::app_server::product_host::serve(socket, host, authority, shutdown).await;
-    }
+    let admitted = admission.lock().expect("handshake admission").take();
+    let delivery = match admitted {
+        Some(Admission::ProductHost(authority)) => {
+            return crate::app_server::product_host::serve(socket, host, authority, shutdown).await;
+        }
+        Some(Admission::Ordinary(delivery)) => delivery,
+        None => return Err(failure("WebSocket admission missing")),
+    };
     let (mut writer, reader) = socket.split();
     let incoming = reader
         .take_while(|message| std::future::ready(!matches!(message, Ok(Message::Close(_)))))
@@ -205,7 +227,10 @@ where
                 Err(error) => Some(Err(io::Error::other(error))),
             }
         });
-    let endpoint = Arc::new(AppServerConnection::new(host));
+    let endpoint = Arc::new(match delivery {
+        Some(authorization) => AppServerConnection::with_delivery_access(host, authorization),
+        None => AppServerConnection::new(host),
+    });
     let result = super::serve(
         endpoint.clone(),
         incoming,

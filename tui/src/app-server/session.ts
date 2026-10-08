@@ -73,6 +73,7 @@ import {
   type RuntimeClientAgent,
   type RuntimeClientTranscriptCursor,
   type RuntimeClientTranscriptPage,
+  type SessionFileReference,
   type SessionModelConfig,
   type SessionModelView,
   type SessionNodeId,
@@ -89,6 +90,12 @@ import {
   replaceFromSnapshot,
 } from "../presentation/projection.ts";
 import type { PresentationState } from "../presentation/state.ts";
+import {
+  pageDeliveries,
+  type DeliveryLocation,
+  type DeliveryPage,
+  type DeliveryRecord,
+} from "../presentation/deliveries.ts";
 import { AppServerClient, isResyncRequired } from "./client.ts";
 
 /** Native owner bound for one bounded page. */
@@ -378,6 +385,43 @@ export class AppServerSession {
       "transcript_window",
     );
     return page.window.page;
+  }
+
+  /**
+   * Whether this connection's transport was granted delivery access: the
+   * owned stdio child, or the separate remote delivery credential.
+   */
+  get deliveryAccess(): boolean {
+    return this.#client.capabilities?.delivery_access === true;
+  }
+
+  /** One bounded page of committed deliveries, by the same transcript paging. */
+  async deliveryPage(before?: RuntimeClientTranscriptCursor): Promise<DeliveryPage> {
+    return pageDeliveries(await this.transcriptPage(before));
+  }
+
+  /**
+   * Original bytes (≤ 512 KiB, base64) of one committed delivery, through
+   * this attachment. Native authority resolves the address every time; no
+   * model request, Agent, or Tool execution starts.
+   */
+  async readDelivery(record: Pick<DeliveryRecord, "messageId" | "index">): Promise<{ file: SessionFileReference; data: string }> {
+    const { file, data } = await this.#client.call(
+      "delivery/read",
+      { target: this.#target, message_id: record.messageId, delivery_index: record.index },
+      "session_file_bytes",
+    );
+    return { file, data };
+  }
+
+  /** The verified server-side path and leaf identity of one delivery. */
+  async locateDelivery(record: Pick<DeliveryRecord, "messageId" | "index">): Promise<DeliveryLocation> {
+    const { file, path, device, inode } = await this.#client.call(
+      "delivery/locate",
+      { target: this.#target, message_id: record.messageId, delivery_index: record.index },
+      "session_file_location",
+    );
+    return { file, path, device, inode };
   }
 
   /** A read is valid only in the exact parent attachment/presentation epoch. */

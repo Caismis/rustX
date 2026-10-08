@@ -46,6 +46,7 @@ struct HostInner {
     #[cfg(test)]
     file_read_probe: Arc<super::product_host::ReadProbe>,
     product_host: Mutex<Option<super::product_host::Authority>>,
+    delivery_access: Mutex<Option<super::delivery_access::Grant>>,
     authority_id: String,
     manager: SessionRuntimeManager,
     state: Mutex<HostState>,
@@ -117,6 +118,36 @@ impl AppServerHost {
             .as_ref()?
             .authenticate(offered)
     }
+    /// Native process composition only, like the Product Host credential.
+    /// Replacing or removing it revokes every connection it admitted.
+    pub(crate) fn bind_delivery_access(
+        &self,
+        credential: Option<super::transport::websocket::Credential>,
+    ) {
+        *self.0.delivery_access.lock().expect("delivery access") =
+            credential.map(super::delivery_access::Grant::new);
+    }
+    /// `Ok(None)`: no delivery credential was offered. An offered credential
+    /// that does not authenticate fails the whole handshake closed.
+    pub(super) fn authenticate_delivery_access(
+        &self,
+        offered: &[&str],
+    ) -> Result<Option<tokio_util::sync::CancellationToken>, ()> {
+        if !offered
+            .iter()
+            .any(|value| value.starts_with(super::delivery_access::CREDENTIAL_PREFIX))
+        {
+            return Ok(None);
+        }
+        self.0
+            .delivery_access
+            .lock()
+            .expect("delivery access")
+            .as_ref()
+            .and_then(|grant| grant.authenticate(offered))
+            .map(Some)
+            .ok_or(())
+    }
     pub(super) fn register_file_route(&self, route: &Arc<super::connection::Route>) {
         let mut routes = self.0.file_routes.lock().expect("file routes");
         routes.retain(|_, route| {
@@ -160,6 +191,7 @@ impl AppServerHost {
             #[cfg(test)]
             file_read_probe: Arc::default(),
             product_host: Mutex::default(),
+            delivery_access: Mutex::default(),
             authority_id: uuid::Uuid::new_v4().to_string(),
             manager,
             state: Mutex::default(),

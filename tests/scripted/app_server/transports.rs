@@ -62,7 +62,7 @@ async fn initialize(client: &impl AppServerConformanceDriver) {
         client,
         0,
         Method::Initialize(InitializeParams {
-            protocol_version: 37,
+            protocol_version: 38,
             client: ClientIdentity {
                 name: "transport".into(),
                 version: "1".into(),
@@ -292,7 +292,7 @@ async fn blocked_websocket_overflows_with_controlled_duplex_capacity() {
         let mut request = "ws://localhost/".into_client_request().unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.app-server.v37, rustx-token.{}", driver::TOKEN)
+            format!("rustx.app-server.v38, rustx-token.{}", driver::TOKEN)
                 .parse()
                 .unwrap(),
         );
@@ -641,7 +641,7 @@ async fn authenticated_websocket_capacity_is_released_after_client_reaping() {
         let mut request = url.as_str().into_client_request().unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.app-server.v37, rustx-token.{}", driver::TOKEN)
+            format!("rustx.app-server.v38, rustx-token.{}", driver::TOKEN)
                 .parse()
                 .unwrap(),
         );
@@ -774,6 +774,120 @@ async fn ready_control_admission_does_not_wait_for_continuous_notifications() {
         .await
         .unwrap();
         assert_eq!(connection.attachment_counts(), (0, 0));
+        f.close().await;
+    })
+    .await;
+}
+
+// Delivery access is a separate owner-only credential, additive to the
+// ordinary transport token. It never substitutes for it, a wrong value fails
+// the handshake closed, and native credential removal revokes live grants.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn websocket_delivery_access_is_a_separate_additive_revocable_credential() {
+    async fn delivery_access(client: &driver::Driver) -> bool {
+        let MethodResult::Initialized { capabilities, .. } = call(
+            client,
+            0,
+            Method::Initialize(InitializeParams {
+                protocol_version: 38,
+                client: ClientIdentity {
+                    name: "rustx-product-host".into(),
+                    version: "1".into(),
+                },
+                presentation: PresentationCapabilities::default(),
+            }),
+        )
+        .await
+        else {
+            panic!("initialized")
+        };
+        capabilities.delivery_access
+    }
+    async fn read(client: &driver::Driver, target: AttachmentTarget) -> ErrorData {
+        let Response::Failure(failure) = client
+            .request(Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(9),
+                call: Method::DeliveryRead {
+                    target,
+                    message_id: crate::runtime::identity::MessageId::new("invented"),
+                    delivery_index: 0,
+                },
+            })
+            .await
+        else {
+            panic!("no delivery exists")
+        };
+        failure.error.data.unwrap()
+    }
+    bounded(async {
+        const DELIVERY: &str = "delivery-secret-000000000000000000000000000000000000";
+        const PRODUCT_HOST: &str = "product-host-secret-0000000000000000000000000000000000";
+        let f = Fixture::new().await;
+        f.host
+            .bind_delivery_access(Some(websocket::Credential::new(DELIVERY.into()).unwrap()));
+        f.host
+            .bind_product_host(Some(websocket::Credential::new(PRODUCT_HOST.into()).unwrap()));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let stop = CancellationToken::new();
+        let serving = tokio::spawn(websocket::serve(
+            listener,
+            f.host.clone(),
+            websocket::Credential::new(driver::TOKEN.into()).unwrap(),
+            stop.clone(),
+        ));
+        let token = driver::TOKEN;
+        for offered in [
+            format!("rustx.app-server.v38, rustx-delivery-access.{DELIVERY}"),
+            format!("rustx.app-server.v38, rustx-token.{token}, rustx-delivery-access.{PRODUCT_HOST}"),
+            format!("rustx.app-server.v38, rustx-token.{token}, rustx-delivery-access.{token}"),
+            format!("rustx.app-server.v38, rustx-token.{token}, rustx-delivery-access.wrong"),
+            format!("rustx.app-server.v38, rustx-token.{token}, rustx-product-host.{PRODUCT_HOST}, rustx-delivery-access."),
+        ] {
+            assert!(driver::try_socket(&url, &offered).await.is_err(), "{offered}");
+        }
+        let unauthorized = ErrorData::SessionFileRead {
+            reason: crate::tools::session_files::SessionFileReadFailure::Unauthorized,
+        };
+        // A Product Host secret offered on the ordinary lane is not delivery access.
+        let ordinary = driver::websocket_offering(
+            &url,
+            &format!("rustx.app-server.v38, rustx-token.{token}, rustx-product-host.{PRODUCT_HOST}"),
+        )
+        .await;
+        assert!(!delivery_access(&ordinary).await);
+        let target = attach(&ordinary, &f).await;
+        assert_eq!(read(&ordinary, target.clone()).await, unauthorized);
+        call(&ordinary, 2, Method::SessionDetach { target }).await;
+        ordinary.close().await;
+        let granted = driver::websocket_offering(
+            &url,
+            &format!("rustx.app-server.v38, rustx-token.{token}, rustx-delivery-access.{DELIVERY}"),
+        )
+        .await;
+        assert!(delivery_access(&granted).await);
+        let target = attach(&granted, &f).await;
+        assert_eq!(
+            read(&granted, target.clone()).await,
+            ErrorData::SessionFileRead {
+                reason: crate::tools::session_files::SessionFileReadFailure::Unavailable,
+            },
+            "authorized lookup of an invented coordinate finds no delivery"
+        );
+        f.host.bind_delivery_access(None);
+        assert_eq!(read(&granted, target).await, unauthorized, "removal revokes live grants");
+        assert!(
+            driver::try_socket(
+                &url,
+                &format!("rustx.app-server.v38, rustx-token.{token}, rustx-delivery-access.{DELIVERY}"),
+            )
+            .await
+            .is_err()
+        );
+        granted.close().await;
+        stop.cancel();
+        serving.await.unwrap().unwrap();
         f.close().await;
     })
     .await;

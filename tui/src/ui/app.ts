@@ -96,6 +96,18 @@ import {
 } from "./components/session-selector.ts";
 import { TreeSelector, type TreeSelection } from "./components/tree-selector.ts";
 import {
+  DeliverySelector,
+  type DeliveryAvailability,
+} from "./components/delivery-selector.ts";
+import type { DeliveryPage } from "../presentation/deliveries.ts";
+import {
+  deliveryDestination,
+  openDelivery,
+  saveDelivery,
+  systemOpener,
+} from "../app-server/delivery-files.ts";
+import { TransportClosedError } from "../app-server/transport.ts";
+import {
   renderBackgroundSection,
   renderInteractionSection,
   renderOrphanExecutions,
@@ -1099,6 +1111,9 @@ export class RustxTuiApp {
           lease,
         );
         break;
+      case "choose_delivery":
+        this.#showDeliverySelector(outcome.page, lease);
+        break;
       case "focus_session":
         await this.#focusSession(
           outcome.sessionId,
@@ -1533,6 +1548,83 @@ export class RustxTuiApp {
             this.#showTransient("error", `session focus change failed: ${compactDiagnostic(error)}`);
           }
         });
+    };
+  }
+
+  /**
+   * `/files`: committed deliveries and explicit client-local actions.
+   *
+   * Availability comes from facts established at composition, never from
+   * paths: delivery access is the connection's transport grant, and a shared
+   * filesystem requires that this TUI spawned the server (Open additionally
+   * verifies the leaf identity before launching anything). Each action is
+   * one owned operation; closing the surface aborts it, and an outcome for an
+   * operation the surface no longer owns is dropped.
+   */
+  #showDeliverySelector(page: DeliveryPage, lease: PresentationLease): void {
+    const session = lease.session;
+    if (session === undefined || !this.#isCurrentPresentationLease(lease)) return;
+    const sharedHost = this.#host.ownership === "owned_child";
+    const opener = systemOpener();
+    const noAccess = this.#host.ownership === "owned_child"
+      ? "the App Server did not grant delivery access to this connection"
+      : "this connection holds no delivery access; reconnect with --delivery-access-token-file";
+    const availability: DeliveryAvailability = {
+      save: session.deliveryAccess ? undefined : noAccess,
+      open: !session.deliveryAccess ? noAccess
+        : !sharedHost ? "this App Server's files are not on this machine; use Save"
+          : opener === undefined ? "no system opener on this platform" : undefined,
+    };
+    const selector = new DeliverySelector(page, availability);
+    const handle = this.#showPopup(selector, { width: "80%", heightPercent: 70 });
+    let inFlight: { operation: number; abort: AbortController } | undefined;
+    const current = () => this.#isCurrentPresentationLease(lease) && this.#overlay === handle;
+    selector.onChange = () => {
+      if (current()) this.#tui.requestRender();
+    };
+    selector.onCancel = () => {
+      inFlight?.abort.abort();
+      if (current()) this.#closeOverlay();
+    };
+    selector.onAbort = (operation) => {
+      if (inFlight?.operation === operation) inFlight.abort.abort();
+    };
+    selector.onLoadMore = () => {
+      const before = selector.nextCursor;
+      if (before === undefined) return;
+      void session.deliveryPage(before).then((older) => {
+        if (current()) selector.appendPage(older);
+      }).catch((error: unknown) => {
+        if (!current()) return;
+        this.#showTransient("error", `delivery history page failed: ${compactDiagnostic(error)}`);
+        selector.retryPage();
+      });
+    };
+    selector.onAction = (operation, action, record, destination) => {
+      const abort = new AbortController();
+      inFlight = { operation, abort };
+      const task = (async () => {
+        if (action === "save") {
+          const path = await saveDelivery(
+            () => session.readDelivery(record),
+            deliveryDestination(record.file.name, destination ?? ""),
+            abort.signal,
+          );
+          return `Saved ${sanitizeField(record.file.name)} to ${sanitizeField(path)}`;
+        }
+        const requested = await openDelivery(() => session.locateDelivery(record), {
+          sharedHost,
+          opener,
+          signal: abort.signal,
+        });
+        return `${requested.opener} accepted the request to open ${sanitizeField(requested.path)}`;
+      })();
+      void task.then(
+        (text) => selector.settle(operation, "info", text),
+        (error: unknown) => selector.settle(operation, "error", deliveryFailure(error, abort.signal.aborted)),
+      ).finally(() => {
+        if (inFlight?.operation === operation) inFlight = undefined;
+      });
     };
   }
 
@@ -2055,4 +2147,25 @@ function compactDiagnostic(error: unknown): string {
 
 function nextTick(): Promise<void> {
   return new Promise((resolve) => process.nextTick(resolve));
+}
+
+/** One bounded line for a failed or cancelled delivery action. */
+function deliveryFailure(error: unknown, aborted: boolean): string {
+  if (aborted) return "Cancelled; no file was written or opened";
+  if (error instanceof TransportClosedError) return "Disconnected from the App Server; nothing was written";
+  if (error instanceof AppServerRequestError && error.error.data?.kind === "session_file_read") {
+    const reason = error.error.data.reason;
+    const text: Record<typeof reason, string> = {
+      missing: "the delivered file no longer exists",
+      unauthorized: "this connection is not authorized to access it",
+      unavailable: "its original Session or root is unavailable",
+      not_regular: "it is no longer a regular file",
+      replaced: "it was replaced during the operation; try again",
+      too_large: "it exceeds the 512 KiB transfer limit",
+      capacity: "the App Server is busy with other file reads; try again",
+      read_failed: "the App Server could not read it",
+    };
+    return `Failed: ${text[reason]}`;
+  }
+  return `Failed: ${compactDiagnostic(error)}`;
 }

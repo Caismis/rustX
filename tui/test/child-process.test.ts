@@ -50,10 +50,11 @@ function readAll(child: AppServerChild): Promise<string> {
 }
 
 describe("AppServerChild", () => {
-  it("always selects the stdio App Server, and nothing else", () => {
+  it("always selects the stdio App Server it owns, and nothing else", () => {
     // The subcommand and the transport selection are not options: this owner
     // exists precisely to run one `rustx app-server --listen stdio` child.
-    assert.deepEqual(appServerArguments({}), ["app-server", "--listen", "stdio"]);
+    // As that child's pipe owner it explicitly delegates delivery access.
+    assert.deepEqual(appServerArguments({}), ["app-server", "--listen", "stdio", "--stdio-delivery-access"]);
   });
 
   it("forwards only process-level source bindings, in a deterministic order", async () => {
@@ -73,6 +74,7 @@ describe("AppServerChild", () => {
       "/private/state",
       "--listen",
       "stdio",
+      "--stdio-delivery-access",
     ]);
   });
 
@@ -92,6 +94,7 @@ describe("AppServerChild", () => {
       "app-server",
       "--listen",
       "stdio",
+      "--stdio-delivery-access",
     ]);
   });
 

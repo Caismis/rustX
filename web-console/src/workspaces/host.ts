@@ -1,5 +1,5 @@
-import type { SourceMutation, SourceSettings } from '../../../protocol/app-server/v37.ts';
-import type { AttachmentTarget, SessionFileReference } from '../../../protocol/app-server/v37.ts';
+import type { SourceMutation, SourceSettings } from '../../../protocol/app-server/v38.ts';
+import type { AttachmentTarget, SessionFileReference } from '../../../protocol/app-server/v38.ts';
 import type { DocumentRequest, DocumentResult } from '../../shared/documents.ts';
 export interface DeliveryRead { target: AttachmentTarget; message_id: string; delivery_index: number }
 export interface DeliveryBytes { file: SessionFileReference; data: string }

@@ -71,7 +71,7 @@ import {
 } from "./transport.ts";
 
 /** The protocol version this client speaks. Independent of every other version. */
-export const APP_SERVER_PROTOCOL_VERSION = 37;
+export const APP_SERVER_PROTOCOL_VERSION = 38;
 
 /** How this client identifies itself in `initialize`. */
 export const CLIENT_IDENTITY: ClientIdentity = {
@@ -147,6 +147,9 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   // safely retryable.
   "session/traceDetail": "read",
   "artifact/read": "read",
+  // Bounded pure reads under transport-granted delivery access.
+  "delivery/read": "read",
+  "delivery/locate": "read",
   "session/uploadPrepare": "side_effecting",
   "session/uploadStatus": "read",
   "configuration/sourcesRead": "read",
@@ -380,7 +383,7 @@ export class AppServerClient {
 
     const record = decodeProtocolMessage(untrusted);
     if (record === undefined) {
-      this.#fail("invalid App Server v37 protocol message");
+      this.#fail("invalid App Server v38 protocol message");
       return;
     }
 

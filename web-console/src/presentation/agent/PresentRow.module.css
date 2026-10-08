@@ -1,0 +1,6 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Derived from pinned Harness; see PROVENANCE.md. */
+/** Present status remains readable beside long workspace paths. */
+.status { flex-shrink: 0; }
+.paths { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-left: 8px; }
+/* Harness --dsw-radius-lg resolves to 16px. */
+.output { margin: 8px 0; padding: 12px; border-radius: 16px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-secondary); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }

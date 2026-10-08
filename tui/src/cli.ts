@@ -47,7 +47,8 @@ export const USAGE = `usage:
               [--runtime-root <dir>] [session options] [routing options]
 
   existing / remote App Server (WebSocket):
-    rustx-tui --connect <ws://host:port> --token-file <path> --workspace <server-absolute-dir> [session options] [routing options]
+    rustx-tui --connect <ws://host:port> --token-file <path> [--delivery-access-token-file <path>] \\
+              --workspace <server-absolute-dir> [session options] [routing options]
 
   session options (applied to Sessions this launch creates; paths resolve on the App Server host):
     [--workspace <dir>] [--model <model-identity>] [--name <text>]
@@ -69,6 +70,11 @@ export type ConnectionMode =
       endpoint: string;
       /** File holding the dedicated transport token. Read at connect time. */
       tokenFile: string;
+      /**
+       * File holding the server operator's separate delivery-access
+       * credential. Optional: without it `/files` shows metadata only.
+       */
+      deliveryAccessTokenFile?: string;
     };
 
 /** Which Session the terminal opens on. Client focus, never server state. */
@@ -99,6 +105,7 @@ const VALUE_FLAGS = [
   "--binary",
   "--connect",
   "--token-file",
+  "--delivery-access-token-file",
   "--runtime-root",
   "--workspace",
   "--config",
@@ -223,6 +230,11 @@ function localMode(
       "argument --token-file applies only to --connect; a stdio App Server child needs no transport credential",
     );
   }
+  if (values.has("--delivery-access-token-file")) {
+    throw new ArgumentError(
+      "argument --delivery-access-token-file applies only to --connect; this TUI delegates delivery access to the stdio child it owns",
+    );
+  }
   return {
     kind: "local",
     binary,
@@ -255,5 +267,8 @@ function remoteMode(
       "argument --connect requires --token-file; the App Server WebSocket transport admits only credentialed clients",
     );
   }
-  return { kind: "remote", endpoint, tokenFile };
+  const deliveryAccessTokenFile = values.get("--delivery-access-token-file");
+  return deliveryAccessTokenFile === undefined
+    ? { kind: "remote", endpoint, tokenFile }
+    : { kind: "remote", endpoint, tokenFile, deliveryAccessTokenFile };
 }

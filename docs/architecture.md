@@ -16,6 +16,16 @@ managed ArtifactIds remain immutable ArtifactStore identities.
 See [the delivery and safe-preview contract](file-delivery.md) for authorization,
 descriptor containment, mutable history, bounds, and resource lifetimes.
 
+`app_server::delivery_access` is the one native owner of committed-delivery bytes
+and locations (#454). Two transport-authenticated callers enter it: the private
+Product Host lane (`product_host`, which also supplies registered roots) and an
+`AppServerConnection` whose transport granted delivery access (`delivery/read`,
+`delivery/locate`). Transports mint the cancellation authority; `connection`
+only routes to its own attachments. Clients consume the same typed committed
+facts. The Web binds them to Harness-derived presentation over its PreviewWorkspace
+owners. The TUI's pure `tool-present` renderer and `/files` selector dispatch
+intents to its own client-local action owner (`delivery-files.ts`).
+
 ## Session preview workspaces (#441)
 
 The browser `PreviewWorkspaceOwner` owns bounded Session-local logical tabs,

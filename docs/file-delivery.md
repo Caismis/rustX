@@ -72,10 +72,53 @@ Attempt, or model request.
 
 ## Authorized read and containment
 
-App Server v35 has no public `session/fileRead` Method. An ordinary authenticated
+App Server v38 has no public `session/fileRead` Method. An ordinary authenticated
 App Server connection cannot enter the file-read seam, even with the exact
 attachment, canonical Tool message ID, delivery index, Session cwd, and reference.
 Initialize client names are metadata and have no authorization role.
+
+Two transport-authenticated callers enter one native owner,
+`app_server::delivery_access`: the private Product Host lane below, and an App
+Server connection holding *delivery access*. Each passes a cancellation authority
+minted by its transport authentication; no JSON field, client name, coordinate,
+path or root list can manufacture one.
+
+### Delivery access for App Server clients
+
+`delivery/read` and `delivery/locate` serve trusted clients such as the TUI. Delivery
+access is granted only when the connection is established:
+
+- **stdio:** `--stdio-delivery-access` delegates it to the stdio owner — the process
+  that spawned the server and owns its pipes. That owner already runs with the same
+  user authority. The TUI passes it for the child it spawns. It is the owner's explicit
+  composition choice, never implied by stdio.
+- **WebSocket:** `--delivery-access-token-file` names a separate 43–128 character
+  owner-only credential. The file must be regular, unreadable by other users, and
+  is never followed through a symlink. Startup rejects reuse of the transport token
+  or the Product Host secret. A client offers `rustx-delivery-access.<secret>`
+  beside `rustx-token.<token>`. A wrong value fails the handshake with 401, and the
+  response selects only the public subprotocol. The secret never enters ordinary TUI
+  or Web configuration, URLs, logs or protocol fields.
+
+Without access both Methods fail `session_file_read` / `unauthorized` before any
+lookup. With it, the target must be one of the connection's own attachments. Native
+lookup then resolves the exact committed Tool-result message and delivery index to
+the original Conversation, its current catalog mapping and recorded root
+device/inode, exactly as for the Product Host. The difference is the root policy:
+the Product Host additionally requires a currently registered Workspace root; a
+delivery-access connection is native-process authority and uses the original
+mapping alone. Connection close cancels the connection's authority and native
+credential removal cancels every grant, so admitted reads fail at their next fence
+and publish nothing. Reads share the two native permits, which are released only
+when the descriptor read physically settles.
+
+`delivery/locate` walks the same descriptors, runs the same fences and returns the
+absolute server path plus the verified leaf device/inode, without bytes or a size
+bound. A location is a server path, never a client path. A client may open it
+locally only when it can show that it shares the server's filesystem (see the TUI
+below); path spelling and loopback addresses are not evidence.
+
+### Product Host lane
 
 The launcher provisions a separate 256-bit process-ephemeral Product Host secret
 in an owner-only file, passes its path with `--product-host-token-file`, and puts
@@ -120,6 +163,8 @@ the same file policy. Socket disconnect, process shutdown, or native credential
 replacement/removal cancels captured native authority. Credential replacement is a
 native owner seam, never a public RPC; a restarted native process uses a new secret.
 
+### Native fences and containment (both callers)
+
 Native fences run at authenticated admission, before canonical lookup/allocation,
 before open, after leaf open immediately before bytes, after byte/edge verification,
 and before response serialization/delivery. They check captured host authority,
@@ -159,7 +204,7 @@ the ordinary native failure vocabulary.
 | --- | --- |
 | Session-file preview and Download | 524,288 bytes (512 KiB), inclusive |
 | Session-file base64 carrier | 699,052 characters; below the 1 MiB native frame cap |
-| Native Session-file reads | 2 owned reads per AppServerHost; excess fails, no unbounded queue |
+| Native Session-file reads | 2 owned reads per AppServerHost, shared by the Product Host lane and delivery-access connections; excess fails, no unbounded queue |
 | Product Host file operations | 2 physical read obligations per Host instance; clean close/terminal response releases admission, unknown settlement keeps its slot unavailable |
 | Browser private Host reads / retained preview URLs | 2 private permits / 3 aggregate URLs: 2 visible panes plus 1 transient Download |
 | Managed Artifact transfers / URLs / bytes | Existing independent 2 / 16 / 262,144 bytes; preview leases separately obey the aggregate 3-URL limit |
@@ -228,6 +273,63 @@ registry is introduced.
 The existing #430/#443 RightPanel and ChatViewport remain the geometry and scroll
 owners. Delivery opens no second sidebar or automatic scroll effect. Width is
 presentation-only; the existing turn navigator and reading-anchor contract apply.
+
+## TUI consumption
+
+The TUI renders and lists only committed facts. `CorrelatedTool.resultCommitted` is
+true only when a card's settled lifecycle comes from the committed canonical
+Tool-result message. The card shell passes `deliveries` to renderers only for such
+a successful result, and passes an empty list for a successful foreground
+settlement that has not committed yet. The pure `tool-present` renderer draws the
+declared paths from the arguments as the call, and `Delivered N files` plus each
+committed file, in canonical order, as the result. Malformed shapes fall back to the
+generic card. Status remains the card shell's runtime lifecycle.
+
+`/files` pages the focused Session's committed history through `session/transcript`
+(one bounded native page per explicit request, newest result first). It keeps no
+index or cache. Each entry shows the filename, type, description, original relative
+path, original Conversation scope, `message#i/n` address and action availability.
+Reconnect, cold resume and forks read the same canonical records.
+
+Actions live in the TUI-owned `app-server/delivery-files.ts`. Renderers and command
+definitions never touch the filesystem.
+
+- **Save** calls `delivery/read` and checks the base64 bound before decoding. It
+  writes the bytes to an explicitly typed client-local path with `open(..., 'wx')`,
+  which never truncates existing data. A cancelled or failed write removes the file
+  it created.
+- **Open** is offered only when this TUI spawned the App Server (ownership
+  `owned_child`, established at construction) and the connection holds delivery
+  access. `delivery/locate` returns the verified leaf, and the TUI requires its own
+  `lstat` of that path to report the same regular-file device/inode before it
+  launches the platform opener (`xdg-open`/`open`, argv only, no shell). Success is
+  reported as the opener accepting the request, never as an application opening.
+  The opener resolves the path again after this check, so a replacement in that
+  window is not prevented, as in any file manager.
+- **Remote** (`--connect`) never interprets a server path locally. With
+  `--delivery-access-token-file`, Save writes bytes on the client machine. Without
+  it, `/files` shows metadata and reports both actions as unavailable.
+
+Every outcome belongs to one selector-owned operation token. Escape aborts it and
+closing the selector aborts it, and an obsolete outcome is dropped. Missing,
+unauthorized, unavailable, replaced, oversized (>512 KiB), capacity and disconnected
+failures are reported explicitly. No action starts an Agent, Tool or model request.
+
+## Web presentation
+
+The Web adapts DeepSeek Harness `ui-deliverables` presentation, not its runtime.
+`bindings/present.ts` maps the native foreground lifecycle to Harness phases:
+assembled→preparing, running, success→ok, cancelled→stopped, and other terminals→error.
+It also turns the committed message's typed `deliveries` into card views. The
+`PresentRow` call row shows the phase and the declared paths, and expands to the
+recorded result text. It never renders cards. `PresentedFileCard` cards appear only
+for successful committed Tool messages: a whole-card Preview gesture opens the
+existing PreviewWorkspace, and a separate Download action uses the existing original-byte
+owner. They show a filename/description hierarchy and file-type glyph in a
+one-row or two-column layout, collapsed to four cards behind an `All N files`
+toggle. Harness Host open/reveal phases, desktop metadata, Cordis and DSH Session
+events are excluded. The browser keeps using the Product Host lane; delivery
+access is never given to the browser.
 
 The closed PDF, OOXML and HTML viewer families extend this ownership contract;
 see [advanced document previews](document-previews.md) for their admission,
