@@ -139,7 +139,9 @@ The launcher generates a distinct process-ephemeral 256-bit secret, passes an
 owner-only file with `--product-host-token-file` to the native process and its value
 only to Node's private Host configuration. The browser receives neither. File reads
 use the private `/product-host/file-read` WebSocket lane, not an ordinary App Server
-Method. The Host supplies current registered Workspace roots; configured picker
+Method. The browser never offers the separate delivery-access credential that
+`delivery/read` requires; that grant belongs to trusted App Server clients such as
+the TUI (see `docs/file-delivery.md`). The Host supplies current registered Workspace roots; configured picker
 locations or display classification alone do not authorize bytes. Root changes and
 Host retirement abort its owned reads. Native handshake authority, attachment and
 mapping fences independently prevent obsolete publication. See

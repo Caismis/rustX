@@ -310,8 +310,10 @@ definitions never touch the filesystem.
   `--delivery-access-token-file`, Save writes bytes on the client machine. Without
   it, `/files` shows metadata and reports both actions as unavailable.
 
-Every outcome belongs to one selector-owned operation token. Escape aborts it and
-closing the selector aborts it, and an obsolete outcome is dropped. Missing,
+Every outcome belongs to one selector-owned operation token. Escape aborts it. A
+selector never shows a stale or duplicate outcome. If another overlay replaced the
+selector, the outcome of an explicitly started action appears once on the
+transient surface instead. Missing,
 unauthorized, unavailable, replaced, oversized (>512 KiB), capacity and disconnected
 failures are reported explicitly. No action starts an Agent, Tool or model request.
 

@@ -1619,9 +1619,15 @@ export class RustxTuiApp {
         });
         return `${requested.opener} accepted the request to open ${sanitizeField(requested.path)}`;
       })();
+      // An explicitly requested action that outlives its surface (another
+      // overlay replaced it) still reports, once, on the transient surface.
+      const report = (level: "info" | "error", text: string) => {
+        if (current()) selector.settle(operation, level, text);
+        else if (this.#isCurrentPresentationLease(lease)) this.#showTransient(level, text);
+      };
       void task.then(
-        (text) => selector.settle(operation, "info", text),
-        (error: unknown) => selector.settle(operation, "error", deliveryFailure(error, abort.signal.aborted)),
+        (text) => report("info", text),
+        (error: unknown) => report("error", deliveryFailure(error, abort.signal.aborted)),
       ).finally(() => {
         if (inFlight?.operation === operation) inFlight = undefined;
       });

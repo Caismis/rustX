@@ -14,7 +14,7 @@ const ARGS = JSON.stringify({ files: [{ path: 'out/报告 file.md' }, { path: 'o
 const result = (status: ToolExecutionResult['status'], deliveries: SessionFileReference[] = []): ToolExecutionResult =>
   ({ status, duration_ms: 1, content: [{ type: 'text', text: 'Declared 1 deliverable(s)' }], deliveries });
 const tool = (state: ForegroundToolExecution['state']): ForegroundToolExecution =>
-  ({ call_id: 'call-present', tool_id: 'tool-present', name: 'present', state });
+  ({ call_id: 'call-present', message_id: 'assistant-1', block_index: 0, tool_id: 'tool-present', name: 'present', state });
 
 it('maps only the native lifecycle to Harness present phases', () => {
   expect(presentRow(tool({ type: 'assembled', arguments: ARGS })).phase).toBe('preparing');

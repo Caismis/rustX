@@ -450,6 +450,56 @@ describe("RustxTuiApp lifecycle", () => {
     assert.deepEqual(log, ["close_stdin", "wait_exit"]);
   });
 
+  it("/files dispatches only explicit, authorized client-local saves", { timeout: 10_000 }, async () => {
+    const file = {
+      scope: { conversation_id: "conv-original", device: "1", inode: "2" },
+      path: "out/报告 final.md", name: "报告 final.md", description: "Final report", mime_type: "text/markdown",
+    };
+    const record = { messageId: "tool-msg", index: 0, count: 1, file };
+    for (const access of [false, true]) {
+      const session = fakeSession() as unknown as Record<string, unknown>;
+      const page = deferred<void>();
+      const read = deferred<unknown>();
+      let pages = 0;
+      const reads: unknown[] = [];
+      Object.assign(session, {
+        deliveryAccess: access,
+        deliveryPage: async () => {
+          pages += 1;
+          page.resolve();
+          return { records: [record] };
+        },
+        // Refuse after observing the request: no client-local file is created.
+        readDelivery: async (requested: unknown) => {
+          reads.push(requested);
+          read.resolve(requested);
+          throw new AppServerRequestError("delivery/read", {
+            code: -32000, message: "Session file access is not authorized",
+            data: { kind: "session_file_read", reason: "unauthorized" },
+          });
+        },
+      });
+      const app = appOver(session as unknown as AppServerSession);
+      const running = app.run();
+      process.stdin.emit("data", "/files\r");
+      await page.promise;
+      await waitForApplicationContinuation();
+      process.stdin.emit("data", "s");
+      if (access) {
+        // The destination is explicit: replace the default name, then submit.
+        process.stdin.emit("data", "\u0015");
+        process.stdin.emit("data", "/nonexistent-rustx-dir/copy.md");
+        process.stdin.emit("data", "\r");
+        assert.deepEqual(await read.promise, record);
+      }
+      await waitForApplicationContinuation();
+      assert.equal(pages, 1, "one bounded page per /files");
+      assert.deepEqual(reads, access ? [record] : [], "an unauthorized connection reads nothing");
+      await app.quit();
+      await running;
+    }
+  });
+
   it("keeps Esc precedence at the app input-routing boundary", async () => {
     let cancelled = 0;
     const runningState = {
