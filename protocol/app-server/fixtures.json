@@ -54,6 +54,7 @@
     "result": {
       "type": "session_summary",
       "summary": {
+        "ownership_generation": "1",
         "cwd": "/workspace",
         "id": "ses_00000000-0000-7000-8000-000000000001",
         "name": null,

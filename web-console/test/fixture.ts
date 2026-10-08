@@ -134,7 +134,7 @@ export class Server {
   }
   summary(id: string): SessionSummary {
     if (!this.snapshots.has(id)) throw new RpcFailure({ code: -32000, message: 'Unknown Session', data: { kind: 'unknown_session', session_id: id } });
-    return { id, cwd: `/workspace/${id}`, name: `Session ${id}`, updated_at: '2026-09-14T00:00:00Z', active_node: `node-${id}`, ...this.summaries.get(id) };
+    return { ownership_generation: '1', id, cwd: `/workspace/${id}`, name: `Session ${id}`, updated_at: '2026-09-14T00:00:00Z', active_node: `node-${id}`, ...this.summaries.get(id) };
   }
   readonly uploads = new Map<string, Extract<MethodResult, { type: 'upload_status' }>['outcome']>();
   private execute(request: Request, socket: FakeSocket): MethodResult {

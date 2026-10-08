@@ -523,9 +523,10 @@ explicitly close a terminal to terminate it. Collapsing the panel detaches the
 renderer while the shell continues; reopening reads its bounded 256K-character output
 window. Terminal creation is idempotent by operation ID. Input is never replayed
 after a transport failure. Native `session/ownershipRetired` notifications settle
-all terminals for a deleted Session or replaced active node, even after native
-enumeration is unavailable. The Host observes this connection before validating
-the target; disconnect closes admission and settles all its terminals. Every
+terminals through their exact native ownership-generation watermark, even after
+native enumeration is unavailable. Delayed retirements preserve successor PTYs,
+including when a Session selects an earlier node again. The Host observes this
+connection before validating the target; disconnect closes admission and settles all its terminals. Every
 input/resize/create still revalidates the exact native Session/node.
 
 `LocalWorkspaceHost.close()` is asynchronous: success means every owned unit

@@ -127,9 +127,10 @@ another Session's root.
 
 ## Protocol and schema boundaries
 
-App Server v35 is mandatory (`rustx.app-server.v35`). Session catalog schema 14
-records native operation correlation and known pre-ready failure alongside each
-allocation. SQLite schema 49 and Runtime Client v57 are unchanged.
+App Server v37 is mandatory (`rustx.app-server.v37`). Session catalog schema 15
+retains native upload operation correlation and known pre-ready failures alongside
+each allocation, and adds the execution-ownership generation described in
+[the App Server contract](app-server-protocol.md). SQLite schema 49 is unchanged.
 
 ### Control and data contract
 

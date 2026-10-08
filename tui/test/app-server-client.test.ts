@@ -620,6 +620,8 @@ describe("generated-contract ingress", () => {
   });
   const malformed: [string, unknown][] = [
     ["unknown notification", { jsonrpc: "2.0", method: "session/unknown", params: {} }],
+    ["obsolete Session-only retirement", { jsonrpc: "2.0", method: "session/ownershipRetired", params: { session_id: "ses_00000000-0000-7000-8000-000000000001" } }],
+    ["inexact ownership watermark", { jsonrpc: "2.0", method: "session/ownershipRetired", params: { session_id: "ses_00000000-0000-7000-8000-000000000001", retired_through: 1 } }],
     ["missing params", { jsonrpc: "2.0", method: "session/event" }],
     ["malformed target", { ...event(), params: { ...event().params, target: { session_id: "a" } } }],
     ["nested exact integer", { ...event(), params: { ...event().params, target: { ...target(), runtime_incarnation: "01" } } }],

@@ -346,3 +346,15 @@ def web_timeout_retry() -> Scenario:
         Step(expected, Stream(Gate("stop-retry"), Text("Late retry output must stay hidden."), Finish()), allow_disconnect=True))
 
 SCENARIOS["web_timeout_retry"] = web_timeout_retry
+
+def web_terminal_ownership() -> Scenario:
+    """One native message supplies a branch boundary; ownership changes run no model work."""
+    return Scenario(
+        "web_terminal_ownership",
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                    body_contains=("Ownership branch seed",)),
+             Stream(Text("Committed ownership test boundary."), Finish())),
+    )
+
+
+SCENARIOS["web_terminal_ownership"] = web_terminal_ownership

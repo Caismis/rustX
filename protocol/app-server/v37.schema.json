@@ -14636,6 +14636,10 @@
       "description": "Native display metadata, shared by exact identity reads and catalog rows.",
       "type": "object",
       "properties": {
+        "ownership_generation": {
+          "description": "Native execution ownership generation, encoded as an exact decimal integer.\nChanges only when active-node ownership is replaced; never a display timestamp.",
+          "type": "string"
+        },
         "cwd": {
           "description": "Canonical durable Session cwd, projected without loading a runtime.",
           "type": "string"
@@ -14669,6 +14673,7 @@
         }
       },
       "required": [
+        "ownership_generation",
         "cwd",
         "id",
         "updated_at",
@@ -20144,7 +20149,7 @@
       "unevaluatedProperties": false,
       "oneOf": [
         {
-          "description": "Native ownership changed. Host-owned execution under this Session must settle.",
+          "description": "Retire this Session's execution generations through the inclusive native watermark.",
           "type": "object",
           "properties": {
             "method": {
@@ -20156,11 +20161,16 @@
               "properties": {
                 "session_id": {
                   "$ref": "#/$defs/SessionId"
+                },
+                "retired_through": {
+                  "description": "Exact decimal integer; independent of notification delivery sequence.",
+                  "type": "string"
                 }
               },
               "additionalProperties": false,
               "required": [
-                "session_id"
+                "session_id",
+                "retired_through"
               ]
             }
           },

@@ -21,7 +21,7 @@ const SESSION_B = "ses_01900000-0000-7000-8000-000000001002";
 const SESSION_NEW = "ses_01900000-0000-7000-8000-000000001003";
 const SESSION_CREATED = "ses_01900000-0000-7000-8000-000000001004";
 const parsedResume = () => parseArguments(["--binary", "rustx", "--resume", "--workspace", "/server/work"]);
-const rows = [SESSION_A, SESSION_B].map((id) => ({ id, name: `Session ${id}`, cwd: "/server/work", active_node: `node_${id.slice(4)}`, updated_at: "2026-09-14T00:00:00Z" }));
+const rows = [SESSION_A, SESSION_B].map((id) => ({ id, name: `Session ${id}`, cwd: "/server/work", ownership_generation: "1", active_node: `node_${id.slice(4)}`, updated_at: "2026-09-14T00:00:00Z" }));
 
 async function connected() {
   const transport = new FakeTransport();

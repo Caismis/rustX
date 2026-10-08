@@ -87,6 +87,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             id: RequestId::String("exact-session-summary".into()),
             result: MethodResult::SessionSummary {
                 summary: crate::local_runtime::session::SessionSummary {
+                    ownership_generation: "1".into(),
                     id: target.session_id.clone(),
                     cwd: "/workspace".into(),
                     name: None,

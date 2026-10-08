@@ -1580,9 +1580,46 @@ rejects foreign, future or mutated cuts. Appends preserve frozen reads. A distan
 jump needs one at-most-64-entry read; the browser retains a finite historical
 window independently of the native live tail. See [conversation reading](conversation-reading.md).
 
-`session/ownershipRetired {session_id}` is published after committed Session
-deletion or active-node replacement, including uncertain directory durability.
-It is independent of display/activity invalidations and of runtime attachments.
-A Product Host observes this lifecycle before validating any terminal admission;
-it settles all PTYs owned by that Session. The notification retires execution
-ownership; it does not transfer it to a browser possessing a terminal ID.
+`session/summary` includes `ownership_generation`, an exact decimal integer
+assigned by the native catalog. Session creation and active-node replacement
+persist the new catalog commit generation with the active-node selection at the
+catalog rename visibility point. Metadata changes and repeated selection retain
+the generation. A → B → A therefore has three distinct ownership generations.
+Catalog schema 15 requires this field; older development catalogs are refused.
+`session/switchNode` retires the old resident runtime, commits the selected node
+and its ownership, then composes the successor runtime. Failed composition does
+not roll back the committed selection. Cold attachment and history reads do not
+select a node.
+
+`session/ownershipRetired {session_id, retired_through}` publishes an inclusive
+ownership-generation watermark after committed Session deletion or active-node
+replacement, including uncertain directory durability. Pre-rename failures
+publish nothing. The log coalesces by retaining the greatest retired generation;
+its delivery sequence is only an observer cursor, never execution authority.
+A delayed or reordered watermark cannot retire a successor generation.
+
+The Product Host subscribes before native ownership reads. Each request registers
+an admission before its read starts, retaining the greatest matching retirement
+watermark until the request ends. After the read, the Host validates native
+Session/node identity, workspace authority and generation. Before synchronous PTY
+reservation/spawn, and after any capacity-eviction wait, it rechecks that admission.
+The notification handler synchronously fences pending admissions and starts
+settlement of registered PTYs at or below its watermark. A notification during
+PTY readiness therefore finds an already registered owner; a notification during
+the native read fences its later completion. Unrelated Sessions and successor
+generations remain usable. No permanent Host watermark cache is required.
+
+A read authorizes execution under its exact generation, not an indefinitely
+current Session. Native replacement may precede delayed notification delivery;
+any already admitted execution remains owned and settles when retirement is
+observed. No browser-supplied generation authorizes execution. Input and resize
+reread native authority and require the terminal's exact retained generation;
+close only settles an existing matching Session/node/terminal identity and does
+not readmit execution. Native connection loss permanently closes this Host's
+terminal admission; a replacement Host requires its own observer lifetime.
+
+Retirement, explicit close and shutdown share the supervisor settlement promise.
+Capacity is released only after native child-reaping proof and successful outer
+supervisor exit. Failures retain capacity and remain observable. This publication
+does not replace process containment or transfer authority to a browser holding
+a terminal ID.

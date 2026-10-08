@@ -37,8 +37,8 @@ type Registration = { id: string; location: string; displayName: string };
 export class LocalWorkspaceHost implements ProductHostWorkspaces {
   private readonly terminals: WorkspaceTerminals;
   private terminalObserver?: Promise<() => Promise<void>>;
-  private terminalEpoch = 0;
   private terminalFailure?: unknown;
+  private terminalObserverEnded = false;
   private closing?: Promise<void>;
   private documentReads = new Set<AbortController>();
   private fileReads = new Set<AbortController>();
@@ -112,12 +112,13 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   }
   private async watchTerminals() {
     if (this.terminalFailure) throw this.terminalFailure;
-    await (this.terminalObserver ??= this.observeTerminals(this.config.endpoint, this.config.transportToken!, session => {
-      ++this.terminalEpoch;
-      void this.terminals.retireSession(session).catch(error => { this.terminalFailure = error; });
+    await (this.terminalObserver ??= this.observeTerminals(this.config.endpoint, this.config.transportToken!, (session, retiredThrough) => {
+      if (this.closed || this.terminalObserverEnded) return;
+      void this.terminals.retireOwnership(session, retiredThrough).catch(error => { this.terminalFailure = error; });
     }, () => {
-      ++this.terminalEpoch;
-      this.terminalFailure = new Error('Native terminal ownership connection ended');
+      if (this.closed || this.terminalObserverEnded) return;
+      this.terminalObserverEnded = true;
+      this.terminalFailure ??= new Error('Native terminal ownership connection ended');
       void this.terminals.close().catch(error => { this.terminalFailure = error; });
     }));
   }
@@ -199,19 +200,24 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     const target = call?.target;
     if (!target || !['session_id', 'active_node'].every(key => typeof target[key as keyof DesktopTarget] === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(target[key as keyof DesktopTarget])) || !call.request) throw new Error('Invalid workbench target');
     if (this.config.nativeFilesystem !== 'shared' || !this.config.transportToken) throw new Error('Native filesystem mapping unavailable on this Product Host');
-    // Explicit close only needs the original Host-owned terminal identity, even
-    // when its native node has since retired; it cannot admit new execution.
-    if (call.request.kind === 'close') return this.terminals.request(JSON.stringify([target.session_id, target.active_node]), '', call.request, signal);
-    const terminal = ['create', 'input', 'resize', 'poll', 'terminals'].includes(call.request.kind);
-    if (terminal) await this.watchTerminals();
-    const epoch = this.terminalEpoch;
-    const cwd = await this.readSession(this.config.endpoint, this.config.transportToken, target);
-    if (terminal && (epoch !== this.terminalEpoch || this.terminalFailure)) throw new Error('Native terminal ownership changed');
-    this.mutationScope(scope); signal?.throwIfAborted();
-    if (!this.classifyLocation(cwd).authorized) throw new Error('Workspace is not authorized');
-    const root = realpathSync(cwd);
-    if (call.request.kind === 'resolve') {
-      const input = call.request.path;
+    const read = async () => {
+      const native = await this.readSession(this.config.endpoint, this.config.transportToken!, target);
+      this.mutationScope(scope); signal?.throwIfAborted();
+      if (!this.classifyLocation(native.cwd).authorized) throw new Error('Workspace is not authorized');
+      return { ...native, cwd: realpathSync(native.cwd) };
+    };
+    const request = call.request;
+    if (request.kind === 'create' || request.kind === 'input' || request.kind === 'resize' || request.kind === 'poll' || request.kind === 'terminals' || request.kind === 'close') {
+      if (request.kind !== 'close') await this.watchTerminals();
+      this.mutationScope(scope);
+      if (this.terminalFailure) throw this.terminalFailure;
+      const value = await this.terminals.request(target, read, request, signal);
+      this.mutationScope(scope); signal?.throwIfAborted();
+      return value;
+    }
+    const { cwd: root } = await read();
+    if (request.kind === 'resolve') {
+      const input = request.path;
       if (typeof input !== 'string' || !input || input.length > 4096 || /[\u0000-\u001f\u007f]/.test(input)) throw new Error('Invalid file reference');
       const path = relative(root, resolve(root, input));
       if (!path || path === '..' || path.startsWith('../') || isAbsolute(path)) throw new Error('File reference is outside this workspace');
@@ -220,12 +226,12 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
         return { path };
       });
     }
-    if (call.request.kind === 'office') {
-      const path = call.request.path, extension = path.split('.').at(-1)?.toLowerCase();
+    if (request.kind === 'office') {
+      const path = request.path, extension = path.split('.').at(-1)?.toLowerCase();
       if (extension !== 'docx' && extension !== 'pptx') throw new Error('converter_unavailable');
       const result = await deriveWorkspaceOffice(extension, async () => {
         this.mutationScope(scope); signal?.throwIfAborted();
-        const current = await this.readSession(this.config.endpoint, this.config.transportToken!, target);
+        const { cwd: current } = await this.readSession(this.config.endpoint, this.config.transportToken!, target);
         this.mutationScope(scope); signal?.throwIfAborted();
         if (!this.classifyLocation(current).authorized || realpathSync(current) !== root) throw new Error('source_changed');
         return { data: workspaceFile(root, path, true, true).base64! };
@@ -233,9 +239,8 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       if (result.preview.kind !== 'pdf') throw new Error('converter_failure');
       return { cwd: root, base64: result.preview.data };
     }
-    if (call.request.kind === 'applications') return { applications: this.desktop.catalog(true) };
-    if (call.request.kind === 'open') {
-      const request = call.request;
+    if (request.kind === 'applications') return { applications: this.desktop.catalog(true) };
+    if (request.kind === 'open') {
       if (!['files', 'code'].includes(request.application) || typeof request.directory !== 'boolean') throw new Error('Invalid workspace application');
       if (this.desktopPending) throw new Error('A desktop launch is already pending');
       this.desktopPending = true;
@@ -248,9 +253,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
         return {};
       } finally { this.desktopPending = false; }
     }
-    const value = await this.terminals.request(JSON.stringify([target.session_id, target.active_node]), root, call.request, signal);
-    this.mutationScope(scope); signal?.throwIfAborted();
-    return value;
+    return workspaceFile(root, request.path, request.kind !== 'files', request.kind === 'bytes');
   }
   async desktopCatalog(scope: WorkspaceAuthorityScope, refresh = false): Promise<DesktopCatalog> {
     this.mutationScope(scope);
@@ -270,7 +273,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       const launch = this.desktop.prepare(application);
       // Native read is the Session admission point. It rejects a retired Session
       // or changed active node. No display path enters this operation.
-      const cwd = await this.readSession(this.config.endpoint, this.config.transportToken, target);
+      const { cwd } = await this.readSession(this.config.endpoint, this.config.transportToken, target);
       this.mutationScope(scope);
       const location = this.classifyLocation(cwd);
       if (!location.authorized) throw new Error(`Workspace directory is ${location.reason}; it cannot be opened`);

@@ -274,7 +274,7 @@ it('late metadata searches cannot replace newer results or results after Workspa
   server.handlers.set('session/list', request => {
     if (request.method !== 'session/list') throw new Error('wrong request');
     const id = request.params.query!;
-    return { type: 'sessions', sessions: [{ id, cwd: '/workspace/A', active_node: `node-${id}`, name: id, updated_at: '0' }] };
+    return { type: 'sessions', sessions: [{ ownership_generation: '1', id, cwd: '/workspace/A', active_node: `node-${id}`, name: id, updated_at: '0' }] };
   });
   fireEvent.change(screen.getByLabelText('Search Session metadata'), { target: { value: 'old' } });
   const old = await server.waitFor('session/list', 2);
@@ -532,7 +532,7 @@ it('classification belongs to exactly the native summary page that requested it'
   const pending = deferred<Awaited<ReturnType<ProductHostWorkspaces['classifyLocations']>>>();
   await mount(host);
   host.classifyLocations = vi.fn(() => pending.promise);
-  server.handlers.set('session/list', () => ({ type: 'sessions', sessions: [{ id: 'C', name: 'Fresh Session', cwd: '/workspace/B', active_node: 'c', updated_at: '2026-09-18T00:00:00Z' }], }));
+  server.handlers.set('session/list', () => ({ type: 'sessions', sessions: [{ ownership_generation: '1', id: 'C', name: 'Fresh Session', cwd: '/workspace/B', active_node: 'c', updated_at: '2026-09-18T00:00:00Z' }], }));
   await act(async () => { await server.client.listSessions(); });
   const groupContaining = () => screen.getByRole('button', { name: 'Open Fresh Session' }).closest('[data-workspace-group]')?.textContent ?? '';
   expect(groupContaining()).toBe('');

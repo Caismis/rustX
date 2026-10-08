@@ -2330,6 +2330,13 @@ mod tests {
             .await
             .unwrap()
             .session;
+        let generation = controller
+            .read_session_summary(&session.id)
+            .await
+            .unwrap()
+            .ownership_generation
+            .parse::<u64>()
+            .unwrap();
         append_root_history(&controller, &session.id, user("deleted before publication")).await;
         let invalidations = controller.summary_invalidations();
         let recorded = invalidations.recorded();
@@ -2366,7 +2373,7 @@ mod tests {
         );
         assert_eq!(
             invalidations.next_ownership_after(recorded),
-            Some((recorded + 1, session.id.clone()))
+            Some((recorded + 1, session.id.clone(), generation))
         );
         gate.release();
         assert_eq!(

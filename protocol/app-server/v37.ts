@@ -2932,6 +2932,10 @@ export type Notification1 =
       method: 'session/ownershipRetired';
       params: {
         session_id: SessionId;
+        /**
+         * Exact decimal integer; independent of notification delivery sequence.
+         */
+        retired_through: string;
       };
     }
   | {
@@ -7775,6 +7779,11 @@ export interface SessionSnapshot {
  * Native display metadata, shared by exact identity reads and catalog rows.
  */
 export interface SessionSummary {
+  /**
+   * Native execution ownership generation, encoded as an exact decimal integer.
+   * Changes only when active-node ownership is replaced; never a display timestamp.
+   */
+  ownership_generation: string;
   /**
    * Canonical durable Session cwd, projected without loading a runtime.
    */

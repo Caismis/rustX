@@ -255,7 +255,8 @@ pub(crate) mod create_profile {
 /// distinguished from user choices; older development schemas are refused.
 /// Version 7 co-locates live Sessions and pending-only frozen cleanup authority,
 /// with generation-checked publication. Older development schemas are rejected.
-pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 14;
+/// Version 15 persists execution ownership generations at the active-node visibility commit.
+pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 15;
 
 /// The largest display name a Session may carry.
 pub const SESSION_NAME_LIMIT: usize = 120;
@@ -441,11 +442,20 @@ struct SummaryInvalidationState {
     /// publication this process made.
     sequence: u64,
     /// The sequence of each Session's latest recorded publication.
-    published: BTreeMap<SessionId, (u64, u64, u64)>,
+    published: BTreeMap<SessionId, SessionInvalidation>,
     /// Woken on every record. A `watch` is a level-triggered wake-up, not a
     /// delivery channel: observers always reread the map above, so a coalesced
     /// wake-up can never drop an invalidation.
     changed: Option<tokio::sync::watch::Sender<u64>>,
+}
+
+#[derive(Debug, Default)]
+struct SessionInvalidation {
+    metadata_sequence: u64,
+    membership_sequence: u64,
+    retirement_sequence: u64,
+    /// Native catalog ownership, not the process-local delivery sequence above.
+    retired_through: u64,
 }
 
 impl SessionSummaryInvalidations {
@@ -460,21 +470,11 @@ impl SessionSummaryInvalidations {
         let mut state = self.state.lock().expect("summary invalidation log lock");
         state.sequence += 1;
         let sequence = state.sequence;
-        let membership = if catalog_changed {
-            sequence
-        } else {
-            state
-                .published
-                .get(session_id)
-                .map_or(0, |(_, membership, _)| *membership)
-        };
-        let ownership = state
-            .published
-            .get(session_id)
-            .map_or(0, |(_, _, ownership)| *ownership);
-        state
-            .published
-            .insert(session_id.clone(), (sequence, membership, ownership));
+        let entry = state.published.entry(session_id.clone()).or_default();
+        entry.metadata_sequence = sequence;
+        if catalog_changed {
+            entry.membership_sequence = sequence;
+        }
         if let Some(changed) = &state.changed {
             changed.send_replace(sequence);
         }
@@ -482,26 +482,27 @@ impl SessionSummaryInvalidations {
 
     /// A committed deletion or active-node replacement retires Host execution
     /// ownership, independently of ordinary metadata/activity invalidations.
-    fn retire_ownership(&self, id: &SessionId) {
+    fn retire_ownership(&self, id: &SessionId, retired_through: u64) {
         let mut state = self.state.lock().expect("summary invalidation log lock");
         state.sequence += 1;
         let sequence = state.sequence;
         let entry = state.published.entry(id.clone()).or_default();
-        entry.2 = sequence;
+        entry.retirement_sequence = sequence;
+        entry.retired_through = entry.retired_through.max(retired_through);
         if let Some(changed) = &state.changed {
             changed.send_replace(sequence);
         }
     }
 
-    pub(crate) fn next_ownership_after(&self, delivered: u64) -> Option<(u64, SessionId)> {
+    pub(crate) fn next_ownership_after(&self, delivered: u64) -> Option<(u64, SessionId, u64)> {
         self.state
             .lock()
             .expect("summary invalidation log lock")
             .published
             .iter()
-            .filter(|(_, (_, _, ownership))| *ownership > delivered)
-            .map(|(id, (_, _, ownership))| (*ownership, id.clone()))
-            .min_by_key(|(sequence, _)| *sequence)
+            .filter(|(_, entry)| entry.retirement_sequence > delivered)
+            .map(|(id, entry)| (entry.retirement_sequence, id.clone(), entry.retired_through))
+            .min_by_key(|(sequence, _, _)| *sequence)
     }
 
     /// The current frontier. A new observer starts here, so publications that
@@ -521,11 +522,11 @@ impl SessionSummaryInvalidations {
         state
             .published
             .iter()
-            .filter_map(|(id, (sequence, membership, _))| {
-                if *membership > delivered {
-                    Some((*membership, id.clone(), true))
-                } else if *sequence > delivered {
-                    Some((*sequence, id.clone(), false))
+            .filter_map(|(id, entry)| {
+                if entry.membership_sequence > delivered {
+                    Some((entry.membership_sequence, id.clone(), true))
+                } else if entry.metadata_sequence > delivered {
+                    Some((entry.metadata_sequence, id.clone(), false))
                 } else {
                     None
                 }
@@ -555,6 +556,9 @@ impl SessionSummaryInvalidations {
 /// Native display metadata, shared by exact identity reads and catalog rows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SessionSummary {
+    /// Native execution ownership generation, encoded as an exact decimal integer.
+    /// Changes only when active-node ownership is replaced; never a display timestamp.
+    pub ownership_generation: String,
     /// Canonical durable Session cwd, projected without loading a runtime.
     pub cwd: PathBuf,
     /// Session identity.
@@ -692,6 +696,7 @@ struct CatalogDocument {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 struct PersistedSession {
+    ownership_generation: u64,
     ordinal: u64,
     uploads: uploads::UploadRegistry,
     id: SessionId,
@@ -1221,6 +1226,7 @@ impl SessionCatalog {
         sessions.insert(
             session_id.clone(),
             PersistedSession {
+                ownership_generation: 0,
                 uploads: uploads::UploadRegistry::default(),
                 ordinal: 1,
                 id: session_id.clone(),
@@ -2447,6 +2453,7 @@ impl SessionCatalog {
         next.sessions.insert(
             prepared.session_id.clone(),
             PersistedSession {
+                ownership_generation: 0,
                 ordinal: self.document.next_session_ordinal,
                 uploads: prepared.uploads.clone(),
                 id: prepared.session_id.clone(),
@@ -2561,6 +2568,16 @@ impl SessionCatalog {
             .ok_or_else(|| SessionError::Catalog {
                 detail: "catalog generation exhausted".into(),
             })?;
+        // Assign the catalog commit identity only to newly admitted ownership.
+        // Metadata-only commits and repeated selection retain the old generation.
+        for (id, session) in &mut next.sessions {
+            session.ownership_generation = self
+                .document
+                .sessions
+                .get(id)
+                .filter(|old| self.published && old.active_node == session.active_node)
+                .map_or(next.generation, |old| old.ownership_generation);
+        }
         validate_document(&next)?;
         // Membership evidence belongs to the visibility commit, including
         // uncertain directory durability. Cleanup/recovery commits with unchanged
@@ -2586,14 +2603,14 @@ impl SessionCatalog {
                     .get(*id)
                     .is_none_or(|new| new.active_node != old.active_node)
             })
-            .map(|(id, _)| id.clone())
+            .map(|(id, old)| (id.clone(), old.ownership_generation))
             .collect();
         let committed = self.persist(&next);
         if committed.is_ok() || committed.as_ref().is_err_and(SessionError::committed) {
             self.document = next;
             self.published = true;
-            for id in retired {
-                self.summary_invalidations.retire_ownership(&id);
+            for (id, generation) in retired {
+                self.summary_invalidations.retire_ownership(&id, generation);
             }
             for id in membership {
                 self.summary_invalidations.record_change(&id, true);
@@ -2988,6 +3005,7 @@ fn activity_at(session: &PersistedSession) -> DateTime<Utc> {
 
 fn project_summary(session: &PersistedSession) -> SessionSummary {
     SessionSummary {
+        ownership_generation: session.ownership_generation.to_string(),
         cwd: session.state.cwd.clone(),
         id: session.id.clone(),
         name: session.name.clone(),
@@ -3041,6 +3059,8 @@ fn validate_document(document: &CatalogDocument) -> Result<(), SessionError> {
     let mut node_ordinals = BTreeSet::new();
     for (session_id, session) in &document.sessions {
         if document.retired.sessions.contains(session_id)
+            || session.ownership_generation == 0
+            || session.ownership_generation > document.generation
             || session.ordinal == 0
             || session.ordinal >= document.next_session_ordinal
             || !session_ordinals.insert(session.ordinal)
@@ -6052,8 +6072,9 @@ model = "provider/model"
 
     // P08 (native half; the agent-sourced-input half is scripted)
     #[test]
+    #[allow(clippy::too_many_lines)] // One commit/ABA/coalescing audit of the same native Session.
     fn branching_and_switching_the_active_node_keeps_the_root_projection() {
-        let (_directory, mut catalog, _config) = open_catalog();
+        let (directory, mut catalog, _config) = open_catalog();
         let history = source_history();
         let (conversation, session, root_node) = append_history(&catalog, &history);
         assert!(
@@ -6079,15 +6100,39 @@ model = "provider/model"
         let branch_node = branch.node_id.clone();
         let ownership = catalog.summary_invalidations();
         let frontier = ownership.frontier();
+        let a1 = catalog
+            .summary(&session)
+            .unwrap()
+            .ownership_generation
+            .parse::<u64>()
+            .unwrap();
         catalog
-            .publish_node(&session, &branch, root_node, super::SessionNodeOrigin::New)
+            .publish_node(
+                &session,
+                &branch,
+                root_node.clone(),
+                super::SessionNodeOrigin::New,
+            )
             .expect("publish branch node");
+        let published_generation = catalog.summary(&session).unwrap().ownership_generation;
         catalog
             .set_current_node(&session, Some(&branch_node))
             .expect("switch the active node");
         let retired = ownership.next_ownership_after(frontier).unwrap();
         assert_eq!(retired.1, session);
+        assert_eq!(retired.2, a1);
         let summary = catalog.summary(&session).expect("summary");
+        assert_eq!(
+            summary.ownership_generation, published_generation,
+            "repeated selection retains execution ownership"
+        );
+        let b = summary.ownership_generation.parse::<u64>().unwrap();
+        assert!(b > a1);
+        assert_eq!(
+            ownership.next_ownership_after(retired.0),
+            None,
+            "same-node selection does not retire ownership"
+        );
         assert_eq!(
             summary.active_node, branch_node,
             "the active selection moved to the branch"
@@ -6098,8 +6143,55 @@ model = "provider/model"
             "the row keeps the root lineage's projection"
         );
         catalog
-            .set_current_node(&session, None)
+            .set_current_node(&session, Some(&root_node))
             .expect("switch back to the root");
+        let a2 = catalog
+            .summary(&session)
+            .unwrap()
+            .ownership_generation
+            .parse::<u64>()
+            .unwrap();
+        assert!(a2 > b, "ABA must not reuse the original A generation");
+        assert_eq!(
+            ownership.next_ownership_after(frontier).unwrap().2,
+            b,
+            "coalescing retires through B, excluding A2"
+        );
+        let after_aba = ownership.frontier();
+        catalog.arm_write_fault_before_rename();
+        assert!(
+            catalog
+                .set_current_node(&session, Some(&branch_node))
+                .is_err()
+        );
+        assert_eq!(
+            catalog.summary(&session).unwrap().ownership_generation,
+            a2.to_string()
+        );
+        assert!(ownership.next_ownership_after(after_aba).is_none());
+        catalog.arm_write_fault_after_rename();
+        assert!(
+            catalog
+                .set_current_node(&session, Some(&branch_node))
+                .unwrap_err()
+                .committed()
+        );
+        let b2 = catalog
+            .summary(&session)
+            .unwrap()
+            .ownership_generation
+            .parse::<u64>()
+            .unwrap();
+        assert!(b2 > a2);
+        assert_eq!(
+            reopen_catalog(directory.path())
+                .summary(&session)
+                .unwrap()
+                .ownership_generation,
+            b2.to_string(),
+            "post-rename ownership is persisted even when directory durability is uncertain"
+        );
+        assert_eq!(ownership.next_ownership_after(after_aba).unwrap().2, a2);
         assert_eq!(
             catalog
                 .summary(&session)
@@ -8293,13 +8385,17 @@ mod ownership_invalidation_tests {
         log.record_change(&id, true);
         log.record(&id);
         assert!(log.next_ownership_after(0).is_none());
-        log.retire_ownership(&id);
+        log.retire_ownership(&id, 7);
         let retirement = log.next_ownership_after(0).unwrap();
         log.record(&id);
         log.record_change(&id, true);
         assert_eq!(log.next_ownership_after(0), Some(retirement.clone()));
         assert!(log.next_ownership_after(retirement.0).is_none());
-        log.retire_ownership(&id);
-        assert!(log.next_ownership_after(retirement.0).unwrap().0 > retirement.0);
+        log.retire_ownership(&id, 12);
+        let coalesced = log.next_ownership_after(0).unwrap();
+        assert!(coalesced.0 > retirement.0);
+        assert_eq!(coalesced.2, 12);
+        log.retire_ownership(&id, 7);
+        assert_eq!(log.next_ownership_after(0).unwrap().2, 12);
     }
 }

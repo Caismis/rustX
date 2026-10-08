@@ -4282,8 +4282,12 @@ async fn issue422_multi_client_deletion_membership_converges_at_commit() {
                         assert_eq!(session_id, id);
                         membership = true;
                     }
-                    NotificationMethod::OwnershipRetired { session_id } => {
+                    NotificationMethod::OwnershipRetired {
+                        session_id,
+                        retired_through,
+                    } => {
                         assert_eq!(session_id, id);
+                        assert_eq!(retired_through, sessions[0].ownership_generation);
                         retired = true;
                     }
                     _ => {}
@@ -5738,6 +5742,132 @@ async fn durable_history_is_readable_before_and_during_runtime_preparation() {
         assert_eq!(connection.attachment_counts(), (0, 1));
         probe.before_compose.release();
         attaching.await.unwrap();
+        connection.close();
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn explicit_node_switch_commits_aba_ownership_and_coalesces_exact_retirements() {
+    bounded(async {
+        use crate::durable::{ConversationStore, SqliteConversationStore};
+        use crate::local_runtime::session::LineageSide;
+        use crate::message::TextBlock;
+        use crate::message::types::{
+            InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+        };
+        use crate::runtime::identity::MessageId;
+        let f = Fixture::new().await;
+        let source = &f.sessions[0];
+        let controller = f.manager.session_controller();
+        let access = controller.acquire_session(&source.id, None).await.unwrap();
+        let store = SqliteConversationStore::open(
+            source.active_conversation_id.clone(),
+            &access.database_path,
+        )
+        .unwrap();
+        store
+            .append_canonical(&MessageBlock::User(UserMessageBlock {
+                id: MessageId::new("ownership-seed"),
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                timestamp: None,
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: "ownership seed".into(),
+                })],
+            }))
+            .unwrap();
+        let revision = store.load_head().unwrap().revision;
+        drop(store);
+        drop(access);
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let a1 = controller.read_session_summary(&source.id).await.unwrap();
+        let target_a = attach(&connection, &f, 0).await;
+        let MethodResult::SessionTransition {
+            session: branch, ..
+        } = call(
+            &connection,
+            8000,
+            Method::SessionBranch {
+                session_id: source.id.clone(),
+                node_id: source.active_node.clone(),
+                surface_revision: revision,
+                boundary: MessageId::new("ownership-seed"),
+                side: LineageSide::Before,
+            },
+        )
+        .await
+        else {
+            panic!("branch committed")
+        };
+        let b = controller.read_session_summary(&source.id).await.unwrap();
+        assert!(
+            b.ownership_generation.parse::<u64>().unwrap()
+                > a1.ownership_generation.parse::<u64>().unwrap()
+        );
+        call(
+            &connection,
+            8001,
+            Method::SessionSwitchNode {
+                target: target_a,
+                node_id: branch.active_node,
+            },
+        )
+        .await;
+        assert_eq!(
+            controller
+                .read_session_summary(&source.id)
+                .await
+                .unwrap()
+                .ownership_generation,
+            b.ownership_generation
+        );
+        let target_b = attach(&connection, &f, 0).await;
+        let MethodResult::Session { session: selected } = call(
+            &connection,
+            8002,
+            Method::SessionSwitchNode {
+                target: target_b,
+                node_id: source.active_node.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("selection committed")
+        };
+        assert_eq!(selected.active_node, source.active_node);
+        let MethodResult::SessionSummary { summary: a2 } = call(
+            &connection,
+            8003,
+            Method::SessionSummary {
+                session_id: source.id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("native ownership")
+        };
+        assert_eq!(a2.active_node, a1.active_node);
+        assert!(
+            a2.ownership_generation.parse::<u64>().unwrap()
+                > b.ownership_generation.parse::<u64>().unwrap()
+        );
+        // No notification was read during either commit: the native log must
+        // coalesce through B while the newer A2 read is already authoritative.
+        loop {
+            if let NotificationMethod::OwnershipRetired {
+                session_id,
+                retired_through,
+            } = connection.next_notification().await.notification
+            {
+                assert_eq!(session_id, source.id);
+                assert_eq!(retired_through, b.ownership_generation);
+                break;
+            }
+        }
+        assert!(f.provider.request_bodies().is_empty());
         connection.close();
         f.close().await;
     })

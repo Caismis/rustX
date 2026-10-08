@@ -442,15 +442,19 @@ impl AppServerConnection {
                             .unload_incarnation(&target.conversation_id, target.runtime_incarnation)
                             .await
                             .map_err(manager_error)?;
+                        // Explicit selection is a catalog commit, unlike a cold
+                        // attachment/read. Publish ownership retirement before
+                        // admitting the successor runtime; failed composition
+                        // leaves the committed node selected, never resurrects A.
+                        let session = manager
+                            .session_controller()
+                            .set_current_node(&target.session_id, &node_id)
+                            .await
+                            .map_err(session_error)?;
                         manager
                             .load(&target.session_id, Some(&node_id))
                             .await
                             .map_err(manager_error)?;
-                        let session = manager
-                            .session_controller()
-                            .read_session(&target.session_id)
-                            .await
-                            .map_err(session_error)?;
                         Ok(MethodResult::Session { session })
                     }
                     .await;
@@ -785,11 +789,14 @@ impl AppServerConnection {
             .ownership_invalidations_delivered
             .lock()
             .expect("ownership invalidation cursor");
-        let (sequence, session_id) = self
+        let (sequence, session_id, retired_through) = self
             .summary_invalidations
             .next_ownership_after(*delivered)?;
         *delivered = sequence;
-        Some(NotificationMethod::OwnershipRetired { session_id })
+        Some(NotificationMethod::OwnershipRetired {
+            session_id,
+            retired_through: retired_through.to_string(),
+        })
     }
 
     fn next_summary_invalidation(&self) -> Option<NotificationMethod> {
