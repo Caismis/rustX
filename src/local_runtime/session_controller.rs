@@ -421,7 +421,13 @@ impl SessionController {
             }
             Ok((
                 access.node.conversation_id,
-                crate::runtime_client::snapshot::ConversationWindow { page },
+                crate::runtime_client::snapshot::ConversationWindow {
+                    cut: read.cut,
+                    page,
+                    newer_cursor: read.newer_cursor.map(Into::into),
+                    target: read.target,
+                    target_cursor: read.target_cursor.map(Into::into),
+                },
             ))
         })
         .await
@@ -2351,12 +2357,16 @@ mod tests {
         );
         assert_eq!(
             invalidations.recorded(),
-            recorded + 1,
-            "deletion announces its membership visibility exactly once"
+            recorded + 2,
+            "deletion announces membership and ownership retirement exactly once each"
         );
         assert_eq!(
             invalidations.next_after(recorded),
-            Some((recorded + 1, session.id.clone(), true))
+            Some((recorded + 2, session.id.clone(), true))
+        );
+        assert_eq!(
+            invalidations.next_ownership_after(recorded),
+            Some((recorded + 1, session.id.clone()))
         );
         gate.release();
         assert_eq!(
@@ -2370,7 +2380,7 @@ mod tests {
         ));
         assert_eq!(
             invalidations.recorded(),
-            recorded + 1,
+            recorded + 2,
             "the resumed repair adds nothing to deletion's membership invalidation"
         );
     }

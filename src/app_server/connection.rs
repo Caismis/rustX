@@ -149,6 +149,7 @@ pub struct AppServerConnection {
     /// notification reader starts late, pauses, or never runs.
     summary_invalidations: Arc<crate::local_runtime::session::SessionSummaryInvalidations>,
     summary_invalidations_delivered: Arc<Mutex<u64>>,
+    ownership_invalidations_delivered: Arc<Mutex<u64>>,
 }
 
 impl AppServerConnection {
@@ -185,6 +186,7 @@ impl AppServerConnection {
         Self {
             summary_invalidations,
             summary_invalidations_delivered: Arc::new(Mutex::new(delivered)),
+            ownership_invalidations_delivered: Arc::new(Mutex::new(delivered)),
             sessions,
             host,
             initialized: Arc::new(Mutex::new(None)),
@@ -778,6 +780,18 @@ impl AppServerConnection {
     /// applications: no per-connection queue, no durable replay, no scheduler.
     /// One Session is announced per call, in publication order, and the cursor
     /// advances only for a notification actually returned.
+    fn next_ownership_invalidation(&self) -> Option<NotificationMethod> {
+        let mut delivered = self
+            .ownership_invalidations_delivered
+            .lock()
+            .expect("ownership invalidation cursor");
+        let (sequence, session_id) = self
+            .summary_invalidations
+            .next_ownership_after(*delivered)?;
+        *delivered = sequence;
+        Some(NotificationMethod::OwnershipRetired { session_id })
+    }
+
     fn next_summary_invalidation(&self) -> Option<NotificationMethod> {
         let mut delivered = self
             .summary_invalidations_delivered
@@ -800,7 +814,10 @@ impl AppServerConnection {
         let mut configuration_changes = self.host.manager().configuration_changes();
         let mut summary_invalidations = self.summary_invalidations.changes();
         loop {
-            if let Some(notification) = self.next_summary_invalidation() {
+            if let Some(notification) = self
+                .next_ownership_invalidation()
+                .or_else(|| self.next_summary_invalidation())
+            {
                 return Notification {
                     jsonrpc: JsonRpcVersion::V2,
                     notification,

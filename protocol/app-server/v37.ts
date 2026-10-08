@@ -473,8 +473,8 @@ export type SessionNodeId = string;
  */
 export type TraceCursor = string;
 /**
- * One contiguous transcript read vocabulary: the newest page, or the page
- * before an already-read boundary, each at the current cut.
+ * Bounded windows positioned by native Turn identity or by a captured read cut.
+ * Append-only live growth preserves a cut; mutation invalidates it.
  */
 export type ConversationWindowAt =
   | {
@@ -482,7 +482,18 @@ export type ConversationWindowAt =
     }
   | {
       before: TranscriptCursor;
+      cut?: ConversationReadCut | null;
       type: 'older';
+    }
+  | {
+      after: TranscriptCursor;
+      cut: ConversationReadCut;
+      type: 'newer';
+    }
+  | {
+      id: ConversationTurnId;
+      cut: ConversationReadCut;
+      type: 'turn';
     };
 /**
  * A durable transcript cursor.
@@ -492,6 +503,10 @@ export type ConversationWindowAt =
  * sequence, and the inbound mailbox sequence.
  */
 export type TranscriptCursor = string;
+/**
+ * Identifies one attempt to execute an agent manifest.
+ */
+export type AttemptId = string;
 /**
  * The identity of one reasoning profile declared by a model.
  *
@@ -1266,10 +1281,6 @@ export type ServerLifecycle = 'Accepting' | 'Draining' | 'Terminated';
  * Residency only; execution and interaction state remain runtime-owned.
  */
 export type ResidencyState = 'Unloaded' | 'Loading' | 'Loaded' | 'Unloading';
-/**
- * Identifies one attempt to execute an agent manifest.
- */
-export type AttemptId = string;
 /**
  * Identifies one turn within an attempt.
  */
@@ -2918,6 +2929,12 @@ export type Notification = {
 } & Notification1;
 export type Notification1 =
   | {
+      method: 'session/ownershipRetired';
+      params: {
+        session_id: SessionId;
+      };
+    }
+  | {
       method: 'configuration/changed';
       params: {
         application: ConfigurationApplication;
@@ -3705,6 +3722,25 @@ export interface UploadMetadata {
   size: number;
 }
 /**
+ * Inclusive Journal/transcript bounds a read was captured at, plus its semantic mutation epoch.
+ */
+export interface ConversationReadCut {
+  conversation_id: ConversationId;
+  journal: string;
+  transcript: string;
+  /**
+   * Advances on every edit/removal of a mutable pending transcript body.
+   */
+  mutation_revision: string;
+}
+/**
+ * Origin survives lineage copying; ordinal never participates in identity.
+ */
+export interface ConversationTurnId {
+  conversation_id: ConversationId;
+  attempt_id: AttemptId;
+}
+/**
  * The authoritative mutable model configuration of one conversation
  * session.
  *
@@ -3862,7 +3898,7 @@ export interface WorkflowRunId {
    */
   conversation_id: string;
   /**
-   * Native admitted attempt, unique across process recovery.
+   * Identifies one attempt to execute an agent manifest.
    */
   attempt_id: string;
   /**
@@ -7259,7 +7295,11 @@ export interface QuestionnaireSubmission1 {
   answers: QuestionnaireAnswerEntry[];
 }
 export interface ConversationWindow {
+  cut: ConversationReadCut;
   page: RuntimeClientTranscriptPage;
+  newer_cursor?: RuntimeClientTranscriptCursor | null;
+  target?: ConversationTurnId | null;
+  target_cursor?: RuntimeClientTranscriptCursor | null;
 }
 export interface ConversationTurnPage {
   cut: ConversationReadCut;
@@ -7269,18 +7309,6 @@ export interface ConversationTurnPage {
    * @maxItems 64
    */
   turns: ConversationTurn[];
-}
-/**
- * Inclusive Journal/transcript bounds a read was captured at, plus its semantic mutation epoch.
- */
-export interface ConversationReadCut {
-  conversation_id: ConversationId;
-  journal: string;
-  transcript: string;
-  /**
-   * Advances on every edit/removal of a mutable pending transcript body.
-   */
-  mutation_revision: string;
 }
 export interface ConversationTurn {
   id: ConversationTurnId;
@@ -7297,13 +7325,6 @@ export interface ConversationTurn {
    * The turn's final text-bearing response; empty until the turn settles.
    */
   response: string;
-}
-/**
- * Origin survives lineage copying; ordinal never participates in identity.
- */
-export interface ConversationTurnId {
-  conversation_id: ConversationId;
-  attempt_id: AttemptId;
 }
 /**
  * The current read model; observing it never starts or authorizes work.

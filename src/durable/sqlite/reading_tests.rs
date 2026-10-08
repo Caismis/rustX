@@ -18,6 +18,7 @@ fn located(
     let window = store
         .conversation_window(
             &ConversationWindowAt::Older {
+                cut: None,
                 before: crate::durable::TranscriptCursor::new(cursor.get() + 1),
             },
             1,
@@ -206,6 +207,7 @@ fn distant_turn_locations_are_exact_bounded_and_read_only() {
     let older = store
         .conversation_window(
             &ConversationWindowAt::Older {
+                cut: None,
                 before: latest.page.entries[0].cursor,
             },
             64,
@@ -407,6 +409,28 @@ fn pending_edits_and_removals_advance_the_mutation_epoch_without_moving_turns() 
         (first.cut.journal, first.cut.transcript)
     );
     assert_eq!(edited.cut.mutation_revision, 1);
+    assert!(
+        store
+            .conversation_window(
+                &ConversationWindowAt::Turn {
+                    id: first.turns[0].id.clone(),
+                    cut: first.cut.clone(),
+                },
+                64
+            )
+            .is_err()
+    );
+    assert!(
+        store
+            .conversation_window(
+                &ConversationWindowAt::Older {
+                    before: first.turns[0].cursor.unwrap(),
+                    cut: Some(first.cut.clone()),
+                },
+                64
+            )
+            .is_err()
+    );
     assert_eq!(
         store.edit_pending(&expected, "stale").unwrap(),
         PendingMutationOutcome::Conflict
@@ -432,4 +456,52 @@ fn pending_edits_and_removals_advance_the_mutation_epoch_without_moving_turns() 
         1,
         "a retired pending body is not read"
     );
+}
+
+#[test]
+fn distant_turn_is_one_bounded_native_window_at_its_cut() {
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    for index in 0..2048 {
+        let attempt = format!("turn-{index}");
+        start(&store, &attempt);
+        timeout(&store, &attempt);
+    }
+    let outline = store.conversation_turns(0, 64).unwrap();
+    assert_eq!(outline.total, 2048);
+    let first = &outline.turns[0];
+    let window = store
+        .conversation_window(
+            &ConversationWindowAt::Turn {
+                id: first.id.clone(),
+                cut: outline.cut.clone(),
+            },
+            64,
+        )
+        .unwrap();
+    assert_eq!(window.page.entries.len(), 64);
+    assert_eq!(window.target.as_ref(), Some(&first.id));
+    assert_eq!(window.target_cursor, first.cursor);
+    assert_eq!(window.page.entries[0].cursor, first.cursor.unwrap());
+    assert_eq!(window.cut, outline.cut);
+    start(&store, "live");
+    timeout(&store, "live");
+    let newer = store
+        .conversation_window(
+            &ConversationWindowAt::Newer {
+                after: window.newer_cursor.unwrap(),
+                cut: window.cut.clone(),
+            },
+            64,
+        )
+        .unwrap();
+    assert_eq!(newer.page.entries.len(), 64);
+    assert_eq!(newer.cut, window.cut);
+    assert!(
+        newer
+            .page
+            .entries
+            .iter()
+            .all(|entry| entry.cursor.get() <= window.cut.transcript)
+    );
+    assert!(store.conversation_read_cut().unwrap().transcript > window.cut.transcript);
 }

@@ -411,7 +411,8 @@ export const fixtures = [
       },
       "at": {
         "type": "older",
-        "before": "9007199254740993"
+        "before": "9007199254740993",
+        "cut": null
       },
       "limit": 32
     }
@@ -674,9 +675,18 @@ export const fixtures = [
     "result": {
       "type": "transcript_window",
       "window": {
+        "cut": {
+          "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+          "journal": "0",
+          "transcript": "0",
+          "mutation_revision": "0"
+        },
         "page": {
           "entries": []
-        }
+        },
+        "newer_cursor": null,
+        "target": null,
+        "target_cursor": null
       }
     }
   },

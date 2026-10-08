@@ -441,7 +441,7 @@ struct SummaryInvalidationState {
     /// publication this process made.
     sequence: u64,
     /// The sequence of each Session's latest recorded publication.
-    published: BTreeMap<SessionId, (u64, u64)>,
+    published: BTreeMap<SessionId, (u64, u64, u64)>,
     /// Woken on every record. A `watch` is a level-triggered wake-up, not a
     /// delivery channel: observers always reread the map above, so a coalesced
     /// wake-up can never drop an invalidation.
@@ -466,14 +466,42 @@ impl SessionSummaryInvalidations {
             state
                 .published
                 .get(session_id)
-                .map_or(0, |(_, membership)| *membership)
+                .map_or(0, |(_, membership, _)| *membership)
         };
+        let ownership = state
+            .published
+            .get(session_id)
+            .map_or(0, |(_, _, ownership)| *ownership);
         state
             .published
-            .insert(session_id.clone(), (sequence, membership));
+            .insert(session_id.clone(), (sequence, membership, ownership));
         if let Some(changed) = &state.changed {
             changed.send_replace(sequence);
         }
+    }
+
+    /// A committed deletion or active-node replacement retires Host execution
+    /// ownership, independently of ordinary metadata/activity invalidations.
+    fn retire_ownership(&self, id: &SessionId) {
+        let mut state = self.state.lock().expect("summary invalidation log lock");
+        state.sequence += 1;
+        let sequence = state.sequence;
+        let entry = state.published.entry(id.clone()).or_default();
+        entry.2 = sequence;
+        if let Some(changed) = &state.changed {
+            changed.send_replace(sequence);
+        }
+    }
+
+    pub(crate) fn next_ownership_after(&self, delivered: u64) -> Option<(u64, SessionId)> {
+        self.state
+            .lock()
+            .expect("summary invalidation log lock")
+            .published
+            .iter()
+            .filter(|(_, (_, _, ownership))| *ownership > delivered)
+            .map(|(id, (_, _, ownership))| (*ownership, id.clone()))
+            .min_by_key(|(sequence, _)| *sequence)
     }
 
     /// The current frontier. A new observer starts here, so publications that
@@ -493,7 +521,7 @@ impl SessionSummaryInvalidations {
         state
             .published
             .iter()
-            .filter_map(|(id, (sequence, membership))| {
+            .filter_map(|(id, (sequence, membership, _))| {
                 if *membership > delivered {
                     Some((*membership, id.clone(), true))
                 } else if *sequence > delivered {
@@ -2549,10 +2577,24 @@ impl SessionCatalog {
             )
             .cloned()
             .collect();
+        let retired: Vec<_> = self
+            .document
+            .sessions
+            .iter()
+            .filter(|(id, old)| {
+                next.sessions
+                    .get(*id)
+                    .is_none_or(|new| new.active_node != old.active_node)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
         let committed = self.persist(&next);
         if committed.is_ok() || committed.as_ref().is_err_and(SessionError::committed) {
             self.document = next;
             self.published = true;
+            for id in retired {
+                self.summary_invalidations.retire_ownership(&id);
+            }
             for id in membership {
                 self.summary_invalidations.record_change(&id, true);
             }
@@ -4633,6 +4675,7 @@ model = "provider/model"
                     let window = copied_store
                         .conversation_window(
                             &crate::durable::reading::ConversationWindowAt::Older {
+                                cut: None,
                                 before: crate::durable::TranscriptCursor::new(3),
                             },
                             1,
@@ -4813,6 +4856,7 @@ model = "provider/model"
                 let window = destination
                     .conversation_window(
                         &crate::durable::reading::ConversationWindowAt::Older {
+                            cut: None,
                             before: crate::durable::TranscriptCursor::new(3),
                         },
                         1,
@@ -4997,6 +5041,7 @@ model = "provider/model"
                 let window = copied
                     .conversation_window(
                         &crate::durable::reading::ConversationWindowAt::Older {
+                            cut: None,
                             before: crate::durable::TranscriptCursor::new(
                                 turn.cursor.unwrap().get() + 1,
                             ),
@@ -6032,12 +6077,16 @@ model = "provider/model"
             "a branch node is never the projection subject"
         );
         let branch_node = branch.node_id.clone();
+        let ownership = catalog.summary_invalidations();
+        let frontier = ownership.frontier();
         catalog
             .publish_node(&session, &branch, root_node, super::SessionNodeOrigin::New)
             .expect("publish branch node");
         catalog
             .set_current_node(&session, Some(&branch_node))
             .expect("switch the active node");
+        let retired = ownership.next_ownership_after(frontier).unwrap();
+        assert_eq!(retired.1, session);
         let summary = catalog.summary(&session).expect("summary");
         assert_eq!(
             summary.active_node, branch_node,
@@ -8232,4 +8281,25 @@ model = "provider/model"
     }
     mod archive_tests;
     pub(crate) mod deletion_tests;
+}
+
+#[cfg(test)]
+mod ownership_invalidation_tests {
+    use super::*;
+    #[test]
+    fn ownership_retirement_survives_coalesced_metadata_and_is_not_inferred_from_activity() {
+        let log = SessionSummaryInvalidations::default();
+        let id = SessionId::new("ses_00000000-0000-7000-8000-000000000001");
+        log.record_change(&id, true);
+        log.record(&id);
+        assert!(log.next_ownership_after(0).is_none());
+        log.retire_ownership(&id);
+        let retirement = log.next_ownership_after(0).unwrap();
+        log.record(&id);
+        log.record_change(&id, true);
+        assert_eq!(log.next_ownership_after(0), Some(retirement.clone()));
+        assert!(log.next_ownership_after(retirement.0).is_none());
+        log.retire_ownership(&id);
+        assert!(log.next_ownership_after(retirement.0).unwrap().0 > retirement.0);
+    }
 }

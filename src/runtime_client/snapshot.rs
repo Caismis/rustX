@@ -1376,7 +1376,11 @@ impl RuntimeClientSnapshot {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationWindow {
+    pub cut: crate::durable::reading::ConversationReadCut,
     pub page: RuntimeClientTranscriptPage,
+    pub newer_cursor: Option<RuntimeClientTranscriptCursor>,
+    pub target: Option<crate::durable::reading::ConversationTurnId>,
+    pub target_cursor: Option<RuntimeClientTranscriptCursor>,
 }
 
 /// Bounded read evidence for the most recently admitted manual compaction.

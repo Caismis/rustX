@@ -290,6 +290,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         Method::Transcript {
             target: target.clone(),
             at: crate::durable::reading::ConversationWindowAt::Older {
+                cut: None,
                 before: crate::durable::TranscriptCursor::new(EXACT),
             },
             limit: 32,
@@ -433,6 +434,15 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         },
         MethodResult::TranscriptWindow {
             window: crate::runtime_client::snapshot::ConversationWindow {
+                cut: crate::durable::reading::ConversationReadCut {
+                    conversation_id: target.conversation_id.clone(),
+                    journal: 0,
+                    transcript: 0,
+                    mutation_revision: 0,
+                },
+                newer_cursor: None,
+                target: None,
+                target_cursor: None,
                 page: crate::runtime_client::snapshot::RuntimeClientTranscriptPage {
                     entries: Vec::new(),
                     next_cursor: None,

@@ -392,7 +392,7 @@ for (const outcome of ["ready", "withdraw", "disconnect", "rejection"] as const)
     assert.equal(h.editor.disableSubmit, false);
     assert.doesNotMatch(h.render(), /Connecting/);
     const [history] = await transport.log.awaitMethod("session/history");
-    transport.respond(history!.id, { type: "session_history", conversation_id: "conv_01900000-0000-7000-8000-000000000002", window: { page: { entries: [{ cursor: "1", item: { type: "message", message: { id: "saved", role: "user", source: "human", content: [{ type: "text", text: "Previously saved message" }] } } }] } } });
+    transport.respond(history!.id, { type: "session_history", conversation_id: "conv_01900000-0000-7000-8000-000000000002", window: { cut: { conversation_id: 'conv_01900000-0000-7000-8000-000000000002', journal: '1000', transcript: '1000', mutation_revision: '0' }, page: { entries: [{ cursor: "1", item: { type: "message", message: { id: "saved", role: "user", source: "human", content: [{ type: "text", text: "Previously saved message" }] } } }] } } });
     await tick();
     assert.match(h.render(), /Previously saved message/);
     assert.doesNotMatch(h.render(), /Connecting/);

@@ -236,7 +236,7 @@ export class AppServerSession {
       this.#installConfiguration(application);
       return true;
     }
-    if (notification.method === "session/summaryInvalidated") {
+    if (notification.method === "session/summaryInvalidated" || notification.method === "session/ownershipRetired") {
       // Both explicit catalog_changed values are valid. The TUI holds
       // no live catalog/summary cache: `/resume` reads the catalog afresh every
       // time it opens, so there is nothing here to repair. The notification is

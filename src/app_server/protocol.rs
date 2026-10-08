@@ -692,6 +692,9 @@ pub struct Notification {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "method", content = "params", deny_unknown_fields)]
 pub enum NotificationMethod {
+    /// Native ownership changed. Host-owned execution under this Session must settle.
+    #[serde(rename = "session/ownershipRetired")]
+    OwnershipRetired { session_id: SessionId },
     #[serde(rename = "configuration/changed")]
     ConfigurationChanged {
         application: crate::local_runtime::configuration::application::ConfigurationApplication,

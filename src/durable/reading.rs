@@ -64,20 +64,33 @@ pub struct ConversationTurnPage {
     pub turns: Vec<ConversationTurn>,
 }
 
-/// One contiguous transcript read vocabulary: the newest page, or the page
-/// before an already-read boundary, each at the current cut.
+/// Bounded windows positioned by native Turn identity or by a captured read cut.
+/// Append-only live growth preserves a cut; mutation invalidates it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ConversationWindowAt {
     Latest,
-    Older { before: super::TranscriptCursor },
+    Older {
+        before: super::TranscriptCursor,
+        cut: Option<ConversationReadCut>,
+    },
+    Newer {
+        after: super::TranscriptCursor,
+        cut: ConversationReadCut,
+    },
+    Turn {
+        id: ConversationTurnId,
+        cut: ConversationReadCut,
+    },
 }
 
-/// A page read in one transaction at `cut`, which decorations must not exceed.
 #[derive(Debug)]
 pub struct DurableConversationWindow {
     pub cut: ConversationReadCut,
     pub page: super::TranscriptPage,
+    pub newer_cursor: Option<super::TranscriptCursor>,
+    pub target: Option<ConversationTurnId>,
+    pub target_cursor: Option<super::TranscriptCursor>,
 }
 
 /// Immutable reading provenance in native start order, separate from finalized responses.

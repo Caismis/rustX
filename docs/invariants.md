@@ -337,6 +337,13 @@ spine; clients merge live and older pages by durable transcript cursor. Entry
 identity only detects the same durable fact, and page reads do not move the
 live event cursor.
 
+App Server v37 navigation adds native Turn-relative finite windows at a captured
+`ConversationReadCut`. It owns positioning and mutation rejection. Web presentation
+retains at most 256 historical entries / 8 MiB plus the independent finite live
+snapshot; it never walks from a distant Turn to the live tail. New navigation,
+attachment replacement and semantic invalidation retire old read commit authority.
+See [the complete reading contract](conversation-reading.md).
+
 The generic Event Journal append cannot commit interaction transcript facts:
 `append_event` rejects `InteractionRequested` and `InteractionSettled` before
 the durable transition begins. Only the narrow

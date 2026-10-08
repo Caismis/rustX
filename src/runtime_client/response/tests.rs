@@ -929,6 +929,7 @@ fn exact_window_decoration_keeps_attempt_tool_occurrences_and_response_identity(
     let read = store
         .conversation_window(
             &crate::durable::reading::ConversationWindowAt::Older {
+                cut: None,
                 before: outline.turns[1].cursor.unwrap(),
             },
             4,

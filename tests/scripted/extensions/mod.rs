@@ -3536,6 +3536,7 @@ async fn goal351_model_create_goal_starts_no_nested_attempt_and_continues_after_
     let window = store
         .conversation_window(
             &rustx::durable::reading::ConversationWindowAt::Older {
+                cut: None,
                 before: rustx::durable::TranscriptCursor::new(
                     settled.turns[1].cursor.unwrap().get() + 1,
                 ),
@@ -3625,6 +3626,7 @@ async fn goal351_model_create_goal_starts_no_nested_attempt_and_continues_after_
         let located = child
             .conversation_window(
                 &rustx::durable::reading::ConversationWindowAt::Older {
+                    cut: None,
                     before: rustx::durable::TranscriptCursor::new(turn.cursor.unwrap().get() + 1),
                 },
                 1,

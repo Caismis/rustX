@@ -107,15 +107,17 @@ history. Each mark carries its origin, ordinal, bounded prompt and response
 previews and optional exact transcript cursor.
 
 `session/transcript {target, at, limit}` reads one contiguous transcript
-vocabulary and returns `transcript_window { page }`:
+vocabulary and returns `transcript_window { cut, page, newer_cursor, target, target_cursor }`:
 
 - `latest`: the newest finite page;
-- `older {before}`: the finite page strictly before an already-read cursor.
+- `older {before, cut}`: the finite page strictly before an already-read cursor; a missing cut captures current authority;
+- `newer {after, cut}`: the finite page strictly after the cursor at the same cut;
+- `turn {id, cut}`: native resolves the canonical Turn anchor and reads forward from it.
 
 All root pages are 1–64 entries; `next_cursor` is present while older history
-exists. A turn's native cursor from the outline is a position in this same
-order, so a reader reaches any turn by paging `older` until its page covers that
-cursor. Agent/internal transcript APIs retain their separate registry and
+exists. A distant Turn takes exactly one native window read, independently of its
+distance from the live tail. Native identity and the captured cut select its
+position; the browser never walks the intervening conversation. Agent/internal transcript APIs retain their separate registry and
 read-model ownership.
 
 A read cut C is `(ConversationId, journal, transcript, mutation_revision)`, the
@@ -123,7 +125,8 @@ inclusive upper bounds one read was captured at. `mutation_revision` is the
 native monotonic epoch of successful pending-body edits/removals. Pending
 adoption preserves its accepted body and position; new admissions and ordinary
 execution append facts. Surface compaction preserves immutable Ledger/Journal
-meaning. Every read captures a fresh C; no request names a past cut.
+meaning. Latest reads capture a fresh C. Anchor and continuation reads name C and reject
+foreign, future or mutated cuts; append-only growth remains reconstructible.
 
 Selection happens in one SQLite transaction, bounded to C's `transcript`; Tool
 results are included only if their own canonical transcript position belongs to
@@ -159,17 +162,20 @@ Only an exact native anchor satisfies a navigation scroll. Return to latest
 restores the current live identity and follow mode through ChatViewport. An
 unloaded mark reaches a distant page without accumulating outline history.
 
-As in DeepSeek Harness's Chat window (`loadOlder`/`loadThrough`), the browser
-transcript is one contiguous window from its oldest loaded page through the live
-tail. Older pages only ever prepend; nothing replaces or freezes the window, and
-there is no later-content paging. A loaded exact anchor lands without a read. Any
-other jump pages `older` reads of 64 entries until the window's head reaches the
-turn's native cursor, then lands; the pages publish together once, including those
-read before a failure, whose error stays visible with Load earlier still usable.
-One older read runs per Session: a repeated Load earlier is a no-op, and a jump
-arriving during a read joins it and lowers its shared target. A page that does not
-move the head ends the jump. A turn the history cannot reach fails visibly rather
-than landing elsewhere.
+The browser keeps at most 256 historical entries and 8 MiB of serialized UTF-16
+entry data, independently of the native live tail (at most 64 entries). A jump to
+an already loaded exact anchor needs no read; any other jump requests one native
+64-entry window. Older and later actions each request one page and trim the
+opposite end of the finite cache. The transcript explicitly identifies historical
+inspection and leaves the intervening history unloaded. Live streaming continues
+from the independent runtime snapshot; overlapping cursors render exactly once
+using the current native entry. Return to latest releases the historical window.
+
+A new navigation intent retires the previous read's commit authority immediately.
+An older page never joins or broadens a newer jump. Failed reads preserve the last
+valid presentation and expose recovery; pending-body invalidation retires the cut
+and returns to current native authority with an explanation. No retries or timeout
+heuristics determine ordering.
 
 Outline paging intent is explicitly `latest` or `page(offset)`, independently of
 the native response's offset. Initial load and automatic start/location/settlement
@@ -180,12 +186,12 @@ the newest page explicitly restores latest intent. One refresh demand arriving d
 in-flight outline read is retained and serviced after its reply; streaming text
 deltas create no demand. The cache still holds only one outline page.
 
-Every older read captures the attachment target, connection generation,
-attachment epoch, resync authority and cache epoch. Node/runtime changes,
+Every window read captures the attachment target, connection generation,
+attachment epoch, resync authority and navigation intent. Node/runtime changes,
 reattachment, resync and a window rebase orphan it. Only the newest navigation
 intent lands, and only while ChatViewport's intent ticket is current: user
-scrolling retires the landing, never the read, whose rows still merge while
-ChatViewport preserves the newer reading position. Outline reads have
+scrolling retires the landing, while the read may still publish its finite window if its navigation ownership
+remains current. ChatViewport preserves the newer reading position. Outline reads have
 independent paging intent and survive window changes; resync retires both domains.
 
 ChatViewport is the sole automatic Chat scroll writer. The rail and Return to
@@ -200,8 +206,7 @@ then a clamped absolute position; they never restore follow mode.
 
 Ordinary scrolling away from the live bottom or a turn jump exposes Return to
 latest even for short history; live output keeps rendering in the window. The
-explicit action restores frame-owned bottom/follow mode without discarding loaded
-history; subsequent streaming follows until another user scroll or navigation
+explicit action restores frame-owned bottom/follow mode and releases the historical window; subsequent streaming follows until another user scroll or navigation
 detaches.
 
 ## Width preference

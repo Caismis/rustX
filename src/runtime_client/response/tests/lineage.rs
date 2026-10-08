@@ -86,6 +86,7 @@ fn deep_lineage_reopen_preserves_response_facts_without_execution_ownership() {
         let location = child
             .conversation_window(
                 &crate::durable::reading::ConversationWindowAt::Older {
+                    cut: None,
                     before: crate::durable::TranscriptCursor::new(
                         outline.turns[1].cursor.unwrap().get() + 1,
                     ),
@@ -439,6 +440,7 @@ fn lineage_preserves_success_failed_and_terminal_only_turns_in_native_order() {
             let read = child
                 .conversation_window(
                     &crate::durable::reading::ConversationWindowAt::Older {
+                        cut: None,
                         before: crate::durable::TranscriptCursor::new(
                             turn.cursor.unwrap().get() + 1,
                         ),

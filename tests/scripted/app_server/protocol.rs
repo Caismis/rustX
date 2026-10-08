@@ -4271,14 +4271,22 @@ async fn issue422_multi_client_deletion_membership_converges_at_commit() {
                     }
                 ));
             }
-            loop {
-                if let NotificationMethod::SummaryInvalidated {
-                    session_id,
-                    catalog_changed: true,
-                } = a.next_notification().await.notification
-                {
-                    assert_eq!(session_id, id);
-                    break;
+            let mut membership = false;
+            let mut retired = false;
+            while !membership || !retired {
+                match a.next_notification().await.notification {
+                    NotificationMethod::SummaryInvalidated {
+                        session_id,
+                        catalog_changed: true,
+                    } => {
+                        assert_eq!(session_id, id);
+                        membership = true;
+                    }
+                    NotificationMethod::OwnershipRetired { session_id } => {
+                        assert_eq!(session_id, id);
+                        retired = true;
+                    }
+                    _ => {}
                 }
             }
             let MethodResult::Sessions { sessions, .. } = call(
@@ -4527,7 +4535,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
             target: target.clone(), at: crate::durable::reading::ConversationWindowAt::Latest, limit: 1,
         }).await else { panic!() };
         let MethodResult::TranscriptWindow { window: older } = call(&browser, 4121, Method::Transcript {
-            target: target.clone(), at: crate::durable::reading::ConversationWindowAt::Older {
+            target: target.clone(), at: crate::durable::reading::ConversationWindowAt::Older { cut: None,
                 before: window.page.entries[0].cursor.into(),
             }, limit: 64,
         }).await else { panic!() };
