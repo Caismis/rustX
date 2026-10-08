@@ -1,5 +1,6 @@
-import { cleanup, fireEvent, render } from '@testing-library/react';
-import { afterEach, expect, it } from 'vitest';
+import { act, cleanup, fireEvent, render } from '@testing-library/react';
+import { afterEach, expect, it, vi } from 'vitest';
+import { RunningStatus } from '../src/presentation/agent/RunningStatus';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { RuntimeFacts } from '../src/app/agent/Activity';
 import { snapshot } from './fixture';
@@ -230,4 +231,32 @@ it('authentication failures use Harness copy and stopping never renders a failur
   s.transcript.entries![0].item = { type: 'attempt_terminal', turn: { ...turn, outcome: 'cancelled', failure: undefined } };
   ui.rerender(<AgentTranscript snapshot={s}/>);
   expect(ui.container.querySelector('[data-turn-error]')).toBeNull();
+});
+
+
+it('places one running indicator after streaming output and removes it on settlement', () => {
+  const live = { ...snapshot(), attempt: { attempt_id: 'a', phase: { type: 'running' as const }, turn: 1, in_flight: { message_id: 'answer', blocks: [{ type: 'text' as const, block_index: 0, text: 'Working response' }] } } };
+  const ui = render(<AgentTranscript snapshot={live}/>);
+  const indicator = ui.container.querySelector('[data-chat-running]')!;
+  expect(indicator).toBeTruthy();
+  expect(indicator.parentElement!.lastElementChild).toBe(indicator);
+  expect(ui.container.querySelectorAll('[data-chat-running]')).toHaveLength(1);
+  expect(ui.container.querySelector('[data-turn-process]')).toBeNull();
+  ui.rerender(<AgentTranscript snapshot={{ ...live, attempt: null }}/>);
+  expect(ui.container.querySelector('[data-chat-running]')).toBeNull();
+});
+
+it('ticks the running clock without changing the live announcement and cleans up its timer', () => {
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(new Date('2026-10-08T00:01:01Z'));
+    const ui = render(<RunningStatus startTime={Date.parse('2026-10-08T00:00:00Z')}/>);
+    expect(ui.container.textContent).toContain('Deep diving for 1m 1s');
+    const announcement = ui.getByRole('status').textContent;
+    act(() => vi.advanceTimersByTime(1000));
+    expect(ui.container.textContent).toContain('Deep diving for 1m 2s');
+    expect(ui.getByRole('status').textContent).toBe(announcement);
+    ui.unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { vi.useRealTimers(); }
 });

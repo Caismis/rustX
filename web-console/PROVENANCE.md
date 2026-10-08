@@ -1,3 +1,14 @@
+## Running Turn indicator
+
+The running status, whale-tail APNG and static SVG come from
+`packages/client/ui-chat/src/client/chat/{RunningStatus.tsx,RunningWhaleTail.tsx,running-whale@2x.png,ChatView.module.css}`
+at Harness `5badb15009ae1756c3afe0ae0cef1faafc290ccc`. The matching light/dark
+Deep-diving color tokens come from that revision's `ui-theme/src/styles/design-platform.css`.
+The existing TextShimmer renders the text sweep. The native active Attempt mounts
+one indicator at the transcript tail; its own start timestamp drives an isolated
+one-second clock. Historical windows and settled Attempts show no live indicator.
+Reduced-motion and forced-color modes use the original static whale artwork.
+
 ## Information-flow spacing
 
 Reference: local `../deepseek-harness` at

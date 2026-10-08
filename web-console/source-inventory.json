@@ -933,7 +933,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "b3e201aadfd42397be649054ad66d5c7334f282eb78059d602c8523179fd0bc5"
+      "local_sha256": "cd4df3f70e684c3d074277c310cf6a2cd44904a3c2b786b729a6c4cbb5562c1e"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -2361,9 +2361,17 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "ac3b8d8e0224af953536861982fd3ad43f6ff24c80257a01dd404cb615c98664",
+      "local_sha256": "db3b2436022d04f5ff78aa87eca26fc3595da61f9e19ad7f7e0b4bef8a658809",
       "retained_dependencies": [],
-      "classification": "A"
+      "classification": "A",
+      "additional_sources": [
+        {
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream": "packages/client/ui-theme/src/styles/design-platform.css",
+          "upstream_sha256": "809b20ae477324fdf5181a2d338655a19919cabbf1b0e60adc149908462c5a66",
+          "treatment": "Deep-diving light/dark text and shimmer color tokens."
+        }
+      ]
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -3253,7 +3261,7 @@
           "treatment": "Compaction checkpoint disclosure and bilingual summary wording adapted to native Ledger messages; no Harness runtime or command authority."
         }
       ],
-      "local_sha256": "ec1b6518b76ddb197b3e8e9825c05f54044b323135bbb7d660aa3d43a7e00b65"
+      "local_sha256": "e87d6d43e303f54f0d7f18e38e11f09d1b6ce81366b2b09804abd38ed52c39af"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",
@@ -5512,6 +5520,56 @@
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "local_sha256": "d94ebe864be9009234d11abc16e8ba41458219dc8516243b1c38190e7e6dbb9d",
       "classification": "A"
+    },
+    {
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream": "packages/client/ui-chat/src/client/chat/RunningStatus.tsx",
+      "destination": "web-console/src/presentation/agent/RunningStatus.tsx",
+      "upstream_sha256": "a1b1a866e7c6a07ab4233f27fe186079f24bfec3478a7b326ef248d3bdfcb225",
+      "classification": "A",
+      "treatment": "Harness running indicator, whale animation and reduced-motion artwork. Clock and translation adapted to native rustX Turn facts.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../../locale/react",
+        "../primitives/TextShimmer",
+        "./Chat.module.css",
+        "./RunningWhaleTail",
+        "react"
+      ],
+      "excluded_dependencies": [
+        "Harness Session store and slot contracts"
+      ],
+      "local_sha256": "ce2058013adaa706761202a70b0a32a0794a366d33482c12be5f4668c97439e0"
+    },
+    {
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream": "packages/client/ui-chat/src/client/chat/RunningWhaleTail.tsx",
+      "destination": "web-console/src/presentation/agent/RunningWhaleTail.tsx",
+      "upstream_sha256": "0ddb0ab3819c0eb3b8a5ab96d8c3d5ada30771fa66d16e594faa5e552161905d",
+      "classification": "A",
+      "treatment": "Harness whale artwork retained unchanged; local stylesheet import adapted.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "./Chat.module.css"
+      ],
+      "excluded_dependencies": [
+        "Harness Session store and slot contracts"
+      ],
+      "local_sha256": "cf8f93d8082702e342191dd46dd8f70dffb68fc69dd575fcd072b01f15363d50"
+    },
+    {
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream": "packages/client/ui-chat/src/client/chat/running-whale@2x.png",
+      "destination": "web-console/src/presentation/agent/running-whale@2x.png",
+      "upstream_sha256": "0fd990d118113d19af7af4480f2b55d610b103451a08be6f7bf5a146823f8bd3",
+      "classification": "A",
+      "treatment": "Harness whale artwork retained unchanged; local stylesheet import adapted.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "Harness Session store and slot contracts"
+      ],
+      "local_sha256": "0fd990d118113d19af7af4480f2b55d610b103451a08be6f7bf5a146823f8bd3"
     }
   ],
   "inspected_only": [

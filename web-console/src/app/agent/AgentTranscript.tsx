@@ -5,6 +5,7 @@ import { turnProcesses } from '../../bindings/turn-process';
 import { stepGroups, type StepPiece } from '../../bindings/step-groups';
 import { StepGroup } from '../../presentation/agent/StepGroup';
 import { TurnError } from '../../presentation/agent/TurnError';
+import { RunningStatus } from '../../presentation/agent/RunningStatus';
 import { TurnProcess } from '../../presentation/agent/TurnProcess';
 import type { RuntimeClientSnapshot, CompletedResponseView, RuntimeClientTranscriptEntry, MessageBlock, InFlightBlock, ForegroundToolExecution } from '../../../../protocol/app-server/v37';
 import { conversation, json } from '../../bindings/projection';
@@ -96,22 +97,23 @@ export function AgentTranscript({ snapshot, history, loadEarlier, loadLater, onH
   // Agent Status has its own anchored annotation, so its canonical Context message
   // must not reappear here as ordinary chat or as purported current context.
   const currentContext = messages.filter(message => message.role === 'user' && message.kind && message.kind !== 'message' && !durableIds.has(message.id) && !isAgentStatusContext(message));
-  const liveProcess = snapshot.attempt && snapshot.attempt.phase.type !== 'settled' && !entries.some(entry => entry.turn_process?.conversation_id === snapshot.conversation_id && entry.turn_process.attempt_id === snapshot.attempt!.attempt_id) && !entries.some(entry => entry.completed_response?.origin.conversation_id === snapshot.conversation_id && entry.completed_response.origin.attempt_id === snapshot.attempt!.attempt_id) && <TurnProcess id={JSON.stringify([snapshot.conversation_id, snapshot.attempt.attempt_id])} open tools={snapshot.attempt.foreground?.length ?? 0} messages={0}
-      running
-      start={snapshot.transcript.statistics?.latest_turn?.attempt_id === snapshot.attempt.attempt_id ? snapshot.transcript.statistics.latest_turn.started_at : undefined}
-      end={snapshot.transcript.statistics?.latest_turn?.attempt_id === snapshot.attempt.attempt_id ? snapshot.transcript.statistics.latest_turn.ended_at ?? undefined : undefined}/>;
+  const runningAttempt = !history?.window && snapshot.attempt?.phase.type !== 'settled' ? snapshot.attempt : undefined;
+  const latestTurn = snapshot.transcript.statistics?.latest_turn;
+  const startedAt = runningAttempt && (latestTurn?.attempt_id === runningAttempt.attempt_id ? latestTurn.started_at
+    : entries.find(entry => entry.turn_process?.conversation_id === snapshot.conversation_id && entry.turn_process.attempt_id === runningAttempt.attempt_id)?.turn_process?.started_at);
+  const startTime = startedAt ? Date.parse(startedAt) : undefined;
   return <div className={css.column} aria-label={tx('agent:agent-transcript.canonical-conversation')}>
     {history?.page.next_cursor != null && <Button disabled={history.loading} onClick={loadEarlier}>{history.loading ? tx('agent:agent-transcript.loading-earlier') : tx('agent:agent-transcript.load-earlier')}</Button>}
     {history?.window && <p role="status">{tx('agent:agent-transcript.history-window')}</p>}
     {history?.window?.newer_cursor != null && <Button disabled={history.loading} onClick={loadLater}>{tx('agent:agent-transcript.load-later')}</Button>}
     {history?.error && <p role="alert">{history.error}</p>}
     {!messages.length && !entries.length && <Feedback kind="empty" title={tx('agent:agent-transcript.ready-for-a-task')}><p>{tx('agent:agent-transcript.what-would-you-like-to-work-on')}</p></Feedback>}
-    {[...turnPresentation(entries), ...(liveProcess ? [{ kind: 'live-process' as const }] : []), ...(streaming && !durableIds.has(streaming.message_id) && !settledPublications.has(streaming.message_id) ? [{ kind: 'streaming' as const, streaming }] : [])].map(node => {
-      if (node.kind === 'live-process') return <div className={css.flowItem} data-chat-flow-kind="turn-process" key="live-process" data-chat-turn-owner={turnAnchor({conversation_id:snapshot.conversation_id,attempt_id:snapshot.attempt!.attempt_id})}>{liveProcess}{requestFeedback?.(snapshot.attempt!.attempt_id)}</div>;
+    {[...turnPresentation(entries), ...(streaming && !durableIds.has(streaming.message_id) && !settledPublications.has(streaming.message_id) ? [{ kind: 'streaming' as const, streaming }] : [])].map(node => {
       if (node.kind === 'streaming') return <div className={css.flowItem} data-chat-group-part={node.streaming.blocks?.some(block => block.type === 'text') ? 'response' : undefined} key={`message:${node.streaming.message_id}`}><MessageSeat key="seat" id={`message:${node.streaming.message_id}`} turnOwner={snapshot.attempt ? turnAnchor({conversation_id:snapshot.conversation_id,attempt_id:snapshot.attempt.attempt_id}) : undefined}
         message={{ role: 'assistant', id: node.streaming.message_id, content: [] }} blocks={node.streaming.blocks ?? []} streaming
         tools={snapshot.attempt?.foreground?.filter(tool => tool.message_id === node.streaming.message_id)}/></div>;
-      if (node.kind === 'process') return <div className={css.flowItem} data-chat-flow-kind="turn-process" key={node.key} data-chat-turn-owner={turnAnchor(node.process)} data-chat-anchor-key={entries.some(entry => entry.cursor === node.process.control_cursor) ? turnAnchor(node.process) : undefined}><TurnProcess id={node.key} open tools={node.process.tool_call_count} messages={node.process.message_count} outcome={node.process.outcome} running={node.process.outcome === 'running'} start={node.process.started_at ?? undefined} end={node.process.ended_at ?? undefined}/>{requestFeedback?.(node.process.attempt_id)}</div>;
+      if (node.kind === 'process' && node.process.outcome === 'running') return null;
+      if (node.kind === 'process') return <div className={css.flowItem} data-chat-flow-kind="turn-process" key={node.key} data-chat-turn-owner={turnAnchor(node.process)} data-chat-anchor-key={entries.some(entry => entry.cursor === node.process.control_cursor) ? turnAnchor(node.process) : undefined}><TurnProcess id={node.key} open tools={node.process.tool_call_count} messages={node.process.message_count} outcome={node.process.outcome} start={node.process.started_at ?? undefined} end={node.process.ended_at ?? undefined}/>{requestFeedback?.(node.process.attempt_id)}</div>;
       if (node.kind === 'tail') return <TurnTail key={node.key} text={node.text} response={node.response} latest={node.response === latestResponse?.completed_response} onHistorical={onHistorical} disabled={historicalDisabled} lineageSwitchSafe={lineageSwitchSafe}/>;
       const entry = node.entry;
       if (entry.item.type === 'attempt_terminal') {
@@ -162,7 +164,7 @@ export function AgentTranscript({ snapshot, history, loadEarlier, loadLater, onH
         })}</>}/></div>;
     })}
     {!!currentContext.length && <details><summary>{tx('agent:agent-transcript.current-context')}</summary>{currentContext.map(message => <Message key={message.id} message={message} />)}</details>}
-
-
+    {runningAttempt && requestFeedback?.(runningAttempt.attempt_id)}
+    {runningAttempt && <RunningStatus key={runningAttempt.attempt_id} startTime={startTime !== undefined && Number.isFinite(startTime) ? startTime : undefined}/>}
   </div>;
 }
