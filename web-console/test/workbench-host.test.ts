@@ -217,3 +217,28 @@ it.each(['native loss', 'Host shutdown'] as const)('%s fences a held native read
   if(reason==='native loss')await expect(host.close()).rejects.toThrow('settlement failed');
   request.mockRestore();retirement.mockRestore();
 });
+
+it('Desktop admission authorizes a location; delayed application pathname resolution is explicitly best-effort', async () => {
+ const {DesktopAdapter}=await import('../host/desktop');
+ const root=directory(),outside=directory(),path=join(root,'file.txt');
+ writeFileSync(path,'admitted object');writeFileSync(join(outside,'replacement'),'later object');
+ let resolve!:()=>void,reached!:()=>void;
+ const held=new Promise<void>(done=>{resolve=done;}),entered=new Promise<void>(done=>{reached=done;});
+ const launch=vi.fn(async (spec:{args:string[]})=>{
+   reached();await held;
+   // Model the external application resolving its argv only after admission.
+   expect(readFileSync(spec.args.at(-1)!,'utf8')).toBe('later object');
+   return {status:'spawned' as const};
+ });
+ const adapter=new DesktopAdapter({platform:'linux',env:{PATH:'/bin',DISPLAY:':0'},executable:path=>path,launch});
+ const host=new LocalWorkspaceHost({roots:[{id:'root',cwd:root,displayName:'Root'}],picker:false,metadataFile:join(root,'metadata.json'),nativeFilesystem:'shared',transportToken:'test',endpoint:'ws://localhost:8080'},adapter,async()=>({cwd:root,ownershipGeneration:'1'}));
+ try {
+  const scope=await host.listWorkspaces();
+  const work=host.workbench(scope,{target:{session_id:'A',active_node:'node-A'},request:{kind:'open',path:'file.txt',directory:false,application:'code'}});
+  await entered;renameSync(path,join(root,'original.txt'));symlinkSync(join(outside,'replacement'),path);
+  resolve();await work;
+  expect(readFileSync(join(root,'original.txt'),'utf8')).toBe('admitted object');expect(launch).toHaveBeenCalledOnce();
+  await expect(host.workbench(scope,{target:{session_id:'A',active_node:'node-A'},request:{kind:'open',path:'file.txt',directory:false,application:'code'}})).rejects.toThrow();
+  expect(launch).toHaveBeenCalledOnce();
+ } finally {resolve();await host.close();}
+});

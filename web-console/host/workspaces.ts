@@ -246,10 +246,13 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       this.desktopPending = true;
       try {
         const launch = this.desktop.prepare(request.application);
-        await withWorkspacePath(root, request.path, request.directory, fd => {
+        // Authorize this Workspace location now. Desktop launch passes a pathname:
+        // an external application may resolve a replaced object later. No descriptor
+        // lifetime or pathname recheck can promise identity through that boundary.
+        withWorkspacePath(root, request.path, request.directory, fd => {
           if (!request.directory && !fstatSync(fd).isFile()) throw new Error('Not a regular file');
-          return launch(root, join(root, request.path), !request.directory);
         });
+        await launch(root, join(root, request.path), !request.directory);
         return {};
       } finally { this.desktopPending = false; }
     }

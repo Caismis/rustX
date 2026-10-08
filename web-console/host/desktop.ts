@@ -100,6 +100,8 @@ export class DesktopAdapter {
     }
     return entries;
   }
+  /** Pathname launch only: admission is the caller's responsibility; the external
+   * application owns eventual path resolution and file-object identity. */
   prepare(id: DesktopAppId): (cwd: string, path?: string, reveal?: boolean) => Promise<DesktopLaunch> {
     const catalog = this.catalog();
     const entry = catalog.available ? this.resolved?.find(entry => entry.application.id === id) : undefined;

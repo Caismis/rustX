@@ -379,3 +379,17 @@ excluded: DSH storage membership, persisted `workspace_id`, Remote feed framewor
 Session creation/navigation policy, and framework services. The new association owner
 is locally authored, with no copied DSH source. Existing presentation notices and
 source lineage remain in place; modified descendants retain their inventory records.
+
+### External file-opening identity
+
+Opening a Workspace file in a desktop application is a best-effort pathname
+operation. The Host authorizes the native Session location and validates the
+relative path using descriptor-relative traversal at admission: absolute escapes,
+`..`, and symlink traversal are rejected. This guarantees admission of an
+allowed Workspace location, not the identity of the file eventually used by the
+external application. Another local process can rename or replace the path after
+admission; the application may resolve that path after the launcher returns.
+Keeping a descriptor open or rechecking the pathname cannot guarantee identity
+through that external boundary. No file-object identity or desktop sandbox is
+promised. A new opening request independently repeats Host admission. Descriptor
+based Workspace reads retain their stronger object-bound read contract.
