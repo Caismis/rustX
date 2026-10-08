@@ -55,6 +55,8 @@ test('two isolated Product Hosts/processes, cold Sessions and responsive Workspa
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
     await expect(page.getByText(/Untrusted project source/)).toHaveCount(0);
     expect(await read()).toEqual(original);
+    // Draft editability precedes attachment; native residency is the barrier.
+    await expect.poll(async () => (await remoteA.client.call('server/diagnostics', {}, 'diagnostics')).snapshot.external_attachments).toBe(1);
     const resident = (await remoteA.client.call('server/diagnostics', {}, 'diagnostics')).snapshot;
     expect(resident.loaded).toBe(1);
     await closeSessionView(page, id);

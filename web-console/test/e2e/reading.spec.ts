@@ -48,7 +48,7 @@ test('native distant reading rail, detached/latest follow and measured width in 
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.addInitScript(() => {
       const NativeSocket = window.WebSocket;
-      const state = { gate: false, fail: false, held: [] as (() => void)[], reads: 0, other: 0 };
+      const state = { gate: false, fail: false, held: [] as (() => void)[], reads: 0, other: 0, windows: [] as number[] };
       Object.assign(window, { readingTransport: state });
       class GatedSocket extends NativeSocket {
         private methods = new Map<string, string>();
@@ -56,8 +56,9 @@ test('native distant reading rail, detached/latest follow and measured width in 
           super(...args);
           this.addEventListener('message', event => {
             const reply = JSON.parse(String(event.data));
-            if (reply.id && this.methods.get(String(reply.id)) === 'older') {
+            if (reply.id && this.methods.get(String(reply.id)) === 'turn') {
               event.stopImmediatePropagation();
+              if(reply.result?.window)state.windows.push(reply.result.window.page.entries?.length ?? 0);
               const deliver = () => this.onmessage?.(new MessageEvent('message', { data: JSON.stringify(state.fail ? {jsonrpc:'2.0',id:reply.id,error:{code:-32000,message:'Reading fixture rejection'}} : reply) }));
               if (state.gate) state.held.push(deliver); else deliver();
             }
@@ -65,8 +66,8 @@ test('native distant reading rail, detached/latest follow and measured width in 
         }
         send(data: Parameters<WebSocket['send']>[0]) {
           const request = JSON.parse(String(data));
-          if (request.method === 'session/transcript' && request.params.at.type === 'older') { this.methods.set(String(request.id), 'older'); state.reads++; }
-          if (request.method === 'session/transcript' && request.params.at.type !== 'older') state.other++;
+          if (request.method === 'session/transcript' && request.params.at.type === 'turn') { this.methods.set(String(request.id), 'turn'); state.reads++; }
+          if (request.method === 'session/transcript' && request.params.at.type !== 'turn') state.other++;
           super.send(data);
         }
       }
@@ -92,8 +93,8 @@ test('native distant reading rail, detached/latest follow and measured width in 
     await page.evaluate(() => { (window as any).readingTransport.fail=false; });
     await page.locator('[data-turn-navigator]').getByRole('button', { name: 'Reload turns' }).click();
     await expect(page.locator('[data-turn-navigator]').getByRole('alert')).toHaveCount(0);
-    // A distant unloaded mark reads its outline page, then pages older history
-    // through the turn's location (as Harness's loadThrough) and jumps once.
+    // A distant unloaded mark reads its outline page and exactly one bounded
+    // native Turn window; no intervening history is materialized.
     await railScroll(0);
     const mark = rail.locator('[data-turn-ordinal="1"]');
     await expect(mark).toHaveAccessibleName('Load and jump to turn 1');
@@ -125,11 +126,14 @@ test('native distant reading rail, detached/latest follow and measured width in 
       await expect(rail.locator('[aria-current="true"]')).toHaveCount(1);
       await expect(rail.locator('[aria-current="true"]')).toHaveAttribute('data-turn-id', top >= stops.end ? stops.next : stops.first);
     }
-    // Only ordinary older pages were read, and the window still reaches the live tail.
+    // Two direct windows (one rejected, one accepted), independent live tail,
+    // and a finite presentation. No prefix traversal or duplicate output.
     expect(await page.evaluate(()=>(window as any).readingTransport.other)).toBe(0);
-    expect(await page.evaluate(()=>(window as any).readingTransport.reads)).toBeGreaterThan(1);
+    expect(await page.evaluate(()=>(window as any).readingTransport.reads)).toBe(2);
     await expect(page.getByText(/Native reading answer 299\n/)).toHaveCount(1);
-    await expect(page.getByRole('button', { name: 'Load later content' })).toHaveCount(0);
+    expect(await page.evaluate(()=>(window as any).readingTransport.windows)).toEqual([64,64]);
+    expect(await viewport.locator('[data-chat-anchor-key]').count()).toBeLessThanOrEqual(256);
+    await expect(page.getByRole('button', { name: 'Load later', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Return to latest', exact: true }).click();
     await expect.poll(()=>viewport.evaluate(el=>el.scrollHeight-el.clientHeight-el.scrollTop)).toBeLessThan(3);
     // Ordinary detached state has no historical jump/cache-limit prerequisite.
