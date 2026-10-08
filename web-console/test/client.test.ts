@@ -447,7 +447,7 @@ it('late history cannot replace an attached conversation or a retired navigation
 it('pages durable preview while connecting without starting another attachment', async () => {
   const s = server(); await s.connect(); s.held.add('session/attach');
   const entry = (cursor: string) => ({ cursor, item: { type: 'message' as const, message: { id: `message-${cursor}`, role: 'user' as const, source: 'human' as const, content: [{ type: 'text' as const, text: cursor }] } } });
-  s.handlers.set('session/history', request => ({ type: 'session_history', conversation_id: 'conversation-A', window: { page: request.method === 'session/history' && request.params.at.type === 'latest' ? { entries: [entry('2')], next_cursor: '2' } : { entries: [entry('1')], next_cursor: null } } }));
+  s.handlers.set('session/history', request => ({ type: 'session_history', conversation_id: 'conversation-A', window: { cut: { conversation_id: 'conversation-A', journal: '1000', transcript: '1000', mutation_revision: '0' }, page: request.method === 'session/history' && request.params.at.type === 'latest' ? { entries: [entry('2')], next_cursor: '2' } : { entries: [entry('1')], next_cursor: null } } }));
   const work = s.client.attach('A');
   await vi.waitFor(() => expect(s.client.getSnapshot().views.A.preview).toBeTruthy());
   await s.client.loadEarlierPreview('A');

@@ -116,7 +116,7 @@ it('current native identity precedes location; the first durable process locatio
  expect(mark().getAttribute('aria-current')).toBe('true');
 });
 
-it('a loaded rail mark outside the transcript window pages older history through its location and live output keeps appending', async()=>{
+it('a loaded rail mark outside the transcript window reads its native window while the independent live tail keeps appending', async()=>{
  installTurnNavigatorObserver();
  server=new Server();await server.attached('A');
  const old={id:{conversation_id:'conversation-A',attempt_id:'old'},ordinal:1,cursor:'1',prompt:'first',response:'answer'};
@@ -135,14 +135,15 @@ it('a loaded rail mark outside the transcript window pages older history through
  expect(turnsRequests()).toHaveLength(1);
  server.held.add('session/transcript');
  fireEvent.click(mark);const request=await server.waitFor('session/transcript',1);
- expect(request.params).toMatchObject({limit:64});expect(request.params).toHaveProperty('at',{type:'older',before:'600'});
+ expect(request.params).toMatchObject({limit:64});expect(request.params).toHaveProperty('at',{type:'turn',id:old.id,cut});
  expect(mark.getAttribute('aria-busy')).toBe('true');
- await act(async()=>{server.socket.success(request,{type:'transcript_window',window:{page:{entries:[{...row('1'),turn_process:{...old.id,control_cursor:'1',message_count:1,tool_call_count:0,outcome:'completed'}}]}}});expect(await work).toBe(true);});
+ await act(async()=>{server.socket.success(request,{type:'transcript_window',window: { cut, target:old.id, target_cursor:'1', page:{entries:[{...row('1'),turn_process:{...old.id,control_cursor:'1',message_count:1,tool_call_count:0,outcome:'completed'}}]}}});expect(await work).toBe(true);});
  expect(mark.hasAttribute('aria-busy')).toBe(false);
- expect(server.client.getSnapshot().views.A.history?.page.entries?.map(row=>row.cursor)).toEqual(['1','600','601']);
- // The window stays joined to the live tail: no historical freeze, no later-content paging.
+ expect(server.client.getSnapshot().views.A.history?.page.entries?.map(row=>row.cursor)).toEqual(['1']);
+ // The historical window and current tail have separate read authority.
  await act(async()=>{server.durableUpdate('A',{...s,transcript:{entries:[row('600'),row('601'),row('602')]}});});
- expect(server.client.getSnapshot().views.A.history?.page.entries?.map(row=>row.cursor)).toEqual(['1','600','601','602']);
+ expect(server.client.getSnapshot().views.A.history?.page.entries?.map(row=>row.cursor)).toEqual(['1']);
+ expect(server.client.getSnapshot().views.A.snapshot?.transcript.entries?.map(row=>row.cursor)).toEqual(['600','601','602']);
  // Active reading belongs to ChatViewport, separately tested in scroll.test.tsx.
  ui!.rerender(<TurnNavigator client={server.client} sessionId="A" active={'turn:["conversation-A","old"]'} onNavigate={()=>{}}/>);
  expect(mark.getAttribute('aria-current')).toBe('true');

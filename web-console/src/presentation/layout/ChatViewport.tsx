@@ -8,6 +8,8 @@ interface ViewportProps {
   children: ReactNode;
   overlay?: ReactNode;
   latestLabel?: string;
+  historical?: boolean;
+  onLatest?: () => void;
   latestTurn?: string;
   /** null means observed detached reading with no native owner; undefined is
    * unobserved/follow mode, where the rail may use current native state. */
@@ -109,6 +111,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean }
   };
   /** Explicit action changes intent; positioning still belongs to the frame. */
   returnToBottom = () => {
+    this.props.onLatest?.();
     this.writtenTop = this.viewport.current?.scrollTop ?? this.writtenTop;
     this.intent++; this.navigation = undefined;
     this.explicitLatest = true;
@@ -160,6 +163,6 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean }
   render() {
     return <div className="chat-reading-surface" style={{ position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>{this.props.overlay}<div ref={this.viewport} className="conversation-scroll" style={{ overflowAnchor: 'none' }} onScroll={this.onScroll}>
       <div ref={this.content}>{this.props.children}</div>
-    </div>{this.props.latestLabel && this.state.detached && <button type="button" data-chat-latest className="chat-return-latest" aria-label={this.props.latestLabel} title={this.props.latestLabel} onClick={this.returnToBottom}><IconChevronDownOutline14 size={16}/></button>}</div>;
+    </div>{this.props.latestLabel && (this.state.detached || this.props.historical) && <button type="button" data-chat-latest className="chat-return-latest" aria-label={this.props.latestLabel} title={this.props.latestLabel} onClick={this.returnToBottom}><IconChevronDownOutline14 size={16}/></button>}</div>;
   }
 }

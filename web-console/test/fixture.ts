@@ -159,7 +159,7 @@ export class Server {
       case 'session/history': {
         const history = (request.params.node_id ? this.nodeSnapshots.get(request.params.node_id) : undefined) ?? this.snapshots.get(request.params.session_id)!;
         if (!history) throw new RpcFailure({ code: -32000, message: 'Unknown Session' });
-        result = { type: 'session_history', conversation_id: history.conversation_id, window: { page: history.transcript } }; break;
+        result = { type: 'session_history', conversation_id: history.conversation_id, window: { cut: { conversation_id: 'conversation-A', journal: '1000', transcript: '1000', mutation_revision: '0' }, page: history.transcript } }; break;
       }
       case 'session/attach': {
         this.reservations.get(socket)?.delete(id);
@@ -238,4 +238,4 @@ export class Server {
   }
 }
 
-export function readingWindow(page: import('../../protocol/app-server/v37').RuntimeClientTranscriptPage) { return { page }; }
+export function readingWindow(page: import('../../protocol/app-server/v37').RuntimeClientTranscriptPage) { return { cut: { conversation_id: 'conversation-A', journal: '1000', transcript: '1000', mutation_revision: '0' }, page }; }
