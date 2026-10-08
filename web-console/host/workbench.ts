@@ -145,7 +145,8 @@ export class WorkspaceTerminals {
       const timeout = setTimeout(done, 25000);
       terminal.listeners.add(done); signal?.addEventListener('abort', done, { once: true }); if (signal?.aborted) done();
     });
-    signal?.throwIfAborted();
+    // Poll publication is still owned by the admission retained across its wait.
+    check();
     if (terminal.failure) throw new Error(terminal.failure);
     return { output: terminal.output.slice(Math.max(0, request.cursor - terminal.offset)), cursor: terminal.offset + terminal.output.length, reset: request.cursor < terminal.offset, exited: terminal.exited };
   }

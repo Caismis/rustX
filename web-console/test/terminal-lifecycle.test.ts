@@ -5,9 +5,9 @@ import { WorkspaceTerminals } from '../host/workbench';
 import type { TerminalProcess } from '../host/terminal-process';
 function gate() { let resolve!: () => void, reject!: (error: Error) => void; const promise = new Promise<void>((yes, no) => { resolve = yes; reject = no; }); void promise.catch(() => {}); return { promise, resolve, reject }; }
 function fixture() {
-  const units: { ready: ReturnType<typeof gate>; done: ReturnType<typeof gate>; stop: ReturnType<typeof vi.fn>; write: ReturnType<typeof vi.fn> }[] = [];
-  const spawn = vi.fn((): TerminalProcess => {
-    const ready=gate(),done=gate(),stop=vi.fn(()=>done.promise),write=vi.fn();units.push({ready,done,stop,write});
+  const units: { ready: ReturnType<typeof gate>; done: ReturnType<typeof gate>; stop: ReturnType<typeof vi.fn>; write: ReturnType<typeof vi.fn>; output: (data: string) => void }[] = [];
+  const spawn = vi.fn((_binary: string, _shell: string, _cwd: string, output: (data: string) => void): TerminalProcess => {
+    const ready=gate(),done=gate(),stop=vi.fn(()=>done.promise),write=vi.fn();units.push({ready,done,stop,write,output});
     return { ready:ready.promise,done:done.promise,stop,write,resize:vi.fn() };
   });
   const terminals=new WorkspaceTerminals('/supervisor',spawn),owner={session_id:'A',active_node:'node-A'};
@@ -143,7 +143,7 @@ it('duplicate creation after a shared capacity-eviction barrier still reserves e
   const a=f.create(),b=f.create(a.id);await Promise.resolve();
   expect(f.units[0].stop).toHaveBeenCalledOnce();
   const spawned=gate(),spawn=f.spawn.getMockImplementation()!;
-  f.spawn.mockImplementation(()=>{const unit=spawn();spawned.resolve();return unit;});
+  f.spawn.mockImplementation((...args)=>{const unit=spawn(...args);spawned.resolve();return unit;});
   eviction.resolve();await spawned.promise;
   f.units[8].ready.resolve();await Promise.all([a.work,b.work]);
   expect(f.spawn).toHaveBeenCalledTimes(9);
@@ -159,4 +159,27 @@ it('retirement failure retains the unit and stays observable through repeated re
   const list=await f.terminals.request(f.owner,async()=>({cwd:'/tmp',ownershipGeneration:'1'}),{kind:'terminals'});
   expect(list.terminals).toHaveLength(1);
   await expect(f.terminals.close()).rejects.toThrow('settlement failed');
+});
+
+it('a waiting Poll revalidates retirement before publication, independently of physical settlement', async () => {
+ const f=fixture(),a=f.create();await Promise.resolve();f.units[0].ready.resolve();await a.work;
+ const entered=gate(),controller=new AbortController();
+ const listen=controller.signal.addEventListener.bind(controller.signal);
+ vi.spyOn(controller.signal,'addEventListener').mockImplementation((...args)=>{listen(...args);entered.resolve();});
+ const poll=f.terminals.request(f.owner,async()=>({cwd:'/tmp',ownershipGeneration:'1'}),{kind:'poll',id:a.id,cursor:0},controller.signal);
+ const rejected=expect(poll).rejects.toThrow('retired');
+ await entered.promise; // The long-poll wait has installed its existing abort listener.
+ const retired=f.terminals.retireOwnership('A','1');
+ f.units[0].output('buffered after retirement');await rejected;
+ expect(f.units[0].stop).toHaveBeenCalledOnce();
+ // Physical proof is still held: retirement has not released retained capacity.
+ expect((await f.terminals.request(f.owner,async()=>({cwd:'/tmp',ownershipGeneration:'1'}),{kind:'terminals'})).terminals).toHaveLength(1);
+ const id=randomUUID(),create=f.terminals.request(f.owner,async()=>({cwd:'/tmp',ownershipGeneration:'3'}),{kind:'create',id,shell:'/bin/sh'});
+ await Promise.resolve();f.units[1].ready.resolve();await create;
+ const successor=f.terminals.request(f.owner,async()=>({cwd:'/tmp',ownershipGeneration:'3'}),{kind:'poll',id,cursor:0});
+ await Promise.resolve();f.units[1].output('successor');expect(await successor).toMatchObject({output:'successor',exited:false});
+ f.units[0].done.resolve();await retired;
+ const completion=f.terminals.request(f.owner,async()=>({cwd:'/tmp',ownershipGeneration:'3'}),{kind:'poll',id,cursor:9});
+ await Promise.resolve();f.units[1].done.resolve();expect(await completion).toMatchObject({output:'',exited:true});
+ expect(f.units[1].stop).not.toHaveBeenCalled();await f.terminals.close();
 });
