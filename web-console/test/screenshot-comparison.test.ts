@@ -91,11 +91,15 @@ it.each([
       expect(region.maxChangedPixels).toBeGreaterThan(0);
       expect(region.maxChannelDelta).toBeGreaterThan(0);
     }
-    for (const [a, index] of entry.regions.map((region, index) => [region, index] as const))
-      for (const b of entry.regions.slice(index + 1)) {
-        const overlap = a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
-        expect(overlap).toBe(false);
-      }
+    // Index each approved pixel once. The row-span evidence contains hundreds
+    // of tiny regions; pairwise assertions are quadratic in the region count.
+    // A duplicate cell proves overlap, and every measurement must have an owner.
+    const owners = new Map<string, NoiseRegion>();
+    for (const region of entry.regions) for (const [x, y] of cells(region)) {
+      const key = `${x},${y}`;
+      expect(owners.has(key)).toBe(false);
+      owners.set(key, region);
+    }
     // Every recorded measurement binds to exactly one region, inside both
     // bounds, and the region's budget covers its own evidence.
     const measured = entry.pixels as MeasuredNoisePixel[];
@@ -104,11 +108,11 @@ it.each([
     for (const [x, y, before, after] of measured) {
       expect(pixel(image, x, y)).toEqual(before);
       expect(after).not.toEqual(before);
-      const owners = entry.regions.filter(region => x >= region.x && x < region.x + region.width && y >= region.y && y < region.y + region.height);
-      expect(owners).toHaveLength(1);
+      const owner = owners.get(`${x},${y}`);
+      expect(owner).toBeDefined();
       const delta = Math.max(...before.map((channel, i) => Math.abs(after[i] - channel)));
-      expect(delta).toBeLessThanOrEqual(owners[0].maxChannelDelta);
-      perRegion.set(owners[0], (perRegion.get(owners[0]) ?? 0) + 1);
+      expect(delta).toBeLessThanOrEqual(owner!.maxChannelDelta);
+      perRegion.set(owner!, (perRegion.get(owner!) ?? 0) + 1);
     }
     for (const region of entry.regions) expect(perRegion.get(region) ?? 0).toBeLessThanOrEqual(region.maxChangedPixels);
   }
