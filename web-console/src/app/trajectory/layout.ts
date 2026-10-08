@@ -130,6 +130,10 @@ export function projectTrajectory(tx: Translate, records: readonly TraceRecord[]
   const turns = new Map<string, TrajectoryTurnModel>();
   const groups = new Map<string, TrajectoryGroupModel>();
   for (const record of records) {
+    // Questions and approvals are already represented by their Tool execution.
+    // Keep interaction lifecycle audits in Trace, not as duplicate trajectory
+    // rows or timeline spans (including when the owning Tool is on another page).
+    if (record.kind === 'interaction') continue;
     const { attempt_id: attempt, step_id: step } = record.location;
     if (attempt == null) {
       sections.push({ kind: 'outside', record, cells: cellsOf(tx, record) });

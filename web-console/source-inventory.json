@@ -804,7 +804,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "3235eeca50567bc95d3d6e12c41206776990e222b61c0896c7070fdcf5d86a24",
+      "local_sha256": "e0a32a2e526a920e1e5748ff958fe4f6b6a7a0f16b38817f35e0d0cb4e714ccf",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/layout.ts",
@@ -2645,7 +2645,7 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "e5909bf6771bb0982317510b4fd3d84a3e7cb3cc05f8bc92ae05016487059158"
+      "local_sha256": "e9a6397dcd0a1f260b8676095adcde01bff5badaecaada449fa3634c12095991"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
