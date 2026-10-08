@@ -1739,6 +1739,12 @@ activation/revision fences guard admission and publication. Unknown transport
 settlement keeps its charged slot across reconnects, with an explicit unavailable
 state if the bounded retirement allowance is exhausted. No native cancellation
 or durable statistics authority is implemented in the browser.
+Release now fences both dispatch and publication at local attachment-intent
+revocation, including a revision that survives immediate Open batching. A
+never-dispatched capacity refusal remains deferred inventory demand. Only the
+request pipeline's newer capacity cut resumes admission; native errors remain
+terminal and unknown transmitted outcomes remain charged. These are local
+observation rules, with no native protocol or statistics-folding changes.
 
 Repair browser acceptance follows the new Settings page order, the shared slash
 model picker, and the actual `data-conversation-scroll` owner. Agent, Shell,

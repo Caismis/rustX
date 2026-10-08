@@ -93,3 +93,37 @@ it('continuous selected-Agent updates cannot starve the rest of the inventory', 
   for (let id = 1; id < 10; id++) expect(f.meters.getSnapshot().readings.has(String(id))).toBe(true);
   expect(f.maximum).toBe(2);
 });
+it('capacity deferral preserves all 80 demands and waits for a strictly newer readiness cut', async () => {
+  const f = fixture(), agents = Array.from({ length: 80 }, (_, i) => agent(i)), scope = f.scope(agents);
+  f.meters.admissionAvailable(7); f.meters.update(scope);
+  await f.settle(0, { settled: true, deferred: 7 });
+  await f.settle(1, { settled: true, deferred: 7 });
+  expect(f.active).toBe(0); expect(f.meters.getSnapshot().readings.size).toBe(0);
+  for (let i = 0; i < 100; i++) { f.meters.update(scope, '79'); f.meters.admissionAvailable(7); }
+  expect(f.requests).toHaveLength(2);
+  f.meters.admissionAvailable(8); expect(f.requests).toHaveLength(4);
+  expect(f.requests[2].id).toBe('79');
+  for (let i = 2; i < 82; i++) await f.settle(i);
+  expect(new Set(f.requests.slice(2).map(row => row.id)).size).toBe(80);
+  expect(f.requests).toHaveLength(82); expect(f.maximum).toBe(2); expect(f.active).toBe(0);
+  expect(f.meters.getSnapshot().readings.size).toBe(80);
+});
+it('readiness arriving before the refusal continuation is not lost', async () => {
+  const f = fixture(), scope = f.scope([agent(0)]);
+  f.meters.update(scope); f.meters.admissionAvailable(1);
+  await f.settle(0, { settled: true, deferred: 0 });
+  expect(f.requests).toHaveLength(2);
+  await f.settle(1); expect(f.meters.getSnapshot().readings.size).toBe(1);
+  f.meters.admissionAvailable(2); f.meters.update(scope); expect(f.requests).toHaveLength(2);
+});
+it('synchronous authority revocation fences settlement-driven admission before an observer update', async () => {
+  const f = fixture(), agents = [agent(0), agent(1), agent(2)];
+  let revision = 0;
+  const scope = { ...f.scope(agents), current: () => revision === 0 };
+  f.meters.update(scope); revision++;
+  await f.settle(0); await f.settle(1);
+  expect(f.requests).toHaveLength(2); expect(f.meters.getSnapshot().readings.size).toBe(0);
+  f.meters.update(f.scope(agents));
+  for (let i = 2; i < 5; i++) await f.settle(i);
+  expect(f.meters.getSnapshot().readings.size).toBe(3); expect(f.maximum).toBe(2);
+});

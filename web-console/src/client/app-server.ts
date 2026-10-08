@@ -66,6 +66,8 @@ export interface SessionView {
   summary?: SessionSummary;
   // Local future-control intent; never inferred from an RPC acknowledgement.
   attachmentIntent: 'wanted' | 'released';
+  /** Release revokes old observation proofs even if Open restores intent in the same render batch. */
+  attachmentIntentRevision?: number;
   // Last server observation, independent of focus and local intent.
   attachment: 'detached' | 'attaching' | 'attached' | 'resynchronizing' | 'stale' | 'error';
   target?: AttachmentTarget;
@@ -180,6 +182,10 @@ export class RequestNotDispatched extends Error {
     super(cause instanceof Error ? cause.message : String(cause), { cause });
   }
 }
+/** Capacity refusal carries the exact readiness cut at which nothing was sent. */
+class RequestAdmissionDeferred extends RequestNotDispatched {
+  constructor(readonly revision: number) { super('Client request capacity reached.'); }
+}
 export class OutcomeUncertain extends Error {
   constructor() { super('Response lost after transmission. Outcome uncertain; the request was not replayed. Reconnect and inspect authoritative state.'); }
 }
@@ -259,6 +265,7 @@ export class AppServerClient {
       const result = await this.request({ method: 'agent/statistics', params: { target, agent_id: id } }, 'agent_statistics', () => { acknowledged = true; }, current);
       return { settled: true, metrics: result.metrics };
     } catch (error) {
+      if (error instanceof RequestAdmissionDeferred) return { settled: true, deferred: error.revision };
       // A correlated native rejection settles the read; an unsent refusal
       // started none. Timeout/disconnect only retires the browser waiter.
       return { settled: acknowledged || error instanceof RpcFailure || error instanceof RequestNotDispatched,
@@ -307,6 +314,19 @@ export class AppServerClient {
   private state: ClientView = {
     connection: 'disconnected', generation: 0, sessions: [], views: {}, uncertain: [], interactionOperations: {},
   };
+  private admissionRevision = 0;
+  private admissionNotification = false;
+  private capacityReleased() {
+    ++this.admissionRevision;
+    if (this.admissionNotification) return;
+    this.admissionNotification = true;
+    // Notify after pending-map mutation/pumping has committed. A readiness cut
+    // also prevents a completion racing the refusal continuation from being lost.
+    queueMicrotask(() => {
+      this.admissionNotification = false;
+      if (this.socket && this.initialized && this.pending.size < 64) this.agentMeters.admissionAvailable(this.admissionRevision);
+    });
+  }
   constructor(private readonly socketFactory: SocketFactory = (url, protocols) => new WebSocket(url, protocols), private readonly timeoutMs = 30_000, private readonly uploadCarrier = transferUpload) {
     // Navigation retires admission proofs; release their reservations outside the caller's stack.
     this.navigation.subscribe(() => queueMicrotask(() => this.pump()));
@@ -534,7 +554,7 @@ export class AppServerClient {
     if (lane !== 'rpc' && [...this.pending.values()].filter(item => requestLane(item.request.method) === lane).length >= DOMAIN_CAPACITY[lane]) {
       throw new RequestNotDispatched(`Client ${lane} capacity reached. Inspect current operations before issuing another.`);
     }
-    if (this.pending.size >= 64) throw new RequestNotDispatched('Client request capacity reached.');
+    if (this.pending.size >= 64) throw new RequestAdmissionDeferred(this.admissionRevision);
     // Keep uncertain diagnostics finite without silently forgetting unresolved mutations.
     if (!READS.has(operation.method) && this.state.uncertain.length + this.pending.size >= 64) throw new RequestNotDispatched('Uncertain-operation capacity reached. Inspect and acknowledge diagnostics first.');
     const generation = this.state.generation;
@@ -602,6 +622,7 @@ export class AppServerClient {
   }
   private refuse(pending: Pending, cause: unknown = new Error('Authority changed before dispatch. No operation was sent.')) {
     if (pending.sent || !this.pending.delete(String(pending.request.id))) return;
+    this.capacityReleased();
     clearTimeout(pending.timer); pending.validation?.abort(); pending.validation = undefined;
     pending.reject(new RequestNotDispatched(cause));
     if (pending.request.method === 'turn/start' || pending.request.method === 'turn/steer') this.publishInbound(pending.request.params.target.session_id);
@@ -638,6 +659,7 @@ export class AppServerClient {
         this.lose(generation); return;
       }
       this.pending.delete(String(value.id)); clearTimeout(pending.timer);
+      this.capacityReleased();
       // Evidence observers run at decode time, before continuation authority
       // checks. Their failures are local diagnostics, never a native RPC result.
       try {
@@ -1839,7 +1861,7 @@ export class AppServerClient {
   /** Closing a view releases only this client relationship. */
   release(id: string): Promise<void> {
     this.modelPreparations.get(id)?.retire(); this.modelPreparations.delete(id);
-    this.setSession(id, { attachmentIntent: 'released', modelIntent: undefined });
+    this.setSession(id, { attachmentIntent: 'released', attachmentIntentRevision: (this.state.views[id]?.attachmentIntentRevision ?? 0) + 1, modelIntent: undefined });
     return this.changeAttachment(id, 'detach', async generation => {
       const target = this.state.views[id]?.target;
       if (!target) return;

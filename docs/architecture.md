@@ -6958,6 +6958,28 @@ rerenders do not dispatch redundant reads. A native rejection is a terminal erro
 for that demand, not zero usage or an automatic retry. Live revisions invalidate
 readings and never contribute durable usage or timing evidence.
 
+Explicit Release revokes meter authority at the synchronous `attachmentIntent`
+state transition, before native detach acknowledgement. The predicate requires
+`wanted` and the captured local intent revision. Release increments that revision
+so an immediate Open in the same React batch cannot revive old proofs. React
+subscribes to both intent and revision; a successor observation scope starts with
+fresh readings. Admission and publication use the same predicate, while already
+transmitted reads retain their settlement obligations.
+
+A full 64-entry RPC pending map is temporary admission deferral, not a native
+statistics error. The request pipeline attaches its capacity revision to this
+never-dispatched refusal. Meter reservations are released, no terminal reading is
+stored, and one client-wide deferred cut pauses admission with all inventory
+demands still discoverable. Only a strictly newer capacity-availability cut can
+resume it. The pipeline advances the cut after removing a pending request through
+correlated settlement or unsent refusal, and coalesces delivery in a microtask
+after pending-map mutation/pumping. It notifies only when initialized transport
+and pending capacity are available. Revision comparison preserves a wakeup that
+arrives before the refusal continuation. Renders, selection and activity updates
+cannot retry a capacity refusal; no timer or second RPC queue is involved. A
+correlated native failure remains terminal for its unchanged demand, and an
+unknown transmitted outcome keeps its charged slot.
+
 Across every scope and connection generation of one client, at most four meter
 requests remain unconfirmed: two current slots plus a bounded retirement allowance.
 A switch from two stalled A reads can admit two B reads immediately. Further

@@ -1,6 +1,6 @@
 import { agentMetrics } from './agent-statistics-fixture';
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { Message } from '../src/app/agent/Message';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { RuntimeFacts } from '../src/app/agent/Activity';
@@ -158,6 +158,104 @@ it('a correlated native failure frees capacity, renders an error without zero us
   const view = <SubagentScope client={server.client} sessionId="A"><Reading/></SubagentScope>;
   const ui = render(view); await ui.findByText(/unknown:durable read unavailable/);
   ui.rerender(view);
+  await act(async () => { await server.client.request({ method: 'session/statistics', params: { session_id: 'A' } }, 'session_statistics'); });
   expect(server.requests.filter(row => row.request.method === 'agent/statistics')).toHaveLength(1);
   expect(server.client.agentMeters.getSnapshot().blocked).toBe(false);
+});
+
+it('Release revokes meter admission and publication before a held detach acknowledges, then Open services fresh demands', async () => {
+  const { useSubagents } = await import('../src/app/agent/subagent-context');
+  const server = new Server(); servers.push(server);
+  server.snapshots.get('A')!.agents = [agent, { ...agent, agent_id: 'second' }, { ...agent, agent_id: 'third' }];
+  await server.attached('A'); server.held.add('agent/statistics'); server.held.add('session/detach');
+  function Reading() { return <output>{Object.keys(useSubagents()!.metrics).length}</output>; }
+  const ui = render(<SubagentScope client={server.client} sessionId="A"><Reading/></SubagentScope>);
+  const reads = () => server.requests.filter(row => row.request.method === 'agent/statistics');
+  await server.waitFor('agent/statistics', 2);
+  let release!: Promise<void>;
+  await act(async () => {
+    release = server.client.release('A');
+    expect(server.client.getSnapshot().views.A.attachmentIntent).toBe('released');
+    expect(server.client.getSnapshot().views.A.attachment).toBe('attached');
+    server.reply(reads()[0].request);
+  });
+  expect(reads()).toHaveLength(2); expect(ui.getByText('0')).toBeTruthy();
+  await act(async () => { server.reply(reads()[1].request); });
+  expect(reads()).toHaveLength(2); expect(ui.getByText('0')).toBeTruthy();
+  await act(async () => { server.reply(await server.waitFor('session/detach', 1)); await release; });
+  await act(async () => { server.held.delete('agent/statistics'); await server.client.attach('A'); });
+  expect(reads()).toHaveLength(5); expect(ui.getByText('3')).toBeTruthy();
+});
+
+it('Release and immediate Open never revive old proofs, including late completion after successor attach', async () => {
+  const { useSubagents } = await import('../src/app/agent/subagent-context');
+  const server = new Server(); servers.push(server); server.snapshots.get('A')!.agents = [agent, { ...agent, agent_id: 'second' }];
+  await server.attached('A'); server.held.add('agent/statistics'); server.held.add('session/detach');
+  function Reading() { return <output>{Object.values(useSubagents()!.metrics).map(value => value.duration.settled_ms).join(',') || 'unknown'}</output>; }
+  const ui = render(<SubagentScope client={server.client} sessionId="A"><Reading/></SubagentScope>);
+  const reads = () => server.requests.filter(row => row.request.method === 'agent/statistics');
+  await server.waitFor('agent/statistics', 2);
+  const old = server.client.agentMeters.getSnapshot().scope!;
+  let release!: Promise<void>, reopen!: Promise<void>;
+  await act(async () => {
+    release = server.client.release('A'); reopen = server.client.attach('A');
+    expect(old.current()).toBe(false); // wanted again, same target, no intervening React commit.
+    server.reply(reads()[0].request);
+  });
+  expect(ui.getByText('unknown')).toBeTruthy();
+  const oldTarget = server.target('A');
+  await act(async () => { server.reply(await server.waitFor('session/detach', 1)); await release; await reopen; });
+  expect(server.target('A').attachment_id).not.toBe(oldTarget.attachment_id);
+  await act(async () => {
+    for (const row of reads().filter(row => (row.request.params as { target: { attachment_id: string } }).target.attachment_id === oldTarget.attachment_id).slice(1)) server.reply(row.request);
+  });
+  expect(ui.getByText('unknown')).toBeTruthy();
+  const current = reads().filter(row => (row.request.params as { target: { attachment_id: string } }).target.attachment_id === server.target('A').attachment_id);
+  expect(current).toHaveLength(2);
+  await act(async () => { for (const row of current) server.socket.success(row.request, { type: 'agent_statistics', metrics: { ...agentMetrics, duration: { settled_ms: '999', active: null } } }); });
+  expect(ui.getByText('999,999')).toBeTruthy();
+  expect(reads().filter(row => (row.request.params as { target: { attachment_id: string } }).target.attachment_id === server.target('A').attachment_id)).toHaveLength(2);
+});
+
+it.each([1, 80])('actual 64-request saturation defers %i stable Agent demands until capacity returns, without render retries', async count => {
+  const { useSubagents } = await import('../src/app/agent/subagent-context');
+  const server = new Server(); servers.push(server);
+  server.snapshots.get('A')!.agents = Array.from({ length: count }, (_, i) => ({ ...agent, agent_id: `child-${i}` }));
+  await server.attached('A');
+  server.held.add('session/statistics'); server.held.add('agent/statistics');
+  const baseline = server.requests.filter(row => row.request.method === 'session/statistics').length;
+  const blockers = Array.from({ length: 64 }, () => server.client.request({ method: 'session/statistics', params: { session_id: 'A' } }, 'session_statistics').catch(() => {}));
+  const request = vi.spyOn(server.client, 'request');
+  const attempts = () => request.mock.calls.filter(([op]) => op.method === 'agent/statistics');
+  const reads = () => server.requests.filter(row => row.request.method === 'agent/statistics');
+  function Reading() { const scope = useSubagents()!; return <output>{Object.keys(scope.metrics).length}:{Object.keys(scope.metricErrors).length}</output>; }
+  const view = () => <SubagentScope client={server.client} sessionId="A"><Reading/></SubagentScope>;
+  const ui = render(view());
+  await act(async () => {});
+  expect(attempts()).toHaveLength(Math.min(count, 2)); expect(reads()).toHaveLength(0);
+  expect(ui.getByText('0:0')).toBeTruthy();
+  for (let i = 0; i < 10; i++) ui.rerender(view());
+  await act(async () => {});
+  expect(attempts()).toHaveLength(Math.min(count, 2));
+  const first = server.requests.filter(row => row.request.method === 'session/statistics')[baseline];
+  await act(async () => { server.reply(first.request); });
+  expect(attempts().length).toBeGreaterThan(Math.min(count, 2));
+  expect(ui.getByText('0:0')).toBeTruthy();
+  await act(async () => {
+    server.held.delete('session/statistics');
+    for (const row of server.requests.filter(row => row.request.method === 'session/statistics').slice(baseline + 1)) server.reply(row.request);
+    await Promise.all(blockers);
+  });
+  let maximum = 0;
+  for (let i = 0; i < count; i++) {
+    await server.waitFor('agent/statistics', i + 1);
+    maximum = Math.max(maximum, reads().length - i);
+    await act(async () => { server.reply(reads()[i].request); });
+  }
+  expect(reads()).toHaveLength(count); expect(new Set(reads().map(row => (row.request.params as { agent_id: string }).agent_id)).size).toBe(count);
+  expect(maximum).toBe(Math.min(count, 2)); expect(ui.getByText(`${count}:0`)).toBeTruthy();
+  await act(async () => { server.snapshots.get('A')!.agents = server.snapshots.get('A')!.agents!.map(row => ({ ...row })); await server.client.refresh('A'); });
+  for (let i = 0; i < 10; i++) ui.rerender(view());
+  expect(reads()).toHaveLength(count);
+  request.mockRestore();
 });

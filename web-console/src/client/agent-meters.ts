@@ -12,7 +12,8 @@ export interface MeterScope {
 }
 export interface MeterReading { demand: string; metrics?: AgentStatistics; error?: string }
 export interface MeterView { scope?: MeterScope; readings: ReadonlyMap<string, MeterReading>; blocked: boolean }
-export type MeterOutcome = { settled: boolean; metrics?: AgentStatistics; error?: string };
+export type MeterOutcome = { settled: boolean; metrics?: AgentStatistics; error?: string; deferred?: never }
+  | { settled: true; deferred: number; metrics?: never; error?: never };
 type Read = (target: AttachmentTarget, id: string, current: () => boolean) => Promise<MeterOutcome>;
 type Flight = { scope?: MeterScope; id: string; demand: string };
 const EMPTY: MeterView = { readings: new Map(), blocked: false };
@@ -27,11 +28,18 @@ export class AgentMeters {
   private selected?: string;
   private cursor?: string;
   private priority = true;
+  private admissionRevision = 0;
+  private deferredAt?: number;
   private listeners = new Set<() => void>();
   private view: MeterView = EMPTY;
   constructor(private readonly read: Read) {}
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   getSnapshot = () => this.view;
+  /** Request-pipeline evidence, never a render/revision-driven retry. */
+  admissionAvailable(revision: number) {
+    this.admissionRevision = revision;
+    if (this.deferredAt !== undefined && revision > this.deferredAt) this.drain();
+  }
   update(scope: MeterScope, selected?: string) {
     if (this.scope !== scope) {
       this.scope = scope; this.readings = new Map(); this.cursor = undefined; this.priority = true;
@@ -51,8 +59,9 @@ export class AgentMeters {
     return this.scope === scope && scope.current() && scope.inventory().some(agent => agent.agent_id === id && meterDemand(agent) === demand);
   }
   private drain() {
+    if (this.deferredAt !== undefined && this.admissionRevision > this.deferredAt) this.deferredAt = undefined;
     const scope = this.scope;
-    if (scope?.target && scope.current()) {
+    if (scope?.target && scope.current() && this.deferredAt === undefined) {
       const agents = scope.inventory();
       while (this.flights.size < 4 && [...this.flights].filter(flight => flight.scope === scope).length < 2) {
         const eligible = (agent: RuntimeClientAgent) => this.readings.get(agent.agent_id)?.demand !== meterDemand(agent)
@@ -77,7 +86,11 @@ export class AgentMeters {
           if (outcome.settled) this.flights.delete(flight);
           // A rejected observer without settlement remains a charged slot.
           else flight.scope = undefined;
-          if (current()) this.readings.set(flight.id, { demand: flight.demand, metrics: outcome.metrics, error: outcome.error });
+          if (outcome.deferred !== undefined) {
+            // Capacity is client-wide. Preserve the inventory demand but pause
+            // admission until a strictly newer readiness cut, even across scopes.
+            this.deferredAt = Math.max(this.deferredAt ?? -1, outcome.deferred);
+          } else if (current()) this.readings.set(flight.id, { demand: flight.demand, metrics: outcome.metrics, error: outcome.error });
         }, error => {
           flight.scope = undefined;
           if (current()) this.readings.set(flight.id, { demand: flight.demand, error: String(error) });

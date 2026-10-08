@@ -25,12 +25,15 @@ export function SubagentScope({ client, sessionId, children }: { client: AppServ
   const agents = useClientSelector(client, state => sessionId ? state.views[sessionId]?.snapshot?.agents : undefined) ?? NO_AGENTS;
   const generation = useClientSelector(client, state => state.generation);
   const target = useClientSelector(client, state => sessionId ? state.views[sessionId]?.target : undefined);
-  const owner = JSON.stringify([generation, sessionId, target]);
+  const intent = useClientSelector(client, state => sessionId ? state.views[sessionId]?.attachmentIntent : undefined);
+  const intentRevision = useClientSelector(client, state => (sessionId ? state.views[sessionId]?.attachmentIntentRevision : undefined) ?? 0);
+  const owner = JSON.stringify([generation, sessionId, target, intentRevision]);
   const scope = useMemo<MeterScope>(() => ({
     target,
     current: () => {
       const state = client.getSnapshot(), view = sessionId ? state.views[sessionId] : undefined;
-      return !!target && state.generation === generation && view?.attachment === 'attached' && !view.deleting && sameTarget(view.target, target);
+      return !!target && state.generation === generation && view?.attachment === 'attached' && view.attachmentIntent === 'wanted'
+        && (view.attachmentIntentRevision ?? 0) === intentRevision && !view.deleting && sameTarget(view.target, target);
     },
     inventory: () => (sessionId ? client.getSnapshot().views[sessionId]?.snapshot?.agents : undefined) ?? [],
   }), [client, owner]);
@@ -40,7 +43,7 @@ export function SubagentScope({ client, sessionId, children }: { client: AppServ
   const attached = useClientSelector(client, state => sessionId ? state.views[sessionId]?.attachment : undefined);
   const deleting = useClientSelector(client, state => sessionId ? state.views[sessionId]?.deleting : undefined);
   useLayoutEffect(() => () => client.agentMeters.retire(scope), [client, scope]);
-  useLayoutEffect(() => { client.agentMeters.update(scope, id); }, [client, scope, agents, attached, deleting, id]);
+  useLayoutEffect(() => { client.agentMeters.update(scope, id); }, [client, scope, agents, attached, intent, deleting, id]);
   const readings = useSyncExternalStore(client.agentMeters.subscribe, client.agentMeters.getSnapshot);
   const metrics: Record<string, AgentStatistics> = {}, metricErrors: Record<string, string> = {};
   if (readings.scope === scope && scope.current()) for (const agent of agents) {
