@@ -161,8 +161,8 @@ for(const source of ['gesture','refresh'] as const)it(`latest unloaded navigatio
  server.handlers.set('session/turns',request=>{if(request.method!=='session/turns')throw Error();const offset=request.params.offset??6016;return {type:'conversation_turns',page:{...outline,offset,turns:Array.from({length:Math.min(64,6063-offset)},(_,i)=>turn(offset+i+1))}};});
  const first=source==='gesture'?server.client.navigateTurn('A',100):server.client.refreshTurns('A');
  const old=await server.waitFor('session/turns',2);
- const skipped=server.client.navigateTurn('A',200),latest=server.client.navigateTurn('A',300);
- expect(await skipped).toBe(false);
+ const replaced=server.client.navigateTurn('A',150),skipped=server.client.navigateTurn('A',200),latest=server.client.navigateTurn('A',300);
+ expect(await replaced).toBe(false);expect(await skipped).toBe(false);
  expect(server.requests.filter(row=>row.request.method==='session/turns')).toHaveLength(2);
  const original=server.client.getSnapshot().views.A.turnOutline?.page;
  server.reply(old);await first;
@@ -218,15 +218,15 @@ it.each([64,128,192])('ordinal %i stays fixed across growth into the next latest
  server.handlers.set('session/turns',request=>{
   if(request.method!=='session/turns')throw Error();
   const offset=request.params.offset??Math.floor((total-1)/64)*64;
-  return {type:'conversation_turns',page:{...outline,total,offset,turns:Array.from({length:Math.min(64,total-offset)},(_,i)=>turn(offset+i+1))}};
+  return {type:'conversation_turns',page:{...outline,cut:{...cut,journal:String(7000+total),transcript:String(7000+total)},total,offset,turns:Array.from({length:Math.min(64,total-offset)},(_,i)=>turn(offset+i+1))}};
  });
  await server.client.readTurns('A');server.held.add('session/turns');
  const navigation=server.client.navigateTurn('A',ordinal),held=await server.waitFor('session/turns',3);
  expect(held.params).toMatchObject({offset:ordinal-64,limit:64});
- total=ordinal+1;server.reply(held);
+ total=ordinal+1;const resolvedCut={...cut,journal:String(7000+total),transcript:String(7000+total)};server.reply(held);
  const window=await server.waitFor('session/transcript',1);
- expect(window.params).toMatchObject({at:{type:'turn',id:turn(ordinal).id,cut},limit:64});
- server.reply(window);expect(await navigation).toEqual(turn(ordinal));expect(reads()).toHaveLength(1);
+ expect(window.params).toMatchObject({at:{type:'turn',id:turn(ordinal).id,cut:resolvedCut},limit:64});
+ server.socket.success(window,{type:'transcript_window',window:{cut:resolvedCut,target:turn(ordinal).id,target_cursor:String(ordinal),page:{entries:[entry(ordinal)]}}});expect(await navigation).toEqual(turn(ordinal));expect(reads()).toHaveLength(1);
  expect(cursors()![0]).toBe(ordinal);expect(server.client.getSnapshot().views.A.turnOutline?.paging).toEqual({type:'latest'});
  const refresh=server.client.refreshTurns('A'),latest=await server.waitFor('session/turns',4);
  expect(latest.params).toMatchObject({offset:null});server.reply(latest);await refresh;
