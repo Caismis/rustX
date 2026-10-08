@@ -6,8 +6,18 @@ test('MCP scope shows only definitions owned by the selected scope', async ({pag
  await page.getByRole('button',{name:'Settings',exact:true}).click();
  await page.getByRole('tab',{name:'MCP servers',exact:true}).click();
  await expect(page.getByRole('listitem',{name:'exa',exact:true})).toBeVisible();
+ const tabs=await page.getByRole('tab').allTextContents();
  await page.getByRole('button',{name:'Configuration scope'}).click();
+ await expect(page.getByRole('menu').getByRole('separator')).toBeVisible();
+ await expect(page.getByRole('menu').getByText('Workspaces',{exact:true})).toBeVisible();
+ await expect(page.getByRole('menuitem',{name:'User (global)',exact:true})).toHaveAttribute('aria-current','true');
+ await page.screenshot({path:'/tmp/rustx-mcp-scope-menu.png'});
  await page.getByRole('menuitem',{name:'Workspace A',exact:true}).click();
+ expect(await page.getByRole('tab').allTextContents()).toEqual(tabs);
+ await page.getByRole('tab',{name:'General',exact:true}).click();
+ await expect(page.getByRole('heading',{name:'User Settings',exact:true})).toBeVisible();
+ await page.getByRole('tab',{name:'MCP servers',exact:true}).click();
+ await expect(page.getByRole('button',{name:'Configuration scope'})).toHaveText('Workspace A');
  await expect(page.getByText('No MCP servers installed',{exact:true})).toBeVisible();
  await expect(page.getByRole('listitem',{name:'exa',exact:true})).toHaveCount(0);
  await expect(page.getByText('Inherited from user',{exact:true})).toHaveCount(0);

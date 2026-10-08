@@ -1717,3 +1717,10 @@ separators. Geometry and controls use rustX's existing Harness-derived settings
 vocabulary, including panel container queries and shared capsule buttons.
 ZCode remains the reference for scope-local management behavior and MCP glyph;
 no runtime/configuration behavior is changed by this presentation adaptation.
+
+MCP scope switching follows ZCode `PluginScopeMenu.tsx`: a user option followed
+by a separator, workspace group label, folder icons and a selected check.
+The existing Menu primitive provides keyboard/portal behavior. MCP's selected
+configuration owner is local to the page; the settings shell retains its
+original target and navigation capabilities. All reads and edits continue through
+the exact-target native settings actor.

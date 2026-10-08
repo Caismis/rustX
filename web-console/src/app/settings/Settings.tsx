@@ -46,7 +46,8 @@ export interface SettingsProps {
   connection: ConnectionController;
   /** The one owner of whether Settings is open, which target it is bound to,
    * which page it shows and which detail is focused inside that page. This
-   * component holds no navigation state and renders that state as it is. */
+   * component renders shell navigation as it is; resource pages may select
+   * their own configuration owner without retargeting the shell. */
   navigation: SettingsNavigationActor;
 }
 
@@ -100,19 +101,22 @@ export function Settings(props: SettingsProps) {
   const view = useSelector(props.navigation, snapshot => ({
     target: snapshot.context.target, page: snapshot.context.page, focus: snapshot.context.focus,
   }), shallowEqual);
-  return view.page && <SettingsDialog {...props} target={view.target} page={view.page} focus={view.focus} />;
+  return view.page && <SettingsDialog key={settingsTargetKey(view.target)} {...props} target={view.target} page={view.page} focus={view.focus} />;
 }
 
 function SettingsDialog({ client, host, theme = 'system', setTheme, connection, navigation, target, page: current, focus }: SettingsProps & {
   target: SettingsTarget; page: SettingsPage; focus: FocusMap;
 }) {
   const tx = useTranslation();
+  const [mcpTarget, setMcpTarget] = useState(target);
+  // Resource scope selects the native owner without navigating the settings shell.
+  const activeTarget = current === 'mcp' ? mcpTarget : target;
   const [extensionFilter, setExtensionFilter] = useState<ExtensionFilter>('all');
   // The navigation machine admits only pages and details this owner
   // authorizes, so the page and focus are rendered exactly as they are.
-  const { actor, transport } = useSettingsTarget(client, target, host);
+  const { actor, transport } = useSettingsTarget(client, activeTarget, host);
   const onFocus = (next?: SettingsFocus) => navigation.send({ type: 'FOCUS', focus: next });
-  const scope: SourceScope = settingsTargetScope(target);
+  const scope: SourceScope = settingsTargetScope(activeTarget);
   // The fresh authoritative observation, and the last one demoted to stale
   // presentation data by a presentation or generation boundary. Rendering the
   // stale value keeps the presentation continuous across a dialog reopen; it is
@@ -145,7 +149,7 @@ function SettingsDialog({ client, host, theme = 'system', setTheme, connection, 
   // not leak across pages. Editing transactions are deliberately not part of
   // that subtree, and the key deliberately carries no source revision, so
   // neither a page change nor an authoritative read can remount a dirty form.
-  const editorKey = `${transport.endpoint ?? ''}|${transport.authorityRevision ?? 0}|${settingsTargetKey(target)}:${current}`;
+  const editorKey = `${transport.endpoint ?? ''}|${transport.authorityRevision ?? 0}|${settingsTargetKey(activeTarget)}:${current}`;
   const connectionFocused = current === 'advanced' && focus.advanced !== undefined;
   // Whether this owner's Advanced page reaches Connection at all is the
   // navigation capability, not whether a connection controller exists.
@@ -171,9 +175,9 @@ function SettingsDialog({ client, host, theme = 'system', setTheme, connection, 
         `rustx.toml` closes the semantic units it authors and says nothing
         about the MCP or named-Agent documents, each of which is its own
         authority and reports its own state. */}
-    {current === 'mcp' && <McpPage connection={{client,host,endpoint:transport.endpoint ?? '',workspaceId:target.kind === 'workspace' ? target.id : undefined,active:editable}} source={source} scope={scope} revision={structured ? config.revision : undefined}
+    {current === 'mcp' && <McpPage connection={{client,host,endpoint:transport.endpoint ?? '',workspaceId:activeTarget.kind === 'workspace' ? activeTarget.id : undefined,active:editable}} source={source} scope={scope} revision={structured ? config.revision : undefined}
       focus={focus.mcp} onFocus={onFocus} refresh={() => actor.send({type:'RECONCILE'})} refreshing={busy || reconciling}
-      scopeControl={<SettingsScopeMenu target={target} host={host} onSelect={next => { navigation.send({type:'OPEN',target:next}); navigation.send({type:'SELECT',page:'mcp'}); }}/>} />}
+      scopeControl={<SettingsScopeMenu target={mcpTarget} host={host} onSelect={next => { onFocus(undefined); setMcpTarget(next); }}/>} />}
     {current === 'extensions' && <ExtensionsPage source={source} scope={scope}
       revision={structured ? config.revision : undefined} models={models} focus={focus.extensions} onFocus={onFocus}
       filter={extensionFilter} onFilter={setExtensionFilter} refresh={() => actor.send({type:'RECONCILE'})} refreshing={busy || reconciling}
@@ -196,7 +200,7 @@ function SettingsDialog({ client, host, theme = 'system', setTheme, connection, 
     // Scope stays visible; internal observation metadata is not product copy.
     context={<div className={css.context} data-lifecycle={lifecycle}>
       <div className={css.contextTitle}>
-        <h2>{settingsTargetLabel(tx, target)}</h2>
+        <h2>{settingsTargetLabel(tx, activeTarget)}</h2>
       </div>
       <Button size="sm" variant="outline" disabled={busy || transport.connection !== 'connected'} onClick={() => actor.send({ type: 'REFRESH' })}>{tx('settings:settings.reload-configuration')}</Button>
     </div>}>
