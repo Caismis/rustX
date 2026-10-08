@@ -499,12 +499,22 @@ paths are relative, symlinks are not followed, directory pages are bounded to
 2,000 entries, and text previews to 1 MiB. Descriptor-relative browsing uses the same POSIX `openat`/`fdopendir`
 implementation on Linux and macOS. Remote/unmapped Hosts do not gain filesystem access.
 
-Workspace HTML defaults to the static, script-disabled preview. Script execution
-requires explicit opt-in in General settings. The current opaque iframe does
-not provide a zero-network execution boundary: browser WebRTC can transmit even
-with a restrictive CSP. Interactive execution must not be described as network
-isolated; completing that contract requires an isolated execution environment or
-removing script execution from ordinary Web previews.
+Workspace HTML is trusted document content. It defaults to the static,
+script-disabled preview; General settings enables interactive previews for
+running page scripts. Interactive documents may access the network and load
+remote resources, subject to normal browser restrictions. Network isolation is
+not part of this preview contract.
+
+The interactive iframe retains its opaque origin and `allow-scripts` sandbox:
+page scripts cannot access the parent application's DOM or storage, and receive
+no Product Host callback or native filesystem API. Local JavaScript and CSS are
+packaged before execution under the original document's workspace authority,
+with at most 64 assets, 4 MiB per asset and 32 MiB in total. Runtime requests do
+not authorize additional workspace reads. Closing or replacing the preview
+aborts its pending reads, removes its iframe and revokes its owned document URL.
+Browser acceptance covers local script execution, stylesheet packaging, parent
+isolation and switching back to the static preview; it does not assert that
+trusted interactive documents are unable to transmit data.
 
 Terminals use Host-owned native `interactive-supervisor` units through `node-pty`
 and lazy-loaded xterm.js. Choose an
