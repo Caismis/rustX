@@ -5653,7 +5653,7 @@
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "7ff85add08053f3fa0cbbd8805e4278b39be1ffc72340e084924ae71f89c6c78"
+      "local_sha256": "a9809a22c6e8b9e9191e4ef92060b8d101e9dc148368bd4d6ac142dfbf426b4d"
     },
     {
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",

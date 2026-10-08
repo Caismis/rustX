@@ -1,7 +1,7 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Header layout adapted from ui-subagent/SubagentHeaderLineage; see PROVENANCE.md. */
 import { useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
 import type { RuntimeClientAgent, AgentStatistics } from '../../../../protocol/app-server/v38';
-import { sameTarget, type AppServerClient } from '../../client/app-server';
+import type { AppServerClient } from '../../client/app-server';
 import { useClientSelector } from '../../client/selectors';
 import { useTranslation } from '../../locale/react';
 import { Menu } from '../../presentation/primitives/Menu';
@@ -26,17 +26,13 @@ export function SubagentScope({ client, sessionId, children }: { client: AppServ
   const generation = useClientSelector(client, state => state.generation);
   const target = useClientSelector(client, state => sessionId ? state.views[sessionId]?.target : undefined);
   const intent = useClientSelector(client, state => sessionId ? state.views[sessionId]?.attachmentIntent : undefined);
-  const intentRevision = useClientSelector(client, state => (sessionId ? state.views[sessionId]?.attachmentIntentRevision : undefined) ?? 0);
-  const owner = JSON.stringify([generation, sessionId, target, intentRevision]);
+  const admission = useClientSelector(client, state => sessionId ? state.views[sessionId]?.attachmentObservation : undefined);
+  const owner = JSON.stringify([generation, sessionId, target, admission]);
   const scope = useMemo<MeterScope>(() => ({
     target,
-    current: () => {
-      const state = client.getSnapshot(), view = sessionId ? state.views[sessionId] : undefined;
-      return !!target && state.generation === generation && view?.attachment === 'attached' && view.attachmentIntent === 'wanted'
-        && (view.attachmentIntentRevision ?? 0) === intentRevision && !view.deleting && sameTarget(view.target, target);
-    },
+    current: () => !!sessionId && client.isAttachmentObservationCurrent(sessionId, admission),
     inventory: () => (sessionId ? client.getSnapshot().views[sessionId]?.snapshot?.agents : undefined) ?? [],
-  }), [client, owner]);
+  }), [client, owner, admission]);
   const [selection, setSelection] = useState<{ owner: string; id?: string }>();
   const id = selection?.owner === owner ? selection.id : undefined;
   const open = (id?: string) => setSelection({ owner, id });

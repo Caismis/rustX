@@ -110,6 +110,22 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
       const reader = page.locator('[data-conversation-scroll]').first();
       await reader.evaluate(element => { element.scrollTop = element.scrollHeight; });
       await expect.poll(() => reader.evaluate(element => element.scrollTop === element.scrollHeight - element.clientHeight)).toBe(true);
+      if (state === 'context' && theme === 'dark' && width === 390) {
+        // Measured raster variants must never excuse different model text or
+        // real layout/style changes. Bind that exception to the exact DOM seat.
+        const labels = await stack.evaluate(root => {
+          const origin = root.getBoundingClientRect();
+          return [...root.querySelectorAll('[data-model-select] > span')].map(node => {
+            const r = node.getBoundingClientRect(), s = getComputedStyle(node);
+            return { text: node.textContent, x: r.x-origin.x, y: r.y-origin.y, width:r.width, height:r.height,
+              fontSize:s.fontSize, fontWeight:s.fontWeight, lineHeight:s.lineHeight, color:s.color, transform:s.transform };
+          });
+        });
+        expect(labels).toEqual([
+          { text:'native/coder', x:119, y:270.5, width:70.8125, height:20, fontSize:'13px', fontWeight:'500', lineHeight:'20px', color:'rgb(207, 211, 214)', transform:'none' },
+          { text:'deliberate', x:193.8125, y:270.5, width:50.6875, height:20, fontSize:'13px', fontWeight:'500', lineHeight:'20px', color:'rgb(129, 133, 140)', transform:'none' },
+        ]);
+      }
       await expectStableScreenshot(stack, `composer-${state}-${theme}-${width}.png`);
     };
     await expect(input).toBeVisible(); await expect(primary).toHaveCount(1);

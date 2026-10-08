@@ -68,6 +68,8 @@ export interface SessionView {
   attachmentIntent: 'wanted' | 'released';
   /** Release revokes old observation proofs even if Open restores intent in the same render batch. */
   attachmentIntentRevision?: number;
+  /** Committed native attachment observation authority; intent or retained target cannot mint it. */
+  attachmentObservation?: { readonly generation: number; readonly target: AttachmentTarget; readonly intentRevision: number };
   // Last server observation, independent of focus and local intent.
   attachment: 'detached' | 'attaching' | 'attached' | 'resynchronizing' | 'stale' | 'error';
   target?: AttachmentTarget;
@@ -333,6 +335,12 @@ export class AppServerClient {
   }
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   getSnapshot = () => this.state;
+  isAttachmentObservationCurrent(id: string, admission: SessionView['attachmentObservation']): boolean {
+    const state = this.getSnapshot(), view = state.views[id];
+    return !!admission && view?.attachmentObservation === admission && state.generation === admission.generation
+      && view.attachmentIntent === 'wanted' && (view.attachmentIntentRevision ?? 0) === admission.intentRevision
+      && view.attachment === 'attached' && !view.deleting && sameTarget(view.target, admission.target);
+  }
   private publish(patch: Partial<ClientView>) {
     this.state = { ...this.state, ...patch };
     for (const listener of this.listeners) listener();
@@ -532,7 +540,7 @@ export class AppServerClient {
     for (const item of uncertain) if (item.interactionKey) operations[item.interactionKey] = { sessionId: item.sessionId!, status: 'uncertain' };
     this.publish({ connection, generation: this.state.generation + 1, uncertain, interactionOperations: operations,
       views: Object.fromEntries(Object.entries(this.state.views).map(([id, view]) => [id, {
-        ...view, modelIntent: undefined, ...(view.recoveringDeletion ? { recoveringDeletion: false, deletionRecovery: undefined } : {}), history: undefined, turnOutline: undefined, turnNavigation: undefined, target: undefined, submissions: undefined, inboundRequests: undefined, attachment: view.target || ['attaching', 'attached', 'resynchronizing'].includes(view.attachment) ? 'stale' : view.attachment,
+        ...view, attachmentObservation: undefined, modelIntent: undefined, ...(view.recoveringDeletion ? { recoveringDeletion: false, deletionRecovery: undefined } : {}), history: undefined, turnOutline: undefined, turnNavigation: undefined, target: undefined, submissions: undefined, inboundRequests: undefined, attachment: view.target || ['attaching', 'attached', 'resynchronizing'].includes(view.attachment) ? 'stale' : view.attachment,
       }])),
     });
     if (oldSocket && !this.closedSockets.has(oldSocket)) {
@@ -718,7 +726,7 @@ export class AppServerClient {
     if (!sameTarget(view?.target, target)) return;
     if (value.method === 'session/closed') {
       this.retireAttachmentWork(target.session_id);
-      this.setSession(target.session_id, { attachment: 'stale', target: undefined, error: view.deleting ? undefined : 'Session connection closed. Open the Session to inspect its current state.' });
+      this.setSession(target.session_id, { attachmentObservation: undefined, attachment: 'stale', target: undefined, error: view.deleting ? undefined : 'Session connection closed. Open the Session to inspect its current state.' });
     } else {
       if (value.method === 'session/resyncRequired') {
         this.readingAuthorities.set(target.session_id, (this.readingAuthorities.get(target.session_id) ?? 0) + 1);
@@ -1008,6 +1016,8 @@ export class AppServerClient {
     return this.acquireAttachment(id, navigationCurrent, attached);
   }
   private acquireAttachment(id: string, navigationCurrent: () => boolean = () => true, attached?: (target: AttachmentTarget) => void): Promise<void> {
+    // Capture the Open's revision before it waits behind earlier gestures.
+    const intentRevision = this.state.views[id]?.attachmentIntentRevision ?? 0;
     return this.changeAttachment(id, 'attach', async generation => {
       if (!navigationCurrent() || this.state.views[id]?.attachmentIntent !== 'wanted') return;
       const existing = this.state.views[id]?.target;
@@ -1016,7 +1026,7 @@ export class AppServerClient {
       const epoch = (this.attachmentEpochs.get(id) ?? 0) + 1;
       this.attachmentEpochs.set(id, epoch);
       this.summarySettled.delete(id);
-      await this.performAttach(id, generation, epoch, navigationCurrent, attached);
+      await this.performAttach(id, generation, epoch, intentRevision, navigationCurrent, attached);
     });
   }
   private async readHistoryPreview(id: string, generation: number, epoch: number, admissionCurrent: () => boolean) {
@@ -1126,7 +1136,7 @@ export class AppServerClient {
     }).catch(() => {});
     return work;
   }
-  private async performAttach(id: string, generation: number, epoch: number, navigationCurrent: () => boolean, attached?: (target: AttachmentTarget) => void) {
+  private async performAttach(id: string, generation: number, epoch: number, intentRevision: number, navigationCurrent: () => boolean, attached?: (target: AttachmentTarget) => void) {
     const current = () => this.current(generation) && this.attachmentEpochs.get(id) === epoch;
     const admissionCurrent = () => current() && navigationCurrent();
     let target: AttachmentTarget | undefined;
@@ -1149,7 +1159,12 @@ export class AppServerClient {
       target = result.target;
       if (result.configuration) this.publish({ configuration: { ...this.state.configuration, [id]: result.configuration } });
       if (result.target.session_id !== id || result.target.conversation_id !== result.snapshot.conversation_id) throw new Error('Mismatched attachment identity.');
-      this.setSession(id, { target: result.target, snapshot: result.snapshot, preview: undefined, statisticsPreview: undefined, tracePreview: undefined, cursor: result.cursor, history: replaceTranscript(result.snapshot.transcript, this.state.views[id]?.history), turnOutline: undefined, turnNavigation: undefined, trace: this.supersedeTrace(id, replaceTrace(result.snapshot.trace, this.state.views[id]?.trace)), attachment: 'attached' });
+      // Commit only this operation's native admission. Release during an in-flight
+      // attach still retains its target for detach, but cannot restore observation.
+      const attachmentObservation = this.state.views[id]?.attachmentIntent === 'wanted'
+        && (this.state.views[id]?.attachmentIntentRevision ?? 0) === intentRevision
+        ? { generation, target: result.target, intentRevision } : undefined;
+      this.setSession(id, { attachmentObservation, target: result.target, snapshot: result.snapshot, preview: undefined, statisticsPreview: undefined, tracePreview: undefined, cursor: result.cursor, history: replaceTranscript(result.snapshot.transcript, this.state.views[id]?.history), turnOutline: undefined, turnNavigation: undefined, trace: this.supersedeTrace(id, replaceTrace(result.snapshot.trace, this.state.views[id]?.trace)), attachment: 'attached' });
       attached?.(result.target);
       this.reconcileInteractions(id); this.settleSubmissions(id);
       const settings = await this.request({ method: 'session/settings', params: { session_id: id } }, 'settings');
@@ -1861,7 +1876,7 @@ export class AppServerClient {
   /** Closing a view releases only this client relationship. */
   release(id: string): Promise<void> {
     this.modelPreparations.get(id)?.retire(); this.modelPreparations.delete(id);
-    this.setSession(id, { attachmentIntent: 'released', attachmentIntentRevision: (this.state.views[id]?.attachmentIntentRevision ?? 0) + 1, modelIntent: undefined });
+    this.setSession(id, { attachmentObservation: undefined, attachmentIntent: 'released', attachmentIntentRevision: (this.state.views[id]?.attachmentIntentRevision ?? 0) + 1, modelIntent: undefined });
     return this.changeAttachment(id, 'detach', async generation => {
       const target = this.state.views[id]?.target;
       if (!target) return;
@@ -1891,7 +1906,7 @@ export class AppServerClient {
     this.summarySettled.delete(id);
     this.summaryObservedEpoch.delete(id);
     this.refreshes.delete(id); this.dirty.delete(id); this.resubscribe.delete(id);
-    this.setSession(id, { history: undefined, submissions: undefined, turnOutline: undefined, turnNavigation: undefined });
+    this.setSession(id, { attachmentObservation: undefined, history: undefined, submissions: undefined, turnOutline: undefined, turnNavigation: undefined });
   }
   clearError() { this.publish({ error: undefined }); }
   acknowledgeDiagnostic(id: string) {

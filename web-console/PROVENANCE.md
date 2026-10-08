@@ -1739,8 +1739,10 @@ activation/revision fences guard admission and publication. Unknown transport
 settlement keeps its charged slot across reconnects, with an explicit unavailable
 state if the bounded retirement allowance is exhausted. No native cancellation
 or durable statistics authority is implemented in the browser.
-Release now fences both dispatch and publication at local attachment-intent
-revocation, including a revision that survives immediate Open batching. A
+The client commits attachment observation authority only at native attach
+acknowledgement. Release clears it synchronously; queued Open and a retained old
+target cannot recreate it, including after detach failure. Both dispatch and
+publication consume the same client-owned admission proof. A
 never-dispatched capacity refusal remains deferred inventory demand. Only the
 request pipeline's newer capacity cut resumes admission; native errors remain
 terminal and unknown transmitted outcomes remain charged. These are local
@@ -1783,3 +1785,16 @@ shell now uses `overflow: clip`; ChatViewport remains the only reading scroll
 owner. A controlled overflowing descendant proves the shell rejects scrollTop
 11 (the prior style fails with 11), followed by the unchanged exact reading
 anchor assertion through fullscreen restoration and stream settlement.
+
+PR #457 attachment-admission repair also measures the dark 390px Composer
+attachment reference. Two CI captures and two local stable captures share the
+same eight changed corner pixels; two further local captures equal the reference.
+All four local captures have identical descendant/ancestor geometry and computed
+paint styles. The reference-specific manifest admits exactly those eight pixels
+with individual measured channel bounds. Adjacent pixels, larger deltas, layout
+and dimension changes still fail. The reference image and comparator are unchanged.
+The same isolated dark Composer probe also exposed a stable Context gradient
+variant and model-label raster baseline variant at identical measured geometry
+and styles. Their exact row spans are separately recorded. The browser test binds
+this reference to the exact model/profile text, relative rectangles, font metrics,
+colours and transform; real text or layout changes cannot use that allowance.

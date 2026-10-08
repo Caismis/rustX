@@ -467,3 +467,38 @@ it('late cold statistics cannot replace the attached live reading', async () => 
   expect(s.client.getSnapshot().views.A.statisticsPreview).toBeUndefined();
   expect(s.client.getSnapshot().views.A.snapshot).toBe(snapshot);
 });
+
+it('native attach acknowledgement after Release and queued Open retains detach identity without restoring observation authority', async () => {
+  const s = server(); await s.connect(); s.held.add('session/attach'); s.held.add('session/detach');
+  const first = s.client.attach('A'), request = await s.waitFor('session/attach', 1);
+  const closing = s.client.release('A'), reopening = s.client.attach('A');
+  s.reply(request); await first;
+  const retained = s.client.target('A');
+  expect(s.client.getSnapshot().views.A.attachmentObservation).toBeUndefined();
+  expect(s.client.getSnapshot().views.A.attachmentIntent).toBe('wanted');
+  const detach = await s.waitFor('session/detach', 1); s.reply(detach); await closing;
+  const second = await s.waitFor('session/attach', 2);
+  expect(s.client.getSnapshot().views.A.attachmentObservation).toBeUndefined();
+  s.reply(second); await reopening;
+  const admission = s.client.getSnapshot().views.A.attachmentObservation;
+  expect(admission?.target).not.toEqual(retained);
+  expect(s.client.isAttachmentObservationCurrent('A', admission)).toBe(true);
+});
+
+
+it('an Open revoked while still queued cannot acquire observation authority when it later attaches', async () => {
+  const s = server(); await s.connect(); await s.client.attach('A');
+  s.held.add('session/attach'); s.held.add('session/detach');
+  const firstRelease = s.client.release('A'), firstOpen = s.client.attach('A');
+  const secondRelease = s.client.release('A'), secondOpen = s.client.attach('A');
+  s.reply(await s.waitFor('session/detach', 1)); await firstRelease;
+  s.reply(await s.waitFor('session/attach', 2)); await firstOpen;
+  expect(s.client.getSnapshot().views.A.attachmentObservation).toBeUndefined();
+  expect(s.client.getSnapshot().views.A.attachmentIntent).toBe('wanted');
+  const retired = s.client.target('A');
+  s.reply(await s.waitFor('session/detach', 2)); await secondRelease;
+  s.reply(await s.waitFor('session/attach', 3)); await secondOpen;
+  const admission = s.client.getSnapshot().views.A.attachmentObservation;
+  expect(admission?.target).not.toEqual(retired);
+  expect(s.client.isAttachmentObservationCurrent('A', admission)).toBe(true);
+});

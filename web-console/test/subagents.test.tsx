@@ -84,7 +84,7 @@ it('an obsolete attachment cannot publish late meters or overwrite its successor
     if(++calls===1)return new Promise(resolve=>{release=resolve;});
     return {type:'agent_statistics',metrics:{...agentMetrics,duration:{settled_ms:'999',active:null}}};
   });
-  const publish=(attachment:string)=>s.publish({views:{[cfg3Session]:{...s.client.getSnapshot().views[cfg3Session],target:{...cfg3Target,attachment_id:attachment},snapshot:{...snapshot(),agents:[agent]}}}});
+  const publish=(attachment:string)=>s.publish({views:{[cfg3Session]:{...s.client.getSnapshot().views[cfg3Session],target:{...cfg3Target,attachment_id:attachment},attachmentObservation:{generation:1,target:{...cfg3Target,attachment_id:attachment},intentRevision:0},snapshot:{...snapshot(),agents:[agent]}}}});
   publish('old');
   function Meter(){return <output>{useSubagents()?.metrics.child?.duration.settled_ms ?? 'unknown'}</output>;}
   const ui=render(<SubagentScope client={s.client} sessionId={cfg3Session}><Meter/></SubagentScope>);
@@ -166,7 +166,7 @@ it('a correlated native failure frees capacity, renders an error without zero us
 it('Release revokes meter admission and publication before a held detach acknowledges, then Open services fresh demands', async () => {
   const { useSubagents } = await import('../src/app/agent/subagent-context');
   const server = new Server(); servers.push(server);
-  server.snapshots.get('A')!.agents = [agent, { ...agent, agent_id: 'second' }, { ...agent, agent_id: 'third' }];
+  server.snapshots.get('A')!.agents = [agent, { ...agent, agent_id: 'second' }, { ...agent, agent_id: 'third' }, { ...agent, agent_id: 'fourth' }];
   await server.attached('A'); server.held.add('agent/statistics'); server.held.add('session/detach');
   function Reading() { return <output>{Object.keys(useSubagents()!.metrics).length}</output>; }
   const ui = render(<SubagentScope client={server.client} sessionId="A"><Reading/></SubagentScope>);
@@ -184,37 +184,85 @@ it('Release revokes meter admission and publication before a held detach acknowl
   expect(reads()).toHaveLength(2); expect(ui.getByText('0')).toBeTruthy();
   await act(async () => { server.reply(await server.waitFor('session/detach', 1)); await release; });
   await act(async () => { server.held.delete('agent/statistics'); await server.client.attach('A'); });
-  expect(reads()).toHaveLength(5); expect(ui.getByText('3')).toBeTruthy();
+  expect(reads()).toHaveLength(6); expect(ui.getByText('4')).toBeTruthy();
 });
 
-it('Release and immediate Open never revive old proofs, including late completion after successor attach', async () => {
+it('Release and batched Open cannot admit any replacement scope against T1 before native T2 attach', async () => {
+  const { useSubagents } = await import('../src/app/agent/subagent-context');
+  const server = new Server(); servers.push(server); server.snapshots.get('A')!.agents = Array.from({ length: 4 }, (_, i) => ({ ...agent, agent_id: `child-${i}` }));
+  await server.attached('A'); server.held.add('agent/statistics'); server.held.add('session/detach'); server.held.add('session/attach');
+  function Reading() { return <output>{Object.keys(useSubagents()!.metrics).length}</output>; }
+  const ui = render(<SubagentScope client={server.client} sessionId="A"><Reading/></SubagentScope>);
+  const reads = () => server.requests.filter(row => row.request.method === 'agent/statistics');
+  await server.waitFor('agent/statistics', 2);
+  const old = server.client.agentMeters.getSnapshot().scope!, oldTarget = server.target('A');
+  let release!: Promise<void>, reopen!: Promise<void>;
+  await act(async () => { release = server.client.release('A'); reopen = server.client.attach('A'); expect(old.current()).toBe(false); });
+  const replacement = server.client.agentMeters.getSnapshot().scope!;
+  expect(replacement).not.toBe(old); expect(replacement.current()).toBe(false);
+  expect(server.client.target('A')).toEqual(oldTarget); expect(reads()).toHaveLength(2);
+  for (const row of reads()) {
+    await act(async () => { server.reply(row.request); });
+    expect(reads()).toHaveLength(2); expect(ui.getByText('0')).toBeTruthy();
+  }
+  await act(async () => { server.reply(await server.waitFor('session/detach', 1)); await release; });
+  const attaching = await server.waitFor('session/attach', 2);
+  expect(reads()).toHaveLength(2); expect(server.client.getSnapshot().views.A.attachmentObservation).toBeUndefined();
+  await act(async () => { server.reply(attaching); await reopen; });
+  const newTarget = server.target('A'); expect(newTarget.attachment_id).not.toBe(oldTarget.attachment_id);
+  expect(reads()).toHaveLength(4);
+  for (let i = 2; i < 6; i++) await act(async () => { server.reply(reads()[i].request); });
+  expect(reads()).toHaveLength(6); expect(ui.getByText('4')).toBeTruthy();
+  expect(reads().slice(2).every(row => (row.request.params as { target: { attachment_id: string } }).target.attachment_id === newTarget.attachment_id)).toBe(true);
+});
+
+it('late T1 results cannot overwrite admitted T2 statistics after Release and reattach', async () => {
   const { useSubagents } = await import('../src/app/agent/subagent-context');
   const server = new Server(); servers.push(server); server.snapshots.get('A')!.agents = [agent, { ...agent, agent_id: 'second' }];
-  await server.attached('A'); server.held.add('agent/statistics'); server.held.add('session/detach');
+  await server.attached('A'); server.held.add('agent/statistics');
   function Reading() { return <output>{Object.values(useSubagents()!.metrics).map(value => value.duration.settled_ms).join(',') || 'unknown'}</output>; }
   const ui = render(<SubagentScope client={server.client} sessionId="A"><Reading/></SubagentScope>);
   const reads = () => server.requests.filter(row => row.request.method === 'agent/statistics');
   await server.waitFor('agent/statistics', 2);
-  const old = server.client.agentMeters.getSnapshot().scope!;
-  let release!: Promise<void>, reopen!: Promise<void>;
-  await act(async () => {
-    release = server.client.release('A'); reopen = server.client.attach('A');
-    expect(old.current()).toBe(false); // wanted again, same target, no intervening React commit.
-    server.reply(reads()[0].request);
-  });
-  expect(ui.getByText('unknown')).toBeTruthy();
-  const oldTarget = server.target('A');
-  await act(async () => { server.reply(await server.waitFor('session/detach', 1)); await release; await reopen; });
-  expect(server.target('A').attachment_id).not.toBe(oldTarget.attachment_id);
-  await act(async () => {
-    for (const row of reads().filter(row => (row.request.params as { target: { attachment_id: string } }).target.attachment_id === oldTarget.attachment_id).slice(1)) server.reply(row.request);
-  });
-  expect(ui.getByText('unknown')).toBeTruthy();
-  const current = reads().filter(row => (row.request.params as { target: { attachment_id: string } }).target.attachment_id === server.target('A').attachment_id);
-  expect(current).toHaveLength(2);
-  await act(async () => { for (const row of current) server.socket.success(row.request, { type: 'agent_statistics', metrics: { ...agentMetrics, duration: { settled_ms: '999', active: null } } }); });
+  await act(async () => { await server.client.release('A'); await server.client.attach('A'); });
+  expect(reads()).toHaveLength(4);
+  await act(async () => { for (const row of reads().slice(2)) server.socket.success(row.request, { type: 'agent_statistics', metrics: { ...agentMetrics, duration: { settled_ms: '999', active: null } } }); });
   expect(ui.getByText('999,999')).toBeTruthy();
-  expect(reads().filter(row => (row.request.params as { target: { attachment_id: string } }).target.attachment_id === server.target('A').attachment_id)).toHaveLength(2);
+  await act(async () => { for (const row of reads().slice(0, 2)) server.reply(row.request); });
+  expect(ui.getByText('999,999')).toBeTruthy(); expect(reads()).toHaveLength(4);
+});
+
+it('failed detach retains T1 but Open and refresh cannot mint observation admission; explicit detach and attach recover', async () => {
+  const server = new Server(); servers.push(server); server.snapshots.get('A')!.agents = Array.from({ length: 4 }, (_, i) => ({ ...agent, agent_id: `child-${i}` }));
+  await server.attached('A'); server.held.add('agent/statistics'); server.held.add('session/detach');
+  render(<SubagentScope client={server.client} sessionId="A"><span/></SubagentScope>);
+  const reads = () => server.requests.filter(row => row.request.method === 'agent/statistics');
+  await server.waitFor('agent/statistics', 2); const target = server.target('A');
+  await act(async () => {
+    const rejected = expect(server.client.release('A')).rejects.toThrow('detach refused');
+    const opening = server.client.attach('A');
+    server.socket.deliver({ jsonrpc: '2.0', id: (await server.waitFor('session/detach', 1)).id, error: { code: -32000, message: 'detach refused' } });
+    await rejected; await opening;
+    for (const row of reads()) server.reply(row.request);
+  });
+  expect(server.client.getSnapshot().views.A).toMatchObject({ target, attachment: 'attached', attachmentIntent: 'wanted' });
+  expect(server.client.getSnapshot().views.A.attachmentObservation).toBeUndefined();
+  expect(reads()).toHaveLength(2); expect(server.claims()).toHaveLength(1);
+  await act(async () => { server.held.delete('session/detach'); server.held.delete('agent/statistics'); await server.client.release('A'); await server.client.attach('A'); });
+  expect(reads()).toHaveLength(6); expect(server.target('A').attachment_id).not.toBe(target.attachment_id);
+});
+
+it('Release fences unsent meter requests waiting behind the real eight-slot RPC lane', async () => {
+  const server = new Server(); servers.push(server); server.snapshots.get('A')!.agents = [agent, { ...agent, agent_id: 'second' }];
+  await server.attached('A'); server.held.add('session/statistics'); server.held.add('session/detach');
+  const blockers = Array.from({ length: 8 }, () => server.client.request({ method: 'session/statistics', params: { session_id: 'A' } }, 'session_statistics'));
+  const requests = server.requests.filter(row => row.request.method === 'session/statistics').slice(-8);
+  render(<SubagentScope client={server.client} sessionId="A"><span/></SubagentScope>);
+  let releasing!: Promise<void>;
+  await act(async () => { releasing = server.client.release('A'); for (const row of requests) server.reply(row.request); await Promise.all(blockers); });
+  expect(server.requests.filter(row => row.request.method === 'agent/statistics')).toHaveLength(0);
+  await act(async () => { server.reply(await server.waitFor('session/detach', 1)); await releasing; });
+  expect(server.requests.filter(row => row.request.method === 'agent/statistics')).toHaveLength(0);
 });
 
 it.each([1, 80])('actual 64-request saturation defers %i stable Agent demands until capacity returns, without render retries', async count => {

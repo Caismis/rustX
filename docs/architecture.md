@@ -6958,13 +6958,30 @@ rerenders do not dispatch redundant reads. A native rejection is a terminal erro
 for that demand, not zero usage or an automatic retry. Live revisions invalidate
 readings and never contribute durable usage or timing evidence.
 
-Explicit Release revokes meter authority at the synchronous `attachmentIntent`
-state transition, before native detach acknowledgement. The predicate requires
-`wanted` and the captured local intent revision. Release increments that revision
-so an immediate Open in the same React batch cannot revive old proofs. React
-subscribes to both intent and revision; a successor observation scope starts with
-fresh readings. Admission and publication use the same predicate, while already
-transmitted reads retain their settlement obligations.
+Attachment observation admission belongs to the client's existing serialized
+attachment lifecycle. Desired `attachmentIntent`, retained native `target`, and
+committed `attachmentObservation` are distinct facts. `performAttach` commits the
+observation identity with the validated native attach result, binding generation,
+exact target and the operation's intent revision captured before queueing Open. It cannot commit that
+identity if Release revoked the operation while its acknowledgement was pending;
+the returned target is still retained so the queued detach can settle normally.
+
+Release synchronously clears observation admission in the same state transition
+that sets `attachmentIntent` to released and advances its revision. An immediate
+Open only records wanted intent and queues behind detach. Neither the old target
+nor a replacement React scope can admit observations while that detach is pending.
+A rejected detach retains its native target and claim, but Open/refresh do not
+mint observation authority. Explicit successful detach followed by attach (or
+existing transport reconnection and native attach recovery) establishes fresh
+authority. No native operation is implicitly cancelled or declared settled.
+
+The client-owned `isAttachmentObservationCurrent` predicate verifies the exact
+committed admission identity, generation, target, wanted intent/revision, attached
+state and deletion fence. React projects that proof; the existing statistics
+pre-send and publication checks both consume it. A new target gets fresh readings;
+late old-target results cannot publish or suppress its demand. Transport loss,
+attachment retirement and Session closure clear the admission fact. Meter presence
+never controls the ordinary attachment-operation queue.
 
 A full 64-entry RPC pending map is temporary admission deferral, not a native
 statistics error. The request pipeline attaches its capacity revision to this
