@@ -28,6 +28,11 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean }
   private writtenTop = 0;
   private mounted = false;
   private intent = 0;
+  private retireGesture?: () => void;
+  private retireNavigation = () => {
+    const retire = this.retireGesture; this.retireGesture = undefined;
+    this.intent++; this.navigation = undefined; retire?.();
+  };
   private navigation?: { intent: number; anchor: string; current: () => boolean };
   private active?: string | null;
   private explicitLatest = false;
@@ -57,6 +62,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean }
     const navigation = this.navigation;
     this.navigation = undefined;
     if (navigation && navigation.intent === this.intent && navigation.current()) {
+      this.retireGesture = undefined;
       const row = this.rows().find(row => row.dataset.chatAnchorKey === navigation.anchor);
       if (row) desired = el.scrollTop + row.getBoundingClientRect().top - el.getBoundingClientRect().top;
     } else if (this.following) desired = floor;
@@ -99,7 +105,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean }
     const floor = Math.max(0, el.scrollHeight - el.clientHeight);
     const previous = Math.min(this.writtenTop, floor);
     if (el.scrollTop < previous || Math.abs(el.scrollTop - previous) > 0.5) {
-      this.intent++; this.navigation = undefined;
+      this.retireNavigation();
       // A small upward gesture is reading intent even inside the bottom
       // tolerance. Only a downward arrival may re-enable tail following.
       this.following = el.scrollTop > this.writtenTop && floor - el.scrollTop <= 24;
@@ -113,17 +119,20 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean }
   returnToBottom = () => {
     this.props.onLatest?.();
     this.writtenTop = this.viewport.current?.scrollTop ?? this.writtenTop;
-    this.intent++; this.navigation = undefined;
+    this.retireNavigation();
     this.explicitLatest = true;
     this.following = true; this.reading = undefined;
     this.setState({ detached: false }); this.markLayoutDirty();
   };
-  beginNavigation = () => {
+  beginNavigation = (retired?: () => void) => {
+    this.retireNavigation();
+    this.retireGesture = retired;
     this.writtenTop = this.viewport.current?.scrollTop ?? this.writtenTop;
-    const intent = ++this.intent;
+    const intent = this.intent;
     this.navigation = undefined; this.following = false; this.reading = this.position();
     this.setState({ detached: true });
-    return { current: () => this.mounted && this.intent === intent,
+    const current = () => { if (this.mounted) this.onScroll(); return this.mounted && this.intent === intent; };
+    return { current,
       commit: (anchor: string, current: () => boolean = () => true) => {
         if (!this.mounted || this.intent !== intent || !current()) return false;
         this.navigation = { intent, anchor, current }; this.markLayoutDirty(); return true;
@@ -155,7 +164,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean }
   }
   componentWillUnmount() {
     this.mounted = false;
-    this.intent++;
+    this.retireNavigation();
     this.observer?.disconnect();
     if (this.frame !== undefined) cancelAnimationFrame(this.frame);
     this.frame = undefined;

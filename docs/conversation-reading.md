@@ -184,14 +184,30 @@ page. Selecting an unloaded mark on any other page establishes an explicit
 page; automatic refresh preserves it as live turns arrive. Selecting a mark on
 the newest page explicitly restores latest intent. One refresh demand arriving during an
 in-flight outline read is retained and serviced after its reply; streaming text
-deltas create no demand. The cache still holds only one outline page.
+deltas create no demand. Per Session, one RPC and one replaceable latest demand
+are retained. Equivalent pages share a read; a distinct newer explicit page fences
+the older reply and replaces the pending demand. Superseded/retired demand promises
+resolve without a page, never as successful completion. The viewport gesture starts
+at the click, before outline resolution; only its still-current continuation may
+request the single direct transcript window. Attachment replacement retires both
+active and deferred demands. The cache still holds only one outline page.
+
+The rail uses native ordinal minus one as its fixed-pitch virtual index. Its model
+retains that native page and at most one pinned live identity; unloaded marks are
+computed on demand. It has no total-sized mark array, index Map or measurement
+cache. Only visible indexes plus three-mark overscan and focused neighbours are
+materialized. Hover/focus keys map to ordinals arithmetically; native identity
+lookup inspects only the retained page.
 
 Every window read captures the attachment target, connection generation,
 attachment epoch, resync authority and navigation intent. Node/runtime changes,
 reattachment, resync and a window rebase orphan it. Only the newest navigation
 intent lands, and only while ChatViewport's intent ticket is current: user
-scrolling retires the landing, while the read may still publish its finite window if its navigation ownership
-remains current. ChatViewport preserves the newer reading position. Outline reads have
+scrolling synchronously retires both the client reading intent and the landing.
+Both native authority and the initiating viewport ticket must remain valid at
+`setSession` window installation. A stale success or failure leaves the last valid
+window unchanged. The layout frame independently checks the same ticket again,
+so a scroll after installation still wins over the deferred viewport movement. Outline reads have
 independent paging intent and survive window changes; resync retires both domains.
 
 ChatViewport is the sole automatic Chat scroll writer. The rail and Return to

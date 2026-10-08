@@ -25,13 +25,13 @@ async function ready(){
 }
 async function serve(count=1){server.reply(await server.waitFor('session/transcript',count));}
 
-it('a loaded native anchor lands without a read',async()=>{await ready();expect(await server.client.navigateTurn('A',turn(6010))).toBe(true);expect(reads()).toHaveLength(0);});
+it('a loaded native anchor lands without a read',async()=>{await ready();expect(await server.client.navigateTurn('A',turn(6010))).toEqual(turn(6010));expect(reads()).toHaveLength(0);});
 it('6063 Turns: distant jump is one read and 64 retained entries; live authority continues independently',async()=>{
  await ready();const work=server.client.navigateTurn('A',turn(1));
  expect(server.client.getSnapshot().views.A.turnNavigation?.pending).toBe(turnKey(turn(1).id));
  const request=await server.waitFor('session/transcript',1);
  expect(request.params).toMatchObject({at:{type:'turn',id:turn(1).id,cut},limit:64});
- server.reply(request);expect(await work).toBe(true);
+ server.reply(request);expect(await work).toEqual(turn(1));
  expect(cursors()).toEqual(Array.from({length:64},(_,i)=>i+1));expect(reads()).toHaveLength(1);
  const historical=server.client.getSnapshot().views.A.history;
  await server.update('A',{...snapshot(),transcript:{entries:[entry(6063),entry(6064)]}});
@@ -41,13 +41,13 @@ it('6063 Turns: distant jump is one read and 64 retained entries; live authority
 });
 it('new navigation retires an older in-flight jump without waiting for it',async()=>{
  await ready();const old=server.client.navigateTurn('A',turn(500)),fresh=server.client.navigateTurn('A',turn(200));
- await serve(2);expect(await fresh).toBe(true);const installed=server.client.getSnapshot().views.A.history;
+ await serve(2);expect(await fresh).toEqual(turn(200));const installed=server.client.getSnapshot().views.A.history;
  await serve(1);expect(await old).toBe(false);expect(server.client.getSnapshot().views.A.history).toBe(installed);expect(reads()).toHaveLength(2);
 });
 it('a newer jump retires an ordinary older read; late completion cannot prepend into its window',async()=>{
  await ready();const older=server.client.loadEarlier('A');await server.client.loadEarlier('A');
  expect(reads()).toHaveLength(1);const jump=server.client.navigateTurn('A',turn(400));
- await serve(2);expect(await jump).toBe(true);const installed=server.client.getSnapshot().views.A.history;
+ await serve(2);expect(await jump).toEqual(turn(400));const installed=server.client.getSnapshot().views.A.history;
  await serve(1);await older;expect(server.client.getSnapshot().views.A.history).toBe(installed);
 });
 it('repeated older gestures retain bounded entries and bytes, ordered without duplicates',async()=>{
@@ -72,7 +72,7 @@ it('failed jump preserves the last valid presentation and explicit retry recover
  await ready();const before=server.client.getSnapshot().views.A.history,work=server.client.navigateTurn('A',turn(1));const request=await server.waitFor('session/transcript',1);
  server.socket.deliver({jsonrpc:'2.0',id:request.id,error:{code:-32000,message:'History mutation invalidated this cut'}});expect(await work).toBe(false);
  expect(server.client.getSnapshot().views.A.history).toBe(before);expect(server.client.getSnapshot().views.A.turnNavigation?.error).toContain('History mutation');
- const retry=server.client.navigateTurn('A',turn(200));await serve(2);expect(await retry).toBe(true);
+ const retry=server.client.navigateTurn('A',turn(200));await serve(2);expect(await retry).toEqual(turn(200));
 });
 it('native mutation retires a held read and its obsolete cut',async()=>{
  await ready();const work=server.client.navigateTurn('A',turn(1));const request=await server.waitFor('session/transcript',1);
@@ -139,4 +139,75 @@ it('a failed replacement jump releases the obsolete page loading owner and allow
  await serve(1);await older;expect(cursors()).toEqual(entries);
  const retry=server.client.loadEarlier('A');await serve(3);await retry;
  expect(reads()).toHaveLength(3);expect(cursors()![0]).toBe(5936);
+});
+
+it('an obsolete user gesture cannot install a native window or publish its failure', async () => {
+ await ready();let current=true;
+ const before=server.client.getSnapshot().views.A.history;
+ const work=server.client.navigateTurn('A',turn(1),()=>current);
+ const reply=await server.waitFor('session/transcript',1);
+ current=false;server.reply(reply);expect(await work).toBe(false);
+ expect(server.client.getSnapshot().views.A.history).toBe(before);
+ const failed=server.client.navigateTurn('A',turn(2),()=>true);
+ const error=await server.waitFor('session/transcript',2);
+ server.client.invalidateReading('A');
+ server.socket.deliver({jsonrpc:'2.0',id:error.id,error:{code:-32000,message:'obsolete failure'}});
+ expect(await failed).toBe(false);expect(server.client.getSnapshot().views.A.history).toBe(before);
+ expect(server.client.getSnapshot().views.A.turnNavigation?.error).toBeUndefined();
+});
+
+for(const source of ['gesture','refresh'] as const)it(`latest unloaded navigation survives an in-flight ${source} without an unbounded queue`,async()=>{
+ await ready();server.held.add('session/turns');
+ server.handlers.set('session/turns',request=>{if(request.method!=='session/turns')throw Error();const offset=request.params.offset??6016;return {type:'conversation_turns',page:{...outline,offset,turns:Array.from({length:Math.min(64,6063-offset)},(_,i)=>turn(offset+i+1))}};});
+ const first=source==='gesture'?server.client.navigateTurn('A',100):server.client.refreshTurns('A');
+ const old=await server.waitFor('session/turns',2);
+ const skipped=server.client.navigateTurn('A',200),latest=server.client.navigateTurn('A',300);
+ expect(await skipped).toBe(false);
+ expect(server.requests.filter(row=>row.request.method==='session/turns')).toHaveLength(2);
+ const original=server.client.getSnapshot().views.A.turnOutline?.page;
+ server.reply(old);await first;
+ const fresh=await server.waitFor('session/turns',3);expect(fresh.params).toMatchObject({offset:256,limit:64});
+ expect(server.client.getSnapshot().views.A.turnOutline?.page).toBe(original);
+ server.reply(fresh);const window=await server.waitFor('session/transcript',1);expect(window.params).toMatchObject({at:{type:'turn',id:turn(300).id}});
+ server.reply(window);expect(await latest).toEqual(turn(300));expect(reads()).toHaveLength(1);expect(cursors()![0]).toBe(300);
+ expect(server.requests.filter(row=>row.request.method==='session/turns')).toHaveLength(3);
+});
+it('equivalent pending outline demands coalesce but only the last gesture lands',async()=>{
+ await ready();server.held.add('session/turns');
+ const a=server.client.navigateTurn('A',100),read=await server.waitFor('session/turns',2);
+ const b=server.client.navigateTurn('A',110);
+ server.socket.success(read,{type:'conversation_turns',page:{...outline,offset:64,turns:Array.from({length:64},(_,i)=>turn(i+65))}});
+ expect(await a).toBe(false);await serve();expect(await b).toEqual(turn(110));
+ expect(server.requests.filter(row=>row.request.method==='session/turns')).toHaveLength(2);expect(reads()).toHaveLength(1);
+});
+it.each(['attachment','disconnect'] as const)('%s retires both the active and deferred outline navigation',async reason=>{
+ await ready();server.held.add('session/turns');
+ const a=server.client.navigateTurn('A',100),old=await server.waitFor('session/turns',2),socket=server.socket;
+ const b=server.client.navigateTurn('A',300);
+ if(reason==='attachment'){await server.client.release('A');await server.client.attach('A');}else server.client.disconnect();
+ expect(await a).toBe(false);expect(await b).toBe(false);
+ const before=server.client.getSnapshot().views.A;
+ socket.deliver(server.commit(old,socket));
+ expect(server.client.getSnapshot().views.A.history).toBe(before.history);expect(reads()).toHaveLength(0);
+ expect(server.requests.filter(row=>row.request.method==='session/turns')).toHaveLength(2);
+});
+
+it('retired user intent removes deferred outline demand without issuing its RPC',async()=>{
+ await ready();server.held.add('session/turns');
+ const refresh=server.client.refreshTurns('A'),old=await server.waitFor('session/turns',2);
+ let current=true;const jump=server.client.navigateTurn('A',300,()=>current);
+ current=false;server.client.invalidateReading('A');
+ const before=server.client.getSnapshot().views.A.history;
+ server.reply(old);await refresh;expect(await jump).toBe(false);
+ expect(server.requests.filter(row=>row.request.method==='session/turns')).toHaveLength(2);
+ expect(reads()).toHaveLength(0);expect(server.client.getSnapshot().views.A.history).toBe(before);
+});
+it('failed latest outline settles its pending mark without replacing history or navigating',async()=>{
+ await ready();server.held.add('session/turns');
+ const before=server.client.getSnapshot().views.A.history,work=server.client.navigateTurn('A',300);
+ const read=await server.waitFor('session/turns',2);
+ server.socket.deliver({jsonrpc:'2.0',id:read.id,error:{code:-32000,message:'outline unavailable'}});
+ expect(await work).toBe(false);expect(server.client.getSnapshot().views.A.history).toBe(before);
+ expect(server.client.getSnapshot().views.A.turnOutline?.error).toContain('outline unavailable');
+ expect(server.client.getSnapshot().views.A.turnNavigation?.pending).toBeUndefined();expect(reads()).toHaveLength(0);
 });

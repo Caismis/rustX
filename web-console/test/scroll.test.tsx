@@ -467,3 +467,39 @@ it('explicit latest and navigation supersede undelivered earlier scroll samples'
   v.flush(); expect(v.top()).toBe(500);
   expect(navigation.current()).toBe(true);
 });
+
+for (const when of ['before reply', 'before layout'] as const) it(`real viewport scroll retires a distant native Turn navigation ${when}`, async () => {
+ const v=await clippedReading('completed');v.ui.unmount();
+ try {
+  await act(async()=>{v.server.snapshots.set('A',{...snapshot(),transcript:{entries:v.entries.slice(2),next_cursor:'120'}});await v.server.client.refresh('A');});
+  v.server.held.add('session/transcript');
+  const ui=await act(async()=>render(<ConversationLive client={v.server.client} sessionId="A" mode="chat" disabled={false} onHistorical={()=>{}}/>));
+  const viewport=ui.container.querySelector<HTMLElement>('.conversation-scroll')!;
+  Object.defineProperties(viewport,{scrollHeight:{value:2200},clientHeight:{value:200}});
+  vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockImplementation(function(this:HTMLElement){
+   const key=this.dataset.chatAnchorKey??this.dataset.chatTurnOwner;
+   const top=key?(v.positions[key]??0)-viewport.scrollTop:0;
+   return {top,bottom:top+900,left:0,right:500,width:500,height:900,x:0,y:top,toJSON(){}};
+  });
+  v.flush();viewport.scrollTop=1300;fireEvent.scroll(viewport);v.flush();
+  const before=v.server.client.getSnapshot().views.A.history;
+  fireEvent.click(ui.getByRole('button',{name:'Jump to turn 1'}));
+  const intent=v.server.client.getSnapshot().views.A.turnNavigation!.intent;
+  const read=await v.server.waitFor('session/transcript',1);
+  const respond=()=>v.server.socket.success(read,{type:'transcript_window',window:{cut:v.cut,target:v.a,target_cursor:'90',page:{entries:[{...v.entries[0],cursor:'90'},...v.entries]}}});
+  if(when==='before layout')await act(async()=>respond());
+  const valid=v.server.client.getSnapshot().views.A.history;
+  viewport.scrollTop=1400;fireEvent.scroll(viewport);
+  expect(v.server.client.getSnapshot().views.A.turnNavigation!.intent).toBeGreaterThan(intent);
+  const content=ui.container.querySelector('.chat-content')?.textContent??ui.container.textContent;
+  const marks=()=>[...ui.container.querySelectorAll('[data-turn-id][aria-current="true"]')].map(mark=>mark.getAttribute('data-turn-id'));
+  const active=marks();expect(active).toEqual([turnAnchor(v.b).slice(5)]);
+  if(when==='before reply')await act(async()=>respond());
+  v.flush();
+  expect(v.server.client.getSnapshot().views.A.history).toBe(valid);
+  if(when==='before reply')expect(valid).toBe(before);else expect(valid).not.toBe(before);
+  expect(ui.container.querySelector('.chat-content')?.textContent??ui.container.textContent).toBe(content);
+  expect(marks()).toEqual(active);expect(viewport.scrollTop).toBe(1400);
+  ui.unmount();
+ } finally {v.server.client.disconnect();}
+});

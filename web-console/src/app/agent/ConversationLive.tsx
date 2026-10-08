@@ -45,14 +45,16 @@ export function ConversationLive({ client, sessionId, mode, disabled, onHistoric
     ? <Trajectory key={`${view.id}:${view.target?.attachment_id}`} cache={view.trace} onSelect={id => client.selectTrace(view.id, id)} onLoadDetail={id => { void client.loadTraceDetail(view.id, id); }} loadEarlier={() => void client.loadEarlierTrace(view.id).catch(() => {})}/>
     : <ChatViewport ref={viewport} key={`${view.id}:${view.target?.attachment_id}`} latestLabel={tx('agent:agent-transcript.return-to-latest')}
       overlay={<TurnNavigator key={`rail:${view.id}:${view.target?.attachment_id}`} client={client} sessionId={view.id} active={active} onNavigate={turn=>{
-        const intent=viewport.current?.beginNavigation();
+        let clientIntent: number | undefined;
+        const clientCurrent = () => {
+          const current = client.getSnapshot().views[view.id];
+          return current?.target === view.target && current.attachment === 'attached' && current.turnNavigation?.intent === clientIntent;
+        };
+        const intent=viewport.current?.beginNavigation(() => { if (clientCurrent()) client.invalidateReading(view.id); });
         if(intent){
           const work=client.navigateTurn(view.id,turn,intent.current);
-          const clientIntent=client.getSnapshot().views[view.id]?.turnNavigation?.intent;
-          void work.then(committed=>{if(committed)intent.commit(turnAnchor(turn.id),()=>{
-            const current=client.getSnapshot().views[view.id];
-            return current?.target===view.target && current.attachment==='attached' && current.turnNavigation?.intent===clientIntent;
-          });});
+          clientIntent=client.getSnapshot().views[view.id]?.turnNavigation?.intent;
+          void work.then(committed=>{if(committed)intent.commit(turnAnchor(committed.id),clientCurrent);});
         }
       }}/>}
       latestTurn={view.attempt && view.attempt.phase.type!=='settled' ? turnAnchor({conversation_id:view.conversation_id,attempt_id:view.attempt.attempt_id}) : undefined}

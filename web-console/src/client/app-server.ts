@@ -14,6 +14,19 @@ import { HISTORY_PAGE_SIZE, sameReadCut, extendTranscriptWindow, installTranscri
 import type { ConversationTurn, ConversationTurnPage } from '../../../protocol/app-server/v37';
 import { ProtocolLog, type WireContext } from './protocol-log';
 
+interface OutlineDemand {
+  offset?: number;
+  current: () => boolean;
+  work: Promise<ConversationTurnPage | undefined>;
+  resolve: (page?: ConversationTurnPage) => void;
+}
+interface OutlineRead {
+  authority: () => boolean;
+  active: OutlineDemand;
+  pending?: OutlineDemand;
+  refresh: boolean;
+}
+
 /** Expected observed cancellation identity; never substituted with a successor Attempt. */
 export interface CancellationTarget {
   readonly generation: number;
@@ -254,8 +267,7 @@ export class AppServerClient {
   private attachmentEpochs = new Map<string, number>();
   private readingIntents = new Map<string, number>();
   private readingAuthorities = new Map<string, number>();
-  private outlineRefreshPending = new Set<string>();
-  private outlineIntents = new Map<string, number>();
+  private outlineReads = new Map<string, OutlineRead>();
   // Native metadata invalidation (Issue #386). One monotonic clock orders every
   // metadata observation this client makes: `summaryReadSequence` is ticked at
   // the *start* of each catalog list and each exact summary read — its causal
@@ -331,7 +343,7 @@ export class AppServerClient {
     // model/cancellation continuations only update already-reserved Session rows.
     const detached = [...(this.state.detached ?? [])];
     if (this.state.uncertain.length || sessions.length) detached.push({ authority: this.state.endpoint!, authorityId: this.state.authorityId, operations: this.state.uncertain, sessions });
-    this.attachmentEpochs.clear(); this.readingAuthorities.clear(); this.outlineIntents.clear(); this.outlineRefreshPending.clear(); this.readingIntents.clear(); this.summarySettled.clear(); this.summaryInvalidations.clear(); this.summaryObservedEpoch.clear(); this.summaryInFlight.clear(); this.summaryReads.clear(); this.summaryObservations.clear();
+    this.attachmentEpochs.clear(); this.readingAuthorities.clear(); for (const id of this.outlineReads.keys()) this.retireOutline(id); this.readingIntents.clear(); this.summarySettled.clear(); this.summaryInvalidations.clear(); this.summaryObservedEpoch.clear(); this.summaryInFlight.clear(); this.summaryReads.clear(); this.summaryObservations.clear();
     this.listEpoch++; this.listOffset = 0; this.listQuery = '';
     this.log.clear();
     this.publish({ authorityId: undefined, views: {}, sessions: [], nextOffset: undefined, uncertain: [], interactionOperations: {}, detached,
@@ -668,7 +680,7 @@ export class AppServerClient {
     } else {
       if (value.method === 'session/resyncRequired') {
         this.readingAuthorities.set(target.session_id, (this.readingAuthorities.get(target.session_id) ?? 0) + 1);
-        this.outlineRefreshPending.delete(target.session_id);
+        this.retireOutline(target.session_id);
         this.invalidateReading(target.session_id);
         this.setSession(target.session_id, { turnOutline: undefined, attachment: 'resynchronizing' });
         this.resubscribe.add(target.session_id);
@@ -695,8 +707,7 @@ export class AppServerClient {
       }
       if (value.params.event.type === 'pending_inbound_changed') {
         this.invalidateReading(target.session_id);
-        this.outlineIntents.set(target.session_id, (this.outlineIntents.get(target.session_id) ?? 0) + 1);
-        this.outlineRefreshPending.delete(target.session_id);
+        this.retireOutline(target.session_id);
         const error = 'History changed. Reload the Turn outline to navigate again.';
         this.setSession(target.session_id, { turnOutline: { paging: view.turnOutline?.paging ?? { type: 'latest' }, error },
           ...(view.history?.window ? { history: { ...replaceTranscript(view.snapshot.transcript, view.history), error } } : {}) });
@@ -1084,7 +1095,7 @@ export class AppServerClient {
       while (this.dirty.has(id) && current()) {
         this.dirty.delete(id);
         const resync = this.resubscribe.delete(id);
-        if (resync) { this.outlineRefreshPending.delete(id);this.setSession(id, { attachment: 'resynchronizing', trace: this.supersedeTrace(id, replaceTrace({ records: [], next_cursor: null }, this.state.views[id]?.trace)), history: replaceTranscript({ entries: [] }, this.state.views[id]?.history), turnOutline: undefined, turnNavigation: undefined }); }
+        if (resync) { this.retireOutline(id);this.setSession(id, { attachment: 'resynchronizing', trace: this.supersedeTrace(id, replaceTrace({ records: [], next_cursor: null }, this.state.views[id]?.trace)), history: replaceTranscript({ entries: [] }, this.state.views[id]?.history), turnOutline: undefined, turnNavigation: undefined }); }
         this.acquiring.add(id);
         const result = await this.request({ method: 'session/snapshot', params: { target, trace_records: traceInterests(this.state.views[id]?.trace) } }, 'snapshot');
         if (!current()) return;
@@ -1240,38 +1251,105 @@ export class AppServerClient {
       && this.state.views[id]?.attachment === 'attached' && this.state.views[id]?.attachmentIntent === 'wanted'
       && sameTarget(this.state.views[id]?.target, target);
   }
-  /** Automatic refresh preserves the selected paging intent, never the returned offset. */
-  refreshTurns(id: string) {
-    if(this.state.views[id]?.turnOutline?.loading){this.outlineRefreshPending.add(id);return Promise.resolve();}
-    const paging=this.state.views[id]?.turnOutline?.paging;
-    return this.readTurns(id,paging?.type==='page' ? paging.offset : undefined);
+  private retireOutline(id: string) {
+    const read = this.outlineReads.get(id);
+    this.outlineReads.delete(id);
+    read?.active.resolve(); read?.pending?.resolve();
   }
-  async readTurns(id: string, offset?: number) {
+  /** Automatic refresh preserves explicit paging; one later read discharges growth. */
+  refreshTurns(id: string) {
+    const read = this.outlineReads.get(id);
+    if (read?.authority()) { read.refresh = true; return Promise.resolve(undefined); }
+    const paging = this.state.views[id]?.turnOutline?.paging;
+    return this.readTurns(id, paging?.type === 'page' ? paging.offset : undefined);
+  }
+  /** One in-flight RPC plus one replaceable latest demand. A skipped demand never
+   * masquerades as a completed page. Equivalent demands share the native read. */
+  readTurns(id: string, offset?: number, userCurrent: () => boolean = () => true): Promise<ConversationTurnPage | undefined> {
     const view = this.state.views[id];
-    if (!view?.target || view.attachment !== 'attached' || view.attachmentIntent !== 'wanted' || view.turnOutline?.loading) return;
-    const target = this.target(id), authority = this.readingAuthority(id);
-    const intent = (this.outlineIntents.get(id) ?? 0) + 1; this.outlineIntents.set(id,intent);
-    const current = () => authority() && this.outlineIntents.get(id) === intent;
-    const paging:OutlinePagingIntent=offset===undefined ? {type:'latest'} : {type:'page',offset};
-    this.setSession(id,{ turnOutline: { ...this.state.views[id]?.turnOutline, paging, loading: true, error: undefined } });
+    if (!view?.target || view.attachment !== 'attached' || view.attachmentIntent !== 'wanted' || !userCurrent()) return Promise.resolve(undefined);
+    let read = this.outlineReads.get(id);
+    if (read && !read.authority()) { this.retireOutline(id); read = undefined; }
+    const paging: OutlinePagingIntent = offset === undefined ? { type: 'latest' } : { type: 'page', offset };
+    if (read) {
+      const equivalent = read.active.offset === offset ? read.active : read.pending?.offset === offset ? read.pending : undefined;
+      if (equivalent) {
+        if (equivalent === read.active) { read.pending?.resolve(); read.pending = undefined; }
+        equivalent.current = userCurrent;
+        this.setSession(id, { turnOutline: { ...view.turnOutline, paging, loading: true, error: undefined } });
+        return equivalent.work;
+      }
+    }
+    let resolve!: OutlineDemand['resolve'];
+    const demand: OutlineDemand = { offset, current: userCurrent, work: new Promise(done => { resolve = done; }), resolve: page => resolve(page) };
+    const start = !read;
+    if (read) { read.pending?.resolve(); read.pending = demand; }
+    else {
+      read = { authority: this.readingAuthority(id), active: demand, refresh: false };
+      this.outlineReads.set(id, read);
+    }
+    this.setSession(id, { turnOutline: { ...view.turnOutline, paging, loading: true, error: undefined } });
+    if (start) void this.runOutline(id, read);
+    return demand.work;
+  }
+  private async runOutline(id: string, read: OutlineRead) {
+    const demand = read.active;
+    const current = () => this.outlineReads.get(id) === read && read.authority() && !read.pending && demand.current();
+    const paging: OutlinePagingIntent = demand.offset === undefined ? { type: 'latest' } : { type: 'page', offset: demand.offset };
+    let page: ConversationTurnPage | undefined;
     try {
-      const result = await this.request({ method: 'session/turns', params: { target, offset: offset ?? null, limit: HISTORY_PAGE_SIZE } }, 'conversation_turns', undefined, current);
       if (!current()) return;
-      if (result.page.cut.conversation_id !== target.conversation_id || result.page.turns.length > HISTORY_PAGE_SIZE) throw new Error('Invalid native turn outline.');
-      this.setSession(id,{turnOutline:{paging,page:result.page}});
-      if(this.outlineRefreshPending.delete(id))void this.refreshTurns(id);
-    } catch (error) { if (current()) { this.outlineRefreshPending.delete(id);this.setSession(id,{turnOutline:{ ...this.state.views[id]?.turnOutline, paging, loading:false, error:String(error) }}); } }
+      const target = this.target(id);
+      const result = await this.request({ method: 'session/turns', params: { target, offset: demand.offset ?? null, limit: HISTORY_PAGE_SIZE } }, 'conversation_turns', undefined, current);
+      if (current()) {
+        if (result.page.cut.conversation_id !== target.conversation_id || result.page.turns.length > HISTORY_PAGE_SIZE) throw new Error('Invalid native turn outline.');
+        page = result.page;
+        this.setSession(id, { turnOutline: { paging, page } });
+      }
+    } catch (error) {
+      if (current()) { read.refresh = false; this.setSession(id, { turnOutline: { ...this.state.views[id]?.turnOutline, paging, loading: false, error: String(error) } }); }
+    } finally {
+      demand.resolve(page);
+      if (this.outlineReads.get(id) === read) {
+        const pending = read.pending;
+        if (read.authority() && pending?.current()) {
+          read.active = pending; read.pending = undefined; read.refresh = false;
+          void this.runOutline(id, read);
+        } else {
+          this.outlineReads.delete(id); pending?.resolve();
+          if (read.authority()) {
+            const outline = this.state.views[id]?.turnOutline;
+            if (outline?.loading) this.setSession(id, { turnOutline: { ...outline, loading: false } });
+            if (read.refresh) void this.refreshTurns(id);
+          }
+        }
+      }
+    }
   }
   /** Native resolves the exact Turn at its outline cut in one bounded read. */
-  async navigateTurn(id: string, turn: ConversationTurn, userCurrent: () => boolean = () => true) {
-    const view = this.state.views[id], cursor = turn.cursor;
-    if (cursor == null || !view?.history || view.attachment !== 'attached' || view.attachmentIntent !== 'wanted') return false;
-    const authority = this.readingAuthority(id), intent = this.invalidateReading(id), key = turnKey(turn.id);
-    const current = () => authority() && this.readingIntents.get(id) === intent;
+  async navigateTurn(id: string, selection: ConversationTurn | number, userCurrent: () => boolean = () => true) {
+    const view = this.state.views[id];
+    if (!view?.history || view.attachment !== 'attached' || view.attachmentIntent !== 'wanted' || !userCurrent()) return false;
+    const authority = this.readingAuthority(id), intent = this.invalidateReading(id);
+    const current = () => authority() && this.readingIntents.get(id) === intent && userCurrent();
+    let turn: ConversationTurn, cut = view.turnOutline?.page?.cut;
+    if (typeof selection === 'number') {
+      this.setSession(id, { turnNavigation: { intent, pending: `ordinal:${selection}` } });
+      const total = view.turnOutline?.page?.total ?? 0;
+      const offset = Math.floor((selection - 1) / HISTORY_PAGE_SIZE) * HISTORY_PAGE_SIZE;
+      const page = await this.readTurns(id, offset >= Math.floor((total - 1) / HISTORY_PAGE_SIZE) * HISTORY_PAGE_SIZE ? undefined : offset, current);
+      if (!current()) return false;
+      if (!page) { this.setSession(id, { turnNavigation: { intent } }); return false; }
+      const found = page.turns.find(row => row.ordinal === selection);
+      if (!found) { this.setSession(id, { turnNavigation: { intent, error: 'This Turn is no longer in the native outline.' } }); return false; }
+      turn = found; cut = page.cut;
+    } else turn = selection;
+    const cursor = turn.cursor, key = turnKey(turn.id);
+    if (!current()) return false;
+    if (cursor == null) { this.setSession(id, { turnNavigation: { intent } }); return false; }
     const anchored = () => !!this.state.views[id]?.history?.page.entries?.some(entry => entry.cursor === cursor
       && (entry.turn_process && turnKey(entry.turn_process) === key || entry.item.type === 'attempt_terminal' && turnKey(entry.item.turn) === key));
-    if (anchored()) return userCurrent();
-    const cut = view.turnOutline?.page?.cut;
+    if (anchored()) { this.setSession(id, { turnNavigation: { intent } }); return turn; }
     if (!cut) { this.setSession(id, { turnNavigation: { intent, error: 'Reload the native Turn outline before navigating.' } }); return false; }
     this.setSession(id, { turnNavigation: { intent, pending: key } });
     try {
@@ -1281,7 +1359,7 @@ export class AppServerClient {
       const history = installTranscriptWindow(result.window, this.state.views[id]?.history);
       if (!(history.page.entries ?? []).some(entry => entry.cursor === cursor)) throw new Error('This turn is outside the readable native history.');
       this.setSession(id, { history, turnNavigation: { intent } });
-      return anchored() && userCurrent();
+      return anchored() && current() ? turn : false;
     } catch (error) {
       if (current()) this.setSession(id, { turnNavigation: { intent, error: String(error) } });
       return false;
@@ -1647,7 +1725,7 @@ export class AppServerClient {
   }
   private retireAttachmentWork(id: string) {
     this.acquiring.delete(id);
-    this.readingIntents.delete(id); this.outlineIntents.delete(id); this.outlineRefreshPending.delete(id); this.readingAuthorities.delete(id);
+    this.readingIntents.delete(id); this.retireOutline(id); this.readingAuthorities.delete(id);
     this.traceReads.delete(id);
     this.traceAuthorities.delete(id);
     this.summarySettled.delete(id);

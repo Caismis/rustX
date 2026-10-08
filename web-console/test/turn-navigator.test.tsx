@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, render, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
+import { turnRail, turnRailRange } from '../src/app/agent/turn-rail-items';
 import { TurnNavigator } from '../src/app/agent/TurnNavigator';
 import { Server } from './fixture';
 import { installTurnNavigatorObserver } from './turn-navigator-fixture';
@@ -15,19 +16,29 @@ async function scrollRail(ui: ReturnType<typeof render>, top: number) {
   await act(async () => { element.scrollTop = top; element.dispatchEvent(new Event('scroll')); });
 }
 
-async function thousandTurns() {
+function navigationIntent() {
+  server.handlers.set('session/transcript', request => {
+    if (request.method !== 'session/transcript' || request.params.at.type !== 'turn') throw Error('expected direct Turn window');
+    const at = request.params.at;
+    const turn = server.client.getSnapshot().views.A.turnOutline!.page!.turns.find(turn => turn.id.attempt_id === at.id.attempt_id)!;
+    return {type:'transcript_window',window:{cut:at.cut,target:at.id,target_cursor:turn.cursor,page:{entries:[{cursor:turn.cursor!,item:{type:'message',message:{role:'assistant',id:'read',content:[{type:'text',text:'window'}]}},turn_process:{...at.id,control_cursor:turn.cursor!,message_count:1,tool_call_count:0,outcome:'completed'}}]}}};
+  });
+  return vi.fn((selection: ConversationTurn | number) => { if (typeof selection === 'number') void server.client.navigateTurn('A', selection); });
+}
+
+async function thousandTurns(total = 1000) {
   // 600px shows about 60 marks: the loaded final page and the unloaded turns above it.
   installTurnNavigatorObserver(600);
   server = new Server(); await server.attached('A');
   server.handlers.set('session/turns', request => {
     if (request.method !== 'session/turns') throw new Error('outline method');
-    const offset = request.params.offset ?? 960;
-    return { type: 'conversation_turns', page: { cut: { conversation_id: 'conversation-A', journal: '1', transcript: '1000', mutation_revision: '0' }, offset, total: 1000,
-      turns: Array.from({ length: Math.min(64, 1000 - offset) }, (_, i) => native(offset + i + 1, offset + i + 1 === 999 ? '' : undefined)) } };
+    const offset = request.params.offset ?? Math.floor((total - 1) / 64) * 64;
+    return { type: 'conversation_turns', page: { cut: { conversation_id: 'conversation-A', journal: '1', transcript: '1000', mutation_revision: '0' }, offset, total,
+      turns: Array.from({ length: Math.min(64, total - offset) }, (_, i) => native(offset + i + 1, offset + i + 1 === 999 ? '' : undefined)) } };
   });
-  const navigate = vi.fn();
+  const navigate = navigationIntent();
   let ui: ReturnType<typeof render>;
-  await act(async () => { ui = render(<TurnNavigator client={server.client} sessionId="A" active={'turn:["conversation-A","native-1000"]'} onNavigate={navigate}/>); });
+  await act(async () => { ui = render(<TurnNavigator client={server.client} sessionId="A" active={`turn:["conversation-A","native-${total}"]`} onNavigate={navigate}/>); });
   return { ui: ui!, navigate };
 }
 
@@ -67,16 +78,18 @@ it('an unloaded mark reads its native page before navigating; the newest page re
   const read = await server.waitFor('session/turns', 2);
   expect(read.params).toMatchObject({ offset: 896 });
   expect(ui.getByRole('button', { name: 'Load and jump to turn 960' }).getAttribute('aria-busy')).toBe('true');
-  expect(navigate).not.toHaveBeenCalled();
+  expect(navigate).toHaveBeenCalledExactlyOnceWith(960);
+  expect(server.requests.filter(row=>row.request.method==='session/transcript')).toHaveLength(0);
   await act(async () => server.reply(read));
-  expect(navigate).toHaveBeenCalledExactlyOnceWith(native(960));
+  expect(server.client.getSnapshot().views.A.history?.window?.target).toEqual(native(960).id);
   expect(server.client.getSnapshot().views.A.turnOutline?.paging).toEqual({ type: 'page', offset: 896 });
   expect(ui.getByRole('button', { name: 'Jump to turn 960' }).hasAttribute('aria-busy')).toBe(false);
   fireEvent.click(ui.getByRole('button', { name: 'Load and jump to turn 1000' }));
   const latest = await server.waitFor('session/turns', 3);
   expect(latest.params).toMatchObject({ offset: null });
   await act(async () => server.reply(latest));
-  expect(navigate).toHaveBeenLastCalledWith(native(1000));
+  expect(navigate).toHaveBeenLastCalledWith(1000);
+  expect(server.client.getSnapshot().views.A.history?.window?.target).toEqual(native(1000).id);
   expect(server.client.getSnapshot().views.A.turnOutline?.paging).toEqual({ type: 'latest' });
 });
 
@@ -127,7 +140,7 @@ it('a loaded rail mark outside the transcript window reads its native window whi
  const s={...server.snapshots.get('A')!,attempt:{attempt_id:'live',phase:{type:'running' as const},turn:1},transcript:{entries:[row('600')],next_cursor:'600'}};
  server.snapshots.set('A',s);await server.client.refresh('A');
  server.handlers.set('session/turns',()=>({type:'conversation_turns',page:{cut,offset:0,total:2,turns:[old,live]}}));
- let work:Promise<boolean>|undefined,ui:ReturnType<typeof render>;
+ let work:Promise<false | ConversationTurn>|undefined,ui:ReturnType<typeof render>;
  await act(async()=>{ui=render(<TurnNavigator client={server.client} sessionId="A" onNavigate={turn=>{work=server.client.navigateTurn('A',turn);}}/>);});
  const mark=ui!.getByRole('button',{name:'Jump to turn 1'});
  await act(async()=>{server.durableUpdate('A',{...s,transcript:{entries:[row('600'),row('601')]}});});
@@ -137,7 +150,7 @@ it('a loaded rail mark outside the transcript window reads its native window whi
  fireEvent.click(mark);const request=await server.waitFor('session/transcript',1);
  expect(request.params).toMatchObject({limit:64});expect(request.params).toHaveProperty('at',{type:'turn',id:old.id,cut});
  expect(mark.getAttribute('aria-busy')).toBe('true');
- await act(async()=>{server.socket.success(request,{type:'transcript_window',window: { cut, target:old.id, target_cursor:'1', page:{entries:[{...row('1'),turn_process:{...old.id,control_cursor:'1',message_count:1,tool_call_count:0,outcome:'completed'}}]}}});expect(await work).toBe(true);});
+ await act(async()=>{server.socket.success(request,{type:'transcript_window',window: { cut, target:old.id, target_cursor:'1', page:{entries:[{...row('1'),turn_process:{...old.id,control_cursor:'1',message_count:1,tool_call_count:0,outcome:'completed'}}]}}});expect(await work).toEqual(old);});
  expect(mark.hasAttribute('aria-busy')).toBe(false);
  expect(server.client.getSnapshot().views.A.history?.page.entries?.map(row=>row.cursor)).toEqual(['1']);
  // The historical window and current tail have separate read authority.
@@ -169,7 +182,8 @@ it('an explicit historical page survives live growth; an unloaded newest mark re
  await scrollRail(fixture.ui,0);
  await act(async()=>{fireEvent.click(fixture.ui.getByRole('button',{name:'Load and jump to turn 1'}));});
  expect(server.client.getSnapshot().views.A.turnOutline?.paging).toEqual({type:'page',offset:0});
- expect(fixture.navigate).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ordinal:1,cursor:'1'}));
+ expect(fixture.navigate).toHaveBeenCalledExactlyOnceWith(1);
+ expect(server.client.getSnapshot().views.A.history?.window?.target?.attempt_id).toBe('a1');
  await fixture.start(129);await fixture.locate(129);await fixture.settle(129);
  const outline=server.client.getSnapshot().views.A.turnOutline!;
  expect(outline.paging).toEqual({type:'page',offset:0});expect(outline.page?.turns.map(turn=>turn.ordinal)).toEqual(Array.from({length:64},(_,i)=>i+1));
@@ -203,7 +217,7 @@ async function pagingRail(initial:number){
   return {type:'conversation_turns',page:{cut:{conversation_id:'conversation-A',journal:String(total),transcript:String(location??initial),mutation_revision:'0'},offset,total,
    turns:Array.from({length:Math.min(64,total-offset)},(_,i)=>{const n=offset+i+1;return {id:{conversation_id:'conversation-A',attempt_id:`a${n}`},ordinal:n,cursor:n>initial && n!==location?null:String(n),prompt:`turn ${n}`,response:''};})}};
  });
- const navigate=vi.fn();
+ const navigate=navigationIntent();
  let ui:ReturnType<typeof render>;await act(async()=>{ui=render(<TurnNavigator client={server.client} sessionId="A" onNavigate={navigate}/>);});
  const update=async(n:number,settled=false,phaseChange=false)=>{const s=server.snapshots.get('A')!;const next:RuntimeClientSnapshot={...s,attempt:{attempt_id:`a${n}`,turn:1,phase:settled?{type:'settled',outcome:{type:'completed',finish_reason:{type:'stop'}}}:{type:'running'}},transcript:{entries:location?[{cursor:String(location),item:{type:'message',message:{role:'assistant',id:`m${location}`,content:[{type:'text',text:'native output'}]}},turn_process:{conversation_id:'conversation-A',attempt_id:`a${n}`,control_cursor:String(location),message_count:1,tool_call_count:0,outcome:settled?'completed' as const:'running' as const}}]:[]}};await act(async()=>{server.snapshots.set('A',next);if(phaseChange)await server.client.refresh('A');else server.durableUpdate('A',next);});};
  return {ui:ui!,navigate,mark:(n:number)=>ui!.container.querySelector<HTMLButtonElement>(`[data-turn-id='["conversation-A","a${n}"]']`),
@@ -223,4 +237,52 @@ it('observed unknown detached ownership suppresses the unrelated live fallback',
  expect(ui.container.querySelectorAll('[aria-current]')).toHaveLength(0);
  ui.rerender(<TurnNavigator client={server.client} sessionId="A" onNavigate={()=>{}}/>);
  expect(ui.container.querySelectorAll('[aria-current]')).toHaveLength(1);
+});
+
+it('a million native ordinals retain only one page and arithmetic accessors; allocation follows the visible range', () => {
+ const total=1_000_000,offset=499_968;
+ const page={cut:{conversation_id:'conversation-A',journal:'1',transcript:String(total),mutation_revision:'0'},offset,total,turns:Array.from({length:64},(_,i)=>native(offset+i+1))};
+ let accesses=0;page.turns=new Proxy(page.turns,{get(target,key,receiver){if(typeof key==='string' && /^\d+$/.test(key))accesses++;return Reflect.get(target,key,receiver);}});
+ const model=turnRail(page);
+ expect(Object.keys(model)).toEqual(['count','item','indexOfKey','indexOfTurn']);
+ expect(model.count).toBe(total);expect(accesses).toBe(0);
+ for(const ordinal of [1,64,65,499_968,499_969,500_032,500_033,total]) {
+  const item=model.item(ordinal-1)!;expect(item.key).toBe(`ordinal:${ordinal}`);expect(item.ordinal).toBe(ordinal);
+  expect(item.turn).toEqual(ordinal>offset && ordinal<=offset+64?native(ordinal):undefined);
+  expect(model.indexOfKey(item.key)).toBe(ordinal-1);
+ }
+ for(const top of [0,5_000_000,9_999_700]) {
+  const range=turnRailRange(total,top,300,42);expect(range.length).toBeLessThanOrEqual(42);
+  const marks=range.map(index=>model.item(index)!);expect(marks).toHaveLength(range.length);
+ }
+ expect(accesses).toBeLessThan(150);expect(page.turns).toHaveLength(64);
+});
+it('a million-Turn rail mounts bounded marks and navigates earliest, middle and latest native ordinals',async()=>{
+ const {ui,navigate}=await thousandTurns(1_000_000);
+ expect(ui.getByRole('button',{name:'Jump to turn 1000000'})).toBeTruthy();
+ for(const ordinal of [1,500_001]) {
+  await scrollRail(ui,(ordinal-1)*10);
+  expect(within(ui.getByRole('navigation')).getAllByRole('button').length).toBeLessThan(72);
+  await act(async()=>{fireEvent.click(ui.getByRole('button',{name:`Load and jump to turn ${ordinal}`}));});
+  expect(navigate).toHaveBeenLastCalledWith(ordinal);
+  expect(server.client.getSnapshot().views.A.history?.window?.target).toEqual(native(ordinal).id);
+ }
+ await scrollRail(ui,9_999_400);
+ await act(async()=>{fireEvent.click(ui.getByRole('button',{name:'Load and jump to turn 1000000'}));});
+ expect(navigate).toHaveBeenLastCalledWith(1_000_000);
+ expect(server.client.getSnapshot().views.A.history?.window?.target).toEqual(native(1_000_000).id);
+ expect(turnsRequests()).toHaveLength(4);
+ expect(server.requests.filter(row=>row.request.method==='session/transcript')).toHaveLength(3);
+});
+it('overlapping unloaded clicks retain only the newest page demand and navigation',async()=>{
+ const {ui}=await thousandTurns();server.held.add('session/turns');
+ fireEvent.click(ui.getByRole('button',{name:'Load and jump to turn 960'}));const old=await server.waitFor('session/turns',2);
+ await scrollRail(ui,0);fireEvent.click(ui.getByRole('button',{name:'Load and jump to turn 1'}));
+ expect(turnsRequests()).toHaveLength(2);
+ await act(async()=>server.reply(old));const next=await server.waitFor('session/turns',3);expect(next.params).toMatchObject({offset:0});
+ expect(server.requests.filter(row=>row.request.method==='session/transcript')).toHaveLength(0);
+ await act(async()=>server.reply(next));
+ const windows=server.requests.filter(row=>row.request.method==='session/transcript');expect(windows).toHaveLength(1);
+ expect(windows[0].request.params).toMatchObject({at:{type:'turn',id:native(1).id}});
+ expect(server.client.getSnapshot().views.A.history?.window?.target).toEqual(native(1).id);
 });

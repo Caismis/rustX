@@ -1336,13 +1336,15 @@ chooser's response-anchored rows and their copy are removed. `TurnTail.tsx`,
 Reference: `/home/caismis/Documents/codes/deepseek-harness@5badb15009ae1756c3afe0ae0cef1faafc290ccc`,
 read-only. `ui-chat` `ChatView.tsx` and `use-chat-navigation.ts`, and
 `session-controller` `Session.loadOlder`/`loadThrough`, were consulted; no new
-upstream source is imported and no pin changes. As there, the Chat transcript is
-one contiguous window through the live tail: a rail jump to an unloaded turn
-pages older history through its location before landing, and Load earlier only
-prepends. rustX's historical replacement windows, Load later content, the
-browser entry/byte cache bound and its Return-to-latest window reset are
-removed. `ChatViewport.tsx`, `TurnNavigator.tsx` and `dictionaries/agent.ts` are
-rehashed in the inventory.
+upstream source is imported and no pin changes. The earlier contiguous
+load-through adaptation is superseded by PR #453's native bounded reading
+contract: direct anchor-relative windows, finite browser history, independent
+live-tail authority and explicit Return-to-latest reset. A viewport gesture now
+starts before outline I/O and fences both native window publication and the final
+layout frame. The fixed-pitch Turn rail computes ordinal ranges arithmetically;
+no total-sized mark array, index Map or virtualizer measurement cache remains.
+`ChatViewport.tsx` and `TurnNavigator.tsx` retain the same source attribution and
+are rehashed with the current dependency closure in the inventory.
 
 ## Conversation header and Trajectory chrome (UI/UX alignment)
 
