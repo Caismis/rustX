@@ -38,9 +38,9 @@ use rustx::runtime_client::transport::stdio::{
     serve_stdio_jsonl_with_io,
 };
 use rustx::runtime_client::{
-    RuntimeClientAttemptPhase, RuntimeClientCursor, RuntimeClientEndpoint, RuntimeClientEvent,
-    RuntimeClientHost, RuntimeClientOutcome, RuntimeClientProtocolEvent, RuntimeClientResponse,
-    RuntimeClientResult,
+    RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientAttemptPhase, RuntimeClientCursor,
+    RuntimeClientEndpoint, RuntimeClientEvent, RuntimeClientHost, RuntimeClientOutcome,
+    RuntimeClientProtocolEvent, RuntimeClientResponse, RuntimeClientResult,
 };
 use support::fake::{FakeStep, model_release};
 use support::runtime_client_fixture::RuntimeClientFixture;
@@ -479,7 +479,9 @@ async fn run_session(
 
 /// One `initialize` record.
 fn initialize_record(id: u64) -> Vec<u8> {
-    format!("{{\"method\":\"initialize\",\"id\":{id},\"protocol_version\":59}}\n").into_bytes()
+    let version = RUNTIME_CLIENT_PROTOCOL_VERSION;
+    format!("{{\"method\":\"initialize\",\"id\":{id},\"protocol_version\":{version}}}\n")
+        .into_bytes()
 }
 
 /// Parses one captured record as a response.
@@ -552,12 +554,12 @@ async fn a_record_split_across_reads_is_reassembled() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn crlf_records_are_accepted() {
     let host = idle_host("conv_1d86d008-9ed5-78cd-a533-d37bab683d68").await;
+    let mut initialize = initialize_record(1);
+    initialize.pop();
+    initialize.extend_from_slice(b"\r\n");
     let outcome = run_session(
         host.endpoint(),
-        &[
-            b"{\"method\":\"initialize\",\"id\":1,\"protocol_version\":59}\r\n",
-            b"{\"method\":\"snapshot_get\",\"id\":2}\r\n",
-        ],
+        &[&initialize, b"{\"method\":\"snapshot_get\",\"id\":2}\r\n"],
         PIPE_BYTES,
     )
     .await;
@@ -659,7 +661,7 @@ async fn invalid_records_are_fatal_and_write_nothing() {
         ),
         (
             "wrong-type",
-            br#"{"method":"initialize","id":"two","protocol_version":59}"#,
+            br#"{"method":"initialize","id":"two","protocol_version":58}"#,
         ),
     ];
     for (name, record) in cases {

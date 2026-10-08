@@ -8,10 +8,10 @@ import type {
   ConfigurationApplication, RuntimeClientSessionDeletionResult, PendingInboundRef, PendingMutationOutcome, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot,
   SessionPersistentState, SessionSummary, ServerCapabilities, UserInputBlock, UploadReceipt, UploadedFile,
-} from '../../../protocol/app-server/v37';
+} from '../../../protocol/app-server/v38';
 import { transferUpload, uploadOperationId } from '../../../protocol/app-server/upload';
 import { HISTORY_PAGE_SIZE, sameReadCut, extendTranscriptWindow, installTranscriptWindow, prependTranscript, refreshTranscript, replaceTranscript, turnKey, type TranscriptCache } from './transcript';
-import type { ConversationTurn, ConversationTurnPage } from '../../../protocol/app-server/v37';
+import type { ConversationTurn, ConversationTurnPage } from '../../../protocol/app-server/v38';
 import { ProtocolLog, type WireContext } from './protocol-log';
 
 interface OutlineDemand {
@@ -375,7 +375,7 @@ export class AppServerClient {
     // Ownership commits after close/retirement, before attempting the new transport.
     committed?.();
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v37', `rustx-token.${token}`]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v38', `rustx-token.${token}`]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -393,12 +393,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 37, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 38, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (!hello.authority_id || hello.protocol_version !== 37 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v37 with native multi-Session, headless interactions, and single-controller admission is required.');
+      if (!hello.authority_id || hello.protocol_version !== 38 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v38 with native multi-Session, headless interactions, and single-controller admission is required.');
       }
       if (this.state.authorityId && this.state.authorityId !== hello.authority_id) {
         try { this.admitAuthorityReplacement(); }
@@ -1373,6 +1373,30 @@ export class AppServerClient {
       return false;
     }
   }
+  /** Native owns the exact message position; one read installs a bounded window. */
+  async navigateMessage(id: string, messageId: string, userCurrent: () => boolean = () => true) {
+    const view = this.state.views[id];
+    if (!view?.history || view.attachment !== 'attached' || view.attachmentIntent !== 'wanted' || !userCurrent()) return false;
+    const authority = this.readingAuthority(id), intent = this.invalidateReading(id), target = view.target!;
+    const current = () => authority() && this.readingIntents.get(id) === intent && userCurrent();
+    const anchored = () => this.state.views[id]?.history?.page.entries?.some(entry => entry.item.type === 'message' && entry.item.message.id === messageId);
+    if (anchored()) return true;
+    this.setSession(id, { turnNavigation: { intent, pending: `message:${messageId}` } });
+    try {
+      const result = await this.request({ method: 'session/transcript', params: { target, at: { type: 'message', id: messageId, cut: null }, limit: HISTORY_PAGE_SIZE } }, 'transcript_window', undefined, current);
+      if (!current()) return false;
+      const cursor = result.window.target_cursor, entries = result.window.page.entries ?? [];
+      if (result.window.cut.conversation_id !== target.conversation_id || cursor == null || entries.length > HISTORY_PAGE_SIZE
+        || !entries.some(entry => entry.cursor === cursor && entry.item.type === 'message' && entry.item.message.id === messageId)) throw new Error('Invalid native message window.');
+      const history = installTranscriptWindow(result.window, this.state.views[id]?.history);
+      if (!history.page.entries?.some(entry => entry.item.type === 'message' && entry.item.message.id === messageId)) throw new Error('The fork source message is outside the readable native history.');
+      this.setSession(id, { history, turnNavigation: { intent } });
+      return current() && !!anchored();
+    } catch (error) {
+      if (current()) this.setSession(id, { turnNavigation: { intent, error: String(error) } });
+      return false;
+    }
+  }
   returnToLatest(id: string) {
     this.invalidateReading(id);
     const view = this.state.views[id];
@@ -1389,7 +1413,7 @@ export class AppServerClient {
     return this.readHistoryPage(id, { type: 'older', before: history.page.next_cursor, cut: history.window?.cut ?? null });
   }
   /** One gesture, one read. Navigation intent fences both page and anchor reads. */
-  private async readHistoryPage(id: string, at: import('../../../protocol/app-server/v37').ConversationWindowAt) {
+  private async readHistoryPage(id: string, at: import('../../../protocol/app-server/v38').ConversationWindowAt) {
     const history = this.state.views[id]?.history;
     if (!history || this.state.views[id]?.attachment !== 'attached') return;
     const target = this.target(id), authority = this.readingAuthority(id), intent = this.invalidateReading(id);
@@ -1598,7 +1622,7 @@ export class AppServerClient {
   }
   /** Transport continuation guard, not Session model authority. A successful
    * mutation response alone cannot enable a dependent Send. */
-  async setAgentModel(id: string, config: import('../../../protocol/app-server/v37').SessionModelConfig) {
+  async setAgentModel(id: string, config: import('../../../protocol/app-server/v38').SessionModelConfig) {
     const target = this.target(id), generation = this.state.generation;
     if (this.state.views[id].modelMutation) throw new Error('Reread native model state before another mutation.');
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);

@@ -826,6 +826,17 @@ impl PendingObservations {
         state.reliable.len() + state.latest_activity.len() + state.latest_progress.len()
     }
 
+    /// Test-only: pending disposable subagent activity, excluding reliable
+    /// lifecycle and configuration observations that must not be coalesced.
+    #[cfg(test)]
+    pub(crate) fn queued_activity(&self) -> usize {
+        self.state
+            .lock()
+            .expect("pending observation queue lock poisoned")
+            .latest_activity
+            .len()
+    }
+
     /// Test-only: separate runtime adoption authority from the child activity
     /// backpressure lane. A child admission can publish Busy asynchronously.
     #[cfg(test)]
@@ -1094,6 +1105,47 @@ mod tests {
             other => panic!("expected an activity observation, got {other:?}"),
         }
         assert_eq!(queue.queued(), 0);
+    }
+
+    /// Reliable updates can arrive after a stalled consumer's initial cut;
+    /// they stay lossless while activity retains exactly its latest value.
+    #[test]
+    fn reliable_updates_do_not_change_the_activity_backlog_bound() {
+        let queue = PendingObservations::new();
+        let id = "conv_36524fd8-f674-7fc2-8125-06d01fee0e18-subagent-1";
+        queue.park();
+        queue.push(ConversationObservation::SubagentLifecycle {
+            agent: None,
+            snapshot: subagent_snapshot(id, 1),
+        });
+        let baseline = queue.queued();
+        queue.push(ConversationObservation::SubagentLifecycle {
+            agent: None,
+            snapshot: subagent_snapshot(id, 2),
+        });
+        queue.push(ConversationObservation::SubagentWorkspace(
+            subagent_snapshot(id, 2),
+        ));
+        for revision in 3..=202 {
+            queue.push(ConversationObservation::SubagentActivity(
+                subagent_snapshot(id, revision),
+            ));
+        }
+        assert!(
+            queue.queued() > baseline + 1,
+            "reliable updates also remain pending"
+        );
+        assert_eq!(queue.queued_activity(), 1);
+        assert!(queue.drain().is_empty(), "the consumer remains parked");
+        queue.unpark();
+        let drained = queue.drain();
+        assert!(matches!(drained.as_slice(), [
+            ConversationObservation::SubagentLifecycle { snapshot: first, .. },
+            ConversationObservation::SubagentLifecycle { snapshot: second, .. },
+            ConversationObservation::SubagentWorkspace(workspace),
+            ConversationObservation::SubagentActivity(activity),
+        ] if first.observation.revision == 1 && second.observation.revision == 2
+            && workspace.observation.revision == 2 && activity.observation.revision == 202));
     }
 
     /// Activity entries of K subagents coexist: the disposable lane is

@@ -296,6 +296,14 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             },
             limit: 32,
         },
+        Method::Transcript {
+            target: target.clone(),
+            at: crate::durable::reading::ConversationWindowAt::Message {
+                id: crate::runtime::identity::MessageId::new("source-message-fixture"),
+                cut: None,
+            },
+            limit: 64,
+        },
         Method::ConversationTurns {
             target: target.clone(),
             offset: Some(64),
@@ -445,6 +453,9 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                 target: None,
                 target_cursor: None,
                 page: crate::runtime_client::snapshot::RuntimeClientTranscriptPage {
+                    inherited_through: Some(
+                        crate::runtime_client::snapshot::RuntimeClientTranscriptCursor::new(0),
+                    ),
                     entries: Vec::new(),
                     next_cursor: None,
                     statistics: None,
@@ -793,9 +804,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v37.schema.json", "v37.ts"]);
+        assert_eq!(generations, ["v38.schema.json", "v38.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v37.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v38.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

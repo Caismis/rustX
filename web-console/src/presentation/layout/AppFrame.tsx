@@ -67,12 +67,14 @@ function DragHandle(props: { side: 'sidebar' | 'rightbar'; left: number; onStart
 
 
 /** Harness measured three-column shell; every state here is disposable geometry. */
-export function AppFrame({ sidebar, children, rightPanel, rightOpen = false, overlay }: {
+export function AppFrame({ sidebar, children, rightPanel, rightOpen = false, overlay, dismissSidebarLabel }: {
+  dismissSidebarLabel: string;
   sidebar: (geometry: SidebarGeometry) => ReactNode; children: ReactNode;
   rightPanel?: (geometry: { width: number; viewportWidth: number; canShow: boolean }) => ReactNode;
   rightOpen?: boolean; overlay?: ReactNode;
 }) {
   const frameRef = useRef<HTMLDivElement>(null);
+  const sidebarRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState(() => window.innerWidth);
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT);
   const [narrowExpanded, setNarrowExpanded] = useState(false);
@@ -89,19 +91,25 @@ export function AppFrame({ sidebar, children, rightPanel, rightOpen = false, ove
   }, []);
   const narrow = viewport < SIDEBAR_AUTO_COLLAPSE;
   const collapsed = narrow ? !narrowExpanded : sidebarWidth === 0;
+  const floatingSidebar = narrow && !collapsed;
   const preference = collapsed ? 0 : sidebarWidth || SIDEBAR_DEFAULT;
-  const normal = computeColumns(viewport, preference, rightWidth ?? viewport * .45);
-  const cols = computeColumns(viewport, preference, rightOpen ? rightWidth ?? viewport * .45 : 0);
+  const normal = computeColumns(viewport, narrow ? 0 : preference, rightWidth ?? viewport * .45);
+  const cols = computeColumns(viewport, narrow ? 0 : preference, rightOpen ? rightWidth ?? viewport * .45 : 0);
+  const visibleSidebarWidth = floatingSidebar ? Math.min(preference, viewport - 48) : cols.sidebar;
   const base = useRef(0);
+  const dismissSidebar = () => { setNarrowExpanded(false); sidebarRef.current?.focus(); };
   const toggleSidebar = () => { if (narrow) setNarrowExpanded(value => !value); else setSidebarWidth(value => value === 0 ? SIDEBAR_DEFAULT : 0); };
   return <div ref={frameRef} className={css.frame} data-harness-frame
+    data-sidebar-overlay={floatingSidebar || undefined}
+    onKeyDown={event => { if (floatingSidebar && event.key === 'Escape' && !event.defaultPrevented && sidebarRef.current?.contains(event.target as Node)) { event.preventDefault(); dismissSidebar(); } }}
     data-sidebar-collapsed={collapsed || undefined} data-rightbar-collapsed={cols.rightbar === 0 || undefined}
     data-dragging={dragging || undefined} style={{ gridTemplateColumns: `${cols.sidebar}px minmax(0, 1fr) ${cols.rightbar}px` }}>
-    <div className={css.sidebarCol}>{sidebar({ collapsed, width: cols.sidebar, toggleSidebar })}</div>
-    <main className={css.centerCol}>{children}</main>
-    <div className={css.rightbarCol} data-rightbar-col>{rightPanel?.({ width: normal.rightbar, viewportWidth: viewport, canShow: normal.rightbar > 0 })}</div>
+    <div ref={sidebarRef} tabIndex={-1} className={css.sidebarCol} style={{ width: visibleSidebarWidth }}>{sidebar({ collapsed, width: visibleSidebarWidth, toggleSidebar })}</div>
+    <main className={css.centerCol} inert={floatingSidebar}>{children}</main>
+    <div className={css.rightbarCol} data-rightbar-col inert={floatingSidebar}>{rightPanel?.({ width: normal.rightbar, viewportWidth: viewport, canShow: normal.rightbar > 0 })}</div>
+    {floatingSidebar && <button type="button" className={css.sidebarBackdrop} tabIndex={-1} aria-label={dismissSidebarLabel} onClick={dismissSidebar} />}
     <div className={css.overlayLayer} data-shell-overlay>{overlay}</div>
-    {!collapsed && <DragHandle side="sidebar" left={cols.sidebar} onStart={() => { base.current = cols.sidebar; setDragging(true); }}
+    {!collapsed && !narrow && <DragHandle side="sidebar" left={cols.sidebar} onStart={() => { base.current = cols.sidebar; setDragging(true); }}
       onDrag={dx => setSidebarWidth(clampWidth(base.current + dx, SIDEBAR_MIN, SIDEBAR_MAX))} onEnd={() => setDragging(false)} />}
     {rightOpen && normal.rightbar > 0 && <DragHandle side="rightbar" left={viewport - normal.rightbar} onStart={() => { base.current = normal.rightbar; setDragging(true); }}
       onDrag={dx => setRightWidth(base.current - dx)} onEnd={() => setDragging(false)} />}

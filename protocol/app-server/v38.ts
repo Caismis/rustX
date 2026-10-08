@@ -494,6 +494,11 @@ export type ConversationWindowAt =
       id: ConversationTurnId;
       cut: ConversationReadCut;
       type: 'turn';
+    }
+  | {
+      id: MessageId;
+      cut?: ConversationReadCut | null;
+      type: 'message';
     };
 /**
  * A durable transcript cursor.
@@ -507,6 +512,10 @@ export type TranscriptCursor = string;
  * Identifies one attempt to execute an agent manifest.
  */
 export type AttemptId = string;
+/**
+ * Identifies a committed canonical message block.
+ */
+export type MessageId = string;
 /**
  * The identity of one reasoning profile declared by a model.
  *
@@ -596,10 +605,6 @@ export type SubagentId = string;
  * none of them may be substituted for one.
  */
 export type SurfaceRevision = string;
-/**
- * Identifies a committed canonical message block.
- */
-export type MessageId = string;
 /**
  * Which history prefix a lineage operation retains.
  */
@@ -6214,6 +6219,10 @@ export interface TraceMessageDetail {
  */
 export interface RuntimeClientTranscriptPage {
   /**
+   * Last native transcript position inherited by this lineage; zero for an empty prefix.
+   */
+  inherited_through?: RuntimeClientTranscriptCursor | null;
+  /**
    * Native whole-conversation totals, independent of this page.
    */
   statistics?: ConversationStatistics | null;
@@ -8401,6 +8410,10 @@ export interface RuntimeDurabilityFailure {
  * One bounded newest-or-older page of derived transcript history.
  */
 export interface RuntimeClientTranscriptPage1 {
+  /**
+   * Last native transcript position inherited by this lineage; zero for an empty prefix.
+   */
+  inherited_through?: RuntimeClientTranscriptCursor | null;
   /**
    * Native whole-conversation totals, independent of this page.
    */

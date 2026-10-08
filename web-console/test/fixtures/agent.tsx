@@ -6,7 +6,7 @@ import { createRoot } from 'react-dom/client';
 import { RpcFailure } from '../../src/client/app-server';
 import { App } from '../../src/app/App';
 import { Server, interaction, snapshot, endpoint } from '../fixture';
-import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v37';
+import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v38';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -69,6 +69,23 @@ if (mode === 'questionnaire') {
  if (answer.role === 'assistant') answer.content.push({ type: 'tool_call', ...ask });
  s.transcript.entries[1] = { cursor: '2', item: { type: 'message', message: s.messages[1] }, tool_calls: [{ message_id: 'answer-1', block_index: 2, call_id: ask.id, tool_id: ask.tool_id, name: ask.name, state: { type: 'running', arguments: JSON.stringify(ask.arguments) } }] };
 }
+if (mode === 'compaction') {
+ s.attempt = null;
+ const summary = { role: 'user' as const, id: 'summary-1', source: 'runtime' as const, kind: { compaction_summary: {} },
+   content: [{ type: 'text' as const, text: '## 已完成的工作\n\n保留 fork 前的历史预览，并整理上下文摘要的显示。\n\n- 历史仍由原生会话数据提供\n- Continue with the original conversation context.\n\n### 下一步\n\n检查窄屏布局与键盘操作。' }] };
+ s.messages.push(summary);
+ s.transcript.entries.push({ cursor: '3', item: { type: 'message', message: summary } });
+}
+if (mode === 'fork') {
+ s.attempt = null;
+ s.transcript.inherited_through = '2';
+ const prompt = { role: 'user' as const, id: 'fork-user', source: 'human' as const, content: [{ type: 'text' as const, text: 'Continue from this fork boundary.' }] };
+ s.messages.push(prompt); s.transcript.entries.push({ cursor: '3', item: { type: 'message', message: prompt } });
+ server.snapshots.set('B', snapshot('B'));
+ server.summaries.set('B', { name: '原始会话：探索历史分叉与上下文压缩的交互设计' });
+ server.handlers.set('session/read', () => ({ type: 'session', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '2026-10-07T00:00:00Z', updated_at: '2026-10-07T00:00:00Z' } }));
+ server.handlers.set('session/tree', () => ({ type: 'tree', nodes: [{ ordinal: '1', id: 'node-A', conversation_id: 'conversation-A', origin: { type: 'fork', source_session: 'B', source_node: 'node-B', source_surface_revision: '2', source_message: 'answer-1', side: 'after' } }], next_offset: null }));
+}
 server.snapshots.set('A', s);
 await server.attached('A');
 localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
@@ -102,7 +119,7 @@ if (mode === 'composer') {
   };
 }
 declare global {
-  interface Window { composerFixture: { running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; busyEnter(value: 'queue' | 'steer'): void; cancellations(): import('../../../protocol/app-server/v37').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
+  interface Window { composerFixture: { running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; busyEnter(value: 'queue' | 'steer'): void; cancellations(): import('../../../protocol/app-server/v38').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
 }
 
 function RestoredComposerFixture() {

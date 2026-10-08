@@ -20,7 +20,8 @@ import { WorkspaceSessionNavigation } from '../workspaces/navigation';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useActorRef } from '@xstate/react';
 import type { AppServerClient } from '../client/app-server';
-import type { CompletedResponseView, SourceTarget, UserInputBlock } from '../../../protocol/app-server/v37';
+import type { AttachmentTarget, CompletedResponseView, MethodResult, SessionNode, SourceTarget, UserInputBlock } from '../../../protocol/app-server/v38';
+import type { ForkOrigin } from './agent/ForkPoint';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
 import { CommandSession, type ResponseAction } from './commands/native';
 import { available, commands } from './commands/registry';
@@ -112,6 +113,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   const [restored, setRestored] = useState<{ conversation: string; content: UserInputBlock[] }>();
   const [consumed, setConsumed] = useState<{ id: string; sequence: number }>();
   const [transitioning, setTransitioning] = useState<string>();
+  const [sourceLocation, setSourceLocation] = useState<{ target: AttachmentTarget; messageId: string }>();
   const workspaceNavigation = useMemo(() => new WorkspaceSessionNavigation(workspaceAuthority, client, navigation), [workspaceAuthority, client, navigation]);
   useEffect(() => client.setAttachmentAdmission(workspaceNavigation.admit), [client, workspaceNavigation]);
   // Existing navigation hints may restore wanted views, never a released claim.
@@ -214,6 +216,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   // Every Session focus path publishes the same pair. Until native cwd has been
   // classified, its Workspace is pending rather than inherited from another Session.
   const focusSession = (id?: string, options: { attach?: boolean; ready?: () => void; preserveDraft?: boolean; commitDraft?: boolean } = {}) => {
+    setSourceLocation(undefined);
     if (!options.preserveDraft && !options.commitDraft) setDraftBinding(value => value + 1);
     // Remount/classification of the same pending Conversation is observation,
     // not a new route gesture. Explicit route changes still retire its fence.
@@ -241,6 +244,42 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     if (!openViews.includes(id) && openViews.length >= 32) { setError(message('common:copy.32-session-views-are-open-close-a-view-from-its-sidebar-session-actions-or-use-sidebar-vie')); return; }
     setOpenViews(current => current.includes(id) ? current : [...current, id]);
     focusSession(id, { attach: true, ready });
+  };
+  const openForkSource = (origin: ForkOrigin) => {
+    if (transitioning || !commandable()) return;
+    const id = origin.source_session;
+    if (!openViews.includes(id) && openViews.length >= 32) { setError(message('common:copy.32-session-views-are-open-close-a-view-from-its-sidebar-session-actions-or-use-sidebar-vie')); return; }
+    navigation.invalidate();
+    const current = navigation.capture(), generation = client.getSnapshot().generation;
+    const valid = () => current() && client.getSnapshot().generation === generation;
+    setTransitioning(selected);
+    runGlobal(async () => {
+      try {
+        let node: SessionNode | undefined, offset: number | null | undefined = 0;
+        while (offset != null && valid()) {
+          const page: Extract<MethodResult, { type: 'tree' }> = await client.request({ method: 'session/tree', params: { session_id: id, offset, limit: 32 } }, 'tree');
+          if (!valid()) return;
+          node = page.nodes.find(node => node.id === origin.source_node);
+          if (node) break;
+          offset = page.next_offset;
+        }
+        if (!valid()) return;
+        if (!node) throw new Error('The fork source node is no longer available.');
+        const source = client.getSnapshot().views[id];
+        if (source?.attachment === 'attached' && source.target?.conversation_id !== node.conversation_id) {
+          await new CommandSession(client, id, valid).openNode(node.id, node.conversation_id);
+        } else if (source?.attachment !== 'attached') {
+          await client.attach(id, node.id, valid);
+        }
+        if (!valid()) return;
+        const target = client.target(id);
+        if (target.conversation_id !== node.conversation_id) throw new Error('The fork source attached a different Conversation.');
+        setOpenViews(open => open.includes(id) ? open : [...open, id]);
+        setConversationMode('chat');
+        focusSession(id);
+        setSourceLocation({ target, messageId: origin.source_message });
+      } finally { setTransitioning(undefined); }
+    });
   };
   const closeView = (id: string) => {
     const remaining = openViews.filter(item => item !== id);
@@ -272,8 +311,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     if (owner.kind === 'user') openSettings(userSettingsTarget);
     else navigationActor.send({ type: 'OPEN.OWNER', directory: owner.directory });
   };
-  return <AppFrame sidebar={geometry => <SidebarRoot {...geometry} startSession={() => createInWorkspace(workspace)}
-    panels={[]}
+  return <AppFrame dismissSidebarLabel={tx('sidebar:toggle.dismiss')} sidebar={geometry => <SidebarRoot {...geometry} startSession={() => createInWorkspace(workspace)}
     browser={(wide, expand) => <WorkspaceNavigation associations={associations} key={state.authorityRevision ?? 0} wide={wide} expand={expand} host={workspaceHost} client={client} state={state} endpoint={endpoint} navigation={navigation}
       metadataChanged={removed => { if (removed) setCenter(value => value.kind === 'new-conversation' && value.workspaceId === removed ? { kind: 'new-conversation' } : value); }}
       workspaceSettings={(id, label) => openSettings(workspaceSettingsTarget(id, label))} workspace={workspace} selected={selected}
@@ -333,7 +371,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
 
       <section className={`conversation-panel ${agentCss.body}`} id="conversation-view" role={view ? 'tabpanel' : undefined} aria-labelledby={view ? `view-tab-${conversationMode}` : undefined} tabIndex={0}>
       <ConversationWidthControls active={!!view && conversationMode === 'chat'}/>
-      <PreviewContext value={{ openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><ArtifactContext.Provider value={artifacts}><ConversationLive client={client} sessionId={view?.id} mode={conversationMode} disabled={commandOpen || transitioning === view?.id} onHistorical={transitionResponse}/></ArtifactContext.Provider></PreviewContext>
+      <PreviewContext value={{ openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><ArtifactContext.Provider value={artifacts}><ConversationLive client={client} sessionId={view?.id} mode={conversationMode} disabled={commandOpen || transitioning === view?.id} onHistorical={transitionResponse} onOpenSource={openForkSource} sourceLocation={sourceLocation}/></ArtifactContext.Provider></PreviewContext>
       <ConversationSeat client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} sessionId={view?.id}
         initialWorkspace={workspace ?? (center.kind === 'new-conversation' ? center.workspaceId : undefined)}
         workspacePicked={id => { if (newConversationCurrent()) setCenter({ kind: 'new-conversation', workspaceId: id }); }}

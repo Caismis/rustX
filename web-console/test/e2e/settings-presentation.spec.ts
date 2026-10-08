@@ -86,9 +86,9 @@ test('desktop: six pages share one stable Harness frame, distinct icons and one 
   await openUserSettings(page);
   const settings = dialog(page);
   const frame = await panelBox(page);
-  // Bounded product geometry: ~1000 wide, min(820, viewport − 48) high, r24.
-  expect(frame.width).toBeGreaterThanOrEqual(960); expect(frame.width).toBeLessThanOrEqual(1040);
-  expect(frame.height).toBe(820); expect(frame.radius).toBe('24px');
+  // Inspected Harness desktop geometry, bounded by the viewport on small screens.
+  expect(frame.width).toBe(800);
+  expect(frame.height).toBe(704); expect(frame.radius).toBe('24px');
   const rail = page.getByRole('tablist', { name: 'Settings pages' });
   await expect(rail).toHaveAttribute('aria-orientation', 'vertical');
   await expect(rail.getByRole('tab')).toHaveText(pages);
@@ -118,6 +118,13 @@ test('desktop: six pages share one stable Harness frame, distinct icons and one 
 
   // Settings forms retain their geometry; Provider cards use pinned Harness ModelsSection geometry.
   await openSettingsPage(page, 'Agent');
+  const identity = settings.getByRole('form', { name: 'Root identity' });
+  const configurationDetails = identity.getByRole('button', { name: 'Source revision & replacement', exact: true });
+  await expect(identity.locator('[data-authored]')).toBeHidden();
+  await configurationDetails.click();
+  await expect(identity.locator('[data-authored]')).toBeVisible();
+  await configurationDetails.click();
+  await expect(identity.locator('[data-authored]')).toBeHidden();
   const unit = await settings.getByRole('form', { name: 'Root identity' }).evaluate(el => {
     const style = getComputedStyle(el);
     return { height: el.getBoundingClientRect().height, padding: `${style.paddingTop} ${style.paddingLeft}`, radius: style.borderTopLeftRadius };
@@ -159,7 +166,9 @@ test('Workspace inherited and overridden units, restore versus deletion, nested 
   // Overridden and dirty: the draft's Save / Discard row sticks in reach.
   await openSettingsPage(page, 'Agent');
   const identity = settings.getByRole('form', { name: 'Root identity' });
+  await identity.getByRole('button', { name: 'Source revision & replacement', exact: true }).click();
   await expect(identity.locator('[data-authored="present"]')).toBeVisible();
+  await identity.getByRole('button', { name: 'Source revision & replacement', exact: true }).click();
   await identity.getByLabel('Agent identity').fill('rustx-workspace-reviewer');
   await expect(identity).toHaveAttribute('data-draft', 'true');
   await expect(identity.getByRole('button', { name: 'Save Root identity' })).toBeEnabled();

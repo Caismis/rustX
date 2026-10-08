@@ -249,6 +249,9 @@ pub struct RuntimeClientSnapshot {
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub struct RuntimeClientTranscriptPage {
+    /// Last native transcript position inherited by this lineage; zero for an empty prefix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inherited_through: Option<RuntimeClientTranscriptCursor>,
     /// Native whole-conversation totals, independent of this page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub statistics: Option<super::response::ConversationStatistics>,
@@ -413,6 +416,7 @@ pub(crate) fn transcript_page_view(
         .map(transcript_entry_view)
         .collect::<Result<Vec<_>, String>>()?;
     Ok(RuntimeClientTranscriptPage {
+        inherited_through: Some(page.inherited_through.into()),
         statistics: None,
         entries,
         next_cursor: page.next_cursor.map(Into::into),

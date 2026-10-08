@@ -78,10 +78,13 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
       await expect(message).toHaveValue(draft);
       const marker = page.locator('[data-compaction-marker]').getByRole('button');
       await expect(marker).toHaveCount(1);
-      await marker.click();
-      await expect(page.getByText('The user supplied compaction-evidence-435. Preserve that fact.', { exact: true })).toBeVisible();
+      await expect(marker).toContainText('The user supplied compaction-evidence-435. Preserve that fact.');
+      await expect(page.locator('[data-compaction-body]')).toHaveCount(0);
+      await marker.focus(); await marker.press('Enter');
+      await expect(page.locator('[data-compaction-body]').getByText('The user supplied compaction-evidence-435. Preserve that fact.', { exact: true })).toBeVisible();
+      await expect(page.locator('[data-compaction-body]').getByText(copy('A condensed record of earlier context used to continue this conversation.', '先前上下文的精简记录，用于继续当前对话。'), { exact: true })).toBeVisible();
       await expect(marker).toHaveAttribute('aria-expanded', 'true');
-      await marker.click();
+      await marker.press('Space');
       await expect(marker).toHaveAttribute('aria-expanded', 'false');
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       await message.press('Enter');
@@ -98,7 +101,7 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
       await expect(page.getByText('Question answered after compaction.', { exact: true })).toBeInViewport();
       await expect(marker).toHaveCount(2);
       await marker.last().click();
-      await expect(page.getByText("Preserve compaction-evidence-435 and the user's instruction to continue.", { exact: true })).toBeVisible();
+      await expect(page.locator('[data-compaction-body]').getByText("Preserve compaction-evidence-435 and the user's instruction to continue.", { exact: true })).toBeVisible();
       await page.screenshot({ path: `/tmp/rustx-compaction-${locale}-${theme}.png` });
       await expect(page.getByText(copy('Assistant recovery details', '助手恢复详情'), { exact: true })).toHaveCount(0);
       expect(errors).toEqual([]);

@@ -225,14 +225,49 @@ fn local_previews(
 }
 
 /// Prompt and response of an inherited turn from its immutable provenance.
+/// Both reading ownership and completed-response replay ownership explicitly
+/// name retained human inputs. Their earliest text-bearing input is the preview;
+/// transcript adjacency and the source's current state are never evidence.
 fn inherited_previews(
     connection: &Connection,
     turn: &TurnReadingProvenance,
 ) -> Result<(String, String), ConversationStoreError> {
-    let prompt = match &turn.prompt_message_id {
-        Some(id) => message_preview(connection, id, TURN_PROMPT_PREVIEW_MAX)?,
-        None => String::new(),
-    };
+    let mut statement = connection
+        .prepare_cached(
+            "WITH inputs AS (
+            SELECT ?1 AS message_id
+            UNION
+            SELECT json_extract(p.value,'$.retry_message_id')
+            FROM bootstrap_identity b,json_each(b.response_provenance) p
+            WHERE json_extract(p.value,'$.origin.conversation_id')=?2
+              AND json_extract(p.value,'$.origin.attempt_id')=?3
+        )
+        SELECT m.message_id FROM inputs i JOIN message_ledger m ON m.message_id=i.message_id
+        WHERE json_extract(m.message_json,'$.role')='user'
+          AND json_extract(m.message_json,'$.source')='human'
+          AND COALESCE(json_extract(m.message_json,'$.kind'),'message')='message'
+        ORDER BY m.position",
+        )
+        .map_err(|error| storage(format!("inherited prompt owners: {error}")))?;
+    let inputs = statement
+        .query_map(
+            params![
+                turn.prompt_message_id.as_ref().map(MessageId::as_str),
+                turn.id.conversation_id.as_str(),
+                turn.id.attempt_id.as_str()
+            ],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(|error| storage(format!("inherited prompt owners: {error}")))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| storage(format!("inherited prompt owners: {error}")))?;
+    let mut prompt = String::new();
+    for id in inputs {
+        prompt = message_preview(connection, &MessageId::new(id), TURN_PROMPT_PREVIEW_MAX)?;
+        if !prompt.is_empty() {
+            break;
+        }
+    }
     let response = if matches!(turn.outcome, InheritedTurnOutcome::IncompleteAtCut) {
         String::new()
     } else {
@@ -302,6 +337,52 @@ pub(super) fn turns(
     })
 }
 
+fn message_location(
+    connection: &Connection,
+    id: &MessageId,
+    cut: &ConversationReadCut,
+) -> Result<u64, ConversationStoreError> {
+    let cursor: Option<i64> = connection.query_row(
+        "SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1 AND position<=?2",
+        params![id.as_str(),seq_to_i64(cut.transcript)?], |row| row.get(0),
+    ).optional().map_err(|error| storage(error.to_string()))?;
+    let cursor = cursor.ok_or_else(|| {
+        ConversationStoreError::InvalidReference(
+            "message is absent from this Conversation read cut".into(),
+        )
+    })?;
+    nonnegative(cursor, "message location")
+}
+
+/// Select forward from one authoritative position without reading its prefix.
+fn forward_window_before(
+    connection: &Connection,
+    cursor: u64,
+    cut: &ConversationReadCut,
+    limit: usize,
+) -> Result<crate::durable::TranscriptCursor, ConversationStoreError> {
+    let last: i64 = connection.query_row(
+        "SELECT MAX(position) FROM (SELECT position FROM transcript_order WHERE position>=?1 AND position<=?3 ORDER BY position LIMIT ?2)",
+        params![seq_to_i64(cursor)?,limit,seq_to_i64(cut.transcript)?], |row| row.get(0),
+    ).map_err(|error| storage(error.to_string()))?;
+    Ok(crate::durable::TranscriptCursor::new(
+        nonnegative(last, "target window")? + 1,
+    ))
+}
+fn require_message_target(
+    page: &crate::durable::TranscriptPage,
+    id: &MessageId,
+    cursor: Option<crate::durable::TranscriptCursor>,
+) -> Result<(), ConversationStoreError> {
+    if page.entries.iter().any(|entry| Some(entry.cursor) == cursor
+        && matches!(&entry.item, crate::durable::TranscriptItem::Message { message } if message.id() == id)) {
+        Ok(())
+    } else {
+        Err(ConversationStoreError::InvalidReference(
+            "message is not readable at its native transcript position".into(),
+        ))
+    }
+}
 pub(super) fn window(
     connection: &Connection,
     conversation: &ConversationId,
@@ -309,14 +390,14 @@ pub(super) fn window(
     limit: usize,
 ) -> Result<DurableConversationWindow, ConversationStoreError> {
     if limit == 0 || limit > TURN_PAGE_MAX {
-        return Err(storage(
-            "conversation window limit must be between 1 and 64",
-        ));
+        return Err(storage("conversation window limit must be 1 to 64"));
     }
     let actual = cut(connection, conversation)?;
     let expected = match at {
         ConversationWindowAt::Latest => None,
-        ConversationWindowAt::Older { cut, .. } => cut.as_ref(),
+        ConversationWindowAt::Older { cut, .. } | ConversationWindowAt::Message { cut, .. } => {
+            cut.as_ref()
+        }
         ConversationWindowAt::Newer { cut, .. } | ConversationWindowAt::Turn { cut, .. } => {
             Some(cut)
         }
@@ -328,6 +409,11 @@ pub(super) fn window(
     let before = match at {
         ConversationWindowAt::Latest => None,
         ConversationWindowAt::Older { before, .. } => Some(*before),
+        ConversationWindowAt::Message { id, .. } => {
+            let cursor = message_location(connection, id, &cut)?;
+            target_cursor = Some(crate::durable::TranscriptCursor::new(cursor));
+            Some(forward_window_before(connection, cursor, &cut, limit)?)
+        }
         ConversationWindowAt::Newer { after, .. } => {
             let last: Option<i64> = connection.query_row(
                 "SELECT MAX(position) FROM (SELECT position FROM transcript_order WHERE position>?1 AND position<=?3 ORDER BY position LIMIT ?2)",
@@ -360,14 +446,7 @@ pub(super) fn window(
                 })?;
             target = Some(id.clone());
             target_cursor = Some(crate::durable::TranscriptCursor::new(cursor));
-            // Read forward from the exact target, never the intervening prefix.
-            let last: i64 = connection.query_row(
-                "SELECT MAX(position) FROM (SELECT position FROM transcript_order WHERE position>=?1 AND position<=?3 ORDER BY position LIMIT ?2)",
-                params![seq_to_i64(cursor)?,limit,seq_to_i64(cut.transcript)?], |row| row.get(0),
-            ).map_err(|error| storage(error.to_string()))?;
-            Some(crate::durable::TranscriptCursor::new(
-                nonnegative(last, "target window")? + 1,
-            ))
+            Some(forward_window_before(connection, cursor, &cut, limit)?)
         }
     };
     let upper = crate::durable::TranscriptCursor::new(cut.transcript + 1);
@@ -383,6 +462,9 @@ pub(super) fn window(
     }
     if let Some(cursor) = target_cursor {
         page.entries.retain(|entry| entry.cursor >= cursor);
+    }
+    if let ConversationWindowAt::Message { id, .. } = at {
+        require_message_target(&page, id, target_cursor)?;
     }
     if let Some(first) = page.entries.first() {
         let older: bool = connection

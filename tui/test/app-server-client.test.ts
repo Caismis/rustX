@@ -106,8 +106,8 @@ describe("initialization", () => {
   it("negotiates the protocol version once and records server capabilities", async () => {
     const { client, transport } = await initialized();
     const params = paramsOf(transport.log.matching("initialize")[0]!, "initialize");
-    assert.equal(APP_SERVER_PROTOCOL_VERSION, 37);
-    assert.equal(params.protocol_version, 37);
+    assert.equal(APP_SERVER_PROTOCOL_VERSION, 38);
+    assert.equal(params.protocol_version, 38);
     assert.equal(params.client.name, "rustx-tui");
     assert.deepEqual(client.capabilities, CAPABILITIES);
     assert.equal(transport.log.count("initialize"), 1);
@@ -143,7 +143,7 @@ describe("initialization", () => {
       protocol_version: 28,
       capabilities: CAPABILITIES,
     });
-    await assert.rejects(pending, /negotiated protocol 28, this client speaks 37/);
+    await assert.rejects(pending, /negotiated protocol 28, this client speaks 38/);
   });
 });
 

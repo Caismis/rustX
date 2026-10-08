@@ -2571,6 +2571,7 @@ impl ConversationStore for SqliteConversationStore {
         let next_cursor = more.then(|| entries.last().unwrap().cursor);
         entries.reverse();
         Ok(TranscriptPage {
+            inherited_through: inherited_transcript_through(&connection)?,
             entries,
             next_cursor,
         })
@@ -6576,6 +6577,7 @@ fn load_transcript_page(
 ) -> Result<TranscriptPage, ConversationStoreError> {
     if limit == 0 {
         return Ok(TranscriptPage {
+            inherited_through: inherited_transcript_through(connection)?,
             entries: Vec::new(),
             next_cursor: None,
         });
@@ -6647,9 +6649,35 @@ fn load_transcript_page(
         })
         .collect::<Result<Vec<_>, ConversationStoreError>>()?;
     Ok(TranscriptPage {
+        inherited_through: inherited_transcript_through(connection)?,
         entries,
         next_cursor,
     })
+}
+
+/// The seed owns canonical Ledger positions, not remapped message spelling or
+/// origin Conversation IDs. Context messages have no transcript row, while
+/// terminal-only inherited turns do: both are covered by this native boundary.
+fn inherited_transcript_through(
+    connection: &Connection,
+) -> Result<TranscriptCursor, ConversationStoreError> {
+    let position: i64 = connection
+        .query_row(
+            "SELECT COALESCE(MAX(position),0) FROM (
+            SELECT t.position FROM message_ledger m
+            JOIN transcript_order t ON t.reference_kind='message' AND t.reference_id=m.message_id
+            WHERE m.position <= (SELECT message_count FROM bootstrap_identity WHERE id=1)
+            UNION ALL
+            SELECT position FROM transcript_order WHERE reference_kind='inherited_turn'
+        )",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| storage(format!("inherited transcript boundary: {error}")))?;
+    Ok(TranscriptCursor::new(nonnegative(
+        position,
+        "inherited transcript boundary",
+    )?))
 }
 
 /// Resolves one transcript reference without copying its body into the

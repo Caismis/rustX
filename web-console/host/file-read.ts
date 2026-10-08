@@ -1,6 +1,6 @@
 /** Node-only native seam. Never imported by browser code or its protocol log. */
 import type { DeliveryBytes, DeliveryRead } from '../src/workspaces/host.ts';
-import type { AttachmentTarget, RpcError } from '../../protocol/app-server/v37.ts';
+import type { AttachmentTarget, RpcError } from '../../protocol/app-server/v38.ts';
 import { WorkspaceHostError } from '../src/workspaces/host.ts';
 
 export class NativeFileReadError extends Error {

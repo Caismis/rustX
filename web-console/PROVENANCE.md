@@ -1,3 +1,55 @@
+## Local Harness desktop presentation alignment
+
+The installed DeepSeek Harness Windows desktop UI was visually inspected on
+2026-10-04. The existing attributed presentation components remain the source
+baseline; no brand assets, runtime code or new dependencies are imported.
+
+- The application frame uses the reference's muted sidebar surface and rounded
+  conversation panel. Browser chrome remains browser-owned.
+- On narrow screens the expanded sidebar overlays the conversation, preserving
+  the reading width; Escape or the backdrop dismisses it. Covered content is inert.
+- Conversation title weight, default reading width and composer-context alignment
+  follow the inspected desktop layout. Deliberate width preferences remain intact.
+- The sidebar Extensions entry opens rustX's existing native-backed Settings
+  extension inventory; it does not imply a Harness plugin runtime.
+- General settings presents the existing Light and Dark choices as accessible
+  theme cards, following the inspected desktop arrangement. The icons and CSS
+  are locally authored; no unsupported preference is added.
+- The settings modal follows the inspected 800x704 desktop geometry and plain
+  dimmed backdrop; native configuration ownership and reload controls remain.
+- Configuration, extension, upload and context copy uses user-facing language
+  in both locales. General removes the duplicate appearance heading and the
+  unrelated connection paragraph.
+- Configuration cards keep source, revision and provenance details behind a
+  disclosure. Invalid values and save outcomes remain visible; duplicate Tools
+  group headings are removed while each form retains its own legend.
+- The composer plus launcher includes file intake as its first action. Plus,
+  paperclip and command glyphs reuse the already attributed Harness icon module.
+  File selection keeps the existing upload owner and slash discovery remains
+  command-only; the separate attachment toolbar button is removed.
+- Chat/trajectory, Session actions, history navigation, attachment and command
+  controls, approvals, settings and the developer inspector retain their owners.
+
+The local hashes for adapted presentation files are updated in the
+source inventory. The independent-session fork glyph additionally reuses Harness
+`ui-primitives/src/icons/index.tsx` at immutable commit
+`5badb15009ae1756c3afe0ae0cef1faafc290ccc`, recorded with its exact source hash
+in the icon module's `additional_sources`. In-session branches retain the
+original branch glyph; model and tools commands reuse the intelligence and code
+glyphs. Existing source pins and dependency closures remain unchanged.
+
+Model catalog refresh keeps the launcher enabled and visually stable while
+fencing menu choices until the read finishes. First-load feedback lives inside
+the popup; cached refresh does not add an inline loading label to the composer.
+
+Updated screenshot references use exact pixel comparison. Noise evidence tied
+to the previous layout is preserved with its original images in the comparator
+fixtures, rather than reused as an exception for the new layout.
+The narrow running-draft Composer references have newly measured rounded-shadow
+noise at 15 light and 16 dark pixel sites. Each site has its own measured channel
+bound; adjacent pixels, dimensions and all other references remain exact. The
+manifest records independent runs, the pinned browser and decoded-image hashes.
+
 ## Interrupted Assistant presentation
 
 Behavioral reference: local `../deepseek-harness` at
@@ -1383,7 +1435,7 @@ antialiased differently depending on which tile or partial repaint drew them:
 search capture, and other captures varied too. As its own layer it rendered
 identically in 45 of 45 targeted replays.
 
-Trace retained-input ownership repair updates generated imports to App Server v37.
+Trace retained-input ownership repair updates generated imports to App Server v38.
 Source inventory local hashes and dependency closure reflect this mechanical
 protocol change; all Harness upstream pins remain unchanged.
 
@@ -1566,6 +1618,16 @@ This adapts Harness's nonempty reading candidate policy without its approximate
 binary-search candidate selection: native turn identity and exact locate anchors
 remain separate, and a window containing no native region still has no selection.
 
+## Unified canonical compaction summary presentation
+
+CompactionMessage is the sole checkpoint disclosure. The adapter retains a bounded
+plain-text preview while collapsed, and the explanation and original Markdown
+while expanded. Trajectory and compaction share the existing GFM preview projection
+in src/presentation/markdown/preview.ts; the former app-local preview module and
+CompactionSummary component/styles are removed. Native transcript identity, fork
+boundaries and explicit source navigation remain unchanged. Both local presentation
+notes and the upstream interruption/continuation references are retained.
+
 
 Terminal model-error feedback follows local Harness at
 `5badb15009ae1756c3afe0ae0cef1faafc290ccc`:
@@ -1623,7 +1685,7 @@ admission; navigation/transport replacement never replays the pending gesture.
 
 Quiet connection correction: keep the Harness resident chat/composer layout and
 render the locally submitted user bubble plus generic waiting feedback inside the
-conversation. Opening alone has no connecting notice. App Server v37 adds the
+conversation. Opening alone has no connecting notice. App Server v38 adds the
 read-only `session/history` window so cold stored history can render independently
 of resource preparation; this is a native durable read, never a fabricated runtime
 snapshot. Both clients fence late history reads against the current attachment.
@@ -1655,3 +1717,12 @@ icons are reused; missing fork/tools icons use Lucide 0.468.0 `git-fork.svg` and
 `wrench.svg` (https://github.com/lucide-icons/lucide/tree/0.468.0/icons).
 The upstream ISC/Feather MIT notice is shipped in `public/LICENSE-Lucide.txt`
 and reproduced in `THIRD-PARTY-NOTICES.txt`. No runtime dependency was added.
+
+## Main protocol and bounded fork source integration
+
+The main branch owns the bounded v37 navigation, outline demand scheduler and
+command menu presentation. This integration retains those owners and upgrades
+mandatory generated imports to v38 for the new native Message window selector.
+Fork source navigation performs one indexed native read and validates message
+identity before anchoring. Existing source references and immutable upstream
+pins remain; hashes/import inventories reflect the reviewed combined files.

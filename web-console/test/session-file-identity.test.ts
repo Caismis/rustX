@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { sameSessionFile } from '../shared/session-file-identity.ts';
-import type { SessionFileReference } from '../../protocol/app-server/v37.ts';
+import type { SessionFileReference } from '../../protocol/app-server/v38.ts';
 const file: SessionFileReference = { scope: { conversation_id: 'c', device: '1', inode: '2' }, path: 'a/report.xlsx', name: '报告.xlsx', mime_type: 'application/xlsx', description: 'report' };
 it('compares typed identity independent of construction order; absent description is null', () => {
   expect(sameSessionFile(file, { description: 'report', mime_type: file.mime_type, name: file.name, path: file.path, scope: { inode: '2', device: '1', conversation_id: 'c' } })).toBe(true);

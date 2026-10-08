@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import type { ConversationTurn, ConversationTurnPage, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v37';
+import type { ConversationTurn, ConversationTurnPage, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v38';
 import { Server, snapshot } from './fixture';
 import { HISTORY_LIMIT, HISTORY_MAX_BYTES, turnKey } from '../src/client/transcript';
 const owner=(n:number)=>({conversation_id:'conversation-A',attempt_id:`attempt-${n}`,control_cursor:String(n),message_count:1,tool_call_count:0,outcome:'completed' as const});
@@ -17,15 +17,35 @@ async function ready(){
  server.handlers.set('session/transcript',request=>{
   if(request.method!=='session/transcript')throw new Error('transcript read');
   const {at,limit}=request.params;
-  const start=at.type==='turn'?Number(at.id.attempt_id.slice(8)):at.type==='older'?Math.max(1,Number(at.before)-limit):at.type==='newer'?Number(at.after)+1:6000;
+  const start=at.type==='message'?Number(at.id.slice(1)):at.type==='turn'?Number(at.id.attempt_id.slice(8)):at.type==='older'?Math.max(1,Number(at.before)-limit):at.type==='newer'?Number(at.after)+1:6000;
   const end=at.type==='older'?Number(at.before):Math.min(start+limit,6064);
-  return {type:'transcript_window',window:{cut,target:at.type==='turn'?at.id:null,target_cursor:at.type==='turn'?String(start):null,newer_cursor:end<6064?String(end-1):null,page:{entries:Array.from({length:end-start},(_,i)=>entry(start+i)),next_cursor:start>1?String(start):null}}};
+  return {type:'transcript_window',window:{cut,target:at.type==='turn'?at.id:null,target_cursor:at.type==='turn'||at.type==='message'?String(start):null,newer_cursor:end<6064?String(end-1):null,page:{entries:Array.from({length:end-start},(_,i)=>entry(start+i)),next_cursor:start>1?String(start):null}}};
  });
  server.held.add('session/transcript');
 }
 async function serve(count=1){server.reply(await server.waitFor('session/transcript',count));}
 
 it('a loaded native anchor lands without a read',async()=>{await ready();expect(await server.client.navigateTurn('A',turn(6010))).toEqual(turn(6010));expect(reads()).toHaveLength(0);});
+
+it('exact source message uses one bounded native request without scanning intervening history',async()=>{
+ await ready();expect(await server.client.navigateMessage('A','m6010')).toBe(true);expect(reads()).toHaveLength(0);
+ const work=server.client.navigateMessage('A','m530');
+ const request=await server.waitFor('session/transcript',1);
+ expect(request.params).toMatchObject({at:{type:'message',id:'m530',cut:null},limit:64});
+ server.reply(request);expect(await work).toBe(true);expect(reads()).toHaveLength(1);
+ expect(cursors()).toEqual(Array.from({length:64},(_,i)=>530+i));
+});
+it('obsolete source jump cannot publish or continue reading after a newer turn jump',async()=>{
+ await ready();const old=server.client.navigateMessage('A','m1'),fresh=server.client.navigateTurn('A',turn(400));
+ await serve(2);expect(await fresh).toEqual(turn(400));const history=server.client.getSnapshot().views.A.history;
+ await serve(1);expect(await old).toBe(false);expect(server.client.getSnapshot().views.A.history).toBe(history);expect(reads()).toHaveLength(2);
+});
+it('a source-message reply cannot substitute a different native message',async()=>{
+ await ready();const history=server.client.getSnapshot().views.A.history,work=server.client.navigateMessage('A','m1');
+ const request=await server.waitFor('session/transcript',1);
+ server.socket.success(request,{type:'transcript_window',window:{cut,target:null,target_cursor:'2',newer_cursor:'65',page:{entries:Array.from({length:64},(_,i)=>entry(i+2))}}});
+ expect(await work).toBe(false);expect(server.client.getSnapshot().views.A.history).toBe(history);expect(server.client.getSnapshot().views.A.turnNavigation?.error).toContain('Invalid native message window');
+});
 it('6063 Turns: distant jump is one read and 64 retained entries; live authority continues independently',async()=>{
  await ready();const work=server.client.navigateTurn('A',turn(1));
  expect(server.client.getSnapshot().views.A.turnNavigation?.pending).toBe(turnKey(turn(1).id));

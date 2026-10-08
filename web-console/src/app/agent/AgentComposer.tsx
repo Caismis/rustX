@@ -6,15 +6,18 @@ import { useTranslation, useNotice } from '../../locale/react';
 // Native textarea replaces Lexical. Commands are client grammar; effects are typed.
 import { useEffect, useLayoutEffect, useState, useRef, useSyncExternalStore, type ReactNode } from 'react';
 import { AttachmentIntake, transferInputs, pasteText, type IntakeInput, type IntakeFile, type UploadPort } from '../../client/uploads';
-import type { UploadPolicy, UploadReceipt, UploadedFile, UserInputBlock } from '../../../../protocol/app-server/v37';
+import type { UploadPolicy, UploadReceipt, UploadedFile, UserInputBlock } from '../../../../protocol/app-server/v38';
 import { commands, available, parseCommand, type CommandId } from '../commands/registry';
 import { matchCommands } from '../commands/matching';
 import { CommandMenu, type MenuAction } from '../commands/CommandMenu';
+import { IconPlusOutline16, IconSendOutline14, IconQueueOutline14, IconPaperPlaneOutline14 } from '../../presentation/primitives/icons';
 import { useInputTrigger } from '../composer/input-trigger';
 import { editableContent } from '../composer/editor-content';
 import { composerSubmissionPolicy, type SubmitGesture } from '../composer/submission-policy';
 import { useBusyEnter } from '../composer/preferences';
 import { StopSequence, type StopScope } from '../composer/stop-sequence';
+import { Tooltip } from '../../presentation/primitives/Tooltip';
+import { Menu } from '../../presentation/primitives/Menu';
 import { useTextareaAutosize } from '../composer/useTextareaAutosize';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 import { Button } from '../../presentation/primitives/Button';
@@ -31,7 +34,8 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
   consumed?: { id: string; sequence: number };
 }) {
   const tx = useTranslation();
-  const [busyEnter] = useBusyEnter();
+  const [busyEnter, preference] = useBusyEnter();
+  const [preferenceOpen, setPreferenceOpen] = useState(false);
   const [stopSequence] = useState(() => new StopSequence());
   const composing = useRef(false);
   const escapePress = useRef<{ event: KeyboardEvent; accept: ReturnType<StopSequence['prepare']> } | undefined>(undefined);
@@ -100,14 +104,15 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
     draftKind: parsed.type === 'text' ? 'message' as const : selectedCommand ? 'command' as const : 'unsupported-command' as const,
     blocked: disabled || submitDisabled, acknowledging: busy, uploadsPending: pending, cancellationAvailable };
   const primary = composerSubmissionPolicy(facts);
-  useEffect(() => { stopSequence.reset(); }, [stopSequence, binding, cancellationScope?.authority, cancellationScope?.identity, active, cancellationAvailable, menu]);
+  useEffect(() => { stopSequence.reset(); }, [stopSequence, binding, cancellationScope?.authority, cancellationScope?.identity, active, cancellationAvailable, menu, preferenceOpen]);
   useEffect(() => {
     // Window blur only resets; keyboard recognition stays on the focused editor.
     window.addEventListener('blur', stopSequence.reset);
     return () => { window.removeEventListener('blur', stopSequence.reset); stopSequence.reset(); };
   }, [stopSequence]);
-  const invoke = (id: CommandId) => {
+  const invoke = (id: MenuAction) => {
     if (disabled || busy) return;
+    if (id === 'file') { trigger.dismiss(); trigger.restore(); picker.current?.click(); return; }
     if (files.length || restored.length) { setError(message('agent:copy.remove-draft-attachments-before-invoking-a-command')); return; }
     const definition = commands.find(command => command.id === id)!;
     if (!onCommand || !available(definition, active, hasGoal, lineageSwitchSafe) || commandAvailable?.(id) === false) { setError(message('agent:copy.command-unavailable-in-the-current-session-state')); return; }
@@ -201,9 +206,18 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
       </div>
       <div className={css.row}>
         <div className={css.tools}>
-          <button type="button" className={css.add} aria-label={tx('commands:menu.add')} title={tx('commands:menu.add')} aria-haspopup="listbox" aria-expanded={!!menu} disabled={disabled || busy} onMouseDown={event => event.preventDefault()} onClick={trigger.toggle}>+</button>
+          <button type="button" className={css.add} aria-label={tx('commands:menu.add')} title={tx('commands:menu.add')} aria-haspopup="listbox" aria-expanded={!!menu} disabled={disabled || busy} onMouseDown={event => event.preventDefault()} onClick={trigger.toggle}><span aria-hidden="true"><IconPlusOutline16 /></span></button>
           <input ref={picker} type="file" hidden multiple aria-label={tx('agent:agent-composer.attach-files')} disabled={disabled || busy} onChange={event => { pick(Array.from(event.target.files ?? []).map(file => ({ file }))); event.target.value = ''; }}/>
           {permission}
+      <div className={css.busyEnter}>
+      <Menu open={preferenceOpen} autoFocus onClose={() => setPreferenceOpen(false)} selectedId={busyEnter}
+        items={['queue', 'steer'].map(id => ({ id, label: tx(id === 'queue' ? 'agent:submission.queue' : 'agent:submission.immediate'), icon: id === 'queue' ? <IconQueueOutline14 /> : <IconPaperPlaneOutline14 /> }))}
+        onSelect={id => { preference.setBusyEnter(id as 'queue' | 'steer'); setPreferenceOpen(false); }}
+        anchor={<Tooltip label={tx(busyEnter === 'queue' ? 'agent:submission.queue-description' : 'agent:submission.immediate-description')} side="top"><button type="button" className={css.select} aria-label={tx('agent:submission.enter-preference', { behavior: tx(busyEnter === 'queue' ? 'agent:submission.queue' : 'agent:submission.steer') })}
+          aria-haspopup="menu" aria-expanded={preferenceOpen} onClick={() => setPreferenceOpen(value => !value)}>
+          <span aria-hidden="true">{busyEnter === 'queue' ? <IconQueueOutline14 /> : <IconPaperPlaneOutline14 />}</span>{tx(busyEnter === 'queue' ? 'agent:submission.queue' : 'agent:submission.immediate')}
+        </button></Tooltip>} />
+      </div>
         </div>
         <div className={css.trailing}>
           {model}
@@ -211,10 +225,11 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
             disabled={primary.disabled} onMouseDown={event => event.preventDefault()} onClick={() => { if (primary.kind === 'stop') onCancel(); else void submit(); }}>
             {primary.kind === 'stop'
               ? <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden><rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor"/></svg>
-              : <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden><path d="M8 13V3m-4 4 4-4 4 4" fill="none" stroke="currentColor" strokeWidth="2"/></svg>}
+              : <span aria-hidden="true"><IconSendOutline14 /></span>}
           </button>
         </div>
       </div>
+
     </div>
   </div>;
 }

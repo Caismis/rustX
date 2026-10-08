@@ -4,6 +4,9 @@
   min-width: 0;
 }
 
+.root > span { max-width: 100%; min-width: 0; }
+.trigger > svg { flex-shrink: 0; }
+
 /* Figma 313:14108 ToggleButton: 13/20 medium secondary label, 4px gap,
    12px caption chevron; 28px chip height matches the sibling Plan /
    Read-only selects in the same tool row. */
@@ -12,11 +15,8 @@
   align-items: center;
   gap: 4px;
   min-width: 0;
-  /* Legacy fallback, then a row-relative cap that grants long names more
-     room without letting this trailing control consume the composer. */
-  max-width: 220px;
-  max-width: min(360px, 45cqw);
-  height: 28px;
+  max-width: 100%;
+  min-height: 28px;
   padding: 0 4px 0 8px;
   border: none;
   /* Rounded chip chrome, matching the sibling permission trigger. */
@@ -43,48 +43,9 @@
   cursor: default;
 }
 
-.triggerLabel {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Effort value beside the model name (mock's 'High': same 13/20/500, caption
-   tone). Adaptive priority: the huge shrink factor makes the effort absorb
-   all deficit first — it ellipsizes away to nothing before the model name
-   loses a single pixel, and the chevron stays snug throughout. */
-.triggerEffort {
-  flex-shrink: 1000;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--dsw-alias-label-caption);
-}
-
-/* Stand-in for the whole text below the icon-only cut: the settings page's
-   Models glyph (IconDataOutline16), hidden while any text fits. */
-.triggerIcon {
-  display: none;
-  flex: 0 0 auto;
-}
-
-/* Icon-only floor: past continuous shrink (effort ellipsizes away first, then
-   the name), a 360px composer row leaves the 45cqw cap too little for a
-   legible name, so the text yields to the Models glyph. Same anonymous
-   container as PermissionSelect's 460px cut (InputBar .row); the full name
-   stays reachable through the trigger's title and aria-label. */
-@container (max-width: 360px) {
-  .triggerIcon {
-    display: block;
-  }
-
-  .triggerLabel,
-  .triggerEffort {
-    display: none;
-  }
-}
+/* Preserve both values; narrow layouts wrap instead of hiding text. */
+.triggerLabel { min-width: 0; overflow-wrap: anywhere; text-align: left; }
+.triggerEffort { flex: none; white-space: nowrap; color: var(--dsw-alias-label-caption); }
 
 .chevron {
   flex: 0 0 auto;

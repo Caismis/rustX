@@ -63,7 +63,7 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     // Provider is the native effective one.
     await expect(settings.getByLabel('Endpoint', { exact: true })).toHaveValue('');
     await settings.getByRole('button', { name: /Credential source$/ }).click();
-    await expect(page.getByRole('listbox').getByRole('option')).toHaveText(['Read it from an environment variable', 'Enter a literal secret']);
+    await expect(page.getByRole('listbox').getByRole('option')).toHaveText(['Read it from an environment variable', 'Enter a secret']);
     await page.keyboard.press('Escape');
     await expect(settings.getByText(/Native effective Provider acceptance/)).toBeVisible();
     await settings.getByLabel('Endpoint', { exact: true }).fill('http://127.0.0.1:2/v1');
@@ -78,17 +78,17 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     // The User source authors every Native Tool; this Workspace inherits that
     // effective value and authors nothing until an explicit edit.
     await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
-    await expect(settings.getByRole('button', { name: 'Save Native Tools', exact: true })).toBeDisabled();
+    await expect(settings.getByRole('button', { name: 'Save Built-in tools', exact: true })).toBeDisabled();
     await settings.getByLabel('read', { exact: true }).uncheck();
-    await settings.getByRole('button', { name: 'Save Native Tools', exact: true }).click(); await saved('Native Tools');
+    await settings.getByRole('button', { name: 'Save Built-in tools', exact: true }).click(); await saved('Built-in tools');
     await expect(settings.getByLabel('read_image', { exact: true })).not.toBeChecked();
     await expect(settings.getByRole('form', { name: 'read_image policy', exact: true })).toHaveCount(0);
     await settings.getByLabel('read_image', { exact: true }).check();
-    await settings.getByRole('button', { name: 'Save Native Tools', exact: true }).click(); await saved('Native Tools');
+    await settings.getByRole('button', { name: 'Save Built-in tools', exact: true }).click(); await saved('Built-in tools');
     await settings.getByRole('button', { name: 'Reload configuration', exact: true }).click();
     await expect(settings.getByLabel('read_image', { exact: true })).toBeChecked();
     await settings.getByLabel('read_image', { exact: true }).uncheck();
-    await settings.getByRole('button', { name: 'Save Native Tools', exact: true }).click(); await saved('Native Tools');
+    await settings.getByRole('button', { name: 'Save Built-in tools', exact: true }).click(); await saved('Built-in tools');
     await settings.getByRole('button', { name: 'Reload configuration', exact: true }).click();
     await expect(settings.getByLabel('read_image', { exact: true })).not.toBeChecked();
     // Source families share exact/all/none selection without activating definitions.
@@ -104,7 +104,7 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
       await choose(source, 'Selection', 'None');
       await source.getByRole('button', { name: `Save Source ${name}`, exact: true }).click(); await saved(`Source ${name}`);
     }
-    await expect(settings).toContainText('not a filesystem ACL');
+    await expect(settings).toContainText('This does not restrict file access.');
     await expect(settings).toContainText(`${fixture.workspaceA}/.agents/skills`);
     const skills = settings.getByRole('form', { name: 'Skill visibility', exact: true });
     await choose(skills, 'Selection', 'All');

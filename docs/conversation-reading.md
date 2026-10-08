@@ -27,9 +27,14 @@ acceptance, so transcript adjacency is never used to find a prompt. `response`
 is the newest text/refusal-bearing Assistant member, present only once the turn
 has a terminal at the cut. Both join text blocks with single spaces, collapse
 whitespace and end with an ellipsis when clipped: at most 50 and 120 Unicode
-characters (one and three rail-card lines). Inherited turns carry their prompt as
-`TurnReadingProvenance.prompt_message_id`, remapped to destination identity on
-copy and dropped when the prompt is outside the retained cut; their response is
+characters (one and three rail-card lines). Inherited prompt previews use the
+earliest text-bearing Human input explicitly named by the turn's
+`TurnReadingProvenance.prompt_message_id` or its completed response's native
+`retry_message_id`. Both relationships are remapped to destination identity on
+copy and dropped when the input is outside the retained cut. An opening prompt
+precedes later steering input; when only response replay input is retained, that
+recorded input provides the preview. Neither nearby User messages nor live reads
+of the source Session establish ownership. The inherited response is
 the newest text-bearing retained member of a settled inherited turn.
 
 `TurnReadingProvenance` is a separate immutable lineage/bootstrap domain from
@@ -260,3 +265,20 @@ handles are exposed only when the column has usable margin, with slider labels
 and values; narrow columns clamp to available space and hide handles. Reduced
 motion disables rail animation. Width changes create no Session/runtime state or
 request; ChatViewport preserves the reading anchor through the resulting reflow.
+
+## Exact fork source message windows
+
+App Server v38 adds the Message window selector over canonical MessageId. The
+store resolves its existing indexed transcript position inside the same read
+transaction, then returns at most 64 entries forward from that exact position.
+It never scans intervening transcript pages or substitutes a nearby Turn. A
+provided cut obeys the same foreign, future and semantic-mutation fences as other
+windows; an absent cut captures current native facts. A message outside the cut
+or no longer readable fails explicitly. The result carries target_cursor while
+target remains absent: a message identity does not invent Turn ownership.
+
+The Web source action validates the exact message at target_cursor, attachment
+authority and navigation intent before publishing or anchoring. A superseding
+read, reattachment, node switch or user cancellation retires the result. The
+retained presentation remains bounded and later source activity cannot rewrite
+the fork seed boundary.

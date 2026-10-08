@@ -3,7 +3,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { CapabilityInspection1, Model, Request1, SourceSettings } from '../../protocol/app-server/v37';
+import type { CapabilityInspection1, Model, Request1, SourceSettings } from '../../protocol/app-server/v38';
 import { settingsTransactionOwners } from '../src/app/settings/Settings';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { OutcomeUncertain } from '../src/client/app-server';
@@ -933,7 +933,7 @@ it('S2-11 source paths, revisions and raw projections are on Advanced only', asy
     // Protocol vocabulary is not needed for ordinary tasks.
     expect(text(), page).not.toMatch(/\b(root_model|native_tools|source_tools|expected_revision|sourceWrite)\b/);
     // The per-unit CAS base is a collapsed disclosure, never page content.
-    for (const disclosure of screen.queryAllByRole('button', { name: 'Source revision & replacement' })) {
+    for (const disclosure of screen.queryAllByRole('button', { name: 'Configuration details' })) {
       expect(disclosure.getAttribute('aria-expanded')).toBe('false');
     }
   }
@@ -951,9 +951,11 @@ function sources(dir: string): string[] {
     return statSync(path).isDirectory() ? sources(path) : /\.(ts|tsx)$/.test(name) ? [path] : [];
   });
 }
-const importers = (module: string) => sources(join(root, 'src'))
-  .filter(path => new RegExp(`from '${module}'`).test(readFileSync(path, 'utf8')))
-  .map(path => relative(root, path)).sort();
+// Source files do not change during this suite. Read once, especially on bind mounts.
+const sourceImports = sources(join(root, 'src')).map(path => ({ path, text: readFileSync(path, 'utf8') }));
+const importers = (module: string) => sourceImports
+  .filter(source => new RegExp(`from '${module}'`).test(source.text))
+  .map(source => relative(root, source.path)).sort();
 
 it('S2-12 no global state framework, router, second design system or form devtools is a dependency', () => {
   const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { dependencies: Record<string, string>; devDependencies: Record<string, string> };

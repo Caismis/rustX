@@ -22,7 +22,7 @@ for (const mode of ['settled', 'streaming', 'tools', 'error', 'approval', 'quest
    if (mode === 'selectors') {
      await expect(page.getByRole('button', { name: 'Approval mode' })).toHaveCount(0);
      await page.getByRole('button', { name: 'Model and reasoning' }).click();
-     await expect(page.getByText('Reading native models…')).toHaveCount(0);
+     await expect(page.getByText('Loading models…')).toHaveCount(0);
      await page.getByRole('menuitem', { name: 'Reasoning profile' }).click();
      await expect(page.getByRole('menuitem', { name: 'deliberate' })).toBeVisible();
    }
@@ -106,6 +106,11 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
     const primary = page.locator('[data-composer-primary]');
     const shot = async (state: string) => expectStableScreenshot(stack, `composer-${state}-${theme}-${width}.png`);
     await expect(input).toBeVisible(); await expect(primary).toHaveCount(1);
+    const plus = page.getByRole('button', { name: 'Add', exact: true });
+    expect(await plus.evaluate(el => {
+      const button = el.getBoundingClientRect(), icon = el.querySelector('svg')!.getBoundingClientRect();
+      return [icon.x + icon.width / 2 - button.x - button.width / 2, icon.y + icon.height / 2 - button.y - button.height / 2];
+    })).toEqual([0, 0]);
     if (width === 1440) {
       await expect.poll(async () => {
         const left = (await page.getByRole('button', { name: 'Add', exact: true }).boundingBox())!;
@@ -146,7 +151,7 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
     for (const name of ['Add', 'Model and reasoning']) await expect(page.getByRole('button', { name, exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Approval mode', exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Model and reasoning' }).click();
-    await expect(page.getByText('Reading native models…')).toHaveCount(0); await page.keyboard.press('Escape');
+    await expect(page.getByText('Loading models…')).toHaveCount(0); await page.keyboard.press('Escape');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
   });
@@ -185,7 +190,7 @@ test('ModelSelect submenus stay usable inside a narrow viewport', async ({ page 
   // Keyboard: the menu opens on Model, the arrows reach the profile row, and
   // ArrowRight enters its submenu.
   await trigger.focus(); await page.keyboard.press('Enter');
-  await expect(page.getByText('Reading native models…')).toHaveCount(0);
+  await expect(page.getByText('Loading models…')).toHaveCount(0);
   await expect(page.getByRole('menuitem', { name: 'Model', exact: true })).toBeFocused();
   await page.keyboard.press('ArrowDown'); await expect(profile).toBeFocused();
   await page.keyboard.press('ArrowRight'); await expect(page.getByRole('menuitem', { name: 'deliberate' })).toBeFocused();
@@ -222,8 +227,8 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
       : { input: '消息', queue: '排队', steer: '插话', send: '发送', commands: '添加', attach: '添加' };
     const input = page.getByRole('textbox', { name: names.input, exact: true });
     const primary = page.locator('[data-composer-primary]');
-    // The busy-Enter preference is a General Settings row; the Composer has no selector.
-    await expect(page.getByRole('button', { name: /Enter while running|运行时 Enter/ })).toHaveCount(0);
+    // The busy-Enter preference remains available beside the composer controls.
+    await expect(page.getByRole('button', { name: /Enter while running|运行时 Enter/ })).toHaveCount(1);
     await page.evaluate(() => window.composerFixture.running(true));
     await input.fill('Queue by default'); await expect(primary).toHaveAccessibleName(names.queue);
     await input.press('Enter'); await expect(input).toHaveValue('');
@@ -247,7 +252,7 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
     // A dismissed menu's Escape cannot be the first press of cancellation.
     await input.press('Escape'); expect(await page.evaluate(() => window.composerFixture.cancellations())).toEqual([]);
     // Focus outside the supported editor invalidates that arm.
-    await page.getByRole('button', { name: names.attach, exact: true }).focus(); await page.keyboard.press('Escape'); await input.focus();
+    await page.getByRole('button', { name: names.commands, exact: true }).focus(); await page.keyboard.press('Escape'); await input.focus();
     await page.evaluate(() => window.composerFixture.holdCancellation());
     await input.press('Escape'); await input.press('Escape');
     await expect.poll(() => page.evaluate(() => window.composerFixture.cancellations())).toHaveLength(1);

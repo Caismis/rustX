@@ -14,7 +14,7 @@ import { CommandSession } from '../src/app/commands/native';
 import { CommandPanel } from '../src/app/commands/CommandPanel';
 import { App } from '../src/app/App';
 import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
-import type { MethodResult, Request, SessionNode, SessionUserMessageBoundary, UserInputBlock } from '../../protocol/app-server/v37';
+import type { MethodResult, Request, SessionNode, SessionUserMessageBoundary, UserInputBlock } from '../../protocol/app-server/v38';
 import { Server, snapshot } from './fixture';
 
 let server: Server;
@@ -26,6 +26,30 @@ afterEach(() => { cleanup(); server.client.disconnect(); vi.restoreAllMocks(); }
 const methods = () => server.requests.map(item => item.request.method);
 
 describe('one narrow browser command grammar', () => {
+  it('offers Harness attachment and command icons in plus, preserves the draft, and keeps slash discovery command-only', () => {
+    const send = vi.fn(async () => true), command = vi.fn();
+    render(<AgentComposer disabled={false} busy={false} active={false} onCommand={command} onSend={send} onUpload={async () => []} onCancel={() => {}} />);
+    const input = screen.getByLabelText('Message');
+    const picker = screen.getByLabelText('Attach files');
+    const pick = vi.spyOn(picker, 'click');
+    fireEvent.change(input, { target: { value: 'Keep this draft' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    expect(screen.getAllByRole('option').every(row => row.querySelector('svg'))).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Add attachments' })).toBeNull();
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(pick).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('listbox')).toBeNull();
+    expect((input as HTMLTextAreaElement).value).toBe('Keep this draft');
+    expect(send).not.toHaveBeenCalled(); expect(command).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: '/' } });
+    expect(screen.queryByRole('option', { name: /file$/ })).toBeNull();
+  });
+  it('keeps file intake available through plus without a command handler', () => {
+    render(<AgentComposer disabled={false} busy={false} active={false} onSend={async () => true} onUpload={async () => []} onCancel={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    expect(screen.getAllByRole('option')).toHaveLength(1);
+    expect(screen.getByRole('option', { name: /file$/ })).toBeTruthy();
+  });
   it('discovers slash, refuses unsupported input and arguments, and leaves ordinary text alone', () => {
     expect(discoveryQuery('/')).toBe(''); expect(discoveryQuery(' /mdl')).toBe('mdl');
     expect(discoveryQuery('Read /model')).toBeUndefined();

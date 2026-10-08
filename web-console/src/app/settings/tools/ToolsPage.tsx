@@ -3,7 +3,7 @@ import { useState } from 'react';
 import type {
   AgentSkillSelection, ApprovalMode, NativePolicyOverrideDocument, NativeTool,
   RuntimeLayer, SourceScope, SourceSettings, SourceToolSelection,
-} from '../../../../../protocol/app-server/v37';
+} from '../../../../../protocol/app-server/v38';
 import { Button } from '../../../presentation/primitives/Button';
 import { UnitForm } from '../forms/bridge';
 import { CheckboxList, Names, Selection, TextField, nativeTools, policyTools } from '../forms/controls';
@@ -46,14 +46,12 @@ export function ToolsPage({ source, document, scope, revision }: {
     <h3>{tx('settings:tools-page.tools-amp-permissions')}</h3>
     <p>{tx('settings:tools-page.what-the-root-agent-may-use-and-under-what-policy-defining-a-res')}</p>
 
-    <h4>{tx('settings:tools-page.approval')}</h4>
     <UnitForm<ApprovalMode> title={tx('settings:tools-page.approval-mode')} authored={document.approval_mode ?? undefined} blank="policy" revision={revision}
       mutation={authored => ({ kind: 'config', mutation: { unit: 'approval', authored } })}>
       {(value, change) => <Choice label={tx('settings:tools-page.approval-mode')} value={value}
         options={[['policy', tx('settings:copy.policy')], ['full_access', tx('settings:copy.full-access')]]} onChange={change} />}
     </UnitForm>
 
-    <h4>{tx('settings:tools-page.built-in-tools')}</h4>
     <UnitForm<string[]> title={tx('settings:extension-detail.native-tools')} authored={agent?.tools?.builtin ?? undefined} blank={[]} revision={revision}
       mutation={authored => ({ kind: 'config', mutation: { unit: 'native_tools', authored } })}>
       {(value, change) => <>

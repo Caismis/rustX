@@ -381,3 +381,12 @@
 .attachments:empty { display: none; }
 
 /* Quiet input preference, outside the operation toolbar. */
+
+.primary > span, .add > span { display: flex; }
+/* Input preference shares the toolbar with permission and model controls. */
+.busyEnter { display: flex; align-items: center; }
+.busyEnter .select { display: flex; align-items: center; gap: 4px; border: 0; padding: 4px 8px; background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer; }
+.busyEnter .select:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.busyEnter .select > span { display: flex; }
+.busyEnter .select { border-radius: 24px; font-family: var(--dsw-font-family); font-size: 13px; line-height: 20px; font-weight: 500; }
+.busyEnter .select:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }

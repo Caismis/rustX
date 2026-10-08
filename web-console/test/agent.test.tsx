@@ -1,8 +1,9 @@
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v37';
+import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v38';
 import { AgentControls } from '../src/app/agent/AgentControls';
+import { ModelSelect } from '../src/presentation/agent/ModelSelect';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { Interactions } from '../src/app/agent/Interactions';
 import { Tool } from '../src/app/agent/Tool';
@@ -14,6 +15,20 @@ let server: Server;
 beforeEach(() => { server = new Server(); });
 afterEach(() => { cleanup(); server.client.disconnect(); });
 const count = (method: string) => server.requests.filter(row => row.request.method === method).length;
+it('keeps initial model loading inside the popup and cached refresh out of the trigger layout', () => {
+ const props = { current: 'exact/model', profile: 'brief', disabled: false, loading: true, load: () => {}, choose: () => {}, initialOpen: true };
+ const { rerender } = render(<ModelSelect {...props} choices={[]} />);
+ expect(screen.getByText('Reading native models…').closest('[role="menu"]')).not.toBeNull();
+ const trigger = screen.getByRole('button', { name: 'Model and reasoning' });
+ expect(trigger.querySelector('[role="status"]')).toBeNull();
+ expect(screen.getByRole('status').closest('[role="menu"]')).not.toBeNull();
+ rerender(<ModelSelect {...props} choices={[{ id: 'exact/model', profiles: [{ id: 'brief', label: 'brief' }] }]} />);
+ expect(screen.getByText('Reading native models…').closest('[role="menu"]')).not.toBeNull();
+ expect(screen.getByRole('button', { name: 'Model and reasoning' })).toBe(trigger);
+ expect(trigger.textContent).toContain('exact/model');
+ rerender(<ModelSelect {...props} loading={false} choices={[{ id: 'exact/model', profiles: [{ id: 'brief', label: 'brief' }] }]} />);
+ expect(screen.queryByText('Reading native models…')).toBeNull();
+});
 function Control() {
  const state = useSyncExternalStore(server.client.subscribe, server.client.getSnapshot);
  return <AgentControls client={server.client} view={state.views.A}/>;
@@ -42,6 +57,15 @@ async function openModels() {
  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Model and reasoning' })));
  await waitFor(() => expect(screen.queryByText('Reading native models…')).toBeNull());
 }
+it('does not dim the model trigger during a held catalog read', async () => {
+ modelFixture(); await server.attached('A'); server.held.add('session/models'); render(<Control/>);
+ const trigger = screen.getByRole('button', { name: 'Model and reasoning' }) as HTMLButtonElement;
+ fireEvent.click(trigger);
+ await server.waitFor('session/models', 1);
+ expect(trigger.disabled).toBe(false);
+ expect(screen.getByText('Reading native models…').closest('[role="menu"]')).not.toBeNull();
+ expect(count('session/setModel')).toBe(0);
+});
 it('model/profile menu advertises only exact native values and acknowledgement alone never changes selection', async () => {
  modelFixture(); await server.attached('A'); render(<Control/>); await openModels();
  expect(count('session/models')).toBe(1); expect(count('session/model')).toBe(1);
