@@ -86,7 +86,7 @@ export function SubagentHeader({ title }: { title: string }) {
       </button>}
       items={agents.map(agent => ({ id: agent.agent_id, label: <span className={css.row} data-agent-id={agent.agent_id} data-agent-state={agent.state}>
         <StateDot state={agentDot(agent)} size={7}/><span className={css.content}><span className={css.name}>{agent.agent}</span><span className={css.secondary}>{stateLabel(agent)}{agent.observation.activity.type === 'tool' ? ` · ${agent.observation.activity.tool_id.replace(/^tool-/, '')}` : ''}</span></span><span className={css.metrics}>{scope.metrics[agent.agent_id]?.statistics.reported_usage && <span>{tx('agent:usage.count', { count: formatTokens(scope.metrics[agent.agent_id].statistics.reported_usage!.total_tokens, tx) })}</span>}{scope.metrics[agent.agent_id] && <span>{formatDuration(agentDuration(scope.metrics[agent.agent_id], now), tx)}</span>}</span><IconChevronRightOutline14/>
-      </span> }))} onSelect={id => { open(id); setExpanded(false); }}/>} 
+      </span> }))} onSelect={id => { open(id); setExpanded(false); }}/>}
   </div>;
 }
 /** Keep the parent mounted so returning restores its reading position and draft. */
