@@ -342,14 +342,34 @@ definitions never touch the filesystem.
   name counts as removed, and a staging directory that cannot be removed (or that
   someone else added entries to) is kept and reported, never deleted recursively.
 
-  If `link` reports an error, the destination itself is the evidence: an entry
-  naming the staged file is a publication (a network filesystem can report a
-  failure for a retransmitted link it performed), an absent or different entry is
-  a refusal, and a destination that cannot be inspected is reported as an
-  uncertain outcome.
+  A failed `link` acknowledgement does not by itself mean nothing was published.
+  The outcome is decided by evidence, in this order:
+
+  1. **Published** if the destination now names the staged file (same
+     device/inode), whatever the error. A network filesystem can fail a
+     retransmitted link that it performed.
+  2. **Refused** if the error is a definite rejection, which `link(2)` reports
+     without creating the entry: `EEXIST`, a path or permission failure
+     (`ENOENT`, `ENOTDIR`, `EACCES`, `ELOOP`, `ENAMETOOLONG`, `EXDEV`), a read-only,
+     full or over-quota filesystem (`EROFS`, `ENOSPC`, `EDQUOT`, `EMLINK`),
+     `EINVAL`, or unsupported hard links.
+  3. **Uncertain** for anything else, such as `EIO` or an error without a code.
+     An absent destination, or one naming another file, does not prove refusal:
+     the entry may have been created and then removed or replaced by someone else.
+     `DeliveryUncertainError` carries the link error as its cause and what the
+     destination showed (absent, foreign, or uninspectable with its error). Nothing
+     retries the link or touches the destination; the user inspects it.
 
   The outcomes are distinct: saved; saved with a staging-residue warning; not
   saved; not saved with staging residue; outcome unknown.
+- **Staging path.** The staging directory is `<parent>/.rustx-save-XXXXXX`, where
+  `<parent>` is the destination's own spelling of its parent (`dirname`, which
+  only strips the last component). The staged file is `<staging>/file`. Every Save
+  path is built by concatenation, never `path.join`/`resolve`: in
+  `link/../report.md` with `link` a symlink, the OS resolves `link` before `..`,
+  so lexical folding would stage, and clean up, in a different directory than the
+  one the destination is created in. The same strings address the allocation from
+  `mkdtemp` through `link`, `unlink`, `rmdir` and residue reports.
 - **Destination spelling.** The typed path is used exactly as typed. Leading,
   trailing and inner spaces are part of the name, and whitespace only decides
   whether the input is blank. `~`/`~/` expand to the user's home, and a relative

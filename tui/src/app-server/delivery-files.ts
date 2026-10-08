@@ -24,7 +24,7 @@ import { spawn } from "node:child_process";
 import type { BigIntStats } from "node:fs";
 import { link, lstat, mkdtemp, open, rmdir, unlink, type FileHandle } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, sep } from "node:path";
+import { dirname, isAbsolute, sep } from "node:path";
 
 import type { DeliveryLocation } from "../presentation/deliveries.ts";
 import { isRenderableField } from "../sanitize.ts";
@@ -52,10 +52,17 @@ export class DeliveryActionError extends Error {
  */
 export function deliveryDestination(argument: string, cwd = process.cwd(), home = homedir()): string {
   if (argument.trim() === "" || !isRenderableField(argument)) throw new DeliveryActionError("Invalid save destination");
-  const path = argument === "~" ? home : argument.startsWith("~/") ? `${home}/${argument.slice(2)}` : argument;
-  // Prefixing, not `resolve`: lexical `..` folding would name a different
-  // file than the OS does when a component is a symlink.
-  return isAbsolute(path) ? path : `${cwd.endsWith(sep) ? cwd : cwd + sep}${path}`;
+  const path = argument === "~" ? home : argument.startsWith("~/") ? childPath(home, argument.slice(2)) : argument;
+  return isAbsolute(path) ? path : childPath(cwd, path);
+}
+
+/**
+ * `name` inside `directory`, by concatenation only. `path.join`/`resolve`
+ * fold `..` lexically, which names a different directory than the OS does
+ * when the preceding component is a symlink; every Save path is built here.
+ */
+function childPath(directory: string, name: string): string {
+  return directory.endsWith(sep) ? directory + name : directory + sep + name;
 }
 
 /** Strict, bounded base64 decoding of one native delivery body. */
@@ -89,19 +96,37 @@ export class DeliveryResidueError extends DeliveryActionError {
   }
 }
 
-/** A Save whose publication attempt failed without evidence of its outcome. */
+/**
+ * What the destination showed after an ambiguous link failure, none of
+ * which proves this save did not publish: its entry may have been created and
+ * then removed or replaced by someone else.
+ */
+export type DestinationObservation =
+  | { kind: "absent" }
+  | { kind: "foreign" }
+  | { kind: "uninspectable"; error: unknown };
+
+/**
+ * A Save whose dispatched link failed ambiguously, with no evidence either
+ * way: the destination may or may not have been created by this save. The
+ * link error is the cause; nothing retries it or touches the destination.
+ */
 export class DeliveryUncertainError extends DeliveryActionError {
   readonly path: string;
-  readonly inspection: unknown;
+  readonly observed: DestinationObservation;
   readonly residue: string | undefined;
-  constructor(path: string, cause: unknown, inspection: unknown, residue: string | undefined) {
+  constructor(path: string, cause: unknown, observed: DestinationObservation, residue: string | undefined) {
+    const now = observed.kind === "absent" ? "it is now absent"
+      : observed.kind === "foreign" ? "it now names another file"
+        : `it cannot be inspected (${errorCode(observed.error) ?? "error"})`;
     super(
-      `Save outcome unknown: could not confirm whether ${path} was created` +
+      `Save outcome unknown: linking ${path} failed (${errorCode(cause) ?? "error"}) and ${now}; ` +
+        "this save may have created it" +
         (residue === undefined ? "" : `; its staging directory remains at ${residue}`),
     );
     this.name = "DeliveryUncertainError";
     this.path = path;
-    this.inspection = inspection;
+    this.observed = observed;
     this.residue = residue;
     this.cause = cause;
   }
@@ -123,11 +148,21 @@ export const SAVE_FILES: SaveFiles = { mkdtemp, open, link, lstat, unlink, rmdir
 
 /** Link errors meaning this filesystem cannot create the name by a hard link. */
 const UNSUPPORTED_LINK = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"]);
+/**
+ * Link errors that are rejections of the request itself (the name exists, a
+ * path or permission check failed, the filesystem or quota refused, hard
+ * links are unsupported): `link(2)` reports them without creating the entry.
+ * Any other error, such as EIO, or no code at all, leaves the outcome open.
+ */
+const DEFINITE_REFUSAL = new Set([
+  "EEXIST", "ENOENT", "ENOTDIR", "EACCES", "EROFS", "EXDEV", "ELOOP", "ENAMETOOLONG",
+  "EMLINK", "ENOSPC", "EDQUOT", "EINVAL", ...UNSUPPORTED_LINK,
+]);
 
 type Publication =
   | { kind: "published" }
   | { kind: "refused"; error: unknown }
-  | { kind: "uncertain"; error: unknown; inspection: unknown };
+  | { kind: "uncertain"; error: unknown; observed: DestinationObservation };
 
 /**
  * Reads authorized original bytes and publishes them as a new client-local
@@ -135,7 +170,7 @@ type Publication =
  *
  * ```text
  * read (cancellable on the server) -> abort?
- *   -> mkdtemp beside the destination (0700, unique, owned by this save)
+ *   -> mkdtemp in the destination's parent as spelled (0700, unique, owned)
  *   -> staged file 'wx' -> chunked writes, abort? between chunks -> sync -> close
  *   -> abort?   <- publication admission: the last cancellation point
  *   -> link(staged, destination)   <- publication commit (atomic, no clobber)
@@ -167,8 +202,10 @@ export async function saveDelivery(
   signal?.throwIfAborted();
   const bytes = decodeDelivery((await read()).data);
   signal?.throwIfAborted();
-  const stage = await files.mkdtemp(join(dirname(destination), ".rustx-save-"));
-  const staged = join(stage, "file");
+  // The staging directory is a sibling by the destination's own spelling of
+  // its parent, so the OS resolves both through the same components.
+  const stage = await files.mkdtemp(childPath(dirname(destination), ".rustx-save-"));
+  const staged = childPath(stage, "file");
   let created = false;
   let publication: Publication;
   try {
@@ -186,7 +223,7 @@ export async function saveDelivery(
     case "published":
       return cleanup.ok ? { path: destination } : { path: destination, residue: { path: stage, cause: cleanup.error } };
     case "uncertain":
-      throw new DeliveryUncertainError(destination, publication.error, publication.inspection, residue);
+      throw new DeliveryUncertainError(destination, publication.error, publication.observed, residue);
     case "refused":
       if (!cleanup.ok) throw new DeliveryResidueError(stage, publication.error, cleanup.error);
       throw publication.error;
@@ -217,25 +254,31 @@ async function writeStaged(file: FileHandle, bytes: Uint8Array, signal?: AbortSi
 }
 
 /**
- * The publication commit. `link` fails without creating anything, but the
- * destination itself is the evidence: a failure reported for an entry that
- * names the staged file (as a network filesystem can after a retransmitted
- * request) is a publication, and an uninspectable destination is uncertain.
+ * The publication commit and what a failure of it proves.
+ *
+ * The destination naming the staged file proves publication, whatever the
+ * error (a network filesystem can fail a retransmitted link it performed).
+ * Otherwise only the error can prove refusal: an absent or foreign
+ * destination does not show that this link created nothing, because someone
+ * may have removed or replaced the entry in between. A definite rejection is
+ * a refusal; anything else is uncertain.
  */
 async function publish(files: SaveFiles, staged: string, destination: string, identity: BigIntStats): Promise<Publication> {
   try {
     await files.link(staged, destination);
     return { kind: "published" };
   } catch (error) {
-    let current: BigIntStats;
+    let observed: DestinationObservation;
     try {
-      current = await files.lstat(destination, { bigint: true });
+      const current = await files.lstat(destination, { bigint: true });
+      if (current.dev === identity.dev && current.ino === identity.ino) return { kind: "published" };
+      observed = { kind: "foreign" };
     } catch (inspection) {
-      if (errorCode(inspection) === "ENOENT") return { kind: "refused", error: refusal(error, destination) };
-      return { kind: "uncertain", error, inspection };
+      observed = errorCode(inspection) === "ENOENT" ? { kind: "absent" } : { kind: "uninspectable", error: inspection };
     }
-    if (current.dev === identity.dev && current.ino === identity.ino) return { kind: "published" };
-    return { kind: "refused", error: refusal(error, destination) };
+    const code = errorCode(error);
+    if (code !== undefined && DEFINITE_REFUSAL.has(code)) return { kind: "refused", error: refusal(error, destination) };
+    return { kind: "uncertain", error, observed };
   }
 }
 

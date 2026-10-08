@@ -1129,7 +1129,10 @@ a model request.
   appears at the destination in one step. Existing files, directories and symlinks
   are never overwritten, and a cancelled or failed save leaves no partial file. If
   that staging directory cannot be removed, the save says where it is. Filesystems
-  without hard links are refused rather than written unsafely. A filename
+  without hard links are refused rather than written unsafely. If the filesystem
+  reports an ambiguous error (such as an I/O error) for the final step and the
+  file cannot be confirmed, the save says its outcome is unknown; check the
+  destination yourself. A filename
   containing terminal control characters is not prefilled; type the destination
   yourself. Closing `/files` (or switching
   Session, reconnecting or quitting) cancels a running action on the server too.

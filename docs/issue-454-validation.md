@@ -129,7 +129,7 @@ compatibility path or fallback, and the App Server protocol is unchanged.
 | Cancel before staging, during the first write, between chunks, after sync before admission; destination created by another writer meanwhile | deferred read; write/sync hooks abort at the exact step | rejects with the abort reason; `link` never called; the other writer's file intact |
 | Cancel after `link` was dispatched; cancel after success | `link` parked after the real link | resolves as saved; file kept |
 | Write, short write, sync, close, `link`, `mkdtemp` failures | injected errors | destination absent, no staging |
-| `link` reports an error but the destination names the staged inode; destination uninspectable (`EACCES`) | injected errors | saved; `DeliveryUncertainError` |
+| `link` reports an error but the destination names the staged inode; destination uninspectable (`EACCES`) | injected errors | saved; `DeliveryUncertainError` (refined by the certainty repair below) |
 | Staging cleanup fails after publication; staged name not removable after cancellation; a foreign entry inside staging | injected `rmdir`/`unlink` errors; parked write | saved with residue warning; `DeliveryResidueError` with the original cancellation as cause; foreign entry kept, directory reported |
 | Open path uninspectable | `chmod 000` directory | `cannot be inspected (EACCES)`, not "absent" |
 
@@ -146,6 +146,46 @@ Negative controls, each applied to `delivery-files.ts` alone and then restored:
 | Lexical `path.resolve` | spelling |
 | Cleanup errors swallowed | residue |
 | A link error trusted without inspecting the destination | ambiguous link failure |
+
+## Publication certainty and staging-path repair
+
+The review of `78d01f5d` found two defects in the Save publication step.
+
+**P1.** After a failed `link`, an absent destination or one naming another file was
+reported as a definite refusal. That observation describes the destination now, not
+what the link did: the link may have created the entry, and someone may then have
+removed or replaced it. `publish()` now decides by evidence. The destination naming
+the staged inode means published. A definite-rejection code (`EEXIST`, path,
+permission, read-only, space, quota, `EINVAL`, unsupported) means refused. Anything
+else (`EIO`, no code) is uncertain. `DeliveryUncertainError` carries the link error
+and a typed observation: `absent`, `foreign`, or `uninspectable` with its error.
+
+**P2.** The `mkdtemp` prefix and the staged path were built with `path.join`, which
+folds `..` lexically. For `link/../x` with `link` a symlink, that staged in a
+different directory than the one the OS creates the destination in. Every Save path
+is now built by concatenation (`childPath`), from the destination's own spelling of
+its parent.
+
+| Scenario | Synchronization | Result |
+| --- | --- | --- |
+| Real link committed, acknowledgement replaced by `EIO` or `EEXIST`, destination still names the staged inode | `link` seam: real link, then injected error | saved |
+| Real link committed, destination removed, then `EIO` | `rmSync` inside the seam between commit and acknowledgement | `DeliveryUncertainError`, observed `absent`, cause `EIO` |
+| Real link committed, destination replaced by another file, then `EIO` | `rename` over it inside the seam | uncertain, observed `foreign`; the replacement is unchanged |
+| `EIO` and an uninspectable destination (`EACCES`) | injected `link` and `lstat` | uncertain; cause and inspection error both kept |
+| Error without a code | injected | uncertain |
+| `EEXIST` with a foreign destination; `EPERM`/`ENOTSUP`/`EOPNOTSUPP`; real pre-existing entries | injected and real | refused; destination unchanged; staging removed |
+| `workspace/link -> ../other/nested/`, destination `workspace/link/../报告 final.md` (lexically `workspace`, really `other`) | parked second write; `link` recorder | staging and staged file in `other`, none in `workspace`; `link` receives the spelled strings; bytes at `other/报告 final.md`; cancelled and failed saves leave nothing anywhere; a residue path keeps its components, and `realpath(3)` resolves it into `other` |
+| Relative and absolute paths with spaces and Unicode | real files | exact paths and bytes |
+
+Negative controls, each applied alone to `delivery-files.ts` and then restored:
+
+| Control | Test that failed |
+| --- | --- |
+| Absent or foreign destination taken as refusal (the previous code) | evidence test |
+| Every coded error taken as refusal | evidence test |
+| No positive identity evidence | evidence test |
+| `path.join` for the `mkdtemp` prefix | symlink `..` test |
+| `path.join` for the staged path | symlink `..` test |
 
 ## Validation
 

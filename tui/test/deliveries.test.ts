@@ -18,6 +18,8 @@ import {
   readFileSync,
   readdirSync,
   readlinkSync,
+  realpathSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -459,7 +461,7 @@ describe("atomic Save publication", () => {
         ["short", saveFiles({}, { write: async () => ({ bytesWritten: 0 }) }), /stopped accepting bytes/],
         ["sync", saveFiles({}, { sync: async () => { throw failure("EIO"); } }), /EIO/],
         ["close", saveFiles({}, { close: async (close) => { await close(); throw failure("EIO"); } }), /EIO/],
-        ["link", saveFiles({ link: async () => { throw failure("EIO"); } }), /EIO/],
+        ["link", saveFiles({ link: async () => { throw failure("EACCES"); } }), /EACCES/],
         ["mkdtemp", saveFiles({ mkdtemp: async () => { throw failure("EACCES"); } }), /EACCES/],
       ];
       for (const [name, files, expected] of cases) {
@@ -469,26 +471,163 @@ describe("atomic Save publication", () => {
     });
   });
 
-  it("decides an ambiguous link failure by the destination's identity", async () => {
+  it("claims publication or refusal only on evidence; otherwise the outcome is uncertain", async () => {
     await inDir("rustx-save-evidence-", async (dir) => {
-      // The entry exists and names the staged file: that is a publication.
-      const created = join(dir, "created");
-      assert.deepEqual(await saveDelivery(answer, created, undefined, saveFiles({
-        link: async (existing, path) => { await SAVE_FILES.link(existing, path); throw failure("EIO"); },
-      })), { path: created });
-      assert.deepEqual(readFileSync(created), BODY_BYTES);
+      /** A real link whose acknowledgement is replaced by `code`, after `meanwhile`. */
+      const linkedThenFailed = (code: string, meanwhile: (path: string) => void = () => {}) => saveFiles({
+        link: async (existing, path) => {
+          await SAVE_FILES.link(existing, path);
+          meanwhile(path);
+          throw failure(code);
+        },
+      });
+      const outcome = (destination: string, files: SaveFiles) =>
+        saveDelivery(answer, destination, undefined, files).catch((error: unknown) => error);
 
-      // The destination cannot be inspected: the outcome is uncertain, said so.
+      // C. The link committed and the destination still names the staged
+      // file: published, whatever the error (EIO, or EEXIST from a
+      // retransmitted request).
+      for (const code of ["EIO", "EEXIST"]) {
+        const created = join(dir, `created ${code}`);
+        assert.deepEqual(await outcome(created, linkedThenFailed(code)), { path: created });
+        assert.deepEqual(readFileSync(created), BODY_BYTES);
+      }
+
+      // D. The link committed, someone removed the entry, then EIO: absence
+      // does not prove nothing was published.
+      const removed = join(dir, "removed");
+      const gone = await outcome(removed, linkedThenFailed("EIO", (path) => rmSync(path)));
+      assert.ok(gone instanceof DeliveryUncertainError, String(gone));
+      assert.deepEqual(gone.observed, { kind: "absent" });
+      assert.equal((gone.cause as NodeJS.ErrnoException).code, "EIO");
+      assert.match(gone.message, /outcome unknown: linking .*removed failed \(EIO\) and it is now absent; this save may have created it$/);
+
+      // E. The link committed, someone replaced the entry, then EIO: a
+      // foreign file does not prove it either, and it is never touched.
+      const replaced = join(dir, "replaced");
+      const foreign = await outcome(replaced, linkedThenFailed("EIO", (path) => {
+        writeFileSync(join(dir, "replacement"), "theirs");
+        renameSync(join(dir, "replacement"), path);
+      }));
+      assert.ok(foreign instanceof DeliveryUncertainError, String(foreign));
+      assert.deepEqual(foreign.observed, { kind: "foreign" });
+      assert.equal(readFileSync(replaced, "utf8"), "theirs");
+
+      // F. An ambiguous error and an uninspectable destination: both kept.
       const unknown = join(dir, "unknown");
-      const uncertain = await saveDelivery(answer, unknown, undefined, saveFiles({
-        link: async () => { throw failure("EIO"); },
-        lstat: async () => { throw failure("EACCES"); },
-      })).catch((error: unknown) => error);
-      assert.ok(uncertain instanceof DeliveryUncertainError);
-      assert.equal(uncertain.path, unknown);
-      assert.equal(uncertain.residue, undefined);
-      assert.match(uncertain.message, /outcome unknown/);
-      assert.deepEqual(listing(dir), ["created"]);
+      const linkError = failure("EIO");
+      const inspection = failure("EACCES");
+      const blind = await outcome(unknown, saveFiles({
+        link: async () => { throw linkError; },
+        lstat: async () => { throw inspection; },
+      }));
+      assert.ok(blind instanceof DeliveryUncertainError);
+      assert.equal(blind.path, unknown);
+      assert.equal(blind.cause, linkError);
+      assert.deepEqual(blind.observed, { kind: "uninspectable", error: inspection });
+      assert.equal(blind.residue, undefined, "staging was removed; uncertainty stays");
+      assert.match(blind.message, /cannot be inspected \(EACCES\)/);
+
+      // A code that is not a known rejection is not one either.
+      const unexplained = await outcome(join(dir, "unexplained"), saveFiles({
+        link: async () => { throw new Error("no code"); },
+      }));
+      assert.ok(unexplained instanceof DeliveryUncertainError);
+
+      // B. A definite rejection with a foreign destination is a refusal.
+      writeFileSync(join(dir, "occupied"), "kept");
+      const refused = await outcome(join(dir, "occupied"), saveFiles({
+        link: async () => { throw failure("EEXIST"); },
+      }));
+      assert.ok(!(refused instanceof DeliveryUncertainError));
+      assert.match(String(refused), /already exists/);
+      assert.equal(readFileSync(join(dir, "occupied"), "utf8"), "kept");
+
+      assert.deepEqual(staging(dir), [], "every staging allocation was removed");
+      assert.deepEqual(listing(dir), ["created EEXIST", "created EIO", "occupied", "replaced"]);
+    });
+  });
+
+  it("stages in the destination's parent as the OS resolves it, through symlinks and `..`", async () => {
+    await inDir("rustx-save-dotdot-", async (root) => {
+      const workspace = join(root, "workspace");
+      const other = join(root, "other");
+      mkdirSync(join(other, "nested"), { recursive: true });
+      mkdirSync(workspace);
+      symlinkSync("../other/nested/", join(workspace, "link"));
+      // Lexically `workspace/link/..` is `workspace`; the OS resolves `link`
+      // first, so it is `other`.
+      const destination = deliveryDestination("link/../报告 final.md", workspace);
+      assert.equal(destination, `${workspace}/link/../报告 final.md`, "the meaningful components are kept");
+      const settled = () => {
+        assert.deepEqual(listing(workspace), ["link"], "nothing in the lexical parent");
+        assert.deepEqual(listing(join(other, "nested")), []);
+        assert.deepEqual(listing(root), ["other", "workspace"]);
+      };
+
+      // Cancelled mid-write: staging was in the real parent, and is gone.
+      const abort = new AbortController();
+      const cancelled = parkedWrite(2);
+      const cancelling = saveDelivery(answer, destination, abort.signal, cancelled.files);
+      await cancelled.parked;
+      assert.equal(staging(other).length, 1, "staging beside the real destination");
+      assert.deepEqual(staging(workspace), []);
+      abort.abort();
+      cancelled.release();
+      await assert.rejects(cancelling, (error) => error === abort.signal.reason);
+      assert.deepEqual(listing(other), ["nested"]);
+      settled();
+
+      // Failed write: same.
+      await assert.rejects(saveDelivery(answer, destination, undefined, saveFiles({}, {
+        write: async () => { throw failure("EIO"); },
+      })), /EIO/);
+      assert.deepEqual(listing(other), ["nested"]);
+      settled();
+
+      // Residue is reported by the spelled path, which names the real one.
+      const kept = await saveDelivery(answer, destination, undefined, saveFiles({ rmdir: async () => { throw failure("EIO"); } }))
+        .catch((error: unknown) => error);
+      assert.equal(typeof kept, "object");
+      const residue = (kept as { residue?: { path: string } }).residue?.path;
+      assert.ok(residue !== undefined && residue.startsWith(`${workspace}/link/../.rustx-save-`), residue);
+      // `realpathSync.native` is realpath(3); Node's JS realpath folds `..`
+      // lexically first, the very mistake under test.
+      const real = realpathSync.native(residue);
+      assert.equal(real, join(realpathSync.native(other), residue.slice(`${workspace}/link/../`.length)));
+      rmSync(real, { recursive: true });
+      rmSync(join(other, "报告 final.md"));
+
+      // Published: the staged file is written there and linked there.
+      const linked: [string, string][] = [];
+      const writes = parkedWrite(2);
+      const saving = saveDelivery(answer, destination, undefined, {
+        ...writes.files,
+        link: async (existing, path) => { linked.push([existing, path]); return SAVE_FILES.link(existing, path); },
+      });
+      await writes.parked;
+      const [stage] = staging(other);
+      assert.ok(stage);
+      assert.ok(existsSync(join(other, stage, "file")), "the staged file is in the real parent");
+      writes.release();
+      assert.deepEqual(await saving, { path: destination });
+      assert.deepEqual(linked, [[`${workspace}/link/../${stage}/file`, destination]]);
+      assert.deepEqual(readFileSync(join(other, "报告 final.md")), BODY_BYTES);
+      assert.deepEqual(listing(other), ["nested", "报告 final.md"]);
+      settled();
+
+      // Ordinary relative and absolute paths, with spaces and Unicode.
+      mkdirSync(join(workspace, "sub dir"));
+      for (const [typed, real] of [
+        ["sub dir/ naïve résumé.txt ", join(workspace, "sub dir", " naïve résumé.txt ")],
+        [join(workspace, "sub dir", "报告.md"), join(workspace, "sub dir", "报告.md")],
+      ] as const) {
+        const target = deliveryDestination(typed, workspace);
+        assert.equal(target, real);
+        assert.deepEqual(await saveDelivery(answer, target), { path: real });
+        assert.deepEqual(readFileSync(real), BODY_BYTES);
+      }
+      assert.deepEqual(listing(join(workspace, "sub dir")), [" naïve résumé.txt ", "报告.md"].sort());
     });
   });
 
