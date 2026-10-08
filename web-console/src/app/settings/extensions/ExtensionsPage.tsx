@@ -1,113 +1,92 @@
-import type { Translate } from '../../../locale/translation';
-import { useTranslation } from '../../../locale/react';
+import { ResourceAvailability } from './ResourceAvailability';
+import type { ReactNode } from 'react';
 import { useState } from 'react';
+import { useTranslation } from '../../../locale/react';
 import type { ResourceFamily, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v37';
-import { Badge } from '../../../presentation/settings/SettingsContent';
 import { Button } from '../../../presentation/primitives/Button';
+import { IconAgentPresetOutline16, IconPluginPinwheelOutline16, IconCodeOutline16 } from '../../../presentation/primitives/icons';
 import { NativeFacts } from '../../components/NativeFacts';
 import { admitsAuthoring } from '../capability';
-import { Advanced, FilterTabs, ResourceList, Search, type ResourceRow } from '../primitives/aria';
+import { Advanced, FilterTabs, Search } from '../primitives/aria';
 import { documentAuthoring, extensionFamilyLabel, type ExtensionFamily } from '../projection';
 import type { PageFocus } from '../machines/navigation';
 import { TextField } from '../forms/controls';
-import {
-  allExtensionEntries, collectionDiagnostics, extensionEntries, preparationLabel, relationshipLabel, resourceFamilies,
-  selectionLabel, validityLabel, type ExtensionEntry,
-} from './inventory';
+import { allExtensionEntries, collectionDiagnostics, extensionEntries, resourceFamilies, type ExtensionEntry } from './inventory';
 import { ExtensionDetail } from './ExtensionDetail';
 import { NativeExtensions } from './NativeExtensions';
 import css from '../../../presentation/settings/SettingsContent.module.css';
-import workflow from '../../../presentation/settings/SettingsWorkflow.module.css';
+import catalog from './ResourceCatalog.module.css';
 
-type Filter = 'all' | ExtensionFamily;
+export type ExtensionFilter = 'all' | ExtensionFamily;
 
-
-/** The one Extensions resource-management surface.
- *
- * Every resource kind is listed, searched and opened here — MCP servers, Skill
- * packages, named Agents, Workflow programs, Managed Python sources and the
- * native extensions. That does not make them symmetrical: what each kind
- * supports comes from the native capability matrix, so a family with no
- * authoring operation on the wire shows inventory, diagnostics and its
- * supported selection, and shows no Edit, Save or Delete at all.
- *
- * The facts about one resource stay separate facts. A valid definition is not
- * a prepared one, a prepared one is not one the root Agent may use, and one
- * the root Agent may use is not a connected one. Nothing here probes a
- * resource: opening the page issues no preparation and no connection. */
-export function ExtensionsPage({ source, scope, revision, models, focus, onFocus }: {
+/** Resource management uses native ownership for groups and existing exact-scope
+ * editors for writes. Browsing a catalog does not prepare or connect resources. */
+export function ExtensionsPage({ source, scope, revision, models, focus, onFocus, filter, onFilter, scopeControl, refresh, refreshing }: {
   source: SourceSettings; scope: SourceScope; revision?: string; models: string[];
   focus?: PageFocus['extensions']; onFocus: (focus?: PageFocus['extensions']) => void;
+  filter: ExtensionFilter; onFilter: (filter: ExtensionFilter) => void;
+  scopeControl: ReactNode; refresh: () => void; refreshing: boolean;
 }) {
   const tx = useTranslation();
-  const filters: readonly (readonly [Filter, string])[] = [
-  ['all', tx('settings:copy.all')], ['mcp', 'MCP'], ['skill', tx('settings:tools-page.skills')], ['agent', tx('settings:copy.agents')],
-  ['workflow', tx('settings:copy.workflows')], ['managed_python', tx('settings:copy.python')], ['native', tx('settings:copy.native')],
-];
-  const [filter, setFilter] = useState<Filter>('all');
+  const filters: readonly (readonly [ExtensionFilter, string])[] = [
+    ['all', tx('settings:copy.all')], ['mcp', tx('settings:catalog.mcp')], ['skill', tx('settings:catalog.skill')], ['agent', tx('settings:catalog.agent')],
+    ['workflow', tx('settings:copy.workflows')], ['managed_python', tx('settings:copy.python')], ['native', tx('settings:copy.native')],
+  ];
   const [query, setQuery] = useState('');
-  if (focus) {
-    return <ExtensionDetail source={source} scope={scope} revision={revision} models={models}
-      family={focus.family} name={focus.name} onFocus={onFocus} />;
-  }
-  const entries = filter === 'all' ? allExtensionEntries(source, scope)
-    : filter === 'native' ? [] : extensionEntries(source, scope, filter as ResourceFamily);
-  // The MCP document is its own native authority with no repair mutation: while
-  // it does not parse, no MCP identity can be authored in it.
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState('');
+  const title = filter === 'all' ? tx('settings:extensions-page.extensions') : filters.find(([id]) => id === filter)![1];
+  if (focus) return <ExtensionDetail source={source} scope={scope} revision={revision} models={models} family={focus.family} name={focus.name} onFocus={onFocus}/>;
+  const entries = filter === 'all' ? allExtensionEntries(source, scope) : filter === 'native' ? [] : extensionEntries(source, scope, filter);
   const mcp = documentAuthoring(scope === 'user' ? source.user_mcp : source.workspace_mcp);
-  const matches = entries.filter(entry => entry.name.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
-  return <section aria-label={tx('settings:extensions-page.extensions')}>
-    <h3>{tx('settings:extensions-page.extensions')}</h3>
-    <p>{tx('settings:extensions-page.everything-this-agent-can-be-extended-with-defining-a-resource-i')}</p>
-    <FilterTabs label={tx('settings:extensions-page.extension-kinds')} value={filter} onChange={setFilter} options={filters}>
-      {filter === 'native'
-        ? <NativeExtensions source={source} scope={scope} revision={revision} />
-        : <>
-          <div className={workflow.toolbar}>
-            <Search label={tx('settings:extensions-page.find-an-extension')} value={query} onChange={setQuery} placeholder={tx('settings:extensions-page.find-by-identity')} />
-          </div>
-          <ResourceList label={tx('settings:extensions-page.value-extensions', { p0: filters.find(([id]) => id === filter)![1] })}
-            rows={matches.map(entry => extensionRow(tx, entry, scope))}
-            onOpen={id => { const entry = matches.find(item => rowId(item) === id); if (entry) onFocus({ kind: 'extension', family: entry.family, name: entry.name }); }}
-            empty={query ? tx('settings:copy.no-extension-identity-matches-value', { p0: query }) : tx('settings:copy.no-definition-of-this-kind-is-present-in-this-native-projection')} />
-          {filter === 'mcp' && mcp.state === 'malformed' && <>
-            <p role="alert" className={css.error}>{mcp.diagnostic ?? tx('settings:source.not-loaded')}</p>
-            <p role="status">{tx('settings:extensions-page.mcp-editing-is-unavailable-because-this-document-does-not-parse')}{' '}{mcp.path}{tx('settings:extensions-page.then-rescan-configuration-files-on-advanced')}</p>
-          </>}
-          {filter !== 'all' && admitsAuthoring(filter as ExtensionFamily) && !(filter === 'mcp' && mcp.state !== 'structured')
-            && <NewResource family={filter as ExtensionFamily} exists={entries.map(entry => entry.name)}
-              open={name => onFocus({ kind: 'extension', family: filter as ExtensionFamily, name })} />}
-          {filter !== 'all' && !admitsAuthoring(filter as ExtensionFamily)
-            && <p className={css.hint}>{tx('settings:extension-detail.this-protocol-has-no-operation-that-authors-a')}{' '}{extensionFamilyLabel(tx, filter as ExtensionFamily)} {tx('settings:extensions-page.definition-inventory-diagnostics-and-root-selection-are-supporte')}</p>}
-          <CollectionDiagnostics source={source} families={filter === 'all' ? resourceFamilies : [filter as ResourceFamily]} />
-        </>}
+  const canCreate = filter !== 'all' && filter !== 'native' && admitsAuthoring(filter) && (filter !== 'mcp' || mcp.state === 'structured');
+  const describe = (entry: ExtensionEntry) => {
+    if (entry.family === 'agent') return source.agents.find(agent => agent.name === entry.name && agent.scope === entry.owner)?.source.authored?.description || entry.path;
+    if (entry.family === 'mcp') {
+      const definition = (entry.owner === 'user' ? source.user_mcp : source.workspace_mcp)?.authored?.[entry.name]?.definition;
+      if (definition) return definition.type === 'stdio' ? [definition.command, ...(definition.args ?? [])].join(' ') : definition.url ?? entry.path;
+    }
+    return entry.path;
+  };
+  const needle = query.trim().toLocaleLowerCase();
+  const matches = entries.filter(entry => [entry.name, describe(entry), entry.path].some(text => text.toLocaleLowerCase().includes(needle)));
+  const owned = matches.filter(entry => entry.owner === scope);
+  const inherited = matches.filter(entry => entry.owner !== scope);
+  const open = (entry: ExtensionEntry) => onFocus({kind:'extension',family:entry.family,name:entry.name});
+  const actions = <div className={catalog.actions}>
+    <Button size="sm" variant="outline" disabled={refreshing} onClick={refresh}>{tx('settings:catalog.refresh')}</Button>
+    {canCreate && <Button size="sm" variant="primary" onClick={() => setCreating(value => !value)}>{tx('settings:catalog.new')}</Button>}
+  </div>;
+  const cards = (items: readonly ExtensionEntry[]) => <div className={catalog.list} role="list" aria-label={tx('settings:extensions-page.value-extensions',{p0:title})}>
+    {items.map(entry => <div key={`${entry.family}:${entry.name}`} role="listitem" aria-label={entry.name} className={catalog.card}><button type="button" className={catalog.open} aria-label={`${extensionFamilyLabel(tx,entry.family)} ${entry.name}`} onClick={() => open(entry)}>
+      <span className={catalog.icon} aria-hidden="true">{entry.family === 'agent' ? <IconAgentPresetOutline16/> : entry.family === 'mcp' ? <IconPluginPinwheelOutline16/> : <IconCodeOutline16/>}</span>
+      <span className={catalog.content}><span className={catalog.name}><span className={catalog.identity}>{entry.name}</span>{filter === 'all' && <span className={catalog.count}>{extensionFamilyLabel(tx,entry.family)}</span>}</span>
+        <span className={catalog.description} title={entry.diagnostics[0] ?? describe(entry)}>{entry.diagnostics[0] ?? describe(entry)}</span></span>
+      <span className={catalog.state} data-invalid={entry.valid === false || undefined}>{entry.valid === false ? tx('settings:copy.invalid-definition') : entry.selected === undefined ? tx('settings:catalog.unknown') : entry.selected ? tx('settings:catalog.enabled') : tx('settings:catalog.disabled')}</span>
+    </button>{revision !== undefined && (entry.family === 'mcp' || entry.family === 'skill' || entry.family === 'agent') && <ResourceAvailability family={entry.family} name={entry.name} valid={entry.valid} source={source} scope={scope} revision={revision} inspect={() => open(entry)}/>}</div>)}
+  </div>;
+  return <section className={catalog.catalog} aria-label={tx('settings:extensions-page.extensions')}>
+    <h3 className={catalog.title}>{title}</h3>
+    <div className={catalog.header}>{scopeControl}<span className={catalog.count}>{title} {entries.length}</span>
+      <div className={catalog.search}><Search label={tx('settings:extensions-page.find-an-extension')} value={query} onChange={setQuery} placeholder={tx('settings:catalog.search')}/></div>
+    </div>
+    <FilterTabs label={tx('settings:extensions-page.extension-kinds')} value={filter} onChange={value => {onFilter(value);setCreating(false);setName('');setQuery('');}} options={filters}>
+      {filter === 'native' ? <NativeExtensions source={source} scope={scope} revision={revision}/> : <>
+        <div className={catalog.group} role="group" aria-label={tx('settings:catalog.owned')}>
+          <div className={catalog.groupHeader}><h4 className={catalog.groupTitle}>{tx('settings:catalog.owned')}</h4><span className={catalog.count}>{owned.length}</span>{actions}</div>
+          {creating && canCreate && <form className={catalog.create} aria-label={tx('settings:catalog.create-title')} onSubmit={event => {event.preventDefault();if (name.trim() && !entries.some(entry => entry.name === name.trim())) onFocus({kind:'extension',family:filter as ExtensionFamily,name:name.trim()});}}>
+            <TextField label={tx('settings:extensions-page.new-value-identity',{p0:extensionFamilyLabel(tx,filter as ExtensionFamily)})} value={name} change={setName}/>
+            <div className={css.actions}><Button type="submit" variant="primary" disabled={!name.trim() || entries.some(entry => entry.name === name.trim())}>{tx('settings:extensions-page.add')} {extensionFamilyLabel(tx,filter as ExtensionFamily)}</Button><Button onClick={() => setCreating(false)}>{tx('settings:catalog.cancel')}</Button></div>
+          </form>}
+          {owned.length ? cards(owned) : <div className={catalog.empty}><span>{tx(query ? 'settings:catalog.no-results' : 'settings:catalog.empty')}</span><p>{tx(query ? 'settings:catalog.no-results-description' : filter === 'skill' ? 'settings:catalog.skill-help' : 'settings:catalog.empty-description')}</p>{canCreate && !query && <Button variant="primary" onClick={() => setCreating(true)}>{tx('settings:catalog.new')}</Button>}</div>}
+        </div>
+        {!!inherited.length && <div className={catalog.group} role="group" aria-label={tx(scope === 'workspace' ? 'settings:catalog.inherited' : 'settings:catalog.shadowed')}><div className={catalog.groupHeader}><h4 className={catalog.groupTitle}>{tx(scope === 'workspace' ? 'settings:catalog.inherited' : 'settings:catalog.shadowed')}</h4><span className={catalog.count}>{inherited.length}</span></div>{cards(inherited)}</div>}
+        {filter === 'mcp' && mcp.state === 'malformed' && <p role="alert" className={css.error}>{mcp.diagnostic ?? tx('settings:source.not-loaded')}</p>}
+        {filter === 'skill' && !!entries.length && <p className={css.hint}>{tx('settings:catalog.skill-help')}</p>}
+        <CollectionDiagnostics source={source} families={filter === 'all' ? resourceFamilies : [filter as ResourceFamily]}/>
+      </>}
     </FilterTabs>
   </section>;
-}
-
-function rowId(entry: ExtensionEntry): string { return `${entry.family}:${entry.name}`; }
-
-/** One resource row. Each native fact is its own badge, because collapsing
- * them would claim something native never said. */
-function extensionRow(tx: Translate, entry: ExtensionEntry, scope: SourceScope): ResourceRow {
-  const preparation = preparationLabel(tx, entry);
-  const selection = selectionLabel(tx, entry);
-  return {
-    id: rowId(entry), name: entry.name,
-    facts: <>
-      <Badge>{extensionFamilyLabel(tx, entry.family)}</Badge>
-      <Badge>{entry.owner === 'user' ? tx('settings:extension-detail.user') : tx('settings:extension-detail.workspace')}</Badge>
-      <Badge>{relationshipLabel(tx, entry, scope)}</Badge>
-      <Badge tone={entry.valid === undefined ? undefined : entry.valid ? 'success' : 'error'}>{validityLabel(tx, entry)}</Badge>
-      {preparation && <Badge>{preparation}</Badge>}
-      {selection && <Badge>{selection}</Badge>}
-    </>,
-    detail: <>
-      <p className={css.hint}>{entry.path}</p>
-      {entry.shadowed && <p className={css.hint}>{tx('settings:extensions-page.shadows')}{' '}{entry.shadowed}{tx('settings:extensions-page.the-losing-definition-is-not-parsed-or-prepared')}</p>}
-      {entry.diagnostics.map((reason, index) => <p className={css.error} key={index}>{reason}</p>)}
-    </>,
-  };
 }
 
 /** Diagnostics native attributes to a family's source document or collection
@@ -129,14 +108,4 @@ function CollectionDiagnostics({ source, families }: { source: SourceSettings; f
     </p>)}
     {!!skills.length && <Advanced title={tx('settings:extensions-page.skill-discovery-diagnostics-value', { p0: skills.length })}><NativeFacts value={skills} /></Advanced>}
   </section>;
-}
-
-function NewResource({ family, exists, open }: { family: ExtensionFamily; exists: readonly string[]; open: (name: string) => void }) {
-  const tx = useTranslation();
-  const [name, setName] = useState('');
-  const label = extensionFamilyLabel(tx, family);
-  return <div className={css.actions}>
-    <TextField label={tx('settings:extensions-page.new-value-identity', { p0: label })} value={name} change={setName} />
-    <Button disabled={!name || exists.includes(name)} onClick={() => { open(name); setName(''); }}>{tx('settings:extensions-page.add')}{' '}{label}</Button>
-  </div>;
 }

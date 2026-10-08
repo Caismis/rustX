@@ -99,6 +99,8 @@ export interface UnitEditing<T> {
   readonly displayed: T;
   /** Reflect a new authored value into the transaction actor. */
   readonly edit: (value: T) => void;
+  /** One explicit quick-setting gesture, refused while another draft needs review. */
+  readonly apply: (value: T) => void;
   readonly submit: (remove?: boolean) => void;
   readonly discard: () => void;
   readonly review: () => void;
@@ -241,6 +243,11 @@ export function useUnitEditing<T>({ authored, authoredPresent = authored !== und
     // value goes to the transaction actor, never to component or form state
     // that a remount could lose.
     edit: (value: T) => { if (writable) begin(value); },
+    apply: (value: T) => {
+      if (!writable || !admitted || busy || draft || (snapshot && requiresReview(snapshot))) return;
+      begin(value);
+      actor.send({ type: 'UNIT.SUBMIT', identity, selector, revision, mutation: mutation(value) });
+    },
     override: definition === 'inherited' ? () => { if (!awaitingObservation) begin(overrideSeed); } : undefined,
     submit: (remove = false) => {
       if (!remove && !draft) return;

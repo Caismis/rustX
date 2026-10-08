@@ -1,7 +1,8 @@
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted Settings shell; see PROVENANCE.md. */
 import type { Theme } from '../appearance';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
+import { SettingsScopeMenu } from './SettingsScopeMenu';
 import { shallowEqual, useSelector } from '@xstate/react';
 import type { SourceScope } from '../../../../protocol/app-server/v37';
 import type { AppServerClient } from '../../client/app-server';
@@ -24,7 +25,7 @@ import { GeneralPage } from './general/GeneralPage';
 import { ModelsPage } from './models/ModelsPage';
 import { AgentPage } from './agent/AgentPage';
 import { ToolsPage } from './tools/ToolsPage';
-import { ExtensionsPage } from './extensions/ExtensionsPage';
+import { ExtensionsPage, type ExtensionFilter } from './extensions/ExtensionsPage';
 import { AdvancedPage } from './advanced/AdvancedPage';
 import {
   catalogIdentities, configAuthoring, settingsLifecycle, settingsLifecycleLabel,
@@ -103,6 +104,7 @@ function SettingsDialog({ client, host, theme = 'system', setTheme, connection, 
   target: SettingsTarget; page: SettingsPage; focus: FocusMap;
 }) {
   const tx = useTranslation();
+  const [extensionFilter, setExtensionFilter] = useState<ExtensionFilter>('all');
   // The navigation machine admits only pages and details this owner
   // authorizes, so the page and focus are rendered exactly as they are.
   const { actor, transport } = useSettingsTarget(client, target, host);
@@ -117,6 +119,7 @@ function SettingsDialog({ client, host, theme = 'system', setTheme, connection, 
   const source = useSelector(actor, snapshot => snapshot.context.observation ?? snapshot.context.staleObservation);
   const readError = useSelector(actor, snapshot => snapshot.context.readError);
   const convergenceError = useSelector(actor, snapshot => snapshot.context.convergenceError);
+  const reconciling = useSelector(actor, snapshot => snapshot.matches({ maintenance: 'reconciling' }));
   const maintenanceError = useSelector(actor, snapshot => snapshot.context.maintenanceError);
   const outcome = useSelector(actor, mutationOutcome, shallowEqual);
   const busy = useSelector(actor, snapshot => snapshot.matches({ mutation: 'submitting' }));
@@ -166,7 +169,9 @@ function SettingsDialog({ client, host, theme = 'system', setTheme, connection, 
         about the MCP or named-Agent documents, each of which is its own
         authority and reports its own state. */}
     {current === 'extensions' && <ExtensionsPage source={source} scope={scope}
-      revision={structured ? config.revision : undefined} models={models} focus={focus.extensions} onFocus={onFocus} />}
+      revision={structured ? config.revision : undefined} models={models} focus={focus.extensions} onFocus={onFocus}
+      filter={extensionFilter} onFilter={setExtensionFilter} refresh={() => actor.send({type:'RECONCILE'})} refreshing={busy || reconciling}
+      scopeControl={<SettingsScopeMenu key={`${transport.endpoint}:${transport.authorityRevision}`} target={target} host={host} onSelect={next => { navigation.send({type:'OPEN',target:next}); navigation.send({type:'SELECT',page:'extensions'}); }}/>} />}
     {current === 'advanced' && <AdvancedPage source={source} scope={scope}
       config={structured ? { document: config.document, revision: config.revision } : undefined}
       closed={<MalformedNotice config={config} diagnostic={false} />}
@@ -198,7 +203,7 @@ function SettingsDialog({ client, host, theme = 'system', setTheme, connection, 
       <Button size="sm" variant="outline" disabled={busy || transport.connection !== 'connected'} onClick={() => actor.send({ type: 'REFRESH' })}>{tx('settings:settings.reload-configuration')}</Button>
     </div>}>
     <section className={`${css.settings} ${css.page}`} aria-label={tx('settings:settings.settings')} aria-busy={busy}>
-      {scope === 'workspace' && current !== 'models' && <p className={css.hint}>{tx('settings:settings.bound-to-this-exact-authorized-workspace-session-focus-never-ret')}</p>}
+      {scope === 'workspace' && current !== 'models' && current !== 'extensions' && <p className={css.hint}>{tx('settings:settings.bound-to-this-exact-authorized-workspace-session-focus-never-ret')}</p>}
       {/* Target-wide facts, each reported as itself: a read failure, a
           convergence report, an unknown save outcome and a maintenance
           failure are separate alerts, and none of them hides another. */}
@@ -206,7 +211,7 @@ function SettingsDialog({ client, host, theme = 'system', setTheme, connection, 
       {convergenceError && <p role="alert" className={css.error}>{convergenceError}</p>}
       <MutationNotice outcome={outcome} />
       {maintenanceError && <p role="alert" className={css.error}>{maintenanceError}</p>}
-      {scope === 'workspace' && current !== 'general' && current !== 'models' && <p className={css.hint}>{tx('settings:settings.use-global-default-removes-the-unit-this-workspace-authors-so-th')}</p>}
+      {scope === 'workspace' && current !== 'general' && current !== 'models' && current !== 'extensions' && <p className={css.hint}>{tx('settings:settings.use-global-default-removes-the-unit-this-workspace-authors-so-th')}</p>}
       {current === 'general' ? <GeneralPage theme={theme} setTheme={setTheme} /> : connectionFocused
         ? <ConnectionSettings connection={connection} client={client} />
         : !source ? <SourcePending lifecycle={lifecycle} />

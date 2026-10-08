@@ -173,16 +173,21 @@ it('S2-05 every extension row reports kind, scope, validity, preparation and roo
   const s = cfg3Client();
   s.source.prospective_resources = inventory();
   await user(s, 'Extensions');
-  const facts = (name: string) => within(screen.getByRole('row', { name })).getAllByText(/./).map(node => node.textContent);
-  expect(facts('search')).toEqual(expect.arrayContaining(['MCP', 'User', 'Valid definition', 'Prepared', 'Allowed for the root Agent']));
+  const facts = async (name: string) => {
+    await openResourceRow(name);
+    const values = screen.getAllByText(/./).map(node => node.textContent);
+    fireEvent.click(screen.getByRole('button', { name: '← Extensions' }));
+    return values;
+  };
+  expect(await facts('search')).toEqual(expect.arrayContaining(['MCP', 'User', 'Valid definition', 'Prepared', 'Allowed for the root Agent']));
   // Invalid, unprepared and unselected are three facts, not one "broken" state.
-  expect(facts('broken')).toEqual(expect.arrayContaining(['MCP', 'Invalid definition', 'Not prepared', 'Not allowed for the root Agent', 'missing command']));
+  expect(await facts('broken')).toEqual(expect.arrayContaining(['MCP', 'Invalid definition', 'Not prepared', 'Not allowed for the root Agent', 'missing command']));
   // `search` is defined in the same document, and the diagnostic is not its.
-  expect(facts('search')).not.toContain('missing command');
-  expect(facts('docs')).toEqual(expect.arrayContaining(['Skill', 'Valid definition', 'Visible to the root Agent']));
+  expect(await facts('search')).not.toContain('missing command');
+  expect(await facts('docs')).toEqual(expect.arrayContaining(['Skill', 'Valid definition', 'Visible to the root Agent']));
   // A valid Workflow can still be refused admission, and is still not selected.
-  expect(facts('nightly')).toEqual(expect.arrayContaining(['Workflow', 'Valid definition', 'Not admitted', 'Not allowed for the root Agent']));
-  expect(facts('analysis')).toEqual(expect.arrayContaining(['Managed Python', 'Valid definition', 'Preparation unavailable']));
+  expect(await facts('nightly')).toEqual(expect.arrayContaining(['Workflow', 'Valid definition', 'Not admitted', 'Not allowed for the root Agent']));
+  expect(await facts('analysis')).toEqual(expect.arrayContaining(['Managed Python', 'Valid definition', 'Preparation unavailable']));
   // Opening the page probed nothing.
   expect(methods(s).every(method => method === 'configuration/sourcesRead')).toBe(true);
 });
@@ -210,8 +215,8 @@ it('S2-05 a resource diagnostic stays on the identity native attributes it to, n
   const s = cfg3Client();
   s.source.prospective_resources = siblingInventory();
   await user(s, 'Extensions');
-  fireEvent.click(screen.getByRole('tab', { name: 'MCP' }));
-  const row = (name: string) => within(screen.getByRole('row', { name }));
+  fireEvent.click(screen.getByRole('tab', { name: 'MCP servers' }));
+  const row = (name: string) => within(screen.getByRole('listitem', { name }));
   expect(row('broken').getByText('broken: missing command')).toBeTruthy();
   expect(row('search').queryByText('broken: missing command')).toBeNull();
   // The document's own diagnostic is the MCP family's, listed once, and on
@@ -226,7 +231,7 @@ it('S2-05 a resource diagnostic stays on the identity native attributes it to, n
   const search = within(screen.getByRole('region', { name: 'MCP search' }));
   expect(search.queryByText(/missing command|MCP catalog exceeds/)).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: '← Extensions' }));
-  fireEvent.click(await screen.findByRole('tab', { name: 'MCP' }));
+  fireEvent.click(await screen.findByRole('tab', { name: 'MCP servers' }));
   await openResourceRow('broken');
   const broken = within(screen.getByRole('region', { name: 'MCP broken' }));
   expect(broken.getByText('broken: missing command')).toBeTruthy();
@@ -259,19 +264,24 @@ it('S2-05 an identity native published no preparation or admission for is unobse
   const s = cfg3Client();
   s.source.prospective_resources = observationInventory();
   await user(s, 'Extensions');
-  const facts = (name: string) => within(screen.getByRole('row', { name })).getAllByText(/./).map(node => node.textContent);
+  const facts = async (name: string) => {
+    await openResourceRow(name);
+    const values = screen.getAllByText(/./).map(node => node.textContent);
+    fireEvent.click(screen.getByRole('button', { name: '← Extensions' }));
+    return values;
+  };
   const negative = ['Not prepared', 'Preparation unavailable', 'Not admitted', 'Prepared', 'Admitted'];
   // Native's own statuses, exactly.
-  expect(facts('ready-mcp')).toContain('Prepared');
-  expect(facts('idle-mcp')).toContain('Not prepared');
-  expect(facts('down-mcp')).toContain('Preparation unavailable');
-  expect(facts('analysis')).toContain('Prepared');
-  expect(facts('admitted')).toContain('Admitted');
-  expect(facts('refused')).toContain('Not admitted');
+  expect(await facts('ready-mcp')).toContain('Prepared');
+  expect(await facts('idle-mcp')).toContain('Not prepared');
+  expect(await facts('down-mcp')).toContain('Preparation unavailable');
+  expect(await facts('analysis')).toContain('Prepared');
+  expect(await facts('admitted')).toContain('Admitted');
+  expect(await facts('refused')).toContain('Not admitted');
   // No observation: unknown, and no status native did not publish.
   for (const [name, label] of [['unseen-mcp', 'Preparation not observed'], ['unseen-python', 'Preparation not observed'], ['unseen-workflow', 'Admission not observed']]) {
-    expect(facts(name)).toContain(label);
-    for (const status of negative) expect(facts(name)).not.toContain(status);
+    expect(await facts(name)).toContain(label);
+    for (const status of negative) expect(await facts(name)).not.toContain(status);
   }
   // The detail names the same fact under the same title.
   fireEvent.click(screen.getByRole('tab', { name: 'Workflows' }));
@@ -304,7 +314,7 @@ async function mcpDetail(s: Subject) {
   s.source.user_mcp!.authored = { search: { definition: { type: 'stdio', command: 'search-server', args: [] }, retained_env: [], retained_headers: [] } };
   s.source.prospective_resources = inventory();
   await user(s, 'Extensions');
-  fireEvent.click(screen.getByRole('tab', { name: 'MCP' }));
+  fireEvent.click(screen.getByRole('tab', { name: 'MCP servers' }));
   await openResourceRow('search');
   fireEvent.change(screen.getByLabelText('MCP command'), { target: { value: 'search-server-2' } });
   const selection = screen.getByRole('form', { name: 'Source search' });
@@ -432,7 +442,7 @@ const disabled = (element: HTMLElement) => element.matches(':disabled');
 it('S2-07 an inherited MCP definition is inspected read-only; only Override begins a Workspace draft, and Save writes it once', async () => {
   const s = inheritingWorkspace();
   await workspace(s, 'Extensions');
-  fireEvent.click(screen.getByRole('tab', { name: 'MCP' }));
+  fireEvent.click(screen.getByRole('tab', { name: 'MCP servers' }));
   await openResourceRow('search');
   // Inspecting: the inherited safe facts are shown, nothing is writable, no
   // Workspace draft exists and nothing is written.
@@ -505,7 +515,7 @@ it('S2-07 an inherited MCP definition is inspected read-only; only Override begi
 it('S2-07 discarding a Workspace MCP override writes nothing and returns to inspection', async () => {
   const s = inheritingWorkspace();
   await workspace(s, 'Extensions');
-  fireEvent.click(screen.getByRole('tab', { name: 'MCP' }));
+  fireEvent.click(screen.getByRole('tab', { name: 'MCP servers' }));
   await openResourceRow('search');
   fireEvent.click(screen.getByRole('button', { name: 'Override MCP search in this Workspace' }));
   fireEvent.change(field('MCP command'), { target: { value: 'abandoned' } });
@@ -520,7 +530,7 @@ it('S2-07 discarding a Workspace MCP override writes nothing and returns to insp
 it('S2-07 an inherited named Agent is inspected read-only; Override, Save and Use global default are each one explicit Workspace mutation', async () => {
   const s = inheritingWorkspace();
   await workspace(s, 'Extensions');
-  fireEvent.click(screen.getByRole('tab', { name: 'Agents' }));
+  fireEvent.click(screen.getByRole('tab', { name: 'Subagents' }));
   await openResourceRow('reviewer');
   expect(definitionState('Agent reviewer')).toBe('inherited');
   expect(field('Description').value).toBe('User reviewer');
@@ -561,7 +571,8 @@ it('S2-07 a new Workspace resource and a Workspace-only definition are worded as
   const s = inheritingWorkspace();
   s.source.workspace_mcp!.authored = { local: { definition: { type: 'stdio', command: 'local-server', args: [] }, retained_env: [], retained_headers: [] } };
   await workspace(s, 'Extensions');
-  fireEvent.click(screen.getByRole('tab', { name: 'MCP' }));
+  fireEvent.click(screen.getByRole('tab', { name: 'MCP servers' }));
+  fireEvent.click(screen.getAllByRole('button', { name: 'New' })[0]);
   fireEvent.change(screen.getByLabelText('New MCP identity'), { target: { value: 'fresh' } });
   fireEvent.click(screen.getByRole('button', { name: 'Add MCP' }));
   // Creation is its own explicit gesture: writable at once, no override action.
@@ -623,7 +634,7 @@ function agentFiles(files: { user?: 'valid' | 'malformed'; workspace?: 'valid' |
 }
 async function openReviewer(s: Subject, scope: 'user' | 'workspace') {
   await (scope === 'user' ? user : workspace)(s, 'Extensions');
-  fireEvent.click(screen.getByRole('tab', { name: 'Agents' }));
+  fireEvent.click(screen.getByRole('tab', { name: 'Subagents' }));
   await openResourceRow('reviewer');
 }
 const authoredValue = (title: string) => definition(title).getAttribute('data-authored-value');
@@ -771,7 +782,7 @@ it.each([
   await user(s, 'Extensions');
   fireEvent.click(screen.getByRole('tab', { name: filter }));
   expect(screen.queryByRole('button', { name: /^Add / })).toBeNull();
-  expect(screen.getByText(/This protocol has no operation that authors a .* definition/)).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'New' })).toBeNull();
   await openResourceRow(name);
   // The only form is the supported root selection; no Edit, Save or Delete is
   // offered for the definition itself.
@@ -812,7 +823,7 @@ it('S2-09 a dirty Provider draft survives list/detail, page, filter and revision
   expect(endpoint().value).toBe('https://draft.invalid');
   // Another page, a filter change there, and back: Models restores its focus.
   await openSettingsPage('Extensions');
-  fireEvent.click(screen.getByRole('tab', { name: 'MCP' }));
+  fireEvent.click(screen.getByRole('tab', { name: 'MCP servers' }));
   await openSettingsPage('Models');
   expect(screen.getByRole('heading', { name: 'Provider transport' })).toBeTruthy();
   expect(endpoint().value).toBe('https://draft.invalid');

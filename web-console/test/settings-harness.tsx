@@ -137,7 +137,8 @@ export async function openSettingsPage(name: string) {
 /** Open a detail from a resource list through its actual row, so list/detail
  * navigation in a test is the same interaction a user performs. */
 export async function openResourceRow(name: string) {
-  fireEvent.click(await screen.findByRole('row', { name }));
+  const card = screen.queryByRole('listitem', { name });
+  fireEvent.click(card ? within(card).getAllByRole('button')[0] : await screen.findByRole('row', { name }));
 }
 
 /** Wait until the open Settings surface holds a current authoritative

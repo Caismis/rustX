@@ -95,8 +95,9 @@ it('DA-03 a malformed rustx.toml leaves the independent MCP and named Agent docu
   await findOnAdvanced(/Revision: user-1/);
   // MCP: its own valid document, its own revision.
   open('Extensions');
-  filter('MCP');
+  filter('MCP servers');
   expect(screen.queryByRole('form', { name: 'Repair malformed source' })).toBeNull();
+  fireEvent.click(screen.getAllByRole('button', { name: 'New' })[0]);
   fireEvent.change(screen.getByLabelText('New MCP identity'), { target: { value: 'probe' } });
   fireEvent.click(screen.getByRole('button', { name: 'Add MCP' }));
   const mcp = within(screen.getByRole('form', { name: 'MCP probe' }));
@@ -106,8 +107,9 @@ it('DA-03 a malformed rustx.toml leaves the independent MCP and named Agent docu
   expect(writes(s)[0].params).toMatchObject({ expected_revision: 'mcp-1', mutation: { kind: 'mcp', id: 'probe' } });
   // Named Agent: a whole resource document of its own.
   fireEvent.click(screen.getByRole('button', { name: '← Extensions' }));
-  filter('Agents');
+  filter('Subagents');
   expect(screen.queryByRole('form', { name: 'Repair malformed source' })).toBeNull();
+  fireEvent.click(screen.getAllByRole('button', { name: 'New' })[0]);
   fireEvent.change(screen.getByLabelText('New Agent identity'), { target: { value: 'helper' } });
   fireEvent.click(screen.getByRole('button', { name: 'Add Agent' }));
   const agent = within(screen.getByRole('form', { name: 'Agent helper' }));
@@ -125,9 +127,9 @@ it('DA-04 a malformed MCP document admits no MCP mutation and leaves rustx.toml 
   render(<SettingsSurface client={s.client} target={userSettingsTarget} />);
   await findOnAdvanced(/Revision: user-1/);
   open('Extensions');
-  filter('MCP');
+  filter('MCP servers');
   expect(screen.getByText('invalid MCP document')).toBeTruthy();
-  expect(screen.getByText(/MCP editing is unavailable because this document does not parse/)).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'New' })).toBeNull();
   expect(screen.queryByLabelText('New MCP identity')).toBeNull();
   expect(forms()).toEqual([]);
   open('Tools & Permissions');
@@ -162,7 +164,8 @@ async function reachableModels() {
   const catalog = allModels().queryAllByRole('row').map(row => row.getAttribute('aria-label')!);
   const root = options(screen.getByRole('form', { name: 'Default model' }), /Model$/);
   open('Extensions');
-  filter('Agents');
+  filter('Subagents');
+  fireEvent.click(screen.getAllByRole('button', { name: 'New' })[0]);
   fireEvent.change(screen.getByLabelText('New Agent identity'), { target: { value: 'helper' } });
   fireEvent.click(screen.getByRole('button', { name: 'Add Agent' }));
   const agent = screen.getByRole('form', { name: 'Agent helper' });

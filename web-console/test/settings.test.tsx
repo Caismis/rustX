@@ -220,7 +220,8 @@ it('repairs uncertain writes by rereading and never replays the mutation', async
 
 it('edits an independent named-Agent whole resource with inherited model and extensions off', async () => {
   const subject = cfg3Client(); await open(subject, 'Extensions');
-  fireEvent.click(screen.getByRole('tab', { name: 'Agents' }));
+  fireEvent.click(screen.getByRole('tab', { name: 'Subagents' }));
+  fireEvent.click(screen.getAllByRole('button', { name: 'New' })[0]);
   fireEvent.change(await screen.findByLabelText('New Agent identity'), { target: { value: 'researcher' } });
   fireEvent.click(screen.getByRole('button', { name: 'Add Agent' }));
   expect(screen.getByText(/invoking Attempt's already-frozen effective model/)).toBeTruthy();
@@ -241,8 +242,9 @@ it('keeps shadowed User resources visible using native shadowing facts', async (
   fireEvent.click(screen.getByRole('tab', { name: 'Skills' }));
   // The invalid winning definition is shown as the winner it is; the shadowed
   // User definition is named, never used to stand in for it.
+  await openResourceRow('review');
   expect(await screen.findByText(/Shadowed by the Workspace definition/)).toBeTruthy();
-  expect(screen.getByText(/Shadows \/home\/user\/rustx\/.agents\/skills\/review\/SKILL.md/)).toBeTruthy();
+  expect(screen.getByText('/home/user/rustx/.agents/skills/review/SKILL.md')).toBeTruthy();
   expect(screen.getByText('Invalid definition')).toBeTruthy();
   expect(screen.queryByText('Visible to the root Agent')).toBeNull();
 });
@@ -315,13 +317,14 @@ it('does not equate invalid resource existence with readiness or Root authority'
   subject.source.prospective_resources.sources = { 'python:unselected': { status: 'unavailable' } };
   await open(subject, 'Extensions');
   fireEvent.click(screen.getByRole('tab', { name: 'Python' }));
+  await openResourceRow('unselected');
   // Four independent native facts, four independent renderings.
   expect(await screen.findByText('Invalid definition')).toBeTruthy();
-  expect(screen.getByText('Preparation unavailable')).toBeTruthy();
+  expect(screen.getAllByText('Preparation unavailable')[0]).toBeTruthy();
   // Native published no root inspection here, so root availability is reported
   // as unobserved. Unobserved is never rendered as "allowed" or as "not
   // allowed", and preparation is never inferred from validity.
-  expect(screen.getByText('Root selection not observed')).toBeTruthy();
+  expect(screen.getAllByText('Root selection not observed')[0]).toBeTruthy();
   expect(screen.queryByText('Allowed for the root Agent')).toBeNull();
   expect(screen.queryByText('Prepared')).toBeNull();
 });

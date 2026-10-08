@@ -470,7 +470,8 @@ it('S1-14 a confirmed MCP literal-environment save drops the submitted payload o
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={cfg3Host(s)} />);
   await findOnAdvanced(/Revision: workspace-1/);
   fireEvent.click(screen.getByRole('tab', { name: 'Extensions' }));
-  fireEvent.click(screen.getByRole('tab', { name: 'MCP' }));
+  fireEvent.click(screen.getByRole('tab', { name: 'MCP servers' }));
+  fireEvent.click(screen.getAllByRole('button', { name: 'New' })[0]);
   fireEvent.change(screen.getByLabelText('New MCP identity'), { target: { value: 'search' } });
   fireEvent.click(screen.getByRole('button', { name: 'Add MCP' }));
   fireEvent.change(screen.getByLabelText('MCP command'), { target: { value: 'search-server' } });
@@ -587,12 +588,10 @@ it('S1-15 an inherited MCP definition and named Agent are discoverable from the 
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={cfg3Host(s)} />);
   await settingsReady();
   await openSettingsPage('Extensions');
-  fireEvent.click(screen.getByRole('tab', { name: 'MCP' }));
-  const mcp = within(screen.getByRole('grid', { name: 'MCP extensions' }));
-  // A whole-file resource is owned as one identity; native names the winning
-  // scope, so the inherited one is reachable without merging two catalogs.
-  expect(within(mcp.getByRole('row', { name: 'local' })).getByText('Workspace definition')).toBeTruthy();
-  expect(within(mcp.getByRole('row', { name: 'search' })).getByText('Inherited from User · no override in this Workspace')).toBeTruthy();
+  fireEvent.click(screen.getByRole('tab', { name: 'MCP servers' }));
+  expect(within(screen.getByRole('group', { name: 'Defined here' })).getByRole('listitem', { name: 'local' })).toBeTruthy();
+  expect(within(screen.getByRole('group', { name: 'Inherited from user' })).getByRole('listitem', { name: 'search' })).toBeTruthy();
+  fireEvent.click(screen.getAllByRole('button', { name: 'New' })[0]);
   fireEvent.change(screen.getByLabelText('New MCP identity'), { target: { value: 'search' } });
   expect((screen.getByRole('button', { name: 'Add MCP' }) as HTMLButtonElement).disabled).toBe(true);
   // Opening the inherited definition authors nothing in this Workspace: it is
@@ -603,7 +602,7 @@ it('S1-15 an inherited MCP definition and named Agent are discoverable from the 
   expect((screen.getByRole('button', { name: 'Save MCP search' }) as HTMLButtonElement).disabled).toBe(true);
   expect(screen.queryByRole('button', { name: /Use global default MCP search/ })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: '← Extensions' }));
-  fireEvent.click(screen.getByRole('tab', { name: 'Agents' }));
+  fireEvent.click(screen.getByRole('tab', { name: 'Subagents' }));
   await openResourceRow('reviewer');
   // The inherited profile is reported as inherited, from the native inventory
   // alone: even without its User document projected it is not "new", so the

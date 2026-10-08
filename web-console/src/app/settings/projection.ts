@@ -5,11 +5,8 @@ import type {
 } from '../../../../protocol/app-server/v37';
 import type { ConnectionState } from '../../client/app-server';
 
-/** The single owner a Settings instance is bound to for its whole lifetime.
- * There is deliberately no ordinary User/Workspace selector: the global entry
- * opens User authoring and the exact Workspace object entry opens Workspace
- * authoring. Presenting one target's facts never merges another target's
- * meaning. */
+/** Each Settings target names one exact configuration owner. The catalog scope
+ * menu switches targets; transactions and source facts remain owned separately. */
 export interface UserSettingsTarget { kind: 'user' }
 export interface WorkspaceSettingsTarget { kind: 'workspace'; id: string; displayName: string }
 export type SettingsTarget = UserSettingsTarget | WorkspaceSettingsTarget;
