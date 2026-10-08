@@ -460,7 +460,7 @@
    seat above the back-to-bottom control (z-index 8, ui-chat ChatView) while
    the menu is open. The steady state stays 7 so the control keeps painting
    over the card. */
-.root[data-phase='active'] .composerSeat:has([data-trigger-menu]) {
+.root[data-phase='active'] .composerSeat:has([data-trigger-menu], [data-model-picker]) {
   z-index: 9;
 }
 

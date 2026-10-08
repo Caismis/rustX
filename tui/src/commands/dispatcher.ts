@@ -208,9 +208,6 @@ export class CommandDispatcher {
    */
   async submit(line: string): Promise<CommandOutcome> {
     const globalCommand = parseCommandLine(line);
-    if (globalCommand?.name === "/mcp") {
-      try {return await this.#mcp(globalCommand.argument);} catch(error) {return failure(error);}
-    }
     if (globalCommand?.name === "/settings") {
       try { return await this.#settings(globalCommand.argument); } catch (error) { return failure(error); }
     }
@@ -496,31 +493,6 @@ export class CommandDispatcher {
     else return transient("error", "usage: /goal [show | create <objective> | pause | resume | edit <objective> | budget <rounds>]");
     const updated = await session.goal({ action: "mutate", expected: view.current.reference, mutation });
     return inspect("Goal", goalSummary(updated));
-  }
-
-  async #mcp(argument: string): Promise<CommandOutcome> {
-    const words = argument.match(/"(?:[^"\\]|\\.)*"|\S+/g)?.map(word => word.startsWith('"') ? JSON.parse(word) as string : word) ?? [];
-    const owner=words.shift() ?? 'user';
-    let target: import('../../../protocol/app-server/v38.ts').SourceTarget;
-    if(owner==='user')target={kind:'user'};
-    else if(owner==='workspace'&&words[0])target={kind:'workspace',directory:words.shift()!};
-    else return transient('error','usage: /mcp [user | workspace "<canonical path>"] [connect <name> | disconnect <name>]');
-    const action=words.shift(), id=words.shift();
-    const client=this.#context.host.client;
-    if(action==='connect'&&id){
-      const source=(await client.call('configuration/sourcesRead',{target},'source_settings')).projection;
-      const definition=source.prospective_resources?.definitions.find(entry=>entry.family==='mcp'&&entry.name===id);
-      const view=definition?.location.scope==='workspace'?source.workspace_mcp:source.user_mcp;
-      if(!view?.authored?.[id])return transient('error','MCP server not found in this scope.');
-      await client.call('mcp/connect',{target,id,expected_revision:view.revision,refresh:true},'mcp_connections');
-    }else if(action==='disconnect'&&id)await client.call('mcp/disconnect',{target,id},'mcp_connections');
-    else if(action)return transient('error','Expected connect <name> or disconnect <name>.');
-    const {connections}=await client.call('mcp/status',{target},'mcp_connections');
-    const lines=connections.map(row=>{
-      const state=row.state;
-      return `${state.status==='connected'?'●':state.status==='connecting'?'◌':'○'} ${row.id} · ${state.status}${state.status==='connected'?` · ${state.tool_count} tools`:''}`;
-    });
-    return inspect('MCP servers', [...(lines.length?lines:['No MCP settings connections.']), '', 'Run /mcp again to read current native status. Idle connections are released after 60 seconds.'].join('\n'));
   }
 
   async #settings(argument: string): Promise<CommandOutcome> {

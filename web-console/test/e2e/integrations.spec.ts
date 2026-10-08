@@ -30,8 +30,11 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     await settings.getByRole('button', { name: '＋ New', exact: true }).click();
     await settings.getByLabel('Name', { exact: true }).fill('local-fixture');
     await settings.getByLabel('MCP command').fill('python3');
-    await settings.getByLabel('Arguments', { exact: true }).fill([fileURLToPath(new URL('./web09-mcp.py', import.meta.url)), join(fixture.directory, 'mcp-started')].map(value => JSON.stringify(value)).join(' '));
-    await settings.getByRole('button', { name: 'Save', exact: true }).click();
+    for (const [index, value] of [fileURLToPath(new URL('./web09-mcp.py', import.meta.url)), join(fixture.directory, 'mcp-started')].entries()) {
+      await settings.getByRole('button', {name:'Add Arguments',exact:true}).click();
+      await settings.getByLabel(`Arguments ${index+1}`,{exact:true}).fill(value);
+    }
+    await settings.getByRole('button', { name: 'Save MCP local-fixture', exact: true }).click();
     await expect(settings.getByRole('listitem', { name: 'local-fixture', exact: true })).toBeVisible();
     expect(existsSync(join(fixture.directory, 'mcp-started'))).toBe(false);
     await openSettingsPage(page, 'Advanced');
@@ -41,34 +44,33 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     await openWorkspaceSettings(page, 'Workspace A'); await expandModelAuthoring(page);
     await openSettingsPage(page, 'Extensions');
     await openSettingsPage(page, 'MCP servers');
-    // The User definition is the native effective one for this identity, so the
-    // Workspace inventory lists it as inherited instead of hiding it; it is
-    // reachable without retyping the identity, and it offers no removal.
-    const inherited = settings.getByRole('listitem', { name: 'local-fixture', exact: true });
-    await expect(settings.getByRole('group', { name: 'Inherited from user', exact: true })).toContainText('local-fixture');
-    await inherited.getByRole('button', { name: 'MCP local-fixture', exact: true }).click();
+    // The management list remains scope-local. Naming the inherited identity
+    // opens the canonical read-only editor before explicit whole-entry override.
+    await expect(settings.getByRole('listitem', {name:'local-fixture',exact:true})).toHaveCount(0);
+    await settings.getByRole('button', {name:'＋ New MCP server',exact:true}).click();
+    await settings.getByLabel('Name',{exact:true}).fill('local-fixture');
     // Viewing the inherited User definition is not Workspace authoring: its
     // safe native facts are shown read-only, nothing can be saved or removed,
     // and nothing is written.
     await expect(settings.getByLabel('MCP command')).toHaveValue('python3');
     await expect(settings.getByLabel('MCP command')).toBeDisabled();
-    await expect(settings.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
+    await expect(settings.getByRole('button', { name: 'Save MCP local-fixture', exact: true })).toBeDisabled();
     await expect(settings.getByRole('button', { name: 'Use global default MCP local-fixture', exact: true })).toHaveCount(0);
     // Only the explicit override begins a Workspace definition. It replaces the
     // whole User one when saved, against the real native Workspace document.
-    await settings.getByRole('button', { name: 'Override local-fixture', exact: true }).click();
+    await settings.getByRole('button', { name: 'Override MCP local-fixture in this Workspace', exact: true }).click();
     await settings.getByLabel('MCP command').fill('unused-workspace-command');
-    await settings.getByRole('button', { name: 'Save', exact: true }).click();
+    await settings.getByRole('button', { name: 'Save MCP local-fixture', exact: true }).click();
     await expect(settings.getByRole('listitem', { name: 'local-fixture', exact: true })).toBeVisible();
     await settings.getByRole('button', { name: 'MCP local-fixture', exact: true }).click();
     await settings.getByLabel('MCP command').fill('preserved-draft');
     appendFileSync(join(fixture.workspaceA, '.agents/mcp.toml'), '\n# external edit invalidates the draft revision\n');
-    await settings.getByRole('button', { name: 'Save', exact: true }).click();
+    await settings.getByRole('button', { name: 'Save MCP local-fixture', exact: true }).click();
     await expect(settings.getByRole('alert')).toContainText('was not saved: the source changed');
     await expect(settings.getByLabel('MCP command')).toHaveValue('preserved-draft');
     await settings.screenshot({ path: test.info().outputPath('cfg3-cas-conflict.png') });
     await settings.getByRole('button', { name: 'Use reviewed revision', exact: true }).click();
-    await settings.getByRole('button', { name: 'Save', exact: true }).click();
+    await settings.getByRole('button', { name: 'Save MCP local-fixture', exact: true }).click();
     await expect(settings.getByRole('listitem', { name: 'local-fixture', exact: true })).toBeVisible();
     await openSettingsPage(page, 'Extensions');
     await settings.getByRole('tab', { name: 'Subagents', exact: true }).click();
@@ -83,7 +85,9 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     await settings.getByRole('button', { name: 'Save Agent reviewer', exact: true }).click();
     await expect(settings.getByText('Agent reviewer saved.')).toBeVisible();
     await settings.getByRole('button', { name: '← Extensions', exact: true }).click();
-    await expect(settings.getByRole('row', { name: 'reviewer', exact: true })).toContainText('Valid definition');
+    await settings.getByRole('button', { name: 'Agent reviewer', exact: true }).click();
+    await expect(settings.getByText('Valid definition',{exact:true})).toBeVisible();
+    await settings.getByRole('button',{name:'← Extensions',exact:true}).click();
     await settings.screenshot({ path: test.info().outputPath('cfg3-named-agent.png') });
     await openSettingsPage(page, 'Advanced');
     await expect(settings.getByText(/Revision:/)).toBeVisible();
@@ -100,8 +104,8 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     await closeSettings(page);
     await openWorkspaceSettings(page, 'Workspace A'); await expandModelAuthoring(page);
     await openSettingsPage(page, 'Extensions');
-    await settings.getByRole('tab', { name: 'Agents', exact: true }).click();
-    await settings.getByRole('row', { name: 'reviewer', exact: true }).click();
+    await settings.getByRole('tab', { name: 'Subagents', exact: true }).click();
+    await settings.getByRole('button', { name: 'Agent reviewer', exact: true }).click();
     await page.setViewportSize({ width: 390, height: 844 });
     await settings.getByRole('form', { name: 'Agent reviewer', exact: true }).evaluate(el => el.scrollIntoView({ block: 'start' }));
     await page.screenshot({ path: test.info().outputPath('cfg3-agent-mobile-dark.png') });

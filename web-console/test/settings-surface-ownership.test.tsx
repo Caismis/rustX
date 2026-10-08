@@ -462,7 +462,7 @@ it('S1-14 a confirmed Provider literal-secret save drops the submitted payload e
   expect(screen.queryByRole('button', { name: 'Use reviewed revision' })).toBeNull();
 });
 
-it('S1-14 a confirmed MCP literal-environment save drops the submitted payload on the same terms', async () => {
+it('S1-14 a confirmed MCP environment-reference save drops the submitted payload on the same terms', async () => {
   let failReads = false;
   const s = cfg3Client(async (op, source) => {
     if (op.method === 'configuration/sourcesRead' && failReads) throw new Error('authoritative read unavailable');
@@ -476,18 +476,18 @@ it('S1-14 a confirmed MCP literal-environment save drops the submitted payload o
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'search' } });
   openMcpContractEditor();
   fireEvent.change(screen.getByLabelText('MCP command'), { target: { value: 'search-server' } });
-  const literals = within(screen.getByRole('group', { name: 'Literal environment' }));
-  fireEvent.change(literals.getByLabelText('Literal environment name'), { target: { value: 'TOKEN' } });
-  fireEvent.click(literals.getByRole('button', { name: 'Add Literal environment' }));
-  fireEvent.change(literals.getByLabelText('TOKEN'), { target: { value: SECRET_SENTINEL } });
-  expect(retained(s)).toContain(SECRET_SENTINEL);
+  const literals = within(screen.getByRole('group', { name: 'Environment references ($VARIABLE)' }));
+  fireEvent.change(literals.getByLabelText('Environment references ($VARIABLE) name'), { target: { value: 'TOKEN' } });
+  fireEvent.click(literals.getByRole('button', { name: 'Add Environment references ($VARIABLE)' }));
+  fireEvent.change(literals.getByLabelText('TOKEN'), { target: { value: '$TOKEN' } });
+  expect(retained(s)).toContain('$TOKEN');
   failReads = true;
   fireEvent.click(screen.getByRole('button', { name: 'Save MCP search' }));
   await screen.findByText(/Saved, but the authoritative reread failed/);
   fireEvent.click(screen.getByRole('tab', { name: 'Tools & Permissions' }));
   // The MCP selector settles against the MCP source revision, not the config
   // one, and it carries no literal environment value to do so.
-  expect(retained(s)).not.toContain(SECRET_SENTINEL);
+  expect(retained(s)).not.toContain('$TOKEN');
   expect(retained(s)).toContain('"committed":"mcp-committed"');
   failReads = false;
   fireEvent.click(screen.getByRole('button', { name: 'Reload configuration' }));
@@ -591,19 +591,13 @@ it('S1-15 an inherited MCP definition and named Agent are discoverable from the 
   await openSettingsPage('Extensions');
   fireEvent.click(screen.getByRole('tab', { name: 'MCP servers' }));
   expect(within(screen.getByRole('group', { name: 'Installed' })).getByRole('listitem', { name: 'local' })).toBeTruthy();
-  expect(within(screen.getByRole('group', { name: 'Inherited from user' })).getByRole('listitem', { name: 'search' })).toBeTruthy();
-  fireEvent.click(screen.getAllByRole('button', { name: /^(＋ )?New$/ })[0]);
-  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'search' } });
-  expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true);
-  // Opening the inherited definition authors nothing in this Workspace: it is
-  // inspected, and only an explicit override would begin a Workspace draft.
-  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-  await openResourceRow('search');
+  expect(screen.queryByRole('listitem', { name: 'search' })).toBeNull();
+  // The scope-local management list excludes inherited definitions. Native
+  // detail/override contracts remain inspectable through exact navigation.
+  openMcpContractEditor('search');
   expect(screen.getByRole('form', { name: 'MCP search' }).getAttribute('data-definition')).toBe('inherited');
   expect(screen.getByRole('button', { name: 'Override MCP search in this Workspace' })).toBeTruthy();
   expect((screen.getByRole('button', { name: 'Save MCP search' }) as HTMLButtonElement).disabled).toBe(true);
-  expect(screen.queryByRole('button', { name: /Use global default MCP search/ })).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: /^← (Extensions|MCP servers)$/ }));
   await openSettingsPage('Extensions');
   fireEvent.click(screen.getByRole('tab', { name: 'Subagents' }));
   await openResourceRow('reviewer');

@@ -305,7 +305,6 @@ it('S10 target replacement fences stale reads, acknowledgements and the stale wo
     // The Host registration resolution that names every operation's source.
     resolveWorkspace: async id => ({ cwd: `/workspace/${id === 'workspace-a' ? 'A' : 'B'}` }),
     configureWorkspace: async (id, _endpoint, operation) => {
- if(operation.kind === "mcp_status" || operation.kind === "mcp_connect" || operation.kind === "mcp_disconnect") return {kind:"mcp",connections:[]};
       const target: SourceTarget = { kind: 'workspace', directory: `/workspace/${id === 'workspace-a' ? 'A' : 'B'}` };
       if (operation.kind === 'write') {
         const acknowledgement = (await s.client.request({ method: 'configuration/sourceWrite', params: { target, expected_revision: operation.expected_revision, mutation: operation.mutation } }, 'source_settings')).projection;
@@ -434,7 +433,6 @@ it('S12 a held Workspace post-write reread cannot regress a newer authoritative 
     ...s.workspaceHost,
     resolveWorkspace: async () => ({ cwd: target.directory }),
     configureWorkspace: async (_id, _endpoint, operation) => {
- if(operation.kind === "mcp_status" || operation.kind === "mcp_connect" || operation.kind === "mcp_disconnect") return {kind:"mcp",connections:[]};
       if (operation.kind === 'write') {
         const acknowledgement = (await s.client.request({ method: 'configuration/sourceWrite', params: { target, expected_revision: operation.expected_revision, mutation: operation.mutation } }, 'source_settings')).projection;
         const reread: WorkspaceConfigurationReread = { status: 'observed', projection: (await s.client.request({ method: 'configuration/sourcesRead', params: { target } }, 'source_settings')).projection };
@@ -515,7 +513,6 @@ it('S13 a write-owned reread cannot commit over a newer read that was only initi
     ...s.workspaceHost,
     resolveWorkspace: async () => ({ cwd: native.target.directory }),
     configureWorkspace: async (_id, _endpoint, operation) => {
- if(operation.kind === "mcp_status" || operation.kind === "mcp_connect" || operation.kind === "mcp_disconnect") return {kind:"mcp",connections:[]};
       if (operation.kind === 'write') {
         const acknowledgement = (await s.client.request({ method: 'configuration/sourceWrite', params: { target: native.target, expected_revision: operation.expected_revision, mutation: operation.mutation } }, 'source_settings')).projection;
         // Native has committed B and this operation owns its authoritative
@@ -587,7 +584,6 @@ it('S14 a superseded write-owned reread failure publishes no read error and leav
     ...s.workspaceHost,
     resolveWorkspace: async () => ({ cwd: native.target.directory }),
     configureWorkspace: async (_id, _endpoint, operation) => {
- if(operation.kind === "mcp_status" || operation.kind === "mcp_connect" || operation.kind === "mcp_disconnect") return {kind:"mcp",connections:[]};
       if (operation.kind === 'write') {
         const acknowledgement = (await s.client.request({ method: 'configuration/sourceWrite', params: { target: native.target, expected_revision: operation.expected_revision, mutation: operation.mutation } }, 'source_settings')).projection;
         // The commit is definitive; only this operation's own reread failed.
@@ -631,4 +627,24 @@ it('S14 a superseded write-owned reread failure publishes no read error and leav
   await waitFor(() => expect(queryOnAdvanced(/Revision: ws-B/)).toBeTruthy());
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBeLessThanOrEqual(4));
   expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1);
+});
+
+it('MCP refresh is one read and an unrelated native source update never replays external work', async () => {
+  const native = new Native();
+  const s = await open(native);
+  await openSettingsPage('MCP servers');
+  expect(sent(s, 'configuration/sourcesRead')).toHaveLength(1);
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+  await settingsReady();
+  expect(sent(s, 'configuration/sourcesRead')).toHaveLength(2);
+  native.revision = 'user-2';
+  native.description = 'unrelated guidance edit';
+  native.application = native.applied('1', 'applied');
+  await publish(s, native.application);
+  await waitFor(() => expect(sent(s, 'configuration/sourcesRead')).toHaveLength(3));
+  await openSettingsPage('Advanced');
+  await screen.findByText(/Revision: user-2/);
+  await openSettingsPage('MCP servers');
+  cleanup();
+  expect(s.requests.map(item => item.request.method)).toEqual(['initialize', 'session/list', ...Array(3).fill('configuration/sourcesRead')]);
 });

@@ -495,23 +495,20 @@ model = "vision"
 builtin = ["read", "read_image", "bash"]
 ```
 
-### MCP settings connections
+### MCP settings observation
 
-MCP settings status is owned by the native process, independently of a Session's
-executable capability catalog. WebUI and TUI use the same App Server methods:
-`mcp/connect` takes a source target, server ID, exact MCP document revision and
-`refresh`; `mcp/status` reads that target's snapshots; `mcp/disconnect` closes one
-connection and waits for settlement. Connecting is published before the handshake;
-connected requires both negotiation and `tools/list`. No business tool is called.
-A normal connect reuses the same live connection; refresh replaces it after closing
-its predecessor. Reads never reconnect. Failures and the 15-second connection
-deadline are native states, rather than browser timers. Changes to configuration
-invalidate retained settings connections. Without status reads, connections expire
-after 60 seconds; process shutdown also drains them.
+Settings opening, closing, scope switching and refresh only inspect sources.
+They never connect, reconnect or disconnect an MCP server. The existing native
+capability generation owner remains the only runtime connection owner. Native
+prospective preparation and Root selection are separate from admitted runtime
+state; absent live connection evidence is explicitly not observed.
 
-In the WebUI, opening MCP settings connects enabled entries and observes their
-status; Refresh reconnects them. TUI uses `/mcp user`, `/mcp user connect <name>` and
-`/mcp user disconnect <name>`. Replace `user` with `workspace "<canonical path>"`
-for workspace configuration. User-scope connections use the bound user home as cwd;
-workspace-scope connections use that workspace's canonical directory. These status
-connections do not change the tool permissions or connections of existing Sessions.
+Ordinary `configuration/sourceWrite` rejects new literal MCP environment/header
+values. Use `sensitive_env` / `sensitive_headers` environment references instead.
+Existing literals may be retained by key or removed, on the exact source revision;
+replacing them requires editing through the native source owner, outside the Web
+configuration protocol. No Host credential-writing API is introduced.
+
+The earlier trust-gate planning in issues #303/#312 predates accepted CFG3:
+there is no native Workspace trust gate. Product Host Workspace authorization
+remains distinct from native whole-entry User/Workspace precedence.

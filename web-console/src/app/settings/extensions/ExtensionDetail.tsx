@@ -87,7 +87,7 @@ export function ExtensionDetail(props: ExtensionDetailProps) {
  * shadows the entire same-name User one — so there is no value to merge and no
  * effective document to reconstruct. An inherited identity authors nothing
  * until an explicit override replaces the whole definition. */
-function McpDefinition({ source, scope, name }: ExtensionDetailProps) {
+export function McpDefinition({ source, scope, name }: ExtensionDetailProps) {
   const tx = useTranslation();
   const catalog = scope === 'user' ? source.user_mcp : source.workspace_mcp;
   // The MCP document is its own native authority: `rustx.toml` being malformed
@@ -139,11 +139,7 @@ function McpFields({ form }: { form: import('../forms/bridge').TypedUnitForm<Mcp
       </>}
     <Entries form={form} name="definition.sensitive_env" label={tx('settings:extension-detail.environment-references-variable')} />
     {transport === 'http' && <Entries form={form} name="definition.sensitive_headers" label={tx('settings:extension-detail.header-references-variable')} />}
-    {/* Literal environment values and headers are secrets on the same terms as
-        a Provider credential: memory-only while being authored, never read
-        back from native, and dropped once the commit is confirmed. */}
-    <Entries form={form} name="definition.env" label={tx('settings:extension-detail.literal-environment')} secret />
-    {transport === 'http' && <Entries form={form} name="definition.headers" label={tx('settings:extension-detail.literal-headers')} secret />}
+    <p>{tx('settings:mcp.references-only')}</p>
     <Strings form={form} name="retained_env" label={tx('settings:extension-detail.retain-existing-environment-keys')} />
     <Strings form={form} name="retained_headers" label={tx('settings:extension-detail.retain-existing-header-keys')} />
   </>}</Subscribe>;

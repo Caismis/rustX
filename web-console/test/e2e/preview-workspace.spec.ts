@@ -223,7 +223,7 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     await page.setViewportSize({ width: 1920, height: 1000 }); await expect(panel).not.toBeVisible();
     await page.getByRole('button', { name: 'Reopen previews', exact: true }).click(); await expect(panes).toHaveCount(2); await expect.poll(liveWorkers).toBe(2);
 
-    const conversation = page.locator('.conversation-scroll');
+    const conversation = page.locator('[data-conversation-scroll]').first();
     await conversation.evaluate(element => { element.scrollTop = 0; element.dispatchEvent(new Event('scroll')); });
     await expect(page.getByRole('button', { name: 'Return to latest', exact: true })).toBeVisible();
     const anchor = page.getByRole('article', { name: 'Your message', exact: true }).getByText('Preview workspace files', { exact: true });

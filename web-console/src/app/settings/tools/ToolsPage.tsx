@@ -74,6 +74,7 @@ export function ToolsPage({ source, document, scope, revision }: {
     </div>
 
     <h4>{tx('settings:tools-page.skills')}</h4>
+    <p className={css.hint}>{tx('settings:tools-page.skill-selection-controls-which-skill-descriptions-are-advertised')}</p>
     <dl><dt>{tx('settings:tools-page.user-skill-root')}</dt><dd>{skillRoots[0]}</dd><dt>{tx('settings:tools-page.workspace-skill-root')}</dt><dd>{skillRoots[1]}</dd></dl>
     <UnitForm<AgentSkillSelection> title={tx('settings:extension-detail.skill-visibility')} authored={agent?.skills ?? undefined} blank={[]} revision={revision}
       mutation={authored => ({ kind: 'config', mutation: { unit: 'skills', authored } })}>

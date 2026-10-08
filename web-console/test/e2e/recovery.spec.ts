@@ -60,7 +60,7 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
     await settings.getByLabel('Name', { exact: true }).fill('loss-fixture');
     await settings.getByLabel('MCP command', { exact: true }).fill('inert-fixture');
     wire.loseNext('configuration/sourceWrite');
-    await settings.getByRole('button', { name: 'Save', exact: true }).click();
+    await settings.getByRole('button', { name: 'Save MCP loss-fixture', exact: true }).click();
     await expect.poll(wire.lost).toBe(2);
     expect(readFileSync(join(fixture.directory, 'home/rustx/.agents/mcp.toml'), 'utf8')).toContain('inert-fixture');
     await reconnect();

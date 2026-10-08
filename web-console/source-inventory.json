@@ -479,7 +479,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "5492322067af012012b0badac3ec05b4c3a3fc17753c627d1dd70ccde6790d5a"
+      "local_sha256": "d24028087535af1db7eb0677da8d0346d8dc2ce3206ec977663ccde627e02efc"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
@@ -531,7 +531,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "ac96d9fc155f70ca50c6a3635c3c124c0639f9b7adfdbae6f7510ad0482c5a76"
+      "local_sha256": "aee41eacd55c2e451baba5a0edbacdd884e69f1a4ec7b45905a28dd79fe00244"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
@@ -971,7 +971,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "11191c121a7f27d54b1b893c06f64555650a60ef6cedc03ed9b89e300730694e",
+      "local_sha256": "c90e8fb4272ab451d8c50c1b853f096396da7f1f5a84c7c3205bff844274a48f",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css",
@@ -2833,7 +2833,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "0e020066128ecca068f94bb98d8a869d1dba33e7d2132008bba97dc3dadbf727",
+      "local_sha256": "7d72202502bcbb9b809a0eeb76e538eb176034231c284d1bbbf4a3d74bfd73db",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css",
@@ -3356,7 +3356,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "6478157a0960271a67c4cc55d4ca1beb34c4ac875eaa60fd892371c0d86aca26"
+      "local_sha256": "af30001e10e3d3d83c7b22fead3b54f9df6be55ddbf3cada8430530fa496dc45"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -3632,7 +3632,7 @@
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [],
-      "local_sha256": "890208b55b25a278588f5a107c3e59e698a2bd8277a65b0452f30c6083b8eba3"
+      "local_sha256": "5cb56e2e856025728dffba5b2be33093b7cf40d09847556ac34683d9803e445a"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/stat-dialog.ts",
@@ -5587,7 +5587,7 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [],
-      "local_sha256": "44b07ff0a33a3a77ee4ce96bd5938c45655d47b1e9a1542f96377ac1bad95a75",
+      "local_sha256": "d8eb7159650158fbdbcc2a88b54496c2d5d37c2013260d072aafa67c5bac0e9b",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/settings/PreferenceRow.module.css",
@@ -5647,12 +5647,13 @@
         "../../presentation/primitives/icons",
         "../components/ActivityCards",
         "./Subagents.module.css",
+        "./meter-queue",
         "./subagent-context",
         "./token-format",
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "e6e3c270920fc2a9b22ad1ccd46777885b8eefa1efb08445c2bdf9e7480e085e"
+      "local_sha256": "d0e186057835efb3b6f2e8562800e0ad6e7ea358422b83f960dc3670b483c0ce"
     },
     {
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
@@ -5671,9 +5672,9 @@
       "upstream": "packages/client/ui-settings-models/src/client/ModelsSection.module.css",
       "destination": "web-console/src/app/settings/mcp/McpPage.module.css",
       "upstream_sha256": "0de105abac343887fbea8508fc0e20b6903505a3f689dd05b1125ff02886e801",
-      "local_sha256": "b2b34a20376af1ce312c6f39a92ad5130066840672b6fcf5e5af3b585e859a0f",
+      "local_sha256": "64c372df486b7fe157c335f74f8715af0aa99ecac1880d70121e93cb3a977a56",
       "classification": "B",
-      "treatment": "MCP catalog and editor adapt Harness settings materials, compact typography, card spacing, inset editor and disclosure; shared rustX Button geometry and settings container sizing. Native MCP scope and connection authority retained.",
+      "treatment": "MCP catalog and editor adapt Harness settings materials, compact typography, card spacing, inset editor and disclosure; shared rustX Button geometry and settings container sizing. Scope-local configuration observation; native capability generations retain execution ownership.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": []

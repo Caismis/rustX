@@ -8,7 +8,7 @@ test('short final turn navigation retains the clicked mark until reader scrollin
   const last = page.getByRole('button', { name: 'last', exact: true });
   await first.click(); await expect(first).toHaveAttribute('aria-current', 'true');
   await last.click(); await expect(last).toHaveAttribute('aria-current', 'true');
-  const box = (await page.locator('.conversation-scroll').boundingBox())!;
+  const box = (await page.locator('[data-conversation-scroll]').first().boundingBox())!;
   await page.mouse.move(box.x + 100, box.y + 100);
   await page.mouse.wheel(0, -120);
   await expect(first).toHaveAttribute('aria-current', 'true');

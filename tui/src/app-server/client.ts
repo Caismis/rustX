@@ -136,9 +136,6 @@ export class UncertainOutcomeError extends Error {
 /** Every generated method must deliberately classify a lost response. */
 export type ResponseLossClass = "read" | "side_effecting" | "connection_local";
 export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
-  "mcp/connect": "side_effecting",
-  "mcp/disconnect": "side_effecting",
-  "mcp/status": "read",
   "session/switchNode": "side_effecting",
   "session/transcript": "read",
   "session/history": "read",

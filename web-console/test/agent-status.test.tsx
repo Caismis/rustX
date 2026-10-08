@@ -131,7 +131,9 @@ describe('single-anchor Agent Status placement', () => {
   it('is a subordinate annotation, not a conversation speaker or a response with actions', () => {
     const ui = render(<AgentTranscript snapshot={withTranscript(CONVERSATION(), [status('s1', fresh('u1'))])} />);
     expect(ui.container.querySelectorAll('[aria-label="Your message"]')).toHaveLength(1);
-    expect(ui.container.querySelectorAll('[aria-label="Assistant response"]')).toHaveLength(1);
+    // The one native Assistant message has separate response and process segments.
+    expect(ui.container.querySelectorAll('[data-chat-anchor-key="message:a1"]')).toHaveLength(1);
+    expect(ui.container.querySelectorAll('[aria-label="Assistant response"]')).toHaveLength(2);
     const note = screen.getByRole('note', { name: 'Agent Status' });
     expect(note.closest('[aria-label="Your message"], [data-assistant-message]')).toBeNull();
     expect(within(note).queryByRole('button', { name: 'Copy' })).toBeNull();

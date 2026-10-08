@@ -1724,3 +1724,27 @@ The existing Menu primitive provides keyboard/portal behavior. MCP's selected
 configuration owner is local to the page; the settings shell retains its
 original target and navigation capabilities. All reads and edits continue through
 the exact-target native settings actor.
+
+PR #457 repair retains the scope-local list and Harness settings primitives, but
+routes both definition entry points through the existing `McpDefinition` and
+Settings transaction actor. JSON import only accepts environment references;
+Header/Env literals are retained by key or removed, never introduced by Web
+configuration writes. Settings inspection and refresh are read-only. The native
+capability lifecycle owns all MCP connections; no settings connection/probe is
+created. Meter scheduling is local presentation code with two in-flight and 32
+pending observation bounds, separate from native durable folding authority.
+
+Repair browser acceptance follows the new Settings page order, the shared slash
+model picker, and the actual `data-conversation-scroll` owner. Agent, Shell,
+Settings and localized General screenshot references are refreshed for the PR's intentional
+reserved scroll gutter, lineage header, running-status seat and new conversation
+preferences. The strict comparator and its noise budgets are unchanged. A hidden
+StepGroup title now stays hidden in detailed mode, and stream-to-canonical
+message seats retain their disclosure identity instead of remounting.
+
+Settings preference and resource-catalog secondary text uses the existing
+readable label tokens after browser contrast checks; invalid definitions keep
+a readable label with an error-colored underline. Skill visibility retains its
+selection-versus-filesystem explanation. The four updated Shell references
+with registered corner-arc noise retain every historical evidence pixel within
+its recorded alternatives; their regions and budgets are unchanged.

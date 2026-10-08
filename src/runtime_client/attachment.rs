@@ -79,7 +79,15 @@ impl RuntimeAttachment {
     }
     native_control!(agent_status, false, id: &crate::runtime::identity::AgentId);
     native_control!(agent_list, false);
-    native_control!(agent_statistics, false, id: &crate::runtime::identity::AgentId);
+    /// Read durable child meters without blocking an async dispatch worker.
+    /// # Errors
+    /// Closed attachments and unavailable durable evidence are explicit.
+    pub async fn agent_statistics(
+        &self,
+        id: &crate::runtime::identity::AgentId,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.access(false)?.agent_statistics(id).await
+    }
     native_control!(agent_transcript_page, false, id: &crate::runtime::identity::AgentId, before: Option<super::snapshot::RuntimeClientTranscriptCursor>, limit: usize);
 
     /// Wait for this exact finite Job's physical settlement.
@@ -319,8 +327,8 @@ impl RuntimeAttachment {
             RuntimeClientRequest::JobList { .. } => Ok(inner.job_list()),
             RuntimeClientRequest::AgentStatus { agent_id, .. } => inner.agent_status(&agent_id),
             RuntimeClientRequest::AgentList { .. } => inner.agent_list(),
-            RuntimeClientRequest::AgentStatistics { agent_id, .. } => {
-                inner.agent_statistics(&agent_id)
+            RuntimeClientRequest::AgentStatistics { .. } => {
+                unreachable!("Agent statistics are read asynchronously")
             }
             RuntimeClientRequest::AgentTranscript {
                 agent_id,
@@ -379,6 +387,9 @@ impl RuntimeAttachment {
         }
 
         let domain_result = match &request {
+            RuntimeClientRequest::AgentStatistics { agent_id, .. } => {
+                Some(inner.agent_statistics(agent_id).await)
+            }
             RuntimeClientRequest::JobWait { job_id, .. } => {
                 Some(inner.job_wait(job_id, false).await)
             }

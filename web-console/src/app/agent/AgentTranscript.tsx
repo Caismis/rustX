@@ -100,6 +100,24 @@ export function AgentTranscript({ snapshot, history, loadEarlier, loadLater, onH
       {piece.group.members.map(member => <div key={entryIdentity(member.entry)}>{member.blocks && member.entry.item.type === 'message'
         ? <Message message={member.entry.item.message} include={member.blocks} tools={toolsOf(member.entry)}/> : audit(member.entry)}</div>)}
     </StepGroup>);
+  // A canonical correction of a message without a published process keeps
+  // the same seats, block keys and disclosure state as its streaming form.
+  const messageSegments = (value: MessageBlock, blocks: InFlightBlock[] | Extract<MessageBlock, {role:'assistant'}>['content'], tools: ForegroundToolExecution[], streaming = false) => {
+    const segments: {process:boolean; indices:number[]}[]=[];
+    blocks.forEach((block,index)=>{
+      const process=block.type==='reasoning'||block.type==='tool_call', previous=segments.at(-1);
+      if(previous?.process===process)previous.indices.push(index);else segments.push({process,indices:[index]});
+    });
+    return segments.map(segment=>{
+      const key=`message:${value.id}:${segment.indices[0]}`;
+      const message=<Message message={value} blocks={streaming ? blocks as InFlightBlock[] : undefined} include={segment.indices} streaming={streaming} tools={tools}/>;
+      return <div className={css.flowItem} data-chat-group-part={segment.process ? undefined : 'response'} key={key}>
+        {segment.process ? <StepGroup id={key} counts={[]} open={stepsOpen.has(key)} direct={!groupedLive}
+          {...(streaming ? liveGroup(tools, blocks.filter((block,index)=>segment.indices.includes(index)&&block.type==='reasoning').map(block=>'text' in block ? block.text ?? '' : '').at(-1)) : {})}
+          onToggle={()=>setStepsOpen(previous=>{const next=new Set(previous);if(next.has(key))next.delete(key);else next.add(key);return next;})}>{message}</StepGroup> : message}
+      </div>;
+    });
+  };
   const disclosure = (key: string) => {
     const group = process.groups.get(key)!;
     const response = entries.find(entry => entry.turn_process && JSON.stringify([entry.turn_process.conversation_id, entry.turn_process.attempt_id]) === key && entry.completed_response)?.completed_response;
@@ -123,26 +141,10 @@ export function AgentTranscript({ snapshot, history, loadEarlier, loadLater, onH
     {!messages.length && !entries.length && <Feedback kind="empty" title={tx('agent:agent-transcript.ready-for-a-task')}><p>{tx('agent:agent-transcript.what-would-you-like-to-work-on')}</p></Feedback>}
     {[...turnPresentation(entries), ...(streaming && !durableIds.has(streaming.message_id) && !settledPublications.has(streaming.message_id) ? [{ kind: 'streaming' as const, streaming }] : [])].map(node => {
       if (node.kind === 'streaming') {
-        const blocks = node.streaming.blocks ?? [];
-        const segments: { process: boolean; indices: number[] }[] = [];
-        blocks.forEach((block, index) => {
-          const isProcess = block.type === 'reasoning' || block.type === 'tool_call';
-          const previous = segments.at(-1);
-          if (previous?.process === isProcess) previous.indices.push(index);
-          else segments.push({ process: isProcess, indices: [index] });
-        });
         const tools = snapshot.attempt?.foreground?.filter(tool => tool.message_id === node.streaming.message_id) ?? [];
-        return <div className={css.flowItem} key={`message:${node.streaming.message_id}`}><MessageSeat id={`message:${node.streaming.message_id}`}
+        return <div className={css.flowItem} key={`message:${node.streaming.message_id}`}><MessageSeat key="seat" id={`message:${node.streaming.message_id}`}
           turnOwner={snapshot.attempt ? turnAnchor({conversation_id:snapshot.conversation_id,attempt_id:snapshot.attempt.attempt_id}) : undefined}
-          other={segments.map(segment => {
-            const segmentKey = `streaming:${node.streaming.message_id}:${segment.indices[0]}`;
-            const message = <Message message={{role:'assistant',id:node.streaming.message_id,content:[]}} blocks={blocks} include={segment.indices} streaming tools={tools}/>;
-            return <div className={css.flowItem} data-chat-group-part={segment.process ? undefined : 'response'} key={segmentKey}>
-              {segment.process ? <StepGroup id={segmentKey} counts={[]} open={stepsOpen.has(segmentKey)} direct={!groupedLive}
-                {...liveGroup(tools, blocks.filter((block, index) => segment.indices.includes(index) && block.type === 'reasoning').map(block => 'text' in block ? block.text ?? '' : '').at(-1))}
-                onToggle={() => setStepsOpen(previous => { const next = new Set(previous); if (next.has(segmentKey)) next.delete(segmentKey); else next.add(segmentKey); return next; })}>{message}</StepGroup> : message}
-            </div>;
-          })}/></div>;
+          other={messageSegments({role:'assistant',id:node.streaming.message_id,content:[]}, node.streaming.blocks ?? [], tools, true)}/></div>;
       }
       if (node.kind === 'process' && node.process.outcome === 'running') return null;
       if (node.kind === 'process') return <div className={css.flowItem} data-chat-flow-kind="turn-process" key={node.key} data-chat-turn-owner={turnAnchor(node.process)} data-chat-anchor-key={entries.some(entry => entry.cursor === node.process.control_cursor) ? turnAnchor(node.process) : undefined}><TurnProcess id={node.key} open tools={node.process.tool_call_count} messages={node.process.message_count} outcome={node.process.outcome} start={node.process.started_at ?? undefined} end={node.process.ended_at ?? undefined}/>{requestFeedback?.(node.process.attempt_id)}</div>;
@@ -183,10 +185,10 @@ export function AgentTranscript({ snapshot, history, loadEarlier, loadLater, onH
         {entrySeat && disclosure(key!)}
         {entry.completed_response && !process.groups.has(process.attempts.get(JSON.stringify([entry.completed_response.origin.conversation_id, entry.completed_response.origin.attempt_id])) ?? '') && <><TurnProcess id={JSON.stringify([entry.completed_response.origin.conversation_id, entry.completed_response.origin.attempt_id])} open tools={entry.turn_process?.tool_call_count ?? 0} messages={entry.turn_process?.message_count ?? 0} durationMs={entry.completed_response.timing?.total_duration_ms ?? undefined}/>{requestFeedback?.(entry.completed_response.origin.attempt_id)}</>}
         </>} bodyHidden={!final && !processOpen}
-        message={body && !stepped && entry.item.type === 'message' ? entry.item.message : undefined} reasoningHidden={final && !processOpen}
+        message={body && !stepped && entry.item.type === 'message' && entry.item.message.role !== 'assistant' ? entry.item.message : undefined} reasoningHidden={final && !processOpen}
         actions={entry.item.type === 'message' && isHumanMessage(entry.item.message) && (!entry.item.message.kind || entry.item.message.kind === 'message') && <div className={tailCss.actions} aria-label={tx('agent:agent-transcript.message-actions')}><MessageTime time={entry.item.message.timestamp}/><CopyMessage text={entry.item.message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('')}/></div>}
         tools={toolsOf(entry)}
-        other={stepped ? pieces(entry, stepped, processOpen) : body && audit(entry)}
+        other={stepped ? pieces(entry, stepped, processOpen) : body && (entry.item.type === 'message' && entry.item.message.role === 'assistant' ? messageSegments(entry.item.message, entry.item.message.content, toolsOf(entry)) : audit(entry))}
         suffix={<>{statuses.map(status => {
           // Keep the native anchor, while sharing its exact completed Attempt's
           // disclosure. Never borrow the adjacent row's ownership for a status.

@@ -45,8 +45,8 @@ reasoning = { default_profile = "deep", profiles = { deep = { enabled = true }, 
       if (owner === 'Root') { await openSettingsPage(page, 'Models'); await expandModelAuthoring(page); }
       else {
         await openSettingsPage(page, 'Extensions');
-        await settings.getByRole('tab', { name: 'Agents', exact: true }).click();
-        await settings.getByRole('row', { name: 'optional', exact: true }).click();
+        await settings.getByRole('tab', { name: 'Subagents', exact: true }).click();
+        await settings.getByRole('button', { name: 'Agent optional', exact: true }).click();
       }
       const title = owner === 'Root' ? 'Default model' : 'Agent optional';
       const form = settings.getByRole('form', { name: title, exact: true });
@@ -105,7 +105,7 @@ reasoning = { default_profile = "deep", profiles = { deep = { enabled = true }, 
       }
       await editor.fill(JSON.stringify(config));
       await settings.getByRole('button', { name: 'Use configuration', exact: true }).click();
-      await settings.getByRole('button', { name: 'Save', exact: true }).click();
+      await settings.getByRole('button', { name: `Save MCP implicit-${transport}`, exact: true }).click();
       await expect(settings.getByRole('listitem', { name: `implicit-${transport}`, exact: true })).toBeVisible();
     }
     const mcp = readFileSync(mcpFile, 'utf8');

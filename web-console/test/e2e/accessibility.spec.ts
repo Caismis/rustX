@@ -4,7 +4,7 @@ import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { openEmptySession, selectedSettingsPage, settingsSectionMenu } from './shell-actions';
 
-const settingsPageOrder = ['General', 'Models', 'Agent', 'Tools & Permissions', 'Extensions', 'Advanced'];
+const settingsPageOrder = ['General', 'Models', 'Agent', 'Tools & Permissions', 'MCP servers', 'Extensions', 'Advanced'];
 
 for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and editor reachability at ${width}px`, async ({ page }) => {
   const fixture = await startDogfood();
@@ -79,7 +79,7 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     await tabTo(message); await page.keyboard.type('/mdl');
     await expect(page.getByRole('option', { name: /Model/ })).toBeVisible();
     await page.keyboard.press('Enter');
-    const dialog = page.getByRole('dialog', { name: '/model', exact: true }); await expect(dialog).toBeVisible();
+    const dialog = page.getByRole('listbox', { name: 'Model', exact: true }); await expect(dialog).toBeVisible();
     await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0); await expect(message).toBeFocused();
     // The composer paints keyboard focus on its rounded card, not a second
     // rectangular outline around the native text scrollport.

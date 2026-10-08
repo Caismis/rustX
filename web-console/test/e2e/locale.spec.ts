@@ -50,10 +50,8 @@ test('Chinese new conversation preserves the user draft and localizes composer c
   await page.getByRole('menuitem', { name: 'Workspace A', exact: true }).click();
   await expect(page.locator('[data-model-select]')).toBeEnabled();
   await input.fill('/model');
-  await input.press('Enter');
-  await expect(page.getByRole('menu').filter({ has: page.getByRole('menuitem', { name: '模型', exact: true }) })).toBeVisible();
-  await expect(page.locator('[data-model-select]')).toHaveAttribute('aria-expanded', 'true');
-  await page.getByRole('menuitem', { name: 'fixture/model', exact: true }).click();
+  await expect(page.getByRole('listbox', { name: '模型', exact: true })).toBeVisible();
+  await page.getByRole('option', { name: 'fixture/model', exact: true }).click();
   await expect(input).toHaveValue('');
   expect(await page.evaluate(() => (window as unknown as { rustxNativeRequests(): { method: string }[] }).rustxNativeRequests().filter(request => request.method === 'session/create'))).toEqual([]);
 });

@@ -320,7 +320,7 @@ pub(crate) struct ClientInner {
     /// live and read-only hosts.
     store: Arc<dyn ConversationStore>,
     read_store: Arc<dyn ConversationStore>,
-    agent_statistics: Mutex<BTreeMap<ConversationId, super::agent_statistics::StatisticsFold>>,
+    agent_statistics: super::agent_statistics::StatisticsCache,
     /// Whether this host is a read-only attachment to durable conversation
     /// state rather than a control adapter over a live runtime.
     read_only: bool,
@@ -1717,7 +1717,20 @@ impl ClientInner {
         Ok(super::projection::agent_view(&agent, &activation))
     }
 
-    pub(crate) fn agent_statistics(
+    pub(crate) async fn agent_statistics(
+        self: &Arc<Self>,
+        id: &crate::runtime::identity::AgentId,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        let owner = Arc::clone(self);
+        let id = id.clone();
+        tokio::task::spawn_blocking(move || owner.read_agent_statistics(&id))
+            .await
+            .map_err(|_| RuntimeClientError::RuntimeFailure {
+                message: "Agent statistics reader failed".to_owned(),
+            })?
+    }
+
+    fn read_agent_statistics(
         &self,
         id: &crate::runtime::identity::AgentId,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
@@ -1737,16 +1750,14 @@ impl ClientInner {
             |error: crate::durable::ConversationStoreError| RuntimeClientError::RuntimeFailure {
                 message: error.to_string(),
             };
-        let through = store.presentation_frontier().map_err(failed)?;
-        // This lock belongs only to meter reads, never the parent projection or
-        // execution. Statistics cannot delay snapshot/attach or sending input.
-        let mut cache = self
-            .agent_statistics
+        // Only locate the per-Conversation fold under the map lock. Durable
+        // reads and waiting for another read of this child happen outside it.
+        let fold = self.agent_statistics.entry(agent.child_conversation_id);
+        let mut fold = fold
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let metrics = cache
-            .entry(agent.child_conversation_id)
-            .or_default()
+        let through = store.presentation_frontier().map_err(failed)?;
+        let metrics = fold
             .read(
                 &store,
                 through,
@@ -2159,7 +2170,7 @@ impl RuntimeClientHost {
                 store.conversation_id()
             )),
             runtime: None,
-            agent_statistics: Mutex::new(BTreeMap::new()),
+            agent_statistics: super::agent_statistics::StatisticsCache::default(),
             read_store: store.presentation_reader(),
             store,
             read_only: true,
@@ -2273,7 +2284,7 @@ impl RuntimeClientHost {
             conversation_id: seed.conversation_id,
             agent_id: config.runtime.agent_id().clone(),
             runtime: Some(config.runtime),
-            agent_statistics: Mutex::new(BTreeMap::new()),
+            agent_statistics: super::agent_statistics::StatisticsCache::default(),
             read_store: store.presentation_reader(),
             store,
             read_only: false,

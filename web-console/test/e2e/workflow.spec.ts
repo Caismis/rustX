@@ -51,15 +51,15 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     await closeSettings(page);
     await openWorkspaceSettings(page, 'Workspace A');
     await openSettingsPage(page, 'Extensions');
-    await settings.getByRole('tab', { name: 'Agents', exact: true }).click();
-    await expect(settings.getByRole('row', { name: 'reviewer', exact: true })).toBeVisible();
+    await settings.getByRole('tab', { name: 'Subagents', exact: true }).click();
+    await expect(settings.getByRole('button', { name: 'Agent reviewer', exact: true })).toBeVisible();
     await settings.getByRole('tab', { name: 'Workflows', exact: true }).click();
-    await expect(settings.getByRole('row', { name: 'review_pr', exact: true })).toBeVisible();
+    await expect(settings.getByRole('button', { name: 'Workflow review_pr', exact: true })).toBeVisible();
     // A Workflow has no authoring operation on this protocol: no Add is offered.
     await expect(settings.getByRole('button', { name: /^Add / })).toHaveCount(0);
     await settings.screenshot({ path: test.info().outputPath('native-workflow-inventory.png') });
     await settings.getByRole('tab', { name: 'Skills', exact: true }).click();
-    await expect(settings.getByRole('row', { name: 'acceptance', exact: true })).toBeVisible();
+    await expect(settings.getByRole('button', { name: 'Skill acceptance', exact: true })).toBeVisible();
     await openSettingsPage(page, 'Tools & Permissions');
     await settings.getByRole('button', { name: 'Remove workflows 1', exact: true }).click();
     await settings.getByRole('button', { name: 'Save Workflow allowlist', exact: true }).click();

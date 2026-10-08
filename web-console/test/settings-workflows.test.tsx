@@ -1,5 +1,4 @@
 // @vitest-environment jsdom
-import { openMcpContractEditor } from './settings-harness';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
@@ -9,7 +8,7 @@ import { settingsTransactionOwners } from '../src/app/settings/Settings';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { OutcomeUncertain } from '../src/client/app-server';
 import {
-  chooseOption, confirmAction, openResourceRow, openSettingsPage, settingsReady, SettingsSurface,
+  chooseOption, confirmAction, openMcpContractEditor, openResourceRow, openSettingsPage, settingsReady, SettingsSurface,
 } from './settings-harness';
 import { cfg3Client, cfg3Host } from './cfg3-fixture';
 afterEach(cleanup);
@@ -191,7 +190,7 @@ it('S2-05 every extension row reports kind, scope, validity, preparation and roo
   expect(await facts('nightly')).toEqual(expect.arrayContaining(['Workflow', 'Valid definition', 'Not admitted', 'Not allowed for the root Agent']));
   expect(await facts('analysis')).toEqual(expect.arrayContaining(['Managed Python', 'Valid definition', 'Preparation unavailable']));
   // Disabled MCP entries only read status or release an existing settings connection.
-  expect(methods(s).every(method => ['configuration/sourcesRead','mcp/status','mcp/disconnect'].includes(method))).toBe(true);
+  expect(methods(s).every(method => ['configuration/sourcesRead'].includes(method))).toBe(true);
 });
 
 /** Two MCP identities authored in one `mcp.toml`, one valid and one not. */
@@ -446,7 +445,7 @@ it('S2-07 an inherited MCP definition is inspected read-only; only Override begi
   const s = inheritingWorkspace();
   await workspace(s, 'Extensions');
   fireEvent.click(screen.getByRole('tab', { name: 'MCP servers' }));
-  await openResourceRow('search');
+  openMcpContractEditor('search');
   // Inspecting: the inherited safe facts are shown, nothing is writable, no
   // Workspace draft exists and nothing is written.
   expect(definitionState('MCP search')).toBe('inherited');
@@ -519,7 +518,7 @@ it('S2-07 discarding a Workspace MCP override writes nothing and returns to insp
   const s = inheritingWorkspace();
   await workspace(s, 'Extensions');
   fireEvent.click(screen.getByRole('tab', { name: 'MCP servers' }));
-  await openResourceRow('search');
+  openMcpContractEditor('search');
   fireEvent.click(screen.getByRole('button', { name: 'Override MCP search in this Workspace' }));
   fireEvent.change(field('MCP command'), { target: { value: 'abandoned' } });
   fireEvent.click(screen.getByRole('button', { name: 'Discard draft' }));

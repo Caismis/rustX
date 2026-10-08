@@ -38,6 +38,12 @@ export class ProtocolLog {
         if (method === 'session/uploadPrepare' && envelope.result?.transfer) envelope.result.transfer.path = '[upload capability omitted]';
         if (method === 'artifact/read' && envelope.result?.data) envelope.result.data = '[artifact bytes omitted]';
         if (method === 'session/uploadPrepare' || method?.startsWith('artifact/')) raw = JSON.stringify(envelope);
+        // Authoring payloads are not general-purpose protocol diagnostics,
+        // including rejected requests sent by a non-UI caller.
+        if (method === 'configuration/sourceWrite' && envelope.params?.mutation) {
+          envelope.params.mutation = '[configuration write omitted]';
+          raw = JSON.stringify(envelope);
+        }
         sessionId = envelope.params?.target?.session_id ?? envelope.params?.session_id ?? sessionId
           ?? envelope.result?.target?.session_id ?? envelope.result?.session?.id ?? envelope.result?.result?.session_id;
       }

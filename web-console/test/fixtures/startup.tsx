@@ -18,6 +18,13 @@ import '../../src/app/console.css';
 const server = new Server();
 if (!new URL(location.href).searchParams.has('existing')) server.snapshots.clear();
 else server.snapshots.get('A')!.transcript.entries = [{ cursor: '1', item: { type: 'message', message: { id: 'saved-user', role: 'user', source: 'human', content: [{ type: 'text', text: 'Previously saved message' }] } } }];
+for (const saved of server.snapshots.values()) saved.model = cfg3Effective().effective_model;
+server.handlers.set('session/model', request => {
+  if (request.method !== 'session/model') throw new Error('Wrong operation');
+  const model = server.snapshots.get(request.params.target.session_id)?.model;
+  if (!model) throw new Error('Missing native fixture model');
+  return { type: 'model', model };
+});
 server.workspaceHost.resolveWorkspace = async () => ({ cwd: '/workspace/A' });
 server.workspaceHost.classifyLocations = async paths => paths.map(() => ({ authorized: true, workspaceId: 'workspace-a' }));
 const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], toolCalls: true, reasoning: false };
@@ -27,7 +34,6 @@ if (new URL(location.href).searchParams.has('models')) {
   saved.model = cfg3Effective().effective_model;
   saved.transcript.entries = Array.from({ length: 20 }, (_, index) => ({ cursor: String(index + 1), item: { type: 'message' as const, message: { id: `saved-${index}`, role: index % 2 ? 'assistant' as const : 'user' as const, source: 'human' as const, content: [{ type: 'text' as const, text: `Saved message ${index}: ` + 'Previously saved conversation content. '.repeat(12) }] } } }));
   server.handlers.set('session/models', () => ({ type: 'models', catalog: { models: [{ model: saved.model!.configured.model, protocol: 'openai_responses' as const, contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'literal' }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, reasoningProfiles: [] }] } }));
-  server.handlers.set('session/model', () => ({ type: 'model', model: saved.model! }));
 }
 if (new URL(location.href).searchParams.has('cold-model')) {
   const models = ['fixture/native', 'fixture/second'].map(model => ({ model, protocol: 'openai_responses' as const, contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'literal' as const }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, reasoningProfiles: [{ id: 'low', enabled: true }, { id: 'high', enabled: true }], defaultReasoningProfile: 'high' }));

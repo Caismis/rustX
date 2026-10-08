@@ -465,6 +465,11 @@ fn mcp_candidate(
         crate::toml_authoring::parse(original.unwrap_or(b""))
             .map_err(|_| SettingsError::Invalid)?;
     if let Some(mut authored) = authored {
+        // Ordinary configuration authoring has no credential-write authority.
+        // Existing literals can only be retained from this exact CAS source.
+        if !authored.definition.env.is_empty() || !authored.definition.headers.is_empty() {
+            return Err(SettingsError::Invalid);
+        }
         let old = document.mcp_servers.get(&id);
         for (keys, target, previous) in [
             (
@@ -1176,5 +1181,80 @@ impl UserConfigManager {
         }
         self.read_source_settings(target)
             .map_err(|_| SettingsError::Committed)
+    }
+}
+
+#[cfg(test)]
+mod mcp_write_tests {
+    use super::*;
+
+    #[test]
+    fn removed_settings_controls_are_not_protocol_methods() {
+        for method in ["mcp/connect", "mcp/status", "mcp/disconnect"] {
+            let mut params = serde_json::json!({"target":{"kind":"user"}});
+            if method != "mcp/status" {
+                params["id"] = serde_json::json!("docs");
+            }
+            if method == "mcp/connect" {
+                params["expected_revision"] = serde_json::json!("revision");
+                params["refresh"] = serde_json::json!(false);
+            }
+            let request = serde_json::json!({"method":method,"params":params});
+            assert!(
+                serde_json::from_value::<crate::app_server::protocol::Method>(request).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn mcp_literals_are_retained_or_removed_but_never_written_by_generic_authoring() {
+        let original = br#"[mcp_servers.docs]
+url = "https://example.invalid/mcp"
+headers = { Authorization = "private-original" }
+"#;
+        let id = crate::runtime::identity::McpServerId::new("docs");
+        let retained: McpWrite = serde_json::from_value(serde_json::json!({
+            "definition":{"type":"http","url":"https://example.invalid/mcp"},
+            "retained_headers":["Authorization"]
+        }))
+        .unwrap();
+        let kept = mcp_candidate(Some(original), id.clone(), Some(retained.clone())).unwrap();
+        assert!(
+            String::from_utf8(kept)
+                .unwrap()
+                .contains("private-original")
+        );
+        let mut removed = retained.clone();
+        removed.retained_headers.clear();
+        let bytes = mcp_candidate(Some(original), id.clone(), Some(removed)).unwrap();
+        assert!(
+            !String::from_utf8(bytes)
+                .unwrap()
+                .contains("private-original")
+        );
+        let mut duplicate = retained.clone();
+        duplicate.retained_headers.push("Authorization".into());
+        assert!(matches!(
+            mcp_candidate(Some(original), id.clone(), Some(duplicate)),
+            Err(SettingsError::Invalid)
+        ));
+        for retain in [true, false] {
+            let mut replaced = retained.clone();
+            if !retain {
+                replaced.retained_headers.clear();
+            }
+            replaced
+                .definition
+                .headers
+                .insert("Authorization".into(), "private-new".into());
+            let error = mcp_candidate(Some(original), id.clone(), Some(replaced)).unwrap_err();
+            assert!(matches!(error, SettingsError::Invalid));
+            assert!(!format!("{error:?}").contains("private"));
+        }
+        // Retention never copies a credential out of another source.
+        assert!(matches!(
+            mcp_candidate(None, id, Some(retained)),
+            Err(SettingsError::Invalid)
+        ));
     }
 }

@@ -334,15 +334,6 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
         // Resolve again after asynchronous admission, immediately before submission.
         if ((await this.resolveWorkspace(id, endpoint)).cwd !== cwd) throw new Error('Workspace authority changed');
         const target = { kind: 'workspace' as const, directory: cwd };
-        if (operation.kind === 'mcp_status' || operation.kind === 'mcp_connect' || operation.kind === 'mcp_disconnect') {
-          const result = operation.kind === 'mcp_status'
-            ? await client.call('mcp/status', {target}, 'mcp_connections')
-            : operation.kind === 'mcp_connect'
-              ? await client.call('mcp/connect', {target,id:operation.id,expected_revision:operation.expected_revision,refresh:operation.refresh}, 'mcp_connections')
-              : await client.call('mcp/disconnect', {target,id:operation.id}, 'mcp_connections');
-          if ((await this.resolveWorkspace(id, endpoint)).cwd !== cwd) throw new Error('Workspace authority changed');
-          return {kind:'mcp',connections:result.connections};
-        }
         if (operation.kind === 'write') {
           // The native write is the linearization point. Once it acknowledges,
           // the mutation is committed and nothing below may turn it into a
@@ -364,8 +355,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
         return { kind: operation.kind, projection: result.projection };
       } finally { await client.close(); }
     };
-    // Connection work has its own native owner; never block configuration writes.
-    return operation.kind.startsWith('mcp_') ? run() : this.lane(id, run);
+    return this.lane(id, run);
   }
   async classifyLocations(cwds: readonly string[], endpoint: string, authorityId?: string): Promise<SessionLocation[]> {
     this.route(endpoint);

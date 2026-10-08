@@ -433,28 +433,6 @@ export type Request1 =
       };
     }
   | {
-      method: 'mcp/connect';
-      params: {
-        target: SourceTarget;
-        id: McpServerId;
-        expected_revision: string;
-        refresh: boolean;
-      };
-    }
-  | {
-      method: 'mcp/status';
-      params: {
-        target: SourceTarget;
-      };
-    }
-  | {
-      method: 'mcp/disconnect';
-      params: {
-        target: SourceTarget;
-        id: McpServerId;
-      };
-    }
-  | {
       method: 'configuration/sourcesRead';
       params: {
         target: SourceTarget;
@@ -761,10 +739,6 @@ export type SourceTarget =
       directory: string;
       kind: 'workspace';
     };
-/**
- * Identifies an MCP server bound to the runtime.
- */
-export type McpServerId = string;
 export type SourceMutation =
   | {
       document: string;
@@ -784,6 +758,10 @@ export type SourceMutation =
       authored?: AgentProfileDocument | null;
       kind: 'agent';
     };
+/**
+ * Identifies an MCP server bound to the runtime.
+ */
+export type McpServerId = string;
 /**
  * A validated reference, written as `$ENV_VAR` only in declared secret fields.
  */
@@ -1298,10 +1276,6 @@ export type MethodResult =
   | {
       projection: EffectiveConfiguration;
       type: 'effective_configuration';
-    }
-  | {
-      connections: McpConnectionSnapshot[];
-      type: 'mcp_connections';
     }
   | {
       projection: SourceSettings;
@@ -2827,23 +2801,6 @@ export type Origin =
   | {
       base: string;
       kind: 'process';
-    };
-export type McpConnectionStatus =
-  | {
-      status: 'connecting';
-    }
-  | {
-      tool_count: number;
-      status: 'connected';
-    }
-  | {
-      status: 'failed';
-    }
-  | {
-      status: 'timed_out';
-    }
-  | {
-      status: 'disconnected';
     };
 export type ProcessPolicyImpact = 'hot' | 'restart';
 /**
@@ -9792,11 +9749,6 @@ export interface AdmittedConfiguration {
   generation: RuntimeResourceRevision;
   model: SessionModelView;
   resources: CapabilityInspection1;
-}
-export interface McpConnectionSnapshot {
-  id: McpServerId;
-  revision: string;
-  state: McpConnectionStatus;
 }
 export interface SourceSettings {
   target: SourceTarget;

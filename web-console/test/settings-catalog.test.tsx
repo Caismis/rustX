@@ -78,27 +78,16 @@ it('a rejected quick write exposes its retained draft through detail rather than
   expect(writes(s)).toHaveLength(1);
 });
 
-it.each([
-  {state:{status:'connecting'},color:'connecting',label:'Connecting to MCP server…'},
-  {state:{status:'connected',tool_count:2},color:'connected',label:'MCP server is connected and available.'},
-  {state:{status:'failed'},color:'error',label:'MCP server is unavailable.'},
-  {state:{status:'timed_out'},color:'timeout',label:'MCP connection timed out.'},
-  {state:{status:'disconnected'},color:'disconnected',label:'MCP server is disconnected.'},
-] as const)('MCP displays native $color and the matching tooltip',async({state,color,label})=>{
-  const s=cfg3Client(async op=>{
-    if(op.method==='mcp/connect'||op.method==='mcp/status')return {type:'mcp_connections',connections:[{id:'search',revision:'mcp-1',state}]};
-  });
-  s.source.user.authored!.agent={tools:{sources:{search:'all'}}};
+it('MCP observation stays unknown and navigation and refresh only read configuration', async () => {
+  const s = cfg3Client();
+  s.source.user.authored!.agent = {tools:{sources:{search:'all'}}};
   await catalog(s);
-  const icon=await screen.findByRole('img',{name:label});
-  expect(icon.querySelector('[data-status]')?.getAttribute('data-status')).toBe(color);
-  fireEvent.mouseEnter(icon);
-  expect((await screen.findByRole('tooltip')).textContent).toContain(label);
-  expect(s.request.mock.calls.some(([op])=>op.method==='mcp/connect'&&op.params.expected_revision==='mcp-1')).toBe(true);
+  await screen.findByRole('img', {name:/MCP server status is not yet available/});
+  await openSettingsPage('MCP servers');
+  fireEvent.click(screen.getByRole('button', {name:'Refresh'}));
+  await settingsReady();
+  await openSettingsPage('General');
+  await openSettingsPage('MCP servers');
+  expect([...new Set(s.request.mock.calls.map(([op]) => op.method))]).toEqual(['configuration/sourcesRead']);
   expect(writes(s)).toHaveLength(0);
-});
-it('disabled MCP never starts a connection',async()=>{
- const s=cfg3Client();await catalog(s);
- await screen.findByRole('img',{name:'MCP server is disabled.'});
- expect(s.request.mock.calls.some(([op])=>op.method==='mcp/connect')).toBe(false);
 });

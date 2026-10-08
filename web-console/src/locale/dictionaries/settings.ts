@@ -1,20 +1,11 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
-  "mcp.headers": "Request headers (optional)",
-  "mcp.headers-placeholder": "{\n  \"Authorization\": \"Bearer your-token\"\n}",
-  "mcp.env-placeholder": "{\n  \"MY_API_KEY\": \"your-key\"\n}",
+  "mcp.references-only": "Use environment references ($VARIABLE). Existing literal values can be retained or removed; literal replacement requires the native source owner.",
+  "mcp.headers": "Header environment references (optional)",
 
-  "mcp.status-connected": "MCP server is connected and available.",
-  "mcp.status-connecting": "Connecting to MCP server…",
-  "mcp.status-disabled": "MCP server is disabled.",
-  "mcp.status-disconnected": "MCP server is disconnected.",
-  "mcp.status-timeout": "MCP connection timed out.",
-  "mcp.connection-error": "Could not read MCP connection status. Refresh to retry.",
 
-  "mcp.status-error": "MCP server is unavailable.",
   "mcp.status-invalid": "The server configuration is invalid.",
   "mcp.status-unknown": "MCP server status is not yet available.",
-  "mcp.status-warning": "MCP server needs attention.",
 
   "mcp.name-mismatch": "The imported name differs from the server being edited.",
   "mcp.back": "← MCP servers",
@@ -41,12 +32,11 @@ export const en = {
   "mcp.apply-json": "Use configuration",
   "mcp.invalid-json": "Invalid MCP configuration: {error}",
   "mcp.duplicate": "This name already exists in this scope.",
-  "mcp.env": "Environment variables (optional)",
+  "mcp.env": "Environment references (optional)",
   "mcp.scope": "Scope",
   "mcp.remove": "Delete server",
   "mcp.remove-confirm": "Delete this MCP server?",
   "mcp.remove-help": "Remove the definition from the current scope.",
-  "mcp.retained": "Existing secret values are retained by key and are never shown here.",
 
   "catalog.enable": "Allow {name} for the agent",
   "catalog.review-selection": "Manage selection",
@@ -615,21 +605,12 @@ export const en = {
 } as const;
 export type SettingsKey = keyof typeof en;
 export const zh = {
-  "mcp.headers": "请求头（可选）",
-  "mcp.headers-placeholder": "{\n  \"Authorization\": \"Bearer your-token\"\n}",
-  "mcp.env-placeholder": "{\n  \"MY_API_KEY\": \"your-key\"\n}",
+  "mcp.references-only": "使用环境变量引用（$VARIABLE）。已有字面值可保留或移除；替换字面值需由原生配置所有者操作。",
+  "mcp.headers": "请求头环境变量引用（可选）",
 
-  "mcp.status-connected": "MCP 服务器已连接并可用。",
-  "mcp.status-connecting": "正在连接 MCP 服务器…",
-  "mcp.status-disabled": "MCP 服务器已停用。",
-  "mcp.status-disconnected": "MCP 服务器已断开。",
-  "mcp.status-timeout": "MCP 服务器连接超时。",
-  "mcp.connection-error": "无法获取 MCP 连接状态，请刷新重试。",
 
-  "mcp.status-error": "MCP 服务器不可用。",
   "mcp.status-invalid": "服务器配置无效。",
   "mcp.status-unknown": "暂时无法获取 MCP 服务器状态。",
-  "mcp.status-warning": "MCP 服务器需要处理。",
 
   "mcp.name-mismatch": "导入的名称与正在编辑的服务器不一致。",
   "mcp.back": "← MCP 服务器",
@@ -656,12 +637,11 @@ export const zh = {
   "mcp.apply-json": "使用此配置",
   "mcp.invalid-json": "MCP 配置无效：{error}",
   "mcp.duplicate": "当前范围已有同名服务器。",
-  "mcp.env": "环境变量（可选）",
+  "mcp.env": "环境变量引用（可选）",
   "mcp.scope": "作用域",
   "mcp.remove": "删除服务器",
   "mcp.remove-confirm": "删除此 MCP 服务器？",
   "mcp.remove-help": "从当前作用域移除服务器定义。",
-  "mcp.retained": "已有密钥值按名称保留，不会在此显示。",
 
   "catalog.enable": "允许智能体使用 {name}",
   "catalog.review-selection": "管理可用范围",

@@ -17,11 +17,7 @@
 .open { display:flex; align-items:center; gap:12px; min-width:0; flex:1; background:none; border:0; border-radius:8px; color:inherit; text-align:left; padding:0; cursor:pointer; font:inherit; font-size:14px; line-height:22px; }
 .icon { width:32px; height:32px; display:grid; place-items:center; flex:none; position:relative; border-radius:10px; background:var(--dsw-alias-bg-layer-1); }
 .dot { position:absolute; right:-2px; bottom:-2px; width:8px; height:8px; border:2px solid var(--dsw-alias-bg-layer-2); border-radius:50%; background:var(--dsw-alias-label-tertiary); box-sizing:content-box; }
-.dot[data-status=connected] { background:var(--dsw-alias-state-success-primary); }
-.dot[data-status=timeout], .dot[data-status=invalid], .dot[data-status=error] { background:var(--dsw-alias-state-error-primary); }
-.dot[data-status=warning] { background:var(--dsw-alias-state-warn-primary); }
-.dot[data-status=connecting] { background:transparent; border:2px solid var(--dsw-alias-state-warn-primary); border-right-color:transparent; animation:mcp-connecting 0.8s linear infinite; }
-@keyframes mcp-connecting { to { transform:rotate(360deg); } }
+.dot[data-status=invalid] { background:var(--dsw-alias-state-error-primary); }
 .content { display:flex; flex-direction:column; gap:2px; min-width:0; }
 .content > * { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .content > :first-child { font-weight:500; }
@@ -55,4 +51,3 @@
   .row,.form { padding:12px; }
   .form .footer { margin-inline:-12px; padding-inline:12px; }
 }
-@media(prefers-reduced-motion:reduce) { .dot[data-status=connecting] { animation:none; } }

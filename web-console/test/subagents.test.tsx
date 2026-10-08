@@ -64,5 +64,28 @@ it('large child lists bound background meter requests without blocking the paren
     server.held.delete('agent/statistics');
     for (const row of reads()) server.reply(row.request);
   });
-  await waitFor(() => expect(reads()).toHaveLength(80));
+  await waitFor(() => expect(reads()).toHaveLength(34));
+});
+
+it('an obsolete attachment cannot publish late meters or overwrite its successor', async () => {
+  const {cfg3Client,cfg3Session,cfg3Target}=await import('./cfg3-fixture');
+  const {useSubagents}=await import('../src/app/agent/subagent-context');
+  let release!: (value: import('../../protocol/app-server/v38').MethodResult)=>void;
+  let calls=0;
+  const s=cfg3Client(async op=>{
+    if(op.method!=='agent/statistics')return;
+    if(++calls===1)return new Promise(resolve=>{release=resolve;});
+    return {type:'agent_statistics',metrics:{...agentMetrics,duration:{settled_ms:'999',active:null}}};
+  });
+  const publish=(attachment:string)=>s.publish({views:{[cfg3Session]:{...s.client.getSnapshot().views[cfg3Session],target:{...cfg3Target,attachment_id:attachment},snapshot:{...snapshot(),agents:[agent]}}}});
+  publish('old');
+  function Meter(){return <output>{useSubagents()?.metrics.child?.duration.settled_ms ?? 'unknown'}</output>;}
+  const ui=render(<SubagentScope client={s.client} sessionId={cfg3Session}><Meter/></SubagentScope>);
+  await waitFor(()=>expect(calls).toBe(1));
+  await act(async()=>publish('successor'));
+  await ui.findByText('999');
+  await act(async()=>release({type:'agent_statistics',metrics:agentMetrics}));
+  expect(ui.getByText('999')).toBeTruthy();expect(calls).toBe(2);
+  ui.rerender(<SubagentScope client={s.client} sessionId={cfg3Session}><Meter/></SubagentScope>);
+  expect(calls).toBe(2);
 });

@@ -6903,7 +6903,7 @@ and retained workspace facts do not manufacture transcript completion facts.
 The TUI has one disposable child page, fenced by parent attachment epoch and
 child selection/read generation. Reconnect reconstructs from current authority;
 Esc closes presentation without runtime mutation. Child HITL remains routed to
-the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-agent-conversations-v35).
+the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-agent-conversations-v38).
 
 ## Image Tool and Bash presentation (#412)
 
@@ -6937,5 +6937,16 @@ Timing uses the existing native generation evidence and foreground tool spans.
 Elapsed working time sums Attempt intervals across activations, excluding idle
 gaps. An unfinished interval advances in the UI only when its start belongs to
 the currently active activation; otherwise it freezes at the last observed
-fact. Native statistics reads use their own lock and do not gate parent attach,
-snapshots or input admission. The TUI transport recognizes the same read method.
+fact. Durable store opening, frontier, replay and occupancy reads execute on the
+blocking pool. The cache map lock only locates a per-Conversation fold; each fold
+has its own lock, so a blocked child does not serialize unrelated meter reads or
+hold up async dispatch. The TUI transport recognizes the same read method.
+
+The Web meter scheduler retains at most two in-flight reads and 32 pending
+identities, with one latest observation requirement per exact connection,
+attachment and Agent identity. Cleanup deletes obsolete queued work before
+dispatch; response publication checks the same identity. Excess oldest queued
+observations are discarded and their meters remain unknown until a subsequent
+observation requests them. Presentation-only rerenders and child selection do
+not create requests. Live observation revisions only invalidate a reading and
+never contribute usage or durable timing evidence.

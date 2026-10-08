@@ -152,7 +152,7 @@ it('S1-15 an MCP literal environment value is never projected back into its edit
   fireEvent.click(screen.getByRole('tab', { name: 'MCP servers' }));
   await openResourceRow('search');
   // Native cleared the literal map and named only the identities it retained.
-  expect(within(screen.getByRole('group', { name: 'Literal environment' })).queryByLabelText('TOKEN')).toBeNull();
+  expect(screen.queryByRole('group', { name: 'Literal environment' })).toBeNull();
   expect((within(screen.getByRole('group', { name: 'Retain existing environment keys' })).getByRole('textbox', { name: 'Retain existing environment keys 1' }) as HTMLInputElement).value).toBe('TOKEN');
   expect(document.body.innerHTML).not.toContain(SENTINEL);
   expect(retained(s)).not.toContain(SENTINEL);

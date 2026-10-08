@@ -43,7 +43,7 @@ test('stream publications and a turn-local clock preserve chrome identity, geome
     expect({ header: await header!.boundingBox(), card: await card.boundingBox() }).toEqual(geometry);
   }
   await page.clock.runFor(5000);
-  await expect(page.getByRole('button', { name: 'Deep diving for 5s', exact: true })).toBeVisible();
+  await expect(page.locator('[data-chat-running]').getByText('Deep diving for 5s ···', { exact: true })).toBeVisible();
   expect({ header: await header!.boundingBox(), card: await card.boundingBox() }).toEqual(geometry);
   await expect(input).toBeFocused(); await expect(input).toHaveValue('Keep this draft');
   expect(await input.evaluate((node: HTMLTextAreaElement) => [node.selectionStart, node.selectionEnd])).toEqual([3, 7]);
@@ -66,7 +66,7 @@ for (const mode of ['empty', 'preview', 'named', 'delete', 'other-uncertain', 'b
   }
   if (mode === 'other-uncertain') {
     await expect(page.getByLabel('Session status')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: /^Deep diving/ }).first()).toBeVisible();
+    await expect(page.getByRole('status').filter({ hasText: 'Deep diving' }).first()).toBeVisible();
     await expect(page.locator('button[data-session-id="B"]')).toContainText('Needs verification');
   }
   if (mode === 'delete') {
@@ -141,7 +141,7 @@ test('Session product states stay concise and recovery evidence remains in Inspe
   for (const mode of ['idle', 'queued', 'stopping', 'reconnect', 'uncertain'] as const) {
     await page.goto(`${fixtureOrigin}/test/fixtures/shell.html`);
     await expect(page.getByLabel('Session status')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: /^Deep diving/ }).first()).toBeVisible();
+    await expect(page.getByRole('status').filter({ hasText: 'Deep diving' }).first()).toBeVisible();
     await page.evaluate(mode => window.sessionFixture.state(mode), mode);
     const expected = { idle: undefined, queued: 'Queued', stopping: 'Stopping…', reconnect: 'Connection interrupted', uncertain: 'Needs verification' }[mode];
     if (expected) await expect(page.getByLabel('Session status')).toContainText(expected);

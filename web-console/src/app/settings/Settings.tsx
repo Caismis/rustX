@@ -175,8 +175,8 @@ function SettingsDialog({ client, host, theme = 'system', setTheme, connection, 
         `rustx.toml` closes the semantic units it authors and says nothing
         about the MCP or named-Agent documents, each of which is its own
         authority and reports its own state. */}
-    {current === 'mcp' && <McpPage connection={{client,host,endpoint:transport.endpoint ?? '',workspaceId:activeTarget.kind === 'workspace' ? activeTarget.id : undefined,active:editable}} source={source} scope={scope} revision={structured ? config.revision : undefined}
-      focus={focus.mcp} onFocus={onFocus} refresh={() => actor.send({type:'RECONCILE'})} refreshing={busy || reconciling}
+    {current === 'mcp' && <McpPage source={source} scope={scope} revision={structured ? config.revision : undefined}
+      focus={focus.mcp} onFocus={onFocus} refresh={() => actor.send({type:'REFRESH'})} refreshing={busy || reconciling}
       scopeControl={<SettingsScopeMenu target={mcpTarget} host={host} onSelect={next => { onFocus(undefined); setMcpTarget(next); }}/>} />}
     {current === 'extensions' && <ExtensionsPage source={source} scope={scope}
       revision={structured ? config.revision : undefined} models={models} focus={focus.extensions} onFocus={onFocus}

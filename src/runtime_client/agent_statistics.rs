@@ -38,6 +38,31 @@ pub struct AgentActiveInterval {
     pub running: bool,
 }
 
+/// Cache synchronization is per durable Conversation, never per process.
+#[derive(Default)]
+pub(crate) struct StatisticsCache(
+    std::sync::Mutex<
+        std::collections::BTreeMap<
+            crate::runtime::identity::ConversationId,
+            std::sync::Arc<std::sync::Mutex<StatisticsFold>>,
+        >,
+    >,
+);
+impl StatisticsCache {
+    pub(crate) fn entry(
+        &self,
+        id: crate::runtime::identity::ConversationId,
+    ) -> std::sync::Arc<std::sync::Mutex<StatisticsFold>> {
+        std::sync::Arc::clone(
+            self.0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .entry(id)
+                .or_default(),
+        )
+    }
+}
+
 #[derive(Default, Clone)]
 pub(crate) struct StatisticsFold {
     through: u64,
@@ -112,9 +137,11 @@ impl StatisticsFold {
     fn settle(&mut self, at: DateTime<Utc>) {
         if let Some(active) = self.view.duration.active.take() {
             self.view.duration.settled_ms = self.view.duration.settled_ms.saturating_add(
-                at.signed_duration_since(active.started_at)
-                    .num_milliseconds()
-                    .max(0) as u64,
+                u64::try_from(
+                    at.signed_duration_since(active.started_at)
+                        .num_milliseconds(),
+                )
+                .unwrap_or(0),
             );
         }
         self.active_attempt = None;
@@ -126,10 +153,11 @@ impl StatisticsFold {
             if let Some(active) = &self.view.duration.active {
                 self.settle(active.observed_at);
             }
-        } else if id.is_some() && id == self.active_attempt {
-            if let Some(active) = &mut self.view.duration.active {
-                active.observed_at = active.observed_at.max(at);
-            }
+        } else if id.is_some()
+            && id == self.active_attempt
+            && let Some(active) = &mut self.view.duration.active
+        {
+            active.observed_at = active.observed_at.max(at);
         }
         let Some(id) = id else {
             return;
@@ -167,11 +195,11 @@ impl StatisticsFold {
                 }
             }
             RuntimeEvent::ToolExecutionStarted { tool_call_id, .. } => {
-                self.activity.tool_started(id, tool_call_id.clone(), at)
+                self.activity.tool_started(id, tool_call_id.clone(), at);
             }
             RuntimeEvent::ToolExecutionCompleted { tool_call_id, .. }
             | RuntimeEvent::ToolExecutionFailed { tool_call_id, .. } => {
-                self.activity.tool_settled(id, tool_call_id.clone(), at)
+                self.activity.tool_settled(id, tool_call_id.clone(), at);
             }
             RuntimeEvent::AttemptCompleted { .. }
             | RuntimeEvent::AttemptCancelled { .. }
@@ -210,6 +238,68 @@ impl StatisticsFold {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+    #[tokio::test(flavor = "current_thread")]
+    async fn independent_conversations_do_not_share_the_blocked_fold_lock() {
+        use crate::durable::SqliteConversationStore;
+        use crate::runtime::identity::ConversationId;
+        use std::sync::Arc;
+        let cache = Arc::new(StatisticsCache::default());
+        let a = ConversationId::generate();
+        let b = ConversationId::generate();
+        let held = cache.entry(a.clone());
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let holder = tokio::task::spawn_blocking(move || {
+            let _lock = held.lock().unwrap();
+            entered_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        entered_rx.await.unwrap();
+        let owner = Arc::clone(&cache);
+        let (requested_tx, requested_rx) = tokio::sync::oneshot::channel();
+        let waiting_read = tokio::task::spawn_blocking(move || {
+            let fold = owner.entry(a);
+            requested_tx.send(()).unwrap();
+            let _lock = fold.lock().unwrap();
+        });
+        requested_rx.await.unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let store =
+            SqliteConversationStore::open(b.clone(), &directory.path().join("b.sqlite")).unwrap();
+        let independent = tokio::task::spawn_blocking(move || {
+            let attempt = AttemptId::new("b");
+            store
+                .append_event(crate::events::types::RuntimeEventEnvelope {
+                    schema_version: 1,
+                    event_id: crate::runtime::identity::EventId::new("b-start"),
+                    sequence: 0,
+                    conversation_id: b.clone(),
+                    attempt_id: Some(attempt.clone()),
+                    turn_id: None,
+                    timestamp: Utc::now(),
+                    event: RuntimeEvent::AttemptStarted {
+                        attempt_id: attempt,
+                    },
+                })
+                .unwrap();
+            let through = store.presentation_frontier().unwrap();
+            cache
+                .entry(b)
+                .lock()
+                .unwrap()
+                .read(&store, through, None)
+                .unwrap()
+        })
+        .await
+        .unwrap();
+        assert_eq!(independent.statistics.turns, 1);
+        assert!(!independent.duration.active.unwrap().running);
+        assert!(!waiting_read.is_finished());
+        release_tx.send(()).unwrap();
+        holder.await.unwrap();
+        waiting_read.await.unwrap();
+    }
+
     #[test]
     fn timeout_and_abandoned_intervals_never_include_inactive_gaps() {
         let mut fold = StatisticsFold::default();

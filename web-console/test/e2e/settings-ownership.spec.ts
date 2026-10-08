@@ -33,6 +33,7 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
    // The User source authors every Native Tool, so this Workspace displays the
    // native effective value while authoring none of it.
    await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
+   await settings.getByRole('form', { name: 'Native Tools', exact: true }).getByRole('button', { name: 'Configuration details', exact: true }).click();
    await expect(settings.getByRole('form', { name: 'Native Tools', exact: true }).getByText('Inherited — no Workspace override')).toBeVisible();
    await expect(settings.getByRole('button', { name: 'Save Native Tools', exact: true })).toBeDisabled();
    // An explicit edit against that displayed value is Workspace A's own draft.

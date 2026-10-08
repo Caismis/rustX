@@ -3,7 +3,6 @@
 //! Source content is reread per call; admitted configurations own their capture.
 
 pub mod application;
-pub mod mcp_connections;
 pub mod settings;
 
 use crate::bounded_file::read_bounded;

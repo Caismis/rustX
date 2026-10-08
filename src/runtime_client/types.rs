@@ -631,7 +631,8 @@ impl RuntimeClientRequest {
     pub fn requires_async(&self) -> bool {
         matches!(
             self,
-            Self::CompactContext { .. }
+            Self::AgentStatistics { .. }
+                | Self::CompactContext { .. }
                 | Self::InteractionRespond { .. }
                 | Self::JobWait { .. }
                 | Self::JobCancel { .. }

@@ -397,7 +397,6 @@ impl SessionController {
     > {
         let access = self.acquire_session(id, node).await?;
         tokio::task::spawn_blocking(move || {
-            use crate::durable::ConversationStore as _;
             let store = crate::durable::SqliteConversationStore::open_existing(
                 access.node.conversation_id.clone(),
                 &access.database_path,
@@ -455,7 +454,6 @@ impl SessionController {
             )
             .map_err(SessionError::Store)?
             .with_lifecycle(access.allocation);
-            use crate::durable::ConversationStore as _;
             let through = store.presentation_frontier().map_err(SessionError::Store)?;
             let occupancy =
                 crate::context::occupancy::read(&store, through).map_err(SessionError::Store)?;

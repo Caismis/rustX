@@ -104,21 +104,9 @@ impl TraceProjection<'_> {
                 let messages = self
                     .store
                     .load_messages(&message_ids[..message_ids.len().min(ADOPTED_MESSAGE_LIMIT)])?;
-                // An adopted provider-user batch is an agent message only when
-                // every canonical input names the same sender. Never infer a
-                // sender from preview text, adjacency, or a partial batch.
-                if messages.len() == message_ids.len()
-                    && let Some(crate::message::types::MessageBlock::User(first)) = messages.first()
-                    && let crate::message::types::UserSource::Agent { agent_id: sender } = &first.source
-                    && messages.iter().all(|message| matches!(message,
-                        crate::message::types::MessageBlock::User(user) if user.source == first.source))
-                {
-                    if identity_fits(sender.as_str()) {
-                        agent_id = Some(sender.clone());
-                    } else {
-                        truncated = true;
-                    }
-                }
+                let (sender, overflow) = adopted_sender(&messages, message_ids.len());
+                agent_id = sender;
+                truncated |= overflow;
                 for message in messages {
                     if preview.is_none() {
                         preview = message_preview(&message);
@@ -397,5 +385,28 @@ pub(super) fn bound_record(record: &mut TraceRecord) {
         record.request = None;
         record.tool = None;
         record.attachments.clear();
+    }
+}
+
+/// A sender is evidence only when the complete adopted batch agrees.
+fn adopted_sender(
+    messages: &[crate::message::types::MessageBlock],
+    expected: usize,
+) -> (Option<crate::runtime::identity::AgentId>, bool) {
+    use crate::message::types::{MessageBlock, UserSource};
+    if messages.len() == expected
+        && let Some(MessageBlock::User(first)) = messages.first()
+        && let UserSource::Agent { agent_id } = &first.source
+        && messages.iter().all(
+            |message| matches!(message, MessageBlock::User(user) if user.source == first.source),
+        )
+    {
+        if identity_fits(agent_id.as_str()) {
+            (Some(agent_id.clone()), false)
+        } else {
+            (None, true)
+        }
+    } else {
+        (None, false)
     }
 }
