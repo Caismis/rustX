@@ -246,6 +246,23 @@ export type Request1 =
       };
     }
   | {
+      method: 'session/traceHistory';
+      params: {
+        session_id: SessionId;
+        node_id?: SessionNodeId | null;
+        before?: TraceCursor | null;
+        limit: number;
+      };
+    }
+  | {
+      method: 'session/traceHistoryDetail';
+      params: {
+        session_id: SessionId;
+        node_id?: SessionNodeId | null;
+        record_id: string;
+      };
+    }
+  | {
       method: 'session/summary';
       params: {
         session_id: SessionId;
@@ -1092,6 +1109,16 @@ export type MethodResult =
       conversation_id: ConversationId;
       window: ConversationWindow;
       type: 'session_history';
+    }
+  | {
+      conversation_id: ConversationId;
+      page: TracePage;
+      type: 'session_trace_history';
+    }
+  | {
+      conversation_id: ConversationId;
+      detail?: TraceDetail | null;
+      type: 'session_trace_history_detail';
     }
   | {
       window: ConversationWindow;

@@ -1570,6 +1570,19 @@ Session errors. Connection preparation may run concurrently. Clients display thi
 as read-only history until attachment, and ignore late reads after attachment or
 navigation replacement. Only a submitted local prompt displays connecting feedback.
 
+`session/traceHistory { session_id, node_id?, before?, limit }` and
+`session/traceHistoryDetail { session_id, node_id?, record_id }` provide the same
+cold-read path for trajectory pages and inspection details. They return
+`session_trace_history { conversation_id, page }` and
+`session_trace_history_detail { conversation_id, detail }`. Pages are bounded to
+1..=32 records; detail identities to 256 bytes. Both retain allocation access and
+reuse the native durable TraceProjection without loading configuration or tools.
+The WebUI fences preview reads by navigation, connection and attachment epoch,
+and replaces them with the live snapshot when initialization completes. Prompts
+submitted during initialization stay locally owned until attachment, display
+connecting feedback immediately, and are admitted once; connection failure keeps
+the unsent draft recoverable.
+
 ### Bounded history windows and Host execution retirement (v37)
 
 `ConversationWindowAt` is `latest`, `older {before, cut?}`,

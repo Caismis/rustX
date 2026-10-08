@@ -221,7 +221,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     if (!options.preserveDraft && !options.commitDraft) setDraftBinding(value => value + 1);
     // Remount/classification of the same pending Conversation is observation,
     // not a new route gesture. Explicit route changes still retire its fence.
-    if (!(options.preserveDraft && id === selected && id && client.firstSubmissions.session(id))) navigation.invalidate();
+    if (!(options.preserveDraft && id === selected)) navigation.invalidate();
     const current = navigation.capture();
     const generation = state.generation;
     setCenter(id ? { kind: 'session', sessionId: id } : { kind: 'new-conversation' });

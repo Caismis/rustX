@@ -330,3 +330,52 @@ it('files selected before first attachment retain exact draft identity and submi
   await act(async()=>server.reply(start));
   expect(owner.snapshot()).toHaveLength(0);upload.mockRestore();
 });
+
+it('cold sessions accept a prompt while initialization is held, then admit it exactly once', async () => {
+  await server.connect(); nativeModel();
+  server.held.add('session/attach'); server.held.add('turn/start');
+  await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+  const opening = await server.waitFor('session/attach', 1);
+  const message = input();
+  expect(message.disabled).toBe(false);
+  fireEvent.change(message, { target: { value: 'send while connecting' } });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
+  expect(screen.getByText('send while connecting')).toBeTruthy();
+  expect(document.querySelector('[data-first-submission="attaching"]')?.textContent).toContain('Connecting');
+  expect(message.value).toBe('');
+  expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(0);
+  await act(async () => fireEvent.click(screen.getByRole('tab', { name: 'Trajectory' })));
+  expect(screen.getByRole('searchbox')).toBeTruthy();
+  await act(async () => fireEvent.click(screen.getByRole('tab', { name: 'Chat' })));
+  expect(screen.getByText('send while connecting')).toBeTruthy();
+  await act(async () => server.reply(opening));
+  const start = await server.waitFor('turn/start', 1);
+  expect(JSON.stringify(start.params)).toContain('send while connecting');
+  await act(async () => server.reply(start));
+  expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
+  expect(server.requests.filter(row => row.request.method === 'session/create')).toHaveLength(0);
+});
+
+it('a cold connection failure keeps the unsent prompt recoverable without dispatching a turn', async () => {
+  await server.connect(); nativeModel(); server.held.add('session/attach');
+  await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+  const opening = await server.waitFor('session/attach', 1);
+  fireEvent.change(input(), { target: { value: 'retain on connection failure' } });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
+  await act(async () => server.socket.deliver({ jsonrpc: '2.0', id: opening.id, error: { code: -32000, message: 'Runtime initialization failed' } }));
+  expect(input().value).toBe('retain on connection failure');
+  expect(server.client.firstSubmissions.session('A')?.phase).toBe('failed');
+  expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(0);
+});
+
+it('restoring a cold selected view does not retire its own in-flight admission', async () => {
+  await server.connect(); nativeModel(); server.held.add('session/attach');
+  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
+  await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
+  await server.waitFor('session/attach', 1);
+  expect(input().disabled).toBe(false);
+  expect(server.client.getSnapshot().views.A.preview?.conversationId).toBe('conversation-A');
+  expect(server.client.getSnapshot().views.A.tracePreview?.conversationId).toBe('conversation-A');
+});

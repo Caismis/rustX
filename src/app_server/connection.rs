@@ -529,6 +529,47 @@ impl AppServerConnection {
                     window,
                 })
             }
+            Method::SessionTraceHistory {
+                session_id,
+                node_id,
+                before,
+                limit,
+            } => {
+                if limit == 0 || limit > crate::runtime_client::trace::TRACE_PAGE_LIMIT {
+                    return Err(domain(ErrorData::InvalidParams));
+                }
+                let (conversation_id, page) = self
+                    .sessions
+                    .read_trace(&session_id, node_id.as_ref(), move |projection| {
+                        projection.page(before.as_ref(), limit)
+                    })
+                    .await
+                    .map_err(session_error)?;
+                Ok(MethodResult::SessionTraceHistory {
+                    conversation_id,
+                    page,
+                })
+            }
+            Method::SessionTraceHistoryDetail {
+                session_id,
+                node_id,
+                record_id,
+            } => {
+                if record_id.len() > 256 {
+                    return Err(domain(ErrorData::InvalidParams));
+                }
+                let (conversation_id, detail) = self
+                    .sessions
+                    .read_trace(&session_id, node_id.as_ref(), move |projection| {
+                        projection.detail(&record_id)
+                    })
+                    .await
+                    .map_err(session_error)?;
+                Ok(MethodResult::SessionTraceHistoryDetail {
+                    conversation_id,
+                    detail: detail.map(Box::new),
+                })
+            }
             Method::SessionRead { session_id } => Ok(MethodResult::Session {
                 session: self
                     .sessions

@@ -235,6 +235,20 @@ pub enum Method {
         at: crate::durable::reading::ConversationWindowAt,
         limit: usize,
     },
+    /// Inspect durable trace without composing a runtime or acquiring control.
+    #[serde(rename = "session/traceHistory")]
+    SessionTraceHistory {
+        session_id: SessionId,
+        node_id: Option<SessionNodeId>,
+        before: Option<crate::runtime_client::trace::TraceCursor>,
+        limit: usize,
+    },
+    #[serde(rename = "session/traceHistoryDetail")]
+    SessionTraceHistoryDetail {
+        session_id: SessionId,
+        node_id: Option<SessionNodeId>,
+        record_id: String,
+    },
     #[serde(rename = "session/summary")]
     SessionSummary { session_id: SessionId },
     #[serde(rename = "session/name")]
@@ -545,6 +559,14 @@ pub enum MethodResult {
     SessionHistory {
         conversation_id: ConversationId,
         window: crate::runtime_client::snapshot::ConversationWindow,
+    },
+    SessionTraceHistory {
+        conversation_id: ConversationId,
+        page: crate::runtime_client::trace::TracePage,
+    },
+    SessionTraceHistoryDetail {
+        conversation_id: ConversationId,
+        detail: Option<Box<crate::runtime_client::trace::TraceDetail>>,
     },
     TranscriptWindow {
         window: crate::runtime_client::snapshot::ConversationWindow,

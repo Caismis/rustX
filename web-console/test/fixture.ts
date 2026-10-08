@@ -156,6 +156,8 @@ export class Server {
       case 'server/info': result = { type: 'server_info', capabilities: this.capabilities }; break;
       case 'session/summary': result = { type: 'session_summary', summary: this.summary(request.params.session_id) }; break;
       case 'session/list': if (request.params.limit > 32) throw new Error('Native Session page limit is 32'); result = { type: 'sessions', sessions: [...this.snapshots.keys()].map(id => this.summary(id)).sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).filter(row => !request.params.query || [row.id, row.name, row.preview].some(text => text?.toLowerCase().includes(request.params.query!.toLowerCase()))).slice(request.params.offset, request.params.offset + request.params.limit) }; break;
+      case 'session/traceHistory': result = { type: 'session_trace_history', conversation_id: this.snapshots.get(id)!.conversation_id, page: this.snapshots.get(id)!.trace }; break;
+      case 'session/traceHistoryDetail': result = { type: 'session_trace_history_detail', conversation_id: this.snapshots.get(id)!.conversation_id, detail: null }; break;
       case 'session/history': {
         const history = (request.params.node_id ? this.nodeSnapshots.get(request.params.node_id) : undefined) ?? this.snapshots.get(request.params.session_id)!;
         if (!history) throw new RpcFailure({ code: -32000, message: 'Unknown Session' });

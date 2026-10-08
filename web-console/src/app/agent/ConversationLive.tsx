@@ -28,6 +28,10 @@ export function ConversationLive({ client, sessionId, mode, disabled, onHistoric
   const tx=useTranslation(), viewport=useRef<ChatViewport>(null), [active,setActive]=useState<string | null>();
   const submission = useSyncExternalStore(client.firstSubmissions.subscribe, () => sessionId ? client.firstSubmissions.session(sessionId) : undefined);
   const waiting = !!submission && ['attaching', 'uploading', 'admitting'].includes(submission.phase);
+  const tracePreview = useClientSelector(client, state => {
+    const view = sessionId ? state.views[sessionId] : undefined;
+    return mode === 'trajectory' && view?.attachment === 'attaching' ? view.tracePreview : undefined;
+  });
   const view = useClientSelector(client, state => {
     const view = sessionId ? state.views[sessionId] : undefined;
     if (!view) return undefined;
@@ -40,6 +44,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, onHistoric
       safe: lineageSwitchSafe(view), disabled: disabled || view.attachment !== 'attached' || view.attachmentIntent !== 'wanted'
         || !!view.modelMutation || !!view.snapshot?.shutting_down || !!view.snapshot?.durability_failure };
   }, shallowEqual);
+  if (sessionId && tracePreview) return <Trajectory key={sessionId} cache={tracePreview.cache} onSelect={id => client.selectTrace(sessionId, id)} onLoadDetail={id => { void client.loadTraceDetail(sessionId, id); }} loadEarlier={() => void client.loadEarlierTrace(sessionId).catch(() => {})}/>;
   if (!view) return sessionId ? <ChatViewport latestLabel={tx('agent:agent-transcript.return-to-latest')}><PendingMessage client={client} sessionId={sessionId}/></ChatViewport> : null;
   return mode === 'trajectory' && view.trace
     ? <Trajectory key={`${view.id}:${view.target?.attachment_id}`} cache={view.trace} onSelect={id => client.selectTrace(view.id, id)} onLoadDetail={id => { void client.loadTraceDetail(view.id, id); }} loadEarlier={() => void client.loadEarlierTrace(view.id).catch(() => {})}/>

@@ -142,6 +142,8 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   "session/switchNode": "side_effecting",
   "session/transcript": "read",
   "session/history": "read",
+  "session/traceHistory": "read",
+  "session/traceHistoryDetail": "read",
   "session/turns": "read",
   "agent/transcript": "read",
   "session/trace": "read",

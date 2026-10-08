@@ -76,6 +76,7 @@ export interface SessionView {
   history?: TranscriptCache;
   /** Read-only durable history, never an execution snapshot or control claim. */
   preview?: { conversationId: string; history: TranscriptCache };
+  tracePreview?: { conversationId: string; cache: TraceCache };
   turnOutline?: { paging: OutlinePagingIntent; page?: ConversationTurnPage; loading?: boolean; error?: string };
   turnNavigation?: { intent: number; pending?: string; error?: string };
   settings?: SessionPersistentState;
@@ -218,7 +219,7 @@ function goalRefusal(error: unknown) {
 const READS = new Set<Request1['method']>([
   'session/turns', 'session/uploadStatus',
   'artifact/read', 'initialize', 'server/info', 'session/list', 'session/read', 'session/summary', 'session/tree', 'session/deletePreview',
-  'session/history', 'session/configuration', 'session/snapshot', 'session/transcript', 'session/trace', 'session/traceDetail', 'session/settings', 'session/model', 'session/models',
+  'session/history', 'session/traceHistory', 'session/traceHistoryDetail', 'session/configuration', 'session/snapshot', 'session/transcript', 'session/trace', 'session/traceDetail', 'session/settings', 'session/model', 'session/models',
   'mcp/status', 'configuration/sourcesRead', 'session/effectiveConfiguration', 'resources/read', 'job/status', 'job/list', 'job/wait', 'agent/status', 'agent/list', 'agent/wait', 'agent/transcript', 'session/boundaries',
 ]);
 /** Domain settlement has no RPC response deadline. Separate bounded lanes keep
@@ -972,7 +973,7 @@ export class AppServerClient {
       if (!navigationCurrent() || this.state.views[id]?.attachmentIntent !== 'wanted') return;
       const existing = this.state.views[id]?.target;
       if (existing) { attached?.(existing); return this.refresh(id); }
-      this.setSession(id, { attachment: 'attaching', error: undefined });
+      this.setSession(id, { attachment: 'attaching', preview: undefined, tracePreview: undefined, error: undefined });
       const epoch = (this.attachmentEpochs.get(id) ?? 0) + 1;
       this.attachmentEpochs.set(id, epoch);
       this.summarySettled.delete(id);
@@ -987,6 +988,49 @@ export class AppServerClient {
       const result = await this.request({ method: 'session/history', params: { session_id: id, node_id: node, at: { type: 'latest' }, limit: HISTORY_PAGE_SIZE } }, 'session_history', undefined, current);
       if (current()) this.setSession(id, { preview: { conversationId: result.conversation_id, history: replaceTranscript(result.window.page) } });
     } catch { /* Attachment recovery owns errors; a late read cannot replace the live view. */ }
+  }
+  /** Read-only trace is independent of slow runtime/resource initialization. */
+  private async readTracePreview(id: string, admitted: () => boolean, older = false) {
+    const view = this.state.views[id], previous = older ? view?.tracePreview : undefined;
+    if (older && (!previous || previous.cache.loading || previous.cache.page.next_cursor == null)) return;
+    const generation = this.state.generation, epoch = this.attachmentEpochs.get(id), node = view?.nodeId;
+    const current = () => admitted() && this.current(generation) && this.attachmentEpochs.get(id) === epoch
+      && this.state.views[id]?.attachment === 'attaching' && this.state.views[id]?.attachmentIntent === 'wanted'
+      && this.state.views[id]?.nodeId === node;
+    const cache = previous?.cache ?? replaceTrace({ records: [], next_cursor: null });
+    const limit = Math.min(TRACE_PAGE_SIZE, TRACE_LIMIT - cache.page.records.length);
+    if (limit < 1 || !current()) return;
+    if (previous) this.setSession(id, { tracePreview: { ...previous, cache: { ...cache, loading: true, error: undefined } } });
+    try {
+      const admission = older ? await this.admitAttachment(id, current) : current;
+      if (!admission) return;
+      const result = await this.request({ method: 'session/traceHistory', params: { session_id: id, node_id: node, before: older ? cache.page.next_cursor : null, limit } }, 'session_trace_history', undefined, admission);
+      if (!current()) return;
+      if (previous && result.conversation_id !== previous.conversationId) throw new Error('Trace conversation changed.');
+      this.setSession(id, { tracePreview: { conversationId: result.conversation_id, cache: older ? prependTrace(this.state.views[id].tracePreview!.cache, result.page) : replaceTrace(result.page) } });
+    } catch (error) {
+      if (current()) this.setSession(id, { tracePreview: { conversationId: previous?.conversationId ?? '', cache: { ...(this.state.views[id]?.tracePreview?.cache ?? cache), loading: false, error: String(error) } } });
+    }
+  }
+  private async readTracePreviewDetail(id: string, record: string) {
+    const preview = this.state.views[id]?.tracePreview;
+    if (!preview || preview.cache.details[record]?.loading || preview.cache.details[record]?.detail) return;
+    const generation = this.state.generation, epoch = this.attachmentEpochs.get(id), node = this.state.views[id]?.nodeId;
+    const pending = beginTraceDetail(preview.cache, record);
+    const current = () => this.current(generation) && this.attachmentEpochs.get(id) === epoch
+      && this.state.views[id]?.attachment === 'attaching' && this.state.views[id]?.attachmentIntent === 'wanted'
+      && this.state.views[id]?.tracePreview?.cache.details[record] === pending.details[record];
+    this.setSession(id, { tracePreview: { ...preview, cache: pending } });
+    try {
+      const admission = await this.admitAttachment(id, current);
+      if (!admission) return;
+      const result = await this.request({ method: 'session/traceHistoryDetail', params: { session_id: id, node_id: node, record_id: record } }, 'session_trace_history_detail', undefined, admission);
+      if (!current()) return;
+      if (result.conversation_id !== preview.conversationId) throw new Error('Trace conversation changed.');
+      this.setSession(id, { tracePreview: { ...preview, cache: completeTraceDetail(this.state.views[id].tracePreview!.cache, record, pending.epoch, result.detail ?? undefined) } });
+    } catch (error) {
+      if (current()) this.setSession(id, { tracePreview: { ...preview, cache: completeTraceDetail(this.state.views[id].tracePreview!.cache, record, pending.epoch, undefined, String(error)) } });
+    }
   }
   async loadEarlierPreview(id: string): Promise<void> {
     const view = this.state.views[id], preview = view?.preview, before = preview?.history.page.next_cursor;
@@ -1043,7 +1087,10 @@ export class AppServerClient {
         const valid = await admitted.validate(signal);
         // Both reads belong to the same explicitly admitted Open gesture. Start
         // durable history at its final validation, independently of runtime load.
-        if (valid && admitted.current()) void this.readHistoryPreview(id, generation, epoch, admitted.current);
+        if (valid && admitted.current()) {
+          void this.readHistoryPreview(id, generation, epoch, admitted.current);
+          void this.readTracePreview(id, admitted.current);
+        }
         return valid;
       } };
       const result = await this.request({ method: 'session/attach', params: { session_id: id, node_id: this.state.views[id]?.nodeId } }, 'attached', undefined, opening);
@@ -1051,7 +1098,7 @@ export class AppServerClient {
       target = result.target;
       if (result.configuration) this.publish({ configuration: { ...this.state.configuration, [id]: result.configuration } });
       if (result.target.session_id !== id || result.target.conversation_id !== result.snapshot.conversation_id) throw new Error('Mismatched attachment identity.');
-      this.setSession(id, { target: result.target, snapshot: result.snapshot, preview: undefined, cursor: result.cursor, history: replaceTranscript(result.snapshot.transcript, this.state.views[id]?.history), turnOutline: undefined, turnNavigation: undefined, trace: this.supersedeTrace(id, replaceTrace(result.snapshot.trace, this.state.views[id]?.trace)), attachment: 'attached' });
+      this.setSession(id, { target: result.target, snapshot: result.snapshot, preview: undefined, tracePreview: undefined, cursor: result.cursor, history: replaceTranscript(result.snapshot.transcript, this.state.views[id]?.history), turnOutline: undefined, turnNavigation: undefined, trace: this.supersedeTrace(id, replaceTrace(result.snapshot.trace, this.state.views[id]?.trace)), attachment: 'attached' });
       attached?.(result.target);
       this.reconcileInteractions(id); this.settleSubmissions(id);
       const settings = await this.request({ method: 'session/settings', params: { session_id: id } }, 'settings');
@@ -1103,7 +1150,7 @@ export class AppServerClient {
         if (!current()) return;
         if (result.snapshot.conversation_id !== target.conversation_id) throw new Error('Mismatched snapshot conversation.');
         if (BigInt(result.cursor) >= BigInt(this.state.views[id].cursor ?? '0')) {
-          this.setSession(id, { snapshot: result.snapshot, preview: undefined, cursor: result.cursor, history: refreshTranscript(this.state.views[id]?.history, result.snapshot.transcript), trace: this.supersedeTrace(id, refreshTrace(this.state.views[id]?.trace, result.snapshot.trace, result.snapshot.trace_updates)), error: undefined });
+          this.setSession(id, { snapshot: result.snapshot, preview: undefined, tracePreview: undefined, cursor: result.cursor, history: refreshTranscript(this.state.views[id]?.history, result.snapshot.transcript), trace: this.supersedeTrace(id, refreshTrace(this.state.views[id]?.trace, result.snapshot.trace, result.snapshot.trace_updates)), error: undefined });
           this.reconcileInteractions(id); this.settleSubmissions(id);
           await this.refreshDisplaySummary(id);
           if (!current()) return;
@@ -1176,6 +1223,7 @@ export class AppServerClient {
   /** One older page, as Harness's loadOlder. */
   loadEarlier(id: string) { return this.pageOlder(id); }
   async loadEarlierTrace(id: string) {
+    if (this.state.views[id]?.attachment === 'attaching') return this.readTracePreview(id, () => true, true);
     const target = this.target(id);
     const generation = this.state.generation;
     const cache = this.state.views[id].trace;
@@ -1201,6 +1249,8 @@ export class AppServerClient {
     }
   }
   selectTrace(id: string, record?: string) {
+    const preview = this.state.views[id]?.tracePreview;
+    if (this.state.views[id]?.attachment === 'attaching' && preview) { this.setSession(id, { tracePreview: { ...preview, cache: selectTrace(preview.cache, record) } }); return; }
     const trace = this.state.views[id]?.trace;
     if (trace) this.setSession(id, { trace: selectTrace(trace, record) });
   }
@@ -1213,6 +1263,7 @@ export class AppServerClient {
    * for; anything else is dropped rather than attached to a newer window.
    */
   async loadTraceDetail(id: string, record: string) {
+    if (this.state.views[id]?.attachment === 'attaching') return this.readTracePreviewDetail(id, record);
     const target = this.target(id);
     const generation = this.state.generation;
     const cache = this.state.views[id]?.trace;
