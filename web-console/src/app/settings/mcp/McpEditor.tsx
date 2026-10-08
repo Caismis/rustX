@@ -61,8 +61,8 @@ function Editor({ source, scope, revision, focus, scopeControl, close, document 
   if (focus.mode === 'permissions' && name) return <ExtensionDetail source={source} scope={scope} revision={revision} models={[]} family="mcp" name={name} backLabel={tx('settings:mcp.back')} onFocus={close}/>;
   return <>
     <div className={css.breadcrumb}><button type="button" onClick={close}>{tx('settings:catalog.mcp')}</button><span>›</span><span>{focus.name ?? title}</span></div>
-    <div className={css.editorHeader}><div><h3>{title}</h3><p>{tx('settings:mcp.form-help')}</p></div><div className={css.actions} role="group" aria-label={tx('settings:mcp.form')}>
-      <Button size="sm" variant={mode === 'form' ? 'toolbar' : 'ghost'} onClick={() => chooseMode('form')}>{tx('settings:mcp.form')}</Button><Button size="sm" variant={mode === 'json' ? 'toolbar' : 'ghost'} onClick={() => chooseMode('json')}>JSON</Button></div></div>
+    <div className={css.editorHeader}><div><h3>{title}</h3><p>{tx('settings:mcp.form-help')}</p></div><div className={css.modes} role="group" aria-label={tx('settings:mcp.form')}>
+      <Button size="sm" aria-pressed={mode === 'form'} variant={mode === 'form' ? 'toolbar' : 'ghost'} onClick={() => chooseMode('form')}>{tx('settings:mcp.form')}</Button><Button size="sm" aria-pressed={mode === 'json'} variant={mode === 'json' ? 'toolbar' : 'ghost'} onClick={() => chooseMode('json')}>JSON</Button></div></div>
     <form className={css.form} ref={formRef} aria-label={title} onSubmit={event => {event.preventDefault();save();}}>
       <div className={css.top}><label>{tx('settings:mcp.name')}<input value={name} placeholder={tx('settings:mcp.name-placeholder')} required disabled={!!focus.name || unit.draft || unit.busy} onChange={event => setName(event.target.value.trim())}/></label><div className={css.scope}>{tx('settings:mcp.scope')}{scopeControl}</div></div>
       {duplicate && <p role="alert">{tx('settings:mcp.duplicate')}</p>}

@@ -18,3 +18,23 @@ test('MCP scope shows only definitions owned by the selected scope', async ({pag
  await expect(page.getByRole('listitem',{name:'exa',exact:true})).toBeVisible();
  expect(errors).toEqual([]);
 });
+
+test('MCP settings share compact settings typography and fit narrow panels', async ({page})=>{
+ await page.addInitScript(()=>localStorage.setItem('rustx-locale-v1','en'));
+ await page.goto(`http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT??5174}/test/fixtures/settings.html?scenario=mcp-scope`);
+ await page.getByRole('button',{name:'Settings',exact:true}).click();
+ await page.getByRole('tab',{name:'MCP servers',exact:true}).click();
+ await expect(page.locator('[data-mcp-page] h3')).toHaveCSS('font-size','20px');
+ await page.screenshot({path:'/tmp/rustx-mcp-list-light.png'});
+ await page.emulateMedia({colorScheme:'dark'});
+ await page.screenshot({path:'/tmp/rustx-mcp-list-dark.png'});
+ await page.getByRole('listitem',{name:'exa',exact:true}).getByRole('button').first().click();
+ await expect(page.getByRole('button',{name:'Form',exact:true})).toHaveAttribute('aria-pressed','true');
+ await page.screenshot({path:'/tmp/rustx-mcp-editor-dark.png'});
+ await page.getByRole('button',{name:'JSON',exact:true}).click();
+ await expect(page.getByRole('button',{name:'JSON',exact:true})).toHaveAttribute('aria-pressed','true');
+ await page.setViewportSize({width:600,height:850});
+ await page.screenshot({path:'/tmp/rustx-mcp-editor-narrow.png'});
+ const bounds=await page.locator('[data-mcp-page]').evaluate(el=>({client:el.clientWidth,scroll:el.scrollWidth}));
+ expect(bounds.scroll).toBeLessThanOrEqual(bounds.client);
+});

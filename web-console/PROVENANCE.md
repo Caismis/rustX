@@ -1709,3 +1709,11 @@ state rows; the child reader reuses the main conversation's statistics dock,
 context meter and completed-response presentation. Native event folds retain
 request usage coverage, generation evidence and activation timing. Browser code
 only formats those readings and interpolates explicitly running intervals.
+
+MCP settings presentation now follows Harness `ui-settings-models`'s
+`ModelsSection.module.css` at `5badb15009ae1756c3afe0ae0cef1faafc290ccc`:
+compact headings, outlined setting cards, module-filled editor and disclosure
+separators. Geometry and controls use rustX's existing Harness-derived settings
+vocabulary, including panel container queries and shared capsule buttons.
+ZCode remains the reference for scope-local management behavior and MCP glyph;
+no runtime/configuration behavior is changed by this presentation adaptation.

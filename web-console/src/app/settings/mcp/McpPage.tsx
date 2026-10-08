@@ -15,7 +15,7 @@ import { McpStatusIcon } from './McpStatusIcon';
 import { McpEditor } from './McpEditor';
 import css from './McpPage.module.css';
 
-/** ZCode's dedicated catalog layout, backed by rustX's exact-scope authority. */
+/** Scope-local MCP management using the shared Harness settings presentation. */
 export function McpPage({ source, scope, revision, focus, onFocus, scopeControl, refresh, refreshing, connection }: {
   connection: McpConnectionContext; source: SourceSettings; scope: SourceScope; revision?: string; focus?: PageFocus['mcp'];
   onFocus: (focus?: PageFocus['mcp']) => void; scopeControl: ReactNode; refresh: () => void; refreshing: boolean;

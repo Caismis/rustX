@@ -5665,6 +5665,18 @@
       "retained_dependencies": [],
       "excluded_dependencies": [],
       "local_sha256": "71a34428e36706458fb6b8c69a253670d3b491adfe4478a7da4a3b662863f2a2"
+    },
+    {
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream": "packages/client/ui-settings-models/src/client/ModelsSection.module.css",
+      "destination": "web-console/src/app/settings/mcp/McpPage.module.css",
+      "upstream_sha256": "0de105abac343887fbea8508fc0e20b6903505a3f689dd05b1125ff02886e801",
+      "local_sha256": "6b35213cd8f53ddce56949663f72e76d927d1fb4c65c6da5c1563afb68cb21d3",
+      "classification": "B",
+      "treatment": "MCP catalog and editor adapt Harness settings materials, compact typography, card spacing, inset editor and disclosure; shared rustX Button geometry and settings container sizing. Native MCP scope and connection authority retained.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": []
     }
   ],
   "inspected_only": [
