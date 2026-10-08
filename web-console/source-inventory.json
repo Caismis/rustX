@@ -919,12 +919,12 @@
       "local_sha256": "85454af52fe48c27419bc91c19101098a49c18001ad450fbfe68c7bb75d9cdba"
     },
     {
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream": "packages/client/ui-chat/src/client/chat/ChatView.module.css",
       "destination": "web-console/src/presentation/agent/Chat.module.css",
-      "upstream_sha256": "f2696301b4ec912ecdf1df83229a87140566a1c6dabca8bac55259df2c29a695",
+      "upstream_sha256": "73e746a051e6077e92d91fa59ade9fb65a4ec48e57922616458df95a56a04dcd",
       "classification": "A",
-      "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
+      "treatment": "Pinned Harness styles; native textarea environment adaptation where required. Information-flow spacing, Turn heading and bubble geometry aligned to the referenced revision; native seat wrappers remain rustX-owned.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -933,7 +933,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "34a782ebaeaa1a5c17646c1f823f9f2d454d8251551b24f1cf21774ab77504d3"
+      "local_sha256": "b3e201aadfd42397be649054ad66d5c7334f282eb78059d602c8523179fd0bc5"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -990,12 +990,12 @@
       ]
     },
     {
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream": "packages/client/ui-chat/src/client/chat/MessageItem.module.css",
       "destination": "web-console/src/presentation/agent/Message.module.css",
-      "upstream_sha256": "998c35f8b412380fb64819d8036f136dd0661d6fbc31692656c7ce0514fb9308",
+      "upstream_sha256": "e52ee9df23a65396983f2f22b3186a1e6fd72e4ba4fd0f48d5bee746205870f1",
       "classification": "A",
-      "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
+      "treatment": "Pinned Harness styles; native textarea environment adaptation where required. Information-flow spacing, Turn heading and bubble geometry aligned to the referenced revision; native seat wrappers remain rustX-owned.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -1004,7 +1004,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "8de9fedd2016833e52f355cfd1cd7c83a691e13f1467a4ee9dcde56b4f09488e"
+      "local_sha256": "01a1a8db3bf2942501c1d7f0c731aaa65e207663c27bfeee67d47b56839286bb"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -1156,7 +1156,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "e0e8e23387c0e6876f991579944e507d8fcbd8ab962b5d8bc14f3ac1f5c59953"
+      "local_sha256": "b7ef87cdf58aad7da3e7ed46003b713d5ca6f723fa48b96ee04ab5046b9a2eaa"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -2925,12 +2925,12 @@
       ]
     },
     {
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream": "packages/client/ui-chat/src/client/chat/TurnProcessNodeView.module.css",
       "destination": "web-console/src/presentation/agent/TurnProcess.module.css",
-      "upstream_sha256": "94f400f0120a6a773fd65be6869c9b7d895590e31cc3cc8943e5d63eec7173d5",
+      "upstream_sha256": "2fb00c2a24da7f9946dac118eaa076bd55133ca972d159c8b72d7ffee1ba2292",
       "classification": "B",
-      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes. Issue #406: Current process-row typography, disabled/hover treatment, chevron geometry and reduced-motion behavior.",
+      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes. Issue #406: Current process-row typography, disabled/hover treatment, chevron geometry and reduced-motion behavior. Information-flow spacing, Turn heading and bubble geometry aligned to the referenced revision; native seat wrappers remain rustX-owned.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -2938,7 +2938,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "6a30a10e045170ea1ae11978634fdcb7d43f24d7ce8b8c5c6646632296163353",
+      "local_sha256": "b793df7c610fcf2ef9a37d7644c24fcf67e83c54f24dff12b31fadebbb495381",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/TurnProcessNodeView.module.css",
@@ -3253,7 +3253,7 @@
           "treatment": "Compaction checkpoint disclosure and bilingual summary wording adapted to native Ledger messages; no Harness runtime or command authority."
         }
       ],
-      "local_sha256": "025a59fd740368eedd12887cbf6140b5b41dd280ad6bb370c88b99c14cc78034"
+      "local_sha256": "ec1b6518b76ddb197b3e8e9825c05f54044b323135bbb7d660aa3d43a7e00b65"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",

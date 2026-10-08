@@ -1,3 +1,14 @@
+## Information-flow spacing
+
+Reference: local `../deepseek-harness` at
+`5badb15009ae1756c3afe0ae0cef1faafc290ccc`,
+`packages/client/ui-chat/src/client/chat/{ChatView,ChatGroupSeat,TurnProcessNodeView,MessageItem}.module.css`
+and `packages/client/ui-chat/src/client/locale.ts`.
+The native transcript seats use the same 6px process, 12px response and 16px
+Turn spacing, 14px Turn heading, 20px user bubble radius, and Chinese Think /
+completed-duration wording. Hidden native seats no longer leave sibling gaps.
+Native ownership, grouping, tool status and disclosure state remain rustX-owned.
+
 ## Interrupted Assistant presentation
 
 Behavioral reference: local `../deepseek-harness` at
