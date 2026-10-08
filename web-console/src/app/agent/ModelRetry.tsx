@@ -13,14 +13,18 @@ export function ModelRetries({ client, sessionId, attemptId }: { client: AppServ
   const attached = view.attachment === 'attached';
   return modelRetryNotices(view.trace.page.records, attemptId).map(notice => <RetryNotice key={notice.key}
     notice={notice} attached={attached} client={client} sessionId={sessionId}
-    running={view.snapshot?.attempt?.attempt_id === attemptId && view.snapshot.attempt.phase.type !== 'settled'}/>);
+    running={view.snapshot?.attempt?.attempt_id === attemptId && view.snapshot.attempt.phase.type === 'running'
+      && view.snapshot.attempt.in_flight?.message_id === notice.request.request?.assistant_message_id}/>);
 }
 function RetryNotice({ notice, attached, running, client, sessionId }: {
   notice: ModelRetryNotice; attached: boolean; running: boolean; client: AppServerClient; sessionId: string;
 }) {
   const tx = useTranslation(), [open, setOpen] = useState(false);
   const detail = useClientSelector(client, state => notice.failure ? state.views[sessionId]?.trace?.details[notice.failure.id] : undefined);
-  const active = attached && running && notice.request.state === 'running' && notice.retry > 0;
+  // Trace may have been read before PublicationOpened. Exact current native
+  // Assistant ownership answers that earlier incomplete read without a reread;
+  // a durable terminal request can never become active again.
+  const active = attached && running && ['running', 'incomplete'].includes(notice.request.state) && notice.retry > 0;
   const label = active ? tx('agent:retry.active') : notice.request.state === 'cancelled' ? tx('agent:retry.cancelled')
     : notice.request.request?.failure_kind === 'timeout' ? tx('agent:retry.timeout') : tx('agent:retry.started');
   const read = () => { if (attached && notice.failure?.has_detail) void client.loadTraceDetail(sessionId, notice.failure.id); };

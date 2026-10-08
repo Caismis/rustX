@@ -80,11 +80,14 @@ export function ConversationComposer({ client, host, authority, associations, in
       queueMicrotask(() => seat.current?.querySelector<HTMLTextAreaElement>('textarea')?.focus());
     }
   };
-  const intake = useAttachmentIntake(client.attachmentIntakes, JSON.stringify([client.getSnapshot().endpoint, client.getSnapshot().authorityId, binding, activeView?.id, activeView?.target?.conversation_id]), JSON.stringify([client.getSnapshot().generation, activeView?.target]));
+  const intake = useAttachmentIntake(client.attachmentIntakes, JSON.stringify([client.getSnapshot().endpoint, client.getSnapshot().authorityId, binding, activeView?.id]), JSON.stringify([client.getSnapshot().generation, activeView?.target]));
+  // The route owns a draft; acquiring its first native attachment must not
+  // retire selected files. Native target changes still fence upload operations.
+  const hasDraftFiles = useSyncExternalStore(intake.subscribe, intake.snapshot).some(file => file.status === 'draft');
   const composer = (block: () => Message | undefined, permission?: React.ReactNode, model?: React.ReactNode) => <AgentComposer onRetainedRemove={flow && (flow.phase === 'paused' || ['failed', 'uncertain'].includes(flow.phase) && flow.failedPhase === 'uploading') ? id => submissions.removeUpload(flow, id) : undefined} onRetainedRecover={flow && ['failed', 'uncertain'].includes(flow.phase) ? retry => { void submissions.recoverUpload(flow, firstSubmitPort(client, host, current, opened), retry); } : undefined} uploadPolicy={client.getSnapshot().capabilities?.upload_policy} intakeOwner={intake} firstSubmission={flow} consumed={active ? consumed : draftConsumed} commandAvailable={active ? () => !active.disabled : id => id === 'model'} onCommand={() => { modelCommand.current = true; seat.current?.querySelector<HTMLButtonElement>('[data-model-select]')?.click(); }} submitDisabled={!!block()} active={false}
     permission={permission} model={model} onCancel={() => {}} onUpload={async () => { throw new Error(tx('common:copy.no-session-exists-before-submit')); }} onSend={async () => false}
-    onDraftSend={active && !connecting ? undefined : async (text, files, attachmentIds) => {
-      if (connecting && activeView) return submissions.submit(binding, { workspaceId: '', text, files, attachmentIds }, firstSubmitPort(client, host, current, opened, true), () => intake.clear(), (files, ids) => intake.restoreDraft(files, ids), activeView.id);
+    onDraftSend={active && !connecting && !hasDraftFiles ? undefined : async (text, files, attachmentIds) => {
+      if (activeView) return submissions.submit(binding, { workspaceId: '', text, files, attachmentIds }, firstSubmitPort(client, host, current, opened, true), () => intake.clear(), (files, ids) => intake.restoreDraft(files, ids), activeView.id);
       const blocked = block();
       if (blocked) { setError(blocked); return false; }
       if (!selected) { setError(message('common:copy.choose-a-host-authorized-registered-workspace-before-submitting')); return false; }

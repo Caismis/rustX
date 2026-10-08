@@ -33,6 +33,7 @@ it('shows timeout then active retry, loads only disclosed failure details and st
     expect(ui.container.querySelector('summary')?.textContent).toBe('Model request timed out');
     expect(ui.container.querySelector('[data-active]')).toBeNull();
     expect(server.socket.requests.filter(r => r.method === 'session/traceDetail')).toHaveLength(0);
+    state.attempt!.in_flight = { message_id: retry().request!.assistant_message_id, blocks: [] };
     state.trace = { records: [failed(), retry()] }; server.snapshots.set('A', structuredClone(state));
     await act(() => server.client.refresh('A'));
     expect(ui.getByText('Retrying model request (1)')).toBeTruthy();
@@ -53,4 +54,20 @@ it('shows timeout then active retry, loads only disclosed failure details and st
     expect(ui.getByText('Model request retried (1)')).toBeTruthy();
     expect(server.socket.requests.some(r => r.method === 'turn/start')).toBe(false);
   } finally { server.client.disconnect(); }
+});
+
+it('exact native publication ownership activates an earlier incomplete retry without a Trace reread', async () => {
+ const server = new Server(), state = snapshot(), request = retry();request.state='incomplete';
+ state.attempt={attempt_id:'attempt-a',phase:{type:'running'},turn:0};
+ state.trace={records:[failed(),request]};server.snapshots.set('A',state);await server.attached('A');
+ try {
+  const ui=render(<ModelRetries client={server.client} sessionId="A" attemptId="attempt-a"/>);
+  expect(ui.container.querySelector('[data-active]')).toBeNull();
+  const publish=async(message_id:string)=>act(async()=>{
+   server.cursor++;server.socket.deliver({jsonrpc:'2.0',method:'session/event',params:{target:server.target('A'),cursor:String(server.cursor),event:{type:'assistant_message_started',attempt_id:'attempt-a',message_id}}});
+  });
+  await publish('another-request');expect(ui.container.querySelector('[data-active]')).toBeNull();
+  await publish(request.request!.assistant_message_id);expect(ui.getByText('Retrying model request (1)')).toBeTruthy();
+  expect(server.requests.filter(row=>row.request.method==='session/trace')).toHaveLength(0);
+ } finally {server.client.disconnect();}
 });

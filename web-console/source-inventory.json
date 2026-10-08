@@ -2789,7 +2789,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "5770f95f704ca6eb324fb3c8c8799df6a04efbd379c17107340d3304024f6d8c",
+      "local_sha256": "123b47b30f3f5fb3a14723c023e75fed490e3c62e4d156be54ced7e807249ed9",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-workspace/src/client/WorkspacePicker.tsx",
@@ -5433,7 +5433,7 @@
         "Harness retry event protocol and runtime authority"
       ],
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "local_sha256": "69161fe7488f14fc91f8000c6ae0f2b6c2e6504021b4d407ecc26ebf8f3c7804",
+      "local_sha256": "596c3dbcb0b4e8c3ea7fa842d636afc237744ff84d4a95deefd9ef4545a4784e",
       "classification": "A"
     },
     {

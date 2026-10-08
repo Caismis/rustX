@@ -303,3 +303,29 @@ it('typing while attachment is held cannot offer native commands before admissio
   await act(async()=>fireEvent.keyDown(message,{key:'Enter'}));
   expect(screen.getByRole('dialog',{name:'/model'})).toBeTruthy();
 });
+
+it('files selected before first attachment retain exact draft identity and submit once after attachment', async () => {
+  await server.connect(); nativeModel(); server.held.add('session/attach');server.held.add('turn/start');
+  const file=new File(['original bytes'],'note.txt',{type:'text/plain'});
+  const upload=vi.spyOn(server.client,'upload').mockImplementation(async(session,files,_gate,operation)=>{
+    expect(session).toBe('A');expect(files).toEqual([file]);
+    return [{receipt:{session_id:session,batch_id:operation!,token:'file-0'},file:{name:file.name,batch_id:operation!},path:'/workspace/A/note.txt'}];
+  });
+  await act(async()=>{render(<App client={server.client} workspaceHost={server.workspaceHost}/>);});
+  await act(async()=>fireEvent.click(screen.getByRole('button',{name:'Open Session A'})));
+  const opening=await server.waitFor('session/attach',1),message=input();
+  fireEvent.change(message,{target:{value:'exact draft'}});
+  await act(async()=>fireEvent.change(screen.getByLabelText('Attach files'),{target:{files:[file]}}));
+  const owner=vi.mocked(AgentComposer).mock.calls.at(-1)![0].intakeOwner!,before=owner.snapshot()[0];
+  expect(before.file).toBe(file);expect(before.status).toBe('draft');expect(upload).not.toHaveBeenCalled();
+  await act(async()=>server.reply(opening));
+  expect(vi.mocked(AgentComposer).mock.calls.at(-1)![0].intakeOwner).toBe(owner);
+  expect(owner.snapshot()[0]).toBe(before);expect(input()).toBe(message);expect(message.value).toBe('exact draft');
+  expect(upload).not.toHaveBeenCalled();
+  await act(async()=>fireEvent.click(screen.getByRole('button',{name:'Send'})));
+  const start=await server.waitFor('turn/start',1);expect(upload).toHaveBeenCalledOnce();
+  expect(server.requests.filter(row=>row.request.method==='session/create')).toHaveLength(0);
+  expect(JSON.stringify(start.params)).toContain('exact draft');expect(JSON.stringify(start.params)).toContain('file-0');
+  await act(async()=>server.reply(start));
+  expect(owner.snapshot()).toHaveLength(0);upload.mockRestore();
+});
