@@ -1,3 +1,4 @@
+import { ConversationPreferenceRows } from './ConversationPreferenceRows';
 import { useInteractiveHtml } from '../../components/workbench-documents/html/preferences';
 import { localeController } from '../../../locale/controller';
 import { useBusyEnter } from '../../composer/preferences';
@@ -28,6 +29,7 @@ export function GeneralPage({ theme, setTheme }: { theme: Theme; setTheme?: (the
     <Choice label={tx('settings:copy.language')} value={tx.locale} options={[["en", "English"], ["zh", "中文"]]} onChange={localeController.setLocale} />
     <AppearanceRow title={tx('settings:general-page.appearance')} value={theme} onChange={setTheme}
       labels={{ light: tx('settings:copy.light'), dark: tx('settings:copy.dark'), system: tx('settings:appearance.system') }}/>
+    <ConversationPreferenceRows/>
     <Choice label={tx('artifacts:workbench.html-interactive')} value={interactiveHtml ? 'on' : 'off'}
       options={[["on", tx('artifacts:workbench.html-enabled')], ["off", tx('artifacts:workbench.html-static')]]}
       onChange={value => setInteractiveHtml(value === 'on')} description={tx('artifacts:workbench.html-description')} />

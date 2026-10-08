@@ -1,8 +1,10 @@
+import { toolCard } from '../../bindings/tools';
+import { useConversationPreferences } from '../conversation-preferences';
 import { useTranslation } from '../../locale/react';
 import { useState, type ReactNode } from 'react';
 import { turnPresentation } from '../../bindings/turn-presentation';
 import { turnProcesses } from '../../bindings/turn-process';
-import { stepGroups, type StepPiece } from '../../bindings/step-groups';
+import { stepActivity, stepGroups, type StepPiece } from '../../bindings/step-groups';
 import { StepGroup } from '../../presentation/agent/StepGroup';
 import { TurnError } from '../../presentation/agent/TurnError';
 import { RunningStatus } from '../../presentation/agent/RunningStatus';
@@ -46,6 +48,9 @@ function MessageSeat({ id, hidden, owner, turnOwner, reveal, prefix, suffix, bod
 }
 export function AgentTranscript({ snapshot, history, loadEarlier, loadLater, onHistorical, historicalDisabled, lineageSwitchSafe = false, requestFeedback }: { snapshot: Pick<RuntimeClientSnapshot, 'messages' | 'attempt' | 'transcript' | 'statuses' | 'conversation_id'>; history?: TranscriptCache; loadEarlier?: () => void; loadLater?: () => void; onHistorical?: (action: ResponseAction, response: CompletedResponseView) => void; historicalDisabled?: boolean; lineageSwitchSafe?: boolean; requestFeedback?: (attemptId: string) => ReactNode }) {
   const tx = useTranslation();
+  const [{ transcriptMode }] = useConversationPreferences();
+  const verbose = transcriptMode === 'verbose';
+  const groupedLive = transcriptMode === 'compact' || transcriptMode === 'standard';
   const { messages, streaming } = conversation(snapshot);
   const entries = transcriptPresentation(history, snapshot.transcript);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
@@ -63,6 +68,11 @@ export function AgentTranscript({ snapshot, history, loadEarlier, loadLater, onH
   const toldByCall = askUserAudits(entries);
   const steps = stepGroups(entries, entry => hasBody(entry) && !toldByCall(entry));
   const toolsOf = (entry: RuntimeClientTranscriptEntry) => (entry.tool_calls ?? []).map(tool => tool.state.type === 'settled' ? tool : snapshot.attempt?.foreground?.find(live => live.message_id === tool.message_id && live.block_index === tool.block_index && live.call_id === tool.call_id && live.tool_id === tool.tool_id) ?? tool);
+  const liveGroup = (tools: readonly ForegroundToolExecution[], reasoning?: string) => {
+    const active = tools.filter(tool => tool.state.type !== 'settled').at(-1);
+    const kind = active ? stepActivity(active.name) : 'thinking';
+    return { activityTitle: tx(`agent:step-process.live.${kind}`), detail: transcriptMode === 'standard' ? (active ? toolCard(active).summary : reasoning?.split('\n').find(line => line.trim())) : undefined };
+  };
   // Publication audits are frozen released output, not diagnostic cards. Empty
   // failed requests (including overflow before compaction) have no Chat body.
   // Proposed calls are not executions and must never acquire Tool UI or actions.
@@ -83,6 +93,8 @@ export function AgentTranscript({ snapshot, history, loadEarlier, loadLater, onH
   const pieces = (entry: RuntimeClientTranscriptEntry, list: readonly StepPiece[], processOpen: boolean) => list.map(piece => piece.kind === 'reply'
     ? entry.item.type === 'message' && <Message key={`reply:${piece.blocks[0]}`} message={entry.item.message} include={piece.blocks} tools={toolsOf(entry)}/>
     : <StepGroup key={piece.group.key} id={piece.group.key} counts={piece.group.counts} hidden={!processOpen} open={stepsOpen.has(piece.group.key)}
+      direct={verbose || !groupedLive && entry.turn_process?.outcome === 'running'}
+      {...(entry.turn_process?.outcome === 'running' ? liveGroup(piece.group.members.flatMap(member => toolsOf(member.entry)), piece.group.members.flatMap(member => member.entry.item.type === 'message' && member.entry.item.message.role === 'assistant' ? member.entry.item.message.content.filter(block => block.type === 'reasoning').map(block => block.text ?? '') : []).at(-1)) : {})}
       onToggle={() => setStepsOpen(previous => { const next = new Set(previous); if (next.has(piece.group.key)) next.delete(piece.group.key); else next.add(piece.group.key); return next; })}>
       {piece.group.members.map(member => <div key={entryIdentity(member.entry)}>{member.blocks && member.entry.item.type === 'message'
         ? <Message message={member.entry.item.message} include={member.blocks} tools={toolsOf(member.entry)}/> : audit(member.entry)}</div>)}
@@ -90,7 +102,7 @@ export function AgentTranscript({ snapshot, history, loadEarlier, loadLater, onH
   const disclosure = (key: string) => {
     const group = process.groups.get(key)!;
     const response = entries.find(entry => entry.turn_process && JSON.stringify([entry.turn_process.conversation_id, entry.turn_process.attempt_id]) === key && entry.completed_response)?.completed_response;
-    return <><TurnProcess durationMs={response?.timing?.total_duration_ms ?? undefined} id={key} open={expanded.has(key)} tools={group.tools} messages={group.messages} toggle={() => setExpanded(previous => {
+    return <><TurnProcess durationMs={response?.timing?.total_duration_ms ?? undefined} id={key} open={verbose || expanded.has(key)} tools={group.tools} messages={group.messages} toggle={verbose ? undefined : () => setExpanded(previous => {
       const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next;
     })}/>{requestFeedback?.(group.owner.attempt_id)}</>;
   };
@@ -109,9 +121,28 @@ export function AgentTranscript({ snapshot, history, loadEarlier, loadLater, onH
     {history?.error && <p role="alert">{history.error}</p>}
     {!messages.length && !entries.length && <Feedback kind="empty" title={tx('agent:agent-transcript.ready-for-a-task')}><p>{tx('agent:agent-transcript.what-would-you-like-to-work-on')}</p></Feedback>}
     {[...turnPresentation(entries), ...(streaming && !durableIds.has(streaming.message_id) && !settledPublications.has(streaming.message_id) ? [{ kind: 'streaming' as const, streaming }] : [])].map(node => {
-      if (node.kind === 'streaming') return <div className={css.flowItem} data-chat-group-part={node.streaming.blocks?.some(block => block.type === 'text') ? 'response' : undefined} key={`message:${node.streaming.message_id}`}><MessageSeat key="seat" id={`message:${node.streaming.message_id}`} turnOwner={snapshot.attempt ? turnAnchor({conversation_id:snapshot.conversation_id,attempt_id:snapshot.attempt.attempt_id}) : undefined}
-        message={{ role: 'assistant', id: node.streaming.message_id, content: [] }} blocks={node.streaming.blocks ?? []} streaming
-        tools={snapshot.attempt?.foreground?.filter(tool => tool.message_id === node.streaming.message_id)}/></div>;
+      if (node.kind === 'streaming') {
+        const blocks = node.streaming.blocks ?? [];
+        const segments: { process: boolean; indices: number[] }[] = [];
+        blocks.forEach((block, index) => {
+          const isProcess = block.type === 'reasoning' || block.type === 'tool_call';
+          const previous = segments.at(-1);
+          if (previous?.process === isProcess) previous.indices.push(index);
+          else segments.push({ process: isProcess, indices: [index] });
+        });
+        const tools = snapshot.attempt?.foreground?.filter(tool => tool.message_id === node.streaming.message_id) ?? [];
+        return <div className={css.flowItem} key={`message:${node.streaming.message_id}`}><MessageSeat id={`message:${node.streaming.message_id}`}
+          turnOwner={snapshot.attempt ? turnAnchor({conversation_id:snapshot.conversation_id,attempt_id:snapshot.attempt.attempt_id}) : undefined}
+          other={segments.map(segment => {
+            const segmentKey = `streaming:${node.streaming.message_id}:${segment.indices[0]}`;
+            const message = <Message message={{role:'assistant',id:node.streaming.message_id,content:[]}} blocks={blocks} include={segment.indices} streaming tools={tools}/>;
+            return <div className={css.flowItem} data-chat-group-part={segment.process ? undefined : 'response'} key={segmentKey}>
+              {segment.process ? <StepGroup id={segmentKey} counts={[]} open={stepsOpen.has(segmentKey)} direct={!groupedLive}
+                {...liveGroup(tools, blocks.filter((block, index) => segment.indices.includes(index) && block.type === 'reasoning').map(block => 'text' in block ? block.text ?? '' : '').at(-1))}
+                onToggle={() => setStepsOpen(previous => { const next = new Set(previous); if (next.has(segmentKey)) next.delete(segmentKey); else next.add(segmentKey); return next; })}>{message}</StepGroup> : message}
+            </div>;
+          })}/></div>;
+      }
       if (node.kind === 'process' && node.process.outcome === 'running') return null;
       if (node.kind === 'process') return <div className={css.flowItem} data-chat-flow-kind="turn-process" key={node.key} data-chat-turn-owner={turnAnchor(node.process)} data-chat-anchor-key={entries.some(entry => entry.cursor === node.process.control_cursor) ? turnAnchor(node.process) : undefined}><TurnProcess id={node.key} open tools={node.process.tool_call_count} messages={node.process.message_count} outcome={node.process.outcome} start={node.process.started_at ?? undefined} end={node.process.ended_at ?? undefined}/>{requestFeedback?.(node.process.attempt_id)}</div>;
       if (node.kind === 'tail') return <TurnTail key={node.key} text={node.text} response={node.response} latest={node.response === latestResponse?.completed_response} onHistorical={onHistorical} disabled={historicalDisabled} lineageSwitchSafe={lineageSwitchSafe}/>;
@@ -133,10 +164,10 @@ export function AgentTranscript({ snapshot, history, loadEarlier, loadLater, onH
       const statuses = statusesAt(placement, { messageId: entry.item.type === 'message' ? entry.item.message.id : undefined, cursor: entry.cursor });
       const key = process.membership.get(entry.cursor);
       const group = key ? process.groups.get(key) : undefined;
-      const processOpen = !group || group.owner.outcome !== 'completed' || expanded.has(key!);
+      const processOpen = verbose || !group || group.owner.outcome !== 'completed' || expanded.has(key!);
       const final = entry.item.type === 'message' && entry.item.message.id === entry.turn_process?.final_message_id;
       const statusOwner = (status: typeof statuses[number]) => process.attempts.get(JSON.stringify([snapshot.conversation_id, status.attempt_id]));
-      const visibleStatus = statuses.some(status => { const owner = statusOwner(status); return !owner || process.groups.get(owner)?.owner.outcome !== 'completed' || expanded.has(owner); });
+      const visibleStatus = statuses.some(status => { const owner = statusOwner(status); return verbose || !owner || process.groups.get(owner)?.owner.outcome !== 'completed' || expanded.has(owner); });
       const body = hasBody(entry) && !toldByCall(entry);
       const stepped = steps.get(entry.cursor);
       const entrySeat = group?.seat?.kind === 'entry' && group.seat.cursor === entry.cursor;
@@ -160,7 +191,7 @@ export function AgentTranscript({ snapshot, history, loadEarlier, loadLater, onH
           // disclosure. Never borrow the adjacent row's ownership for a status.
           const owner = statusOwner(status);
           const seat = owner ? process.groups.get(owner)?.seat : undefined;
-          return <div className={css.flow} hidden={!!owner && process.groups.get(owner)?.owner.outcome === 'completed' && !expanded.has(owner) && !(seat?.kind === 'status' && seat.statusId === status.status_message_id)} key={status.status_message_id}>{seat?.kind === 'status' && seat.statusId === status.status_message_id && disclosure(owner!)}<div hidden={!!owner && process.groups.get(owner)?.owner.outcome === 'completed' && !expanded.has(owner)}><AgentStatusAnnotation status={status}/></div></div>;
+          return <div className={css.flow} hidden={!verbose && !!owner && process.groups.get(owner)?.owner.outcome === 'completed' && !expanded.has(owner) && !(seat?.kind === 'status' && seat.statusId === status.status_message_id)} key={status.status_message_id}>{seat?.kind === 'status' && seat.statusId === status.status_message_id && disclosure(owner!)}<div hidden={!verbose && !!owner && process.groups.get(owner)?.owner.outcome === 'completed' && !expanded.has(owner)}><AgentStatusAnnotation status={status}/></div></div>;
         })}</>}/></div>;
     })}
     {!!currentContext.length && <details><summary>{tx('agent:agent-transcript.current-context')}</summary>{currentContext.map(message => <Message key={message.id} message={message} />)}</details>}

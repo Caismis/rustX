@@ -1,3 +1,4 @@
+import { useConversationPreferences } from './conversation-preferences';
 import { FileLinks } from '../presentation/markdown/FileLinks';
 import { Workbench, type WorkbenchHandle } from './components/Workbench';
 import { DetachedFirstSubmissions } from './new-conversation/DetachedFirstSubmissions';
@@ -93,7 +94,10 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   const collapsePanel = () => { previewOwner.collapse(); returnPreviewFocus(); };
   const [theme, setTheme] = useState(readTheme);
   useLayoutEffect(() => applyTheme(theme), [theme]);
-  const [conversationMode, setConversationMode] = useState<'chat' | 'trajectory'>('chat');
+  const [displayPreferences] = useConversationPreferences();
+  useLayoutEffect(() => { document.body.style.setProperty('--dsh-content-font-size', `${displayPreferences.fontSize}px`); }, [displayPreferences.fontSize]);
+  const [requestedConversationMode, setConversationMode] = useState<'chat' | 'trajectory'>('chat');
+  const conversationMode = displayPreferences.codingView ? requestedConversationMode : 'chat';
   const [preferences] = useState(readPreferences);
   const endpoint = state.endpoint ?? '';
   const initialViews = preferences.endpoint === state.endpoint ? preferences.openViews : [];
@@ -331,7 +335,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
         else focusSession(view.id, { attach: true, preserveDraft: true });
       }} />}
 
-      <section className={`conversation-panel ${agentCss.body}`} id="conversation-view" role={view ? 'tabpanel' : undefined} aria-labelledby={view ? `view-tab-${conversationMode}` : undefined} tabIndex={0}>
+      <section className={`conversation-panel ${agentCss.body}`} id="conversation-view" role={view && displayPreferences.codingView ? 'tabpanel' : undefined} aria-labelledby={view && displayPreferences.codingView ? `view-tab-${conversationMode}` : undefined} tabIndex={0}>
       <ConversationWidthControls active={!!view && conversationMode === 'chat'}/>
       <PreviewContext value={{ openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><ArtifactContext.Provider value={artifacts}><ConversationLive client={client} sessionId={view?.id} mode={conversationMode} disabled={commandOpen || transitioning === view?.id} onHistorical={transitionResponse}/></ArtifactContext.Provider></PreviewContext>
       <ConversationSeat client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} sessionId={view?.id}

@@ -1140,7 +1140,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "40ac5e15c864cdf0779d76cb098d6e2d817ffccafb381468555dea38f3c8f7d5"
+      "local_sha256": "d367dc5c2ce4409a53ada0ded50098b9248205cfd308507cc2c937ffdfc3d84a"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -3263,7 +3263,7 @@
           "treatment": "Compaction checkpoint disclosure and bilingual summary wording adapted to native Ledger messages; no Harness runtime or command authority."
         }
       ],
-      "local_sha256": "95b6fa904a991bcfa434c01f58698962e115dbed8ee784c414ba389c4208db61"
+      "local_sha256": "bef6b4f1c7811982e6b30ee6f4ff1edd432d83c61fa35adcbb6d3e850b725ca7"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",
@@ -3352,7 +3352,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "4cffb1840a98d766a2e871ef01933678a768fe8bf0ea0013d428b313a5f2efdc"
+      "local_sha256": "501791750840883ccc259e15c62d7607f9e2e61c27ac9ca7e99a0a6407e469b3"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -3616,7 +3616,7 @@
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "59e36a3292a29ccea3f533aeaa130f0bdaf5baf9212ea8ccdede401c7b248e36"
+      "local_sha256": "e3905fc83c91117b6112733c54234aab472d00c9b56ea189d5a66f0b2d251c8d"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/ChatGroupSeat.module.css",
@@ -5572,6 +5572,57 @@
         "Harness Session store and slot contracts"
       ],
       "local_sha256": "0fd990d118113d19af7af4480f2b55d610b103451a08be6f7bf5a146823f8bd3"
+    },
+    {
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream": "packages/client/ui-theme/src/client/FontSizeRow.module.css",
+      "destination": "web-console/src/app/settings/general/ConversationPreferences.module.css",
+      "classification": "B",
+      "treatment": "Font-size row and stepper reused for browser-owned conversation preferences; responsive row and selector styles added.",
+      "upstream_sha256": "f64c8437d6a46f279a7359e68655b88fa9d2376138e7af9297f19e5ec0548ba2",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [],
+      "local_sha256": "44b07ff0a33a3a77ee4ce96bd5938c45655d47b1e9a1542f96377ac1bad95a75",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-chat/src/client/settings/PreferenceRow.module.css",
+          "upstream_sha256": "1e1d409eb08a85038358d116378493b62593dcbce71033334882da78b2cd0741",
+          "treatment": "Selector pill and chevron styling."
+        }
+      ]
+    },
+    {
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream": "packages/client/ui-theme/src/client/FontSizeRow.tsx",
+      "destination": "web-console/src/app/settings/general/ConversationPreferenceRows.tsx",
+      "classification": "B",
+      "treatment": "General settings font stepper, work-detail selector and coding-view switch adapted to browser-owned rustX preferences and existing presentation primitives.",
+      "upstream_sha256": "36dd81c778cf745a61c93ee28c9e3383c71510fcd2862c7fa7ae4bd125d1a3d2",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../../../locale/react",
+        "../../../presentation/primitives/Menu",
+        "../../../presentation/primitives/Switch",
+        "../../../presentation/primitives/icons",
+        "../../conversation-preferences",
+        "./ConversationPreferences.module.css",
+        "react"
+      ],
+      "excluded_dependencies": [],
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-chat/src/client/settings/PreferenceRow.tsx",
+          "upstream_sha256": "f16f2b1103247e918e5831340677dbb78c225a27697ca3025ae65cc2a2559979",
+          "treatment": "Settings row layout and selection interaction."
+        },
+        {
+          "upstream": "packages/client/ui-settings-general/src/client/DeveloperToolsRow.tsx",
+          "upstream_sha256": "826d5a0f4981770dd994a754a8c4fbf29819d3db11080311f7a465d74371446b",
+          "treatment": "Settings row layout and selection interaction."
+        }
+      ],
+      "local_sha256": "30aa7f9e4e64dc3ddc01c5ac65f44fc1463e138cf82e4aa04d430f8737b680e0"
     }
   ],
   "inspected_only": [

@@ -144,7 +144,7 @@ describe('single-anchor Agent Status placement', () => {
     expect(screen.getByRole('button', { name: 'Load earlier' })).toBeTruthy();
     expect(screen.getByLabelText('Streaming response').textContent).toContain('Still answering');
     expect(anchorKeys(ui.container)).toEqual(['message:u1', 'message:a1', 'message:t1', 'message:live']);
-    expect([...ui.container.querySelectorAll('[data-chat-turn-owner]')].map(row => row.getAttribute('data-chat-turn-owner'))).toEqual(['turn:["conversation-A","attempt-A"]', 'turn:["conversation-A","attempt-A"]']);
+    expect([...ui.container.querySelectorAll('[data-chat-turn-owner]')].map(row => row.getAttribute('data-chat-turn-owner'))).toEqual(['turn:["conversation-A","attempt-A"]']);
     expect(annotations(ui.container)).toEqual([['s2', 'message:t1']]);
   });
 });

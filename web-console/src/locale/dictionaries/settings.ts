@@ -1,5 +1,19 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
+  "general-page.font-unit": "px",
+  "general-page.font-size": "Font size",
+  "general-page.font-description": "Only affects conversation content",
+  "general-page.font-increase": "Increase font size",
+  "general-page.font-decrease": "Decrease font size",
+  "general-page.work-details": "Work details",
+  "general-page.work-description": "Choose how much tool-call detail to show",
+  "general-page.compact": "Compact",
+  "general-page.standard": "Standard",
+  "general-page.detailed": "Detailed",
+  "general-page.verbose": "Fully expanded",
+  "general-page.coding-view": "Show coding view",
+  "general-page.coding-description": "Show the conversation trajectory and tool execution details.",
+
   "appearance.system": "System",
   "policy.foreground_only": "Foreground only",
   "policy.background_only": "Background only",
@@ -523,6 +537,20 @@ export const en = {
 } as const;
 export type SettingsKey = keyof typeof en;
 export const zh = {
+  "general-page.font-unit": "px",
+  "general-page.font-size": "字号大小",
+  "general-page.font-description": "仅影响会话内容的字号",
+  "general-page.font-increase": "增大字号",
+  "general-page.font-decrease": "减小字号",
+  "general-page.work-details": "工作步骤展示",
+  "general-page.work-description": "选择希望看到多少工具调用细节",
+  "general-page.compact": "简洁",
+  "general-page.standard": "标准",
+  "general-page.detailed": "详细",
+  "general-page.verbose": "完全展开",
+  "general-page.coding-view": "显示代码工作视图",
+  "general-page.coding-description": "开启后，显示会话轨迹和工具执行详情。",
+
   "appearance.system": "跟随系统",
   "policy.foreground_only": "仅前台",
   "policy.background_only": "仅后台",

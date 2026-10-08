@@ -1,5 +1,20 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
+  "step-process.live.thinking": "Analyzing request",
+  "step-process.live.read": "Reading files",
+  "step-process.live.readImage": "Reading images",
+  "step-process.live.search": "Searching code",
+  "step-process.live.write": "Writing files",
+  "step-process.live.edit": "Editing files",
+  "step-process.live.commands": "Running commands",
+  "step-process.live.code": "Running code",
+  "step-process.live.webSearch": "Searching the web",
+  "step-process.live.webFetch": "Visiting web pages",
+  "step-process.live.subagents": "Coordinating subagents",
+  "step-process.live.plan": "Updating the plan",
+  "step-process.live.questions": "Waiting for your input",
+  "step-process.live.tools": "Calling tools",
+
   "retry.active": "Retrying model request",
   "retry.cancelled": "Model request retry cancelled",
   "retry.started": "Model request retried",
@@ -301,6 +316,21 @@ export const en = {
 } as const;
 export type AgentKey = keyof typeof en;
 export const zh = {
+  "step-process.live.thinking": "正在分析请求",
+  "step-process.live.read": "正在读取文件",
+  "step-process.live.readImage": "正在读取图片",
+  "step-process.live.search": "正在搜索代码",
+  "step-process.live.write": "正在写入文件",
+  "step-process.live.edit": "正在编辑文件",
+  "step-process.live.commands": "正在运行命令",
+  "step-process.live.code": "正在运行代码",
+  "step-process.live.webSearch": "正在搜索网页",
+  "step-process.live.webFetch": "正在访问网页",
+  "step-process.live.subagents": "正在协调子智能体",
+  "step-process.live.plan": "正在更新计划",
+  "step-process.live.questions": "等待你的操作",
+  "step-process.live.tools": "正在调用工具",
+
   "retry.active": "正在重试模型请求",
   "retry.cancelled": "模型请求重试已取消",
   "retry.started": "已重试模型请求",
