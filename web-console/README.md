@@ -460,9 +460,10 @@ managed artifact service, never browser access to a local path.
 
 ## Conversation reading
 
-Chat now has a bounded native turn rail whose jumps page one contiguous
-transcript window through the live tail, ordinary detached Return to latest, and
-measured browser width preferences. See
+Chat has a bounded native Turn rail. A distant jump reads one native window
+at the selected Turn, retaining at most 256 historical entries / 8 MiB alongside
+the independently current live tail. Return to latest releases the historical
+window. Navigation intent retires obsolete reads. See
 [the reading contract](../docs/conversation-reading.md) for ownership, limits,
 lineage mapping and deterministic intent rules.
 
@@ -497,6 +498,13 @@ palette overrides. Files are read from the current native Session's cwd;
 paths are relative, symlinks are not followed, directory pages are bounded to
 2,000 entries, and text previews to 1 MiB. Descriptor-relative browsing uses the same POSIX `openat`/`fdopendir`
 implementation on Linux and macOS. Remote/unmapped Hosts do not gain filesystem access.
+
+Workspace HTML defaults to the static, script-disabled preview. Script execution
+requires explicit opt-in in the workspace panel. The current opaque iframe does
+not provide a zero-network execution boundary: browser WebRTC can transmit even
+with a restrictive CSP. Interactive execution must not be described as network
+isolated; completing that contract requires an isolated execution environment or
+removing script execution from ordinary Web previews.
 
 Terminals use Host-owned native `interactive-supervisor` units through `node-pty`
 and lazy-loaded xterm.js. Choose an

@@ -290,4 +290,3 @@ export function formatStartedAt(timestamp: number): string {
   const three = (value: number) => String(value).padStart(3, '0');
   return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())} ${two(date.getHours())}:${two(date.getMinutes())}:${two(date.getSeconds())}.${three(date.getMilliseconds())}`;
 }
-

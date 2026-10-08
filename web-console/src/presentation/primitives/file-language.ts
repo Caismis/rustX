@@ -117,4 +117,3 @@ export function languageForPath(path: string): string | undefined {
   const extension = extensionForPath(path)
   return extension === undefined ? undefined : LANGUAGES.get(extension)
 }
-

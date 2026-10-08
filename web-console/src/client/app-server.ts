@@ -1662,4 +1662,3 @@ export class AppServerClient {
     this.publish({ uncertain: this.state.uncertain.filter(item => item.id !== id) });
   }
 }
-

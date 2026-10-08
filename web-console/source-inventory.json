@@ -47,7 +47,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "093493a5bb1183ac6f9539b846c5bddc030769cb4d358d76eb9c5a26c8f38284",
+      "local_sha256": "9cc9850bdebb1167b1e1c7e49838fc4fe6cae83d8d271ed8c9e788a5a68b6b83",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
@@ -104,7 +104,7 @@
         "Harness queue and retry authority"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "574e4d8eef54cfedbe6e2690660e8a83e003ed7f3bfc2bac6f9752d88f0e3468"
+      "local_sha256": "6322fdc3c4d9502fd2ec644c75c17e8f264b93b0fc5b79d5fe72ea3089965f96"
     },
     {
       "upstream": "packages/client/ui-commands/src/client/PopupSelectView.tsx",
@@ -869,7 +869,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "160e23126eb07fbeb2c1894ac8a8f72b7a5ef5c9ef121a45f76542f478b4a301",
+      "local_sha256": "697723b5e62bc55a95fe31966c2f029c6ff5218478c452ab035dee8242dc31eb",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/timeline.ts",
@@ -1312,7 +1312,7 @@
         "Harness attachment identity and storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "f1bb30a4edbec1e547a647d1a31edfcd9ba4e67082aaf5f748d7731fda415908",
+      "local_sha256": "07480f427ee41d587bf7fdac98919896b09a57b665e34a510a9e3ac3b0568e42",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/ChatView.tsx",
@@ -2176,7 +2176,7 @@
         "./SidebarRight.module.css",
         "react"
       ],
-      "local_sha256": "2c7805ae42b3a829961f61baf22d202d9189bd6d0b91ce847b02ef9cc4885eda",
+      "local_sha256": "e542cc874abbd36ef50e7a82d8929dd44f256d0c422493c89339d1cef65a216f",
       "classification": "B"
     },
     {
@@ -2645,7 +2645,7 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "a9b8fb8bb0dbcf0e107c9a943feaa8f95d846a3debaa1c7a32d8a7e925176031"
+      "local_sha256": "e5909bf6771bb0982317510b4fd3d84a3e7cb3cc05f8bc92ae05016487059158"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
@@ -2789,7 +2789,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "bb79bdb9586dec68d29ec4df6272ed60bed6f5b3febb9f51cb102e86aefd65ce",
+      "local_sha256": "5770f95f704ca6eb324fb3c8c8799df6a04efbd379c17107340d3304024f6d8c",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-workspace/src/client/WorkspacePicker.tsx",
@@ -3253,7 +3253,7 @@
           "treatment": "Compaction checkpoint disclosure and bilingual summary wording adapted to native Ledger messages; no Harness runtime or command authority."
         }
       ],
-      "local_sha256": "0a76559566f8b35daafd7c7ecb20bc21e48fa28ef9adbf841ee99f8e6ac8d359"
+      "local_sha256": "025a59fd740368eedd12887cbf6140b5b41dd280ad6bb370c88b99c14cc78034"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",
@@ -3441,7 +3441,7 @@
           "treatment": "Event-cell turn label (full/compact) and active-turn rail adapted onto native Turn/Step/Request controls."
         }
       ],
-      "local_sha256": "a797716b100ca416bc87becbc5ec7f0c836b233221bf4e7750cc4830255c6b89"
+      "local_sha256": "e99c0dfc863544d1bcfa2347b45c586828bcd91cf1a8777672c54d0bfa2c738f"
     },
     {
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
@@ -3861,7 +3861,7 @@
           "treatment": "Retained Harness presentation geometry, artwork or terminal theme; rustX native ownership remains separate."
         }
       ],
-      "local_sha256": "39abf79b734f100e97cbce97e55bc38a6ba37b332ef3914c61a26704cb921f5f"
+      "local_sha256": "b76fde1925ba2faedb1f93f7e32e550a6fde569d0de021184ca6cbaa35d4c162"
     },
     {
       "upstream": "packages/client/ui-sidebar-terminal/src/client/terminal-theme.ts",
@@ -4024,7 +4024,7 @@
         "Harness runtime, slot/store authority and remote transport"
       ],
       "retained_dependencies": [],
-      "local_sha256": "e71bc35c471469066f2dc704821d578c9278146ec477ed33e12a70b5e2cf073c"
+      "local_sha256": "19743c91847814fe2cc15fbeda2be99f498e9e6537e42615a7769f0794926ef4"
     },
     {
       "upstream": "packages/client/ui-sidebar-files/src/client/FilesBody.tsx",
@@ -4131,7 +4131,7 @@
         "Harness runtime, slot/store authority and remote transport"
       ],
       "retained_dependencies": [],
-      "local_sha256": "99ca0b14683e8cdfbe86e184d809a9dec3ce8b69b6f23f6edaf93e2238c080f5"
+      "local_sha256": "14f037846a156e2d7d6e34612afb7a61ba71df78f32f8ecdeda5f25cea10be8b"
     },
     {
       "upstream": "packages/client/ui-dockkit/src/index.ts",
@@ -5447,7 +5447,7 @@
         "Harness retry event protocol and runtime authority"
       ],
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "local_sha256": "19c80a18d615e7f4a819016bebf638f0d6ca9cb8de4e8fde4410c0cab973d019",
+      "local_sha256": "96cd43c73bdb1300e392648d6f22393a65dcf2e538ba6a00e5d94e7078341df0",
       "classification": "A"
     },
     {

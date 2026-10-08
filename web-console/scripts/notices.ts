@@ -45,15 +45,15 @@ function visit(file: string) {
     return;
   }
   if (!files.length) throw new Error(`Missing license text: ${key}`);
-  // License text is reproduced verbatim apart from line endings: a CRLF file
-  // (tslib's) is normalized so the notice is one consistent text file.
+  // License wording is preserved. Normalize line endings here and trailing
+  // horizontal whitespace in the final artifact for repository whitespace checks.
   packages.set(key, files.map(name => readFileSync(join(dirname(file), name), 'utf8').replace(/\r\n/g, '\n')).join('\n'));
   for (const name of Object.keys(pkg.dependencies ?? {})) visit(locate(dirname(file), name));
 }
 const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 for (const name of Object.keys(manifest.dependencies)) visit(locate(root, name));
 packages.set('Lucide 0.468.0 (vendored git-fork and wrench icons)', readFileSync(join(root, 'public/LICENSE-Lucide.txt'), 'utf8'));
-const output = 'Production install dependency notices for rustX Web Console\nIncludes the complete pinned install closure; only selected modules enter the browser bundle.\n\n' + [...packages].sort(([a], [b]) => a.localeCompare(b)).map(([name, license]) => `===== ${name} =====\n${license.trim()}\n`).join('\n');
+const output = 'Production install dependency notices for rustX Web Console\nIncludes the complete pinned install closure; only selected modules enter the browser bundle.\n\n' + [...packages].sort(([a], [b]) => a.localeCompare(b)).map(([name, license]) => `===== ${name} =====\n${license.trim().replace(/[ \t]+$/gm, '')}\n`).join('\n');
 const path = join(root, 'public/THIRD-PARTY-NOTICES.txt');
 if (process.argv.includes('--write')) writeFileSync(path, output);
 else if (readFileSync(path, 'utf8') !== output) throw new Error('Dependency notices drifted: run node scripts/notices.ts --write');
