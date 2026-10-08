@@ -53,7 +53,8 @@ where
         connection.clone(),
         incoming,
         |mut receiver| async move {
-            while let Some(record) = receiver.recv().await {
+            while let Some(record) = receiver.next().await {
+                let record = record?;
                 tokio::time::timeout(WRITE_TIMEOUT, async {
                     writer.write_all(record.as_bytes()).await?;
                     writer.write_all(b"\n").await?;

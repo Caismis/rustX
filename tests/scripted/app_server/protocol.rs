@@ -5132,6 +5132,312 @@ pub(crate) async fn delivery_access_boundary_scenario() {
     .await;
 }
 
+pub(super) const DELIVERED: &[u8] = b"# Original\r\n\r\nNative bytes\r\n";
+
+/// Commits one `present` delivery of `f.sessions[0]` through an ordinary
+/// connection, which then closes. Returns the delivering Tool message id.
+pub(super) async fn committed_delivery(f: &Fixture) -> crate::runtime::identity::MessageId {
+    use crate::message::types::MessageBlock;
+    std::fs::write(f.workspaces[0].join("报告 file.md"), DELIVERED).unwrap();
+    let ordinary = AppServerConnection::new(f.host.clone());
+    initialize(&ordinary).await;
+    let target = attach(&ordinary, f, 0).await;
+    f.gates[0].release();
+    call(
+        &ordinary,
+        4300,
+        Method::TurnStart {
+            target: target.clone(),
+            content: wire_text("request-A"),
+        },
+    )
+    .await;
+    await_attempt_settled(&ordinary, &target.session_id).await;
+    let MethodResult::Snapshot { snapshot, .. } = call(
+        &ordinary,
+        4301,
+        Method::SessionSnapshot {
+            target,
+            trace_records: vec![],
+        },
+    )
+    .await
+    else {
+        panic!("snapshot")
+    };
+    ordinary.close();
+    snapshot
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            MessageBlock::Tool(tool) if !tool.result.deliveries.is_empty() => Some(tool.id.clone()),
+            _ => None,
+        })
+        .expect("committed delivery")
+}
+
+pub(super) fn delivery_request(
+    id: i64,
+    target: &AttachmentTarget,
+    message_id: &crate::runtime::identity::MessageId,
+    locate: bool,
+) -> Request {
+    let (target, message_id) = (target.clone(), message_id.clone());
+    Request {
+        jsonrpc: JsonRpcVersion::V2,
+        id: RequestId::Integer(id),
+        call: if locate {
+            Method::DeliveryLocate {
+                target,
+                message_id,
+                delivery_index: 0,
+            }
+        } else {
+            Method::DeliveryRead {
+                target,
+                message_id,
+                delivery_index: 0,
+            }
+        },
+    }
+}
+
+async fn cancel_delivery(connection: &AppServerConnection, request: i64) -> bool {
+    let MethodResult::DeliveryCancel { accepted } = call(
+        connection,
+        9000 + request,
+        Method::DeliveryCancel {
+            request_id: RequestId::Integer(request),
+        },
+    )
+    .await
+    else {
+        panic!("delivery cancel")
+    };
+    accepted
+}
+
+#[track_caller]
+pub(super) fn delivered_bytes(response: &Response) -> Vec<u8> {
+    use base64::Engine;
+    let Response::Success(success) = response else {
+        panic!("delivery success expected: {response:?}")
+    };
+    let MethodResult::SessionFileBytes { data, .. } = &success.result else {
+        panic!("bytes expected")
+    };
+    base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .unwrap()
+}
+
+#[track_caller]
+pub(super) fn failed_with(response: &Response, expected: &ErrorData) {
+    let Response::Failure(Failure {
+        error: RpcError {
+            data: Some(data), ..
+        },
+        ..
+    }) = response
+    else {
+        panic!("typed failure expected: {response:?}")
+    };
+    assert_eq!(data, expected);
+}
+
+/// Request-scoped cancellation, at every native interleaving.
+///
+/// Each case pins one boundary with a probe, never a sleep: before native
+/// admission, after admission before open, after open before bytes, after
+/// physical settlement before publication, and after publication. Terminal
+/// response, publication, physical settlement and permit restoration are
+/// checked separately.
+pub(crate) async fn delivery_cancellation_scenario() {
+    use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
+    bounded(async {
+        let f = Fixture::with_tool(Some("present")).await;
+        let tool = committed_delivery(&f).await;
+        let authority = tokio_util::sync::CancellationToken::new();
+        let trusted = AppServerConnection::with_delivery_access(f.host.clone(), authority);
+        initialize(&trusted).await;
+        let own = attach(&trusted, &f, 0).await;
+        let read = |id| delivery_request(id, &own, &tool, false);
+        let probe = f.host.file_read_probe();
+        let permits = f.host.file_reads();
+        let mut completed = probe.completed.subscribe();
+        let cancelled = ErrorData::DeliveryCancelled;
+        let spawn_read = |id| {
+            let trusted = trusted.clone();
+            let request = read(id);
+            tokio::spawn(async move { trusted.handle_request(request).await })
+        };
+
+        // 1. Accepted before native admission: nothing is admitted at all.
+        probe.completed.send_replace(None);
+        probe.before_admission.arm();
+        let pending = spawn_read(10);
+        probe.before_admission.wait_entered().await;
+        assert!(cancel_delivery(&trusted, 10).await);
+        assert!(cancel_delivery(&trusted, 10).await, "cancel is idempotent");
+        probe.before_admission.release();
+        failed_with(&pending.await.unwrap(), &cancelled);
+        assert_eq!(*completed.borrow(), None, "never admitted");
+        assert_eq!(permits.available_permits(), SESSION_FILE_MAX_READS);
+
+        // 2./3. Accepted after admission (before open; after open, before
+        // bytes): the admitted read keeps its permit until it physically
+        // settles, publishes nothing, and answers exactly once.
+        for gate in [probe.before_open.clone(), probe.before_bytes.clone()] {
+            probe.completed.send_replace(None);
+            let release = gate.arm_scoped();
+            let pending = spawn_read(11);
+            let entered = gate.clone();
+            tokio::task::spawn_blocking(move || entered.wait_entered())
+                .await
+                .unwrap();
+            assert!(cancel_delivery(&trusted, 11).await);
+            assert_eq!(
+                permits.available_permits(),
+                SESSION_FILE_MAX_READS - 1,
+                "the parked read still owns its permit"
+            );
+            assert!(!pending.is_finished(), "no response before settlement");
+            drop(release);
+            completed.wait_for(Option::is_some).await.unwrap();
+            assert_eq!(*completed.borrow(), Some(false), "no bytes produced");
+            failed_with(&pending.await.unwrap(), &cancelled);
+            assert_eq!(permits.available_permits(), SESSION_FILE_MAX_READS);
+        }
+
+        // 4. Accepted after physical settlement, before the publication
+        // commit: the produced bytes and the native path are not published.
+        for locate in [false, true] {
+            probe.completed.send_replace(None);
+            let reply = trusted
+                .reply(delivery_request(12, &own, &tool, locate))
+                .await;
+            assert_eq!(*completed.borrow(), Some(true), "native work settled");
+            assert_eq!(permits.available_permits(), SESSION_FILE_MAX_READS);
+            assert!(cancel_delivery(&trusted, 12).await);
+            failed_with(&reply.commit(), &cancelled);
+        }
+
+        // 5. After the publication commit the response stands; a late cancel
+        // is refused rather than misrepresenting it as unpublished.
+        let published = trusted.handle_request(read(13)).await;
+        assert_eq!(delivered_bytes(&published), DELIVERED);
+        assert!(!cancel_delivery(&trusted, 13).await);
+        assert!(!cancel_delivery(&trusted, 404).await, "unknown id");
+
+        // 6. Concurrent requests: cancelling one never touches the other,
+        // nor can another connection (or an ordinary one) name it.
+        let other = AppServerConnection::with_delivery_access(
+            f.host.clone(),
+            tokio_util::sync::CancellationToken::new(),
+        );
+        initialize(&other).await;
+        let ordinary = AppServerConnection::new(f.host.clone());
+        initialize(&ordinary).await;
+        probe.before_admission.arm();
+        let parked = spawn_read(14);
+        probe.before_admission.wait_entered().await;
+        failed_with(
+            &trusted.handle_request(read(14)).await,
+            &ErrorData::InvalidParams,
+        );
+        assert!(
+            !cancel_delivery(&other, 14).await,
+            "another connection's id"
+        );
+        assert_eq!(
+            rejected(
+                &ordinary,
+                Method::DeliveryCancel {
+                    request_id: RequestId::Integer(14)
+                }
+            )
+            .await,
+            ErrorData::SessionFileRead {
+                reason: SessionFileReadFailure::Unauthorized
+            }
+        );
+        let sibling = trusted.reply(read(15)).await;
+        assert!(cancel_delivery(&trusted, 14).await);
+        probe.before_admission.release();
+        failed_with(&parked.await.unwrap(), &cancelled);
+        assert_eq!(delivered_bytes(&sibling.commit()), DELIVERED);
+
+        // 7. The connection stays healthy: a cancelled id is free again.
+        assert_eq!(
+            delivered_bytes(&trusted.handle_request(read(10)).await),
+            DELIVERED
+        );
+        assert_eq!(permits.available_permits(), SESSION_FILE_MAX_READS);
+        other.close();
+        ordinary.close();
+        trusted.close();
+        f.close().await;
+    })
+    .await;
+}
+
+/// Revocation that wins before the publication commit suppresses a produced
+/// delivery response with a typed failure for the same id; a response already
+/// committed stands.
+pub(crate) async fn delivery_publication_revocation_scenario() {
+    use crate::tools::session_files::SessionFileReadFailure;
+    bounded(async {
+        let f = Fixture::with_tool(Some("present")).await;
+        let tool = committed_delivery(&f).await;
+        let unauthorized = ErrorData::SessionFileRead {
+            reason: SessionFileReadFailure::Unauthorized,
+        };
+        for (locate, revocation) in [
+            (false, "credential"),
+            (true, "credential"),
+            (false, "detach"),
+            (true, "detach"),
+            (false, "close"),
+            (true, "close"),
+        ] {
+            let authority = tokio_util::sync::CancellationToken::new();
+            let trusted =
+                AppServerConnection::with_delivery_access(f.host.clone(), authority.clone());
+            initialize(&trusted).await;
+            let own = attach(&trusted, &f, 0).await;
+            let committed = trusted
+                .handle_request(delivery_request(20, &own, &tool, locate))
+                .await;
+            let reply = trusted
+                .reply(delivery_request(21, &own, &tool, locate))
+                .await;
+            assert!(matches!(reply.produced(), Response::Success(_)));
+            let expected = match revocation {
+                "credential" => {
+                    authority.cancel();
+                    unauthorized.clone()
+                }
+                "detach" => {
+                    call(&trusted, 22, Method::SessionDetach { target: own }).await;
+                    ErrorData::StaleAttachment
+                }
+                _ => {
+                    trusted.close();
+                    unauthorized.clone()
+                }
+            };
+            failed_with(&reply.commit(), &expected);
+            assert!(
+                matches!(committed, Response::Success(_)),
+                "a response committed before revocation stands"
+            );
+            trusted.close();
+        }
+        f.close().await;
+    })
+    .await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn manual_compaction_correlation_is_bounded_before_admission() {
     bounded(async {

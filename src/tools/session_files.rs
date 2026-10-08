@@ -552,19 +552,34 @@ mod tests {
                 inode: metadata.ino(),
             }
         );
-        // A replacement is a different leaf: reopening observes it, explicitly.
-        std::fs::remove_file(&leaf).unwrap();
-        assert_eq!(
-            locate_authorized(&root, &file, || Ok(()))
-                .unwrap_err()
-                .kind(),
-            io::ErrorKind::NotFound
-        );
+        // A removed leaf is Missing. The original stays allocated (moved
+        // aside) while its replacement is created, so the two identities are
+        // distinct by construction: unlink + recreate may reuse an inode.
+        let aside = root.join("sub/original aside");
+        std::fs::rename(&leaf, &aside).unwrap();
+        let missing = locate_authorized(&root, &file, || Ok(())).unwrap_err();
+        assert_eq!(read_failure(&missing), SessionFileReadFailure::Missing);
         std::fs::write(&leaf, b"replacement").unwrap();
-        assert_ne!(
-            locate_authorized(&root, &file, || Ok(())).unwrap().inode,
-            located.inode
+        // A fresh lookup observes the current leaf, explicitly.
+        let current = std::fs::symlink_metadata(&leaf).unwrap();
+        let relocated = locate_authorized(&root, &file, || Ok(())).unwrap();
+        assert_eq!(
+            (relocated.device, relocated.inode),
+            (current.dev(), current.ino())
         );
+        assert_ne!(relocated.inode, located.inode);
+        // A swap after the owned leaf open cannot redirect the retained
+        // descriptor: verification fails instead of publishing either identity.
+        let calls = std::cell::Cell::new(0);
+        let swapped = locate_authorized(&root, &file, || {
+            calls.set(calls.get() + 1);
+            if calls.get() == 2 {
+                std::fs::rename(&aside, &leaf).unwrap();
+            }
+            Ok(())
+        })
+        .unwrap_err();
+        assert_eq!(read_failure(&swapped), SessionFileReadFailure::Replaced);
         // Symlinked leaves and unrelated roots never resolve.
         std::fs::remove_file(&leaf).unwrap();
         symlink("/etc/hostname", &leaf).unwrap();

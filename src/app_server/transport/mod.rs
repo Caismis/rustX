@@ -6,7 +6,7 @@ use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use super::connection::AppServerConnection;
+use super::{connection::AppServerConnection, connection::Reply, delivery_access::Publication};
 
 pub mod resources;
 pub mod stdio;
@@ -44,10 +44,60 @@ impl io::Write for Record {
     }
 }
 
-fn enqueue(sender: &mpsc::Sender<String>, value: &impl Serialize) -> io::Result<()> {
-    let record = serialize_record(value)?;
+/// One encoded, size-checked record and, for a delivery response, the owner
+/// of its publication commit.
+pub(super) struct Outbound {
+    record: String,
+    publication: Option<(Publication, bool)>,
+}
+
+/// The writer's only source of records. A delivery response is committed here,
+/// after the writer is ready to transmit it and immediately before the
+/// physical write: the publication linearization point. Revocation or
+/// cancellation that wins before it replaces the record with the same id's
+/// typed failure; after it, the record is on its way and is not retracted.
+pub(super) struct Outgoing(mpsc::Receiver<Outbound>);
+impl Outgoing {
+    pub(super) async fn next(&mut self) -> Option<io::Result<String>> {
+        let Outbound {
+            record,
+            publication,
+        } = self.0.recv().await?;
+        let Some((publication, success)) = publication else {
+            return Some(Ok(record));
+        };
+        #[cfg(test)]
+        publication.probe().before_publication.enter().await;
+        Some(publication.publish_record(record, success))
+    }
+}
+
+fn enqueue(sender: &mpsc::Sender<Outbound>, value: &impl Serialize) -> io::Result<()> {
+    send(
+        sender,
+        Outbound {
+            record: serialize_record(value)?,
+            publication: None,
+        },
+    )
+}
+
+/// The response is encoded (and size-checked) now; its publication is
+/// decided only by the writer.
+fn enqueue_reply(sender: &mpsc::Sender<Outbound>, reply: Reply) -> io::Result<()> {
+    let success = matches!(reply.response, super::protocol::Response::Success(_));
+    send(
+        sender,
+        Outbound {
+            record: serialize_record(&reply.response)?,
+            publication: reply.publication.map(|publication| (publication, success)),
+        },
+    )
+}
+
+fn send(sender: &mpsc::Sender<Outbound>, outbound: Outbound) -> io::Result<()> {
     sender
-        .try_send(record)
+        .try_send(outbound)
         .map_err(|_| failure("outbound capacity exhausted"))
 }
 
@@ -75,12 +125,12 @@ async fn serve<S, W, F>(
 ) -> io::Result<()>
 where
     S: Stream<Item = io::Result<String>> + Send,
-    W: FnOnce(mpsc::Receiver<String>) -> F,
+    W: FnOnce(Outgoing) -> F,
     F: Future<Output = io::Result<()>>,
 {
     let _detach = Detach(connection.clone());
     let (outgoing, receiver) = mpsc::channel(OUTBOUND_MESSAGES);
-    let write = writer(receiver);
+    let write = writer(Outgoing(receiver));
     tokio::pin!(incoming, write);
     let mut requests: FuturesUnordered<BoxFuture<'_, _>> = FuturesUnordered::new();
     // Alternate ready observations with protocol progress. Completion priority
@@ -94,6 +144,9 @@ where
                 if connection.server_draining() {
                     // The host has supervised semantic owners. Drain encoded
                     // records with the physical write deadline before close.
+                    // Process shutdown revokes delivery publication first, as
+                    // it does on the Product Host lane.
+                    connection.revoke_delivery_access();
                     drop(requests);
                     drop(outgoing);
                     return write.await;
@@ -106,7 +159,7 @@ where
                 observation_turn = false;
             }
             response = requests.next(), if !requests.is_empty() => {
-                if let Some(Some(response)) = response { enqueue(&outgoing, &response)?; }
+                if let Some(Some(reply)) = response { enqueue_reply(&outgoing, reply)?; }
                 observation_turn = true;
             }
             record = incoming.next() => {
@@ -115,7 +168,7 @@ where
                 if record.len() > MAX_MESSAGE_BYTES { return Err(failure("inbound message exceeds limit")); }
                 if requests.len() == IN_FLIGHT_REQUESTS { return Err(failure("request capacity exhausted")); }
                 let connection = connection.clone();
-                requests.push(Box::pin(async move { connection.handle_json(&record).await }));
+                requests.push(Box::pin(async move { connection.reply_json(&record).await }));
                 observation_turn = true;
             }
             notification = connection.next_notification(), if !observation_turn => {
@@ -137,7 +190,7 @@ mod tests {
         }
         assert!(enqueue(&sender, &0).is_err());
         assert_eq!(receiver.len(), OUTBOUND_MESSAGES);
-        receiver.try_recv().unwrap();
+        assert_eq!(receiver.try_recv().unwrap().record, "0");
         enqueue(&sender, &0).unwrap();
         let mut record = Record(Vec::new());
         std::io::Write::write_all(&mut record, &vec![0; MAX_MESSAGE_BYTES]).unwrap();

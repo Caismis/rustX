@@ -235,7 +235,8 @@ where
         endpoint.clone(),
         incoming,
         |mut receiver| async move {
-            while let Some(record) = receiver.recv().await {
+            while let Some(record) = receiver.next().await {
+                let record = record?;
                 tokio::time::timeout(WRITE_TIMEOUT, writer.send(Message::Text(record.into())))
                     .await
                     .map_err(|_| failure("WebSocket write deadline exceeded"))?

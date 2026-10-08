@@ -892,3 +892,107 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
     })
     .await;
 }
+
+/// The physical writer is the publication boundary. With a delivery response
+/// produced (native work settled) and dequeued but parked before its commit,
+/// revocation wins: the client receives the same id's typed failure, never the
+/// bytes or the native path. Unrelated responses and resource settlement are
+/// unaffected, and every request is answered exactly once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn delivery_publication_commits_at_the_transport_writer() {
+    use super::protocol::{committed_delivery, delivery_request, failed_with};
+    use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
+    bounded(async {
+        let f = Fixture::with_tool(Some("present")).await;
+        let tool = committed_delivery(&f).await;
+        let probe = f.host.file_read_probe();
+        let unauthorized = ErrorData::SessionFileRead {
+            reason: SessionFileReadFailure::Unauthorized,
+        };
+        for (locate, revocation) in [
+            (false, "credential"),
+            (true, "credential"),
+            (false, "detach"),
+            (false, "close"),
+            (true, "close"),
+            (false, "none"),
+        ] {
+            let authority = CancellationToken::new();
+            let connection = Arc::new(AppServerConnection::with_delivery_access(
+                f.host.clone(),
+                authority.clone(),
+            ));
+            let (client, server) = tokio::io::duplex(1 << 20);
+            let (reader, writer) = tokio::io::split(server);
+            let serving = tokio::spawn(stdio::serve(
+                connection.clone(),
+                reader,
+                writer,
+                CancellationToken::new(),
+            ));
+            let (reader, writer) = tokio::io::split(client);
+            let client = driver::jsonl(reader, writer);
+            initialize(&client).await;
+            let target = attach(&client, &f).await;
+            probe.completed.send_replace(None);
+            probe.before_publication.arm();
+            let revoke = async {
+                probe.before_publication.wait_entered().await;
+                assert_eq!(
+                    *probe.completed.borrow(),
+                    Some(true),
+                    "the sensitive response was produced"
+                );
+                let expected = match revocation {
+                    "credential" => {
+                        authority.cancel();
+                        Some(unauthorized.clone())
+                    }
+                    "detach" => {
+                        connection
+                            .handle_request(Request {
+                                jsonrpc: JsonRpcVersion::V2,
+                                id: RequestId::Integer(31),
+                                call: Method::SessionDetach {
+                                    target: target.clone(),
+                                },
+                            })
+                            .await;
+                        Some(ErrorData::StaleAttachment)
+                    }
+                    "close" => {
+                        connection.close();
+                        Some(unauthorized.clone())
+                    }
+                    _ => None,
+                };
+                probe.before_publication.release();
+                expected
+            };
+            let (response, expected) = tokio::join!(
+                client.request(delivery_request(30, &target, &tool, locate)),
+                revoke
+            );
+            match expected {
+                Some(expected) => failed_with(&response, &expected),
+                None => assert!(matches!(response, Response::Success(_))),
+            }
+            if revocation != "close" {
+                // The connection stays usable for unrelated requests.
+                assert!(matches!(
+                    call(&client, 32, Method::ServerInfo {}).await,
+                    MethodResult::ServerInfo { .. }
+                ));
+            }
+            assert_eq!(
+                f.host.file_reads().available_permits(),
+                SESSION_FILE_MAX_READS
+            );
+            client.close().await;
+            serving.await.unwrap().unwrap();
+            connection.close();
+        }
+        f.close().await;
+    })
+    .await;
+}

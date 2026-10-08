@@ -20,7 +20,14 @@ pub(crate) const SUBPROTOCOL: &str = "rustx.product-host.file-read.v2";
 #[cfg(test)]
 #[derive(Debug)]
 pub(crate) struct ReadProbe {
+    /// Delivery operation registered, before native admission.
+    pub before_admission: Pause,
+    /// Admitted and holding a permit, before the descriptor walk opens anything.
+    pub before_open: std::sync::Arc<crate::runtime::conversation_runtime::Gate>,
     pub before_bytes: std::sync::Arc<crate::runtime::conversation_runtime::Gate>,
+    /// A delivery response dequeued by the transport writer, before its
+    /// publication commit.
+    pub before_publication: Pause,
     pub completed: tokio::sync::watch::Sender<Option<bool>>,
     pub retirement_waiting: tokio::sync::watch::Sender<bool>,
     pub authority: std::sync::Mutex<Option<CancellationToken>>,
@@ -29,11 +36,56 @@ pub(crate) struct ReadProbe {
 impl Default for ReadProbe {
     fn default() -> Self {
         Self {
+            before_admission: Pause::default(),
+            before_open: std::sync::Arc::default(),
             before_bytes: std::sync::Arc::default(),
+            before_publication: Pause::default(),
             completed: tokio::sync::watch::channel(None).0,
             retirement_waiting: tokio::sync::watch::channel(false).0,
             authority: std::sync::Mutex::default(),
         }
+    }
+}
+
+/// A one-shot async test boundary. Unarmed, it never waits.
+#[cfg(test)]
+#[derive(Debug)]
+pub(crate) struct Pause {
+    armed: std::sync::atomic::AtomicBool,
+    entered: tokio::sync::watch::Sender<bool>,
+    proceed: tokio::sync::watch::Sender<bool>,
+}
+#[cfg(test)]
+impl Default for Pause {
+    fn default() -> Self {
+        Self {
+            armed: std::sync::atomic::AtomicBool::new(false),
+            entered: tokio::sync::watch::channel(false).0,
+            proceed: tokio::sync::watch::channel(false).0,
+        }
+    }
+}
+#[cfg(test)]
+impl Pause {
+    /// The next [`Pause::enter`] parks until [`Pause::release`].
+    pub(crate) fn arm(&self) {
+        self.entered.send_replace(false);
+        self.proceed.send_replace(false);
+        self.armed.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    pub(crate) async fn enter(&self) {
+        if !self.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        let mut proceed = self.proceed.subscribe();
+        self.entered.send_replace(true);
+        let _ = proceed.wait_for(|proceed| *proceed).await;
+    }
+    pub(crate) async fn wait_entered(&self) {
+        let _ = self.entered.subscribe().wait_for(|entered| *entered).await;
+    }
+    pub(crate) fn release(&self) {
+        self.proceed.send_replace(true);
     }
 }
 

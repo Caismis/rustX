@@ -107,6 +107,17 @@ pub enum Method {
         #[schemars(range(max = 7))]
         delivery_index: usize,
     },
+    /// Cancels this connection's own in-flight `delivery/read` or
+    /// `delivery/locate` with exactly this request id.
+    ///
+    /// `accepted: true` means the cancellation won before that request's
+    /// publication commit: its one response is `delivery_cancelled`, sent
+    /// after its native work has physically settled. `false` means no such
+    /// request is running on this connection (unknown id, or its response
+    /// was already committed); its response stands as produced. Other
+    /// requests and connections are never affected.
+    #[serde(rename = "delivery/cancel")]
+    DeliveryCancel { request_id: RequestId },
     #[serde(rename = "session/uploadPrepare")]
     SessionUploadPrepare {
         target: AttachmentTarget,
@@ -458,6 +469,8 @@ pub enum ErrorData {
     },
     NotInitialized,
     AlreadyInitialized,
+    /// The client cancelled this delivery request before publication.
+    DeliveryCancelled,
     StaleAttachment,
     StaleRuntime,
     ControllerInUse,
@@ -506,6 +519,9 @@ pub enum MethodResult {
     SessionFileBytes {
         file: crate::tools::session_files::SessionFileReference,
         data: String,
+    },
+    DeliveryCancel {
+        accepted: bool,
     },
     SessionFileLocation {
         file: crate::tools::session_files::SessionFileReference,

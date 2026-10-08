@@ -135,6 +135,32 @@
           ]
         },
         {
+          "description": "Cancels this connection's own in-flight `delivery/read` or\n`delivery/locate` with exactly this request id.\n\n`accepted: true` means the cancellation won before that request's\npublication commit: its one response is `delivery_cancelled`, sent\nafter its native work has physically settled. `false` means no such\nrequest is running on this connection (unknown id, or its response\nwas already committed); its response stands as produced. Other\nrequests and connections are never affected.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "delivery/cancel"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "request_id": {
+                  "$ref": "#/$defs/RequestId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "request_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
           "type": "object",
           "properties": {
             "method": {
@@ -5415,6 +5441,23 @@
             "type",
             "file",
             "data"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "accepted": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "const": "delivery_cancel"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "accepted"
           ]
         },
         {
@@ -20063,6 +20106,20 @@
             "kind": {
               "type": "string",
               "const": "already_initialized"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "The client cancelled this delivery request before publication.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "delivery_cancelled"
             }
           },
           "required": [

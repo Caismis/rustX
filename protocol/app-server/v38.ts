@@ -41,6 +41,12 @@ export type Request1 =
       };
     }
   | {
+      method: 'delivery/cancel';
+      params: {
+        request_id: RequestId;
+      };
+    }
+  | {
       method: 'session/uploadPrepare';
       params: {
         target: AttachmentTarget;
@@ -1024,6 +1030,10 @@ export type MethodResult =
       file: SessionFileReference;
       data: string;
       type: 'session_file_bytes';
+    }
+  | {
+      accepted: boolean;
+      type: 'delivery_cancel';
     }
   | {
       file: SessionFileReference;
@@ -2896,6 +2906,9 @@ export type ErrorData =
     }
   | {
       kind: 'already_initialized';
+    }
+  | {
+      kind: 'delivery_cancelled';
     }
   | {
       kind: 'stale_attachment';

@@ -5,14 +5,32 @@
 //! holding delivery access (stdio owner or separate WebSocket credential).
 //! Neither JSON fields, client names, coordinates nor paths create authority:
 //! the caller passes a cancellation token minted by transport authentication.
+//!
+//! On the ordinary lane each request is one [`Operation`] owned by its
+//! connection, from registration to the publication commit:
+//!
+//! ```text
+//! register (exact JSON-RPC id) -> native admission -> fences -> physical settlement
+//!   -> response queued -> transport writer: Publication::commit -> bytes on the wire
+//! delivery/cancel (same connection, same id) -> Running => Cancelled, token cancelled
+//! revocation (credential, detach, close)     -> authority/attachment checked at commit
+//! ```
+//!
+//! Cancellation or revocation that wins before the commit replaces the
+//! response with its typed failure for the same id. After the commit the
+//! response is transmitted; nothing retracts it.
 use super::{
     connection::{Route, client_error, domain, host_error, manager_error},
     host::AppServerHost,
-    protocol::{ErrorData, MethodResult, RpcError},
+    protocol::{ErrorData, MethodResult, RequestId, Response, RpcError},
 };
 use crate::tools::session_files::SessionFileReadFailure as FileFailure;
 use base64::Engine;
-use std::{io, path::PathBuf, sync::Arc};
+use std::{
+    io,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 use tokio_util::sync::CancellationToken;
 
 /// Which canonical roots may contain the original Session cwd.
@@ -164,11 +182,14 @@ async fn resolve(
         #[cfg(test)]
         let fences = std::sync::atomic::AtomicUsize::new(0);
         let authorized = || {
-            // Third fence: after the unchanged descriptor owner's leaf open,
+            // First call: admitted, before the descriptor walk opens anything.
+            // Third: after the unchanged descriptor owner's leaf open,
             // immediately before it reads any bytes or publishes identity.
             #[cfg(test)]
-            if fences.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 2 {
-                probe.before_bytes.enter();
+            match fences.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                0 => probe.before_open.enter(),
+                2 => probe.before_bytes.enter(),
+                _ => {}
             }
             check(&read_authorization)?;
             let mapping_current = catalog.blocking_lock().file_mapping_matches(
@@ -272,5 +293,175 @@ impl Grant {
 impl Drop for Grant {
     fn drop(&mut self) {
         self.revoked.cancel();
+    }
+}
+
+/// Where one ordinary-lane delivery request stands relative to its commit.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum State {
+    Running,
+    /// `delivery/cancel` won: the terminal response is `delivery_cancelled`.
+    Cancelled,
+    /// The publication decision was made; cancellation no longer applies.
+    Settled,
+}
+
+/// One in-flight delivery request of one connection.
+pub(super) struct Operation {
+    state: Mutex<State>,
+    /// A child of the connection's delivery authority. Cancelling it (by
+    /// `delivery/cancel`, credential revocation or close) fails every native
+    /// fence the request has not passed yet.
+    token: CancellationToken,
+}
+
+/// One connection's delivery requests, keyed by their exact JSON-RPC ids.
+/// Only that connection can name them: a cancel from anywhere else finds an
+/// unrelated (or empty) table.
+#[derive(Default)]
+pub(super) struct Operations(Mutex<std::collections::HashMap<String, Arc<Operation>>>);
+
+fn key(id: &RequestId) -> String {
+    serde_json::to_string(id).expect("request id serializes")
+}
+
+impl Operations {
+    /// Registers one request before its native admission. An id already in
+    /// flight on this connection is refused, so a cancel names exactly one
+    /// operation.
+    pub(super) fn register(
+        self: &Arc<Self>,
+        id: &RequestId,
+        authority: &CancellationToken,
+        route: Arc<Route>,
+        #[cfg(test)] probe: Arc<super::product_host::ReadProbe>,
+    ) -> Option<Publication> {
+        let operation = Arc::new(Operation {
+            state: Mutex::new(State::Running),
+            token: authority.child_token(),
+        });
+        let mut table = self.0.lock().expect("delivery operations");
+        if table.contains_key(&key(id)) {
+            return None;
+        }
+        table.insert(key(id), operation.clone());
+        Some(Publication {
+            operations: self.clone(),
+            id: id.clone(),
+            operation,
+            authority: authority.clone(),
+            route,
+            #[cfg(test)]
+            probe,
+        })
+    }
+
+    /// Cancels this connection's exact running request. `true` means the
+    /// cancellation won: that request's only response is `delivery_cancelled`.
+    /// `false` means no such request is running here (unknown, never
+    /// registered, or its publication was already decided).
+    pub(super) fn cancel(&self, id: &RequestId) -> bool {
+        let Some(operation) = self
+            .0
+            .lock()
+            .expect("delivery operations")
+            .get(&key(id))
+            .cloned()
+        else {
+            return false;
+        };
+        let mut state = operation.state.lock().expect("delivery operation");
+        match *state {
+            State::Running => {
+                *state = State::Cancelled;
+                operation.token.cancel();
+                true
+            }
+            State::Cancelled => true,
+            State::Settled => false,
+        }
+    }
+}
+
+/// The publication owner of one delivery response. It travels with the
+/// serialized response through the bounded outbound queue and is committed by
+/// the transport writer immediately before the physical write (or by the
+/// in-process caller when it returns). Dropping it uncommitted publishes
+/// nothing and unregisters the request.
+pub(super) struct Publication {
+    operations: Arc<Operations>,
+    id: RequestId,
+    operation: Arc<Operation>,
+    authority: CancellationToken,
+    route: Arc<Route>,
+    #[cfg(test)]
+    probe: Arc<super::product_host::ReadProbe>,
+}
+
+impl Publication {
+    /// The request's cancellation token, passed to every native fence.
+    pub(super) fn token(&self) -> CancellationToken {
+        self.operation.token.clone()
+    }
+
+    #[cfg(test)]
+    pub(super) fn probe(&self) -> &super::product_host::ReadProbe {
+        &self.probe
+    }
+
+    /// The publication linearization point. `Ok` commits the response as
+    /// produced; `Err` is the typed terminal failure that replaces it.
+    ///
+    /// A cancellation accepted earlier always wins. A success (bytes or a
+    /// native path) additionally requires the connection's delivery
+    /// authority and the exact attachment to be current now; a failure
+    /// carries nothing sensitive and keeps its own reason.
+    pub(super) fn commit(&self, success: bool) -> Result<(), RpcError> {
+        let mut state = self.operation.state.lock().expect("delivery operation");
+        let decision = match *state {
+            State::Cancelled => Err(domain(ErrorData::DeliveryCancelled)),
+            State::Settled | State::Running if !success => Ok(()),
+            State::Settled | State::Running => check_rpc(&self.authority).and_then(|()| {
+                self.route
+                    .attachment
+                    .read_authority()
+                    .map(|_| ())
+                    .map_err(client_error)
+            }),
+        };
+        *state = State::Settled;
+        decision
+    }
+
+    /// Commits a typed response for the in-process caller.
+    pub(super) fn publish(&self, response: Response) -> Response {
+        let success = matches!(response, Response::Success(_));
+        match self.commit(success) {
+            Ok(()) => response,
+            Err(error) => super::connection::failure(Some(self.id.clone()), error),
+        }
+    }
+
+    /// Commits an already serialized response for a transport writer.
+    pub(super) fn publish_record(&self, record: String, success: bool) -> io::Result<String> {
+        match self.commit(success) {
+            Ok(()) => Ok(record),
+            Err(error) => super::transport::serialize_record(&super::connection::failure(
+                Some(self.id.clone()),
+                error,
+            )),
+        }
+    }
+}
+
+impl Drop for Publication {
+    fn drop(&mut self) {
+        let mut table = self.operations.0.lock().expect("delivery operations");
+        if table
+            .get(&key(&self.id))
+            .is_some_and(|current| Arc::ptr_eq(current, &self.operation))
+        {
+            table.remove(&key(&self.id));
+        }
     }
 }
