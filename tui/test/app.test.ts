@@ -25,6 +25,7 @@ import {
 import { TransportClosedError } from "../src/app-server/transport.ts";
 import { emptyPresentationState } from "../src/presentation/projection.ts";
 import { TransientFeedbackSurface } from "../src/ui/components/transient-feedback.ts";
+import { DeliverySelector } from "../src/ui/components/delivery-selector.ts";
 import type { AppServerHost } from "../src/app-server/host.ts";
 import type { AppServerSession } from "../src/app-server/session.ts";
 import type {
@@ -575,6 +576,132 @@ describe("RustxTuiApp lifecycle", () => {
         await teardown();
         rmSync(dir, { recursive: true, force: true });
       }
+    }
+  });
+
+  it("/files reports an Open the opener already received once, after retirement, never into a successor", { timeout: 10_000 }, async () => {
+    const { lstatSync, mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "rustx-files-open-"));
+    const path = join(dir, "报告 final.md");
+    writeFileSync(path, "delivered");
+    const leaf = lstatSync(path, { bigint: true });
+    const file = {
+      scope: { conversation_id: "conv-original", device: "1", inode: "2" },
+      path: "out/报告 final.md", name: "报告 final.md", description: null, mime_type: "text/markdown",
+    };
+    const record = { messageId: "tool-msg", index: 0, count: 1, file };
+    const location = { file, path, device: leaf.dev.toString(), inode: leaf.ino.toString() };
+    const transientPrototype = TransientFeedbackSurface.prototype as unknown as {
+      replace: (feedback: { level: "info" | "error"; text: string }) => void;
+    };
+    const selectorPrototype = DeliverySelector.prototype as unknown as {
+      settle: (operation: number, level: "info" | "error", text: string) => void;
+    };
+    const originalReplace = transientPrototype.replace;
+    const originalSettle = selectorPrototype.settle;
+    const reports: string[] = [];
+    const settled: string[] = [];
+    transientPrototype.replace = function(feedback): void {
+      reports.push(`${feedback.level}: ${feedback.text}`);
+      originalReplace.call(this, feedback);
+    };
+    selectorPrototype.settle = function(operation, level, text): void {
+      settled.push(text);
+      originalSettle.call(this, operation, level, text);
+    };
+    try {
+      // `escape` with an action in flight cancels that action and keeps the
+      // surface; `snapshot` and `replacement` retire the surface.
+      for (const [when, retirement, exit] of [
+        ["before launch", "snapshot", 0],
+        ["after launch", "snapshot", 0],
+        ["after launch", "snapshot", 3],
+        ["after launch", "replacement", 0],
+        ["after launch", "replacement", 3],
+        ["after launch", "escape", 0],
+      ] as const) {
+        const label = `${when}, ${retirement}, exit ${exit}`;
+        reports.length = 0;
+        settled.length = 0;
+        const state = { ...emptyPresentationState(sessionModel("alpha/model-a")), attempt: attemptView() };
+        const session = fakeSession(state) as unknown as Record<string, unknown> & { publishState(state: unknown): void; publishSnapshot(): void };
+        const page = deferred<void>();
+        const located = deferred<typeof location>();
+        const locating = deferred<AbortSignal>();
+        Object.assign(session, {
+          deliveryAccess: true,
+          deliveryPage: async () => { page.resolve(); return { records: [record] }; },
+          locateDelivery: async (_requested: unknown, signal: AbortSignal) => { locating.resolve(signal); return located.promise; },
+        });
+        const launched = deferred<void>();
+        const exited = deferred<number>();
+        let launches = 0;
+        const app = new RustxTuiApp({
+          host: fakeHost(),
+          session: session as unknown as AppServerSession,
+          sessionSettings: SESSION_SETTINGS,
+          cwd: "/work/project",
+          opener: {
+            command: "xdg-open",
+            launch: async () => { launches += 1; launched.resolve(); return exited.promise; },
+          },
+        });
+        const running = app.run();
+        try {
+          process.stdin.emit("data", "/files\r");
+          await page.promise;
+          await waitForApplicationContinuation();
+          process.stdin.emit("data", "o");
+          const signal = await locating.promise;
+          if (when === "after launch") {
+            located.resolve(location);
+            await launched.promise;
+          }
+          if (retirement === "escape") {
+            process.stdin.emit("data", "\u001b");
+            await waitForPiEscapeDisambiguation();
+          } else if (retirement === "snapshot") {
+            session.publishSnapshot();
+          } else {
+            session.publishState({ ...state, pendingInteractions: [approvalInteraction()] });
+          }
+          await waitForApplicationContinuation();
+          assert.equal(signal.aborted, true, `${label}: the action is cancelled`);
+          located.resolve(location);
+          exited.resolve(exit);
+          await waitForApplicationContinuation();
+          await waitForApplicationContinuation();
+          const opens = reports.filter((report) => report.includes("open request") || report.includes("to open"));
+          if (retirement === "escape") {
+            // Still on screen: the one report is the selector's, and a
+            // cancellation after the launch does not turn it into "nothing".
+            assert.deepEqual(settled, [`xdg-open accepted the request to open ${path}`], label);
+            assert.deepEqual(opens, [], label);
+            continue;
+          }
+          assert.deepEqual(settled, [], `${label}: a retired selector is never written to`);
+          if (when === "before launch") {
+            assert.equal(launches, 0, `${label}: nothing launched`);
+            assert.deepEqual(opens, [], `${label}: nothing happened, nothing owed`);
+          } else {
+            assert.equal(launches, 1);
+            assert.deepEqual(opens, [exit === 0
+              ? `info: xdg-open accepted the request to open ${path}`
+              : "error: Failed: xdg-open did not accept the open request (exit 3)"], `${label}: exactly one terminal report`);
+          }
+        } finally {
+          located.resolve(location);
+          exited.resolve(exit);
+          await app.quit();
+          await running;
+        }
+      }
+    } finally {
+      transientPrototype.replace = originalReplace;
+      selectorPrototype.settle = originalSettle;
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 

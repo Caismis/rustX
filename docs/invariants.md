@@ -33,20 +33,32 @@ revocation (credential removal, close, shutdown, detach) that wins before the co
 prevents that response from publishing bytes or a native path; the request still
 answers exactly once, with a typed failure for the same id, after its native work
 physically settled. A response committed before cancellation or revocation stands
-and is never reported as unpublished. In the TUI each `/files` interaction owns its
+and is never reported as unpublished. The TUI client reserves one of a connection's
+16 in-flight request slots for `delivery/cancel` and sends cancellations through it
+in abort order, so ordinary requests can neither block a cancellation nor make it a
+seventeenth request. A refused cancellation ends the connection rather than
+disappearing. In the TUI each `/files` interaction owns its
 Save/Open: retiring it (Escape, overlay close or replacement, Session focus change,
 snapshot replacement, disconnect, shutdown) cancels the native request and every
 uncommitted local effect. A Save writes, syncs and closes its complete file in a
-private staging directory it created beside the destination, and commits by one
-`link` to the exact typed destination, which never replaces an existing entry;
-cancellation counts only up to that link's dispatch. Staging paths are built by
-concatenation from the destination's own spelling of its parent, so `..` after a
-symlink resolves to the same directory as the destination. A failed link is
+private staging directory it created in the destination's parent, and commits by
+one `link` to the exact typed destination, which never replaces an existing entry;
+cancellation counts only up to that link's dispatch. The parent is opened through
+the destination's own spelling, so `..` after a symlink resolves as for the
+destination. The staging directory and staged file are reached only through held
+descriptors (`/proc/self/fd`), so renaming or replacing their names cannot make the
+link publish, or cleanup remove, anything but this save's own file. Systems
+without descriptor paths refuse Save. A failed link is
 reported as published only when the destination names the staged file, as refused
 only for a definite rejection code, and as uncertain otherwise, never as
 unpublished because the destination is now absent or foreign. Nothing removes the
-destination, cleanup removes only the save's own staging names, and staging that
-cannot be removed is reported. An Open commits when the OS opener is spawned.
+destination. Cleanup unlinks only the staged file through its held directory, and
+removes the empty staging directory by name only while that name still refers to
+it. Staging that is moved, replaced or not removable is reported. "Saved" is a fact
+about the commit, not a promise that the entry keeps its name. An Open commits when
+the OS opener is spawned. It is best effort: its identity check does not bind the
+file the opener later resolves. Each action records its committed effect itself,
+and an outcome owed after retirement is reported once on the transient surface.
 Externally derived names, paths, descriptions and errors never reach the terminal
 unsanitized, and a delivered name becomes an editable destination only when it
 renders as itself.

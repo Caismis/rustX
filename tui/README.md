@@ -127,7 +127,7 @@ pnpm --dir tui start --connect ws://127.0.0.1:8080 --token-file /private/user/so
 Add `--delivery-access-token-file /private/user/delivery-token` when the server
 operator provisioned committed-delivery access for this client (see `/files`).
 
-Both modes use App Server V7. `--config` and `--runtime-root` bind the owned
+Both modes use App Server protocol v38. `--config` and `--runtime-root` bind the owned
 local child process; they do not become Session settings. `--workspace` supplies
 the Session cwd and `--model` supplies explicit Session intent. Remote Workspace
 paths are absolute server paths. The TUI never parses authored configuration or
@@ -1126,20 +1126,28 @@ a model request.
 - **Save** writes the original bytes (at most 512 KiB) to a path you type on the
   **TUI machine**, exactly as typed (spaces included). The file is written and
   synced in a private `.rustx-save-*` directory beside the destination, then
-  appears at the destination in one step. Existing files, directories and symlinks
-  are never overwritten, and a cancelled or failed save leaves no partial file. If
-  that staging directory cannot be removed, the save says where it is. Filesystems
-  without hard links are refused rather than written unsafely. If the filesystem
+  appears at the destination in one step. That directory is held open throughout,
+  so renaming or replacing it cannot make the save publish or delete anything but
+  its own file. Existing files, directories and symlinks are never overwritten, and
+  a cancelled or failed save leaves no partial file. If that staging directory
+  cannot be removed, or was moved or replaced, the save says where it was created.
+  Filesystems without hard links, and systems without `/proc/self/fd` (Save is
+  Linux-only), are refused rather than written unsafely. "Saved" means the file was
+  created at that path; anyone who can write that directory may rename it later. If the filesystem
   reports an ambiguous error (such as an I/O error) for the final step and the
   file cannot be confirmed, the save says its outcome is unknown; check the
   destination yourself. A filename
   containing terminal control characters is not prefilled; type the destination
   yourself. Closing `/files` (or switching
   Session, reconnecting or quitting) cancels a running action on the server too.
-- **Open** is offered only for the App Server child this TUI spawned. It works only
-  after the native side verifies the file and this machine's own path is proven to
-  be the same file. It reports that the system opener accepted the request, not
-  that an application opened.
+- **Open** is best effort and is offered only for the App Server child this TUI
+  spawned. It asks the system opener only after the native side verifies the file
+  and this machine's own path names the same regular file at that moment. The
+  opener looks the path up again itself, so a file renamed or replaced in between
+  can be what it opens. Open reports only that the opener accepted or rejected the
+  request, never that an application opened, or which file it showed. Use Save when
+  the exact file matters. An Open the opener already received is still reported
+  after `/files` closes.
 
 The owned stdio child grants delivery access to this TUI by explicit delegation.
 A remote (`--connect`) App Server grants it only for the operator's separate

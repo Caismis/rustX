@@ -857,7 +857,7 @@ use the existing subscription as invalidation signals. Neither historical reads
 nor Trace cursors advance a subscription cursor. See [Trace architecture](trace.md)
 for source authorities, ordering, read cuts, repair, bounds and unavailable facts.
 
-Generated Rust Schema/TypeScript, Web Console and TUI all negotiate version 30.
+Generated Rust Schema/TypeScript, Web Console and TUI all negotiate version 38.
 Earlier versions are rejected; there are no aliases or dual-version paths.
 
 `session/trace` accepts optional `records: TraceCursor[]` (maximum 512) and returns
@@ -901,7 +901,7 @@ Complete = terminal
 The obsolete `GoalView.armed` member and every activation-only observation are
 removed, so no snapshot and no `goal_changed` event can represent
 `Active + disarmed`. Native Runtime Client version 43 introduced this vocabulary;
-current version 56 retains it and rejects older peers by strict negotiation. This remains mandatory
+current version 59 retains it and rejects older peers by strict negotiation. This remains mandatory
 App Server protocol v38, with no compatibility field and no activation mode.
 
 Clients derive presentation from the phase alone: `Active` offers Pause,
@@ -972,7 +972,7 @@ other pre-1.0 schema changes, older stores are refused explicitly; no migration
 or compatibility representation is introduced.
 
 Native Runtime Client version 37 introduced the mandatory pending revision and
-`pending_inbound_changed` event. Current version 56 retains both with no
+`pending_inbound_changed` event. Current version 59 retains both with no
 compatibility decoder.
 
 Snapshot/attachment reads also reconcile Pending Inbound directly from durable
@@ -1289,7 +1289,7 @@ recovery uses existing idempotent cleanup/finalization and idempotent fence rele
 A client-side unknown outcome requires authoritative observation, not cleanup
 recovery or mutation replay. Only server-confirmed committed outcomes grant the
 explicit recovery action. These recovery semantics remain in App Server v38;
-native Runtime Client is v53.
+native Runtime Client is v59.
 
 ## Rich historical Trace inspection (#364)
 
@@ -1565,6 +1565,18 @@ means no such request is running here (unknown id, or its response was already
 committed) and that response stands as produced. Without delivery access the
 method is `unauthorized`; another connection's ids are never visible. Cancelling
 one request never affects another request or the connection.
+
+**Cancellation capacity.** A connection carries at most `IN_FLIGHT_REQUESTS`
+(16) semantic requests; a seventeenth ends it. `delivery/cancel` is answered at
+once, without awaiting native work, so its slot is held only briefly. A client
+that cancels must therefore keep one slot for it: the TUI counts each request
+until its response arrives (never earlier than the server frees the slot),
+admits at most 15 ordinary requests, and reserves the sixteenth for
+`delivery/cancel`, sending cancellations one at a time in abort order and
+dropping one whose request settled first. No number of ordinary requests can
+then delay a cancellation beyond the previous cancel's answer, or make it a
+seventeenth request. A server that refuses an owed cancellation breaks this
+contract, and the TUI ends the connection rather than lose it silently.
 
 **Publication commit.** A delivery response is serialized (and size-checked)
 into the ordinary bounded outbound queue together with its publication owner.

@@ -104,9 +104,13 @@ import {
   DeliveryResidueError,
   DeliveryUncertainError,
   deliveryDestination,
+  launchOpener,
+  localEffect,
   openDelivery,
   saveDelivery,
   systemOpener,
+  type LocalEffect,
+  type Opener,
 } from "../app-server/delivery-files.ts";
 import { TransportClosedError } from "../app-server/transport.ts";
 import {
@@ -177,6 +181,8 @@ export interface RustxTuiAppOptions {
    * as a second opinion about where anything is running.
    */
   cwd?: string;
+  /** The system opener `/files` Open asks; this platform's by default. */
+  opener?: { command: string | undefined; launch: Opener };
 }
 
 /**
@@ -202,6 +208,7 @@ export class RustxTuiApp {
   #connecting: { queued?: string; history?: PresentationState } | undefined;
   #initialResumePage: SessionCatalogPage | undefined;
   readonly #workspace: string | undefined;
+  readonly #opener: { command: string | undefined; launch: Opener };
 
   readonly #tui: TUI;
   readonly #startup = new Container();
@@ -287,6 +294,7 @@ export class RustxTuiApp {
     this.#initialResumePage = options.resumePage;
     this.#initialConnection = options.connecting;
     this.#workspace = options.cwd;
+    this.#opener = options.opener ?? { command: systemOpener(), launch: launchOpener };
 
     this.#tui = new TUI(new ProcessTerminal());
     this.#editor = new ComposerEditor(this.#tui);
@@ -1571,12 +1579,14 @@ export class RustxTuiApp {
     const session = lease.session;
     if (session === undefined || !this.#isCurrentPresentationLease(lease)) return;
     const sharedHost = this.#host.ownership === "owned_child";
-    const opener = systemOpener();
+    const opener = this.#opener.command;
+    const launch = this.#opener.launch;
     const noAccess = this.#host.ownership === "owned_child"
       ? "the App Server did not grant delivery access to this connection"
       : "this connection holds no delivery access; reconnect with --delivery-access-token-file";
     const availability: DeliveryAvailability = {
-      save: session.deliveryAccess ? undefined : noAccess,
+      save: !session.deliveryAccess ? noAccess
+        : process.platform !== "linux" ? "Save stages through /proc/self/fd, which this system does not provide" : undefined,
       open: !session.deliveryAccess ? noAccess
         : !sharedHost ? "this App Server's files are not on this machine; use Save"
           : opener === undefined ? "no system opener on this platform" : undefined,
@@ -1615,42 +1625,45 @@ export class RustxTuiApp {
       const abort = new AbortController();
       const signal = AbortSignal.any([interaction.signal, abort.signal]);
       inFlight = { operation, abort };
+      // What this action has done outside the process, recorded by the
+      // action at the moment it happens.
+      const effect = localEffect();
       const task = (async () => {
         if (action === "save") {
           const saved = await saveDelivery(
             () => session.readDelivery(record, signal),
             deliveryDestination(destination ?? ""),
             signal,
+            undefined,
+            effect,
           );
           const text = `Saved ${record.file.name} to ${saved.path}`;
           return saved.residue === undefined ? text
-            : `${text}; warning: its staging directory remains at ${saved.residue.path} (${compactDiagnostic(saved.residue.cause)})`;
+            : `${text}; warning: its staging directory (created at ${saved.residue.path}) was not removed (${compactDiagnostic(saved.residue.cause)})`;
         }
         const requested = await openDelivery(() => session.locateDelivery(record, signal), {
           sharedHost,
           opener,
+          launch,
           signal,
+          effect,
         });
         return `${requested.opener} accepted the request to open ${requested.path}`;
       })();
       // One terminal report per operation. A live surface shows every
-      // outcome. Once the interaction is retired, only an effect that
-      // happened or may have happened (a committed save or launch, an
-      // uncertain publication, or staging residue left behind) is still
-      // reported, once, on the transient surface; a cancelled or failed
-      // unpublished action is not reported to a successor.
-      const report = (level: "info" | "error", text: string, happened: boolean) => {
+      // outcome. Once the interaction is retired, an outcome is still owed
+      // only if the action committed an external effect (a dispatched save
+      // link or a spawned opener) or left staging behind: it is reported
+      // once, on the transient surface, never into a successor surface. A
+      // cancelled or failed action that did neither is not reported.
+      const report = (level: "info" | "error", text: string) => {
         const safe = sanitizeField(text);
         if (current()) selector.settle(operation, level, safe);
-        else if (happened) this.#showTransient(level, safe);
+        else if (effect.committed || effect.residue) this.#showTransient(level, safe);
       };
       void task.then(
-        (text) => report("info", text, true),
-        (error: unknown) => report(
-          "error",
-          deliveryFailure(error, signal),
-          error instanceof DeliveryResidueError || error instanceof DeliveryUncertainError,
-        ),
+        (text) => report("info", text),
+        (error: unknown) => report("error", deliveryFailure(error, signal, effect)),
       ).finally(() => {
         if (inFlight?.operation === operation) inFlight = undefined;
       });
@@ -2182,11 +2195,12 @@ function nextTick(): Promise<void> {
 }
 
 /** One bounded line for a failed or cancelled delivery action. */
-function deliveryFailure(error: unknown, signal: AbortSignal): string {
+function deliveryFailure(error: unknown, signal: AbortSignal, effect: LocalEffect): string {
   if (error instanceof DeliveryResidueError || error instanceof DeliveryUncertainError) return error.message;
   // Cancellation won before Save's publication admission, Open's launch, or
-  // the server's response publication.
-  if ((signal.aborted && error === signal.reason) || isDeliveryCancelled(error)) {
+  // the server's response publication. A committed effect is never
+  // described as nothing having happened, whatever aborted afterwards.
+  if (!effect.committed && ((signal.aborted && error === signal.reason) || isDeliveryCancelled(error))) {
     return "Cancelled; nothing was saved or opened";
   }
   if (error instanceof TransportClosedError) return "Disconnected from the App Server; nothing was written";

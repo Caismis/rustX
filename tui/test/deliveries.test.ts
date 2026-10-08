@@ -11,6 +11,7 @@
 import assert from "node:assert/strict";
 import {
   chmodSync,
+  constants,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -38,6 +39,7 @@ import {
   SAVE_FILES,
   decodeDelivery,
   deliveryDestination,
+  localEffect,
   openDelivery,
   saveDelivery,
   type SaveFiles,
@@ -99,12 +101,14 @@ interface HandleHooks {
   sync?: (proceed: () => Promise<void>) => Promise<void>;
   close?: (proceed: () => Promise<void>) => Promise<void>;
 }
-/** The real Save filesystem operations, with explicit interposition points. */
+/** The real Save filesystem operations, with explicit interposition points
+ * on the staged file (the one handle Save creates). */
 function saveFiles(over: Partial<SaveFiles> = {}, hooks: HandleHooks = {}): SaveFiles {
   return {
     ...SAVE_FILES,
     open: async (path, flags, mode) => {
       const handle = await SAVE_FILES.open(path, flags, mode);
+      if ((flags & constants.O_CREAT) === 0) return handle;
       const write = handle.write.bind(handle) as (buffer: Uint8Array, offset: number, length: number) => Promise<Written>;
       const sync = handle.sync.bind(handle);
       const close = handle.close.bind(handle);
@@ -519,7 +523,10 @@ describe("atomic Save publication", () => {
       const inspection = failure("EACCES");
       const blind = await outcome(unknown, saveFiles({
         link: async () => { throw linkError; },
-        lstat: async () => { throw inspection; },
+        lstat: async (path, options) => {
+          if (path === unknown) throw inspection;
+          return SAVE_FILES.lstat(path, options);
+        },
       }));
       assert.ok(blind instanceof DeliveryUncertainError);
       assert.equal(blind.path, unknown);
@@ -611,7 +618,9 @@ describe("atomic Save publication", () => {
       assert.ok(existsSync(join(other, stage, "file")), "the staged file is in the real parent");
       writes.release();
       assert.deepEqual(await saving, { path: destination });
-      assert.deepEqual(linked, [[`${workspace}/link/../${stage}/file`, destination]]);
+      assert.equal(linked.length, 1);
+      assert.match(linked[0]![0], /^\/proc\/self\/fd\/\d+\/file$/, "the staged file, through its held directory");
+      assert.equal(linked[0]![1], destination, "the destination exactly as spelled");
       assert.deepEqual(readFileSync(join(other, "报告 final.md")), BODY_BYTES);
       assert.deepEqual(listing(other), ["nested", "报告 final.md"]);
       settled();
@@ -628,6 +637,192 @@ describe("atomic Save publication", () => {
         assert.deepEqual(readFileSync(real), BODY_BYTES);
       }
       assert.deepEqual(listing(join(workspace, "sub dir")), [" naïve résumé.txt ", "报告.md"].sort());
+    });
+  });
+
+  it("binds staging to the objects it created, whatever later happens to their names", async () => {
+    await inDir("rustx-save-owned-", async (dir) => {
+      /** Someone who may write `dir` moves the staging name away and plants
+       * their own directory, holding their own `file`, under it. */
+      const plant = (stage: string, moved: string) => {
+        renameSync(join(dir, stage), join(dir, moved));
+        mkdirSync(join(dir, stage));
+        writeFileSync(join(dir, stage, "file"), "theirs");
+        return lstatSync(join(dir, stage, "file")).ino;
+      };
+      const fresh = (() => {
+        let seen: string[] = [];
+        return () => {
+          const [stage] = staging(dir).filter((name) => !seen.includes(name));
+          seen = staging(dir);
+          assert.ok(stage, "this save's staging directory");
+          return stage;
+        };
+      })();
+      const moved = /moved or replaced, so it was not removed/;
+      const causeOf = (outcome: { residue?: { cause: unknown } }) => String((outcome.residue?.cause as Error).message);
+
+      // 1. Renamed after creation, mid-write: the bytes are still written to,
+      // and published from, the directory this save created.
+      const renamed = join(dir, "renamed");
+      const one = await saveDelivery(answer, renamed, undefined, saveFiles({}, {
+        write: async (call, write) => { if (call === 1) renameSync(join(dir, fresh()), join(dir, "moved 1")); return write(); },
+      }));
+      assert.equal(one.path, renamed);
+      assert.deepEqual(readFileSync(renamed), BODY_BYTES);
+      assert.deepEqual(listing(join(dir, "moved 1")), [], "its staged file was removed where it is now");
+      assert.match(causeOf(one), moved, "the moved directory is reported, not chased");
+
+      // 2. Replaced by a symlink to a foreign directory holding a `file`.
+      mkdirSync(join(dir, "elsewhere"));
+      writeFileSync(join(dir, "elsewhere", "file"), "theirs");
+      const elsewhere = lstatSync(join(dir, "elsewhere", "file")).ino;
+      const symlinked = join(dir, "symlinked");
+      let link = "";
+      const two = await saveDelivery(answer, symlinked, undefined, saveFiles({}, {
+        write: async (call, write) => {
+          if (call === 1) {
+            link = fresh();
+            renameSync(join(dir, link), join(dir, "moved 2"));
+            symlinkSync(join(dir, "elsewhere"), join(dir, link));
+          }
+          return write();
+        },
+      }));
+      assert.deepEqual(readFileSync(symlinked), BODY_BYTES);
+      assert.equal(readFileSync(join(dir, "elsewhere", "file"), "utf8"), "theirs");
+      assert.equal(lstatSync(join(dir, "elsewhere", "file")).ino, elsewhere, "never written, linked or unlinked");
+      assert.equal(readlinkSync(join(dir, link)), join(dir, "elsewhere"), "the symlink is not removed");
+      assert.deepEqual(listing(join(dir, "moved 2")), []);
+      assert.match(causeOf(two), moved);
+
+      // 4. Replaced between the staged file's close and the publication: the
+      // link still publishes this save's bytes, never the planted file.
+      const closed = join(dir, "closed");
+      let planted3 = { stage: "", ino: 0 };
+      const three = await saveDelivery(answer, closed, undefined, saveFiles({}, {
+        close: async (close) => { await close(); const stage = fresh(); planted3 = { stage, ino: plant(stage, "moved 3") }; },
+      }));
+      assert.deepEqual(readFileSync(closed), BODY_BYTES, "this save's bytes, not theirs");
+      assert.notEqual(lstatSync(closed).ino, planted3.ino);
+      assert.equal(readFileSync(join(dir, planted3.stage, "file"), "utf8"), "theirs");
+      assert.equal(lstatSync(join(dir, planted3.stage, "file")).ino, planted3.ino);
+      assert.deepEqual(listing(join(dir, "moved 3")), []);
+      assert.match(causeOf(three), moved, "the planted directory is not removed either");
+
+      // 5. Replaced after the link, before cleanup: cleanup removes this
+      // save's staged file where it is and never the planted one.
+      const cleaned = join(dir, "cleaned");
+      let planted4 = { stage: "", ino: 0 };
+      const four = await saveDelivery(answer, cleaned, undefined, saveFiles({
+        link: async (existing, path) => {
+          await SAVE_FILES.link(existing, path);
+          const stage = fresh();
+          planted4 = { stage, ino: plant(stage, "moved 4") };
+        },
+      }));
+      assert.deepEqual(readFileSync(cleaned), BODY_BYTES);
+      assert.equal(lstatSync(cleaned).nlink, 1, "the staged name is gone");
+      assert.equal(lstatSync(join(dir, planted4.stage, "file")).ino, planted4.ino);
+      assert.deepEqual(listing(join(dir, "moved 4")), []);
+      assert.match(causeOf(four), moved);
+
+      // 11. Not published (the destination exists) and the staging moved: a
+      // residue error naming where it was made, the destination untouched.
+      writeFileSync(join(dir, "occupied"), "kept");
+      const five = await saveDelivery(answer, join(dir, "occupied"), undefined, saveFiles({}, {
+        write: async (call, write) => { if (call === 1) renameSync(join(dir, fresh()), join(dir, "moved 5")); return write(); },
+      })).catch((error: unknown) => error);
+      assert.ok(five instanceof DeliveryResidueError, String(five));
+      assert.match(five.message, /^Nothing was saved, but this save's staging directory \(created at .*\) was not removed$/);
+      assert.match(String(five.cause), /already exists/);
+      assert.match(String(five.cleanup), moved);
+      assert.equal(readFileSync(join(dir, "occupied"), "utf8"), "kept");
+      assert.deepEqual(listing(join(dir, "moved 5")), []);
+
+      // Replaced before it could even be opened: nothing is written there,
+      // and the name that now holds a symlink is not removed.
+      let swapped = "";
+      const six = await saveDelivery(answer, join(dir, "unopened"), undefined, saveFiles({
+        mkdtemp: async (prefix) => {
+          const made = await SAVE_FILES.mkdtemp(prefix);
+          swapped = fresh();
+          assert.equal(made.slice(made.lastIndexOf("/") + 1), swapped);
+          renameSync(join(dir, swapped), join(dir, "moved 6"));
+          symlinkSync(join(dir, "elsewhere"), join(dir, swapped));
+          return made;
+        },
+      })).catch((error: unknown) => error);
+      assert.ok(six instanceof DeliveryResidueError, String(six));
+      assert.match(String(six.cause), /staging directory was replaced before use/);
+      assert.equal(readlinkSync(join(dir, swapped)), join(dir, "elsewhere"));
+      assert.deepEqual(listing(join(dir, "elsewhere")), ["file"]);
+      assert.equal(existsSync(join(dir, "unopened")), false);
+
+      // A directory this user does not own is never staged in.
+      const seven = await saveDelivery(answer, join(dir, "unowned"), undefined, saveFiles({
+        open: async (path, flags, mode) => {
+          const handle = await SAVE_FILES.open(path, flags, mode);
+          if (!path.includes(".rustx-save-")) return handle;
+          const stat = handle.stat.bind(handle);
+          return Object.assign(handle, {
+            stat: async () => {
+              const real = await stat({ bigint: true });
+              return Object.assign(Object.create(Object.getPrototypeOf(real) as object) as typeof real, real, { uid: real.uid + 1n });
+            },
+          });
+        },
+      })).catch((error: unknown) => error);
+      assert.ok(seven instanceof DeliveryResidueError, String(seven));
+      assert.match(String(seven.cause), /replaced before use/);
+      assert.equal(existsSync(join(dir, "unowned")), false);
+      assert.deepEqual(listing(join(dir, fresh())), [], "nothing written into it, and it is not removed");
+
+      // 12. Every planted file survived: the operation removed none of them.
+      for (const [planted, ino] of [[planted3.stage, planted3.ino], [planted4.stage, planted4.ino]] as const) {
+        assert.equal(lstatSync(join(dir, planted, "file")).ino, ino);
+      }
+    });
+  });
+
+  it("publishes by the destination's path at the commit, with staging held in the parent it opened", async () => {
+    await inDir("rustx-save-parent-", async (dir) => {
+      mkdirSync(join(dir, "parent"));
+      const destination = join(dir, "parent", "out.md");
+      // 3. The parent is renamed between staging and publication: the path
+      // no longer resolves, nothing is published, and the staging is removed
+      // from the parent where it actually is.
+      const refused = await saveDelivery(answer, destination, undefined, saveFiles({}, {
+        close: async (close) => { await close(); renameSync(join(dir, "parent"), join(dir, "parent moved")); },
+      })).catch((error: unknown) => error);
+      assert.equal((refused as NodeJS.ErrnoException).code, "ENOENT", String(refused));
+      assert.deepEqual(listing(join(dir, "parent moved")), [], "no staging left in the renamed parent");
+      assert.deepEqual(listing(dir), ["parent moved"]);
+
+      // A new directory took the name: the commit resolves the path then.
+      mkdirSync(join(dir, "parent"));
+      const replaced = await saveDelivery(answer, destination, undefined, saveFiles({}, {
+        close: async (close) => {
+          await close();
+          renameSync(join(dir, "parent"), join(dir, "parent before"));
+          mkdirSync(join(dir, "parent"));
+        },
+      }));
+      assert.deepEqual(replaced, { path: destination });
+      assert.deepEqual(readFileSync(destination), BODY_BYTES);
+      assert.deepEqual(listing(join(dir, "parent before")), [], "staging removed where it was made");
+    });
+  });
+
+  it("refuses before creating anything where staging cannot be held by descriptor", async () => {
+    await inDir("rustx-save-unpinned-", async (dir) => {
+      let staged = 0;
+      await assert.rejects(saveDelivery(answer, join(dir, "out"), undefined, saveFiles({
+        stat: async () => { throw failure("ENOENT"); },
+        mkdtemp: async (prefix) => { staged += 1; return SAVE_FILES.mkdtemp(prefix); },
+      })), /descriptor paths \(\/proc\/self\/fd\), which this system does not provide/);
+      assert.equal(staged, 0);
+      assert.deepEqual(listing(dir), []);
     });
   });
 
@@ -729,6 +924,69 @@ describe("client-local Open", () => {
       sharedHost: true, opener: "xdg-open", launch: async () => assert.fail("never launched"),
     }), /not the delivered file/);
     await assert.rejects(openDelivery(async () => assert.fail("no opener, no request"), { sharedHost: true }), /no system opener/);
+  });
+
+  it("claims only what rustX can prove: an opener accepted or rejected a pathname", async () => {
+    await inDir("rustx-open-contract-", async (dir) => {
+      const path = join(dir, "报告 final.md");
+      writeFileSync(path, "delivered");
+      const leaf = lstatSync(path, { bigint: true });
+      const location = { file: REPORT, path, device: leaf.dev.toString(), inode: leaf.ino.toString() };
+      const opened: string[] = [];
+      const options = (launch: (command: string, target: string) => Promise<number | null>) => {
+        const effect = localEffect();
+        return { effect, options: { sharedHost: true, opener: "xdg-open", effect, launch } };
+      };
+
+      // Verified local file: the opener is asked, with argv only.
+      const verified = options(async (_command, target) => { opened.push(target); return 0; });
+      assert.deepEqual(await openDelivery(async () => location, verified.options), { path, opener: "xdg-open" });
+      assert.equal(verified.effect.committed, true);
+
+      // Replaced or missing locally, a symlink to it, a directory: nothing is
+      // launched and nothing is committed.
+      const other = join(dir, "other.md");
+      writeFileSync(other, "other");
+      symlinkSync(path, join(dir, "symlink.md"));
+      mkdirSync(join(dir, "directory.md"));
+      for (const target of [
+        { ...location, path: other },
+        { ...location, path: join(dir, "missing.md") },
+        { ...location, path: join(dir, "symlink.md") },
+        { ...location, path: join(dir, "directory.md") },
+      ]) {
+        const refused = options(async () => assert.fail("never launched"));
+        await assert.rejects(openDelivery(async () => target, refused.options), /not the delivered file/, target.path);
+        assert.equal(refused.effect.committed, false);
+      }
+
+      // Replaced after verification, before the opener resolves the path:
+      // the opener opens whatever the path names then. rustX reports the
+      // accepted request and nothing about which file it showed.
+      writeFileSync(join(dir, "swap"), "replacement");
+      const raced = options(async (_command, target) => {
+        renameSync(join(dir, "swap"), target);
+        opened.push(readFileSync(target, "utf8"));
+        return 0;
+      });
+      const requested = await openDelivery(async () => location, raced.options);
+      assert.deepEqual(Object.keys(requested).sort(), ["opener", "path"], "no identity is claimed for what was opened");
+      assert.equal(opened.at(-1), "replacement", "the limit is real: the opener resolves the pathname itself");
+
+      // Rejected by the opener, or the opener could not start: committed, and
+      // reported as the opener's answer.
+      writeFileSync(path, "delivered");
+      const fresh = lstatSync(path, { bigint: true });
+      const current = { ...location, device: fresh.dev.toString(), inode: fresh.ino.toString() };
+      const rejected = options(async () => 4);
+      await assert.rejects(openDelivery(async () => current, rejected.options), /xdg-open did not accept the open request \(exit 4\)/);
+      assert.equal(rejected.effect.committed, true);
+      const missing = localEffect();
+      await assert.rejects(openDelivery(async () => current, {
+        sharedHost: true, opener: "rustx-no-such-opener", effect: missing,
+      }), /rustx-no-such-opener could not take the open request \(ENOENT\)/);
+      assert.equal(missing.committed, true, "the launch was dispatched");
+    });
   });
 
   it("reports an uninspectable local path as such, never as absent", async () => {

@@ -187,6 +187,74 @@ Negative controls, each applied alone to `delivery-files.ts` and then restored:
 | `path.join` for the `mkdtemp` prefix | symlink `..` test |
 | `path.join` for the staged path | symlink `..` test |
 
+## Cancellation capacity, staging ownership, Open contract and retirement repair
+
+The review of `c4725dc4` found four defects.
+
+**P1, cancellation under saturation.** `delivery/cancel` shared the two-slot
+control lane, and a rejected cancel was discarded, so an aborted read could keep
+running on the server. Simply adding capacity would have let a seventeenth request
+end the connection. Invariant: while the connection is healthy, a cancellation of
+an admitted delivery request reaches the server. The client lanes are now
+`wait 4, admission 2, control 2, rpc 7, cancel 1`, which sums to the server's 16.
+Only `delivery/cancel` may use `cancel`, and only through the client's own abort
+path; `call()` cannot name it. Cancellations wait for that slot in abort order and
+are dropped when their request settles first. The linearization point is unchanged:
+the server's `Operations::cancel` against the writer's publication commit. A
+refused cancellation ends the connection.
+
+**P1, staging ownership.** After `mkdtemp`, each step re-resolved the staging
+pathname, so a writer of the parent could rename or replace it between steps and
+redirect the write, the link or cleanup. Invariant: a Save publishes only the bytes
+it staged and removes only objects it can still show it owns. The parent (`O_PATH`)
+and staging directory are held as descriptors and every later step goes through
+`/proc/self/fd/<fd>`. The staging directory is checked to be this user's directory
+before use. The empty directory is removed by name only while that name still
+refers to the held directory. Systems without descriptor paths refuse Save before
+creating anything. The publication commit (the `link` dispatch) and the evidence
+classification are unchanged.
+
+**P1, Open contract.** Open is now defined as best effort in the trusted owned-child
+environment. The device/inode check is an availability check. The opener resolves
+the pathname itself, and the result claims only acceptance or rejection by the
+opener.
+
+**P2, retirement.** Outcomes reported after `/files` retired were chosen by error
+class, so an opener failure after launch was silently dropped. Each action now
+records `LocalEffect.committed` in the same synchronous step as its commit (the
+link dispatch or the opener spawn) and `residue` when staging remains. After
+retirement, exactly those outcomes are reported, once, on the transient surface.
+
+| Scenario | Synchronization | Result |
+| --- | --- | --- |
+| Control lane full (2 `job/cancel`), then a read aborted | data barriers on the fake transport log | the cancel is sent through its own slot |
+| 15 requests in flight (all ordinary lanes full), three reads aborted together | abort order; responses injected one by one | one cancel in flight, never a 17th request; next cancel sent on the previous answer; one whose read published first is never sent; every slot recovered |
+| Server refuses an owed cancel | injected error response | the connection ends with that cause; the read settles once |
+| Real stdio `serve`: a read parked inside its descriptor read plus 14 ordinary requests parked before their operation; cancel as the 16th | `before_bytes` gate, `before_operation` gate | cancel answered `accepted: true` at once; read answers `delivery_cancelled` only after its physical settlement; permits restored; all 14 answered once; connection healthy |
+| Staging renamed mid-write; replaced by a symlink to a foreign directory holding `file` | write hook | this save's bytes published; the foreign file is never written, linked or unlinked (same inode); the moved directory is emptied and reported, never chased |
+| Staging replaced by a planted directory with `file`, between close and link; and after link, before cleanup | close hook; `link` seam | this save's bytes, not the planted ones; the planted file and directory are untouched; residue reported |
+| Not published (`EEXIST`) and staging moved | write hook | `DeliveryResidueError`, destination untouched |
+| Staging name replaced before it was opened; a staging directory that is not this user's | `mkdtemp` seam; `open` seam reporting another uid | refused before writing; nothing removed |
+| Parent renamed between staging and link; a new directory takes its name | close hook | `ENOENT` refusal and no staging left in the moved parent; or published at the typed path, staging removed from the parent where it was made |
+| No `/proc/self/fd` | `stat` seam | refused before `mkdtemp` |
+| Open: verified file; replaced, missing, symlink, directory; replaced after verification; opener exit 4; opener missing | real files; `launch` seam | launch only for the verified file; result claims only acceptance; rejection and spawn failure reported as the opener's, with the launch committed |
+| `/files` retired by snapshot or overlay replacement, before launch, or after launch with exit 0 or 3; Escape after launch | gated `locate` and opener; spies on transient feedback and `DeliverySelector.settle` | before launch: no launch and no report; after launch: exactly one transient report (accepted or rejected), never into the retired selector; Escape keeps the surface, which shows the acceptance, not "Cancelled" |
+
+Negative controls, each applied alone and restored byte-identical from a backup:
+
+| Control | Test that failed |
+| --- | --- |
+| `delivery/cancel` in the control lane (the previous code) | reserved-slot client test |
+| No wait for the cancel slot (all cancels at once) | reserved-slot client test (the second cancel was rejected locally and lost) |
+| Refused cancel swallowed | refused-cancel client test |
+| Server admits one request fewer than the shared budget | `delivery_cancellation_is_admitted_as_the_sixteenth_in_flight_request` |
+| Staged file written and linked by name | staging-ownership test |
+| Staging directory removed by name without the identity check | staging-ownership test |
+| No ownership check on the opened staging directory | staging-ownership test |
+| No descriptor-path probe | unsupported-system test |
+| Open launch commit not recorded | Open contract test; `/files` retirement app test |
+| Post-retirement reporting by error class (the previous code) | `/files` retirement app test |
+
 ## Validation
 
 See the pull request for the final command list and results; the PR description

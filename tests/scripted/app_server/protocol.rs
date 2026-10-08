@@ -5381,6 +5381,130 @@ pub(crate) async fn delivery_cancellation_scenario() {
     .await;
 }
 
+/// The server half of the reserved cancel slot, over a real stdio transport.
+///
+/// The TUI client counts a request until its response arrives and never has
+/// more than `IN_FLIGHT_REQUESTS` outstanding, one of which only
+/// `delivery/cancel` may use. Here fifteen requests are in flight — a
+/// delivery read parked inside its native descriptor read and fourteen
+/// ordinary requests parked before their operation — and the cancel arrives
+/// as the sixteenth: it is admitted, answered at once without waiting for any
+/// of them, and wins; the read answers once, with `delivery_cancelled`, only
+/// after it physically settles; the connection stays healthy throughout.
+pub(crate) async fn delivery_cancellation_capacity_scenario() {
+    use crate::app_server::transport::{IN_FLIGHT_REQUESTS, stdio};
+    use crate::tools::session_files::SESSION_FILE_MAX_READS;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    bounded(async {
+        let f = Fixture::with_tool(Some("present")).await;
+        let tool = committed_delivery(&f).await;
+        let connection = std::sync::Arc::new(AppServerConnection::with_delivery_access(
+            f.host.clone(),
+            tokio_util::sync::CancellationToken::new(),
+        ));
+        initialize(&connection).await;
+        let own = attach(&connection, &f, 0).await;
+        let (mut input, reader) = tokio::io::duplex(1 << 20);
+        let (writer, output) = tokio::io::duplex(1 << 20);
+        let serving = tokio::spawn(stdio::serve(
+            connection.clone(),
+            reader,
+            writer,
+            tokio_util::sync::CancellationToken::new(),
+        ));
+        let mut output = tokio::io::BufReader::new(output).lines();
+        let mut next_response = async || loop {
+            let line = output.next_line().await.unwrap().expect("open output");
+            let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            if value.get("id").is_some() {
+                break serde_json::from_value::<Response>(value).unwrap();
+            }
+        };
+        let line = |request: &Request| format!("{}\n", serde_json::to_string(request).unwrap());
+        let read_probe = f.host.file_read_probe();
+        let permits = f.host.file_reads();
+
+        // A delivery read parked after its leaf open, before its bytes.
+        let release_bytes = read_probe.before_bytes.arm_scoped();
+        input
+            .write_all(line(&delivery_request(100, &own, &tool, false)).as_bytes())
+            .await
+            .unwrap();
+        let entered = read_probe.before_bytes.clone();
+        tokio::task::spawn_blocking(move || entered.wait_entered())
+            .await
+            .unwrap();
+        // Fourteen unrelated requests parked before their operation.
+        let probe = f.manager.probe(&own.conversation_id);
+        probe.before_operation.arm();
+        let ordinary = IN_FLIGHT_REQUESTS - 2;
+        for id in 0..ordinary {
+            let request = Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(i64::try_from(id).unwrap()),
+                call: Method::SessionSnapshot {
+                    target: own.clone(),
+                    trace_records: vec![],
+                },
+            };
+            input.write_all(line(&request).as_bytes()).await.unwrap();
+        }
+        probe.before_operation.entered().await;
+
+        // The sixteenth request in flight: the cancel.
+        let cancel = Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(200),
+            call: Method::DeliveryCancel {
+                request_id: RequestId::Integer(100),
+            },
+        };
+        input.write_all(line(&cancel).as_bytes()).await.unwrap();
+        let Response::Success(answer) = next_response().await else {
+            panic!("the cancel is answered")
+        };
+        assert_eq!(answer.id, RequestId::Integer(200));
+        assert!(matches!(
+            answer.result,
+            MethodResult::DeliveryCancel { accepted: true }
+        ));
+        assert!(!serving.is_finished(), "sixteen in flight is within capacity");
+        assert_eq!(
+            permits.available_permits(),
+            SESSION_FILE_MAX_READS - 1,
+            "the parked read still owns its permit"
+        );
+
+        drop(release_bytes);
+        let cancelled = next_response().await;
+        assert!(matches!(&cancelled, Response::Failure(failure) if failure.id == Some(RequestId::Integer(100))));
+        failed_with(&cancelled, &ErrorData::DeliveryCancelled);
+        assert_eq!(permits.available_permits(), SESSION_FILE_MAX_READS);
+
+        probe.before_operation.release();
+        let mut answered = Vec::new();
+        for _ in 0..ordinary {
+            let Response::Success(snapshot) = next_response().await else {
+                panic!("unrelated requests are untouched")
+            };
+            let RequestId::Integer(id) = snapshot.id else {
+                panic!("integer id")
+            };
+            answered.push(id);
+        }
+        answered.sort_unstable();
+        assert_eq!(
+            answered,
+            (0..i64::try_from(ordinary).unwrap()).collect::<Vec<_>>(),
+            "each answered exactly once"
+        );
+        drop(input);
+        serving.await.unwrap().unwrap();
+        f.close().await;
+    })
+    .await;
+}
+
 /// Revocation that wins before the publication commit suppresses a produced
 /// delivery response with a typed failure for the same id; a response already
 /// committed stands.

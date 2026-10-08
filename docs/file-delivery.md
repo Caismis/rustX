@@ -132,6 +132,17 @@ the same id's typed failure. A response already committed is in transmission and
 stands; a late `delivery/cancel` returns `accepted: false`. Cancelling or revoking
 never closes the connection or affects unrelated responses.
 
+A connection carries at most 16 requests in flight; a seventeenth ends it. The
+server answers `delivery/cancel` without awaiting native work. The TUI client
+counts a request until its response arrives, admits at most 15 ordinary requests,
+and reserves the sixteenth slot for `delivery/cancel`. Cancellations take that slot
+one at a time, in abort order; one whose request settled first is dropped, since
+that response is already the outcome. Ordinary requests can therefore neither
+block a cancellation nor turn it into a seventeenth request. A server that refuses
+an owed cancellation breaks the contract, and the client ends the connection, so
+the cancelled request settles with that terminal failure instead of silently
+running on.
+
 `delivery/locate` walks the same descriptors, runs the same fences and returns the
 absolute server path plus the verified leaf device/inode, without bytes or a size
 bound. A location is a server path, never a client path. A client may open it
@@ -320,12 +331,29 @@ definitions never touch the filesystem.
   leaves the destination unchanged:
 
   ```text
-  mkdtemp(<destination dir>/.rustx-save-XXXXXX)   private 0700 staging, owned by this save
-    -> <staging>/file 'wx' -> 64 KiB writes (abort? between chunks) -> sync -> close
+  open(<destination's parent as spelled>, O_PATH)          held: P
+    -> mkdtemp(P/.rustx-save-XXXXXX), open it O_NOFOLLOW     held: S (this user's dir)
+    -> S/file O_CREAT|O_EXCL -> 64 KiB writes (abort? between chunks) -> sync -> close
     -> abort?                       publication admission: the last cancellation point
-    -> link(<staging>/file, destination)   publication commit
-    -> unlink <staging>/file, rmdir <staging>
+    -> link(S/file, destination)    publication commit
+    -> unlink S/file; rmdir P/<name> only while that name is still S
   ```
+
+  Staging ownership is bound to objects, not names. P and S are held as
+  descriptors and every later step reaches them through `/proc/self/fd/<fd>`, which
+  Linux resolves to the open directory itself. Renaming, replacing or symlinking the
+  staging name, or renaming the parent, cannot redirect a write, the link or the
+  file's cleanup to another object: the link publishes exactly the bytes this save
+  staged. Only this user can add entries to the 0700 staging directory, and S is
+  checked to be this user's directory before anything is written. The one
+  name-based step is removing the empty staging directory, because no API removes
+  a directory by descriptor: it runs only while the name still refers to S,
+  checked immediately before, and can remove nothing but an empty directory. In
+  that instant someone who may write the parent could swap in an empty directory
+  of their own, which is the one limit. A moved or replaced staging directory is
+  reported as residue, never chased. Systems without `/proc/self/fd` (macOS, or
+  Linux without `/proc`) refuse Save before creating anything, and `/files`
+  shows Save as unavailable there.
 
   `link` creates a new name atomically and fails with `EEXIST` for any existing
   entry (file, directory, symlink, dangling symlink), so an existing file, a
@@ -361,15 +389,19 @@ definitions never touch the filesystem.
      retries the link or touches the destination; the user inspects it.
 
   The outcomes are distinct: saved; saved with a staging-residue warning; not
-  saved; not saved with staging residue; outcome unknown.
-- **Staging path.** The staging directory is `<parent>/.rustx-save-XXXXXX`, where
-  `<parent>` is the destination's own spelling of its parent (`dirname`, which
-  only strips the last component). The staged file is `<staging>/file`. Every Save
-  path is built by concatenation, never `path.join`/`resolve`: in
-  `link/../report.md` with `link` a symlink, the OS resolves `link` before `..`,
-  so lexical folding would stage, and clean up, in a different directory than the
-  one the destination is created in. The same strings address the allocation from
-  `mkdtemp` through `link`, `unlink`, `rmdir` and residue reports.
+  saved; not saved with staging residue; outcome unknown. "Saved" states that
+  this save's link created the destination entry naming the complete file at the
+  commit. It makes no claim about later: anyone who may write the parent can rename
+  or replace that entry afterwards.
+- **Staging path.** P is opened through `dirname(destination)`, the destination's
+  own spelling of its parent (`dirname` only strips the last component), so the OS
+  resolves it exactly as `link` resolves the destination. No Save path is built
+  with `path.join`/`resolve`: in `link/../report.md` with `link` a symlink, the OS
+  resolves `link` before `..`, so lexical folding would stage in a different
+  directory than the one the destination is created in. The destination itself is
+  resolved by pathname at the commit, so a parent replaced before then receives the
+  file at the typed path, or the link is refused. Residue is reported where it was
+  created, by the same spelling.
 - **Destination spelling.** The typed path is used exactly as typed. Leading,
   trailing and inner spaces are part of the name, and whitespace only decides
   whether the input is blank. `~`/`~/` expand to the user's home, and a relative
@@ -381,16 +413,23 @@ definitions never touch the filesystem.
   itself; a name carrying a terminal control, C1 or bidi character leaves the field
   empty and asks for an explicit path. The destination Input holds only renderable
   text: a paste that would add such a character is refused whole.
-- **Open** is offered only when this TUI spawned the App Server (ownership
-  `owned_child`, established at construction) and the connection holds delivery
-  access. `delivery/locate` returns the verified leaf, and the TUI requires its own
-  `lstat` of that path to report the same regular-file device/inode before it
-  launches the platform opener (`xdg-open`/`open`, argv only, no shell). The commit
-  is the spawn: cancellation before it launches nothing, and after it the launch
-  is not reported as undone. Success is reported as the opener accepting the
-  request, never as an application opening.
-  The opener resolves the path again after this check, so a replacement in that
-  window is not prevented, as in any file manager.
+- **Open** is best effort, by contract, in one trusted local environment: this
+  TUI spawned the App Server (ownership `owned_child`, established at
+  construction), so the server's paths are this user's paths on this machine, and
+  the connection holds delivery access. Anywhere else Open is refused and Save is
+  offered. `delivery/locate` returns the verified leaf, and the TUI requires its
+  own `lstat` of that path to report the same regular-file device/inode (not a
+  symlink, directory or other file) before it launches the platform opener
+  (`xdg-open`/`open`, argv only, no shell). That check is an availability check at
+  one instant, not a security guarantee. The opener and the application it starts
+  resolve the pathname again, later, by themselves, and no portable opener accepts
+  a descriptor, so a rename or replacement in that window can make them open
+  another file, as in any file manager. The commit is the spawn: cancellation
+  before it launches nothing, and after it the launch is not reported as undone.
+  Exit 0 is reported as the opener accepting the request, never as an application
+  opening, and never as proof of which file it showed. A non-zero exit or a
+  failed spawn is reported as the opener's rejection. Save is the
+  identity-preserving action.
 - **Remote** (`--connect`) never interprets a server path locally. With
   `--delivery-access-token-file`, Save writes bytes on the client machine. Without
   it, `/files` shows metadata and reports both actions as unavailable.
@@ -401,10 +440,16 @@ Session focus change, attachment or snapshot replacement, disconnect, terminal
 failure and quit. Closing aborts the scope, which cancels the native request
 (`delivery/cancel`) and every uncommitted local effect. Escape during an action
 aborts just that action. Each outcome belongs to one operation token, so a
-selector never shows a stale or duplicate outcome. After retirement, only an effect
-that happened or may have happened (a committed save or launch, an uncertain save
-outcome, or staging residue left behind) is reported, once, on the transient
-surface. Outcome text is sanitized before it is drawn. Missing,
+selector never shows a stale or duplicate outcome. Each action records its own
+external effect as it happens (`LocalEffect`): `committed` when Save dispatches its
+link or Open spawns its opener, and `residue` when Save leaves staging behind.
+Retirement can stop an action that has not committed but cannot unsay one that
+has. After retirement, an action with a committed effect or residue reports its
+terminal outcome once on the transient surface: saved, not saved, unknown, opener
+accepted, or opener rejected. It never writes into the retired selector or a
+successor surface, and a committed effect is never described as "nothing was saved
+or opened". An action that did neither is not reported. Outcome text is sanitized
+before it is drawn. Missing,
 unauthorized, unavailable, replaced, oversized (>512 KiB), capacity and disconnected
 failures are reported explicitly. No action starts an Agent, Tool or model request.
 
