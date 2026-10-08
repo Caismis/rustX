@@ -27,6 +27,10 @@ test('MCP settings share compact settings typography and fit narrow panels', asy
  await expect(page.locator('[data-mcp-page] h3')).toHaveCSS('font-size','20px');
  await page.screenshot({path:'/tmp/rustx-mcp-list-light.png'});
  await page.emulateMedia({colorScheme:'dark'});
+ // MCP inherits the dialog material, like every other settings page.
+ const surface=page.locator('[data-mcp-page]').locator('..');
+ await expect(surface).toHaveCSS('background-color','rgba(0, 0, 0, 0)');
+ await expect(page.getByRole('listitem',{name:'exa',exact:true})).toHaveCSS('background-color','rgb(44, 44, 46)');
  await page.screenshot({path:'/tmp/rustx-mcp-list-dark.png'});
  await page.getByRole('listitem',{name:'exa',exact:true}).getByRole('button').first().click();
  await expect(page.getByRole('button',{name:'Form',exact:true})).toHaveAttribute('aria-pressed','true');

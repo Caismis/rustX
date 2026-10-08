@@ -307,6 +307,3 @@
   }
   .options { padding: 16px 16px 20px; }
 }
-
-/* MCP uses the reference product's quiet, flat resource surface. */
-.dialog:has([data-mcp-page]) .options { background: var(--dsw-alias-bg-base); }

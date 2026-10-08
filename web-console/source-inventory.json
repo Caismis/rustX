@@ -2243,7 +2243,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "ccdd9eff2eeb475f92c2a4c1790a4f805b856874ccfe33428efaf21b70f2fb7f",
+      "local_sha256": "9fcb2a507c60c18c0d466edabda8eb984133f67e629587f24c5595a45d8aa84c",
       "retained_dependencies": [],
       "classification": "B"
     },
@@ -5671,7 +5671,7 @@
       "upstream": "packages/client/ui-settings-models/src/client/ModelsSection.module.css",
       "destination": "web-console/src/app/settings/mcp/McpPage.module.css",
       "upstream_sha256": "0de105abac343887fbea8508fc0e20b6903505a3f689dd05b1125ff02886e801",
-      "local_sha256": "6b35213cd8f53ddce56949663f72e76d927d1fb4c65c6da5c1563afb68cb21d3",
+      "local_sha256": "b2b34a20376af1ce312c6f39a92ad5130066840672b6fcf5e5af3b585e859a0f",
       "classification": "B",
       "treatment": "MCP catalog and editor adapt Harness settings materials, compact typography, card spacing, inset editor and disclosure; shared rustX Button geometry and settings container sizing. Native MCP scope and connection authority retained.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
