@@ -249,6 +249,11 @@ pub enum Method {
         node_id: Option<SessionNodeId>,
         record_id: String,
     },
+    #[serde(rename = "session/statistics")]
+    SessionStatistics {
+        session_id: SessionId,
+        node_id: Option<SessionNodeId>,
+    },
     #[serde(rename = "session/summary")]
     SessionSummary { session_id: SessionId },
     #[serde(rename = "session/name")]
@@ -559,6 +564,11 @@ pub enum MethodResult {
     SessionHistory {
         conversation_id: ConversationId,
         window: crate::runtime_client::snapshot::ConversationWindow,
+    },
+    SessionStatistics {
+        conversation_id: ConversationId,
+        statistics: crate::runtime_client::response::ConversationStatistics,
+        occupancy: Option<crate::context::occupancy::ContextOccupancy>,
     },
     SessionTraceHistory {
         conversation_id: ConversationId,

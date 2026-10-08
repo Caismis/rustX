@@ -263,6 +263,13 @@ export type Request1 =
       };
     }
   | {
+      method: 'session/statistics';
+      params: {
+        session_id: SessionId;
+        node_id?: SessionNodeId | null;
+      };
+    }
+  | {
       method: 'session/summary';
       params: {
         session_id: SessionId;
@@ -1109,6 +1116,12 @@ export type MethodResult =
       conversation_id: ConversationId;
       window: ConversationWindow;
       type: 'session_history';
+    }
+  | {
+      conversation_id: ConversationId;
+      statistics: ConversationStatistics;
+      occupancy?: ContextOccupancy | null;
+      type: 'session_statistics';
     }
   | {
       conversation_id: ConversationId;

@@ -1583,6 +1583,14 @@ submitted during initialization stay locally owned until attachment, display
 connecting feedback immediately, and are admitted once; connection failure keeps
 the unsent draft recoverable.
 
+`session/statistics { session_id, node_id? }` independently reads durable
+whole-conversation statistics and the last measured context occupancy. Its
+`session_statistics` result includes `conversation_id`, `statistics` and
+`occupancy`, folded at the same native journal frontier as the live projection.
+It does not initialize a runtime, resolve tools or probe a provider. The WebUI
+loads it alongside history, displays persisted model settings before attachment,
+and retires late metadata replies when attachment or navigation changes.
+
 ### Bounded history windows and Host execution retirement (v37)
 
 `ConversationWindowAt` is `latest`, `older {before, cut?}`,

@@ -570,6 +570,21 @@ impl AppServerConnection {
                     detail: detail.map(Box::new),
                 })
             }
+            Method::SessionStatistics {
+                session_id,
+                node_id,
+            } => {
+                let (conversation_id, statistics, occupancy) = self
+                    .sessions
+                    .read_statistics(&session_id, node_id.as_ref())
+                    .await
+                    .map_err(session_error)?;
+                Ok(MethodResult::SessionStatistics {
+                    conversation_id,
+                    statistics,
+                    occupancy,
+                })
+            }
             Method::SessionRead { session_id } => Ok(MethodResult::Session {
                 session: self
                     .sessions

@@ -435,6 +435,39 @@ impl SessionController {
             detail: error.to_string(),
         })?
     }
+    pub(crate) async fn read_statistics(
+        &self,
+        id: &SessionId,
+        node: Option<&SessionNodeId>,
+    ) -> Result<
+        (
+            crate::runtime::identity::ConversationId,
+            crate::runtime_client::response::ConversationStatistics,
+            Option<crate::context::occupancy::ContextOccupancy>,
+        ),
+        SessionError,
+    > {
+        let access = self.acquire_session(id, node).await?;
+        tokio::task::spawn_blocking(move || {
+            let store = crate::durable::SqliteConversationStore::open_existing(
+                access.node.conversation_id.clone(),
+                &access.database_path,
+            )
+            .map_err(SessionError::Store)?
+            .with_lifecycle(access.allocation);
+            use crate::durable::ConversationStore as _;
+            let through = store.presentation_frontier().map_err(SessionError::Store)?;
+            let occupancy =
+                crate::context::occupancy::read(&store, through).map_err(SessionError::Store)?;
+            let statistics = crate::runtime_client::response::statistics(&store, through)
+                .map_err(SessionError::Store)?;
+            Ok((access.node.conversation_id, statistics, occupancy))
+        })
+        .await
+        .map_err(|error| SessionError::Catalog {
+            detail: error.to_string(),
+        })?
+    }
     /// Durable inspection uses the same projection as live trace, without runtime startup.
     pub(crate) async fn read_trace<T: Send + 'static>(
         &self,
@@ -1520,6 +1553,11 @@ mod tests {
                 .await
                 .is_err()
         );
+        let (owner, statistics, occupancy) =
+            controller.read_statistics(&session.id, None).await.unwrap();
+        assert_eq!(owner, session.active_conversation_id);
+        assert_eq!(statistics.turns, 0);
+        assert!(occupancy.is_none());
         assert!(controller.runtime_owner.get().is_none());
     }
     #[tokio::test]

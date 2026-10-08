@@ -12,7 +12,7 @@ import { selectSessionModel } from '../model-preference';
 
 /** Replaceable read cache scoped to one native attachment. Mutations never update
  * displayed selection; only a subsequent authoritative read unlocks controls. */
-export function AgentControls({ client, view, draft, blocked: pending = false, children }: { children?: (toolbar: ReactNode, picker: ModelPickerState) => ReactNode; client: AppServerClient; view?: SessionView; blocked?: boolean; draft?: { source?: SourceSettings; intent?: SessionModelConfig; choose: (selection: SessionModelConfig) => void; disabled: boolean } }) {
+export function AgentControls({ client, view, draft, coldDefault, blocked: pending = false, children }: { children?: (toolbar: ReactNode, picker: ModelPickerState) => ReactNode; client: AppServerClient; view?: SessionView; coldDefault?: SessionModelConfig; blocked?: boolean; draft?: { source?: SourceSettings; intent?: SessionModelConfig; choose: (selection: SessionModelConfig) => void; disabled: boolean } }) {
   const tx = useTranslation();
  const [catalog, setCatalog] = useState<ModelCatalogView>();
  const [busy, setBusy] = useState(false), [error, setError] = useNotice(), [blocked, setBlocked] = useState(true);
@@ -49,6 +49,7 @@ export function AgentControls({ client, view, draft, blocked: pending = false, c
    finally { if (epoch.current === at) { guard.current = false; setBusy(false); } }
  };
  const model = view?.snapshot?.model;
+ const configured = attached ? model?.configured : view?.settings ? view.settings.model ?? coldDefault : model?.configured;
  const choices = draft?.source?.session_models?.kind === 'available' ? draft.source.session_models.catalog : catalog;
  const draftError = draft?.source?.session_models?.kind === 'unavailable' ? draft.source.session_models.diagnostic : undefined;
  // Reading choices locks selection through loading, not the menu trigger.
@@ -59,11 +60,11 @@ export function AgentControls({ client, view, draft, blocked: pending = false, c
    if (draft) { draft.choose(selection); return true; }
    return !!await mutate(() => selectSessionModel(client, view!.id, selection));
  };
- const picker: ModelPickerState = { choices: catalogChoices(choices), current: draft ? draft.intent?.model : model?.configured.model,
+ const picker: ModelPickerState = { choices: catalogChoices(choices), current: draft ? draft.intent?.model : configured?.model,
    disabled: draft ? draft.disabled || !choices : disabled || blocked, loading: draft ? !draft.source : busy && !catalog,
    error: draft ? draftError : error, choose };
  const toolbar = <div className="agent-control"><ModelSelect binding={JSON.stringify([generation, target?.attachment_id, draft?.source?.target, view?.snapshot?.resources?.revision])} choices={picker.choices}
-   current={picker.current} profile={(draft ? draft.intent?.reasoningProfile : model?.effective.reasoningProfile) ?? undefined} disabled={draft ? draft.disabled || !choices : disabled} loading={draft ? !draft.source : blocked} error={picker.error} load={() => load()}
+   current={picker.current} profile={(draft ? draft.intent?.reasoningProfile : attached ? model?.effective.reasoningProfile : configured?.reasoningProfile) ?? undefined} disabled={draft ? draft.disabled || !choices : disabled} loading={draft ? !draft.source : blocked} error={picker.error} load={() => load()}
    choose={(selected, profile) => { void choose(selected, profile); }}/>
    {activeAttempt(view?.snapshot) && view?.snapshot?.attempt?.model && view?.snapshot.attempt.model.primary.model !== model?.effective.model && <small>{tx('agent:agent-controls.running')}{' '}{view?.snapshot?.attempt?.model?.primary.model}</small>}
    {!draft && blocked && !busy && error && <Button size="sm" disabled={!attached} onClick={() => load(true)}>{tx('agent:agent-controls.reread-models')}</Button>}

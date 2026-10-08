@@ -94,7 +94,7 @@ export function ConversationTotals({ client, sessionId }: { client: AppServerCli
     const view = state.views[sessionId];
     // A detached or disconnected view's last reading is not current occupancy.
     const current = state.connection === 'connected' && view?.attachment === 'attached';
-    return { statistics: view?.snapshot?.transcript.statistics, occupancy: current ? view?.snapshot?.context?.last_request_occupancy : undefined };
+    return { statistics: view?.attachment === 'attaching' ? view.statisticsPreview?.statistics ?? view.snapshot?.transcript.statistics : view?.snapshot?.transcript.statistics, occupancy: current ? view?.snapshot?.context?.last_request_occupancy : view?.attachment === 'attaching' ? view.statisticsPreview?.occupancy ?? view.snapshot?.context?.last_request_occupancy : undefined };
   }, shallowEqual);
   return <ConversationStats statistics={facts.statistics} occupancy={facts.occupancy}/>;
 }

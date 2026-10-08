@@ -76,6 +76,7 @@ export interface SessionView {
   history?: TranscriptCache;
   /** Read-only durable history, never an execution snapshot or control claim. */
   preview?: { conversationId: string; history: TranscriptCache };
+  statisticsPreview?: { conversationId: string; statistics: import('../../../protocol/app-server/v37').ConversationStatistics; occupancy?: import('../../../protocol/app-server/v37').ContextOccupancy | null };
   tracePreview?: { conversationId: string; cache: TraceCache };
   turnOutline?: { paging: OutlinePagingIntent; page?: ConversationTurnPage; loading?: boolean; error?: string };
   turnNavigation?: { intent: number; pending?: string; error?: string };
@@ -219,7 +220,7 @@ function goalRefusal(error: unknown) {
 const READS = new Set<Request1['method']>([
   'session/turns', 'session/uploadStatus',
   'artifact/read', 'initialize', 'server/info', 'session/list', 'session/read', 'session/summary', 'session/tree', 'session/deletePreview',
-  'session/history', 'session/traceHistory', 'session/traceHistoryDetail', 'session/configuration', 'session/snapshot', 'session/transcript', 'session/trace', 'session/traceDetail', 'session/settings', 'session/model', 'session/models',
+  'session/history', 'session/statistics', 'session/traceHistory', 'session/traceHistoryDetail', 'session/configuration', 'session/snapshot', 'session/transcript', 'session/trace', 'session/traceDetail', 'session/settings', 'session/model', 'session/models',
   'mcp/status', 'configuration/sourcesRead', 'session/effectiveConfiguration', 'resources/read', 'job/status', 'job/list', 'job/wait', 'agent/status', 'agent/list', 'agent/wait', 'agent/transcript', 'session/boundaries',
 ]);
 /** Domain settlement has no RPC response deadline. Separate bounded lanes keep
@@ -973,7 +974,7 @@ export class AppServerClient {
       if (!navigationCurrent() || this.state.views[id]?.attachmentIntent !== 'wanted') return;
       const existing = this.state.views[id]?.target;
       if (existing) { attached?.(existing); return this.refresh(id); }
-      this.setSession(id, { attachment: 'attaching', preview: undefined, tracePreview: undefined, error: undefined });
+      this.setSession(id, { attachment: 'attaching', preview: undefined, statisticsPreview: undefined, tracePreview: undefined, error: undefined });
       const epoch = (this.attachmentEpochs.get(id) ?? 0) + 1;
       this.attachmentEpochs.set(id, epoch);
       this.summarySettled.delete(id);
@@ -988,6 +989,17 @@ export class AppServerClient {
       const result = await this.request({ method: 'session/history', params: { session_id: id, node_id: node, at: { type: 'latest' }, limit: HISTORY_PAGE_SIZE } }, 'session_history', undefined, current);
       if (current()) this.setSession(id, { preview: { conversationId: result.conversation_id, history: replaceTranscript(result.window.page) } });
     } catch { /* Attachment recovery owns errors; a late read cannot replace the live view. */ }
+  }
+  private async readColdMetadata(id: string, generation: number, epoch: number, admitted: () => boolean) {
+    const node = this.state.views[id]?.nodeId;
+    const current = () => admitted() && this.current(generation) && this.attachmentEpochs.get(id) === epoch
+      && this.state.views[id]?.attachment === 'attaching' && this.state.views[id]?.attachmentIntent === 'wanted';
+    await Promise.allSettled([
+      this.request({ method: 'session/statistics', params: { session_id: id, node_id: node } }, 'session_statistics', undefined, current)
+        .then(result => { if (current()) this.setSession(id, { statisticsPreview: { conversationId: result.conversation_id, statistics: result.statistics, occupancy: result.occupancy } }); }),
+      this.request({ method: 'session/settings', params: { session_id: id } }, 'settings', undefined, current)
+        .then(result => { if (current()) this.setSession(id, { settings: result.settings }); }),
+    ]);
   }
   /** Read-only trace is independent of slow runtime/resource initialization. */
   private async readTracePreview(id: string, admitted: () => boolean, older = false) {
@@ -1089,6 +1101,7 @@ export class AppServerClient {
         // durable history at its final validation, independently of runtime load.
         if (valid && admitted.current()) {
           void this.readHistoryPreview(id, generation, epoch, admitted.current);
+          void this.readColdMetadata(id, generation, epoch, admitted.current);
           void this.readTracePreview(id, admitted.current);
         }
         return valid;
@@ -1098,7 +1111,7 @@ export class AppServerClient {
       target = result.target;
       if (result.configuration) this.publish({ configuration: { ...this.state.configuration, [id]: result.configuration } });
       if (result.target.session_id !== id || result.target.conversation_id !== result.snapshot.conversation_id) throw new Error('Mismatched attachment identity.');
-      this.setSession(id, { target: result.target, snapshot: result.snapshot, preview: undefined, tracePreview: undefined, cursor: result.cursor, history: replaceTranscript(result.snapshot.transcript, this.state.views[id]?.history), turnOutline: undefined, turnNavigation: undefined, trace: this.supersedeTrace(id, replaceTrace(result.snapshot.trace, this.state.views[id]?.trace)), attachment: 'attached' });
+      this.setSession(id, { target: result.target, snapshot: result.snapshot, preview: undefined, statisticsPreview: undefined, tracePreview: undefined, cursor: result.cursor, history: replaceTranscript(result.snapshot.transcript, this.state.views[id]?.history), turnOutline: undefined, turnNavigation: undefined, trace: this.supersedeTrace(id, replaceTrace(result.snapshot.trace, this.state.views[id]?.trace)), attachment: 'attached' });
       attached?.(result.target);
       this.reconcileInteractions(id); this.settleSubmissions(id);
       const settings = await this.request({ method: 'session/settings', params: { session_id: id } }, 'settings');
@@ -1150,7 +1163,7 @@ export class AppServerClient {
         if (!current()) return;
         if (result.snapshot.conversation_id !== target.conversation_id) throw new Error('Mismatched snapshot conversation.');
         if (BigInt(result.cursor) >= BigInt(this.state.views[id].cursor ?? '0')) {
-          this.setSession(id, { snapshot: result.snapshot, preview: undefined, tracePreview: undefined, cursor: result.cursor, history: refreshTranscript(this.state.views[id]?.history, result.snapshot.transcript), trace: this.supersedeTrace(id, refreshTrace(this.state.views[id]?.trace, result.snapshot.trace, result.snapshot.trace_updates)), error: undefined });
+          this.setSession(id, { snapshot: result.snapshot, preview: undefined, statisticsPreview: undefined, tracePreview: undefined, cursor: result.cursor, history: refreshTranscript(this.state.views[id]?.history, result.snapshot.transcript), trace: this.supersedeTrace(id, refreshTrace(this.state.views[id]?.trace, result.snapshot.trace, result.snapshot.trace_updates)), error: undefined });
           this.reconcileInteractions(id); this.settleSubmissions(id);
           await this.refreshDisplaySummary(id);
           if (!current()) return;

@@ -455,3 +455,15 @@ it('pages durable preview while connecting without starting another attachment',
   expect(s.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(1);
   s.reply(await s.waitFor('session/attach', 1)); await work;
 });
+
+it('late cold statistics cannot replace the attached live reading', async () => {
+  const s = server(); await s.connect();
+  s.held.add('session/statistics'); s.held.add('session/attach');
+  const work = s.client.attach('A');
+  const statistics = await s.waitFor('session/statistics', 1);
+  s.reply(await s.waitFor('session/attach', 1)); await work;
+  const snapshot = s.client.getSnapshot().views.A.snapshot;
+  s.reply(statistics); await Promise.resolve(); await Promise.resolve();
+  expect(s.client.getSnapshot().views.A.statisticsPreview).toBeUndefined();
+  expect(s.client.getSnapshot().views.A.snapshot).toBe(snapshot);
+});

@@ -1117,6 +1117,41 @@
           "properties": {
             "method": {
               "type": "string",
+              "const": "session/statistics"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                },
+                "node_id": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionNodeId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "session_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
               "const": "session/summary"
             },
             "params": {
@@ -5773,6 +5808,37 @@
             "type",
             "conversation_id",
             "window"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "conversation_id": {
+              "$ref": "#/$defs/ConversationId"
+            },
+            "statistics": {
+              "$ref": "#/$defs/ConversationStatistics"
+            },
+            "occupancy": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ContextOccupancy"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "session_statistics"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "conversation_id",
+            "statistics"
           ]
         },
         {

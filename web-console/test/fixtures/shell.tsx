@@ -38,6 +38,8 @@ server.workspaceHost.configureWorkspace = async (_id, _endpoint, operation) => {
 const cold = new URL(location.href).searchParams.get('initial') === 'cold';
 if (cold) {
   server.snapshots.get('A')!.attempt = null;
+  server.snapshots.get('A')!.transcript.statistics = { turns: '8', steps: '46', completed_responses: '8', model_requests: '46', requests_with_usage: '46', reported_usage: { input_tokens: 900000, output_tokens: 100000, total_tokens: 1000000 } };
+  server.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: '/workspace/A', model: { model: 'DeepSeek/deepseek-flash' } } }));
   server.snapshots.get('A')!.trace = { records: [traceRecord(1)] };
   server.held.add('session/attach'); server.held.add('turn/start');
   await server.connect();

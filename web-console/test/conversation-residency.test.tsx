@@ -379,3 +379,20 @@ it('restoring a cold selected view does not retire its own in-flight admission',
   expect(server.client.getSnapshot().views.A.preview?.conversationId).toBe('conversation-A');
   expect(server.client.getSnapshot().views.A.tracePreview?.conversationId).toBe('conversation-A');
 });
+
+it('cold composer reads native model and whole-conversation usage before runtime is ready', async () => {
+  await server.connect(); nativeModel(); server.held.add('session/attach');
+  server.snapshots.get('A')!.transcript.statistics = { turns: '8', steps: '46', completed_responses: '8', model_requests: '46', requests_with_usage: '46', reported_usage: { input_tokens: 900000, output_tokens: 100000, total_tokens: 1000000 } };
+  server.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: '/workspace/A', model: { model: 'cold/native-model' } } }));
+  await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+  await server.waitFor('session/attach', 1);
+  await waitFor(() => expect(document.querySelector('[data-model-select]')?.textContent).toContain('cold/native-model'));
+  expect(document.querySelector('[data-composer-stat="activity"]')?.textContent).toContain('46');
+  expect(document.querySelector('[data-composer-seat]')?.textContent).toContain('1M');
+  expect(input().disabled).toBe(false);
+  fireEvent.change(input(), { target: { value: 'send before ready' } });
+  expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', false);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
+  expect(document.querySelector('[data-first-submission="attaching"]')).toBeTruthy();
+});

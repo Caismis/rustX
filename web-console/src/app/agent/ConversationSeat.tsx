@@ -80,7 +80,7 @@ function composerFacts(view: ReturnType<AppServerClient['getSnapshot']>['views']
   return { id: view.id, target: view.target, attachment: view.attachment, attachmentIntent: view.attachmentIntent, deleting: view.deleting,
     modelMutation: view.modelMutation, cancellation: view.cancellation, active: activeAttempt(view.snapshot), attemptId: view.snapshot?.attempt?.attempt_id,
     resources: view.snapshot?.resources?.revision, attemptModel: view.snapshot?.attempt?.model,
-    lineage: lineageSwitchSafe(view), goal: !!goalDock(view.snapshot), model: view.snapshot?.model,
+    lineage: lineageSwitchSafe(view), goal: !!goalDock(view.snapshot), model: view.snapshot?.model, settings: view.settings,
     conversation: view.snapshot?.conversation_id, shuttingDown: view.snapshot?.shutting_down, durability: view.snapshot?.durability_failure,
     interactions: !!view.snapshot?.pending_interactions?.length };
 }
