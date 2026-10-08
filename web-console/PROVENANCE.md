@@ -1763,3 +1763,11 @@ Automatic model catalog preloading now uses the attached native snapshot for
 the current selection. Only an outstanding model mutation or failed intent
 requires model/snapshot reconciliation; merely mounting the control performs
 no snapshot repair. Existing write acknowledgement and reread fencing remain.
+
+Hosted final-head browser evidence exposed a second scroll offset on the active
+Session shell: `overflow: hidden` allowed its scrollTop to become 11, then
+fullscreen restoration reset it to zero and displaced the reading anchor. The
+shell now uses `overflow: clip`; ChatViewport remains the only reading scroll
+owner. A controlled overflowing descendant proves the shell rejects scrollTop
+11 (the prior style fails with 11), followed by the unchanged exact reading
+anchor assertion through fullscreen restoration and stream settlement.

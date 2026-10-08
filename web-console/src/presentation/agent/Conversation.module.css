@@ -359,7 +359,9 @@
    sticky). The scroll body holds the transcript and the sticky composer seat
    so wheel over the footer moves the flow. */
 .root[data-phase='active'] {
-  overflow: hidden;
+  /* Clip chrome without admitting a second scroll offset during focus/resize.
+     ChatViewport owns the descendant reading scrollport. */
+  overflow: clip;
 }
 
 .root[data-phase='active'] .header {

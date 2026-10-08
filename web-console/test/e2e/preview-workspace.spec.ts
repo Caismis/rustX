@@ -223,6 +223,18 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     await page.setViewportSize({ width: 1920, height: 1000 }); await expect(panel).not.toBeVisible();
     await page.getByRole('button', { name: 'Reopen previews', exact: true }).click(); await expect(panes).toHaveCount(2); await expect.poll(liveWorkers).toBe(2);
 
+    // A clipped Session shell must never become a second scroll owner, even
+    // while resized descendants temporarily extend beyond its bounds.
+    const shellScroll = await page.locator('#session-view').evaluate(element => {
+      const overflow = document.createElement('div');
+      overflow.style.cssText = 'position:absolute;top:100%;height:32px;width:1px;pointer-events:none';
+      element.append(overflow);
+      element.scrollTop = 11;
+      const top = element.scrollTop;
+      overflow.remove();
+      return top;
+    });
+    expect(shellScroll).toBe(0);
     const conversation = page.locator('[data-conversation-scroll]').first();
     await conversation.evaluate(element => { element.scrollTop = 0; element.dispatchEvent(new Event('scroll')); });
     await expect(page.getByRole('button', { name: 'Return to latest', exact: true })).toBeVisible();
