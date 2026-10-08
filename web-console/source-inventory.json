@@ -1317,7 +1317,7 @@
         "Harness attachment identity and storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "de533134e09d95d775c7cdc9d8a38e9d3e1dff335802f9876d59209837de2395",
+      "local_sha256": "23988041ca381fc151eb5a2640dfeef0bde994843f07138f798c07460f0966b5",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/ChatView.tsx",

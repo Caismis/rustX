@@ -33,9 +33,10 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
   private retireGesture?: () => void;
   private retireNavigation = () => {
     const retire = this.retireGesture; this.retireGesture = undefined;
-    this.intent++; this.navigation = undefined; retire?.();
+    this.intent++; this.navigation = undefined; this.landed = undefined; retire?.();
   };
   private navigation?: { intent: number; anchor: string; current: () => boolean };
+  private landed?: { anchor: string; current: () => boolean };
   private active?: string | null;
   private explicitLatest = false;
   private rows() { return [...(this.content.current?.querySelectorAll<HTMLElement>('[data-chat-anchor-key]') ?? [])].filter(row => !row.closest('[hidden]')); }
@@ -66,7 +67,10 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     if (navigation && navigation.intent === this.intent && navigation.current()) {
       this.retireGesture = undefined;
       const row = this.rows().find(row => row.dataset.chatAnchorKey === navigation.anchor);
-      if (row) desired = el.scrollTop + row.getBoundingClientRect().top - el.getBoundingClientRect().top;
+      if (row) {
+        desired = el.scrollTop + row.getBoundingClientRect().top - el.getBoundingClientRect().top;
+        this.landed = navigation;
+      }
     } else if (this.following) desired = floor;
     else if (this.reading) {
       const rows = this.rows();
@@ -98,8 +102,15 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     const region = this.following ? regions.at(-1)
       : regions.reverse().find(row => row.getBoundingClientRect().top <= line) ?? first;
     const owner = region?.dataset.chatTurnOwner;
-    const key = this.following && this.props.latestTurn ? this.props.latestTurn
-      : owner ?? (this.following ? undefined : null);
+    // A successful explicit jump owns selection until the reader moves.
+    // The final prompt may be clamped by the scroll limit, or its owned
+    // response may begin below the reading line. Neither selects its predecessor.
+    const landed = this.landed;
+    const located = landed?.current() && regions.some(row => row.dataset.chatTurnOwner === landed.anchor)
+      ? landed.anchor : undefined;
+    if (!located) this.landed = undefined;
+    const key = located ?? (this.following && this.props.latestTurn ? this.props.latestTurn
+      : owner ?? (this.following ? undefined : null));
     if (key !== this.active) { this.active = key; this.props.onActiveTurn?.(key); }
   };
   private onScroll = () => {

@@ -537,3 +537,34 @@ it('uses the shared session scroller including its composer and keeps floating c
   </div></section>);
   flush(); expect(outer.scrollTop).toBe(600);
 });
+
+it('an explicit final-turn jump keeps its mark selected when the short tail clamps above its owner', () => {
+  const v = coordinatedViewport();
+  v.positions['turn:first'] = 20;
+  v.positions['turn:last'] = 900;
+  v.replace(['turn:first', 'turn:last']); v.flush();
+  v.scroll(400);
+  const intent = v.owner().beginNavigation();
+  intent.commit('turn:last'); v.flush();
+  expect(v.top()).toBe(800);
+  expect(v.active).toHaveBeenLastCalledWith('turn:last');
+  v.grow(0); v.flush();
+  expect(v.active).toHaveBeenLastCalledWith('turn:last');
+  v.scroll(799);
+  expect(v.active).toHaveBeenLastCalledWith('turn:first');
+});
+
+it('locating a prompt selects its turn while the owned response is still below the reading line', () => {
+  const v = coordinatedViewport(), owner = v.owner();
+  Object.assign(v.positions, { 'turn:first': 20, 'turn:last': 500, response: 620 });
+  v.ui.rerender(<ChatViewport onActiveTurn={v.active}>
+    <div data-chat-anchor-key="turn:first" data-chat-turn-owner="turn:first"/>
+    <div data-chat-anchor-key="turn:last">User prompt</div>
+    <div data-chat-anchor-key="response" data-chat-turn-owner="turn:last">Response</div>
+  </ChatViewport>);
+  v.flush(); v.scroll(200);
+  owner.beginNavigation().commit('turn:last'); v.flush();
+  expect(v.top()).toBe(500);
+  expect(v.active).toHaveBeenLastCalledWith('turn:last');
+  v.scroll(499); expect(v.active).toHaveBeenLastCalledWith('turn:first');
+});
