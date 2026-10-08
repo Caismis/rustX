@@ -100,11 +100,11 @@ const obsoletePages = ['Overview', 'Providers & Models', 'Default model', 'Tool 
   'Plugins', 'Agents & Workflows', 'Agents', 'MCP', 'Managed Python', 'Skills', 'Workflows',
   'Appearance', 'Connection', 'Server & source diagnostics'];
 
-it('S2-01 global Settings has exactly six product pages and opens at General', async () => {
+it('S2-01 global Settings has seven product pages and opens at General', async () => {
   const subject = cfg3Client();
   render(<SettingsSurface client={subject.client} target={userSettingsTarget} />);
   expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual([
-    'General', 'Models', 'Agent', 'Tools & Permissions', 'Extensions', 'Advanced',
+    'General', 'Models', 'Agent', 'Tools & Permissions', 'MCP servers', 'Extensions', 'Advanced',
   ]);
   expect(screen.getByRole('tab', { name: 'General', selected: true })).toBeTruthy();
   for (const gone of obsoletePages) expect(screen.queryByRole('tab', { name: gone })).toBeNull();
@@ -131,7 +131,7 @@ it('S2-01 Workspace Settings is a constrained page set that lands on Models', as
   // General holds client-owned preferences that no native source authors, so a
   // Workspace has no General page at all rather than an empty one.
   expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual([
-    'Models', 'Agent', 'Tools & Permissions', 'Extensions', 'Advanced',
+    'Models', 'Agent', 'Tools & Permissions', 'MCP servers', 'Extensions', 'Advanced',
   ]);
   expect(screen.getByRole('tab', { name: 'Models', selected: true })).toBeTruthy();
   expect(screen.queryByRole('tab', { name: 'General' })).toBeNull();
@@ -221,7 +221,7 @@ it('repairs uncertain writes by rereading and never replays the mutation', async
 it('edits an independent named-Agent whole resource with inherited model and extensions off', async () => {
   const subject = cfg3Client(); await open(subject, 'Extensions');
   fireEvent.click(screen.getByRole('tab', { name: 'Subagents' }));
-  fireEvent.click(screen.getAllByRole('button', { name: 'New' })[0]);
+  fireEvent.click(screen.getAllByRole('button', { name: /^(＋ )?New$/ })[0]);
   fireEvent.change(await screen.findByLabelText('New Agent identity'), { target: { value: 'researcher' } });
   fireEvent.click(screen.getByRole('button', { name: 'Add Agent' }));
   expect(screen.getByText(/invoking Attempt's already-frozen effective model/)).toBeTruthy();

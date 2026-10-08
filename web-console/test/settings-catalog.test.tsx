@@ -31,7 +31,7 @@ it('scope menu preserves the resource category and keeps definition drafts bound
   await catalog(s);
   await openResourceRow('search');
   fireEvent.change(screen.getByLabelText('MCP command'), { target: { value: 'unsaved-server' } });
-  fireEvent.click(screen.getByRole('button', { name: '← Extensions' }));
+  fireEvent.click(screen.getByRole('button', { name: /^← (Extensions|MCP servers)$/ }));
   fireEvent.click(screen.getByRole('button', { name: 'Configuration scope' }));
   fireEvent.click(await screen.findByRole('menuitem', { name: 'A' }));
   await screen.findByRole('heading', { name: 'Workspace Settings — A' });

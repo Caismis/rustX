@@ -110,7 +110,7 @@ test('desktop: six pages share one stable Harness frame, distinct icons and one 
     await expect(settings.getByRole('heading', { level: 3, name, exact: true })).toBeVisible();
     // The owner and observation state live in the fixed header on every page.
     await expect(settings.getByRole('heading', { level: 2, name: 'User Settings' })).toBeVisible();
-    await expect(settings.locator('[data-lifecycle="ready"]')).toHaveText('Authoritative source observed');
+    await expect(settings.locator('[data-lifecycle="ready"]')).toBeVisible();
     await expectNoHorizontalOverflow(page);
     await expectAccessible(page, settingsScope);
     if (references[name]) await expectStableScreenshot(settings, references[name]);
@@ -611,7 +611,7 @@ test('confirming a removal settles focus on its unit while the write is in fligh
   // Native answers: the removal settles normally, exactly once, and the
   // keyboard is still inside the unit's workflow.
   await releaseWrites(page);
-  await expect(unit.getByText('Provider transport saved. Native coordination owns application.')).toBeVisible();
+  await expect(unit.getByText('Provider transport saved.')).toBeVisible();
   await expect(remove).toHaveCount(0);
   await expect.poll(writes).toBe(1);
   await expect(unit).toBeFocused();
@@ -658,7 +658,7 @@ test('confirming a restore of inheritance settles focus on its unit while the wr
   await expect(unit).toBeFocused();
   await releaseWrites(page);
   await expect.poll(writes).toBe(1);
-  await expect(unit.getByText('Root identity saved. Native coordination owns application.')).toBeVisible();
+  await expect(unit.getByText('Root identity saved.')).toBeVisible();
   await expect(unit.locator('[data-authored="absent"]')).toContainText('Inherited — no Workspace override');
   await expect(unit).toBeFocused();
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);

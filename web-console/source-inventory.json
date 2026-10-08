@@ -479,7 +479,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "c7d3b143dd8bf63c6fb5a711cd98c76c658bfdd093478303852241967b2e4310"
+      "local_sha256": "c86767e3270966dbb28f63d9aeea8cd18c6b4ede95da050f4236e0ac43e60522"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
@@ -508,6 +508,8 @@
         "./machines/react",
         "./machines/settings-target",
         "./machines/system",
+        "./mcp/McpIcon",
+        "./mcp/McpPage",
         "./models/ModelsPage",
         "./projection",
         "./source-context",
@@ -529,7 +531,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "af16b9c8c166f3854825213741b71834ad318194ff350532be1bdfc98e36adaa"
+      "local_sha256": "fd8e0a26f0b018003051e2c7020f64d75bfdf355334c42861715d3bb25408882"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
@@ -2241,7 +2243,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "9fcb2a507c60c18c0d466edabda8eb984133f67e629587f24c5595a45d8aa84c",
+      "local_sha256": "ccdd9eff2eeb475f92c2a4c1790a4f805b856874ccfe33428efaf21b70f2fb7f",
       "retained_dependencies": [],
       "classification": "B"
     },
@@ -3354,7 +3356,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "2d222e6845efd0f36d86bb94fa3f22c5c7dd54be066c3c449452b6398b7ade8a"
+      "local_sha256": "28728401290a4dcf3f38803d402f5e7d96f27990b6ba171b5d361cc112e8db10"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",

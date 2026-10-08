@@ -21,6 +21,7 @@ import css from '../../../presentation/settings/SettingsContent.module.css';
 import workflow from '../../../presentation/settings/SettingsWorkflow.module.css';
 
 export interface ExtensionDetailProps {
+  backLabel?: string;
   source: SourceSettings; scope: SourceScope; models: string[];
   /** The exact revision of this scope's `rustx.toml`, or `undefined` while it
    * does not parse. Root availability is a unit of that document, so it is
@@ -53,7 +54,7 @@ export function ExtensionDetail(props: ExtensionDetailProps) {
   const preparation = entry && preparationLabel(tx, entry);
   const selection = entry && selectionLabel(tx, entry);
   return <section aria-label={tx('settings:extension-detail.value-value', { p0: extensionFamilyLabel(tx, family), p1: name })} className={workflow.detail}>
-    <div className={workflow.breadcrumb}><Button size="sm" onClick={() => onFocus(undefined)}>{tx('settings:extension-detail.extensions')}</Button><span>{extensionFamilyLabel(tx, family)} {name}</span></div>
+    <div className={workflow.breadcrumb}><Button size="sm" onClick={() => onFocus(undefined)}>{props.backLabel ?? tx('settings:extension-detail.extensions')}</Button><span>{extensionFamilyLabel(tx, family)} {name}</span></div>
     <h3>{name}</h3>
     {entry ? <>
       <div className={workflow.rowFacts}>

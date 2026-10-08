@@ -6,7 +6,6 @@ import { useTranslation } from '../../../locale/react';
 import type { Theme } from '../../appearance';
 import { AppearanceRow } from '../../../presentation/settings/AppearanceRow';
 import { Choice } from '../primitives/aria';
-import css from '../../../presentation/settings/SettingsContent.module.css';
 
 /** The General product page.
  *
@@ -25,7 +24,6 @@ export function GeneralPage({ theme, setTheme }: { theme: Theme; setTheme?: (the
   const [busyEnter, composer] = useBusyEnter();
   return <section aria-label={tx('settings:general-page.general')}>
     <h3>{tx('settings:general-page.general')}</h3>
-    <p>{tx('settings:general-page.preferences-this-browser-client-owns-they-are-stored-by-the-clie')}</p>
     <Choice label={tx('settings:copy.language')} value={tx.locale} options={[["en", "English"], ["zh", "中文"]]} onChange={localeController.setLocale} />
     <AppearanceRow title={tx('settings:general-page.appearance')} value={theme} onChange={setTheme}
       labels={{ light: tx('settings:copy.light'), dark: tx('settings:copy.dark'), system: tx('settings:appearance.system') }}/>
@@ -38,6 +36,5 @@ export function GeneralPage({ theme, setTheme }: { theme: Theme; setTheme?: (the
       options={[['queue', tx('settings:general-page.busy-enter-queue')], ['steer', tx('settings:general-page.busy-enter-steer')]]}
       onChange={value => composer.setBusyEnter(value)}
       description={tx('settings:general-page.busy-enter-description')} />
-    <p className={css.hint}>{tx('settings:general-page.connection-is-also-client-owned-it-is-kept-with-the-other-diagno')}</p>
   </section>;
 }

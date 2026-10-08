@@ -174,9 +174,10 @@ it('S2-05 every extension row reports kind, scope, validity, preparation and roo
   s.source.prospective_resources = inventory();
   await user(s, 'Extensions');
   const facts = async (name: string) => {
+    await openSettingsPage(['search','broken'].includes(name) || name.endsWith('-mcp') ? 'MCP servers' : 'Extensions');
     await openResourceRow(name);
     const values = screen.getAllByText(/./).map(node => node.textContent);
-    fireEvent.click(screen.getByRole('button', { name: '← Extensions' }));
+    fireEvent.click(screen.getByRole('button', { name: /^← (Extensions|MCP servers)$/ }));
     return values;
   };
   expect(await facts('search')).toEqual(expect.arrayContaining(['MCP', 'User', 'Valid definition', 'Prepared', 'Allowed for the root Agent']));
@@ -230,7 +231,7 @@ it('S2-05 a resource diagnostic stays on the identity native attributes it to, n
   await openResourceRow('search');
   const search = within(screen.getByRole('region', { name: 'MCP search' }));
   expect(search.queryByText(/missing command|MCP catalog exceeds/)).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: '← Extensions' }));
+  fireEvent.click(screen.getByRole('button', { name: /^← (Extensions|MCP servers)$/ }));
   fireEvent.click(await screen.findByRole('tab', { name: 'MCP servers' }));
   await openResourceRow('broken');
   const broken = within(screen.getByRole('region', { name: 'MCP broken' }));
@@ -265,9 +266,10 @@ it('S2-05 an identity native published no preparation or admission for is unobse
   s.source.prospective_resources = observationInventory();
   await user(s, 'Extensions');
   const facts = async (name: string) => {
+    await openSettingsPage(['search','broken'].includes(name) || name.endsWith('-mcp') ? 'MCP servers' : 'Extensions');
     await openResourceRow(name);
     const values = screen.getAllByText(/./).map(node => node.textContent);
-    fireEvent.click(screen.getByRole('button', { name: '← Extensions' }));
+    fireEvent.click(screen.getByRole('button', { name: /^← (Extensions|MCP servers)$/ }));
     return values;
   };
   const negative = ['Not prepared', 'Preparation unavailable', 'Not admitted', 'Prepared', 'Admitted'];
@@ -371,7 +373,7 @@ it('S2-07 Workspace Settings offers only Workspace overrides, with inheritance r
   await workspace(s);
   expect(screen.getAllByRole('tab', { selected: false }).concat(screen.getAllByRole('tab', { selected: true }))
     .filter(tab => tab.closest('[aria-label="Settings pages"]')).map(tab => tab.textContent).sort())
-    .toEqual(['Advanced', 'Agent', 'Extensions', 'Models', 'Tools & Permissions']);
+    .toEqual(['Advanced', 'Agent', 'Extensions', 'MCP servers', 'Models', 'Tools & Permissions']);
   await openResourceRow('transport');
   // The Workspace override is removed to inherit again; it is never "deleted".
   expect(screen.queryByRole('button', { name: 'Remove Provider transport' })).toBeNull();
@@ -475,7 +477,7 @@ it('S2-07 an inherited MCP definition is inspected read-only; only Override begi
   // Edit, leave the page and come back: the transaction owner kept the draft.
   fireEvent.change(field('MCP command'), { target: { value: 'search-workspace' } });
   await openSettingsPage('Models');
-  await openSettingsPage('Extensions');
+  await openSettingsPage('MCP servers');
   expect(field('MCP command').value).toBe('search-workspace');
   expect(definitionState('MCP search')).toBe('overriding');
   // Root availability is a second, independent draft.
@@ -545,7 +547,7 @@ it('S2-07 an inherited named Agent is inspected read-only; Override, Save and Us
   expect(retained(s)).toContain('User reviewer');
   expect(writes(s)).toHaveLength(0);
   fireEvent.change(field('Description'), { target: { value: 'Workspace reviewer' } });
-  fireEvent.click(screen.getByRole('button', { name: '← Extensions' }));
+  fireEvent.click(screen.getByRole('button', { name: /^← (Extensions|MCP servers)$/ }));
   await openResourceRow('reviewer');
   expect(field('Description').value).toBe('Workspace reviewer');
 
@@ -572,15 +574,15 @@ it('S2-07 a new Workspace resource and a Workspace-only definition are worded as
   s.source.workspace_mcp!.authored = { local: { definition: { type: 'stdio', command: 'local-server', args: [] }, retained_env: [], retained_headers: [] } };
   await workspace(s, 'Extensions');
   fireEvent.click(screen.getByRole('tab', { name: 'MCP servers' }));
-  fireEvent.click(screen.getAllByRole('button', { name: 'New' })[0]);
-  fireEvent.change(screen.getByLabelText('New MCP identity'), { target: { value: 'fresh' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Add MCP' }));
+  fireEvent.click(screen.getAllByRole('button', { name: /^(＋ )?New$/ })[0]);
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'fresh' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Advanced configuration and permissions' }));
   // Creation is its own explicit gesture: writable at once, no override action.
   expect(definitionState('MCP fresh')).toBe('new');
   expect(disabled(field('MCP command'))).toBe(false);
   expect(screen.queryByRole('button', { name: /^Override MCP fresh/ })).toBeNull();
   expect(writes(s)).toHaveLength(0);
-  fireEvent.click(screen.getByRole('button', { name: '← Extensions' }));
+  fireEvent.click(screen.getByRole('button', { name: /^← (Extensions|MCP servers)$/ }));
   await openResourceRow('local');
   // A Workspace definition that shadows nothing is removed, not "inherited again".
   expect(definitionState('MCP local')).toBe('authored');
@@ -872,7 +874,7 @@ it('S2-09 a committed Model accepts no edit until its authoritative reread, and 
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0].params.expected_revision).toBe('user-1');
   expect(writes(s)[0].params.mutation).toEqual({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...fullModel(), id: 'wire-new' } } });
-  await screen.findByText('Saved. Native application proceeds automatically.');
+  await screen.findByText('Saved.');
   // The post-commit read is outstanding: the presentation still holds the
   // pre-commit Model, and it is no base for a new draft of the same unit.
   expect(wire().value).toBe('wire');
@@ -944,7 +946,7 @@ it('S2-11 source paths, revisions and raw projections are on Advanced only', asy
     // Protocol vocabulary is not needed for ordinary tasks.
     expect(text(), page).not.toMatch(/\b(root_model|native_tools|source_tools|expected_revision|sourceWrite)\b/);
     // The per-unit CAS base is a collapsed disclosure, never page content.
-    for (const disclosure of screen.queryAllByRole('button', { name: 'Source revision & replacement' })) {
+    for (const disclosure of screen.queryAllByRole('button', { name: 'Configuration details' })) {
       expect(disclosure.getAttribute('aria-expanded')).toBe('false');
     }
   }

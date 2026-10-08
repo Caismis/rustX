@@ -139,13 +139,15 @@ export async function openSettingsPage(name: string) {
 export async function openResourceRow(name: string) {
   const card = screen.queryByRole('listitem', { name });
   fireEvent.click(card ? within(card).getAllByRole('button')[0] : await screen.findByRole('row', { name }));
+  const advanced = screen.queryByRole('button', { name: 'Advanced configuration and permissions' });
+  if (advanced) fireEvent.click(advanced);
 }
 
 /** Wait until the open Settings surface holds a current authoritative
  * observation. Source paths and revisions are diagnostics and live on
  * Advanced, so readiness is asserted from the lifecycle itself. */
 export async function settingsReady() {
-  await screen.findByText('Authoritative source observed');
+  await waitFor(() => expect(document.querySelector('[data-lifecycle=ready]')).toBeTruthy());
 }
 
 /** The primary page currently displayed. */

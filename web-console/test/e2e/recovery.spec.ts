@@ -33,9 +33,9 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
       await settings.getByRole('row', { name: 'fixture/console-model', exact: true }).click();
     };
     const openMcp = async () => {
-      await openSettingsPage(page, 'Extensions');
-      if (await settings.getByRole('button', { name: '← Extensions', exact: true }).isVisible()) await settings.getByRole('button', { name: '← Extensions', exact: true }).click();
-      await settings.getByRole('tab', { name: 'MCP', exact: true }).click();
+      await openSettingsPage(page, 'MCP servers');
+      if (await settings.getByRole('button', { name: '← MCP servers', exact: true }).isVisible()) await settings.getByRole('button', { name: '← MCP servers', exact: true }).click();
+      await openSettingsPage(page, 'MCP servers');
     };
     await openModel();
     await settings.getByLabel('Context window').fill('250000');
@@ -56,8 +56,9 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
     await expect(settings.getByLabel('Context window')).toHaveValue('250000');
     expect(writes()).toHaveLength(2);
     await openMcp();
-    await settings.getByLabel('New MCP identity').fill('loss-fixture');
-    await settings.getByRole('button', { name: 'Add MCP', exact: true }).click();
+    await settings.getByRole('button', { name: '＋ New', exact: true }).click();
+    await settings.getByLabel('Name', { exact: true }).fill('loss-fixture');
+    await settings.getByRole('button', { name: 'Advanced configuration and permissions', exact: true }).click();
     await settings.getByLabel('MCP command', { exact: true }).fill('inert-fixture');
     wire.loseNext('configuration/sourceWrite');
     await settings.getByRole('button', { name: 'Save MCP loss-fixture', exact: true }).click();

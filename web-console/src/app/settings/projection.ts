@@ -511,10 +511,3 @@ export function settingsLifecycle(input: { connection: ConnectionState; hasSourc
   }
   return 'failed';
 }
-export function settingsLifecycleLabel(tx: Translate, lifecycle: SettingsLifecycle): string {
-  return lifecycle === 'connecting' ? tx('settings:copy.connecting-to-the-app-server')
-    : lifecycle === 'loading' ? tx('settings:copy.loading-authoritative-sources')
-      : lifecycle === 'ready' ? tx('settings:copy.authoritative-source-observed')
-        : lifecycle === 'stale' ? tx('settings:copy.last-observation-retained-current-status-uncertain')
-          : tx('settings:copy.source-authority-unavailable');
-}

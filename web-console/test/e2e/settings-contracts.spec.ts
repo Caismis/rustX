@@ -52,7 +52,7 @@ reasoning = { default_profile = "deep", profiles = { deep = { enabled = true }, 
       const form = settings.getByRole('form', { name: title, exact: true });
       const save = async () => {
         await form.getByRole('button', { name: `Save ${title}`, exact: true }).click();
-        await expect(settings.getByText(`${title} saved. Native coordination owns application.`)).toBeVisible();
+        await expect(settings.getByText(`${title} saved.`)).toBeVisible();
       };
       await choose(form, 'Summary model', 'summary-b');
       if (owner === 'Agent') {
@@ -88,9 +88,10 @@ reasoning = { default_profile = "deep", profiles = { deep = { enabled = true }, 
       await expect(nested).toHaveCount(0);
     }
     await settings.getByRole('button', { name: '← Extensions', exact: true }).click();
-    await settings.getByRole('tab', { name: 'MCP', exact: true }).click();
+    await openSettingsPage(page, 'MCP servers');
     for (const transport of ['http', 'stdio'] as const) {
-      await settings.getByRole('row', { name: `implicit-${transport}`, exact: true }).click();
+      await settings.getByRole('button', { name: `MCP implicit-${transport}`, exact: true }).click();
+      await settings.getByRole('button', { name: 'Advanced configuration and permissions', exact: true }).click();
       const form = settings.getByRole('form', { name: `MCP implicit-${transport}`, exact: true });
       await expect(form.getByRole('button', { name: new RegExp(`^${transport === 'http' ? 'HTTP' : 'stdio'} Transport$`) })).toBeVisible();
       await expect(settings).not.toContainText('fixture-header-secret');
@@ -105,8 +106,8 @@ reasoning = { default_profile = "deep", profiles = { deep = { enabled = true }, 
         await form.getByLabel('Working directory').fill(fixture.workspaceA);
       }
       await form.getByRole('button', { name: `Save MCP implicit-${transport}`, exact: true }).click();
-      await expect(settings.getByText(`MCP implicit-${transport} saved. Native coordination owns application.`)).toBeVisible();
-      await settings.getByRole('button', { name: '← Extensions', exact: true }).click();
+      await expect(settings.getByText(`MCP implicit-${transport} saved.`)).toBeVisible();
+      await settings.getByRole('button', { name: '← MCP servers', exact: true }).click();
     }
     const mcp = readFileSync(mcpFile, 'utf8');
     expect(mcp).toContain('fixture-header-secret'); expect(mcp).toContain('fixture-env-secret');

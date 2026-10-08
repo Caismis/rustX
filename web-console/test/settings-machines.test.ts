@@ -3195,15 +3195,15 @@ it('S2-09 each page keeps its own detail focus across page changes, and a new ta
   actor.send({ type: 'SELECT', page: 'models' });
   actor.send({ type: 'FOCUS', focus: { kind: 'provider', id: 'deepseek' } });
   actor.send({ type: 'SELECT', page: 'extensions' });
-  actor.send({ type: 'FOCUS', focus: { kind: 'extension', family: 'mcp', name: 'search' } });
+  actor.send({ type: 'FOCUS', focus: { kind: 'extension', family: 'skill', name: 'search' } });
   actor.send({ type: 'SELECT', page: 'models' });
   expect(actor.getSnapshot().context.focus).toEqual({
     models: { kind: 'provider', id: 'deepseek' },
-    extensions: { kind: 'extension', family: 'mcp', name: 'search' },
+    extensions: { kind: 'extension', family: 'skill', name: 'search' },
   });
   // Leaving a detail for its list clears only that page's focus.
   actor.send({ type: 'FOCUS' });
-  expect(actor.getSnapshot().context.focus).toEqual({ extensions: { kind: 'extension', family: 'mcp', name: 'search' } });
+  expect(actor.getSnapshot().context.focus).toEqual({ extensions: { kind: 'extension', family: 'skill', name: 'search' } });
   actor.send({ type: 'OPEN', target: workspaceSettingsTarget('wA', 'Workspace A') });
   expect(actor.getSnapshot().context.focus).toEqual({});
 });
@@ -3240,15 +3240,16 @@ it('S2-01 a page cannot be selected or focused while Settings is closed', () => 
 // state afterwards.
 
 const workspaceA = workspaceSettingsTarget('wA', 'Workspace A');
-const everyPage: readonly SettingsPage[] = ['general', 'models', 'agent', 'tools', 'extensions', 'advanced'];
+const everyPage: readonly SettingsPage[] = ['general', 'models', 'agent', 'tools', 'mcp', 'extensions', 'advanced'];
 const everyFocus: readonly SettingsFocus[] = [
+  { kind: 'mcp', name: 'search' },
   { kind: 'provider', id: 'deepseek' }, { kind: 'model', id: 'main', provider: 'deepseek' },
-  { kind: 'extension', family: 'mcp', name: 'search' }, { kind: 'connection' },
+  { kind: 'extension', family: 'skill', name: 'search' }, { kind: 'connection' },
 ];
 /** The exact legal page → focus-kind matrix of each owner. */
 const legal = {
-  user: { general: [], models: ['provider', 'model'], agent: [], tools: [], extensions: ['extension'], advanced: ['connection'] },
-  workspace: { models: ['provider', 'model'], agent: [], tools: [], extensions: ['extension'], advanced: [] },
+  user: { general: [], models: ['provider', 'model'], agent: [], tools: [], mcp: ['mcp'], extensions: ['extension'], advanced: ['connection'] },
+  workspace: { models: ['provider', 'model'], agent: [], tools: [], mcp: ['mcp'], extensions: ['extension'], advanced: [] },
 } as const satisfies Record<'user' | 'workspace', Partial<Record<SettingsPage, readonly SettingsFocus['kind'][]>>>;
 function opened(target = userSettingsTarget as typeof userSettingsTarget | typeof workspaceA) {
   const actor = navigationActor(async () => ({ kind: 'retired' }));
@@ -3302,7 +3303,7 @@ it('N03 a Workspace target can never enter Connection focus', () => {
 it('N04 Models refuses an Extension focus and Extensions refuses a Provider or Model focus', () => {
   const actor = opened();
   actor.send({ type: 'SELECT', page: 'models' });
-  actor.send({ type: 'FOCUS', focus: { kind: 'extension', family: 'mcp', name: 'search' } });
+  actor.send({ type: 'FOCUS', focus: { kind: 'extension', family: 'skill', name: 'search' } });
   expect(actor.getSnapshot().context.focus).toEqual({});
   actor.send({ type: 'SELECT', page: 'extensions' });
   actor.send({ type: 'FOCUS', focus: { kind: 'provider', id: 'deepseek' } });
@@ -3372,7 +3373,7 @@ it('N09 legal per-page focus is restored after leaving a page, and illegal attem
   actor.send({ type: 'SELECT', page: 'models' });
   actor.send({ type: 'FOCUS', focus: { kind: 'model', id: 'main', provider: 'deepseek' } });
   actor.send({ type: 'SELECT', page: 'extensions' });
-  actor.send({ type: 'FOCUS', focus: { kind: 'extension', family: 'mcp', name: 'search' } });
+  actor.send({ type: 'FOCUS', focus: { kind: 'extension', family: 'skill', name: 'search' } });
   actor.send({ type: 'SELECT', page: 'agent' });
   actor.send({ type: 'FOCUS', focus: { kind: 'provider', id: 'elsewhere' } });
   actor.send({ type: 'SELECT', page: 'advanced' });
@@ -3380,7 +3381,7 @@ it('N09 legal per-page focus is restored after leaving a page, and illegal attem
   actor.send({ type: 'SELECT', page: 'models' });
   expect(actor.getSnapshot().context.focus.models).toEqual({ kind: 'model', id: 'main', provider: 'deepseek' });
   actor.send({ type: 'SELECT', page: 'extensions' });
-  expect(actor.getSnapshot().context.focus.extensions).toEqual({ kind: 'extension', family: 'mcp', name: 'search' });
+  expect(actor.getSnapshot().context.focus.extensions).toEqual({ kind: 'extension', family: 'skill', name: 'search' });
   actor.send({ type: 'SELECT', page: 'advanced' });
   expect(actor.getSnapshot().context.focus.advanced).toEqual({ kind: 'connection' });
   expect(actor.getSnapshot().context.focus).not.toHaveProperty('agent');

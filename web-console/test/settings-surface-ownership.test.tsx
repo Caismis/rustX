@@ -270,11 +270,11 @@ it('S1-06 a successful read clears only the relevant read error, never a distinc
   // A failed read reports its own error.
   failReads = true;
   fireEvent.click(screen.getByRole('button', { name: 'Reload configuration' }));
-  await screen.findByText(/Source read failed/);
+  await screen.findByText(/Could not load settings/);
   // A successful read clears the read error only; the write failure remains.
   failReads = false;
   fireEvent.click(screen.getByRole('button', { name: 'Reload configuration' }));
-  await waitFor(() => expect(screen.queryByText(/Source read failed/)).toBeNull());
+  await waitFor(() => expect(screen.queryByText(/Could not load settings/)).toBeNull());
   expect(screen.getByText(/native write rejected/)).toBeTruthy();
   expect(queryOnAdvanced(/Revision: workspace-1/)).toBeTruthy();
 });
@@ -288,9 +288,9 @@ it('S1-07 a committed save followed by a failed reread is saved plus uncertain, 
   fireEvent.click(screen.getByLabelText('read'));
   failReads = true;
   fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
-  await screen.findByText(/saved\. Native coordination owns application/);
-  expect(screen.getByText(/Source read failed/)).toBeTruthy();
-  expect(screen.getByText(/Last observation retained; current status uncertain/)).toBeTruthy();
+  await screen.findByText(/saved\./);
+  expect(screen.getByText(/Could not load settings/)).toBeTruthy();
+  expect(document.querySelector('[data-lifecycle=stale]')).toBeTruthy();
   // Exactly one write: the committed mutation is never replayed or presented as unsaved.
   expect(writes(s)).toHaveLength(1);
 });
@@ -437,7 +437,7 @@ it('S1-14 a confirmed Provider literal-secret save drops the submitted payload e
   fireEvent.click(screen.getByRole('button', { name: 'Save Provider secret' }));
   // The write commits and native acknowledges it; the post-write authoritative
   // reread fails, so the transaction cannot settle yet.
-  await screen.findByText(/saved\. Native coordination owns application/);
+  await screen.findByText(/saved\./);
   await screen.findByText(/Saved, but the authoritative reread failed/);
   expect(writes(s)).toHaveLength(1);
   // Navigating away unmounts the editor; the store survives, and it must no
@@ -471,9 +471,9 @@ it('S1-14 a confirmed MCP literal-environment save drops the submitted payload o
   await findOnAdvanced(/Revision: workspace-1/);
   fireEvent.click(screen.getByRole('tab', { name: 'Extensions' }));
   fireEvent.click(screen.getByRole('tab', { name: 'MCP servers' }));
-  fireEvent.click(screen.getAllByRole('button', { name: 'New' })[0]);
-  fireEvent.change(screen.getByLabelText('New MCP identity'), { target: { value: 'search' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Add MCP' }));
+  fireEvent.click(screen.getAllByRole('button', { name: /^(＋ )?New$/ })[0]);
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'search' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Advanced configuration and permissions' }));
   fireEvent.change(screen.getByLabelText('MCP command'), { target: { value: 'search-server' } });
   const literals = within(screen.getByRole('group', { name: 'Literal environment' }));
   fireEvent.change(literals.getByLabelText('Literal environment name'), { target: { value: 'TOKEN' } });
@@ -589,19 +589,21 @@ it('S1-15 an inherited MCP definition and named Agent are discoverable from the 
   await settingsReady();
   await openSettingsPage('Extensions');
   fireEvent.click(screen.getByRole('tab', { name: 'MCP servers' }));
-  expect(within(screen.getByRole('group', { name: 'Defined here' })).getByRole('listitem', { name: 'local' })).toBeTruthy();
+  expect(within(screen.getByRole('group', { name: 'Installed' })).getByRole('listitem', { name: 'local' })).toBeTruthy();
   expect(within(screen.getByRole('group', { name: 'Inherited from user' })).getByRole('listitem', { name: 'search' })).toBeTruthy();
-  fireEvent.click(screen.getAllByRole('button', { name: 'New' })[0]);
-  fireEvent.change(screen.getByLabelText('New MCP identity'), { target: { value: 'search' } });
-  expect((screen.getByRole('button', { name: 'Add MCP' }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getAllByRole('button', { name: /^(＋ )?New$/ })[0]);
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'search' } });
+  expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true);
   // Opening the inherited definition authors nothing in this Workspace: it is
   // inspected, and only an explicit override would begin a Workspace draft.
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
   await openResourceRow('search');
   expect(screen.getByRole('form', { name: 'MCP search' }).getAttribute('data-definition')).toBe('inherited');
   expect(screen.getByRole('button', { name: 'Override MCP search in this Workspace' })).toBeTruthy();
   expect((screen.getByRole('button', { name: 'Save MCP search' }) as HTMLButtonElement).disabled).toBe(true);
   expect(screen.queryByRole('button', { name: /Use global default MCP search/ })).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: '← Extensions' }));
+  fireEvent.click(screen.getByRole('button', { name: /^← (Extensions|MCP servers)$/ }));
+  await openSettingsPage('Extensions');
   fireEvent.click(screen.getByRole('tab', { name: 'Subagents' }));
   await openResourceRow('reviewer');
   // The inherited profile is reported as inherited, from the native inventory
@@ -745,7 +747,7 @@ it('S1-35 while one unit owns the target mutation barrier every other unit stays
   expect(submitted).toHaveBeenCalledTimes(1);
   // The commit is acknowledged; its post-commit read is still outstanding.
   await act(async () => { write.resolve({ acknowledgement: committed }); });
-  await screen.findByText('Saved. Native application proceeds automatically.');
+  await screen.findByText('Saved.');
   expect(saveStatus().disabled).toBe(true);
   expect(statusInput.disabled).toBe(false);
   // The authoritative post-commit observation releases the barrier in place:

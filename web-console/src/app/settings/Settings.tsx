@@ -2,6 +2,8 @@ import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted Settings shell; see PROVENANCE.md. */
 import type { Theme } from '../appearance';
 import { useState, type ReactNode } from 'react';
+import { McpIcon } from './mcp/McpIcon';
+import { McpPage } from './mcp/McpPage';
 import { SettingsScopeMenu } from './SettingsScopeMenu';
 import { shallowEqual, useSelector } from '@xstate/react';
 import type { SourceScope } from '../../../../protocol/app-server/v37';
@@ -28,7 +30,7 @@ import { ToolsPage } from './tools/ToolsPage';
 import { ExtensionsPage, type ExtensionFilter } from './extensions/ExtensionsPage';
 import { AdvancedPage } from './advanced/AdvancedPage';
 import {
-  catalogIdentities, configAuthoring, settingsLifecycle, settingsLifecycleLabel,
+  catalogIdentities, configAuthoring, settingsLifecycle,
   settingsTargetKey, settingsTargetLabel, settingsTargetScope, type SettingsTarget,
 } from './projection';
 import {
@@ -67,6 +69,7 @@ const pageIcons: Record<SettingsPage, () => ReactNode> = {
   models: () => <IconDataOutline16 />,
   agent: () => <IconAgentPresetOutline16 />,
   tools: () => <IconShieldOutline16 />,
+  mcp: () => <McpIcon />,
   extensions: () => <IconPluginPinwheelOutline16 />,
   advanced: () => <IconCodeOutline16 />,
 };
@@ -168,6 +171,9 @@ function SettingsDialog({ client, host, theme = 'system', setTheme, connection, 
         `rustx.toml` closes the semantic units it authors and says nothing
         about the MCP or named-Agent documents, each of which is its own
         authority and reports its own state. */}
+    {current === 'mcp' && <McpPage source={source} scope={scope} revision={structured ? config.revision : undefined}
+      focus={focus.mcp} onFocus={onFocus} refresh={() => actor.send({type:'RECONCILE'})} refreshing={busy || reconciling}
+      scopeControl={<SettingsScopeMenu target={target} host={host} onSelect={next => { navigation.send({type:'OPEN',target:next}); navigation.send({type:'SELECT',page:'mcp'}); }}/>} />}
     {current === 'extensions' && <ExtensionsPage source={source} scope={scope}
       revision={structured ? config.revision : undefined} models={models} focus={focus.extensions} onFocus={onFocus}
       filter={extensionFilter} onFilter={setExtensionFilter} refresh={() => actor.send({type:'RECONCILE'})} refreshing={busy || reconciling}
@@ -178,7 +184,7 @@ function SettingsDialog({ client, host, theme = 'system', setTheme, connection, 
       processPolicyImpacts={source.process_policy_impacts} busy={busy} targetValid={targetValid} />}
     {/* The one mutation a malformed `rustx.toml` admits, fenced on its exact
         current revision. It exists only while the document does not parse. */}
-    {config.state === 'malformed' && current !== 'extensions' && <UnitForm title={tx('settings:settings.repair-malformed-source')} blank="" revision={config.revision} removable={false}
+    {config.state === 'malformed' && current !== 'extensions' && current !== 'mcp' && <UnitForm title={tx('settings:settings.repair-malformed-source')} blank="" revision={config.revision} removable={false}
       mutation={replacement => ({ kind: 'repair_config', document: replacement ?? '' })}>
       {(value, change) => <label>{tx('settings:settings.replacement-toml')}<textarea value={value} onChange={event => change(event.target.value)} /></label>}
     </UnitForm>}
@@ -187,23 +193,14 @@ function SettingsDialog({ client, host, theme = 'system', setTheme, connection, 
   const pages = settingsPages(target).map(id => ({ id, label: tx(`settings:page.${id}`), icon: pageIcons[id]() }));
   return <SettingsPanel pages={pages} activeId={current}
     onSelect={id => navigation.send({ type: 'SELECT', page: id as SettingsPage })} onClose={() => navigation.send({ type: 'CLOSE' })}
-    // The owner this dialog is bound to, and the state of its authoritative
-    // observation, identify every page alike — including the client-owned
-    // General page, which authors no native source but still belongs to one
-    // Settings instance. They sit in the fixed header, with the authoritative
-    // reread of this target: a read, never a rescan — rediscovering
-    // configuration files is the separate native maintenance operation on
-    // Advanced. The native source path, its revision and the raw projections
-    // stay on Advanced.
-    context={<div className={css.context}>
+    // Scope stays visible; internal observation metadata is not product copy.
+    context={<div className={css.context} data-lifecycle={lifecycle}>
       <div className={css.contextTitle}>
         <h2>{settingsTargetLabel(tx, target)}</h2>
-        <p role="status" className={css.lifecycle} data-lifecycle={lifecycle}>{settingsLifecycleLabel(tx, lifecycle)}</p>
       </div>
       <Button size="sm" variant="outline" disabled={busy || transport.connection !== 'connected'} onClick={() => actor.send({ type: 'REFRESH' })}>{tx('settings:settings.reload-configuration')}</Button>
     </div>}>
     <section className={`${css.settings} ${css.page}`} aria-label={tx('settings:settings.settings')} aria-busy={busy}>
-      {scope === 'workspace' && current !== 'models' && current !== 'extensions' && <p className={css.hint}>{tx('settings:settings.bound-to-this-exact-authorized-workspace-session-focus-never-ret')}</p>}
       {/* Target-wide facts, each reported as itself: a read failure, a
           convergence report, an unknown save outcome and a maintenance
           failure are separate alerts, and none of them hides another. */}
@@ -211,7 +208,6 @@ function SettingsDialog({ client, host, theme = 'system', setTheme, connection, 
       {convergenceError && <p role="alert" className={css.error}>{convergenceError}</p>}
       <MutationNotice outcome={outcome} />
       {maintenanceError && <p role="alert" className={css.error}>{maintenanceError}</p>}
-      {scope === 'workspace' && current !== 'general' && current !== 'models' && current !== 'extensions' && <p className={css.hint}>{tx('settings:settings.use-global-default-removes-the-unit-this-workspace-authors-so-th')}</p>}
       {current === 'general' ? <GeneralPage theme={theme} setTheme={setTheme} /> : connectionFocused
         ? <ConnectionSettings connection={connection} client={client} />
         : !source ? <SourcePending lifecycle={lifecycle} />

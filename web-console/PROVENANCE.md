@@ -1687,3 +1687,17 @@ icons are reused; missing fork/tools icons use Lucide 0.468.0 `git-fork.svg` and
 `wrench.svg` (https://github.com/lucide-icons/lucide/tree/0.468.0/icons).
 The upstream ISC/Feather MIT notice is shipped in `public/LICENSE-Lucide.txt`
 and reproduced in `THIRD-PARTY-NOTICES.txt`. No runtime dependency was added.
+
+## Dedicated MCP settings
+
+Behavioral and layout reference: local ZCode
+`packages/ui/src/settings/{McpSettingsSection,McpServerForm,McpServerList,SettingsResourceHeaderActions,mcpSettingsShared}.tsx`
+(the shared configuration helper is `.ts`). rustX retains its native source
+transactions and supports its own MCP fields rather than inventing unsupported
+ZCode protocol options. No bundled ZCode servers are included.
+
+The MCP glyph reuses the exact Lucide `Cable` path data from `lucide-react@1.17.0`,
+the version pinned by ZCode's lockfile:
+https://unpkg.com/lucide-react@1.17.0/dist/esm/icons/cable.mjs
+The ISC license is shipped in `public/LICENSE-Lucide-1.17.txt` and the generated
+third-party notices. Only the React SVG wrapper is local.

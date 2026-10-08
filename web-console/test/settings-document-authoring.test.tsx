@@ -97,19 +97,20 @@ it('DA-03 a malformed rustx.toml leaves the independent MCP and named Agent docu
   open('Extensions');
   filter('MCP servers');
   expect(screen.queryByRole('form', { name: 'Repair malformed source' })).toBeNull();
-  fireEvent.click(screen.getAllByRole('button', { name: 'New' })[0]);
-  fireEvent.change(screen.getByLabelText('New MCP identity'), { target: { value: 'probe' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Add MCP' }));
+  fireEvent.click(screen.getAllByRole('button', { name: /^(＋ )?New$/ })[0]);
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'probe' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Advanced configuration and permissions' }));
   const mcp = within(screen.getByRole('form', { name: 'MCP probe' }));
   fireEvent.change(mcp.getByLabelText('MCP command'), { target: { value: 'probe-server' } });
   fireEvent.click(mcp.getByRole('button', { name: 'Save MCP probe' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0].params).toMatchObject({ expected_revision: 'mcp-1', mutation: { kind: 'mcp', id: 'probe' } });
   // Named Agent: a whole resource document of its own.
-  fireEvent.click(screen.getByRole('button', { name: '← Extensions' }));
+  fireEvent.click(screen.getByRole('button', { name: /^← (Extensions|MCP servers)$/ }));
+  open('Extensions');
   filter('Subagents');
   expect(screen.queryByRole('form', { name: 'Repair malformed source' })).toBeNull();
-  fireEvent.click(screen.getAllByRole('button', { name: 'New' })[0]);
+  fireEvent.click(screen.getAllByRole('button', { name: /^(＋ )?New$/ })[0]);
   fireEvent.change(screen.getByLabelText('New Agent identity'), { target: { value: 'helper' } });
   fireEvent.click(screen.getByRole('button', { name: 'Add Agent' }));
   const agent = within(screen.getByRole('form', { name: 'Agent helper' }));
@@ -164,14 +165,15 @@ async function reachableModels() {
   const catalog = allModels().queryAllByRole('row').map(row => row.getAttribute('aria-label')!);
   const root = options(screen.getByRole('form', { name: 'Default model' }), /Model$/);
   open('Extensions');
+  open('Extensions');
   filter('Subagents');
-  fireEvent.click(screen.getAllByRole('button', { name: 'New' })[0]);
+  fireEvent.click(screen.getAllByRole('button', { name: /^(＋ )?New$/ })[0]);
   fireEvent.change(screen.getByLabelText('New Agent identity'), { target: { value: 'helper' } });
   fireEvent.click(screen.getByRole('button', { name: 'Add Agent' }));
   const agent = screen.getByRole('form', { name: 'Agent helper' });
   fireEvent.click(within(agent).getByLabelText('Explicit child model'));
   const named = options(agent, /Model$/);
-  fireEvent.click(screen.getByRole('button', { name: '← Extensions' }));
+  fireEvent.click(screen.getByRole('button', { name: /^← (Extensions|MCP servers)$/ }));
   const selectable = (list: string[]) => list.filter(option => option !== 'Select model');
   return { catalog, root: selectable(root), named: selectable(named) };
 }
