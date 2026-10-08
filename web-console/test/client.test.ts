@@ -476,29 +476,136 @@ it('native attach acknowledgement after Release and queued Open retains detach i
   const retained = s.client.target('A');
   expect(s.client.getSnapshot().views.A.attachmentObservation).toBeUndefined();
   expect(s.client.getSnapshot().views.A.attachmentIntent).toBe('wanted');
-  const detach = await s.waitFor('session/detach', 1); s.reply(detach); await closing;
+  const detach = await s.waitFor('session/detach', 1);
+  expect(detach).toMatchObject({ params: { target: retained } });
+  expect(s.claims()).toEqual([retained]);
+  s.reply(detach); await closing; expect(s.claims()).toEqual([]);
   const second = await s.waitFor('session/attach', 2);
   expect(s.client.getSnapshot().views.A.attachmentObservation).toBeUndefined();
   s.reply(second); await reopening;
   const admission = s.client.getSnapshot().views.A.attachmentObservation;
   expect(admission?.target).not.toEqual(retained);
   expect(s.client.isAttachmentObservationCurrent('A', admission)).toBe(true);
+  s.reply(request); // Duplicate old acknowledgement cannot overwrite the new claim.
+  expect(s.client.target('A')).toEqual(admission?.target);
+  expect(s.claims()).toEqual([admission?.target]); expect(s.maxClaims).toBe(1);
+  expect(attachmentRequests(s).map(request => request.method)).toEqual(['session/attach', 'session/detach', 'session/attach']);
 });
 
 
-it('an Open revoked while still queued cannot acquire observation authority when it later attaches', async () => {
-  const s = server(); await s.connect(); await s.client.attach('A');
-  s.held.add('session/attach'); s.held.add('session/detach');
-  const firstRelease = s.client.release('A'), firstOpen = s.client.attach('A');
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(done => { resolve = done; });
+  return { promise, resolve };
+}
+
+const attachmentRequests = (s: Server) => s.requests.map(({ request }) => request)
+  .filter(request => request.method === 'session/attach' || request.method === 'session/detach');
+
+it('an Open revoked while still queued starts no native attachment', async () => {
+  const s = server(); await s.attached('A'); const initial = s.target('A');
+  s.held.add('session/detach');
+  const refreshed = vi.fn();
+  const firstRelease = s.client.release('A'), firstOpen = s.client.attach('A', undefined, undefined, refreshed);
   const secondRelease = s.client.release('A'), secondOpen = s.client.attach('A');
-  s.reply(await s.waitFor('session/detach', 1)); await firstRelease;
-  s.reply(await s.waitFor('session/attach', 2)); await firstOpen;
-  expect(s.client.getSnapshot().views.A.attachmentObservation).toBeUndefined();
-  expect(s.client.getSnapshot().views.A.attachmentIntent).toBe('wanted');
-  const retired = s.client.target('A');
-  s.reply(await s.waitFor('session/detach', 2)); await secondRelease;
-  s.reply(await s.waitFor('session/attach', 3)); await secondOpen;
+  const detach = await s.waitFor('session/detach', 1);
+  s.held.delete('session/detach'); s.reply(detach);
+  await Promise.all([firstRelease, firstOpen, secondRelease, secondOpen]);
+  expect(refreshed).not.toHaveBeenCalled();
+  expect(attachmentRequests(s).map(request => request.method)).toEqual(['session/attach', 'session/detach', 'session/attach']);
   const admission = s.client.getSnapshot().views.A.attachmentObservation;
-  expect(admission?.target).not.toEqual(retired);
+  expect(admission?.target).not.toEqual(initial);
   expect(s.client.isAttachmentObservationCurrent('A', admission)).toBe(true);
+  expect(s.claims()).toEqual([admission?.target]); expect(s.maxClaims).toBe(1);
+});
+
+it('Release permanently revokes an Open suspended in Product Host admission', async () => {
+  const s = server(); await s.connect();
+  const entered = deferred<() => boolean>(), gate = deferred<void>();
+  let admissions = 0;
+  s.client.setAttachmentAdmission(async (_id, current) => {
+    if (++admissions === 1) { entered.resolve(current); await gate.promise; }
+    return { current: () => true, validate: async () => true };
+  });
+  const old = s.client.attach('A'); const oldCurrent = await entered.promise;
+  expect(oldCurrent()).toBe(true);
+  const release = s.client.release('A'), latest = s.client.attach('A');
+  expect(s.client.getSnapshot().views.A.attachmentIntent).toBe('wanted');
+  expect(oldCurrent()).toBe(false);
+  gate.resolve(); await Promise.all([old, release, latest]);
+  expect(oldCurrent()).toBe(false); expect(admissions).toBe(2);
+  expect(attachmentRequests(s).map(request => request.method)).toEqual(['session/attach']);
+  expect(s.claims()).toEqual([s.client.target('A')]); expect(s.maxClaims).toBe(1);
+});
+
+it('Release revokes an Open waiting for RPC capacity before final dispatch', async () => {
+  const s = server(); await s.connect(); s.held.add('session/settings');
+  const reads = Array.from({ length: 8 }, () => s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings'));
+  await s.waitFor('session/settings', 8);
+  const entered = deferred<void>();
+  const request = s.client.request.bind(s.client);
+  vi.spyOn(s.client, 'request').mockImplementation(((...args: Parameters<typeof request>) => {
+    const work = request(...args);
+    if (args[0].method === 'session/attach') entered.resolve();
+    return work;
+  }) as typeof request);
+  const old = s.client.attach('A');
+  const refused = expect(old).rejects.toThrow('before dispatch');
+  await entered.promise; expect(attachmentRequests(s)).toEqual([]);
+  const release = s.client.release('A'), latest = s.client.attach('A');
+  s.held.delete('session/settings');
+  for (const { request } of s.requests.filter(({ request }) => request.method === 'session/settings')) s.reply(request);
+  await Promise.all([...reads, refused, release, latest]);
+  expect(attachmentRequests(s).map(request => request.method)).toEqual(['session/attach']);
+  expect(s.claims()).toEqual([s.client.target('A')]); expect(s.maxClaims).toBe(1);
+  expect(s.client.getSnapshot().uncertain).toEqual([]);
+  // Every original RPC slot is reusable after refusal and settlement.
+  s.held.add('session/settings');
+  const count = s.requests.filter(({ request }) => request.method === 'session/settings').length;
+  const reused = Array.from({ length: 8 }, () => s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings'));
+  expect(s.requests.filter(({ request }) => request.method === 'session/settings')).toHaveLength(count + 8);
+  for (const { request } of s.requests.filter(({ request }) => request.method === 'session/settings').slice(count)) s.reply(request);
+  await Promise.all(reused);
+});
+
+it('Release revokes an Open during final asynchronous validation', async () => {
+  const s = server(); await s.connect();
+  const entered = deferred<void>(), gate = deferred<boolean>();
+  let admissions = 0;
+  s.client.setAttachmentAdmission(async () => {
+    const first = ++admissions === 1;
+    return { current: () => true, validate: async () => {
+      if (first) { entered.resolve(); return gate.promise; }
+      return true;
+    } };
+  });
+  const old = s.client.attach('A'), refused = expect(old).rejects.toThrow('before dispatch');
+  await entered.promise;
+  const release = s.client.release('A'), latest = s.client.attach('A');
+  gate.resolve(true); await Promise.all([refused, release, latest]);
+  expect(attachmentRequests(s).map(request => request.method)).toEqual(['session/attach']);
+  expect(s.claims()).toEqual([s.client.target('A')]); expect(s.maxClaims).toBe(1);
+});
+
+it.each([true, false])('alternating queued gestures leave only the final Open claim: %s', async finalOpen => {
+  const s = server(); await s.attached('A');
+  // More than one queue capacity over successive settled batches proves reuse.
+  for (let batch = 0; batch < 3; batch++) {
+    s.held.add('session/detach');
+    const work = [s.client.release('A')];
+    for (let i = 0; i < 20; i++) work.push(s.client.attach('A'), s.client.release('A'));
+    const wantsOpen = batch < 2 || finalOpen;
+    if (wantsOpen) work.push(s.client.attach('A'));
+    const detach = await s.waitFor('session/detach', batch + 1);
+    s.held.delete('session/detach'); s.reply(detach);
+    await Promise.all(work);
+    expect(s.claims()).toEqual(wantsOpen ? [s.client.target('A')] : []);
+    expect(attachmentRequests(s).filter(request => request.method === 'session/attach')).toHaveLength(batch + 1 + Number(wantsOpen));
+    expect(attachmentRequests(s).filter(request => request.method === 'session/detach')).toHaveLength(batch + 1);
+  }
+  expect(attachmentRequests(s).map(request => request.method)).toEqual([
+    'session/attach', 'session/detach', 'session/attach', 'session/detach', 'session/attach', 'session/detach',
+    ...(finalOpen ? ['session/attach'] : []),
+  ]);
+  expect(s.maxClaims).toBe(1); expect(s.client.getSnapshot().uncertain).toEqual([]);
 });

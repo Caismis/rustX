@@ -1019,14 +1019,17 @@ export class AppServerClient {
     // Capture the Open's revision before it waits behind earlier gestures.
     const intentRevision = this.state.views[id]?.attachmentIntentRevision ?? 0;
     return this.changeAttachment(id, 'attach', async generation => {
-      if (!navigationCurrent() || this.state.views[id]?.attachmentIntent !== 'wanted') return;
+      const openCurrent = () => this.current(generation) && navigationCurrent()
+        && this.state.views[id]?.attachmentIntent === 'wanted'
+        && (this.state.views[id]?.attachmentIntentRevision ?? 0) === intentRevision;
+      if (!openCurrent()) return;
       const existing = this.state.views[id]?.target;
       if (existing) { attached?.(existing); return this.refresh(id); }
       this.setSession(id, { attachment: 'attaching', modelIntent: undefined, preview: undefined, statisticsPreview: undefined, tracePreview: undefined, error: undefined });
       const epoch = (this.attachmentEpochs.get(id) ?? 0) + 1;
       this.attachmentEpochs.set(id, epoch);
       this.summarySettled.delete(id);
-      await this.performAttach(id, generation, epoch, intentRevision, navigationCurrent, attached);
+      await this.performAttach(id, generation, epoch, intentRevision, openCurrent, attached);
     });
   }
   private async readHistoryPreview(id: string, generation: number, epoch: number, admissionCurrent: () => boolean) {
@@ -1136,9 +1139,11 @@ export class AppServerClient {
     }).catch(() => {});
     return work;
   }
-  private async performAttach(id: string, generation: number, epoch: number, intentRevision: number, navigationCurrent: () => boolean, attached?: (target: AttachmentTarget) => void) {
+  private async performAttach(id: string, generation: number, epoch: number, intentRevision: number, openCurrent: () => boolean, attached?: (target: AttachmentTarget) => void) {
     const current = () => this.current(generation) && this.attachmentEpochs.get(id) === epoch;
-    const admissionCurrent = () => current() && navigationCurrent();
+    // Dispatch authority expires with this Open; response settlement below
+    // deliberately keeps the generation/epoch fence after a request is sent.
+    const admissionCurrent = () => current() && openCurrent();
     let target: AttachmentTarget | undefined;
     try {
       const admitted = await this.admitAttachment(id, admissionCurrent);
