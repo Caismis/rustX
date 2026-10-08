@@ -286,3 +286,14 @@ it('overlapping unloaded clicks retain only the newest page demand and navigatio
  expect(windows[0].request.params).toMatchObject({at:{type:'turn',id:native(1).id}});
  expect(server.client.getSnapshot().views.A.history?.window?.target).toEqual(native(1).id);
 });
+
+it('native invalidation removes rail geometry; explicit recovery places the current native Turn again',async()=>{
+ const {ui}=await thousandTurns();
+ expect(scroller(ui).scrollTop).toBeGreaterThan(9000);
+ await act(async()=>{server.cursor++;server.socket.deliver({jsonrpc:'2.0',method:'session/event',params:{target:server.target('A'),cursor:String(server.cursor),event:{type:'pending_inbound_changed',pending:[]}}});});
+ expect(ui.queryByRole('navigation')).toBeNull();
+ const recovery=ui.getByRole('alert').querySelector('button')!;
+ await act(async()=>fireEvent.click(recovery));
+ expect(scroller(ui).scrollTop).toBeGreaterThan(9000);
+ expect(ui.getByRole('button',{name:'Jump to turn 1000'}).getAttribute('aria-current')).toBe('true');
+});
