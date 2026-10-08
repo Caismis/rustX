@@ -82,6 +82,28 @@ Web:
   collapsed summary. It checks call-row phases, and that the browser's ordinary
   connection gets `delivery/read` refused as unauthorized.
 
+## Review repairs
+
+The independent review of `d35b929f` found four P1 findings and one P2 finding.
+The first two had one cause: an ordinary-lane delivery request had no owner
+between admission and transmission.
+
+| Finding | Correction | Regression |
+| --- | --- | --- |
+| P1: Escape in `/files` abandoned only the local Promise; the native read kept running | Each `delivery/read`/`delivery/locate` is a `delivery_access::Operation` registered under its exact id before admission. New `delivery/cancel` cancels only that connection's own id and fails the request's native fences. The TUI client sends it when the action's signal aborts and keeps the correlation until the one terminal response. | `delivery_cancellation_is_request_scoped_at_every_native_interleaving` (before admission, after admission before open, after open before bytes, after settlement before publication, after publication, concurrent sibling, other/ordinary connections, reuse); TUI client correlation tests; real stdio cancel in `delivery-integration.test.ts` |
+| P1: a produced response could be written after revocation | The response is queued with its `Publication`; `transport::Outgoing` commits it immediately before the physical write, rechecking cancellation, delivery authority and the attachment, and substitutes the same id's typed failure | `delivery_publication_commits_at_the_transport_writer` (real stdio writer parked after native settlement, before commit: credential, detach, close, locate; complementary unrevoked case; unrelated `server/info`; permits restored); `delivery_revocation_before_publication_commit_suppresses_sensitive_responses` |
+| P1: Save prefilled the editable Input with the raw delivered name | `DestinationInput` holds only renderable text (refuses unrenderable `setValue` and whole pastes); the name prefills only when it renders as itself; outcome text is sanitized; `deliveryDestination` has no name fallback | `deliveries.test.ts`: ESC/CSI, OSC, C1, LF, CR, bidi override/isolate, ALM through the real Input render; Unicode/space names prefilled exactly and saved byte-exactly |
+| P1: the location test assumed unlink + recreate yields a new inode | The original stays allocated (renamed aside) while the replacement is created; adds a swap after the owned open, which fails `Replaced` | `location_is_the_verified_leaf_identity_without_a_size_bound`, run 30 times consecutively |
+| P2: retiring `/files` left the operation running | One abort scope per `/files` overlay, retired by `#closeOverlay`, which every ending passes through. Save commits after `sync` + `close` and removes only the device/inode it created. Open commits at the spawn. | `app.test.ts` retirement test (Escape, overlay replacement, snapshot replacement, disconnect, quit; the native read is cancelled and no file appears even when the bytes arrive late); `deliveries.test.ts` Save/Open commit-point orderings |
+
+Negative controls: with the publication decision forced to `Ok`, the three Rust
+publication/cancellation tests fail. With cancel not cancelling the request token,
+the cancellation test fails ("never admitted"). With the interaction abort removed,
+the app retirement test fails on overlay replacement. With the raw `Input` and raw
+prefill, the hostile-name test fails on ESC/CSI.
+
+The protocol stays v38: v38 is introduced by this unmerged PR, and main is v37.
+
 ## Validation
 
 See the pull request for the final command list and results; the PR description
