@@ -328,80 +328,116 @@ definitions never touch the filesystem.
 
 - **Save** calls `delivery/read` and checks the base64 bound before decoding. It
   then publishes one complete file at the typed client-local destination, or
-  leaves the destination unchanged:
+  leaves the destination unchanged. Linux and macOS run the same code, made only
+  of POSIX calls (`open` with `O_CREAT|O_EXCL`, `fsync`, `link`, `lstat`,
+  `unlink`, `fstat`):
 
   ```text
-  open(<destination's parent as spelled>, O_PATH)          held: P
-    -> mkdtemp(P/.rustx-save-XXXXXX), open it O_NOFOLLOW     held: S (this user's dir)
-    -> S/file O_CREAT|O_EXCL -> 64 KiB writes (abort? between chunks) -> sync -> close
-    -> abort?                       publication admission: the last cancellation point
-    -> link(S/file, destination)    publication commit
-    -> unlink S/file; rmdir P/<name> only while that name is still S
+  open(<parent as spelled>/.rustx-save-<128-bit hex>, O_WRONLY|O_CREAT|O_EXCL)   held: F
+    -> 64 KiB writes through F (abort? between chunks) -> fsync F
+    -> abort?                          publication admission: the last cancellation point
+    -> link(staged name, destination)  publication commit: atomic, never replaces an entry
+    -> lstat(destination) is F's device/inode?   published | refused | uncertain
+    -> unlink(staged name), once; F's link count decides residue; close F
   ```
 
-  Staging ownership is bound to objects, not names. P and S are held as
-  descriptors and every later step reaches them through `/proc/self/fd/<fd>`, which
-  Linux resolves to the open directory itself. Renaming, replacing or symlinking the
-  staging name, or renaming the parent, cannot redirect a write, the link or the
-  file's cleanup to another object: the link publishes exactly the bytes this save
-  staged. Only this user can add entries to the 0700 staging directory, and S is
-  checked to be this user's directory before anything is written. The one
-  name-based step is removing the empty staging directory, because no API removes
-  a directory by descriptor: it runs only while the name still refers to S,
-  checked immediately before, and can remove nothing but an empty directory. In
-  that instant someone who may write the parent could swap in an empty directory
-  of their own, which is the one limit. A moved or replaced staging directory is
-  reported as residue, never chased. Systems without `/proc/self/fd` (macOS, or
-  Linux without `/proc`) refuse Save before creating anything, and `/files`
-  shows Save as unavailable there.
+  This is the pattern git uses to publish loose objects (a temporary file in the
+  target directory, written, linked to its final name, then unlinked). It is the
+  strongest no-clobber publication that Linux and macOS both provide through
+  Node's filesystem API.
 
-  `link` creates a new name atomically and fails with `EEXIST` for any existing
-  entry (file, directory, symlink, dangling symlink), so an existing file, a
-  concurrent save or an external writer is never overwritten, and a partial file is
-  never visible at the destination. A filesystem that cannot hard-link (`EPERM`,
-  `ENOTSUP`, `EOPNOTSUPP`, `ENOSYS`) fails the save explicitly, and any other link
-  error is reported as is; there is no rename or copy fallback.
+  **Trust model.** Save protects the user's data against accidents and against
+  every process that cannot modify the destination's parent directory: the
+  kernel's permission checks keep such processes away from both the staged name
+  and the destination (in a sticky directory such as `/tmp`, other users cannot
+  rename or remove this user's entries). Save does not resist a process that
+  *can* modify that parent: this user's own processes, or other users when the
+  parent is group- or world-writable without the sticky bit. Such a process
+  could create, replace or delete the destination directly, so no pathname
+  protocol keeps it out. Two of Save's steps take names, because neither
+  platform offers a portable call that links a file by descriptor
+  (`linkat(AT_EMPTY_PATH)` and `O_TMPFILE` are Linux-only, and Node exposes
+  neither) or that removes a name only while it names a given file. Against
+  that excluded actor Save guarantees honesty, not prevention: it never claims
+  more than its own handle shows. A matching UID is never treated as proof that
+  an object belongs to this save.
+
+  **Ownership** is the handle F returned by the exclusive create. `O_EXCL` fails
+  on any existing entry, a symlink or a directory included, so F is a file this
+  save created, and every byte is written through F, never by name. A name, an
+  owner or a file type is never taken as evidence that an entry is this save's.
+
+  **Publication.** `link` creates the destination name atomically and fails with
+  `EEXIST` for any existing entry (file, directory, symlink, dangling symlink),
+  so an existing file, a concurrent save or an external writer is never
+  overwritten. F is complete and synced before the link, so a partial file is
+  never visible at the destination. The link reads the staged *name*, so the
+  published file is bound to F by evidence after the call, not by the call
+  itself: the save is reported **published** only when the destination,
+  observed by `lstat` after the commit, names F's device and inode. A
+  destination naming anything else is reported as uncertain, never as saved. A
+  filesystem that cannot hard-link (`EPERM`, `ENOTSUP`, `EOPNOTSUPP`, `ENOSYS`;
+  for example FAT, exFAT and some network shares) fails that save explicitly,
+  and any other link error is reported as is; there is no rename or copy
+  fallback.
+
+  **Cleanup** is one `unlink` of the staged name, whatever the outcome. Its
+  result is read from F's own link count, never from the name: F is done when
+  no name links it except, where it may, the destination. A staged file still
+  linked anywhere else (the unlink failed, or someone moved the file) is
+  reported as residue under the name it was created with. An absent staged name
+  is not proof that the file is gone. `unlink` never removes a directory, and
+  nothing ever removes the destination. Within the trust model the staged name
+  only ever names F. An excluded actor who substitutes that name just before
+  the unlink has their entry removed in F's place. That is a limit of pathname
+  deletion: Save reports it as residue, because F is still linked, but cannot
+  prevent it.
 
   Cancellation at or before admission publishes nothing. The admission check and
   the dispatch of `link` run in one synchronous step; once dispatched, the link's
   own result decides, and a later cancellation neither removes the file nor
-  reports it as unsaved. Nothing ever removes the destination. Cleanup touches only
-  the staged name and the staging directory this save created: an already-absent
-  name counts as removed, and a staging directory that cannot be removed (or that
-  someone else added entries to) is kept and reported, never deleted recursively.
+  reports it as unsaved.
 
-  A failed `link` acknowledgement does not by itself mean nothing was published.
   The outcome is decided by evidence, in this order:
 
-  1. **Published** if the destination now names the staged file (same
-     device/inode), whatever the error. A network filesystem can fail a
-     retransmitted link that it performed.
-  2. **Refused** if the error is a definite rejection, which `link(2)` reports
-     without creating the entry: `EEXIST`, a path or permission failure
+  1. **Published** if the destination now names F (same device/inode), whatever
+     `link` answered. A network filesystem can fail a retransmitted link that it
+     performed. A successful link of the staged name does not show which file
+     that name held.
+  2. **Refused** if `link` failed with a definite rejection, which `link(2)`
+     reports without creating the entry: `EEXIST`, a path or permission failure
      (`ENOENT`, `ENOTDIR`, `EACCES`, `ELOOP`, `ENAMETOOLONG`, `EXDEV`), a read-only,
      full or over-quota filesystem (`EROFS`, `ENOSPC`, `EDQUOT`, `EMLINK`),
      `EINVAL`, or unsupported hard links.
-  3. **Uncertain** for anything else, such as `EIO` or an error without a code.
-     An absent destination, or one naming another file, does not prove refusal:
-     the entry may have been created and then removed or replaced by someone else.
-     `DeliveryUncertainError` carries the link error as its cause and what the
-     destination showed (absent, foreign, or uninspectable with its error). Nothing
-     retries the link or touches the destination; the user inspects it.
+  3. **Uncertain** otherwise: an ambiguous link error (such as `EIO`, or an error
+     without a code), or a successful link after which the destination does not
+     name F. An absent destination, or one naming another file, does not prove
+     refusal: the entry may have been created and then removed or replaced by
+     someone else. `DeliveryUncertainError` records whether `link` itself
+     succeeded (`linked`), carries a link error as its cause, and records what
+     the destination showed (absent, foreign, or uninspectable with its error).
+     Nothing retries the link or touches the destination; the user inspects it.
 
-  The outcomes are distinct: saved; saved with a staging-residue warning; not
-  saved; not saved with staging residue; outcome unknown. "Saved" states that
-  this save's link created the destination entry naming the complete file at the
-  commit. It makes no claim about later: anyone who may write the parent can rename
-  or replace that entry afterwards.
-- **Staging path.** P is opened through `dirname(destination)`, the destination's
-  own spelling of its parent (`dirname` only strips the last component), so the OS
-  resolves it exactly as `link` resolves the destination. No Save path is built
-  with `path.join`/`resolve`: in `link/../report.md` with `link` a symlink, the OS
-  resolves `link` before `..`, so lexical folding would stage in a different
-  directory than the one the destination is created in. The destination itself is
-  resolved by pathname at the commit, so a parent replaced before then receives the
-  file at the typed path, or the link is refused. Residue is reported where it was
-  created, by the same spelling.
+  The outcomes are distinct: saved; saved with a residue warning; not saved; not
+  saved with residue; outcome unknown, with or without residue. "Saved" states
+  that this save's link created the destination entry and that, right after,
+  the entry named the complete file this save created and wrote. It makes no
+  claim about later: anyone who may write the parent can rename or replace that
+  entry afterwards. F's bytes are synced before the link. The parent directory
+  is not synced, so whether the new name itself survives a system crash is up
+  to the filesystem; the atomicity of publication does not depend on it.
+- **Staging path.** The staged file is created beside the destination, in
+  `dirname(destination)`, the destination's own spelling of its parent
+  (`dirname` only strips the last component). The OS therefore resolves it
+  exactly as `link` resolves the destination, on the same filesystem. No Save
+  path is built with `path.join`/`resolve`: in `link/../report.md` with `link` a
+  symlink, the OS resolves `link` before `..`, so lexical folding would stage in
+  a different directory than the one the destination is created in. Both names
+  are resolved again at each step. If the parent is renamed or replaced between
+  staging and the commit, the link fails (`ENOENT`) and nothing is published.
+  The staged file, still in the renamed directory, is then reported as residue
+  under the spelling it was created with. The random part of the staged name
+  only avoids collisions; `O_EXCL` is what establishes ownership.
 - **Destination spelling.** The typed path is used exactly as typed. Leading,
   trailing and inner spaces are part of the name, and whitespace only decides
   whether the input is blank. `~`/`~/` expand to the user's home, and a relative
@@ -442,7 +478,8 @@ failure and quit. Closing aborts the scope, which cancels the native request
 aborts just that action. Each outcome belongs to one operation token, so a
 selector never shows a stale or duplicate outcome. Each action records its own
 external effect as it happens (`LocalEffect`): `committed` when Save dispatches its
-link or Open spawns its opener, and `residue` when Save leaves staging behind.
+link or Open spawns its opener, and `residue` when Save leaves its staged file
+behind.
 Retirement can stop an action that has not committed but cannot unsay one that
 has. After retirement, an action with a committed effect or residue reports its
 terminal outcome once on the transient surface: saved, not saved, unknown, opener

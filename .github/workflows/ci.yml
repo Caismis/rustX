@@ -519,8 +519,10 @@ jobs:
         with:
           shared-key: desktop-host
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-      - name: Build native PTY ownership supervisor
-        run: cargo build --bin interactive-supervisor --locked
+      # The supervisor already compiles the rustx library; the real App Server
+      # binary for the TUI Save integration suite adds only its own link.
+      - name: Build native PTY ownership supervisor and the App Server
+        run: cargo build --bin interactive-supervisor --bin rustx --locked
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
@@ -529,6 +531,14 @@ jobs:
           corepack enable
           (cd web-console && corepack install && pnpm install --frozen-lockfile)
           (cd tui && pnpm install --frozen-lockfile)
+      # The TUI Save integration suite drives the shared provider emulator.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+      - name: Prepare the existing provider emulator
+        working-directory: test-support/fake-provider
+        run: uv sync --frozen
       # Real macOS Node/filesystem/process execution, including a harmless Node
       # child through launchDesktop. Fakes cover GUI argv and unavailable sessions;
       # this is not Finder/Terminal GUI smoke and does not duplicate browser E2E.
@@ -537,6 +547,14 @@ jobs:
         run: |
           pnpm run build:host
           pnpm exec vitest run test/desktop-host.test.ts test/document-archive.test.ts test/document-integration.test.ts test/workbench-host.test.ts
+      # Client-local Save on the macOS filesystem: exclusive create, hard-link
+      # publication, link-count cleanup and every ownership interleaving, then
+      # byte-exact Save from a real stdio child and a real WebSocket server.
+      - name: TUI client-local Save (macOS filesystem, stdio and WebSocket)
+        working-directory: tui
+        env:
+          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
+        run: node --test test/deliveries.test.ts test/delivery-integration.test.ts
 
   web-console:
     name: Full Web conformance

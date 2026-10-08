@@ -40,21 +40,24 @@ seventeenth request. A refused cancellation ends the connection rather than
 disappearing. In the TUI each `/files` interaction owns its
 Save/Open: retiring it (Escape, overlay close or replacement, Session focus change,
 snapshot replacement, disconnect, shutdown) cancels the native request and every
-uncommitted local effect. A Save writes, syncs and closes its complete file in a
-private staging directory it created in the destination's parent, and commits by
-one `link` to the exact typed destination, which never replaces an existing entry;
-cancellation counts only up to that link's dispatch. The parent is opened through
-the destination's own spelling, so `..` after a symlink resolves as for the
-destination. The staging directory and staged file are reached only through held
-descriptors (`/proc/self/fd`), so renaming or replacing their names cannot make the
-link publish, or cleanup remove, anything but this save's own file. Systems
-without descriptor paths refuse Save. A failed link is
-reported as published only when the destination names the staged file, as refused
-only for a definite rejection code, and as uncertain otherwise, never as
-unpublished because the destination is now absent or foreign. Nothing removes the
-destination. Cleanup unlinks only the staged file through its held directory, and
-removes the empty staging directory by name only while that name still refers to
-it. Staging that is moved, replaced or not removable is reported. "Saved" is a fact
+uncommitted local effect. A Save, the same on Linux and macOS, creates one staged
+file beside the destination with `O_CREAT|O_EXCL`; the handle that create returns
+is its only ownership evidence, never a name, owner or file type. It writes and
+syncs every byte through that handle and commits by one `link` of the staged name
+to the exact typed destination, which never replaces an existing entry.
+Cancellation counts only up to that link's dispatch. The staged file is created
+through the destination's own spelling of its parent, so `..` after a symlink
+resolves as for the destination. Save reports publication only when the
+destination, observed after the link, names the device/inode of the file it
+created; it reports refusal only for a definite rejection code, and uncertainty
+otherwise, never "unpublished" because the destination is now absent or foreign.
+Nothing removes the destination. Cleanup is one `unlink` of the staged name, judged
+by the handle's link count: a staged file still linked elsewhere is reported as
+residue, and an absent name is no proof of removal. The trust boundary is the
+destination's parent. A process that may modify it can substitute the staged name
+between steps, since neither platform links or conditionally removes by
+descriptor. Save cannot prevent that, but never claims more than its handle
+shows. "Saved" is a fact
 about the commit, not a promise that the entry keeps its name. An Open commits when
 the OS opener is spawned. It is best effort: its identity check does not bind the
 file the opener later resolves. Each action records its committed effect itself,

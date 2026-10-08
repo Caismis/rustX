@@ -1585,8 +1585,7 @@ export class RustxTuiApp {
       ? "the App Server did not grant delivery access to this connection"
       : "this connection holds no delivery access; reconnect with --delivery-access-token-file";
     const availability: DeliveryAvailability = {
-      save: !session.deliveryAccess ? noAccess
-        : process.platform !== "linux" ? "Save stages through /proc/self/fd, which this system does not provide" : undefined,
+      save: !session.deliveryAccess ? noAccess : undefined,
       open: !session.deliveryAccess ? noAccess
         : !sharedHost ? "this App Server's files are not on this machine; use Save"
           : opener === undefined ? "no system opener on this platform" : undefined,
@@ -1639,7 +1638,7 @@ export class RustxTuiApp {
           );
           const text = `Saved ${record.file.name} to ${saved.path}`;
           return saved.residue === undefined ? text
-            : `${text}; warning: its staging directory (created at ${saved.residue.path}) was not removed (${compactDiagnostic(saved.residue.cause)})`;
+            : `${text}; warning: its staged file (created at ${saved.residue.path}) was not removed (${compactDiagnostic(saved.residue.cause)})`;
         }
         const requested = await openDelivery(() => session.locateDelivery(record, signal), {
           sharedHost,
@@ -1653,7 +1652,7 @@ export class RustxTuiApp {
       // One terminal report per operation. A live surface shows every
       // outcome. Once the interaction is retired, an outcome is still owed
       // only if the action committed an external effect (a dispatched save
-      // link or a spawned opener) or left staging behind: it is reported
+      // link or a spawned opener) or left a staged file behind: it is reported
       // once, on the transient surface, never into a successor surface. A
       // cancelled or failed action that did neither is not reported.
       const report = (level: "info" | "error", text: string) => {

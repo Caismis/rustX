@@ -5391,6 +5391,10 @@ pub(crate) async fn delivery_cancellation_scenario() {
 /// as the sixteenth: it is admitted, answered at once without waiting for any
 /// of them, and wins; the read answers once, with `delivery_cancelled`, only
 /// after it physically settles; the connection stays healthy throughout.
+///
+/// Every party is counted at its boundary before the next step: the read by
+/// its held permit, the fourteen by the operation gate's parked count, so the
+/// cancel provably arrives with exactly fifteen others in flight.
 pub(crate) async fn delivery_cancellation_capacity_scenario() {
     use crate::app_server::transport::{IN_FLIGHT_REQUESTS, stdio};
     use crate::tools::session_files::SESSION_FILE_MAX_READS;
@@ -5434,7 +5438,12 @@ pub(crate) async fn delivery_cancellation_capacity_scenario() {
         tokio::task::spawn_blocking(move || entered.wait_entered())
             .await
             .unwrap();
-        // Fourteen unrelated requests parked before their operation.
+        assert_eq!(
+            permits.available_permits(),
+            SESSION_FILE_MAX_READS - 1,
+            "the read is admitted and holds its native permit"
+        );
+        // Fourteen unrelated requests, each parked before its operation.
         let probe = f.manager.probe(&own.conversation_id);
         probe.before_operation.arm();
         let ordinary = IN_FLIGHT_REQUESTS - 2;
@@ -5449,7 +5458,7 @@ pub(crate) async fn delivery_cancellation_capacity_scenario() {
             };
             input.write_all(line(&request).as_bytes()).await.unwrap();
         }
-        probe.before_operation.entered().await;
+        probe.before_operation.parked(ordinary).await;
 
         // The sixteenth request in flight: the cancel.
         let cancel = Request {
@@ -5474,12 +5483,18 @@ pub(crate) async fn delivery_cancellation_capacity_scenario() {
             SESSION_FILE_MAX_READS - 1,
             "the parked read still owns its permit"
         );
+        assert_eq!(
+            probe.before_operation.parked_now(),
+            ordinary,
+            "no unrelated request settled or was dropped"
+        );
 
         drop(release_bytes);
         let cancelled = next_response().await;
         assert!(matches!(&cancelled, Response::Failure(failure) if failure.id == Some(RequestId::Integer(100))));
         failed_with(&cancelled, &ErrorData::DeliveryCancelled);
         assert_eq!(permits.available_permits(), SESSION_FILE_MAX_READS);
+        assert_eq!(probe.before_operation.parked_now(), ordinary);
 
         probe.before_operation.release();
         let mut answered = Vec::new();
@@ -5496,8 +5511,25 @@ pub(crate) async fn delivery_cancellation_capacity_scenario() {
         assert_eq!(
             answered,
             (0..i64::try_from(ordinary).unwrap()).collect::<Vec<_>>(),
-            "each answered exactly once"
+            "each answered exactly once, and nothing else"
         );
+        probe.before_operation.parked(0).await;
+
+        // Back to baseline, and the same connection still serves requests.
+        let after = Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(300),
+            call: Method::SessionSnapshot {
+                target: own.clone(),
+                trace_records: vec![],
+            },
+        };
+        input.write_all(line(&after).as_bytes()).await.unwrap();
+        let Response::Success(snapshot) = next_response().await else {
+            panic!("the connection still serves requests")
+        };
+        assert_eq!(snapshot.id, RequestId::Integer(300));
+        assert_eq!(permits.available_permits(), SESSION_FILE_MAX_READS);
         drop(input);
         serving.await.unwrap().unwrap();
         f.close().await;

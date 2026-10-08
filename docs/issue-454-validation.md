@@ -112,6 +112,9 @@ replace the destination between the check and the unlink, and Save could report
 success for a destination that no longer named its bytes. Destinations were also
 trimmed, and every `lstat` error counted as absence.
 
+(Superseded: the staging directory described here was replaced by a single
+staged file in the filesystem ownership repair below.)
+
 Save is now one staging and publication lifecycle in `delivery-files.ts`. It
 allocates a private 0700 `mkdtemp` directory beside the destination, writes, syncs
 and closes `file` there, and checks cancellation at publication admission. The
@@ -203,7 +206,9 @@ are dropped when their request settles first. The linearization point is unchang
 the server's `Operations::cancel` against the writer's publication commit. A
 refused cancellation ends the connection.
 
-**P1, staging ownership.** After `mkdtemp`, each step re-resolved the staging
+**P1, staging ownership** (superseded by the filesystem ownership repair below,
+which removed the descriptor-pinned directory and its staging-specific tests).
+After `mkdtemp`, each step re-resolved the staging
 pathname, so a writer of the parent could rename or replace it between steps and
 redirect the write, the link or cleanup. Invariant: a Save publishes only the bytes
 it staged and removes only objects it can still show it owns. The parent (`O_PATH`)
@@ -254,6 +259,126 @@ Negative controls, each applied alone and restored byte-identical from a backup:
 | No descriptor-path probe | unsupported-system test |
 | Open launch commit not recorded | Open contract test; `/files` retirement app test |
 | Post-retirement reporting by error class (the previous code) | `/files` retirement app test |
+
+## Filesystem ownership and cross-platform Save repair
+
+The review of `a1607e7a` found that the descriptor-pinned staging above still left
+three pathname races, and that it had disabled Save on macOS:
+
+- **A, creation identity.** The reopened staging directory was accepted because it
+  was a directory owned by this UID. A same-UID substitute passes that check.
+- **B, published bytes.** The link read the entry name `file`. After the staged
+  handle was closed, a substitute at that name would have been published and
+  reported as this save's bytes.
+- **C, cleanup.** The `lstat` → compare → `rmdir` sequence could remove a
+  substituted empty directory.
+
+The decision was to converge on one Save contract, not to add more checks.
+
+**Threat model.**
+
+1. *A same-UID adversary* is not resisted, and no pathname API could resist one.
+   Such a process can rewrite the destination, the staged file or this process.
+2. *A different UID with write permission on the parent* is equivalent to the
+   owner for entries in that directory, so it is inside the trust boundary. In a
+   sticky directory the kernel stops other UIDs from renaming or removing this
+   user's entries, so there they are excluded.
+3. *Assumptions:* the destination's parent exists and its filesystem supports
+   hard links. Every process that may modify that parent is trusted not to
+   interfere while the save runs.
+4. *An open descriptor* protects the identity of the file it names and the
+   writes made through it. It protects no name.
+5. *Atomic on Linux and macOS:* `O_CREAT|O_EXCL` creation (the ownership
+   evidence) and `link(2)` creating the destination entry, never replacing one.
+6. *Pathname-based, so judged only by evidence:* which file the staged name holds
+   when `link` reads it, and what `unlink` removes. Neither platform offers a
+   portable link-by-descriptor (`linkat(AT_EMPTY_PATH)` and `O_TMPFILE` are
+   Linux-only, and Node exposes neither) or a conditional unlink.
+7. *A successful publication establishes* that this save's link created the
+   destination entry, and that `lstat` right after showed it naming the file
+   this save created exclusively and wrote and synced through its own handle.
+   It does not establish that the entry keeps that name, or that the directory
+   entry is durable across a crash (the parent is not synced).
+
+**Design.** This is git's loose-object publication pattern, kept to its minimum.
+
+```text
+open(<parent as spelled>/.rustx-save-<128-bit hex>, O_WRONLY|O_CREAT|O_EXCL)   held: F
+  -> writes through F -> fsync F
+  -> abort?                          admission
+  -> link(staged name, destination)  commit: atomic, never replaces an entry
+  -> lstat(destination) is F?        published | refused | uncertain
+  -> unlink(staged name), once; F's link count decides residue; close F
+```
+
+The private directory, `O_PATH`, `/proc/self/fd`, the uid check and `rmdir` are
+gone, and so is the Linux-only gate in `/files`. There is:
+
+- **one owner**, the handle the exclusive create returned;
+- **one commit**, the `link` dispatch;
+- **one cancellation boundary**, at admission;
+- **one cleanup**, one `unlink`, judged by F's link count.
+
+Against A, ownership comes from the exclusive create's handle, so nothing is
+re-resolved. Against B, a successful link is not publication: only a destination
+naming F's device and inode after the commit is. Against C, no directory is ever
+removed, and residue is judged by F's link count, not by the name. What remains
+is stated, not hidden: within the excluded case, `link` may publish a substitute
+(reported as uncertain) and `unlink` may remove one (F reported as residue).
+Removed obsolete parts: the `stat`, `mkdtemp` and `rmdir` seams, and the
+`/proc` refusal.
+
+Each case below uses real files with interposition at the named boundary:
+
+| # | Scenario | Synchronization boundary | Proven effect |
+| --- | --- | --- | --- |
+| 1 | A file, a symlink to a foreign file, or a directory planted at the staged name before it is created | `open` seam, immediately before the exclusive create | `EEXIST`; the planted entry has the same device/inode and is unchanged; the symlink target is never written; destination absent; `LocalEffect` untouched |
+| 2 | Staged name replaced by another same-user file (different inode) | write seam, before chunk 2 | `DeliveryUncertainError` `linked: true`, `foreign`; destination is their inode with their bytes; this save's moved file has every byte, through its handle; residue reported |
+| 3 | Staged file renamed during writing | write seam, before chunk 1 | `ENOENT` refusal, `DeliveryResidueError` ("linked elsewhere"); the moved file is this save's inode with every byte; destination absent |
+| 4 | Staged name replaced by a symlink to a foreign file | write seam, before chunk 1 | uncertain, `foreign` (Linux links the symlink, macOS its target); the target is never written and keeps its inode; this save's file reported |
+| 5 | Staged name replaced after the data is synced, before the link | sync seam, after the real sync | as 2: never "published" |
+| 6 | Staged file renamed and its name replaced before cleanup | `link` seam, after the real link | saved, destination is this save's inode; residue reported because the file is still linked elsewhere; the substitute at the staged name was unlinked, which is the documented limit for an excluded actor |
+| 7 | Staged file renamed after the link, before cleanup | `link` seam | saved with residue; the moved name and the destination are one inode |
+| 8 | A foreign empty directory substituted immediately before removal | `unlink` seam, before the real unlink | `unlink` fails (`EISDIR` on Linux, `EPERM` on macOS); the directory survives, empty; residue reported |
+| 9 | Destination parent renamed between staging and link; or a new directory takes its name | sync seam | `ENOENT` refusal and residue; the staged file holds every byte in the renamed parent; nothing in the new directory; destination absent |
+| 10 | Destination created by another writer while staging; two saves admitted to `link` together | parked write; both `link` calls gated | `already exists`, their file keeps its inode; exactly one contender publishes |
+| 11 | Cancel before staging, during and between writes, after sync | deferred read; write and sync seams | abort reason; no `link`; nothing left |
+| 12 | Cancel after the link was dispatched | `link` seam, after the real link | saved; `committed` set at dispatch |
+| 13 | Real link with an `EIO`/`EEXIST` acknowledgement; removed or replaced destination; successful link then destination replaced (`linked: true`); uninspectable destination | `link` and `lstat` seams | saved only when the destination is the staged inode; otherwise uncertain, with what was observed |
+| 14 | Unlink fails after publication, after cancellation, and with an uncertain outcome | `unlink` seam | saved with residue; `DeliveryResidueError` keeping the cancellation; uncertain with residue; the retained file is the one written |
+| 15 | Normal Save: Unicode and space names, `..` after a symlink | parked write | the destination's device/inode is the staged file's; staged name `.rustx-save-<32 hex>`; `link` receives both spelled paths; no residue |
+| — | `/files` Save from a local child and from a remote host | `DeliverySelector.settle` spy | identical byte-exact save for both ownerships; Save never locates |
+
+**macOS.** The `Desktop adapter and Host (macOS Node)` job now builds the `rustx`
+binary next to the supervisor; the supervisor already compiles the library. It
+syncs the provider emulator and runs `node --test test/deliveries.test.ts
+test/delivery-integration.test.ts` with `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. That
+runs every case above on APFS, plus byte-exact Save from a real stdio child and
+a real WebSocket App Server.
+
+**Cancellation-capacity regression.** `AsyncGate` (test-only) now counts the
+callers currently parked. The scenario waits for the read's held permit, then for
+exactly 14 parked operations, before it sends the cancel. After the cancel's
+`accepted: true` it asserts:
+
+- the permit is still held, and still 14 parked: nothing settled or was dropped;
+- the read answers `delivery_cancelled` once, after its physical settlement;
+- the 14 answer exactly once each after release, and the parked count returns
+  to 0;
+- a further request on the same connection is answered, and permits are at
+  baseline.
+
+Negative controls, each applied alone and restored byte-identical:
+
+| Control | Tests that failed |
+| --- | --- |
+| A successful link taken as publication, without the post-commit check | 2/5, 4, 13 |
+| Cleanup judged by the name (`unlink` success or `ENOENT` means removed) | 2/5, 3, 4, 6/7/8, 9 |
+| Staged file created without `O_EXCL` | 1 |
+| Identity taken from the staged name just before the link (stat → link) | 2/5, 4 |
+| Save offered only for a local child | `/files` local and remote Save |
+| Server admits one request fewer than 16 | `delivery_cancellation_is_admitted_as_the_sixteenth_in_flight_request` (the connection ends) |
+| Test-side check: 13 requests sent while waiting for 14 parked | the same test, by its liveness bound: the barrier counts, a single arrival does not satisfy it |
 
 ## Validation
 

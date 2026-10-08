@@ -7,8 +7,9 @@
  *
  * ```text
  * Save   native delivery/read (authorized, ≤ 512 KiB, cancellable) -> bounded decode
- *        -> private staging held by descriptor in the destination's parent
- *        -> sync + close -> link(staged, destination): atomic, never replaces an entry
+ *        -> exclusive staged file beside the destination, written through its handle
+ *        -> sync -> link(staged, destination): atomic, never replaces an entry
+ *        -> published only if the destination then names that very file
  * Open   native delivery/locate (authorized, verified leaf identity)
  *        -> this TUI spawned the server  AND  local lstat(dev, ino) matches
  *        -> argv-only OS opener; success means the opener accepted the request
@@ -26,10 +27,11 @@
  */
 
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { constants, type BigIntStats } from "node:fs";
-import { link, lstat, mkdtemp, open, rmdir, stat, unlink, type FileHandle } from "node:fs/promises";
+import { link, lstat, open, unlink, type FileHandle } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, sep } from "node:path";
+import { dirname, isAbsolute, sep } from "node:path";
 
 import type { DeliveryLocation } from "../presentation/deliveries.ts";
 import { isRenderableField } from "../sanitize.ts";
@@ -91,7 +93,7 @@ export function decodeDelivery(data: string): Uint8Array {
 export interface LocalEffect {
   /** Save dispatched its link; Open spawned its opener. */
   committed: boolean;
-  /** Save left its private staging directory behind. */
+  /** Save left its staged file linked somewhere besides the destination. */
   residue: boolean;
 }
 export function localEffect(): LocalEffect {
@@ -101,23 +103,24 @@ export function localEffect(): LocalEffect {
 /** What a committed Save established. */
 export interface SavedDelivery {
   /**
-   * The exact destination at which this Save's link created an entry naming
-   * the complete staged file. A claim about the commit, not about later:
-   * anyone who may write the parent can rename or replace that entry since.
+   * The exact destination at which this Save's link created a new entry,
+   * observed right after the commit to name the very file this Save created
+   * and wrote. A claim about the commit, not about later: anyone who may write
+   * the parent can rename or replace that entry since.
    */
   path: string;
-  /** This Save's private staging directory, when it could not be removed:
-   * where it was created, and why it was kept. */
+  /** This Save's staged file, when it is still linked somewhere besides the
+   * destination: where it was created, and why it was kept. */
   residue?: { path: string; cause: unknown };
 }
 
-/** A Save that published nothing but could not remove its private staging. */
+/** A Save that published nothing but whose staged file is still on disk. */
 export class DeliveryResidueError extends DeliveryActionError {
-  /** Where the staging directory was created; it may have been moved since. */
+  /** Where the staged file was created; it may have been moved since. */
   readonly residue: string;
   readonly cleanup: unknown;
   constructor(residue: string, cause: unknown, cleanup: unknown) {
-    super(`Nothing was saved, but this save's staging directory (created at ${residue}) was not removed`);
+    super(`Nothing was saved, but this save's staged file (created at ${residue}) was not removed`);
     this.name = "DeliveryResidueError";
     this.residue = residue;
     this.cleanup = cleanup;
@@ -126,7 +129,7 @@ export class DeliveryResidueError extends DeliveryActionError {
 }
 
 /**
- * What the destination showed after an ambiguous link failure, none of
+ * What the destination showed when it did not name this Save's file, none of
  * which proves this save did not publish: its entry may have been created and
  * then removed or replaced by someone else.
  */
@@ -136,28 +139,32 @@ export type DestinationObservation =
   | { kind: "uninspectable"; error: unknown };
 
 /**
- * A Save whose dispatched link failed ambiguously, with no evidence either
- * way: the destination may or may not have been created by this save. The
- * link error is the cause; nothing retries it or touches the destination.
+ * A Save whose dispatched link has no proven outcome: link(2) failed
+ * ambiguously, or it succeeded and the destination then did not name the file
+ * this Save wrote. Nothing retries the link or touches the destination.
  */
 export class DeliveryUncertainError extends DeliveryActionError {
   readonly path: string;
+  /** link(2) reported success; otherwise its error is the `cause`. */
+  readonly linked: boolean;
   readonly observed: DestinationObservation;
   readonly residue: string | undefined;
-  constructor(path: string, cause: unknown, observed: DestinationObservation, residue: string | undefined) {
+  constructor(path: string, link: { error: unknown } | undefined, observed: DestinationObservation, residue: string | undefined) {
     const now = observed.kind === "absent" ? "it is now absent"
       : observed.kind === "foreign" ? "it now names another file"
         : `it cannot be inspected (${errorCode(observed.error) ?? "error"})`;
     super(
-      `Save outcome unknown: linking ${path} failed (${errorCode(cause) ?? "error"}) and ${now}; ` +
-        "this save may have created it" +
-        (residue === undefined ? "" : `; its staging directory (created at ${residue}) was not removed`),
+      (link === undefined
+        ? `Save outcome unknown: linking ${path} succeeded, but ${now}, so this save cannot show it holds the saved bytes`
+        : `Save outcome unknown: linking ${path} failed (${errorCode(link.error) ?? "error"}) and ${now}; this save may have created it`) +
+        (residue === undefined ? "" : `; its staged file (created at ${residue}) was not removed`),
     );
     this.name = "DeliveryUncertainError";
     this.path = path;
+    this.linked = link === undefined;
     this.observed = observed;
     this.residue = residue;
-    this.cause = cause;
+    if (link !== undefined) this.cause = link.error;
   }
 }
 
@@ -167,14 +174,11 @@ export const SAVE_CHUNK_BYTES = 64 * 1024;
 /** The filesystem operations of {@link saveDelivery}; tests interpose on them. */
 export interface SaveFiles {
   open: (path: string, flags: number, mode?: number) => Promise<FileHandle>;
-  stat: (path: string, options: { bigint: true }) => Promise<BigIntStats>;
-  mkdtemp: (prefix: string) => Promise<string>;
   link: (existing: string, path: string) => Promise<void>;
   lstat: (path: string, options: { bigint: true }) => Promise<BigIntStats>;
   unlink: (path: string) => Promise<void>;
-  rmdir: (path: string) => Promise<void>;
 }
-export const SAVE_FILES: SaveFiles = { open, stat, mkdtemp, link, lstat, unlink, rmdir };
+export const SAVE_FILES: SaveFiles = { open, link, lstat, unlink };
 
 /** Link errors meaning this filesystem cannot create the name by a hard link. */
 const UNSUPPORTED_LINK = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"]);
@@ -192,23 +196,9 @@ const DEFINITE_REFUSAL = new Set([
 type Publication =
   | { kind: "published" }
   | { kind: "refused"; error: unknown }
-  | { kind: "uncertain"; error: unknown; observed: DestinationObservation };
+  | { kind: "uncertain"; link: { error: unknown } | undefined; observed: DestinationObservation };
 
-const { O_WRONLY, O_CREAT, O_EXCL, O_DIRECTORY, O_NOFOLLOW } = constants;
-/** Linux `O_PATH`, which Node does not export: a descriptor that names a
- * directory without reading it, so a write-only parent still works. */
-const O_PATH = 0o10000000;
-const PINNED_PATHS = "Not saved: Save stages through descriptor paths (/proc/self/fd), which this system does not provide";
-
-/**
- * `name` inside the directory `held` refers to, wherever that directory is
- * now. Linux resolves `/proc/self/fd/N` to the open file description itself,
- * so these paths keep naming the objects this Save created even after
- * someone renames or replaces their original names.
- */
-function pinned(held: FileHandle, name?: string): string {
-  return name === undefined ? `/proc/self/fd/${held.fd}` : `/proc/self/fd/${held.fd}/${name}`;
-}
+const { O_WRONLY, O_CREAT, O_EXCL } = constants;
 
 /**
  * Reads authorized original bytes and publishes them as a new client-local
@@ -216,32 +206,34 @@ function pinned(held: FileHandle, name?: string): string {
  *
  * ```text
  * read (cancellable on the server) -> abort?
- *   -> open the destination's parent as spelled          (held: P)
- *   -> mkdtemp P/.rustx-save-*  (0700)                    (held: S, checked ours)
- *   -> S/file  O_CREAT|O_EXCL -> chunked writes, abort? between chunks -> sync -> close
+ *   -> open <parent>/.rustx-save-<random>  O_CREAT|O_EXCL      held: F
+ *   -> chunked writes through F, abort? between chunks -> fsync F
  *   -> abort?   <- publication admission: the last cancellation point
- *   -> link(S/file, destination)   <- publication commit (atomic, no clobber)
- *   -> unlink S/file; rmdir P/<name> only while that name is still S
+ *   -> link(staged name, destination)   <- publication commit (atomic, no clobber)
+ *   -> lstat(destination) names F's (dev, ino)?  published : refused | uncertain
+ *   -> unlink(staged name), once; F's link count decides whether F is residue
  * ```
  *
- * Ownership is bound to objects, not names. The parent is opened through
- * the destination's own spelling, so the OS resolves it as it resolves the
- * destination, and the staging directory and staged file are then reached
- * only through those held descriptors: renaming, replacing or symlinking
- * the staging name, or renaming the parent, cannot redirect a write, the
- * link or the file's cleanup to another object. Only this user can add
- * entries to the 0700 staging directory, so `S/file` is this Save's file.
- * The one name-based step is removing the empty staging directory itself
- * (no API removes a directory by descriptor): it happens only when that name
- * still refers to S, checked immediately before, and removes nothing but an
- * empty directory; otherwise the directory is reported as residue.
+ * One owner: the handle the exclusive create returned. O_EXCL fails on any
+ * existing entry, a symlink included, so F is a file this Save created, and
+ * every byte is written through F, never by name. Neither the owner, the
+ * type nor the name of an entry is taken as evidence that it is this Save's.
  *
- * The destination is a pathname resolved at the commit: `link` creates a
- * new name there and fails with EEXIST for any existing entry, including a
- * symlink or a directory, so nothing is ever overwritten. A filesystem or
- * system that cannot link, or cannot hold staging by descriptor
- * (`/proc/self/fd`), refuses explicitly before anything is created; there is
- * no copying or rename fallback. Nothing ever removes the destination.
+ * Two steps take names, because neither Linux nor macOS offers a portable
+ * call that links or removes a file by descriptor: the link reads the staged
+ * name, and cleanup unlinks it. Whoever may modify the destination's parent
+ * can therefore substitute the staged name between steps; that is the trust
+ * boundary, and such an actor could create or remove those entries directly.
+ * A substitution cannot make Save claim more than it did: publication is
+ * claimed only when the destination, observed after the commit, names F, and
+ * cleanup is judged by F's link count, so a staged file moved elsewhere is
+ * residue even though its name is gone.
+ *
+ * The destination is a pathname resolved at the commit: `link` creates a new
+ * name there and fails with EEXIST for any existing entry, including a
+ * symlink or a directory, so nothing is ever overwritten. A filesystem that
+ * cannot link refuses explicitly; there is no copying or rename fallback.
+ * Nothing ever removes the destination.
  *
  * Cancellation observed at or before admission prevents publication. The
  * admission check and the call that dispatches `link` run in one synchronous
@@ -259,109 +251,57 @@ export async function saveDelivery(
   signal?.throwIfAborted();
   const bytes = decodeDelivery((await read()).data);
   signal?.throwIfAborted();
-  if (process.platform !== "linux") throw new DeliveryActionError(PINNED_PATHS);
-  const parent = await files.open(dirname(destination), O_PATH | O_DIRECTORY);
-  let stage: FileHandle | undefined;
-  let name: string | undefined;
-  let created = false;
+  // Beside the destination, so the link stays on one filesystem. The random
+  // name only avoids collisions; O_EXCL is what makes the file this Save's.
+  const staged = childPath(dirname(destination), `.rustx-save-${randomBytes(16).toString("hex")}`);
+  const file = await files.open(staged, O_WRONLY | O_CREAT | O_EXCL, 0o666);
   let publication: Publication;
   try {
-    await requirePinnedPaths(files, parent);
-    name = basename(await files.mkdtemp(pinned(parent, ".rustx-save-")));
-    stage = await openStage(files, parent, name);
-    const file = await files.open(pinned(stage, "file"), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o666);
-    created = true;
-    const identity = await writeStaged(file, bytes, signal);
+    const identity = await file.stat({ bigint: true });
+    await writeStaged(file, bytes, signal);
     signal?.throwIfAborted();
-    publication = await publish(files, pinned(stage, "file"), destination, identity, effect);
+    publication = await publish(files, staged, destination, identity, effect);
   } catch (error) {
     publication = { kind: "refused", error };
   }
-  const cleanup = name === undefined ? { ok: true as const } : await removeStaging(files, parent, name, stage, created);
-  // Path-only directory descriptors: closing changes no filesystem state,
-  // so it cannot alter what this Save did.
-  await stage?.close().catch(() => {});
-  await parent.close().catch(() => {});
-  // Reported by the destination's spelling of its parent, where it was made.
-  const residue = name === undefined ? "" : childPath(dirname(destination), name);
+  const cleanup = await removeStaged(files, file, staged, publication);
+  // The outcome and the cleanup are decided, and published bytes were synced
+  // before the link, so closing cannot change what this Save did.
+  await file.close().catch(() => {});
   if (!cleanup.ok) effect.residue = true;
   switch (publication.kind) {
     case "published":
-      return cleanup.ok ? { path: destination } : { path: destination, residue: { path: residue, cause: cleanup.error } };
+      return cleanup.ok ? { path: destination } : { path: destination, residue: { path: staged, cause: cleanup.error } };
     case "uncertain":
-      throw new DeliveryUncertainError(destination, publication.error, publication.observed, cleanup.ok ? undefined : residue);
+      throw new DeliveryUncertainError(destination, publication.link, publication.observed, cleanup.ok ? undefined : staged);
     case "refused":
-      if (!cleanup.ok) throw new DeliveryResidueError(residue, publication.error, cleanup.error);
+      if (!cleanup.ok) throw new DeliveryResidueError(staged, publication.error, cleanup.error);
       throw publication.error;
   }
 }
 
-/** Refuses, before creating anything, where staging cannot be held by descriptor. */
-async function requirePinnedPaths(files: SaveFiles, parent: FileHandle): Promise<void> {
-  const held = await parent.stat({ bigint: true });
-  let named: BigIntStats | undefined;
-  let cause: unknown;
-  try {
-    named = await files.stat(pinned(parent), { bigint: true });
-  } catch (error) {
-    cause = error;
+/** Writes every byte through the staged file's own handle, then syncs it. */
+async function writeStaged(file: FileHandle, bytes: Uint8Array, signal?: AbortSignal): Promise<void> {
+  for (let offset = 0; offset < bytes.length;) {
+    signal?.throwIfAborted();
+    const length = Math.min(SAVE_CHUNK_BYTES, bytes.length - offset);
+    const { bytesWritten } = await file.write(bytes, offset, length);
+    if (bytesWritten === 0) throw new DeliveryActionError("Save staging stopped accepting bytes");
+    offset += bytesWritten;
   }
-  if (named === undefined || named.dev !== held.dev || named.ino !== held.ino) {
-    throw withCause(new DeliveryActionError(PINNED_PATHS), cause);
-  }
-}
-
-/** Opens the staging directory just created, refusing anything not this user's directory. */
-async function openStage(files: SaveFiles, parent: FileHandle, name: string): Promise<FileHandle> {
-  let stage: FileHandle;
-  try {
-    stage = await files.open(pinned(parent, name), O_PATH | O_DIRECTORY | O_NOFOLLOW);
-  } catch (error) {
-    throw withCause(new DeliveryActionError("Not saved: the staging directory was replaced before use"), error);
-  }
-  const owner = await stage.stat({ bigint: true }).catch(async (error: unknown) => {
-    await stage.close().catch(() => {});
-    throw error;
-  });
-  if (!owner.isDirectory() || owner.uid !== BigInt(process.getuid?.() ?? -1)) {
-    await stage.close().catch(() => {});
-    throw new DeliveryActionError("Not saved: the staging directory was replaced before use");
-  }
-  return stage;
-}
-
-/** Writes every byte to the staged file, syncs and closes it; its identity. */
-async function writeStaged(file: FileHandle, bytes: Uint8Array, signal?: AbortSignal): Promise<BigIntStats> {
-  let unclosed = true;
-  try {
-    const identity = await file.stat({ bigint: true });
-    for (let offset = 0; offset < bytes.length;) {
-      signal?.throwIfAborted();
-      const length = Math.min(SAVE_CHUNK_BYTES, bytes.length - offset);
-      const { bytesWritten } = await file.write(bytes, offset, length);
-      if (bytesWritten === 0) throw new DeliveryActionError("Save staging stopped accepting bytes");
-      offset += bytesWritten;
-    }
-    await file.sync();
-    unclosed = false;
-    await file.close();
-    return identity;
-  } finally {
-    // The operation's own failure is the one reported; the descriptor is
-    // released either way.
-    if (unclosed) await file.close().catch(() => {});
-  }
+  await file.sync();
 }
 
 /**
- * The publication commit and what a failure of it proves.
+ * The publication commit and what it proves.
  *
- * The destination naming the staged file proves publication, whatever the
- * error (a network filesystem can fail a retransmitted link it performed).
- * Otherwise only the error can prove refusal: an absent or foreign
- * destination does not show that this link created nothing, because someone
- * may have removed or replaced the entry in between. A definite rejection is
- * a refusal; anything else is uncertain.
+ * Only the destination naming the staged file, observed after the commit,
+ * proves publication, whatever link(2) answered: a network filesystem can
+ * fail a retransmitted link it performed, and a successful link of the staged
+ * name says nothing about which file that name held. Otherwise only a
+ * definite rejection proves refusal: an absent or foreign destination does
+ * not show that this link created nothing, because someone may have removed
+ * or replaced the entry in between. Anything else is uncertain.
  */
 async function publish(
   files: SaveFiles,
@@ -370,23 +310,26 @@ async function publish(
   identity: BigIntStats,
   effect: LocalEffect,
 ): Promise<Publication> {
+  let failure: { error: unknown } | undefined;
   try {
     effect.committed = true;
     await files.link(staged, destination);
-    return { kind: "published" };
   } catch (error) {
-    let observed: DestinationObservation;
-    try {
-      const current = await files.lstat(destination, { bigint: true });
-      if (current.dev === identity.dev && current.ino === identity.ino) return { kind: "published" };
-      observed = { kind: "foreign" };
-    } catch (inspection) {
-      observed = errorCode(inspection) === "ENOENT" ? { kind: "absent" } : { kind: "uninspectable", error: inspection };
-    }
-    const code = errorCode(error);
-    if (code !== undefined && DEFINITE_REFUSAL.has(code)) return { kind: "refused", error: refusal(error, destination) };
-    return { kind: "uncertain", error, observed };
+    failure = { error };
   }
+  let observed: DestinationObservation;
+  try {
+    const current = await files.lstat(destination, { bigint: true });
+    if (current.dev === identity.dev && current.ino === identity.ino) return { kind: "published" };
+    observed = { kind: "foreign" };
+  } catch (inspection) {
+    observed = errorCode(inspection) === "ENOENT" ? { kind: "absent" } : { kind: "uninspectable", error: inspection };
+  }
+  const code = errorCode(failure?.error);
+  if (failure !== undefined && code !== undefined && DEFINITE_REFUSAL.has(code)) {
+    return { kind: "refused", error: refusal(failure.error, destination) };
+  }
+  return { kind: "uncertain", link: failure, observed };
 }
 
 function refusal(error: unknown, destination: string): unknown {
@@ -402,52 +345,41 @@ function refusal(error: unknown, destination: string): unknown {
 }
 
 /**
- * Removes this Save's staged file through its held directory, then the
- * staging directory by name, only while that name still refers to it. A
- * staged name already gone counts as removed, and so does a directory that
- * no longer exists anywhere; a directory moved or replaced, or one someone
- * else added entries to, is kept and reported.
+ * The one cleanup: a single unlink of the staged name, whatever the outcome,
+ * judged by the staged file's own link count rather than by the name. The
+ * file is done when no name links it except, when it may, the destination;
+ * one still linked anywhere else (the unlink failed, or the file was moved)
+ * is residue. No call removes a name only while it names a given file, so
+ * this unlink removes whatever the staged name holds; it never removes a
+ * directory, which unlink refuses, and never the destination.
  */
-async function removeStaging(
+async function removeStaged(
   files: SaveFiles,
-  parent: FileHandle,
-  name: string,
-  stage: FileHandle | undefined,
-  created: boolean,
+  file: FileHandle,
+  staged: string,
+  publication: Publication,
 ): Promise<{ ok: true } | { ok: false; error: unknown }> {
+  const accounted = publication.kind === "published" ||
+      (publication.kind === "uncertain" && publication.observed.kind === "uninspectable")
+    ? 1n
+    : 0n;
+  let failure: unknown;
   try {
-    if (stage === undefined) throw new DeliveryActionError("it was replaced before use, so it was not removed");
-    if (created) await absentIsDone(files.unlink(pinned(stage, "file")));
-    const own = await stage.stat({ bigint: true });
-    if (own.nlink === 0n) return { ok: true };
-    const named = await files.lstat(pinned(parent, name), { bigint: true }).catch((error: unknown) => {
-      if (errorCode(error) === "ENOENT") return undefined;
-      throw error;
-    });
-    if (named?.dev !== own.dev || named.ino !== own.ino) {
-      throw new DeliveryActionError("it was moved or replaced, so it was not removed");
-    }
-    await files.rmdir(pinned(parent, name)).catch(async (error: unknown) => {
-      // Gone between the check and the removal: done only if it is gone
-      // everywhere, not merely from this name.
-      if (errorCode(error) !== "ENOENT" || (await stage.stat({ bigint: true })).nlink !== 0n) throw error;
-    });
-    return { ok: true };
+    await files.unlink(staged);
   } catch (error) {
-    return { ok: false, error };
+    if (errorCode(error) !== "ENOENT") failure = error;
   }
-}
-
-async function absentIsDone(removal: Promise<void>): Promise<void> {
   try {
-    await removal;
+    const { nlink } = await file.stat({ bigint: true });
+    if (nlink <= accounted) return { ok: true };
+    return { ok: false, error: failure ?? new DeliveryActionError("it is linked elsewhere, so it was not removed") };
   } catch (error) {
-    if (errorCode(error) !== "ENOENT") throw error;
+    return { ok: false, error: failure ?? error };
   }
 }
 
 function errorCode(error: unknown): string | undefined {
-  const code = (error as { code?: unknown } | null)?.code;
+  const code = (error as { code?: unknown } | null | undefined)?.code;
   return typeof code === "string" ? code : undefined;
 }
 

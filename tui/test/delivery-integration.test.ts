@@ -303,8 +303,9 @@ describe("committed deliveries through a remote WebSocket App Server", { skip: S
       const [report] = (await session.deliveryPage()).records;
       assert.ok(report);
       const destination = fixture.temp.path("remote-copy.md");
-      await saveDelivery(() => session.readDelivery(report), destination);
+      assert.deepEqual(await saveDelivery(() => session.readDelivery(report), destination), { path: destination });
       assert.deepEqual(readFileSync(destination), REPORT_BYTES);
+      assert.deepEqual(readdirSync(fixture.temp.path(".")).filter((name) => name.startsWith(".rustx-save-")), [], "no staging left behind");
       // A remote server path is never interpreted as a local one.
       await assert.rejects(openDelivery(() => assert.fail("no location is requested remotely"), {
         sharedHost: trusted.ownership === "owned_child",

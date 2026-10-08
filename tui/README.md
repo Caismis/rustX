@@ -1124,22 +1124,26 @@ actions, or `s`/`o` directly. Escape cancels a running action. No file action se
 a model request.
 
 - **Save** writes the original bytes (at most 512 KiB) to a path you type on the
-  **TUI machine**, exactly as typed (spaces included). The file is written and
-  synced in a private `.rustx-save-*` directory beside the destination, then
-  appears at the destination in one step. That directory is held open throughout,
-  so renaming or replacing it cannot make the save publish or delete anything but
-  its own file. Existing files, directories and symlinks are never overwritten, and
-  a cancelled or failed save leaves no partial file. If that staging directory
-  cannot be removed, or was moved or replaced, the save says where it was created.
-  Filesystems without hard links, and systems without `/proc/self/fd` (Save is
-  Linux-only), are refused rather than written unsafely. "Saved" means the file was
-  created at that path; anyone who can write that directory may rename it later. If the filesystem
-  reports an ambiguous error (such as an I/O error) for the final step and the
-  file cannot be confirmed, the save says its outcome is unknown; check the
-  destination yourself. A filename
-  containing terminal control characters is not prefilled; type the destination
-  yourself. Closing `/files` (or switching
-  Session, reconnecting or quitting) cancels a running action on the server too.
+  **TUI machine**, exactly as typed (spaces included). It works the same on Linux
+  and macOS, for a local App Server child and a remote one. The file is created
+  under a new hidden `.rustx-save-*` name beside the destination, written and
+  synced, then appears at the destination in one step. Existing files,
+  directories and symlinks are never overwritten, and a cancelled or failed save
+  leaves no partial file at the destination. "Saved" means the save created the
+  destination and checked that it holds the very file it wrote. Anyone who can
+  write that directory may rename or replace it later. If that directory changes
+  under the save (for example the hidden file is moved, or the directory is
+  renamed), the save never reports more than it can show: it is "saved" only if
+  the destination holds its own file, otherwise "not saved" or "unknown", and a
+  hidden file left behind is reported with the path it was created at. Programs that can write that directory are trusted not to
+  tamper with the save while it runs. Filesystems without hard links (for
+  example FAT or exFAT) are refused rather than written unsafely. If the
+  filesystem reports an ambiguous error (such as an I/O error) for the final
+  step and the file cannot be confirmed, the save says its outcome is unknown;
+  check the destination yourself. A filename containing terminal control
+  characters is not prefilled; type the destination yourself. Closing `/files`
+  (or switching Session, reconnecting or quitting) cancels a running action on
+  the server too.
 - **Open** is best effort and is offered only for the App Server child this TUI
   spawned. It asks the system opener only after the native side verifies the file
   and this machine's own path names the same regular file at that moment. The

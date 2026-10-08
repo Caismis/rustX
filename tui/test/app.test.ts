@@ -501,6 +501,67 @@ describe("RustxTuiApp lifecycle", () => {
     }
   });
 
+  it("/files saves byte-exactly on this client whether its App Server is a local child or remote", { timeout: 10_000 }, async () => {
+    const { mkdtempSync, readFileSync, readdirSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const file = {
+      scope: { conversation_id: "conv-original", device: "1", inode: "2" },
+      path: "out/报告 final.md", name: "报告 final.md", description: null, mime_type: "text/markdown",
+    };
+    const record = { messageId: "tool-msg", index: 0, count: 1, file };
+    const bytes = Buffer.from("# 报告\r\n\u0000\xff", "latin1");
+    const selectorPrototype = DeliverySelector.prototype as unknown as {
+      settle: (operation: number, level: "info" | "error", text: string) => void;
+    };
+    const originalSettle = selectorPrototype.settle;
+    let settled = deferred<string>();
+    selectorPrototype.settle = function(operation, level, text): void {
+      settled.resolve(`${level}: ${text}`);
+      originalSettle.call(this, operation, level, text);
+    };
+    try {
+      // Save availability depends on delivery access alone: not on the
+      // platform, and not on whether the server's files are on this machine.
+      for (const ownership of ["owned_child", "external"] as const) {
+        settled = deferred<string>();
+        const dir = mkdtempSync(join(tmpdir(), "rustx-files-save-"));
+        const destination = join(dir, "copy 报告.md");
+        const session = fakeSession() as unknown as Record<string, unknown>;
+        const page = deferred<void>();
+        let locates = 0;
+        Object.assign(session, {
+          deliveryAccess: true,
+          deliveryPage: async () => { page.resolve(); return { records: [record] }; },
+          readDelivery: async () => ({ file, data: bytes.toString("base64") }),
+          locateDelivery: async () => { locates += 1; throw new Error("Save never locates"); },
+        });
+        const app = appOver(session as unknown as AppServerSession, fakeHost({ ownership }));
+        const running = app.run();
+        try {
+          process.stdin.emit("data", "/files\r");
+          await page.promise;
+          await waitForApplicationContinuation();
+          process.stdin.emit("data", "s");
+          process.stdin.emit("data", "\u0005");
+          process.stdin.emit("data", "\u0015");
+          process.stdin.emit("data", destination);
+          process.stdin.emit("data", "\r");
+          assert.equal(await settled.promise, `info: Saved 报告 final.md to ${destination}`, ownership);
+          assert.deepEqual(readFileSync(destination), bytes, `${ownership}: the original bytes`);
+          assert.deepEqual(readdirSync(dir), ["copy 报告.md"], `${ownership}: nothing else, no staging`);
+          assert.equal(locates, 0);
+        } finally {
+          await app.quit();
+          await running;
+          rmSync(dir, { recursive: true, force: true });
+        }
+      }
+    } finally {
+      selectorPrototype.settle = originalSettle;
+    }
+  });
+
   it("retiring /files cancels its owned Save on the server and writes nothing", { timeout: 10_000 }, async () => {
     const { existsSync, mkdtempSync, readdirSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
