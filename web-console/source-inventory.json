@@ -968,7 +968,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "884f1ed75d4a1a493e40ba9d03447c7b98771eea023ce3e8b1e5e3d7c508be4b",
+      "local_sha256": "11191c121a7f27d54b1b893c06f64555650a60ef6cedc03ed9b89e300730694e",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css",
@@ -1304,7 +1304,8 @@
       "upstream_sha256": "5f6ba885fc60f79cefd212f8b0cb89ceaf72115d971db771fa40c190df89f414",
       "retained_dependencies": [
         "../primitives/icons/index.tsx",
-        "react"
+        "react",
+        "react-dom"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -1313,7 +1314,7 @@
         "Harness attachment identity and storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "5cc8adf7f44414adf42d89c85afe82435a4fd35d0393206443b3d1d51056e6d7",
+      "local_sha256": "de533134e09d95d775c7cdc9d8a38e9d3e1dff335802f9876d59209837de2395",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/ChatView.tsx",
@@ -3552,7 +3553,7 @@
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [],
-      "local_sha256": "eb8d08d9c6ca22e5f0bb42921b0861d78392c130e6de6544c2ac4afbe44e716a"
+      "local_sha256": "e586b93054ed12e67dac7c2b96556225366b7a9eb99a0564245ade15c3c06685"
     },
     {
       "upstream": "packages/client/ui-chat/tests/turn-navigator-fixture.ts",

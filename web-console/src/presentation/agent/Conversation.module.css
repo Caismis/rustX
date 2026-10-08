@@ -547,15 +547,7 @@
   visibility: hidden;
 }
 
-/* The native-bound view and resident seat are direct siblings in WebUI.
-   Keep Harness's overlay and fixed 36px seat fade over the full-height ledger. */
-.body:has(> [data-conversation-composer-overlay]) {
-  overflow: hidden;
+/* Native trajectory and the resident composer share the same session seat. */
+.scrollBody:has([data-conversation-composer-overlay]) {
   --dsh-trajectory-bottom-clearance: calc(var(--dsh-composer-height) + 16px);
-}
-.root[data-phase='active'] .body:has(> [data-conversation-composer-overlay]) > .composerSeat {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
 }

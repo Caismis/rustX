@@ -33,7 +33,7 @@ export function ConversationSeat({ client, host, authority, associations, sessio
 }) {
   const seat = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
-    const element = seat.current!, body = element.parentElement!;
+    const element = seat.current!, body = element.closest<HTMLElement>('.conversation-panel')!;
     const measure = () => body.style.setProperty('--dsh-composer-height', `${element.getBoundingClientRect().height}px`);
     measure();
     const observer = new ResizeObserver(measure);

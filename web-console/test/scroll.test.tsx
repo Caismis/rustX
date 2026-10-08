@@ -503,3 +503,37 @@ for (const when of ['before reply', 'before layout'] as const) it(`real viewport
   ui.unmount();
  } finally {v.server.client.disconnect();}
 });
+
+it('uses the shared session scroller including its composer and keeps floating controls outside it', () => {
+  let frame: FrameRequestCallback | undefined;
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frame = callback; return 1; });
+  vi.stubGlobal('cancelAnimationFrame', () => { frame = undefined; });
+  const observed: Element[] = [];
+  vi.stubGlobal('ResizeObserver', class { constructor(callback: () => void) { resize = callback; } observe(element: Element) { observed.push(element); } disconnect() {} });
+  const ui = render(<section><div data-conversation-scroll>
+    <ChatViewport latestLabel="Latest"><div data-chat-anchor-key="a">Message</div></ChatViewport>
+    <div data-composer-seat>Composer</div>
+  </div></section>);
+  const outer = ui.container.querySelector<HTMLElement>('[data-conversation-scroll]')!;
+  const inner = ui.container.querySelector<HTMLElement>('.conversation-scroll')!;
+  let total = 900;
+  Object.defineProperties(outer, {scrollHeight:{get:()=>total},clientHeight:{get:()=>400}});
+  const flush = () => act(() => { const callback = frame; frame = undefined; callback?.(0); });
+  resize(); flush();
+  expect(outer.scrollTop).toBe(500);
+  expect(inner.scrollTop).toBe(0);
+  expect(observed).toContain(ui.container.querySelector('[data-composer-seat]'));
+  outer.scrollTop = 200; fireEvent.scroll(outer); flush();
+  const latest = ui.getByRole('button',{name:'Latest'});
+  expect(latest.parentElement).toBe(outer.parentElement);
+  fireEvent.click(latest); flush();
+  expect(outer.scrollTop).toBe(500);
+  total += 100; resize(); flush();
+  expect(outer.scrollTop).toBe(600);
+  outer.scrollTop = 200;
+  ui.rerender(<section><div data-conversation-scroll>
+    <ChatViewport key="next-session" latestLabel="Latest"><div data-chat-anchor-key="b">Next session</div></ChatViewport>
+    <div data-composer-seat>Composer</div>
+  </div></section>);
+  flush(); expect(outer.scrollTop).toBe(600);
+});
