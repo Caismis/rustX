@@ -43,3 +43,6 @@
 .dot[data-status=connecting] {background:transparent;border:2px solid var(--dsw-alias-state-warn-primary);border-right-color:transparent;width:10px;height:10px;animation:mcp-connecting 0.8s linear infinite;}
 @keyframes mcp-connecting {to {transform:rotate(360deg);}}
 @media(prefers-reduced-motion:reduce) {.dot[data-status=connecting] {animation:none;}}
+
+.optionalMap summary {color:var(--dsw-alias-label-tertiary);cursor:pointer;font-size:14px;}
+.optionalMap textarea {width:100%;min-height:86px;margin-top:8px;padding:8px;font:13px/1.6 monospace;resize:vertical;}

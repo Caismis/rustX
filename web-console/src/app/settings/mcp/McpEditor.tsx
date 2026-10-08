@@ -76,8 +76,11 @@ function Editor({ source, scope, revision, focus, scopeControl, close, document 
           <label>{tx('settings:extension-detail.mcp-command')}<input required placeholder={tx('settings:mcp.command-placeholder')} value={definition.command ?? ''} onChange={event => change({command:event.target.value})}/></label>
           <ArgumentsField label={tx('settings:extension-detail.arguments')} value={definition.args ?? []} change={args => change({args})}/>
         </>}
-        <details><summary>{tx('settings:mcp.env')}</summary><MapField label={tx('settings:extension-detail.literal-environment')} value={definition.env ?? {}} change={env => change({env})}/>
-          {transport === 'http' && <MapField label={tx('settings:extension-detail.literal-headers')} value={definition.headers ?? {}} change={headers => change({headers})}/>}<p>{tx('settings:mcp.retained')}</p></details>
+        <details key={transport} className={css.optionalMap}><summary>{tx(transport === 'http' ? 'settings:mcp.headers' : 'settings:mcp.env')}</summary>
+          <MapField label={tx(transport === 'http' ? 'settings:mcp.headers' : 'settings:mcp.env')} placeholder={tx(transport === 'http' ? 'settings:mcp.headers-placeholder' : 'settings:mcp.env-placeholder')}
+            value={(transport === 'http' ? definition.headers : definition.env) ?? {}} change={value => change(transport === 'http' ? {headers:value} : {env:value})}/>
+          {((transport === 'http' ? unit.displayed.retained_headers : unit.displayed.retained_env)?.length ?? 0) > 0 && <p>{tx('settings:mcp.retained')}</p>}
+        </details>
       </fieldset>}
       {unit.override && <Button onClick={unit.override}>{tx('settings:bridge.override')} {name}</Button>}
       {error && <p role="alert">{tx('settings:mcp.invalid-json',{error})}</p>}
@@ -91,12 +94,13 @@ function Editor({ source, scope, revision, focus, scopeControl, close, document 
     </form>
   </>;
 }
-function MapField({label,value,change}:{label:string;value:Record<string,string>;change:(value:Record<string,string>)=>void}) {
-  const [text,setText]=useState(JSON.stringify(value,null,2));
+function MapField({label,placeholder,value,change}:{label:string;placeholder:string;value:Record<string,string>;change:(value:Record<string,string>)=>void}) {
+  const display=(value:Record<string,string>)=>Object.keys(value).length ? JSON.stringify(value,null,2) : '';
+  const [text,setText]=useState(display(value));
   const reflected=useRef(JSON.stringify(value));
-  useEffect(()=>{const next=JSON.stringify(value);if(next!==reflected.current){setText(JSON.stringify(value,null,2));reflected.current=next;}},[value]);
+  useEffect(()=>{const next=JSON.stringify(value);if(next!==reflected.current){setText(display(value));reflected.current=next;}},[value]);
   const [error,setError]=useState('');
-  return <label>{label}<textarea value={text} onChange={event=>{setText(event.target.value);try {const parsed:unknown=JSON.parse(event.target.value);if(!parsed || typeof parsed!=='object' || Array.isArray(parsed) || !Object.values(parsed).every(v=>typeof v==='string')) throw new Error('Expected string values');reflected.current=JSON.stringify(parsed);change(parsed as Record<string,string>);setError('');event.target.setCustomValidity('');}catch(cause){setError(String(cause));event.target.setCustomValidity(String(cause));}}}/>{error && <span role="alert">{error}</span>}</label>;
+  return <label><textarea aria-label={label} placeholder={placeholder} rows={3} spellCheck={false} value={text} onChange={event=>{setText(event.target.value);try {const parsed:unknown=JSON.parse(event.target.value.trim() || '{}');if(!parsed || typeof parsed!=='object' || Array.isArray(parsed) || !Object.values(parsed).every(v=>typeof v==='string')) throw new Error('Expected string values');reflected.current=JSON.stringify(parsed);change(parsed as Record<string,string>);setError('');event.target.setCustomValidity('');}catch(cause){setError(String(cause));event.target.setCustomValidity(String(cause));}}}/>{error && <span role="alert">{error}</span>}</label>;
 }
 
 function ArgumentsField({label,value,change}:{label:string;value:string[];change:(value:string[])=>void}) {

@@ -1,5 +1,9 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
+  "mcp.headers": "Request headers (optional)",
+  "mcp.headers-placeholder": "{\n  \"Authorization\": \"Bearer your-token\"\n}",
+  "mcp.env-placeholder": "{\n  \"MY_API_KEY\": \"your-key\"\n}",
+
   "mcp.status-connected": "MCP server is connected and available.",
   "mcp.status-connecting": "Connecting to MCP server…",
   "mcp.status-disabled": "MCP server is disabled.",
@@ -610,6 +614,10 @@ export const en = {
 } as const;
 export type SettingsKey = keyof typeof en;
 export const zh = {
+  "mcp.headers": "请求头（可选）",
+  "mcp.headers-placeholder": "{\n  \"Authorization\": \"Bearer your-token\"\n}",
+  "mcp.env-placeholder": "{\n  \"MY_API_KEY\": \"your-key\"\n}",
+
   "mcp.status-connected": "MCP 服务器已连接并可用。",
   "mcp.status-connecting": "正在连接 MCP 服务器…",
   "mcp.status-disabled": "MCP 服务器已停用。",

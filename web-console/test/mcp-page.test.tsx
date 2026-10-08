@@ -44,3 +44,17 @@ it('canceling creation does not write a server',async()=>{
  fireEvent.click(screen.getByRole('button',{name:'Cancel'}));
  expect(screen.getByText('No MCP servers installed')).toBeTruthy();expect(writes(s)).toHaveLength(0);
 });
+it('HTTP exposes request headers directly and saves the entered map',async()=>{
+ const s=await open();fireEvent.click(screen.getByRole('button',{name:'＋ New MCP server'}));
+ fireEvent.change(screen.getByLabelText('Name'),{target:{value:'headers-server'}});
+ await chooseOption('Transport','HTTP');
+ fireEvent.change(screen.getByLabelText('MCP URL'),{target:{value:'https://example.com/mcp'}});
+ expect(screen.queryByText('Environment variables (optional)')).toBeNull();
+ fireEvent.click(screen.getByText('Request headers (optional)'));
+ const headers=screen.getByLabelText('Request headers (optional)') as HTMLTextAreaElement;
+ expect(headers.value).toBe('');expect(headers.placeholder).toContain('Authorization');
+ fireEvent.change(headers,{target:{value:'{"Authorization":"Bearer test-token"}'}});
+ fireEvent.click(screen.getByRole('button',{name:'Save'}));
+ await screen.findByRole('listitem',{name:'headers-server'});
+ expect(writes(s)[0].mutation).toMatchObject({kind:'mcp',authored:{definition:{headers:{Authorization:'Bearer test-token'}}}});
+});
