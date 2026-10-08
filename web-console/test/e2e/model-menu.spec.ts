@@ -6,7 +6,7 @@ for (const width of [1440, 390]) test(`saved conversation model menu keeps compo
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(fixture);
-  await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.resumeCatalog(); });
+  await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.hold('session/models'); f.resumeCatalog(); });
   await page.locator('button[data-session-id=A]').click();
   await page.evaluate(() => (window as any).startupFixture.release('session/attach'));
   const trigger = page.getByRole('button', { name: 'Model and reasoning' });
@@ -21,11 +21,12 @@ for (const width of [1440, 390]) test(`saved conversation model menu keeps compo
     });
   }
   await expect(page.getByText(/Saved message 19:/)).toBeVisible();
-  await expect.poll(() => page.evaluate(() => (window as any).startupFixture.requests().filter((request: any) => request.method === 'session/model').length)).toBe(1);
-  await page.evaluate(() => (window as any).startupFixture.hold('session/models'));
+  await expect.poll(() => page.evaluate(() => (window as any).startupFixture.requests().filter((request: any) => request.method === 'session/models').length)).toBe(1);
+  await page.evaluate(() => (window as any).startupFixture.release('session/models'));
+  expect(await page.evaluate(() => (window as any).startupFixture.requests().filter((request: any) => request.method === 'session/model' || request.method === 'session/snapshot').length)).toBe(0);
   const geometry = () => page.locator('textarea').evaluate(element => {
     const rect = element.getBoundingClientRect();
-    const scroll = document.querySelector('.conversation-scroll')!;
+    const scroll = document.querySelector('[data-conversation-scroll]')!;
     return { x: rect.x, y: rect.y, height: rect.height, scroll: scroll.scrollTop };
   });
   const before = await geometry();
