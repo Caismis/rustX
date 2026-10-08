@@ -501,7 +501,7 @@ describe("RustxTuiApp lifecycle", () => {
   });
 
   it("retiring /files cancels its owned Save on the server and writes nothing", { timeout: 10_000 }, async () => {
-    const { existsSync, mkdtempSync, rmSync } = await import("node:fs");
+    const { existsSync, mkdtempSync, readdirSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
     const file = {
@@ -568,6 +568,7 @@ describe("RustxTuiApp lifecycle", () => {
         await waitForApplicationContinuation();
         await waitForApplicationContinuation();
         assert.equal(existsSync(destination), false, `${retirement}: no stale local file`);
+        assert.deepEqual(readdirSync(dir), [], `${retirement}: no staging allocated`);
         await quitting;
       } finally {
         served.resolve(body);

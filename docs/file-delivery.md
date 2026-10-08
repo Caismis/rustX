@@ -316,12 +316,46 @@ Actions live in the TUI-owned `app-server/delivery-files.ts`. Renderers and comm
 definitions never touch the filesystem.
 
 - **Save** calls `delivery/read` and checks the base64 bound before decoding. It
-  writes the bytes to an explicitly typed client-local path with `open(..., 'wx')`,
-  which never truncates existing data, in 64 KiB chunks. The local publication
-  commit follows `sync` and `close`: a cancellation observed before it removes the
-  partial file, but only while the destination is still the device/inode this
-  save created. A file that replaced it is left alone, and residue that cannot be
-  removed is reported. After the commit the save stands.
+  then publishes one complete file at the typed client-local destination, or
+  leaves the destination unchanged:
+
+  ```text
+  mkdtemp(<destination dir>/.rustx-save-XXXXXX)   private 0700 staging, owned by this save
+    -> <staging>/file 'wx' -> 64 KiB writes (abort? between chunks) -> sync -> close
+    -> abort?                       publication admission: the last cancellation point
+    -> link(<staging>/file, destination)   publication commit
+    -> unlink <staging>/file, rmdir <staging>
+  ```
+
+  `link` creates a new name atomically and fails with `EEXIST` for any existing
+  entry (file, directory, symlink, dangling symlink), so an existing file, a
+  concurrent save or an external writer is never overwritten, and a partial file is
+  never visible at the destination. A filesystem that cannot hard-link (`EPERM`,
+  `ENOTSUP`, `EOPNOTSUPP`, `ENOSYS`) fails the save explicitly, and any other link
+  error is reported as is; there is no rename or copy fallback.
+
+  Cancellation at or before admission publishes nothing. The admission check and
+  the dispatch of `link` run in one synchronous step; once dispatched, the link's
+  own result decides, and a later cancellation neither removes the file nor
+  reports it as unsaved. Nothing ever removes the destination. Cleanup touches only
+  the staged name and the staging directory this save created: an already-absent
+  name counts as removed, and a staging directory that cannot be removed (or that
+  someone else added entries to) is kept and reported, never deleted recursively.
+
+  If `link` reports an error, the destination itself is the evidence: an entry
+  naming the staged file is a publication (a network filesystem can report a
+  failure for a retransmitted link it performed), an absent or different entry is
+  a refusal, and a destination that cannot be inspected is reported as an
+  uncertain outcome.
+
+  The outcomes are distinct: saved; saved with a staging-residue warning; not
+  saved; not saved with staging residue; outcome unknown.
+- **Destination spelling.** The typed path is used exactly as typed. Leading,
+  trailing and inner spaces are part of the name, and whitespace only decides
+  whether the input is blank. `~`/`~/` expand to the user's home, and a relative
+  path is prefixed with the TUI's cwd without folding `.` or `..`, which the OS
+  resolves (lexical folding names a different file when a component is a
+  symlink).
 - **Destination.** The delivered name is the server's identity for the file and is
   never altered. It prefills the editable destination only when it renders as
   itself; a name carrying a terminal control, C1 or bidi character leaves the field
@@ -348,8 +382,9 @@ failure and quit. Closing aborts the scope, which cancels the native request
 (`delivery/cancel`) and every uncommitted local effect. Escape during an action
 aborts just that action. Each outcome belongs to one operation token, so a
 selector never shows a stale or duplicate outcome. After retirement, only an effect
-that happened (a committed save or launch, or residue left behind) is reported, once,
-on the transient surface. Outcome text is sanitized before it is drawn. Missing,
+that happened or may have happened (a committed save or launch, an uncertain save
+outcome, or staging residue left behind) is reported, once, on the transient
+surface. Outcome text is sanitized before it is drawn. Missing,
 unauthorized, unavailable, replaced, oversized (>512 KiB), capacity and disconnected
 failures are reported explicitly. No action starts an Agent, Tool or model request.
 

@@ -36,11 +36,15 @@ physically settled. A response committed before cancellation or revocation stand
 and is never reported as unpublished. In the TUI each `/files` interaction owns its
 Save/Open: retiring it (Escape, overlay close or replacement, Session focus change,
 snapshot replacement, disconnect, shutdown) cancels the native request and every
-uncommitted local effect. A Save commits only after its complete file is synced and
-closed, and cleanup removes only the file it created. An Open commits when the OS
-opener is spawned. Externally derived names, paths, descriptions and errors never
-reach the terminal unsanitized, and a delivered name becomes an editable destination
-only when it renders as itself.
+uncommitted local effect. A Save writes, syncs and closes its complete file in a
+private staging directory it created beside the destination, and commits by one
+`link` to the exact typed destination, which never replaces an existing entry;
+cancellation counts only up to that link's dispatch. Nothing removes the
+destination, cleanup removes only the save's own staging names, and staging that
+cannot be removed is reported. An Open commits when the OS opener is spawned.
+Externally derived names, paths, descriptions and errors never reach the terminal
+unsanitized, and a delivered name becomes an editable destination only when it
+renders as itself.
 
 Pending Inbound owns accepted queue mutation. `(ConversationId, InboundSequence,
 MessageId)` identifies one occurrence, and its native revision is a compare-and-set

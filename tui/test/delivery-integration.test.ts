@@ -15,7 +15,7 @@
 
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -156,9 +156,9 @@ describe("committed deliveries through an owned stdio child", { skip: SKIP }, ()
       assert.ok(saved instanceof Error, "a missing destination directory fails before writing");
       mkdirSync(fixture.temp.path("saved"));
       const destination = deliveryDestination(`saved/${report.file.name}`, fixture.temp.path("."));
-      assert.equal(await saveDelivery(() => session.readDelivery(report), destination), destination);
+      assert.deepEqual(await saveDelivery(() => session.readDelivery(report), destination), { path: destination });
       assert.deepEqual(readFileSync(destination), REPORT_BYTES);
-      await assert.rejects(saveDelivery(() => session.readDelivery(data), destination), /EEXIST/);
+      await assert.rejects(saveDelivery(() => session.readDelivery(data), destination), /already exists/);
       assert.deepEqual(readFileSync(destination), REPORT_BYTES, "existing data is never truncated");
 
       // Mutable source: reopening observes the current file.
@@ -184,6 +184,7 @@ describe("committed deliveries through an owned stdio child", { skip: SKIP }, ()
         return body;
       }, cancelled, abort.signal), { name: "AbortError" });
       assert.equal(existsSync(cancelled), false);
+      assert.deepEqual(readdirSync(fixture.temp.path("saved")).sort(), ["data set.csv", REPORT].sort(), "no staging left behind");
 
       // Request-scoped cancellation over the real protocol: the native
       // request answers exactly once (bytes only if its publication won),

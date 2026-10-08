@@ -1124,9 +1124,14 @@ actions, or `s`/`o` directly. Escape cancels a running action. No file action se
 a model request.
 
 - **Save** writes the original bytes (at most 512 KiB) to a path you type on the
-  **TUI machine**. Existing files are never overwritten, and a cancelled or failed
-  save leaves no partial file. A filename containing terminal control characters
-  is not prefilled; type the destination yourself. Closing `/files` (or switching
+  **TUI machine**, exactly as typed (spaces included). The file is written and
+  synced in a private `.rustx-save-*` directory beside the destination, then
+  appears at the destination in one step. Existing files, directories and symlinks
+  are never overwritten, and a cancelled or failed save leaves no partial file. If
+  that staging directory cannot be removed, the save says where it is. Filesystems
+  without hard links are refused rather than written unsafely. A filename
+  containing terminal control characters is not prefilled; type the destination
+  yourself. Closing `/files` (or switching
   Session, reconnecting or quitting) cancels a running action on the server too.
 - **Open** is offered only for the App Server child this TUI spawned. It works only
   after the native side verifies the file and this machine's own path is proven to

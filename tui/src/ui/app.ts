@@ -102,6 +102,7 @@ import {
 import type { DeliveryPage } from "../presentation/deliveries.ts";
 import {
   DeliveryResidueError,
+  DeliveryUncertainError,
   deliveryDestination,
   openDelivery,
   saveDelivery,
@@ -1616,12 +1617,14 @@ export class RustxTuiApp {
       inFlight = { operation, abort };
       const task = (async () => {
         if (action === "save") {
-          const path = await saveDelivery(
+          const saved = await saveDelivery(
             () => session.readDelivery(record, signal),
             deliveryDestination(destination ?? ""),
             signal,
           );
-          return `Saved ${record.file.name} to ${path}`;
+          const text = `Saved ${record.file.name} to ${saved.path}`;
+          return saved.residue === undefined ? text
+            : `${text}; warning: its staging directory remains at ${saved.residue.path} (${compactDiagnostic(saved.residue.cause)})`;
         }
         const requested = await openDelivery(() => session.locateDelivery(record, signal), {
           sharedHost,
@@ -1632,9 +1635,10 @@ export class RustxTuiApp {
       })();
       // One terminal report per operation. A live surface shows every
       // outcome. Once the interaction is retired, only an effect that
-      // happened (a committed save or launch, or residue left behind) is
-      // still reported, once, on the transient surface; a cancelled or
-      // failed uncommitted action is not reported to a successor.
+      // happened or may have happened (a committed save or launch, an
+      // uncertain publication, or staging residue left behind) is still
+      // reported, once, on the transient surface; a cancelled or failed
+      // unpublished action is not reported to a successor.
       const report = (level: "info" | "error", text: string, happened: boolean) => {
         const safe = sanitizeField(text);
         if (current()) selector.settle(operation, level, safe);
@@ -1645,7 +1649,7 @@ export class RustxTuiApp {
         (error: unknown) => report(
           "error",
           deliveryFailure(error, signal),
-          error instanceof DeliveryResidueError,
+          error instanceof DeliveryResidueError || error instanceof DeliveryUncertainError,
         ),
       ).finally(() => {
         if (inFlight?.operation === operation) inFlight = undefined;
@@ -2179,10 +2183,11 @@ function nextTick(): Promise<void> {
 
 /** One bounded line for a failed or cancelled delivery action. */
 function deliveryFailure(error: unknown, signal: AbortSignal): string {
-  if (error instanceof DeliveryResidueError) return error.message;
-  // Cancellation won before the local commit (or the server's publication).
+  if (error instanceof DeliveryResidueError || error instanceof DeliveryUncertainError) return error.message;
+  // Cancellation won before Save's publication admission, Open's launch, or
+  // the server's response publication.
   if ((signal.aborted && error === signal.reason) || isDeliveryCancelled(error)) {
-    return "Cancelled; no file was written or opened";
+    return "Cancelled; nothing was saved or opened";
   }
   if (error instanceof TransportClosedError) return "Disconnected from the App Server; nothing was written";
   if (error instanceof AppServerRequestError && error.error.data?.kind === "session_file_read") {

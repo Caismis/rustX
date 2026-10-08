@@ -9,8 +9,20 @@
  */
 
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { open } from "node:fs/promises";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -19,7 +31,9 @@ import {
   DELIVERY_MAX_BASE64,
   DELIVERY_MAX_BYTES,
   DeliveryResidueError,
+  DeliveryUncertainError,
   SAVE_CHUNK_BYTES,
+  SAVE_FILES,
   decodeDelivery,
   deliveryDestination,
   openDelivery,
@@ -76,30 +90,77 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   const promise = new Promise<T>((settle) => { resolve = settle; });
   return { promise, resolve };
 }
-/** Real files whose second chunk write parks until released. */
-function parkedSecondWrite(): { files: SaveFiles; parked: Promise<void>; release: () => void } {
+type Written = { bytesWritten: number };
+/** Interposition points on the staged file's handle. */
+interface HandleHooks {
+  write?: (call: number, proceed: () => Promise<Written>) => Promise<Written>;
+  sync?: (proceed: () => Promise<void>) => Promise<void>;
+  close?: (proceed: () => Promise<void>) => Promise<void>;
+}
+/** The real Save filesystem operations, with explicit interposition points. */
+function saveFiles(over: Partial<SaveFiles> = {}, hooks: HandleHooks = {}): SaveFiles {
+  return {
+    ...SAVE_FILES,
+    open: async (path, flags, mode) => {
+      const handle = await SAVE_FILES.open(path, flags, mode);
+      const write = handle.write.bind(handle) as (buffer: Uint8Array, offset: number, length: number) => Promise<Written>;
+      const sync = handle.sync.bind(handle);
+      const close = handle.close.bind(handle);
+      let writes = 0;
+      Object.assign(handle, {
+        write: (buffer: Uint8Array, offset: number, length: number) => {
+          writes += 1;
+          const proceed = () => write(buffer, offset, length);
+          return hooks.write ? hooks.write(writes, proceed) : proceed();
+        },
+        sync: () => hooks.sync ? hooks.sync(sync) : sync(),
+        close: () => hooks.close ? hooks.close(close) : close(),
+      });
+      return handle;
+    },
+    ...over,
+  };
+}
+/** Real files whose `call`th chunk write parks, before writing, until released. */
+function parkedWrite(call = 2): { files: SaveFiles; parked: Promise<void>; release: () => void } {
   const parked = deferred<void>();
   const proceed = deferred<void>();
-  let writes = 0;
   return {
     parked: parked.promise,
     release: () => proceed.resolve(),
-    files: {
-      open: async (path, flags, mode) => {
-        const handle = await open(path, flags, mode);
-        const write = handle.write.bind(handle) as (buffer: Uint8Array, offset: number, length: number) => Promise<{ bytesWritten: number }>;
-        Object.assign(handle, {
-          write: async (buffer: Uint8Array, offset: number, length: number) => {
-            writes += 1;
-            if (writes === 2) { parked.resolve(); await proceed.promise; }
-            return write(buffer, offset, length);
-          },
-        });
-        return handle;
+    files: saveFiles({}, {
+      write: async (writes, write) => {
+        if (writes === call) { parked.resolve(); await proceed.promise; }
+        return write();
       },
-    },
+    }),
   };
 }
+function failure(code: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(`${code}: injected`), { code });
+}
+/** The directory's entries; a Save leaves only what it published. */
+function listing(dir: string): string[] {
+  return readdirSync(dir).sort();
+}
+function staging(dir: string): string[] {
+  return listing(dir).filter((name) => name.startsWith(".rustx-save-"));
+}
+async function inDir(prefix: string, body: (dir: string) => Promise<void>): Promise<void> {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  try {
+    await body(dir);
+  } finally {
+    chmodSync(dir, 0o700);
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+const BODY_BYTES = Buffer.concat([Buffer.from("line\r\n\u0000报告 ", "utf8"), Buffer.alloc(SAVE_CHUNK_BYTES * 2, 0xff)]);
+const BODY = { data: BODY_BYTES.toString("base64") };
+const answer = async () => BODY;
+
+/** Distinct valid names that trimming or normalization would conflate. */
+const FIDELITY_NAMES = ["report.md", " report.md", "report.md ", "  report final.md  ", "报告 final.md", "naïve résumé — v2.txt"];
 const DATA = file("data set.csv");
 const ARGS = { files: [{ path: "out/报告 final.md" }, { path: "out/data set.csv" }] };
 
@@ -192,108 +253,302 @@ describe("client-local delivery actions", () => {
     }
   });
 
-  it("resolves only explicit, renderable client-local destinations", () => {
-    assert.equal(deliveryDestination("报告 final.md", "/client/cwd", "/home/u"), "/client/cwd/报告 final.md");
-    assert.equal(deliveryDestination("~/out/y", "/client/cwd", "/home/u"), "/home/u/out/y");
-    for (const unsafe of ["", "  ", ...HOSTILE_NAMES]) {
+  it("keeps the typed destination spelling exactly, relative to the cwd", () => {
+    for (const name of FIDELITY_NAMES) {
+      assert.equal(deliveryDestination(name, "/client/cwd", "/home/u"), `/client/cwd/${name}`, JSON.stringify(name));
+    }
+    assert.equal(deliveryDestination("~/out/ y ", "/client/cwd", "/home/u"), "/home/u/out/ y ");
+    assert.equal(deliveryDestination("~", "/client/cwd", "/home/u"), "/home/u");
+    assert.equal(deliveryDestination("/abs/ x/../y ", "/client/cwd"), "/abs/ x/../y ", "absolute, `..` left to the OS");
+    assert.equal(deliveryDestination("link/../x", "/"), "/link/../x");
+    for (const unsafe of ["", "  ", "\t", ...HOSTILE_NAMES]) {
       assert.throws(() => deliveryDestination(unsafe, "/client/cwd"), /Invalid save destination/, JSON.stringify(unsafe));
     }
   });
+});
 
-  it("saves byte-exactly, never truncates, and leaves nothing on cancellation", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "rustx-delivery-save-"));
-    try {
-      const bytes = Buffer.from("line\r\n\u0000报告", "utf8");
-      const read = async () => ({ data: bytes.toString("base64") });
-      const target = join(dir, "报告 final.md");
-      await saveDelivery(read, target);
-      assert.deepEqual(readFileSync(target), bytes);
-      writeFileSync(target, "kept");
-      await assert.rejects(saveDelivery(read, target), /EEXIST/);
-      assert.equal(readFileSync(target, "utf8"), "kept");
-      const abort = new AbortController();
-      abort.abort();
-      await assert.rejects(saveDelivery(read, join(dir, "cancelled"), abort.signal));
-      assert.equal(existsSync(join(dir, "cancelled")), false);
-      await assert.rejects(saveDelivery(async () => ({ data: "!" }), join(dir, "malformed")));
-      assert.equal(existsSync(join(dir, "malformed")), false);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("cancellation before the local commit leaves nothing; after it the save stands", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "rustx-delivery-commit-"));
-    try {
-      const bytes = Buffer.alloc(SAVE_CHUNK_BYTES * 3, 7);
-      const body = { data: bytes.toString("base64") };
-
-      // Before local file creation: the read answered, cancellation won.
-      const beforeCreate = new AbortController();
-      const answered = deferred<{ data: string }>();
-      const early = saveDelivery(() => answered.promise, join(dir, "early"), beforeCreate.signal);
-      beforeCreate.abort();
-      answered.resolve(body);
-      await assert.rejects(early, (error) => error === beforeCreate.signal.reason);
-      assert.equal(existsSync(join(dir, "early")), false, "never created");
-
-      // During an incomplete write: the owned partial file is removed.
-      const during = new AbortController();
-      const writes = parkedSecondWrite();
-      const partial = saveDelivery(async () => body, join(dir, "partial"), during.signal, writes.files);
+describe("atomic Save publication", () => {
+  it("publishes only the complete staged file, at the exact destination, and removes its staging", async () => {
+    await inDir("rustx-save-publish-", async (dir) => {
+      const destination = join(dir, "报告 final.md");
+      const writes = parkedWrite(2);
+      const saving = saveDelivery(answer, destination, undefined, writes.files);
       await writes.parked;
-      assert.equal(existsSync(join(dir, "partial")), true, "partial output exists mid-write");
-      during.abort();
+      assert.equal(existsSync(destination), false, "nothing is visible at the destination mid-write");
+      const [stage] = staging(dir);
+      assert.ok(stage, "one private staging directory beside the destination");
+      assert.equal(statSync(join(dir, stage)).mode & 0o777, 0o700);
       writes.release();
-      await assert.rejects(partial, (error) => error === during.signal.reason);
-      assert.equal(existsSync(join(dir, "partial")), false, "the owned partial file is removed");
-
-      // A file that replaced the destination mid-write is not this
-      // operation's to remove.
-      const replacedAbort = new AbortController();
-      const replacedWrites = parkedSecondWrite();
-      const replaced = saveDelivery(async () => body, join(dir, "replaced"), replacedAbort.signal, replacedWrites.files);
-      await replacedWrites.parked;
-      writeFileSync(join(dir, "someone else"), "theirs");
-      renameSync(join(dir, "someone else"), join(dir, "replaced"));
-      replacedAbort.abort();
-      replacedWrites.release();
-      await assert.rejects(replaced, (error) => error === replacedAbort.signal.reason);
-      assert.equal(readFileSync(join(dir, "replaced"), "utf8"), "theirs");
-
-      // After the commit: resolving means saved; a later cancel changes nothing.
-      const after = new AbortController();
-      assert.equal(await saveDelivery(async () => body, join(dir, "kept"), after.signal), join(dir, "kept"));
-      after.abort();
-      assert.deepEqual(readFileSync(join(dir, "kept")), bytes);
-
-      // Residue that cannot be removed is reported, never hidden.
-      if (process.getuid?.() !== 0) {
-        const locked = join(dir, "locked");
-        const residueAbort = new AbortController();
-        const residueWrites = parkedSecondWrite();
-        const { mkdirSync } = await import("node:fs");
-        mkdirSync(locked);
-        const residue = saveDelivery(async () => body, join(locked, "out"), residueAbort.signal, residueWrites.files);
-        await residueWrites.parked;
-        chmodSync(locked, 0o500);
-        residueAbort.abort();
-        residueWrites.release();
-        await assert.rejects(residue, DeliveryResidueError);
-        chmodSync(locked, 0o700);
-        assert.equal(existsSync(join(locked, "out")), true);
-      }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+      assert.deepEqual(await saving, { path: destination });
+      assert.deepEqual(readFileSync(destination), BODY_BYTES);
+      assert.equal(lstatSync(destination).nlink, 1, "the staged name is gone");
+      assert.deepEqual(listing(dir), ["报告 final.md"]);
+    });
   });
 
+  it("saves every name at exactly its spelled path, byte-exactly", async () => {
+    await inDir("rustx-save-names-", async (dir) => {
+      for (const name of FIDELITY_NAMES) {
+        const bytes = Buffer.from(`${name}\r\n\u0000\xff`, "latin1");
+        const destination = deliveryDestination(name, dir);
+        assert.equal(destination, `${dir}/${name}`);
+        assert.deepEqual(await saveDelivery(async () => ({ data: bytes.toString("base64") }), destination), { path: destination });
+        assert.deepEqual(readFileSync(`${dir}/${name}`), bytes, JSON.stringify(name));
+      }
+      assert.deepEqual(listing(dir), [...FIDELITY_NAMES].sort(), "no trimmed or normalized sibling");
+    });
+  });
+
+  it("never replaces an existing entry, whoever created it and whenever", async () => {
+    await inDir("rustx-save-clobber-", async (dir) => {
+      const existing = join(dir, "existing");
+      writeFileSync(existing, "kept");
+      await assert.rejects(saveDelivery(answer, existing), /already exists/);
+      assert.equal(readFileSync(existing, "utf8"), "kept");
+
+      // Created by another writer while this save was staging.
+      const raced = join(dir, "raced");
+      const writes = parkedWrite(2);
+      const saving = saveDelivery(answer, raced, undefined, writes.files);
+      await writes.parked;
+      writeFileSync(raced, "theirs");
+      writes.release();
+      await assert.rejects(saving, /already exists/);
+      assert.equal(readFileSync(raced, "utf8"), "theirs");
+
+      // Two complete saves admitted to publication together: one publishes.
+      const contested = join(dir, "contested");
+      const admitted = [deferred<void>(), deferred<void>()];
+      const go = deferred<void>();
+      const contender = (index: number) => saveDelivery(
+        async () => ({ data: Buffer.from(`save ${index}`).toString("base64") }),
+        contested,
+        undefined,
+        saveFiles({ link: async (existing, path) => { admitted[index]!.resolve(); await go.promise; return SAVE_FILES.link(existing, path); } }),
+      );
+      const contenders = [contender(0), contender(1)];
+      await Promise.all(admitted.map((gate) => gate.promise));
+      go.resolve();
+      const settled = await Promise.allSettled(contenders);
+      const won = settled.findIndex((result) => result.status === "fulfilled");
+      assert.equal(settled.filter((result) => result.status === "fulfilled").length, 1);
+      assert.match(String((settled[1 - won] as PromiseRejectedResult).reason), /already exists/);
+      assert.equal(readFileSync(contested, "utf8"), `save ${won}`);
+
+      // A symlink, dangling or not, and a directory are entries too; nothing
+      // is created through the link.
+      const target = join(dir, "symlink target");
+      writeFileSync(target, "target");
+      symlinkSync(target, join(dir, "to file"));
+      symlinkSync(join(dir, "nowhere"), join(dir, "dangling"));
+      mkdirSync(join(dir, "a directory"));
+      for (const name of ["to file", "dangling", "a directory"]) {
+        await assert.rejects(saveDelivery(answer, join(dir, name)), /already exists/, name);
+      }
+      assert.equal(readFileSync(target, "utf8"), "target");
+      assert.equal(readlinkSync(join(dir, "to file")), target);
+      assert.equal(existsSync(join(dir, "nowhere")), false, "a dangling link is not followed");
+      assert.deepEqual(readdirSync(join(dir, "a directory")), []);
+      assert.deepEqual(staging(dir), []);
+    });
+  });
+
+  it("fails explicitly, without a fallback, where the filesystem cannot link", async () => {
+    await inDir("rustx-save-nolink-", async (dir) => {
+      for (const code of ["EPERM", "ENOTSUP", "EOPNOTSUPP"]) {
+        const destination = join(dir, `out ${code}`);
+        await assert.rejects(
+          saveDelivery(answer, destination, undefined, saveFiles({ link: async () => { throw failure(code); } })),
+          new RegExp(`cannot publish .* atomically without overwriting \\(${code}\\)`),
+        );
+        assert.equal(existsSync(destination), false);
+      }
+      assert.deepEqual(listing(dir), []);
+    });
+  });
+
+  it("cancellation before publication admission publishes nothing and leaves nothing", async () => {
+    await inDir("rustx-save-cancel-", async (dir) => {
+      let links = 0;
+      const counted = (over: Partial<SaveFiles> = {}, hooks: HandleHooks = {}) =>
+        saveFiles({ link: async (existing, path) => { links += 1; return SAVE_FILES.link(existing, path); }, ...over }, hooks);
+
+      // Before staging begins: the read answered, cancellation won.
+      const beforeStaging = new AbortController();
+      const answered = deferred<{ data: string }>();
+      let staged = 0;
+      const early = saveDelivery(() => answered.promise, join(dir, "early"), beforeStaging.signal,
+        counted({ mkdtemp: async (prefix) => { staged += 1; return SAVE_FILES.mkdtemp(prefix); } }));
+      beforeStaging.abort();
+      answered.resolve(BODY);
+      await assert.rejects(early, (error) => error === beforeStaging.signal.reason);
+      assert.equal(staged, 0, "no staging allocated");
+
+      // During the first write, and between chunks.
+      for (const [name, hook] of [
+        ["first", (abort: AbortController) => async (_call: number, write: () => Promise<Written>) => {
+          abort.abort();
+          return write();
+        }],
+        ["between", (abort: AbortController) => async (call: number, write: () => Promise<Written>) => {
+          const written = await write();
+          if (call === 1) abort.abort();
+          return written;
+        }],
+      ] as const) {
+        const abort = new AbortController();
+        await assert.rejects(
+          saveDelivery(answer, join(dir, name), abort.signal, counted({}, { write: hook(abort) })),
+          (error) => error === abort.signal.reason,
+        );
+      }
+
+      // After sync and close, before admission.
+      const synced = new AbortController();
+      await assert.rejects(
+        saveDelivery(answer, join(dir, "synced"), synced.signal, counted({}, {
+          sync: async (sync) => { await sync(); synced.abort(); },
+        })),
+        (error) => error === synced.signal.reason,
+      );
+
+      // A destination another writer created meanwhile is theirs, untouched.
+      const theirs = new AbortController();
+      const writes = parkedWrite(2);
+      const replaced = saveDelivery(answer, join(dir, "theirs"), theirs.signal, writes.files);
+      await writes.parked;
+      writeFileSync(join(dir, "theirs"), "theirs");
+      theirs.abort();
+      writes.release();
+      await assert.rejects(replaced, (error) => error === theirs.signal.reason);
+      assert.equal(readFileSync(join(dir, "theirs"), "utf8"), "theirs");
+
+      assert.equal(links, 0, "no publication was attempted");
+      assert.deepEqual(listing(dir), ["theirs"], "no partial file and no staging");
+    });
+  });
+
+  it("once publication is dispatched its result decides, and a later cancel never undoes it", async () => {
+    await inDir("rustx-save-dispatched-", async (dir) => {
+      const dispatched = new AbortController();
+      const linked = deferred<void>();
+      const reply = deferred<void>();
+      const destination = join(dir, "dispatched");
+      const saving = saveDelivery(answer, destination, dispatched.signal, saveFiles({
+        link: async (existing, path) => { await SAVE_FILES.link(existing, path); linked.resolve(); await reply.promise; },
+      }));
+      await linked.promise;
+      dispatched.abort();
+      reply.resolve();
+      assert.deepEqual(await saving, { path: destination }, "reported as saved, not cancelled");
+      assert.deepEqual(readFileSync(destination), BODY_BYTES);
+
+      const after = new AbortController();
+      const kept = join(dir, "kept");
+      assert.deepEqual(await saveDelivery(answer, kept, after.signal), { path: kept });
+      after.abort();
+      assert.deepEqual(readFileSync(kept), BODY_BYTES);
+      assert.deepEqual(listing(dir), ["dispatched", "kept"]);
+    });
+  });
+
+  it("a failed write, sync, close or link leaves the destination absent and no staging", async () => {
+    await inDir("rustx-save-fail-", async (dir) => {
+      const cases: [string, SaveFiles, RegExp][] = [
+        ["write", saveFiles({}, { write: async (call, write) => { if (call === 2) throw failure("EIO"); return write(); } }), /EIO/],
+        ["short", saveFiles({}, { write: async () => ({ bytesWritten: 0 }) }), /stopped accepting bytes/],
+        ["sync", saveFiles({}, { sync: async () => { throw failure("EIO"); } }), /EIO/],
+        ["close", saveFiles({}, { close: async (close) => { await close(); throw failure("EIO"); } }), /EIO/],
+        ["link", saveFiles({ link: async () => { throw failure("EIO"); } }), /EIO/],
+        ["mkdtemp", saveFiles({ mkdtemp: async () => { throw failure("EACCES"); } }), /EACCES/],
+      ];
+      for (const [name, files, expected] of cases) {
+        await assert.rejects(saveDelivery(answer, join(dir, name), undefined, files), expected, name);
+      }
+      assert.deepEqual(listing(dir), []);
+    });
+  });
+
+  it("decides an ambiguous link failure by the destination's identity", async () => {
+    await inDir("rustx-save-evidence-", async (dir) => {
+      // The entry exists and names the staged file: that is a publication.
+      const created = join(dir, "created");
+      assert.deepEqual(await saveDelivery(answer, created, undefined, saveFiles({
+        link: async (existing, path) => { await SAVE_FILES.link(existing, path); throw failure("EIO"); },
+      })), { path: created });
+      assert.deepEqual(readFileSync(created), BODY_BYTES);
+
+      // The destination cannot be inspected: the outcome is uncertain, said so.
+      const unknown = join(dir, "unknown");
+      const uncertain = await saveDelivery(answer, unknown, undefined, saveFiles({
+        link: async () => { throw failure("EIO"); },
+        lstat: async () => { throw failure("EACCES"); },
+      })).catch((error: unknown) => error);
+      assert.ok(uncertain instanceof DeliveryUncertainError);
+      assert.equal(uncertain.path, unknown);
+      assert.equal(uncertain.residue, undefined);
+      assert.match(uncertain.message, /outcome unknown/);
+      assert.deepEqual(listing(dir), ["created"]);
+    });
+  });
+
+  it("reports staging that cannot be removed, keeping the publication outcome", async () => {
+    await inDir("rustx-save-residue-", async (dir) => {
+      // Published, then staging cleanup failed: still saved, with a warning.
+      const published = join(dir, "published");
+      const saved = await saveDelivery(answer, published, undefined, saveFiles({ rmdir: async () => { throw failure("EACCES"); } }));
+      assert.equal(saved.path, published);
+      assert.match(String((saved.residue?.cause as Error).message), /EACCES/);
+      assert.deepEqual(readFileSync(published), BODY_BYTES);
+      assert.ok(existsSync(saved.residue!.path), "the staging directory is retained, not deleted recursively");
+
+      // Not published (cancelled), staged name not removable: the original
+      // cancellation is kept as the cause, and the destination is absent.
+      const abort = new AbortController();
+      const kept = await saveDelivery(answer, join(dir, "cancelled"), abort.signal, saveFiles(
+        { unlink: async () => { throw failure("EIO"); } },
+        { sync: async (sync) => { await sync(); abort.abort(); } },
+      )).catch((error: unknown) => error);
+      assert.ok(kept instanceof DeliveryResidueError);
+      assert.equal(kept.cause, abort.signal.reason);
+      assert.match(String((kept.cleanup as Error).message), /EIO/);
+      assert.match(kept.message, /^Nothing was saved/);
+      assert.equal(existsSync(join(dir, "cancelled")), false);
+      assert.ok(existsSync(join(kept.residue, "file")));
+
+      // Someone else's entry inside the staging directory is never removed.
+      const foreign = join(dir, "foreign");
+      const retained = staging(dir);
+      const writes = parkedWrite(2);
+      const saving = saveDelivery(answer, foreign, undefined, writes.files);
+      await writes.parked;
+      const [stage] = staging(dir).filter((name) => !retained.includes(name));
+      const intruder = join(dir, stage!, "not ours");
+      writeFileSync(intruder, "not ours");
+      writes.release();
+      const outcome = await saving;
+      assert.equal(outcome.path, foreign);
+      assert.equal(outcome.residue?.path, join(dir, stage!));
+      assert.match(String((outcome.residue?.cause as Error).message), /ENOTEMPTY|EEXIST/);
+      assert.equal(readFileSync(intruder, "utf8"), "not ours");
+      assert.deepEqual(readFileSync(foreign), BODY_BYTES);
+    });
+  });
+
+  it("rejects a malformed body before allocating anything", async () => {
+    await inDir("rustx-save-malformed-", async (dir) => {
+      await assert.rejects(saveDelivery(async () => ({ data: "!" }), join(dir, "malformed")), /bounded base64/);
+      assert.deepEqual(listing(dir), []);
+    });
+  });
+});
+
+describe("client-local Open", () => {
   it("an Open cancelled before launch launches nothing; after launch it is not undone", async () => {
     const dir = mkdtempSync(join(tmpdir(), "rustx-delivery-open-"));
     try {
       const path = join(dir, "报告 final.md");
       writeFileSync(path, "x");
-      const { lstatSync } = await import("node:fs");
       const leaf = lstatSync(path, { bigint: true });
       const location = { file: REPORT, path, device: leaf.dev.toString(), inode: leaf.ino.toString() };
       const launched: string[] = [];
@@ -336,6 +591,22 @@ describe("client-local delivery actions", () => {
     }), /not the delivered file/);
     await assert.rejects(openDelivery(async () => assert.fail("no opener, no request"), { sharedHost: true }), /no system opener/);
   });
+
+  it("reports an uninspectable local path as such, never as absent", async () => {
+    if (process.getuid?.() === 0) return;
+    await inDir("rustx-open-eacces-", async (dir) => {
+      mkdirSync(join(dir, "sealed"));
+      writeFileSync(join(dir, "sealed", "x"), "x");
+      chmodSync(join(dir, "sealed"), 0o000);
+      try {
+        await assert.rejects(openDelivery(async () => ({ file: REPORT, path: join(dir, "sealed", "x"), device: "1", inode: "2" }), {
+          sharedHost: true, opener: "xdg-open", launch: async () => assert.fail("never launched"),
+        }), /cannot be inspected \(EACCES\)/);
+      } finally {
+        chmodSync(join(dir, "sealed"), 0o700);
+      }
+    });
+  });
 });
 
 describe("/files selector", () => {
@@ -368,7 +639,7 @@ describe("/files selector", () => {
     assert.deepEqual(aborted, [1], "Escape while busy cancels the owned operation");
     selector.settle(0, "info", "obsolete");
     assert.doesNotMatch(selector.render(120).join("\n"), /obsolete/);
-    selector.settle(1, "error", "Cancelled; no file was written or opened");
+    selector.settle(1, "error", "Cancelled; nothing was saved or opened");
     assert.match(selector.render(120).join("\n"), /Cancelled/);
     selector.settle(1, "info", "late duplicate");
     assert.doesNotMatch(selector.render(120).join("\n"), /late duplicate/);
@@ -425,7 +696,7 @@ describe("/files selector", () => {
         assert.equal(destination, name, "the original name, unchanged");
         const bytes = Buffer.from(`${name}\r\n\u0000`, "utf8");
         const target = deliveryDestination(destination!, dir);
-        assert.equal(await saveDelivery(async () => ({ data: bytes.toString("base64") }), target), join(dir, name));
+        assert.deepEqual(await saveDelivery(async () => ({ data: bytes.toString("base64") }), target), { path: join(dir, name) });
         assert.deepEqual(readFileSync(join(dir, name)), bytes);
       }
     } finally {

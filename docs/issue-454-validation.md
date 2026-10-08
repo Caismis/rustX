@@ -94,7 +94,7 @@ between admission and transmission.
 | P1: a produced response could be written after revocation | The response is queued with its `Publication`; `transport::Outgoing` commits it immediately before the physical write, rechecking cancellation, delivery authority and the attachment, and substitutes the same id's typed failure | `delivery_publication_commits_at_the_transport_writer` (real stdio writer parked after native settlement, before commit: credential, detach, close, locate; complementary unrevoked case; unrelated `server/info`; permits restored); `delivery_revocation_before_publication_commit_suppresses_sensitive_responses` |
 | P1: Save prefilled the editable Input with the raw delivered name | `DestinationInput` holds only renderable text (refuses unrenderable `setValue` and whole pastes); the name prefills only when it renders as itself; outcome text is sanitized; `deliveryDestination` has no name fallback | `deliveries.test.ts`: ESC/CSI, OSC, C1, LF, CR, bidi override/isolate, ALM through the real Input render; Unicode/space names prefilled exactly and saved byte-exactly |
 | P1: the location test assumed unlink + recreate yields a new inode | The original stays allocated (renamed aside) while the replacement is created; adds a swap after the owned open, which fails `Replaced` | `location_is_the_verified_leaf_identity_without_a_size_bound`, run 30 times consecutively |
-| P2: retiring `/files` left the operation running | One abort scope per `/files` overlay, retired by `#closeOverlay`, which every ending passes through. Save commits after `sync` + `close` and removes only the device/inode it created. Open commits at the spawn. | `app.test.ts` retirement test (Escape, overlay replacement, snapshot replacement, disconnect, quit; the native read is cancelled and no file appears even when the bytes arrive late); `deliveries.test.ts` Save/Open commit-point orderings |
+| P2: retiring `/files` left the operation running | One abort scope per `/files` overlay, retired by `#closeOverlay`, which every ending passes through. Save's commit is now its atomic `link` (see the Save publication repair below). Open commits at the spawn. | `app.test.ts` retirement test (Escape, overlay replacement, snapshot replacement, disconnect, quit; the native read is cancelled and no file appears even when the bytes arrive late); `deliveries.test.ts` Save/Open commit-point orderings |
 
 Negative controls: with the publication decision forced to `Ok`, the three Rust
 publication/cancellation tests fail. With cancel not cancelling the request token,
@@ -103,6 +103,49 @@ the app retirement test fails on overlay replacement. With the raw `Input` and r
 prefill, the hostile-name test fails on ESC/CSI.
 
 The protocol stays v38: v38 is introduced by this unmerged PR, and main is v37.
+
+## Save publication repair
+
+The review of `956b1f53` found that Save still wrote directly to the destination
+and cleaned up with `lstat` + device/inode compare + `unlink`. Another process could
+replace the destination between the check and the unlink, and Save could report
+success for a destination that no longer named its bytes. Destinations were also
+trimmed, and every `lstat` error counted as absence.
+
+Save is now one staging and publication lifecycle in `delivery-files.ts`. It
+allocates a private 0700 `mkdtemp` directory beside the destination, writes, syncs
+and closes `file` there, and checks cancellation at publication admission. The
+commit is `link(staged, destination)`, which atomically creates a new name and fails
+with `EEXIST` for any existing entry. Cleanup unlinks only the staged name and
+removes only that directory, and it never touches the destination. There is no
+compatibility path or fallback, and the App Server protocol is unchanged.
+
+| Scenario | Synchronization | Result |
+| --- | --- | --- |
+| Complete publication; no visible partial file; staging 0700, removed after success | second chunk write parked on a deferred | destination absent mid-write; exact bytes; `nlink` 1; directory holds only the file |
+| Names `report.md`, ` report.md`, `report.md `, `  report final.md  `, `报告 final.md`, `naïve résumé — v2.txt`; `~/`, absolute, `..` kept | none (pure, then real files) | exact path strings; six distinct files, byte-exact |
+| Existing file; destination created while staging; two complete saves admitted together; symlink; dangling symlink; directory | parked write; both `link` calls gated until both are admitted | `already exists`; existing entries unchanged; exactly one contender publishes; nothing created through a dangling link |
+| `link` unsupported (`EPERM`, `ENOTSUP`, `EOPNOTSUPP`) | injected `link` failure | explicit refusal, destination absent, no staging |
+| Cancel before staging, during the first write, between chunks, after sync before admission; destination created by another writer meanwhile | deferred read; write/sync hooks abort at the exact step | rejects with the abort reason; `link` never called; the other writer's file intact |
+| Cancel after `link` was dispatched; cancel after success | `link` parked after the real link | resolves as saved; file kept |
+| Write, short write, sync, close, `link`, `mkdtemp` failures | injected errors | destination absent, no staging |
+| `link` reports an error but the destination names the staged inode; destination uninspectable (`EACCES`) | injected errors | saved; `DeliveryUncertainError` |
+| Staging cleanup fails after publication; staged name not removable after cancellation; a foreign entry inside staging | injected `rmdir`/`unlink` errors; parked write | saved with residue warning; `DeliveryResidueError` with the original cancellation as cause; foreign entry kept, directory reported |
+| Open path uninspectable | `chmod 000` directory | `cannot be inspected (EACCES)`, not "absent" |
+
+Negative controls, each applied to `delivery-files.ts` alone and then restored:
+
+| Control | Tests that failed |
+| --- | --- |
+| Direct write to the destination with check-then-unlink cleanup | 5, including no visible partial file, no-clobber and cancellation |
+| `rename` as the commit | no-clobber; unsupported filesystem |
+| A failed save unlinks the destination | no-clobber; cancellation (the other writer's file was deleted) |
+| No admission check | cancellation after sync; residue |
+| A cancel after dispatch rolls back | dispatched publication |
+| `trim()` on the destination | spelling; exact-name save |
+| Lexical `path.resolve` | spelling |
+| Cleanup errors swallowed | residue |
+| A link error trusted without inspecting the destination | ambiguous link failure |
 
 ## Validation
 
