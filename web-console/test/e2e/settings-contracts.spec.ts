@@ -91,23 +91,22 @@ reasoning = { default_profile = "deep", profiles = { deep = { enabled = true }, 
     await openSettingsPage(page, 'MCP servers');
     for (const transport of ['http', 'stdio'] as const) {
       await settings.getByRole('button', { name: `MCP implicit-${transport}`, exact: true }).click();
-      await settings.getByRole('button', { name: 'Advanced configuration and permissions', exact: true }).click();
-      const form = settings.getByRole('form', { name: `MCP implicit-${transport}`, exact: true });
-      await expect(form.getByRole('button', { name: new RegExp(`^${transport === 'http' ? 'HTTP' : 'stdio'} Transport$`) })).toBeVisible();
       await expect(settings).not.toContainText('fixture-header-secret');
       await expect(settings).not.toContainText('fixture-env-secret');
+      await settings.getByRole('button', { name: 'JSON', exact: true }).click();
+      const editor = settings.getByLabel('MCP configuration JSON');
+      const config = JSON.parse(await editor.inputValue());
       if (transport === 'http') {
-        await expect(form.getByLabel('MCP command')).toHaveCount(0);
-        await expect(form.getByLabel('Retain existing header keys 1', { exact: true })).toHaveValue('Authorization');
-        await form.getByLabel('MCP URL').fill('https://example.invalid/edited');
+        expect(config.retained_headers).toContain('Authorization');
+        config.definition.url = 'https://example.invalid/edited';
       } else {
-        await expect(form.getByLabel('MCP URL')).toHaveCount(0);
-        await expect(form.getByLabel('Retain existing environment keys 1', { exact: true })).toHaveValue('TOKEN');
-        await form.getByLabel('Working directory').fill(fixture.workspaceA);
+        expect(config.retained_env).toContain('TOKEN');
+        config.definition.cwd = fixture.workspaceA;
       }
-      await form.getByRole('button', { name: `Save MCP implicit-${transport}`, exact: true }).click();
-      await expect(settings.getByText(`MCP implicit-${transport} saved.`)).toBeVisible();
-      await settings.getByRole('button', { name: '← MCP servers', exact: true }).click();
+      await editor.fill(JSON.stringify(config));
+      await settings.getByRole('button', { name: 'Use configuration', exact: true }).click();
+      await settings.getByRole('button', { name: 'Save', exact: true }).click();
+      await expect(settings.getByRole('listitem', { name: `implicit-${transport}`, exact: true })).toBeVisible();
     }
     const mcp = readFileSync(mcpFile, 'utf8');
     expect(mcp).toContain('fixture-header-secret'); expect(mcp).toContain('fixture-env-secret');

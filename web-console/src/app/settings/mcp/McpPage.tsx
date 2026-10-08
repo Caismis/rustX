@@ -28,7 +28,7 @@ export function McpPage({ source, scope, revision, focus, onFocus, scopeControl,
     const config = (owner === 'user' ? source.user_mcp : source.workspace_mcp)?.authored?.[name]?.definition;
     return config ? config.url ? `http · ${config.url}` : `stdio · ${[config.command, ...(config.args ?? [])].join(' ')}` : path;
   };
-  if (focus) return <div className={css.page} data-mcp-page=""><McpEditor key={`${scope}:${focus.name ?? ''}:${focus.mode ?? ''}`} source={source} scope={scope} revision={revision} focus={focus} scopeControl={scopeControl} onAdvanced={name => onFocus({kind:'mcp',name,mode:'permissions'})} close={() => onFocus(undefined)}/></div>;
+  if (focus) return <div className={css.page} data-mcp-page=""><McpEditor key={`${scope}:${focus.name ?? ''}:${focus.mode ?? ''}`} source={source} scope={scope} revision={revision} focus={focus} scopeControl={scopeControl} close={() => onFocus(undefined)}/></div>;
   const filtered = entries.filter(entry => `${entry.name} ${description(entry.name, entry.owner, entry.path)}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const create = () => onFocus({kind:'mcp'});
   const importConfig = () => onFocus({kind:'mcp',mode:'json'});

@@ -11,16 +11,16 @@ import { ExtensionDetail } from '../extensions/ExtensionDetail';
 import { parseMcpJson } from './json';
 import css from './McpPage.module.css';
 
-export function McpEditor({ source, scope, revision, focus, scopeControl, onAdvanced, close }: {
-  source: SourceSettings; scope: SourceScope; revision?: string; focus: PageFocus['mcp']; scopeControl: ReactNode; onAdvanced: (name: string) => void; close: () => void;
+export function McpEditor({ source, scope, revision, focus, scopeControl, close }: {
+  source: SourceSettings; scope: SourceScope; revision?: string; focus: PageFocus['mcp']; scopeControl: ReactNode; close: () => void;
 }) {
   const tx = useTranslation();
   const document = documentAuthoring(scope === 'user' ? source.user_mcp : source.workspace_mcp);
   if (document.state !== 'structured') return <><Button onClick={close}>{tx('settings:catalog.mcp')}</Button><p role="alert">{document.state === 'malformed' ? document.diagnostic : tx('settings:source.not-loaded')}</p></>;
-  return <Editor source={source} scope={scope} revision={revision} focus={focus} scopeControl={scopeControl} onAdvanced={onAdvanced} close={close} document={document}/>;
+  return <Editor source={source} scope={scope} revision={revision} focus={focus} scopeControl={scopeControl} close={close} document={document}/>;
 }
-function Editor({ source, scope, revision, focus, scopeControl, onAdvanced, close, document }: {
-  source: SourceSettings; scope: SourceScope; revision?: string; focus: PageFocus['mcp']; scopeControl: ReactNode; onAdvanced: (name: string) => void; close: () => void;
+function Editor({ source, scope, revision, focus, scopeControl, close, document }: {
+  source: SourceSettings; scope: SourceScope; revision?: string; focus: PageFocus['mcp']; scopeControl: ReactNode; close: () => void;
   document: Extract<ReturnType<typeof documentAuthoring<NonNullable<SourceSettings['user_mcp']['authored']>>>, {state:'structured'}>;
 }) {
   const tx = useTranslation();
@@ -89,7 +89,6 @@ function Editor({ source, scope, revision, focus, scopeControl, onAdvanced, clos
         <Button disabled={unit.busy} onClick={() => {unit.discard();close();}}>{tx('settings:mcp.cancel')}</Button>
       </div>
     </form>
-    {name && <Button size="sm" onClick={() => onAdvanced(name)}>{tx('settings:mcp.advanced')}</Button>}
   </>;
 }
 function MapField({label,value,change}:{label:string;value:Record<string,string>;change:(value:Record<string,string>)=>void}) {

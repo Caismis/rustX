@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { openMcpContractEditor } from './settings-harness';
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { settingsTransactionOwners } from '../src/app/settings/Settings';
@@ -473,7 +474,7 @@ it('S1-14 a confirmed MCP literal-environment save drops the submitted payload o
   fireEvent.click(screen.getByRole('tab', { name: 'MCP servers' }));
   fireEvent.click(screen.getAllByRole('button', { name: /^(＋ )?New$/ })[0]);
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'search' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Advanced configuration and permissions' }));
+  openMcpContractEditor();
   fireEvent.change(screen.getByLabelText('MCP command'), { target: { value: 'search-server' } });
   const literals = within(screen.getByRole('group', { name: 'Literal environment' }));
   fireEvent.change(literals.getByLabelText('Literal environment name'), { target: { value: 'TOKEN' } });

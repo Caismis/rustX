@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { openMcpContractEditor } from './settings-harness';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
@@ -576,7 +577,7 @@ it('S2-07 a new Workspace resource and a Workspace-only definition are worded as
   fireEvent.click(screen.getByRole('tab', { name: 'MCP servers' }));
   fireEvent.click(screen.getAllByRole('button', { name: /^(＋ )?New$/ })[0]);
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'fresh' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Advanced configuration and permissions' }));
+  openMcpContractEditor();
   // Creation is its own explicit gesture: writable at once, no override action.
   expect(definitionState('MCP fresh')).toBe('new');
   expect(disabled(field('MCP command'))).toBe(false);
