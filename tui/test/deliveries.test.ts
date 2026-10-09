@@ -1025,7 +1025,7 @@ describe("atomic Save publication", () => {
       execFileSync("/bin/chmod", ["+a", `user:${me} allow execute,file_inherit,only_inherit`, shared]);
       const policy = aclEntries(shared);
       assert.equal(policy.length, 2, policy.join("\n"));
-      const inherited = [`user:${me} inherited allow execute`, "user:nobody inherited allow read,write"];
+      const inherited = ["user:nobody inherited allow read,write", `user:${me} inherited allow execute`].sort();
       try {
         const destination = join(shared, "报告 final.md");
         const writes = parkedWrite(2);
