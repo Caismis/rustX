@@ -60,4 +60,7 @@ label { display: grid; gap: 5px; font-size: 12px; }
 [data-conversation-scroll] { overflow-anchor: none; }
 [data-conversation-scroll] .chat-reading-surface { position: static; flex: 1 0 auto; min-height: auto; }
 [data-conversation-scroll] .conversation-scroll { overflow: visible; flex: 1 0 auto; min-height: auto; margin-right: 0; scrollbar-gutter: auto; padding-bottom: 0; }
-.conversation-panel:has([data-conversation-scroll]) > .chat-return-latest { bottom: calc(var(--dsh-composer-height, 0px) + 16px); }
+/* Floating chrome is a sibling of its scrollport, including inside the
+   resident parent-session surface. Only scrollports with a composer need
+   its clearance; Agent transcripts keep their own bottom alignment. */
+[data-conversation-scroll]:has([data-composer-seat]) ~ .chat-return-latest { bottom: calc(var(--dsh-composer-height, 0px) + 16px); }
