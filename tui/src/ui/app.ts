@@ -107,6 +107,7 @@ import {
   launchOpener,
   localEffect,
   openDelivery,
+  residueText,
   saveDelivery,
   systemOpener,
   type LocalEffect,
@@ -1638,7 +1639,7 @@ export class RustxTuiApp {
           );
           const text = `Saved ${record.file.name} to ${saved.path}`;
           return saved.residue === undefined ? text
-            : `${text}; warning: its staged file (created at ${saved.residue.path}) was not removed (${compactDiagnostic(saved.residue.cause)})`;
+            : `${text}; warning: ${residueText(saved.residue.path, saved.residue.staged)} (${compactDiagnostic(saved.residue.cause)})`;
         }
         const requested = await openDelivery(() => session.locateDelivery(record, signal), {
           sharedHost,

@@ -1130,12 +1130,15 @@ a model request.
   synced, then appears at the destination in one step. Existing files,
   directories and symlinks are never overwritten, and a cancelled or failed save
   leaves no partial file at the destination. "Saved" means the save created the
-  destination and checked that it holds the very file it wrote. Anyone who can
+  destination and checked that it holds the very file it wrote. The hidden
+  file, and so the saved file, is private to you (mode `0600`) whatever your
+  umask; `chmod` it to share it. Anyone who can
   write that directory may rename or replace it later. If that directory changes
   under the save (for example the hidden file is moved, or the directory is
   renamed), the save never reports more than it can show: it is "saved" only if
   the destination holds its own file, otherwise "not saved" or "unknown", and a
-  hidden file left behind is reported with the path it was created at. Programs that can write that directory are trusted not to
+  hidden file left behind, or one the save cannot show it removed, is reported
+  with the path it was created at. Programs that can write that directory are trusted not to
   tamper with the save while it runs. Filesystems without hard links (for
   example FAT or exFAT) are refused rather than written unsafely. If the
   filesystem reports an ambiguous error (such as an I/O error) for the final

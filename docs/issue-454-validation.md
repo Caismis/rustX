@@ -380,6 +380,69 @@ Negative controls, each applied alone and restored byte-identical:
 | Server admits one request fewer than 16 | `delivery_cancellation_is_admitted_as_the_sixteenth_in_flight_request` (the connection ends) |
 | Test-side check: 13 requests sent while waiting for 14 parked | the same test, by its liveness bound: the barrier counts, a single arrival does not satisfy it |
 
+## Staged-file permissions and cleanup certainty repair
+
+The review of `30b9c1a1` accepted the Save design and found two gaps.
+
+**P1, staged permissions.** F was created `0666`, so the umask decided its
+mode: `0644` under `0022`, `0666` under `0000`. Other local users could read, and
+under a permissive umask even modify, the staged bytes in a traversable
+destination directory. That widened the trust boundary beyond writers of the
+parent. Invariant: no umask grants group or others access to staged bytes. F is
+now created `0600` by the exclusive `open` itself. A umask only removes bits, and
+there is no later `chmod` window. The published destination is the same inode,
+so it is `0600` too; that is the documented default.
+
+**P2, cleanup certainty.** Cleanup counted an uninspectable destination as one
+of F's links. Consider `link` → `EIO` without creating anything, then `lstat` →
+`EACCES`, then `unlink` → `EIO` without removing anything. F still had
+`nlink = 1`, and cleanup was reported complete. Invariant: cleanup is reported
+complete only on proof. Only a destination seen naming F accounts for a link.
+Cleanup now has three results, carried as `staged: "remains" | "unknown"` on
+`SavedDelivery.residue`, `DeliveryResidueError` and `DeliveryUncertainError`:
+
+- **removed:** the count is at most the proven links.
+- **unknown:** the count cannot be read, or its one extra link might be the
+  uninspectable destination's.
+- **remains:** any other link.
+
+`LocalEffect.residue`, and therefore reporting after `/files` retires, covers
+both `remains` and `unknown`. The publication outcome and its commit point are
+unchanged.
+
+| Publication evidence | Cleanup evidence | Synchronization | Result |
+| --- | --- | --- | --- |
+| Destination names F | unlink succeeds | real files | saved; staged name gone; destination `nlink` 1 |
+| Destination names F | unlink `EIO`, nothing removed | `unlink` seam | saved, residue `remains`; staged and destination one inode, `nlink` 2 |
+| Definite refusal (real `EEXIST`) | unlink succeeds | real files | refused; clean |
+| Definite refusal | unlink `EIO` | `unlink` seam | `DeliveryResidueError` `remains`; staged file holds every byte, `nlink` 1; existing destination unchanged |
+| `link` `EIO` (nothing created), destination absent / foreign | unlink `EIO` | `link` and `unlink` seams | uncertain, residue `remains` |
+| `link` `EIO`, destination `lstat` `EACCES` | unlink `EIO`; real F `nlink` 1 | `link`, `lstat`, `unlink` seams | uncertain, residue **`unknown`**, message says removal could not be established; F on disk with every byte; destination absent; `LocalEffect.residue` set |
+| `link` `EIO`, destination `EACCES` | unlink succeeds, `nlink` 0 | same seams | uncertain, no residue |
+| `link` `EIO`, destination `EACCES` | link count unreadable | handle `stat` seam (second call) | uncertain, residue `unknown` |
+| Destination names F | link count unreadable | handle `stat` seam | saved, residue `unknown` |
+| Destination names F | staged name replaced | `link` seam (case 6 above) | only the handle's facts reported |
+
+Permissions are checked by mode bits on real files. A test inside the runner
+checks the requested creation mode and the mode while a write is parked before
+publication, of the published file, while cancelling after sync, and of a
+residue. Then `test/support/save-under-umask.ts` runs Save in its own child
+process, one per umask `0000`, `0002` and `0022`, so the runner's process-wide
+umask is never changed. In each child, a control file created `0666` proves the
+umask was in force. Mid-write, synced, before-link, published, cancelled and
+residue modes are all `0600`, and a cancelled or refused save leaves no
+destination. The real stdio and WebSocket integration saves assert `0600`. The
+macOS Node CI job runs both files on APFS. A check under another effective user
+would need privileges, so it is not part of the suite.
+
+Negative controls, each applied alone and restored byte-identical:
+
+| Control | Tests that failed |
+| --- | --- |
+| Staged file created `0666` | in-runner privacy test; per-umask child test |
+| Old accounting: an uninspectable destination counts as a proven link | cleanup-evidence test (the combined failure) |
+| An unreadable link count taken as removal | cleanup-evidence test |
+
 ## Validation
 
 See the pull request for the final command list and results; the PR description

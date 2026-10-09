@@ -41,7 +41,8 @@ disappearing. In the TUI each `/files` interaction owns its
 Save/Open: retiring it (Escape, overlay close or replacement, Session focus change,
 snapshot replacement, disconnect, shutdown) cancels the native request and every
 uncommitted local effect. A Save, the same on Linux and macOS, creates one staged
-file beside the destination with `O_CREAT|O_EXCL`; the handle that create returns
+file beside the destination with `O_CREAT|O_EXCL` and mode `0600`, so no umask
+makes the staged or saved bytes group- or world-accessible; the handle that create returns
 is its only ownership evidence, never a name, owner or file type. It writes and
 syncs every byte through that handle and commits by one `link` of the staged name
 to the exact typed destination, which never replaces an existing entry.
@@ -52,8 +53,10 @@ destination, observed after the link, names the device/inode of the file it
 created; it reports refusal only for a definite rejection code, and uncertainty
 otherwise, never "unpublished" because the destination is now absent or foreign.
 Nothing removes the destination. Cleanup is one `unlink` of the staged name, judged
-by the handle's link count: a staged file still linked elsewhere is reported as
-residue, and an absent name is no proof of removal. The trust boundary is the
+by the handle's link count. Only a destination seen naming the file accounts for a
+link. A link an uninspectable destination might explain, or an unreadable count,
+makes cleanup `unknown`. Any other link means the staged file `remains`. Both are
+reported as residue, and an absent name is no proof of removal. The trust boundary is the
 destination's parent. A process that may modify it can substitute the staged name
 between steps, since neither platform links or conditionally removes by
 descriptor. Save cannot prevent that, but never claims more than its handle

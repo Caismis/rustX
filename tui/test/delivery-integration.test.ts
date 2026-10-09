@@ -15,7 +15,7 @@
 
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -158,6 +158,7 @@ describe("committed deliveries through an owned stdio child", { skip: SKIP }, ()
       const destination = deliveryDestination(`saved/${report.file.name}`, fixture.temp.path("."));
       assert.deepEqual(await saveDelivery(() => session.readDelivery(report), destination), { path: destination });
       assert.deepEqual(readFileSync(destination), REPORT_BYTES);
+      assert.equal(statSync(destination).mode & 0o777, 0o600, "private to this user, whatever the umask");
       await assert.rejects(saveDelivery(() => session.readDelivery(data), destination), /already exists/);
       assert.deepEqual(readFileSync(destination), REPORT_BYTES, "existing data is never truncated");
 
@@ -305,6 +306,7 @@ describe("committed deliveries through a remote WebSocket App Server", { skip: S
       const destination = fixture.temp.path("remote-copy.md");
       assert.deepEqual(await saveDelivery(() => session.readDelivery(report), destination), { path: destination });
       assert.deepEqual(readFileSync(destination), REPORT_BYTES);
+      assert.equal(statSync(destination).mode & 0o777, 0o600, "private to this user, whatever the umask");
       assert.deepEqual(readdirSync(fixture.temp.path(".")).filter((name) => name.startsWith(".rustx-save-")), [], "no staging left behind");
       // A remote server path is never interpreted as a local one.
       await assert.rejects(openDelivery(() => assert.fail("no location is requested remotely"), {

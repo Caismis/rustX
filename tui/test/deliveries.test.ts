@@ -25,8 +25,11 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { spawnSync } from "node:child_process";
+import type { BigIntStats } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
 import {
@@ -101,23 +104,31 @@ interface HandleHooks {
   write?: (call: number, proceed: () => Promise<Written>) => Promise<Written>;
   sync?: (proceed: () => Promise<void>) => Promise<void>;
   close?: (proceed: () => Promise<void>) => Promise<void>;
+  /** The `call`th `stat` of the staged file's handle. */
+  stat?: (call: number, proceed: () => Promise<BigIntStats>) => Promise<BigIntStats>;
 }
-/** Save's filesystem operations, plus the staged path it created. */
-type Interposed = SaveFiles & { staged: () => string };
+/** Save's filesystem operations, plus the staged path it created and the
+ * mode it asked that creation for. */
+type Interposed = SaveFiles & { staged: () => string; requested: () => number | undefined };
 /** The real Save filesystem operations, with explicit interposition points
  * on the staged file (the one file Save creates). */
 function saveFiles(over: Partial<SaveFiles> = {}, hooks: HandleHooks = {}): Interposed {
   let staged: string | undefined;
+  let requested: number | undefined;
   return {
     ...SAVE_FILES,
     open: async (path, flags, mode) => {
       staged = path;
+      requested = mode;
       hooks.create?.(path);
       const handle = await SAVE_FILES.open(path, flags, mode);
       const write = handle.write.bind(handle) as (buffer: Uint8Array, offset: number, length: number) => Promise<Written>;
       const sync = handle.sync.bind(handle);
       const close = handle.close.bind(handle);
+      const fstat = handle.stat.bind(handle) as (options: { bigint: true }) => Promise<BigIntStats>;
+      const stat = () => fstat({ bigint: true });
       let writes = 0;
+      let stats = 0;
       Object.assign(handle, {
         write: (buffer: Uint8Array, offset: number, length: number) => {
           writes += 1;
@@ -126,6 +137,10 @@ function saveFiles(over: Partial<SaveFiles> = {}, hooks: HandleHooks = {}): Inte
         },
         sync: () => hooks.sync ? hooks.sync(sync) : sync(),
         close: () => hooks.close ? hooks.close(close) : close(),
+        stat: () => {
+          stats += 1;
+          return hooks.stat ? hooks.stat(stats, stat) : stat();
+        },
       });
       return handle;
     },
@@ -134,6 +149,7 @@ function saveFiles(over: Partial<SaveFiles> = {}, hooks: HandleHooks = {}): Inte
       assert.ok(staged !== undefined, "this save created its staged file");
       return staged;
     },
+    requested: () => requested,
   };
 }
 /** Real files whose `call`th chunk write parks, before writing, until released. */
@@ -930,6 +946,176 @@ describe("atomic Save publication", () => {
       assert.ok(uncertain.residue !== undefined && existsSync(uncertain.residue));
       assert.match(uncertain.message, /; its staged file \(created at .*\) was not removed$/);
       assert.equal(existsSync(join(dir, "uncertain")), false);
+    });
+  });
+
+  it("stages privately at 0600, through a parked write, publication, cancellation and residue", async () => {
+    await inDir("rustx-save-private-", async (dir) => {
+      const privateMode = (path: string) => lstatSync(path).mode & 0o777;
+      // Parked mid-write, before publication: the staged bytes are private.
+      const destination = join(dir, "published");
+      const writes = parkedWrite(2);
+      const saving = saveDelivery(answer, destination, undefined, writes.files);
+      await writes.parked;
+      assert.equal(writes.files.requested(), 0o600, "created 0600, never widened later");
+      assert.equal(privateMode(writes.files.staged()), 0o600);
+      writes.release();
+      await saving;
+      assert.equal(privateMode(destination), 0o600, "the published file is the same private inode");
+
+      // Cancelled after sync: private until removed, and no destination.
+      const abort = new AbortController();
+      let synced = 0;
+      const cancelled = saveFiles({}, { sync: async (sync) => { await sync(); synced = privateMode(cancelled.staged()); abort.abort(); } });
+      await assert.rejects(saveDelivery(answer, join(dir, "cancelled"), abort.signal, cancelled), (error) => error === abort.signal.reason);
+      assert.equal(synced, 0o600);
+      assert.equal(existsSync(join(dir, "cancelled")), false);
+
+      // Cleanup failed: the staged file left behind is still private.
+      const kept = await saveDelivery(answer, join(dir, "kept"), undefined, saveFiles({
+        link: async () => { throw failure("EACCES"); },
+        unlink: async () => { throw failure("EIO"); },
+      })).catch((error: unknown) => error);
+      assert.ok(kept instanceof DeliveryResidueError, String(kept));
+      assert.equal(privateMode(kept.residue), 0o600);
+    });
+  });
+
+  it("no umask makes staged or saved bytes group- or world-accessible (isolated child per umask)", () => {
+    const child = fileURLToPath(new URL("./support/save-under-umask.ts", import.meta.url));
+    for (const mask of [0o000, 0o002, 0o022]) {
+      const label = `umask ${mask.toString(8).padStart(3, "0")}`;
+      const dir = mkdtempSync(join(tmpdir(), "rustx-save-umask-"));
+      try {
+        const run = spawnSync(process.execPath, [child, mask.toString(8), dir], { encoding: "utf8" });
+        assert.equal(run.status, 0, `${label}: ${run.stderr}`);
+        const seen = JSON.parse(run.stdout) as {
+          control: number;
+          published: Record<string, number>;
+          cancelled: Record<string, number | boolean>;
+          residue: Record<string, number | boolean>;
+        };
+        assert.equal(seen.control, 0o666 & ~mask, `${label}: the umask was in force for an ordinary creation`);
+        assert.deepEqual(seen.published, { midWrite: 0o600, synced: 0o600, beforeLink: 0o600, destination: 0o600 }, label);
+        assert.deepEqual(seen.cancelled, { midWrite: 0o600, synced: 0o600, destinationExists: false }, label);
+        assert.deepEqual(seen.residue, { midWrite: 0o600, synced: 0o600, kept: 0o600, destinationExists: false }, label);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("reports cleanup as removed only on evidence: an uninspectable destination proves nothing", async () => {
+    await inDir("rustx-save-cleanup-evidence-", async (dir) => {
+      /** An unlink that fails without removing anything. */
+      const unlinkFails = { unlink: async () => { throw failure("EIO"); } };
+      /** A link that fails ambiguously without creating anything. */
+      const ambiguous = { link: async () => { throw failure("EIO"); } };
+      /** Destination inspection refused for `path` only. */
+      const uninspectable = (path: string) => ({
+        lstat: async (target: string, options: { bigint: true }) => {
+          if (target === path) throw failure("EACCES");
+          return SAVE_FILES.lstat(target, options);
+        },
+      });
+      const outcome = async (name: string, over: Partial<SaveFiles>, hooks: HandleHooks = {}) => {
+        const files = saveFiles(over, hooks);
+        const effect = localEffect();
+        const result = await saveDelivery(answer, join(dir, name), undefined, files, effect).catch((error: unknown) => error);
+        return { result, effect, staged: files.staged(), destination: join(dir, name) };
+      };
+      /** The staged file is still on disk, linked once, holding the saved bytes. */
+      const stillStaged = (staged: string) => {
+        assert.equal(lstatSync(staged).nlink, 1);
+        assert.deepEqual(readFileSync(staged), BODY_BYTES);
+      };
+
+      // Destination names F; unlink succeeds: published, clean.
+      const one = await outcome("one", {});
+      assert.deepEqual(one.result, { path: one.destination });
+      assert.equal(existsSync(one.staged), false);
+      assert.equal(lstatSync(one.destination).nlink, 1);
+      assert.deepEqual(one.effect, { committed: true, residue: false });
+
+      // Destination names F; unlink fails, F keeps its staged link: published with residue.
+      const two = await outcome("two", unlinkFails);
+      assert.equal((two.result as { path: string }).path, two.destination);
+      assert.deepEqual((two.result as { residue?: unknown }).residue, { path: two.staged, staged: "remains", cause: failure("EIO") });
+      assert.equal(identity(two.staged), identity(two.destination));
+      assert.equal(lstatSync(two.destination).nlink, 2);
+      assert.deepEqual(two.effect, { committed: true, residue: true });
+
+      // Definite refusal; unlink succeeds, F has no links: refused, clean.
+      writeFileSync(join(dir, "three"), "kept");
+      const three = await outcome("three", {});
+      assert.match(String(three.result), /already exists/);
+      assert.equal(existsSync(three.staged), false);
+      assert.deepEqual(three.effect, { committed: true, residue: false });
+
+      // Definite refusal; unlink fails, F keeps its staged link: refused with residue.
+      writeFileSync(join(dir, "four"), "kept");
+      const four = await outcome("four", unlinkFails);
+      assert.ok(four.result instanceof DeliveryResidueError, String(four.result));
+      assert.equal(four.result.staged, "remains");
+      assert.match(String(four.result.cause), /already exists/);
+      stillStaged(four.staged);
+      assert.equal(readFileSync(join(dir, "four"), "utf8"), "kept");
+
+      // Ambiguous link error, destination absent or foreign; unlink fails:
+      // uncertain, and the remaining link is attributed to the staged file.
+      writeFileSync(join(dir, "six"), "theirs");
+      for (const name of ["five", "six"]) {
+        const ambiguousThen = await outcome(name, { ...ambiguous, ...unlinkFails });
+        assert.ok(ambiguousThen.result instanceof DeliveryUncertainError, String(ambiguousThen.result));
+        assert.deepEqual(ambiguousThen.result.observed, { kind: name === "five" ? "absent" : "foreign" });
+        assert.equal(ambiguousThen.result.residue, ambiguousThen.staged);
+        assert.equal(ambiguousThen.result.staged, "remains");
+        assert.match(ambiguousThen.result.message, /; its staged file \(created at .*\) was not removed$/);
+        stillStaged(ambiguousThen.staged);
+        assert.equal(ambiguousThen.effect.residue, true);
+      }
+
+      // The combined failure: link EIO without publishing, destination lstat
+      // EACCES, unlink EIO without removing. F, nlink 1, is still on disk; its
+      // one link may be an uninspectable destination's, so cleanup is not
+      // established, and the outcome says so.
+      const seven = await outcome("seven", { ...ambiguous, ...uninspectable(join(dir, "seven")), ...unlinkFails });
+      assert.ok(seven.result instanceof DeliveryUncertainError, String(seven.result));
+      assert.equal(seven.result.observed.kind, "uninspectable");
+      assert.equal(seven.result.residue, seven.staged);
+      assert.equal(seven.result.staged, "unknown", "never reported clean without proof");
+      assert.match(seven.result.message, /; whether its staged file \(created at .*\) was removed could not be established$/);
+      stillStaged(seven.staged);
+      assert.equal(existsSync(seven.destination), false);
+      assert.deepEqual(seven.effect, { committed: true, residue: true }, "owed after /files retires");
+
+      // Uninspectable destination; unlink succeeds, F has no links: established.
+      const eight = await outcome("eight", { ...ambiguous, ...uninspectable(join(dir, "eight")) });
+      assert.ok(eight.result instanceof DeliveryUncertainError, String(eight.result));
+      assert.equal(eight.result.residue, undefined);
+      assert.equal(eight.result.staged, undefined);
+      assert.equal(existsSync(eight.staged), false);
+      assert.deepEqual(eight.effect, { committed: true, residue: false });
+
+      // Uninspectable destination; the link count cannot be read after the
+      // unlink: cleanup is unknown, whatever the unlink did.
+      const nine = await outcome("nine", { ...ambiguous, ...uninspectable(join(dir, "nine")) }, {
+        stat: async (call, stat) => { if (call === 2) throw failure("EIO"); return stat(); },
+      });
+      assert.ok(nine.result instanceof DeliveryUncertainError, String(nine.result));
+      assert.equal(nine.result.staged, "unknown");
+      assert.equal(nine.result.residue, nine.staged);
+      assert.equal(nine.effect.residue, true);
+
+      // A link count that cannot be read after a verified publication is not
+      // proof of removal either.
+      const ten = await outcome("ten", {}, {
+        stat: async (call, stat) => { if (call === 2) throw failure("EIO"); return stat(); },
+      });
+      assert.deepEqual((ten.result as { residue?: unknown }).residue, { path: ten.staged, staged: "unknown", cause: failure("EIO") });
+      assert.deepEqual(readFileSync(ten.destination), BODY_BYTES);
+      // The staged name replaced after publication is case 6 above: only
+      // facts this save's own handle shows are reported.
     });
   });
 

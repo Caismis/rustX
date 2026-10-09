@@ -333,7 +333,7 @@ definitions never touch the filesystem.
   `unlink`, `fstat`):
 
   ```text
-  open(<parent as spelled>/.rustx-save-<128-bit hex>, O_WRONLY|O_CREAT|O_EXCL)   held: F
+  open(<parent as spelled>/.rustx-save-<128-bit hex>, O_WRONLY|O_CREAT|O_EXCL, 0600)   held: F
     -> 64 KiB writes through F (abort? between chunks) -> fsync F
     -> abort?                          publication admission: the last cancellation point
     -> link(staged name, destination)  publication commit: atomic, never replaces an entry
@@ -348,11 +348,12 @@ definitions never touch the filesystem.
 
   **Trust model.** Save protects the user's data against accidents and against
   every process that cannot modify the destination's parent directory: the
-  kernel's permission checks keep such processes away from both the staged name
-  and the destination (in a sticky directory such as `/tmp`, other users cannot
+  kernel's permission checks keep such processes away from the staged name, the
+  destination and, by the staged file's `0600` mode, the staged bytes (in a sticky directory such as `/tmp`, other users cannot
   rename or remove this user's entries). Save does not resist a process that
   *can* modify that parent: this user's own processes, or other users when the
-  parent is group- or world-writable without the sticky bit. Such a process
+  parent is group- or world-writable without the sticky bit. Nor does it
+  resist privileged processes, which bypass permissions. Such a process
   could create, replace or delete the destination directly, so no pathname
   protocol keeps it out. Two of Save's steps take names, because neither
   platform offers a portable call that links a file by descriptor
@@ -361,6 +362,16 @@ definitions never touch the filesystem.
   that excluded actor Save guarantees honesty, not prevention: it never claims
   more than its own handle shows. A matching UID is never treated as proof that
   an object belongs to this save.
+
+  **Permissions.** F is created with mode `0600`. A umask can only remove bits
+  from a creation mode, never add them, so under any umask (`0000`, `0002`,
+  `0022`, …) the staged bytes are never readable or writable by group or
+  others. The mode is set by the creating `open` itself, so there is no
+  window before a later `chmod`. The published destination is the same inode,
+  so the saved file is private to this user too. That is the intended default
+  for delivered content; `chmod` it to share it. Nothing changes a mode after
+  publication. The superuser and this user's other processes keep their
+  access, as with any of this user's files.
 
   **Ownership** is the handle F returned by the exclusive create. `O_EXCL` fails
   on any existing entry, a symlink or a directory included, so F is a file this
@@ -381,12 +392,22 @@ definitions never touch the filesystem.
   and any other link error is reported as is; there is no rename or copy
   fallback.
 
-  **Cleanup** is one `unlink` of the staged name, whatever the outcome. Its
-  result is read from F's own link count, never from the name: F is done when
-  no name links it except, where it may, the destination. A staged file still
-  linked anywhere else (the unlink failed, or someone moved the file) is
-  reported as residue under the name it was created with. An absent staged name
-  is not proof that the file is gone. `unlink` never removes a directory, and
+  **Cleanup** is one `unlink` of the staged name, whatever the outcome, separate
+  from publication. Its result is read from F's own link count, never from the
+  name, and only links the evidence proves are attributed to the destination:
+
+  - **removed**: F's link count is at most the links the destination was *seen*
+    to hold. That is one after a verified publication and zero otherwise.
+  - **unknown**: the count cannot be read, or its one extra link might be an
+    uninspectable destination's. An uninspectable destination is not evidence
+    that it names F, so it never makes cleanup look complete. It only stops the
+    remaining link from being called the staged file's for certain.
+  - **remains**: any other link. The unlink failed, or someone moved the file.
+
+  A file that remains or is unknown is reported as residue (`staged:
+  "remains" | "unknown"`) under the name it was created with, and it counts as
+  a local effect still owed to the user after `/files` retires. An absent
+  staged name is not proof that the file is gone. `unlink` never removes a directory, and
   nothing ever removes the destination. Within the trust model the staged name
   only ever names F. An excluded actor who substitutes that name just before
   the unlink has their entry removed in F's place. That is a limit of pathname
@@ -419,7 +440,10 @@ definitions never touch the filesystem.
      Nothing retries the link or touches the destination; the user inspects it.
 
   The outcomes are distinct: saved; saved with a residue warning; not saved; not
-  saved with residue; outcome unknown, with or without residue. "Saved" states
+  saved with residue; outcome unknown, with or without residue. Each residue is
+  either a staged file that was not removed or one whose removal could not be
+  established. A cleanup result never replaces the publication outcome, and an
+  ambiguous one is reported, never turned into success. "Saved" states
   that this save's link created the destination entry and that, right after,
   the entry named the complete file this save created and wrote. It makes no
   claim about later: anyone who may write the parent can rename or replace that
@@ -479,7 +503,7 @@ aborts just that action. Each outcome belongs to one operation token, so a
 selector never shows a stale or duplicate outcome. Each action records its own
 external effect as it happens (`LocalEffect`): `committed` when Save dispatches its
 link or Open spawns its opener, and `residue` when Save leaves its staged file
-behind.
+behind or cannot show it removed.
 Retirement can stop an action that has not committed but cannot unsay one that
 has. After retirement, an action with a committed effect or residue reports its
 terminal outcome once on the transient surface: saved, not saved, unknown, opener

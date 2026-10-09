@@ -93,7 +93,7 @@ export function decodeDelivery(data: string): Uint8Array {
 export interface LocalEffect {
   /** Save dispatched its link; Open spawned its opener. */
   committed: boolean;
-  /** Save left its staged file linked somewhere besides the destination. */
+  /** Save left its staged file behind, or could not show it removed. */
   residue: boolean;
 }
 export function localEffect(): LocalEffect {
@@ -109,20 +109,38 @@ export interface SavedDelivery {
    * the parent can rename or replace that entry since.
    */
   path: string;
-  /** This Save's staged file, when it is still linked somewhere besides the
-   * destination: where it was created, and why it was kept. */
-  residue?: { path: string; cause: unknown };
+  /** This Save's staged file, when cleanup could not show it removed: where
+   * it was created, what cleanup established, and why. */
+  residue?: { path: string; staged: StagedResidue; cause: unknown };
 }
 
-/** A Save that published nothing but whose staged file is still on disk. */
+/**
+ * What cleanup established about a staged file it could not show removed.
+ * `remains`: the file is still linked by a name the evidence cannot
+ * attribute to the destination. `unknown`: the evidence cannot tell, because
+ * the one remaining link may be an uninspectable destination, or the file's
+ * link count could not be read.
+ */
+export type StagedResidue = "remains" | "unknown";
+
+/** The clause a residue adds to a Save's outcome. */
+export function residueText(path: string, staged: StagedResidue, owner = "its"): string {
+  return staged === "remains"
+    ? `${owner} staged file (created at ${path}) was not removed`
+    : `whether ${owner} staged file (created at ${path}) was removed could not be established`;
+}
+
+/** A Save that published nothing but could not show its staged file removed. */
 export class DeliveryResidueError extends DeliveryActionError {
   /** Where the staged file was created; it may have been moved since. */
   readonly residue: string;
+  readonly staged: StagedResidue;
   readonly cleanup: unknown;
-  constructor(residue: string, cause: unknown, cleanup: unknown) {
-    super(`Nothing was saved, but this save's staged file (created at ${residue}) was not removed`);
+  constructor(residue: string, staged: StagedResidue, cause: unknown, cleanup: unknown) {
+    super(`Nothing was saved, but ${residueText(residue, staged, "this save's")}`);
     this.name = "DeliveryResidueError";
     this.residue = residue;
+    this.staged = staged;
     this.cleanup = cleanup;
     this.cause = cause;
   }
@@ -148,8 +166,15 @@ export class DeliveryUncertainError extends DeliveryActionError {
   /** link(2) reported success; otherwise its error is the `cause`. */
   readonly linked: boolean;
   readonly observed: DestinationObservation;
+  /** Where the staged file was created, when cleanup could not show it removed. */
   readonly residue: string | undefined;
-  constructor(path: string, link: { error: unknown } | undefined, observed: DestinationObservation, residue: string | undefined) {
+  readonly staged: StagedResidue | undefined;
+  constructor(
+    path: string,
+    link: { error: unknown } | undefined,
+    observed: DestinationObservation,
+    residue: { path: string; staged: StagedResidue } | undefined,
+  ) {
     const now = observed.kind === "absent" ? "it is now absent"
       : observed.kind === "foreign" ? "it now names another file"
         : `it cannot be inspected (${errorCode(observed.error) ?? "error"})`;
@@ -157,13 +182,14 @@ export class DeliveryUncertainError extends DeliveryActionError {
       (link === undefined
         ? `Save outcome unknown: linking ${path} succeeded, but ${now}, so this save cannot show it holds the saved bytes`
         : `Save outcome unknown: linking ${path} failed (${errorCode(link.error) ?? "error"}) and ${now}; this save may have created it`) +
-        (residue === undefined ? "" : `; its staged file (created at ${residue}) was not removed`),
+        (residue === undefined ? "" : `; ${residueText(residue.path, residue.staged)}`),
     );
     this.name = "DeliveryUncertainError";
     this.path = path;
     this.linked = link === undefined;
     this.observed = observed;
-    this.residue = residue;
+    this.residue = residue?.path;
+    this.staged = residue?.staged;
     if (link !== undefined) this.cause = link.error;
   }
 }
@@ -253,8 +279,11 @@ export async function saveDelivery(
   signal?.throwIfAborted();
   // Beside the destination, so the link stays on one filesystem. The random
   // name only avoids collisions; O_EXCL is what makes the file this Save's.
+  // 0600 at creation: no umask can widen it, so the staged bytes are never
+  // readable or writable by group or others, and the published file, the same
+  // inode, keeps that mode.
   const staged = childPath(dirname(destination), `.rustx-save-${randomBytes(16).toString("hex")}`);
-  const file = await files.open(staged, O_WRONLY | O_CREAT | O_EXCL, 0o666);
+  const file = await files.open(staged, O_WRONLY | O_CREAT | O_EXCL, 0o600);
   let publication: Publication;
   try {
     const identity = await file.stat({ bigint: true });
@@ -268,14 +297,20 @@ export async function saveDelivery(
   // The outcome and the cleanup are decided, and published bytes were synced
   // before the link, so closing cannot change what this Save did.
   await file.close().catch(() => {});
-  if (!cleanup.ok) effect.residue = true;
+  if (cleanup.staged !== "removed") effect.residue = true;
   switch (publication.kind) {
     case "published":
-      return cleanup.ok ? { path: destination } : { path: destination, residue: { path: staged, cause: cleanup.error } };
+      return cleanup.staged === "removed" ? { path: destination }
+        : { path: destination, residue: { path: staged, staged: cleanup.staged, cause: cleanup.error } };
     case "uncertain":
-      throw new DeliveryUncertainError(destination, publication.link, publication.observed, cleanup.ok ? undefined : staged);
+      throw new DeliveryUncertainError(
+        destination,
+        publication.link,
+        publication.observed,
+        cleanup.staged === "removed" ? undefined : { path: staged, staged: cleanup.staged },
+      );
     case "refused":
-      if (!cleanup.ok) throw new DeliveryResidueError(staged, publication.error, cleanup.error);
+      if (cleanup.staged !== "removed") throw new DeliveryResidueError(staged, cleanup.staged, publication.error, cleanup.error);
       throw publication.error;
   }
 }
@@ -346,36 +381,45 @@ function refusal(error: unknown, destination: string): unknown {
 
 /**
  * The one cleanup: a single unlink of the staged name, whatever the outcome,
- * judged by the staged file's own link count rather than by the name. The
- * file is done when no name links it except, when it may, the destination;
- * one still linked anywhere else (the unlink failed, or the file was moved)
- * is residue. No call removes a name only while it names a given file, so
- * this unlink removes whatever the staged name holds; it never removes a
- * directory, which unlink refuses, and never the destination.
+ * judged by the staged file's own link count rather than by the name.
+ *
+ * Only a destination seen naming the file accounts for one of its links, so
+ * the file is `removed` when its count is at most that. A link an
+ * uninspectable destination might explain is not proof: a count it could
+ * explain is `unknown`, as is a count that cannot be read. Any other link
+ * (the unlink failed, or the file was moved) means the file `remains`. No
+ * call removes a name only while it names a given file, so this unlink
+ * removes whatever the staged name holds; it never removes a directory,
+ * which unlink refuses, and never the destination.
  */
 async function removeStaged(
   files: SaveFiles,
   file: FileHandle,
   staged: string,
   publication: Publication,
-): Promise<{ ok: true } | { ok: false; error: unknown }> {
-  const accounted = publication.kind === "published" ||
-      (publication.kind === "uncertain" && publication.observed.kind === "uninspectable")
-    ? 1n
-    : 0n;
+): Promise<{ staged: "removed" } | { staged: StagedResidue; error: unknown }> {
+  const proven = publication.kind === "published" ? 1n : 0n;
+  const possible = publication.kind === "uncertain" && publication.observed.kind === "uninspectable" ? 1n : 0n;
   let failure: unknown;
   try {
     await files.unlink(staged);
   } catch (error) {
     if (errorCode(error) !== "ENOENT") failure = error;
   }
+  let nlink: bigint;
   try {
-    const { nlink } = await file.stat({ bigint: true });
-    if (nlink <= accounted) return { ok: true };
-    return { ok: false, error: failure ?? new DeliveryActionError("it is linked elsewhere, so it was not removed") };
+    ({ nlink } = await file.stat({ bigint: true }));
   } catch (error) {
-    return { ok: false, error: failure ?? error };
+    return { staged: "unknown", error: failure ?? error };
   }
+  if (nlink <= proven) return { staged: "removed" };
+  if (nlink <= proven + possible) {
+    return {
+      staged: "unknown",
+      error: failure ?? new DeliveryActionError("its remaining link may be the destination, which could not be inspected"),
+    };
+  }
+  return { staged: "remains", error: failure ?? new DeliveryActionError("it is linked elsewhere, so it was not removed") };
 }
 
 function errorCode(error: unknown): string | undefined {
