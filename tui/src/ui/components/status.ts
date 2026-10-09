@@ -384,7 +384,7 @@ export function renderStartup(
   const lines = [
     role.strong("rustX"),
     `${role.meta("model")} ${role.accent(model.model)}`,
-    `${role.meta(`provider ${providerLabel(model)} · ${protocolLabel(model.protocol)}`)} · ${role.meta(contextLabel(state))} · ${role.meta(`reasoning ${describeReasoning(model)}`)}`,
+    `${role.meta(`provider ${providerLabel(model)} · ${protocolLabel(model.protocol)}`)} · ${role.meta(contextLabel(state))} · ${role.meta(`${model.profile == null ? "" : `profile ${model.profile} · `}reasoning ${describeReasoning(model)}`)}`,
   ];
   if (session !== undefined) {
     lines.push(

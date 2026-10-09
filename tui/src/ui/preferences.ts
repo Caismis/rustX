@@ -12,7 +12,7 @@
  *
  * ```text
  * reasoningVisible     a client presentation setting  (do I want to read it?)
- * reasoningProfile     a model request configuration  (what did we ask for?)
+ * profile              a model request configuration  (what did we ask for?)
  * reasoningEnabled     a model request configuration  (was it requested?)
  * ```
  *

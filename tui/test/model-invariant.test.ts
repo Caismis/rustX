@@ -298,7 +298,7 @@ describe("session model A -> B invariant", () => {
     assert.equal(state.sessionModel!.effective.capabilities.reasoning, true);
     assert.equal(state.sessionModel!.effective.reasoningEnabled, true);
     assert.equal(
-      state.sessionModel!.effective.reasoningProfile,
+      state.sessionModel!.effective.profile,
       undefined,
       "no profile is invented for a model that declares none",
     );

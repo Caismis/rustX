@@ -477,7 +477,7 @@ describe("startup and context", () => {
           reasoning: true,
         },
         reasoningEnabled: true,
-        reasoningProfile: "medium",
+        profile: "medium",
       }),
     });
     const rendered = plainText(
@@ -496,7 +496,7 @@ describe("startup and context", () => {
     assert.match(rendered, /model alpha\/model-a/);
     assert.match(rendered, /provider alpha · Responses/);
     assert.match(rendered, /context unreported/);
-    assert.match(rendered, /reasoning on \(profile medium\)/);
+    assert.match(rendered, /profile medium · reasoning on/);
     assert.match(rendered, /session review branch/);
     assert.match(rendered, /Ctrl\+L model/);
     assert.match(rendered, /\/help commands/);

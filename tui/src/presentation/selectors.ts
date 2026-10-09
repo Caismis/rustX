@@ -329,38 +329,46 @@ export function capabilitySummary(invocation: ModelInvocationView): string {
 /**
  * How reasoning stands for one invocation.
  *
- * Reports exactly what rustX published. A reasoning-capable model with no
- * selectable profile is *not* rendered as a profile list: there is no
- * universal off/low/medium/high, and inventing one would make this client a
- * second model-configuration authority.
+ * Reports exactly the semantic state rustX resolved. It is never inferred from
+ * a profile name: there is no universal off/low/medium/high, and inventing one
+ * would make this client a second model-configuration authority.
  */
 export function describeReasoning(invocation: ModelInvocationView): string {
   if (!invocation.capabilities.reasoning) {
     return "unsupported";
   }
-  if (invocation.reasoningProfile !== undefined) {
-    return `${invocation.reasoningEnabled ? "on" : "off"} (profile ${invocation.reasoningProfile})`;
+  if (invocation.profile != null) {
+    return invocation.reasoningEnabled ? "on" : "off";
   }
   return invocation.reasoningEnabled
-    ? "on (runtime default, no selectable profile)"
-    : "off (runtime default, no selectable profile)";
+    ? "on (provider default, no profile)"
+    : "off (provider default, no profile)";
 }
 
 /**
- * The reasoning profile the session *asked for*, as configured.
- *
- * Deliberately separate from {@link describeReasoning}, which reports what is
- * effective, and from a catalog entry's `defaultReasoningProfile`, which is
- * what the catalog would fall back to. Those are three different facts and
- * the UI must never present one as another: a catalog default is not evidence
- * that the session configured anything.
+ * The Model Profile one invocation resolved, exactly as rustX published it.
  */
-export function describeConfiguredReasoning(
+export function describeProfile(invocation: ModelInvocationView): string {
+  return invocation.profile == null
+    ? "none (the model declares no profiles)"
+    : `${invocation.profile}`;
+}
+
+/**
+ * The Model Profile the session *asked for*, as configured.
+ *
+ * Deliberately separate from {@link describeProfile}, which reports what is
+ * effective, and from a catalog entry's `defaultProfile`, which is what the
+ * catalog would fall back to. Those are three different facts and the UI must
+ * never present one as another: a catalog default is not evidence that the
+ * session configured anything.
+ */
+export function describeConfiguredProfile(
   configured: SessionModelConfig,
 ): string {
-  return configured.reasoningProfile === undefined
-    ? "not configured (the runtime decides)"
-    : `profile ${configured.reasoningProfile}`;
+  return configured.profile == null
+    ? "not configured (the model default applies)"
+    : `${configured.profile}`;
 }
 
 /**
