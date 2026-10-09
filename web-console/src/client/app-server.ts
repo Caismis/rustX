@@ -157,6 +157,8 @@ type AttachmentAdmission = (id: string, current: () => boolean) => Promise<false
  * object, never the callback: reinstalling the same callback is a new owner. */
 interface AttachmentAdmissionOwner { readonly admit: AttachmentAdmission }
 interface Pending {
+  /** Pure actor authority, evaluated after caller-owned admission callbacks. */
+  authority?: () => boolean;
   dispatchCurrent?: (() => boolean) | OperationAdmission;
   /** Final validation holding an RPC slot; `timer` is its deadline until send. */
   validation?: AbortController;
@@ -461,7 +463,7 @@ export class AppServerClient {
     if (!valid()) return false;
     if (!owner) throw new Error('No Web attachment admission owner.');
     const allowed = await owner.admit(id, valid);
-    return allowed && valid() && { current: () => valid() && allowed.current(), validate: allowed.validate };
+    return allowed && valid() && { current: () => allowed.current() && valid(), validate: allowed.validate };
   }
   restoreViews(ids: readonly string[]) {
     for (const id of ids.slice(0, 32)) if (!this.state.views[id]) this.lifecycles.restore(id);
@@ -643,6 +645,7 @@ export class AppServerClient {
     // The Session actor owns control admission. Retained targets authorize only
     // lifecycle settlement; live reads and new effects require the exact committed
     // attachment proof, captured once and checked again adjacent to socket send.
+    let authority: (() => boolean) | undefined;
     if ('target' in operation.params && 'session_id' in operation.params.target
       && !READS.has(operation.method) && !(operation.method === 'goal/control' && operation.params.control.action === 'show')
       && operation.method !== 'session/detach' && operation.method !== 'session/switchNode' && operation.method !== 'session/subscribe') {
@@ -650,10 +653,7 @@ export class AppServerClient {
       const admission = this.state.views[id]?.attachmentObservation;
       const current = () => this.isAttachmentControlCurrent(id, admission) && sameTarget(admission?.target, target);
       if (!current()) throw new RequestNotDispatched('Attachment control authority was revoked.');
-      const supplied = dispatchCurrent;
-      dispatchCurrent = typeof supplied === 'object'
-        ? { current: () => current() && supplied.current(), validate: signal => supplied.validate(signal), sent: supplied.sent }
-        : () => current() && (!supplied || supplied());
+      authority = current;
     }
     if (operation.method.startsWith('artifact/') && [...this.pending.values()].filter(item => item.request.method.startsWith('artifact/')).length >= 2) throw new RequestNotDispatched('Artifact transfer capacity reached. Retry after current transfers finish.');
     const lane = requestLane(operation.method);
@@ -673,7 +673,7 @@ export class AppServerClient {
       const params = operation.params;
       const context = { method: operation.method,
         sessionId: 'target' in params && 'session_id' in params.target ? params.target.session_id : 'session_id' in params ? params.session_id : undefined };
-      this.pending.set(id, { request, context, mutation: !READS.has(operation.method), sent: false, expected, resolve, reject, dispatchCurrent, acknowledged: result => acknowledged?.(result as Extract<MethodResult, { type: T }>) });
+      this.pending.set(id, { request, context, mutation: !READS.has(operation.method), sent: false, expected, resolve, reject, dispatchCurrent, authority, acknowledged: result => acknowledged?.(result as Extract<MethodResult, { type: T }>) });
       if (operation.method === 'turn/start' || operation.method === 'turn/steer') this.publishInbound(operation.params.target.session_id);
       this.pump();
     });
@@ -685,7 +685,10 @@ export class AppServerClient {
     return result as Extract<MethodResult, { type: T }>;
   }
   private dispatchAllowed(pending: Pending): boolean {
-    try { return dispatchCurrent(pending); }
+    try {
+      return dispatchCurrent(pending) && (!pending.authority || pending.authority())
+        && !!this.socket && this.pending.get(String(pending.request.id)) === pending && !pending.sent;
+    }
     catch (cause) { this.refuse(pending, cause); return false; }
   }
   private pump() {
@@ -747,7 +750,8 @@ export class AppServerClient {
     this.log.observe('out', generation, raw, pending.context);
     if (requestLane(pending.request.method) === 'rpc') pending.timer = setTimeout(() => this.lose(generation), this.timeoutMs);
     try { socket.send(raw); } catch { this.lose(generation); }
-    if (typeof pending.dispatchCurrent === 'object') pending.dispatchCurrent.sent?.();
+    try { if (typeof pending.dispatchCurrent === 'object') pending.dispatchCurrent.sent?.(); }
+    catch (error) { console.error('App Server dispatch observer failed', error); }
   }
   private receive(data: unknown, generation: number) {
     if (typeof data !== 'string') { this.lose(generation); return; }
@@ -1371,7 +1375,7 @@ export class AppServerClient {
   }
   private demandOutline(id: string, offset: number | undefined, paging: OutlinePagingIntent, userCurrent: () => boolean, automatic = false): Promise<ConversationTurnPage | undefined> {
     const view = this.state.views[id];
-    if (!view || !this.lifecycles.observe(id) || !userCurrent()) return Promise.resolve(undefined);
+    if (!view || !userCurrent() || !this.lifecycles.observe(id)) return Promise.resolve(undefined);
     let read = this.outlineReads.get(id);
     if (read && !read.authority()) { this.retireOutline(id); read = undefined; }
     if (read) {
@@ -1398,7 +1402,7 @@ export class AppServerClient {
   private async runOutline(id: string, read: OutlineRead) {
     const demand = read.active;
     const owned = () => this.outlineReads.get(id) === read && read.authority();
-    const current = () => owned() && !read.pending?.current() && demand.current();
+    const current = () => owned() && !read.pending?.current() && demand.current() && owned();
     let page: ConversationTurnPage | undefined;
     try {
       if (!current()) return;
@@ -1417,7 +1421,7 @@ export class AppServerClient {
       demand.resolve(page);
       if (this.outlineReads.get(id) === read) {
         const pending = read.pending;
-        if (read.authority() && pending?.current()) {
+        if (pending?.current() && owned()) {
           read.active = pending; read.pending = undefined;
           void this.runOutline(id, read);
         } else {
@@ -1434,9 +1438,9 @@ export class AppServerClient {
   /** Native resolves the exact Turn at its outline cut in one bounded read. */
   async navigateTurn(id: string, selection: ConversationTurn | number, userCurrent: () => boolean = () => true) {
     const view = this.state.views[id];
-    if (!view?.history || !this.lifecycles.observe(id) || !userCurrent()) return false;
+    if (!view?.history || !userCurrent() || !this.lifecycles.observe(id)) return false;
     const authority = this.readingAuthority(id), intent = this.invalidateReading(id);
-    const current = () => authority() && this.readingIntents.get(id) === intent && userCurrent();
+    const current = () => userCurrent() && authority() && this.readingIntents.get(id) === intent;
     let turn: ConversationTurn, cut = view.turnOutline?.page?.cut;
     if (typeof selection === 'number') {
       this.setSession(id, { turnNavigation: { intent, pending: `ordinal:${selection}` } });
@@ -1571,7 +1575,7 @@ export class AppServerClient {
     if (!policy) throw new UploadFailure('failed', 'Upload policy unavailable');
     if (!files.length || files.length > policy.max_files_per_transfer || files.some(file => file.size > policy.max_file_bytes) || files.reduce((sum, file) => sum + file.size, 0) > policy.max_transfer_bytes) throw new UploadFailure('failed', 'Selection exceeds native upload policy');
     const admission = this.state.views[id]?.attachmentObservation;
-    const current = () => this.isAttachmentControlCurrent(id, admission) && sameTarget(admission?.target, target) && (!evidence || evidence.current());
+    const current = () => (!evidence || evidence.current()) && this.isAttachmentControlCurrent(id, admission) && sameTarget(admission?.target, target);
     if (!current()) throw new UploadFailure('failed', 'Upload authority changed');
     const read = async () => {
       const outcome = await this.uploadStatus(id, operationId).catch(error => { throw new UploadFailure('uncertain', error); });

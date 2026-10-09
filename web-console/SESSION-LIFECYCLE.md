@@ -247,3 +247,29 @@ Release/Switch, isolate fresh-proof pending state, keep wait/interrupt independe
 and exercise subscriber-triggered Release inside pending-inbound invalidation.
 Seven negative controls fail at their intended assertions on `66417757`; the
 repair adds fifteen deterministic cases without timing sleeps.
+
+
+Caller freshness is not actor authority. Transport retains the captured pure
+control proof separately from caller admission, runs caller predicates first,
+and then checks that exact actor proof plus Pending/socket ownership. Final
+validation repeats this ordering immediately before synchronous send. A callback
+that releases its Session and returns true cannot confer authority on itself.
+Dispatch observer failures are diagnostics, not a second RPC settlement.
+
+Lifecycle freshness executes only in the finite I/O continuation, outside actor
+transitions. After navigation or Host callbacks, admission reads the actor's
+latest context and verifies the original token, generation and intent revision.
+NODE and SETTLED actions use pure actor facts; error completion may carry sampled
+navigation obsolescence to retire an unsent presentation without publishing an
+obsolete error. Correlated native results still settle regardless of freshness.
+ACK presentation callbacks are followed by another observation check.
+
+The predicate regressions hold final validation and instrument the exact final
+send entry. A caller Release returning true sends zero Turns; a navigation Release
+returning true sends zero Attachments, with zero claims and no uncertainty. These
+three assertions (direct, validated, lifecycle) fail on `e9e2ad5b`. Additional
+cases cover reentrant Host proof, ACK freshness, obsolete failure settlement,
+Session isolation and throwing dispatch observers. Upload carrier and Turn
+outline/navigation freshness also recheck the original actor proof after caller
+callbacks; they cannot publish or begin transfer under a revoked scope. Existing transmitted-response,
+synchronous transport failure and diagnostic-isolation tests remain unchanged.

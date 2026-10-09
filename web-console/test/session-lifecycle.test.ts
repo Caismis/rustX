@@ -21,6 +21,7 @@ class Harness {
   host?: ReturnType<typeof deferred<void>>; hostEntered = deferred<void>();
   validation?: ReturnType<typeof deferred<void>>; validationEntered = deferred<void>();
   auto = false;
+  beforeDispatch?: () => void;
   private listeners = new Set<() => void>();
   readonly port: SessionLifecyclePort = {
     resolveNode: async () => ({ node: this.selected, conversation: `conversation-${this.selected}` }),
@@ -45,7 +46,9 @@ class Harness {
   });
   private async rpc<T>(kind: string, admission: Admission, input: Partial<Call> = {}): Promise<T> {
     this.validationEntered.resolve(); if (this.validation) await this.validation.promise;
-    if (!admission.current() || !await admission.validate(new AbortController().signal) || !admission.current()) throw new Failure('unsent');
+    if (!admission.current() || !await admission.validate(new AbortController().signal)) throw new Failure('unsent');
+    this.beforeDispatch?.();
+    if (!admission.current()) throw new Failure('unsent');
     admission.sent?.();
     const call: Call = { kind, generation: this.generation, result: deferred<unknown>(), ...input }; this.calls.push(call);
     for (const notify of this.listeners) notify();
@@ -292,4 +295,52 @@ it('observation status carries exact actor proof; retained cleanup identity cann
   h.system.event('S', { type: 'OBSERVATION', proof, status: 'stale' });
   expect(h.system.observe('S')?.proof).toBe(fresh); expect(h.system.controls('S', fresh)).toBe(true);
   expect(h.calls.map(call => call.kind)).toEqual(['attach', 'detach', 'attach']);
+});
+
+it('Open navigation releasing synchronously at the final predicate cannot dispatch the old token', async () => {
+  const h = new Harness(); h.auto = true; h.validation = deferred<void>();
+  let final = false, release: Promise<unknown> | undefined; const order: string[] = [];
+  h.beforeDispatch = () => { final = true; };
+  const open = h.system.command('S', { kind: 'open', node: 'A', current: () => {
+    if (final && !release) { order.push('navigation'); release = h.command('release'); order.push('released'); }
+    return true;
+  } }); const outcome = open.catch(error => error);
+  await h.validationEntered.promise; const op = h.context.active!; h.validation.resolve();
+  await outcome; await release;
+  expect(order).toEqual(['navigation', 'released']); expect(h.facts.attachmentIntentRevision).toBeGreaterThan(op.revision);
+  expect(h.calls.map(c => c.kind)).toEqual([]); expect(h.claims.size).toBe(0);
+  expect(h.facts).toMatchObject({ attachmentIntent: 'released', attachment: 'detached' }); expect(h.context.unresolved).toBeUndefined();
+  expect(h.system.diagnostics().operations).toBe(0);
+});
+
+
+it('a Host proof cannot restore Open authority revoked inside its own current callback', async () => {
+  const h = new Harness(); let release: Promise<unknown> | undefined;
+  h.port.admit = async () => ({ current: () => { release ??= h.command('release'); return true; }, validate: async () => true });
+  await h.command('open', 'A'); await release;
+  expect(h.calls).toEqual([]); expect(h.claims.size).toBe(0);
+  expect(h.facts).toMatchObject({ attachmentIntent: 'released', attachment: 'detached' });
+  expect(h.system.diagnostics().operations).toBe(0);
+});
+
+it('ACK freshness revocation retains cleanup without calling attached or observing its Snapshot', async () => {
+  const h = new Harness(); let acknowledged = false, release: Promise<unknown> | undefined, published = 0;
+  h.port.observeAttached = async () => { published++; };
+  const open = h.system.command('S', { kind: 'open', node: 'A', current: () => {
+    if (acknowledged) release ??= h.command('release');
+    return true;
+  }, attached: () => { published++; } });
+  const attach = await h.next('attach'); acknowledged = true; h.ack(attach); await open;
+  const detach = await h.next('detach');
+  expect(published).toBe(0); expect(h.claims.size).toBe(1); expect(h.facts.attachmentObservation).toBeUndefined();
+  h.ack(detach); await release;
+  expect(h.calls.map(c => c.kind)).toEqual(['attach', 'detach']); expect(h.claims.size).toBe(0);
+});
+
+it('obsolete navigation failure retires outside actor actions without publishing a current error', async () => {
+  const h = new Harness(); let fresh = true;
+  h.port.admit = async () => { fresh = false; throw new Failure('unsent'); };
+  await expect(h.system.command('S', { kind: 'open', node: 'A', current: () => fresh })).rejects.toThrow('unsent');
+  expect(h.calls).toEqual([]); expect(h.facts.attachment).toBe('detached'); expect(h.facts.error).toBeUndefined();
+  expect(h.system.diagnostics().operations).toBe(0);
 });

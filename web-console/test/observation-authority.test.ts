@@ -237,3 +237,28 @@ it('pending inbound replay during resync observes without restoring control befo
   const ready = published(s, () => view(s).attachment === 'attached'); s.reply(subscription); await ready;
   expect(s.client.isAttachmentControlCurrent('A', proof)).toBe(true); expect(count(s, 'session/snapshot')).toBe(1); expect(count(s, 'session/subscribe')).toBe(1); expect(s.claims()).toHaveLength(1);
 });
+
+
+it.each(['outline', 'navigation'] as const)('reentrant %s freshness cannot publish after releasing its observation', async kind => {
+  const s = await setup();
+  const cut = { conversation_id: 'conversation-A', journal: '10', transcript: '10', mutation_revision: '0' };
+  const turn = { id: { conversation_id: 'conversation-A', attempt_id: 'old-attempt' }, ordinal: 1, cursor: '1', prompt: '', response: '' };
+  s.handlers.set('session/turns', () => ({ type: 'conversation_turns', page: { cut, offset: 0, total: 1, turns: [turn] } }));
+  await s.client.readTurns('A'); s.held.add('session/detach');
+  const method = kind === 'outline' ? 'session/turns' : 'session/transcript'; s.held.add(method);
+  let revoke = false, release: Promise<void> | undefined, released: ReturnType<typeof view> | undefined;
+  const current = () => {
+    if (revoke && !release) { release = s.client.release('A'); released = view(s); }
+    return true;
+  };
+  const work = kind === 'outline' ? s.client.readTurns('A', undefined, current) : s.client.navigateTurn('A', turn, current);
+  const request = await s.waitFor(method, kind === 'outline' ? 2 : 1); revoke = true;
+  if (kind === 'outline') s.reply(request);
+  else s.socket.success(request, { type: 'transcript_window', window: { cut, page: { entries: [entry(1)] }, target: turn.id, target_cursor: '1' } });
+  expect(await work).toBe(kind === 'outline' ? undefined : false);
+  expect(released).toBeDefined(); expect(view(s).history).toBe(released!.history);
+  expect(view(s).turnOutline).toBe(released!.turnOutline); expect(view(s).turnNavigation).toBe(released!.turnNavigation);
+  expect(view(s).attachmentObservation).toBeUndefined(); expect(s.claims()).toHaveLength(1);
+  s.reply(await s.waitFor('session/detach', 1)); await release;
+  expect(s.claims()).toHaveLength(0); expect(count(s, method)).toBe(kind === 'outline' ? 2 : 1); expect(count(s, 'session/detach')).toBe(1);
+});

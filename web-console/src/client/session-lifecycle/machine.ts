@@ -34,7 +34,7 @@ export interface LifecycleContext extends LifecycleInput {
   attachmentResult?: Attached;
 }
 type Intent = { type: 'OPEN' | 'RELEASE' | 'SWITCH_NODE' | 'DELETE' | 'RECOVER' | 'INSPECT_DELETION' | 'RECONNECT'; command: Command };
-type Settled = { type: 'SETTLED'; token: number; outcome: { ok: true; value?: RuntimeClientSessionDeletionResult | { node: string; conversation: string } } | { ok: false; error: unknown } };
+type Settled = { type: 'SETTLED'; token: number; outcome: { ok: true; value?: RuntimeClientSessionDeletionResult | { node: string; conversation: string } } | { ok: false; error: unknown; obsolete?: boolean } };
 export type LifecycleEvent = Intent | Settled
   | { type: 'ADVANCE' }
   | { type: 'SENT' | 'SUBMIT'; token: number }
@@ -81,7 +81,6 @@ function intentCurrent(c: LifecycleContext, op: Operation) {
     && (op.command.kind !== 'open' && op.command.kind !== 'switch' || c.facts.attachmentIntent === 'wanted'
       && c.facts.attachmentIntentRevision === op.revision && !c.facts.deleting);
 }
-function admissible(c: LifecycleContext, op: Operation) { return intentCurrent(c, op) && op.command.current(); }
 function revoke(f: LifecycleFacts): LifecycleFacts { return { ...f, attachmentObservation: undefined, attachmentIntentRevision: f.attachmentIntentRevision + 1 }; }
 function deletion(c: LifecycleContext, result: RuntimeClientSessionDeletionResult): Partial<LifecycleContext> {
   if (result.status === 'deleted' || result.status === 'not_found') {
@@ -96,7 +95,9 @@ function deletion(c: LifecycleContext, result: RuntimeClientSessionDeletionResul
 async function execute(self: { getSnapshot(): { context: LifecycleContext }; send(event: LifecycleEvent): void }, op: Operation) {
   const { port } = self.getSnapshot().context;
   const context = () => self.getSnapshot().context;
-  const current = () => admissible(context(), op);
+  // Caller freshness may synchronously send a lifecycle command. Read actor
+  // authority again after it returns; never carry a context across that callback.
+  const current = () => intentCurrent(context(), op) && op.command.current() && intentCurrent(context(), op);
   const settlement = () => owned(context(), op.token) && context().generation === op.generation;
   const submit = () => self.send({ type: 'SUBMIT', token: op.token });
   const proof: Admission = { current, validate: async () => current(), sent: () => self.send({ type: 'SENT', token: op.token }) };
@@ -117,23 +118,24 @@ async function execute(self: { getSnapshot(): { context: LifecycleContext }; sen
         if (current() && controlCurrent(context(), f.attachmentObservation)) op.command.attached?.(f.target);
       } else {
         const admission = await port.admit(current);
-        if (admission && admission.current()) {
-          const conversation = context().facts.nodeConversationId ?? await port.conversation(node, admission.current);
-          if (admission.current()) {
+        const admitted = () => !!admission && admission.current() && current();
+        if (admission && admitted()) {
+          const conversation = context().facts.nodeConversationId ?? await port.conversation(node, admitted);
+          if (admitted()) {
             self.send({ type: 'NODE', token: op.token, node, conversation });
             submit();
-            const result = await port.attach(node, { current: admission.current, sent: proof.sent, validate: async signal => {
+            const result = await port.attach(node, { current: admitted, sent: proof.sent, validate: async signal => {
               const valid = await admission.validate(signal);
-              if (valid && admission.current()) port.cold(admission.current);
-              return valid;
+              if (valid && admitted()) port.cold(admitted);
+              return valid && admitted();
             } });
             if (settlement()) {
               self.send({ type: 'ATTACH_ACK', token: op.token, result });
               if (result.target.session_id !== context().id || result.target.conversation_id !== conversation || result.snapshot.conversation_id !== conversation) throw new Error('Mismatched attachment identity.');
               const observation = context().facts.attachmentObservation;
               if (controlCurrent(context(), observation)) {
-                if (op.command.current()) op.command.attached?.(result.target);
-                await port.observeAttached(result, () => observationCurrent(context(), observation));
+                if (op.command.current() && controlCurrent(context(), observation)) op.command.attached?.(result.target);
+                if (observationCurrent(context(), observation)) await port.observeAttached(result, () => observationCurrent(context(), observation));
               }
             }
           }
@@ -154,7 +156,13 @@ async function execute(self: { getSnapshot(): { context: LifecycleContext }; sen
     else if (op.command.kind === 'recover') { submit(); value = await port.recover(proof); }
     else value = await port.inspectDeletion(current);
     self.send({ type: 'SETTLED', token: op.token, outcome: { ok: true, value } });
-  } catch (error) { self.send({ type: 'SETTLED', token: op.token, outcome: { ok: false, error } }); }
+  } catch (error) {
+    // Sample caller freshness outside the actor transition. The correlated
+    // completion carries presentation obsolescence, never execution authority.
+    let obsolete = false;
+    if (op.command.kind === 'open') { try { obsolete = !current(); } catch { obsolete = true; } }
+    self.send({ type: 'SETTLED', token: op.token, outcome: { ok: false, error, obsolete } });
+  }
 }
 
 export const sessionLifecycleMachine = setup({
@@ -195,7 +203,7 @@ export const sessionLifecycleMachine = setup({
     sent: assign(({ context, event }) => (event.type === 'SENT' || event.type === 'SUBMIT') && context.active ? { active: { ...context.active, stage: event.type === 'SENT' ? 'sent' as const : 'request' as const },
       ...(event.type === 'SENT' && ['switch', 'delete', 'recover'].includes(context.active.command.kind) ? { residency: undefined, selection: undefined } : {}) } : {}),
     selection: assign(({ context, event }) => event.type === 'SELECTION' && context.active?.generation === context.generation ? { selection: { node: event.node, conversation: event.conversation } } : {}),
-    node: assign(({ context: c, event }) => event.type === 'NODE' && c.active && admissible(c, c.active)
+    node: assign(({ context: c, event }) => event.type === 'NODE' && c.active && intentCurrent(c, c.active)
       ? { active: { ...c.active, node: event.node, conversation: event.conversation ?? c.active.conversation }, facts: { ...c.facts, nodeId: event.node, ...(event.conversation ? { nodeConversationId: event.conversation } : {}) } } : {}),
     attached: assign(({ context: c, event }) => {
       if (event.type !== 'ATTACH_ACK' || !c.active || c.active.generation !== c.generation) return {};
@@ -223,7 +231,7 @@ export const sessionLifecycleMachine = setup({
         if (kind === 'recover') return { unresolved, facts: { ...f, recoveringDeletion: false, error: String(error), ...(classification === 'uncertain' ? { deletionRecovery: undefined } : {}) } };
         if (kind === 'open') {
           const absent = !f.target && (classification === 'unsent' || classification === 'refused' || op.stage === 'preparing');
-          if (absent && !admissible(c, op)) return { facts: { ...f, attachment: c.unresolved ? 'stale' : 'detached', error: undefined } };
+          if (absent && (event.outcome.obsolete || !intentCurrent(c, op))) return { facts: { ...f, attachment: c.unresolved ? 'stale' : 'detached', error: undefined } };
           return { unresolved, facts: { ...f, attachment: 'error', error: String(error) } };
         }
         return { unresolved, facts: { ...f, error: String(error) } };
