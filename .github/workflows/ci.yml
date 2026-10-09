@@ -548,8 +548,9 @@ jobs:
           pnpm run build:host
           pnpm exec vitest run test/desktop-host.test.ts test/document-archive.test.ts test/document-integration.test.ts test/workbench-host.test.ts
       # Client-local Save on the macOS filesystem: exclusive create, hard-link
-      # publication, link-count cleanup and every ownership interleaving, then
-      # byte-exact Save from a real stdio child and a real WebSocket server.
+      # publication, link-count cleanup and every ownership interleaving, 0600
+      # creation under an inherited native ACL (macOS only), then byte-exact
+      # Save from a real stdio child and a real WebSocket server.
       - name: TUI client-local Save (macOS filesystem, stdio and WebSocket)
         working-directory: tui
         env:

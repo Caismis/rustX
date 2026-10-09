@@ -10,7 +10,9 @@
 
 import assert from "node:assert/strict";
 import {
+  accessSync,
   chmodSync,
+  constants,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -25,9 +27,9 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import type { BigIntStats } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
@@ -178,6 +180,11 @@ function failure(code: string): NodeJS.ErrnoException {
 /** The directory's entries; a Save leaves only what it published. */
 function listing(dir: string): string[] {
   return readdirSync(dir).sort();
+}
+/** `path`'s ACL entries as macOS `ls -le` prints them, without indices. */
+function aclEntries(path: string): string[] {
+  const lines = execFileSync("/bin/ls", ["-led", path], { encoding: "utf8" }).split("\n").slice(1);
+  return lines.map((line) => line.replace(/^\s*\d+:\s*/, "")).filter((line) => line !== "");
 }
 function staging(dir: string): string[] {
   return listing(dir).filter((name) => name.startsWith(".rustx-save-"));
@@ -1003,6 +1010,54 @@ describe("atomic Save publication", () => {
         rmSync(dir, { recursive: true, force: true });
       }
     }
+  });
+
+  it("requests 0600 under an inherited macOS ACL, which Save neither strips nor rewrites", { skip: process.platform !== "darwin" && "native macOS ACLs" }, async () => {
+    await inDir("rustx-save-acl-", async (dir) => {
+      const me = userInfo().username;
+      const shared = join(dir, "shared");
+      mkdirSync(shared, { mode: 0o700 });
+      // The chosen directory's sharing policy, set with the system tool and
+      // no privilege: its new files grant another principal read and write,
+      // and this user execute; a 0600 mode grants neither. only_inherit leaves
+      // the directory's own access unchanged.
+      execFileSync("/bin/chmod", ["+a", "user:nobody allow read,write,file_inherit,only_inherit", shared]);
+      execFileSync("/bin/chmod", ["+a", `user:${me} allow execute,file_inherit,only_inherit`, shared]);
+      const policy = aclEntries(shared);
+      assert.equal(policy.length, 2, policy.join("\n"));
+      const inherited = [`user:${me} inherited allow execute`, "user:nobody inherited allow read,write"];
+      try {
+        const destination = join(shared, "报告 final.md");
+        const writes = parkedWrite(2);
+        const saving = saveDelivery(answer, destination, undefined, writes.files);
+        await writes.parked;
+        const staged = writes.files.staged();
+        assert.equal(writes.files.requested(), 0o600);
+        assert.equal(lstatSync(staged).mode & 0o777, 0o600, "the mode bits are exactly the requested 0600");
+        assert.deepEqual(aclEntries(staged).sort(), inherited, "inherited by the create itself, before any byte");
+        writes.release();
+        assert.deepEqual(await saving, { path: destination });
+        assert.deepEqual(readFileSync(destination), BODY_BYTES);
+        assert.equal(lstatSync(destination).mode & 0o777, 0o600);
+        assert.deepEqual(listing(shared), ["报告 final.md"]);
+        // Save added, removed and rewrote no entry, here or on the directory.
+        assert.deepEqual(aclEntries(destination).sort(), inherited);
+        assert.deepEqual(aclEntries(shared), policy);
+        // Effective access is the ACL's and the mode's together. The kernel
+        // grants this user execute on the saved 0600 file through the
+        // inherited entry, which a 0600 file outside that policy lacks. So the
+        // mode alone does not bound access. (Access as `nobody` would need
+        // privilege, so the other entry is shown inherited, not exercised.)
+        accessSync(destination, constants.X_OK);
+        const control = join(dir, "control");
+        writeFileSync(control, "", { mode: 0o600 });
+        assert.throws(() => accessSync(control, constants.X_OK), { code: "EACCES" });
+      } finally {
+        for (const path of [shared, ...readdirSync(shared).map((name) => join(shared, name))]) {
+          execFileSync("/bin/chmod", ["-N", path]);
+        }
+      }
+    });
   });
 
   it("reports cleanup as removed only on evidence: an uninspectable destination proves nothing", async () => {
