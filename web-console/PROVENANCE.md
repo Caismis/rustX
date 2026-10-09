@@ -1823,3 +1823,18 @@ maps native foreground lifecycle to Harness phases and maps only a successful
 committed Tool message's typed `deliveries` to cards. Preview and Download stay
 with the existing PreviewWorkspace and original-byte owners. Inventory hashes and
 dependency closures describe this final source, including the v38 import renames.
+
+## UI optimization: complete MCP creation form
+
+Compared the creation flow with local ZCode `McpServerForm.tsx` at
+`29628c9acdb81b703bbd4080c207a0e7ce5e276e`: show the complete form immediately,
+group optional environment/header settings behind a disclosure, and keep Save
+and Cancel together. Existing Harness-derived settings materials remain the
+visual source; no ZCode runtime or form implementation was copied.
+
+The rustX editor keeps exact argument arrays, native-supported stdio/HTTP
+definitions, environment references and retained-key redaction. Unnamed drafts
+cannot be submitted; changing a new identity moves its draft without writing
+either identity. JSON/form switching preserves the draft, and authoritative
+observed saves return to the list even when React batches the submitting state.
+No timeout, protocol-version, SSE or literal-credential controls are introduced.

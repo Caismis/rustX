@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import {afterEach,expect,it} from 'vitest';
-import {cleanup,fireEvent,render,screen} from '@testing-library/react';
+import {cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import {cfg3Client,cfg3Host} from './cfg3-fixture';
 import {SettingsSurface,settingsReady,openSettingsPage,chooseOption} from './settings-harness';
 import {userSettingsTarget} from '../src/app/settings/projection';
@@ -45,6 +45,83 @@ it('canceling creation does not write a server',async()=>{
  fireEvent.change(screen.getByLabelText('MCP command'),{target:{value:'server'}});
  fireEvent.click(screen.getByRole('button',{name:'Cancel'}));
  expect(screen.getByText('No MCP servers installed')).toBeTruthy();expect(writes(s)).toHaveLength(0);
+});
+it('shows the complete form immediately and keeps fields entered before the name through renaming',async()=>{
+ const s=await open();fireEvent.click(screen.getByRole('button',{name:'＋ New MCP server'}));
+ const save=()=>screen.getByRole('button',{name:/^Save MCP/}) as HTMLButtonElement;
+ expect(screen.getByLabelText('MCP command')).toBeTruthy();
+ expect(screen.getByText('Arguments')).toBeTruthy();
+ expect(screen.getByLabelText('Working directory')).toBeTruthy();
+ expect(screen.getByText('Environment references (optional)')).toBeTruthy();
+ expect(save().disabled).toBe(true);
+ fireEvent.change(screen.getByLabelText('MCP command'),{target:{value:'npx'}});
+ expect(save().disabled).toBe(true);
+ // Even an explicit submit event cannot write an unnamed server.
+ fireEvent.submit(save().closest('form')!);expect(writes(s)).toHaveLength(0);
+ fireEvent.change(screen.getByLabelText('Name'),{target:{value:'first'}});
+ await waitFor(()=>expect((screen.getByLabelText('MCP command') as HTMLInputElement).value).toBe('npx'));
+ fireEvent.change(screen.getByLabelText('Name'),{target:{value:'renamed'}});
+ await waitFor(()=>expect(save().disabled).toBe(false));
+ expect((screen.getByLabelText('MCP command') as HTMLInputElement).value).toBe('npx');
+ fireEvent.click(save());await screen.findByRole('listitem',{name:'renamed'});
+ expect(writes(s)).toHaveLength(1);
+ expect(writes(s)[0].mutation).toMatchObject({kind:'mcp',id:'renamed',authored:{definition:{command:'npx'}}});
+ fireEvent.click(screen.getByRole('button',{name:'＋ New'}));
+ expect((screen.getByLabelText('MCP command') as HTMLInputElement).value).toBe('');
+ fireEvent.change(screen.getByLabelText('Name'),{target:{value:'first'}});
+ expect((screen.getByLabelText('MCP command') as HTMLInputElement).value).toBe('');
+});
+it('JSON edits survive repeated mode selection and are applied when returning to the form',async()=>{
+ const s=await open();fireEvent.click(screen.getByRole('button',{name:'＋ New MCP server'}));
+ fireEvent.change(screen.getByLabelText('Name'),{target:{value:'json-form'}});
+ fireEvent.change(screen.getByLabelText('MCP command'),{target:{value:'original'}});
+ fireEvent.click(screen.getByRole('button',{name:'JSON'}));
+ const json='{"type":"http","url":"https://example.com/mcp"}';
+ fireEvent.change(screen.getByLabelText('MCP configuration JSON'),{target:{value:json}});
+ fireEvent.click(screen.getByRole('button',{name:'JSON'}));
+ expect((screen.getByLabelText('MCP configuration JSON') as HTMLTextAreaElement).value).toBe(json);
+ fireEvent.click(screen.getByRole('button',{name:'Form'}));
+ await waitFor(()=>expect((screen.getByLabelText('MCP URL') as HTMLInputElement).value).toBe('https://example.com/mcp'));
+ fireEvent.click(screen.getByRole('button',{name:/^Save MCP/}));
+ await screen.findByRole('listitem',{name:'json-form'});
+ expect(writes(s)[0].mutation).toMatchObject({id:'json-form',authored:{definition:{type:'http',url:'https://example.com/mcp'}}});
+});
+it('invalid JSON remains editable when switching back to the form',async()=>{
+ const s=await open();fireEvent.click(screen.getByRole('button',{name:'⇩ Import'}));
+ fireEvent.change(screen.getByLabelText('MCP configuration JSON'),{target:{value:'{broken'}});
+ fireEvent.click(screen.getByRole('button',{name:'Form'}));
+ expect((screen.getByLabelText('MCP configuration JSON') as HTMLTextAreaElement).value).toBe('{broken');
+ expect(screen.getByRole('alert').textContent).toContain('Invalid JSON');expect(writes(s)).toHaveLength(0);
+});
+it('an unfinished form can visit JSON and return without being forced to complete it',async()=>{
+ const s=await open();fireEvent.click(screen.getByRole('button',{name:'＋ New MCP server'}));
+ fireEvent.click(screen.getByRole('button',{name:'JSON'}));
+ fireEvent.click(screen.getByRole('button',{name:'Form'}));
+ expect(screen.getByLabelText('MCP command')).toBeTruthy();
+ expect(screen.queryByRole('alert')).toBeNull();expect(writes(s)).toHaveLength(0);
+});
+it('a duplicate name cannot overwrite a server and resolving it preserves the new draft',async()=>{
+ const s=await open();
+ // Create the existing definition through the same native transaction path.
+ fireEvent.click(screen.getByRole('button',{name:'＋ New MCP server'}));
+ fireEvent.change(screen.getByLabelText('Name'),{target:{value:'existing'}});
+ fireEvent.change(screen.getByLabelText('MCP command'),{target:{value:'original'}});
+ fireEvent.click(screen.getByRole('button',{name:/^Save MCP/}));
+ await screen.findByRole('listitem',{name:'existing'});
+ fireEvent.click(screen.getByRole('button',{name:'＋ New'}));
+ fireEvent.change(screen.getByLabelText('MCP command'),{target:{value:'new-command'}});
+ fireEvent.change(screen.getByLabelText('Name'),{target:{value:'existing'}});
+ expect(screen.getByRole('alert').textContent).toContain('already exists');
+ expect((screen.getByRole('button',{name:/^Save MCP/}) as HTMLButtonElement).disabled).toBe(true);
+ fireEvent.submit(screen.getByRole('button',{name:/^Save MCP/}).closest('form')!);
+ expect(writes(s)).toHaveLength(1);
+ fireEvent.change(screen.getByLabelText('Name'),{target:{value:'different'}});
+ await waitFor(()=>expect((screen.getByLabelText('MCP command') as HTMLInputElement).value).toBe('new-command'));
+ fireEvent.click(screen.getByRole('button',{name:/^Save MCP/}));
+ await screen.findByRole('listitem',{name:'different'});
+ expect(writes(s)).toHaveLength(2);
+ expect(s.source.user_mcp.authored!.existing.definition.command).toBe('original');
+ expect(writes(s)[1].mutation).toMatchObject({id:'different',authored:{definition:{command:'new-command'}}});
 });
 it('HTTP authors header references without literal credential fields',async()=>{
  const s=await open();fireEvent.click(screen.getByRole('button',{name:'＋ New MCP server'}));

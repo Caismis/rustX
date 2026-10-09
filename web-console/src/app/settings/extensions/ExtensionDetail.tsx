@@ -87,7 +87,7 @@ export function ExtensionDetail(props: ExtensionDetailProps) {
  * shadows the entire same-name User one — so there is no value to merge and no
  * effective document to reconstruct. An inherited identity authors nothing
  * until an explicit override replaces the whole definition. */
-export function McpDefinition({ source, scope, name }: ExtensionDetailProps) {
+export function McpDefinition({ source, scope, name, editor, submitDisabled, actions }: ExtensionDetailProps & { editor?: boolean; submitDisabled?: boolean; actions?: React.ReactNode }) {
   const tx = useTranslation();
   const catalog = scope === 'user' ? source.user_mcp : source.workspace_mcp;
   // The MCP document is its own native authority: `rustx.toml` being malformed
@@ -103,19 +103,22 @@ export function McpDefinition({ source, scope, name }: ExtensionDetailProps) {
   // the whole document above when it does not parse, so a present MCP identity
   // always has an authored value.
   const authored = mcp.document[name];
-  return <section aria-label={tx('settings:extension-detail.mcp-definition')}><h4>{tx('settings:extension-detail.mcp-definition')}</h4>
-    <p>{tx('settings:extension-detail.a-definition-is-inert-it-is-prepared-and-connected-only-once-som')}</p>
-    <p className={css.hint}>{mcp.path}</p>
+  return <section aria-label={tx('settings:extension-detail.mcp-definition')}>
+    {!editor && <><h4>{tx('settings:extension-detail.mcp-definition')}</h4>
+      <p>{tx('settings:extension-detail.a-definition-is-inert-it-is-prepared-and-connected-only-once-som')}</p>
+      <p className={css.hint}>{mcp.path}</p></>}
     <TypedUnitForm<McpWrite> key={`mcp:${name}`} title={tx('settings:extension-detail.mcp-value', { p0: name })} revision={mcp.revision} authored={authored}
+      submitDisabled={submitDisabled}
+      actions={actions}
       blank={{ definition: { type: 'stdio', command: '', args: [] }, retained_env: [], retained_headers: [] }}
       removalNotice={<p>{tx('settings:extension-detail.nothing-that-is-already-running-is-stopped-by-this-and-no-sessio')}</p>}
       mutation={value => ({ kind: 'mcp', id: name, authored: value })}>
-      {form => <McpFields form={form} />}
+      {form => <McpFields form={form} compact={editor} />}
     </TypedUnitForm>
   </section>;
 }
 
-function McpFields({ form }: { form: import('../forms/bridge').TypedUnitForm<McpWrite> }) {
+function McpFields({ form, compact = false }: { form: import('../forms/bridge').TypedUnitForm<McpWrite>; compact?: boolean }) {
   const tx = useTranslation();
   const Subscribe = form.Subscribe as unknown as (props: { selector: (state: { values: McpWrite }) => string; children: (transport: string) => React.ReactNode }) => React.ReactNode;
   // Choosing a transport replaces the whole definition, exactly as native
@@ -131,18 +134,26 @@ function McpFields({ form }: { form: import('../forms/bridge').TypedUnitForm<Mcp
     <Choice label={tx('settings:extension-detail.transport')} value={transport} options={[['stdio', /* i18n-raw: standard transport identifier */ 'stdio'], ['http', 'HTTP']]}
       onChange={next => { if (next !== transport) setTransport(next); }} />
     {transport === 'http'
-      ? <Text form={form} name="definition.url" label={tx('settings:extension-detail.mcp-url')} required url />
+      ? <Text form={form} name="definition.url" label={tx('settings:extension-detail.mcp-url')} placeholder={tx('settings:mcp.url-placeholder')} required url />
       : <>
-        <Text form={form} name="definition.command" label={tx('settings:extension-detail.mcp-command')} required />
+        <Text form={form} name="definition.command" label={tx('settings:extension-detail.mcp-command')} placeholder={tx('settings:mcp.command-placeholder')} required />
         <Strings form={form} name="definition.args" label={tx('settings:extension-detail.arguments')} />
         <Text form={form} name="definition.cwd" label={tx('settings:extension-detail.working-directory')} />
       </>}
+    {compact ? <details><summary>{tx(transport === 'http' ? 'settings:mcp.headers' : 'settings:mcp.env')}</summary><McpEnvironmentFields form={form} http={transport === 'http'}/></details>
+      : <McpEnvironmentFields form={form} http={transport === 'http'}/>}
+  </>}</Subscribe>;
+}
+
+function McpEnvironmentFields({ form, http }: { form: import('../forms/bridge').TypedUnitForm<McpWrite>; http: boolean }) {
+  const tx = useTranslation();
+  return <>
     <Entries form={form} name="definition.sensitive_env" label={tx('settings:extension-detail.environment-references-variable')} />
-    {transport === 'http' && <Entries form={form} name="definition.sensitive_headers" label={tx('settings:extension-detail.header-references-variable')} />}
+    {http && <Entries form={form} name="definition.sensitive_headers" label={tx('settings:extension-detail.header-references-variable')} />}
     <p>{tx('settings:mcp.references-only')}</p>
     <Strings form={form} name="retained_env" label={tx('settings:extension-detail.retain-existing-environment-keys')} />
     <Strings form={form} name="retained_headers" label={tx('settings:extension-detail.retain-existing-header-keys')} />
-  </>}</Subscribe>;
+  </>;
 }
 
 /** One named Agent's complete profile document.

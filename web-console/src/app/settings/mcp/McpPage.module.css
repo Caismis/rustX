@@ -34,6 +34,10 @@
 .modes { display:flex; align-items:center; flex:none; padding:3px; border-radius:18px; background:var(--dsw-alias-bg-module-platform); }
 .form { border:.5px solid var(--dsw-alias-border-l2); border-radius:16px; padding:12px 16px; min-width:0; background:var(--dsw-alias-bg-module-platform); }
 .form fieldset { border:0; padding:0; margin:0; min-width:0; }
+.page .form form { border:0; padding:0; background:none; }
+.form form > fieldset > legend { display:none; }
+.form details { margin-top:12px; }
+.form summary { cursor:pointer; color:var(--dsw-alias-label-secondary); font-size:13px; }
 .top { display:flex; justify-content:space-between; align-items:center; gap:16px; }
 .top > label { width:240px; min-width:0; }
 .scope { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--dsw-alias-label-secondary); }

@@ -273,9 +273,9 @@ export function useUnitEditing<T>({ authored, authoredPresent = authored !== und
  *
  * The frame renders the actions; it never owns them. Every one of them is a
  * message to the unit's transaction actor. */
-function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice, children }: {
+function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice, children, submitDisabled = false, actions }: {
   title: string; unit: UnitEditing<T>; redacted?: boolean; removable: boolean;
-  removalNotice?: ReactNode; children: ReactNode;
+  removalNotice?: ReactNode; children: ReactNode; submitDisabled?: boolean; actions?: ReactNode;
 }) {
   const tx = useTranslation();
   const workspace = unit.scope === 'workspace';
@@ -296,7 +296,7 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
   const owner = workspace ? tx('settings:extension-detail.workspace') : tx('settings:extension-detail.user');
   return <form ref={card} tabIndex={-1} aria-label={title} className={css.unit} data-definition={unit.definition} data-draft={unit.draft || undefined}
     data-authored-value={unit.definition === 'authored' ? unit.unparsed ? 'unparsed' : 'parsed' : undefined}
-    onSubmit={event => { event.preventDefault(); unit.submit(); }}>
+    onSubmit={event => { event.preventDefault(); if (!submitDisabled) unit.submit(); }}>
     <fieldset disabled={unit.busy}><legend>{title}</legend>
       {unit.configUnit && unit.facts.authored.state !== 'unavailable' && <>
         {unit.facts.authored.state === 'invalid' && <p role="alert" className={css.error}>{tx('settings:bridge.authored-source-is-invalid')}{' '}{unit.facts.authored.diagnostic}</p>}
@@ -328,7 +328,7 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
       {unit.committed && <p role="status">{tx('settings:bridge.saved-native-application-proceeds-automatically')}</p>}
       <UnitOutcomeNotice title={title} outcome={unit.outcome} />
       <div className={css.actions}>
-        <Button variant="primary" type="submit" disabled={!unit.draft || !unit.admitted}>{tx('settings:bridge.save')}{' '}{title}</Button>
+        <Button variant="primary" type="submit" disabled={submitDisabled || !unit.draft || !unit.admitted}>{tx('settings:bridge.save')}{' '}{title}</Button>
         {/* Authoring an absent unit is always an explicit gesture, never
             something rendering it does. For a Workspace it is an override of
             the inherited value; for User it starts this scope's own authored
@@ -356,6 +356,7 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
             settle={card} onConfirm={() => unit.submit(true)} /></span>)}
         {unit.intent && <Button type="button" onClick={unit.discard}>{tx('settings:bridge.discard-draft')}</Button>}
         {unit.reviewNeeded && <Button type="button" onClick={unit.review}>{tx('settings:bridge.use-reviewed-revision')}</Button>}
+        {actions}
       </div>
     </fieldset>
   </form>;
@@ -441,9 +442,9 @@ export function UnitForm<T>({ title, children, removable = true, removalNotice, 
  *    the transaction owns; this component never calls a native operation.
  *
  * There is therefore exactly one value called the draft, and the actor owns it. */
-export function TypedUnitForm<T>({ title, children, removable = true, removalNotice, ...options }: UnitOptions<T> & {
+export function TypedUnitForm<T>({ title, children, removable = true, removalNotice, submitDisabled, actions, ...options }: UnitOptions<T> & {
   title: string; children: (form: TypedUnitForm<T>) => ReactNode;
-  removable?: boolean; removalNotice?: ReactNode;
+  removable?: boolean; removalNotice?: ReactNode; submitDisabled?: boolean; actions?: ReactNode;
 }) {
   const unit = useUnitEditing(options);
   // The value this form last pushed into the transaction actor. Comparing the
@@ -477,7 +478,7 @@ export function TypedUnitForm<T>({ title, children, removable = true, removalNot
     reflected.current = unit.displayed;
     form.reset(unit.displayed);
   }, [form, unit.displayed]);
-  return <UnitShell title={title} unit={unit} redacted={options.redacted} removable={removable} removalNotice={removalNotice}>
+  return <UnitShell title={title} unit={unit} redacted={options.redacted} removable={removable} removalNotice={removalNotice} submitDisabled={submitDisabled} actions={actions}>
     {children(form)}
   </UnitShell>;
 }
