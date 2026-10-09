@@ -35,8 +35,10 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
   const tabs = workspace.getByRole('tab');
   const liveWorkers = () => page.evaluate(() => (window as any).previewObservation.workers.size);
   const liveUrls = () => page.evaluate(() => (window as any).previewObservation.urls.size);
-  const opener = (name: string, index = 0) => page.getByRole('button', { name: `Preview ${name}`, exact: true }).nth(index);
-  const open = async (name: string, index = 0) => { await opener(name, index).click(); await expect(panel).toBeVisible(); };
+  // Harness delivery summaries show four cards per result until expanded.
+  const expandDeliveries = async () => { for (const toggle of await page.getByRole('button', { name: /^(Show all \d+ delivered files|展开全部 \d+ 个交付文件)$/ }).all()) await toggle.click(); };
+  const opener = (name: string, index = 0) => page.getByRole('button', { name: `Preview ${name} in sidebar`, exact: true }).nth(index);
+  const open = async (name: string, index = 0) => { await expandDeliveries(); await opener(name, index).click(); await expect(panel).toBeVisible(); };
   const download = async (control: Locator, name: string, bytes: Buffer) => {
     const waiting = page.waitForEvent('download'); await control.click(); const result = await waiting;
     expect(result.suggestedFilename()).toBe(name);
@@ -286,12 +288,12 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     while (await tabs.count()) await workspace.getByRole('button', { name: /^关闭预览 / }).first().click();
     await expect(chinesePanel).not.toBeVisible(); await expect.poll(liveWorkers).toBe(0); await expect.poll(liveUrls).toBe(0);
     expect(await page.evaluate(() => document.activeElement !== document.body && !document.activeElement?.closest('[inert]'))).toBe(true);
-    await page.getByRole('button', { name: '预览 sample.pdf', exact: true }).first().click();
+    await expandDeliveries(); await page.getByRole('button', { name: '在侧边栏预览 sample.pdf', exact: true }).first().click();
     await expect.poll(liveWorkers).toBe(1);
     expect(Number(await tabs.first().getAttribute('data-preview-tab'))).toBeGreaterThan(Math.max(...beforeSession.map(Number)));
     await tabs.first().focus(); await page.keyboard.press('Delete');
     await expect.poll(liveWorkers).toBe(0); await expect.poll(liveUrls).toBe(0);
-    await expect(page.getByRole('button', { name: '预览 sample.pdf', exact: true }).first()).toBeFocused();
+    await expect(page.getByRole('button', { name: '在侧边栏预览 sample.pdf', exact: true }).first()).toBeFocused();
     const counts = await page.evaluate(() => { const state = (window as any).previewObservation; return { workers: state.maximumWorkers, urls: state.maximumUrls, duplicate: state.duplicateRevocations }; });
     expect(counts).toEqual({ workers: 2, urls: 3, duplicate: 0 });
     expect((await fixture.control('requests')).requests).toHaveLength(modelRequests);

@@ -1,11 +1,20 @@
 //! WebSocket admission and framing. Each admitted socket gets its own endpoint.
-use super::{MAX_MESSAGE_BYTES, WRITE_TIMEOUT, failure};
+use super::{MAX_MESSAGE_BYTES, Outbound, WRITE_TIMEOUT, failure};
 use crate::{app_server::connection::AppServerConnection, app_server::host::AppServerHost};
 use futures_util::{SinkExt, StreamExt};
-use std::{io, sync::Arc, time::Duration};
-use tokio::{net::TcpListener, task::JoinSet};
+use std::{
+    io,
+    sync::{Arc, Mutex, MutexGuard},
+    task::{Context, Poll, ready},
+    time::Duration,
+};
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    net::TcpListener,
+    task::JoinSet,
+};
 use tokio_tungstenite::{
-    accept_hdr_async_with_config,
+    WebSocketStream, accept_hdr_async_with_config,
     tungstenite::{
         Message,
         handshake::server::{Request, Response},
@@ -54,6 +63,100 @@ impl Credential {
             ));
         }
         Ok(Self(value))
+    }
+}
+
+/// One WebSocket stream, shared by a connection's reader and its writer in
+/// place of `SplitStream`/`SplitSink`.
+///
+/// `SplitSink::start_send` only parks a frame in the sink's own slot, which a
+/// later flush forwards to tungstenite once it obtains the shared lock; a
+/// frame in that slot is neither undecided nor accepted. Here the writer has
+/// no slot. Each side holds the stream for one non-suspending poll, and the
+/// writer hands a record to tungstenite inside its own locked poll
+/// ([`Self::poll_hand_off`]): the record is either still the writer's
+/// undecided [`Outbound`], or tungstenite has taken its frame.
+pub(crate) struct Socket<S> {
+    stream: Mutex<WebSocketStream<S>>,
+    /// Set when one side found the stream held by the other and waited.
+    #[cfg(test)]
+    pub(crate) waited: tokio::sync::watch::Sender<bool>,
+}
+
+impl<S: AsyncRead + AsyncWrite + Unpin> Socket<S> {
+    pub(crate) fn new(stream: WebSocketStream<S>) -> Self {
+        Self {
+            stream: Mutex::new(stream),
+            #[cfg(test)]
+            waited: tokio::sync::watch::channel(false).0,
+        }
+    }
+
+    fn lock(&self) -> MutexGuard<'_, WebSocketStream<S>> {
+        #[cfg(test)]
+        if self.stream.try_lock().is_err() {
+            self.waited.send_replace(true);
+        }
+        self.stream.lock().expect("WebSocket stream")
+    }
+
+    pub(crate) fn poll_next(
+        &self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Message, tokio_tungstenite::tungstenite::Error>>> {
+        self.lock().poll_next_unpin(cx)
+    }
+
+    pub(crate) async fn next(
+        &self,
+    ) -> Option<Result<Message, tokio_tungstenite::tungstenite::Error>> {
+        std::future::poll_fn(|cx| self.poll_next(cx)).await
+    }
+
+    /// Hands `outbound` to tungstenite, returning the record as handed over.
+    ///
+    /// Only once every earlier frame, and any pong the reader queued, has
+    /// gone to the socket and tungstenite is ready is the record decided and
+    /// handed over, by tungstenite's synchronous `start_send` under the same
+    /// lock. That acceptance is the WebSocket publication point. tungstenite
+    /// writes the frame to the socket at once (its write buffer size is 0);
+    /// what the socket does not take stays in tungstenite's buffer, owned by
+    /// the transport, and is never retracted.
+    pub(crate) fn poll_hand_off(
+        &self,
+        cx: &mut Context<'_>,
+        outbound: &mut Outbound,
+    ) -> Poll<io::Result<String>> {
+        let mut stream = self.lock();
+        ready!(stream.poll_flush_unpin(cx)).map_err(io::Error::other)?;
+        ready!(stream.poll_ready_unpin(cx)).map_err(io::Error::other)?;
+        outbound
+            .poll_hand_off(|record| {
+                Poll::Ready(
+                    stream
+                        .start_send_unpin(Message::Text(record.into()))
+                        .map_err(io::Error::other),
+                )
+            })
+            .map_ok(|(record, ())| record)
+    }
+
+    pub(crate) async fn flush(&self) -> io::Result<()> {
+        std::future::poll_fn(|cx| self.lock().poll_flush_unpin(cx))
+            .await
+            .map_err(io::Error::other)
+    }
+
+    /// Hands one record over and flushes it.
+    pub(crate) async fn send(&self, mut outbound: Outbound) -> io::Result<()> {
+        std::future::poll_fn(|cx| self.poll_hand_off(cx, &mut outbound)).await?;
+        self.flush().await
+    }
+
+    pub(crate) async fn close(&self) -> io::Result<()> {
+        std::future::poll_fn(|cx| self.lock().poll_close_unpin(cx))
+            .await
+            .map_err(io::Error::other)
     }
 }
 
@@ -123,6 +226,44 @@ pub(crate) async fn serve_listener(
     result
 }
 
+/// What one authenticated handshake admitted. Only transport credentials
+/// produce these; nothing in a later JSON payload can.
+enum Admission {
+    /// The private one-read Product Host lane and its native authority.
+    ProductHost(CancellationToken),
+    /// The ordinary lane, with delivery access when its separate credential was offered.
+    Ordinary(Option<CancellationToken>),
+}
+
+fn admit(host: &AppServerHost, credential: &Credential, request: &Request) -> Option<Admission> {
+    let offered: Vec<_> = request
+        .headers()
+        .get_all("sec-websocket-protocol")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(',').map(str::trim))
+        .collect();
+    if request.uri().query().is_some() {
+        return None;
+    }
+    if request.uri().path() == crate::app_server::product_host::PATH {
+        return host
+            .authenticate_product_host(&offered)
+            .map(Admission::ProductHost);
+    }
+    if request.uri().path() != "/"
+        || !offered.contains(&SUBPROTOCOL)
+        || !credential.offered(&offered, "rustx-token.")
+    {
+        return None;
+    }
+    // Delivery access is additive to, never a substitute for, the ordinary
+    // transport credential. A wrong one fails closed instead of downgrading.
+    host.authenticate_delivery_access(&offered)
+        .ok()
+        .map(Admission::Ordinary)
+}
+
 pub(crate) async fn connection<S>(
     socket: S,
     host: AppServerHost,
@@ -137,43 +278,23 @@ where
         .max_frame_size(Some(MAX_MESSAGE_BYTES))
         .write_buffer_size(0)
         .max_write_buffer_size(MAX_MESSAGE_BYTES + 1024);
-    let trusted = Arc::new(std::sync::Mutex::new(None));
-    let admitted = trusted.clone();
+    let admission = Arc::new(std::sync::Mutex::new(None));
+    let admitted = admission.clone();
     let handshake_host = host.clone();
     #[allow(clippy::result_large_err)]
     // tungstenite requires this concrete handshake response type.
     let callback = move |request: &Request, mut response: Response| {
-        let offered: Vec<_> = request
-            .headers()
-            .get_all("sec-websocket-protocol")
-            .iter()
-            .filter_map(|value| value.to_str().ok())
-            .flat_map(|value| value.split(',').map(str::trim))
-            .collect();
-        let selected = if request.uri().query().is_none()
-            && request.uri().path() == crate::app_server::product_host::PATH
-        {
-            if let Some(authority) = handshake_host.authenticate_product_host(&offered) {
-                *admitted.lock().expect("host handshake") = Some(authority);
-                Some(crate::app_server::product_host::SUBPROTOCOL)
-            } else {
-                None
-            }
-        } else if request.uri().path() == "/"
-            && request.uri().query().is_none()
-            && offered.contains(&SUBPROTOCOL)
-            && credential.offered(&offered, "rustx-token.")
-        {
-            Some(SUBPROTOCOL)
-        } else {
-            None
-        };
-        let Some(selected) = selected else {
+        let Some(admission) = admit(&handshake_host, &credential, request) else {
             return Err(http::Response::builder()
                 .status(401)
                 .body(Some("Unauthorized".into()))
                 .expect("constant response"));
         };
+        let selected = match admission {
+            Admission::ProductHost(_) => crate::app_server::product_host::SUBPROTOCOL,
+            Admission::Ordinary(_) => SUBPROTOCOL,
+        };
+        *admitted.lock().expect("handshake admission") = Some(admission);
         response.headers_mut().insert(
             "sec-websocket-protocol",
             http::HeaderValue::from_static(selected),
@@ -190,12 +311,17 @@ where
     .map_err(|_| failure("WebSocket handshake deadline exceeded"))?
     .map_err(io::Error::other) } => socket?,
     };
-    let authority = trusted.lock().expect("host handshake").take();
-    if let Some(authority) = authority {
-        return crate::app_server::product_host::serve(socket, host, authority, shutdown).await;
-    }
-    let (mut writer, reader) = socket.split();
-    let incoming = reader
+    let admitted = admission.lock().expect("handshake admission").take();
+    let delivery = match admitted {
+        Some(Admission::ProductHost(authority)) => {
+            return crate::app_server::product_host::serve(socket, host, authority, shutdown).await;
+        }
+        Some(Admission::Ordinary(delivery)) => delivery,
+        None => return Err(failure("WebSocket admission missing")),
+    };
+    let socket = Socket::new(socket);
+    let socket = &socket;
+    let incoming = futures_util::stream::poll_fn(|cx| socket.poll_next(cx))
         .take_while(|message| std::future::ready(!matches!(message, Ok(Message::Close(_)))))
         .filter_map(|message| async move {
             match message {
@@ -205,21 +331,22 @@ where
                 Err(error) => Some(Err(io::Error::other(error))),
             }
         });
-    let endpoint = Arc::new(AppServerConnection::new(host));
+    let endpoint = Arc::new(match delivery {
+        Some(authorization) => AppServerConnection::with_delivery_access(host, authorization),
+        None => AppServerConnection::new(host),
+    });
     let result = super::serve(
         endpoint.clone(),
         incoming,
         |mut receiver| async move {
-            while let Some(record) = receiver.recv().await {
-                tokio::time::timeout(WRITE_TIMEOUT, writer.send(Message::Text(record.into())))
+            while let Some(outbound) = receiver.next().await {
+                tokio::time::timeout(WRITE_TIMEOUT, socket.send(outbound))
                     .await
-                    .map_err(|_| failure("WebSocket write deadline exceeded"))?
-                    .map_err(io::Error::other)?;
+                    .map_err(|_| failure("WebSocket write deadline exceeded"))??;
             }
-            tokio::time::timeout(WRITE_TIMEOUT, writer.close())
+            tokio::time::timeout(WRITE_TIMEOUT, socket.close())
                 .await
                 .map_err(|_| failure("WebSocket close deadline exceeded"))?
-                .map_err(io::Error::other)
         },
         shutdown,
     )

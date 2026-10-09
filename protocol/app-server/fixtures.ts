@@ -147,6 +147,7 @@ export const fixtures = [
         "multi_session": true,
         "single_writable_controller": true,
         "headless_interactions": true,
+        "delivery_access": false,
         "experimental_methods": []
       }
     }

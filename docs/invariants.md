@@ -12,6 +12,87 @@ socket joins its canceled read before acknowledging clean close; unknown transpo
 settlement keeps admission unavailable. The public authority/protocol contract is
 unchanged. See [preview workspace invariants](preview-workspace.md).
 
+A `present` delivery exists only in the typed `deliveries` of a successfully
+committed canonical Tool-result message (#431/#454). Arguments, Tool output text,
+generic JSON, prose and foreground settlements never become deliveries in any
+client. Delivery metadata is not file authority: Session-file bytes or a native
+location cross the App Server only for a transport-authenticated authority, either
+the Product Host secret lane or a connection's delivery access granted by stdio-owner
+delegation or the separate WebSocket delivery credential. No request field, client
+name, coordinate, path or root list creates or widens it. A connection reaches only
+its own attachments. Close, native credential removal, attachment detach or mapping
+change revoke it at the next fence, and an admitted read releases its native permit
+only on physical settlement. A client interprets a native location locally only on
+a demonstrably shared filesystem; a remote server path is never a client path. See
+[file delivery](file-delivery.md#delivery-access-for-app-server-clients).
+
+Each delivery request has one owner, from registration under its exact request id to
+its publication linearization point: the transport's acceptance of the response, once
+every earlier record has been written. The writer decides the record and offers it in
+one synchronous step, and settles only if the transport accepted. stdio's point is the
+first non-blocking pipe write that takes bytes. WebSocket's is tungstenite's
+synchronous `start_send`, under the stream lock the reader shares; no adapter slot
+holds a frame before it (`SplitSink` is not used). tungstenite writes the frame to the
+socket at once or, when the socket buffer is full, holds it as its one buffered
+message. The step holds the request's state lock and the shared side of the host's
+revocation order. `delivery/cancel` (only for that connection's own id) takes the
+state lock. Every revocation of delivery authority (credential replacement or
+removal, connection revocation and drain, close, attachment detach, Product Host
+disconnect or replacement) runs in the order's exclusive side. Replacing or removing
+the delivery or Product Host credential is one transition: under that exclusive side
+and the credential slot's mutex, the previous grant is dropped, cancelling every token
+it minted, and the next is installed. Authentication, which takes only the slot's
+mutex, sees one side of it, and concurrent rotations take one total order. So a cancellation or
+revocation that completes before the acceptance prevents that response from
+publishing bytes or a native path, including while the transport is backpressured.
+One that overlaps the step waits for the acceptance and is ordered after it. Neither
+lock spans a suspension or an I/O wait. The request still answers exactly once, with a
+typed failure for the same id, after its native work physically settled. A response
+published before cancellation or revocation stands and is never reported as
+unpublished. The Product Host lane publishes through the same owner and order. The TUI client reserves one of a connection's
+16 in-flight request slots for `delivery/cancel` and sends cancellations through it
+in abort order, so ordinary requests can neither block a cancellation nor make it a
+seventeenth request. A refused cancellation ends the connection rather than
+disappearing. In the TUI each `/files` interaction owns its
+Save/Open: retiring it (Escape, overlay close or replacement, Session focus change,
+snapshot replacement, disconnect, shutdown) cancels the native request and every
+uncommitted local effect. A Save, the same on Linux and macOS, creates one staged
+file beside the destination with `O_CREAT|O_EXCL` and mode `0600`, so no umask
+sets a group or other mode bit on the staged or saved file. Mode bits are not effective
+access: the user-chosen destination directory, including an ACL its new files inherit
+(macOS), is trusted policy that Save neither strips nor rewrites. The handle that create returns
+is its only ownership evidence, never a name, owner or file type. It writes and
+syncs every byte through that handle and commits by one `link` of the staged name
+to the exact typed destination, which never replaces an existing entry.
+Cancellation counts only up to that link's dispatch. The staged file is created
+through the destination's own spelling of its parent, so `..` after a symlink
+resolves as for the destination. Save reports publication only when the
+destination, observed after the link, names the device/inode of the file it
+created. It reports refusal only when no link was dispatched: an entry already at
+the destination, or a destination that cannot be inspected, is refused before any
+link, so those refusals are definite. Every other dispatched link is uncertain, never
+"unpublished", whatever its error and whether the destination is now absent or
+foreign, because a network filesystem may answer a retransmission of a link it
+performed (`EEXIST`, `ENOENT`, `EACCES`) and the parent's entries may change between
+steps. Nothing removes the destination. Cleanup is one `unlink` of the staged
+name, judged only by single observations taken after it, never by the publication's
+earlier one. A count of 0, or a destination whose own `lstat` names the file with
+count 1, is `removed`. A count of 2 or more, or the staged name or destination still
+naming it with others, `remains`. Anything else is `unknown`. Both are reported as
+residue, and an absent name is no proof of removal. The trust boundary is the
+destination's parent. A process that may change its entries (including a macOS `delete`
+right on the file) can substitute or remove the staged name
+between steps, since neither platform links or conditionally removes by
+descriptor. Save cannot prevent that, but never claims more than its handle
+shows. "Saved" is a fact
+about the commit, not a promise that the entry keeps its name. An Open commits when
+the OS opener is spawned. It is best effort: its identity check does not bind the
+file the opener later resolves. Each action records its committed effect itself,
+and an outcome owed after retirement is reported once on the transient surface.
+Externally derived names, paths, descriptions and errors never reach the terminal
+unsanitized, and a delivered name becomes an editable destination only when it
+renders as itself.
+
 Pending Inbound owns accepted queue mutation. `(ConversationId, InboundSequence,
 MessageId)` identifies one occurrence, and its native revision is a compare-and-set
 precondition. Mutation and canonical claim are ordered by the durable transaction.

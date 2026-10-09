@@ -23,7 +23,7 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
   const countUrls = () => page.evaluate(() => (window as any).deliveryUrls.size);
   const canonical = page.getByLabel(/^(Canonical conversation|规范对话)$/);
   const panel = page.getByRole('complementary', { name: 'Previews', exact: true });
-  const card = (name: string) => canonical.locator('[data-delivery-card]').filter({ has: page.locator('strong', { hasText: name }) }).first();
+  const card = (name: string) => canonical.locator('[data-delivery-card]').filter({ has: page.locator('[data-presented-name]', { hasText: name }) }).first();
   const close = async () => { await panel.getByRole('button', { name: /^Close preview / }).first().click(); await expect.poll(countUrls).toBe(0); };
   const download = async (link: Locator, name: string, expected: Buffer) => {
     const event = page.waitForEvent('download'); await link.click(); const file = await event;
@@ -44,14 +44,22 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
     await expect(canonical.locator('a[download]')).toHaveCount(0);
     await fixture.release('delivery-before-declaration');
     await expect(canonical.getByText('Delivery finished.', { exact: true })).toBeVisible(); await expectSettled(page);
+    // Harness summary: four cards per committed result until explicitly expanded.
+    await expect(canonical.locator('[data-delivery-card]')).toHaveCount(5);
+    const all = canonical.getByRole('button', { name: 'Show all 6 delivered files', exact: true });
+    await expect(all).toHaveAttribute('aria-expanded', 'false');
+    await all.click();
     await expect(canonical.locator('[data-delivery-card]')).toHaveCount(7);
-    expect(await canonical.locator('[data-delivery-card] strong').allTextContents()).toEqual(['报告 file.md', 'plain 空格.txt', 'source.rs', 'pixel.png', 'data.bin', 'large.txt', '报告 file.md']);
+    expect(await canonical.locator('[data-delivery-card] [data-presented-name]').allTextContents()).toEqual(['报告 file.md', 'plain 空格.txt', 'source.rs', 'pixel.png', 'data.bin', 'large.txt', '报告 file.md']);
+    // The present call rows report runtime-owned phases; cards come only from committed results.
+    await expect(canonical.locator('[data-tool="present"][data-present-phase="error"]')).toHaveCount(1);
+    await expect(canonical.locator('[data-tool="present"][data-present-phase="ok"]')).toHaveCount(2);
     expect(await canonical.innerText()).not.toContain('Duplicate discarded');
     // Cards remain visible while completed activity is folded.
     await expect(card('报告 file.md')).toBeVisible();
     const modelRequests = (await fixture.control('requests')).requests.length; expect(modelRequests).toBe(6);
     const original = readFileSync(join(fixture.workspaceA, '报告 file.md'));
-    await card('报告 file.md').getByRole('button', { name: 'Preview 报告 file.md', exact: true }).focus();
+    await card('报告 file.md').getByRole('button', { name: 'Preview 报告 file.md in sidebar', exact: true }).focus();
     await page.keyboard.press('Enter');
     await expect(panel.getByRole('heading', { name: 'Delivered report' })).toBeVisible();
     await expect(panel.locator('strong', { hasText: 'Original' })).toBeVisible();
@@ -66,13 +74,16 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
       socket.onmessage = event => {
         const reply = JSON.parse(event.data);
         if (reply.id === 4191) socket.send(JSON.stringify({ jsonrpc: '2.0', id: 4192, method: 'session/fileRead', params: { ...read, allowed_roots: [cwd] } }));
-        else if (reply.id === 4192) { socket.close(); resolve(reply.error?.code ?? 0); }
+        else if (reply.id === 4192) socket.send(JSON.stringify({ jsonrpc: '2.0', id: 4193, method: 'delivery/read', params: read }));
+        else if (reply.id === 4193) { socket.close(); resolve(reply.error?.data?.kind === 'session_file_read' && reply.error.data.reason === 'unauthorized' ? -32601 : 0); }
       };
     }), { endpoint: fixture.endpoint, token: fixture.token, read: deliveryRead, cwd: fixture.workspaceA });
-    expect(bypass).toBe(-32601); // All legitimate coordinates and exact cwd still confer no Host authority.
+    // All legitimate coordinates and exact cwd still confer no Host authority; the
+    // removed method stays absent and delivery/read without transport-granted access fails closed.
+    expect(bypass).toBe(-32601);
     await close();
     for (const name of ['plain 空格.txt', 'source.rs', 'pixel.png', 'data.bin', 'large.txt']) {
-      await card(name).getByRole('button', { name: `Preview ${name}`, exact: true }).click();
+      await card(name).getByRole('button', { name: `Preview ${name} in sidebar`, exact: true }).click();
       if (name === 'pixel.png') { await expect(panel.getByRole('img')).toBeVisible(); expect(await panel.getByRole('img').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(1); }
       else if (name === 'data.bin') await expect(panel.getByText('This artifact has no supported inline viewer.')).toBeVisible();
       else await expect(panel.locator('pre')).toBeVisible();
@@ -83,10 +94,10 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
     await expect(panel).not.toBeVisible();
     await expect.poll(countUrls).toBe(0);
     writeFileSync(join(fixture.workspaceA, '报告 file.md'), '# Current mutable report\n');
-    await card('报告 file.md').getByRole('button', { name: 'Preview 报告 file.md', exact: true }).click();
+    await card('报告 file.md').getByRole('button', { name: 'Preview 报告 file.md in sidebar', exact: true }).click();
     await expect(panel.getByRole('heading', { name: 'Current mutable report' })).toBeVisible(); await close();
     unlinkSync(join(fixture.workspaceA, '报告 file.md'));
-    await card('报告 file.md').getByRole('button', { name: 'Preview 报告 file.md', exact: true }).click();
+    await card('报告 file.md').getByRole('button', { name: 'Preview 报告 file.md in sidebar', exact: true }).click();
     await expect(panel.getByRole('alert')).toContainText('file is missing'); await expect(panel.getByRole('button', { name: 'Download artifact', exact: true })).toHaveCount(0);
     writeFileSync(join(fixture.workspaceA, '报告 file.md'), original);
     await panel.getByRole('button', { name: 'Retry preview' }).click();
@@ -97,7 +108,7 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
       await page.setViewportSize({ width, height: 1000 });
       await card('source.rs').scrollIntoViewIfNeeded();
       const before = await viewport.evaluate(el => el.scrollTop);
-      await card('source.rs').getByRole('button', { name: 'Preview source.rs', exact: true }).click();
+      await card('source.rs').getByRole('button', { name: 'Preview source.rs in sidebar', exact: true }).click();
       await expect(panel.locator('pre')).toBeVisible(); await close();
       await expect.poll(() => viewport.evaluate(el => el.scrollTop)).toBeCloseTo(before, 0);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -105,14 +116,14 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
     await page.getByRole('button', { name: '关闭设置', exact: true }).click();
-    await card('source.rs').getByRole('button', { name: '预览 source.rs', exact: true }).click();
+    await card('source.rs').getByRole('button', { name: '在侧边栏预览 source.rs', exact: true }).click();
     const chinese = page.getByRole('complementary', { name: '预览', exact: true });
     await expect(chinese.locator('pre')).toBeVisible();
     await download(chinese.getByRole('button', { name: '下载制品', exact: true }), 'source.rs', readFileSync(join(fixture.workspaceA, 'source.rs')));
     await chinese.getByRole('button', { name: /^关闭预览 / }).first().click(); await expect.poll(countUrls).toBe(0);
     const hostScope = await fixture.workspaceHost.host.listWorkspaces();
     await fixture.workspaceHost.host.removeWorkspace(hostScope, hostScope.workspaces.find(row => row.location === 'root-a')!.id);
-    await card('source.rs').getByRole('button', { name: '预览 source.rs', exact: true }).click();
+    await card('source.rs').getByRole('button', { name: '在侧边栏预览 source.rs', exact: true }).click();
     await expect(chinese.getByRole('alert')).toContainText('not authorized');
     await expect(chinese.getByRole('button', { name: '下载制品', exact: true })).toHaveCount(0);
     await chinese.getByRole('button', { name: /^关闭预览 / }).first().click(); await expect.poll(countUrls).toBe(0);

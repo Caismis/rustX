@@ -407,6 +407,7 @@ describe("what the tool card may hand a terminal", () => {
         lifecycle:
           result === undefined ? { type: "assembled" } : { type: "settled", result },
         committed: result !== undefined,
+        resultCommitted: result !== undefined,
       },
       cardContext,
     );
@@ -528,6 +529,7 @@ describe("what the tool card may hand a terminal", () => {
         argumentsText: '{"action":"create","subject":"\\u001b[8mhidden"}',
         lifecycle: { type: "assembled" },
         committed: false,
+        resultCommitted: false,
       },
       cardContext,
     );
@@ -712,7 +714,7 @@ describe("the todo tool card", () => {
 
   it("shows the runtime's summary and never redraws the whole list", () => {
     const result = renderer.renderResult?.(
-      todoResult(snapshotOf([task(1, "Write the parser")]), "Created #1: Write the parser (pending)"),
+      { ...todoResult(snapshotOf([task(1, "Write the parser")]), "Created #1: Write the parser (pending)"), deliveries: [] },
       { action: "create" },
     );
     assert.deepEqual(result?.summary, ["Created #1: Write the parser (pending)"]);

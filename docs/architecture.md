@@ -16,6 +16,28 @@ managed ArtifactIds remain immutable ArtifactStore identities.
 See [the delivery and safe-preview contract](file-delivery.md) for authorization,
 descriptor containment, mutable history, bounds, and resource lifetimes.
 
+`app_server::delivery_access` is the one native owner of committed-delivery bytes
+and locations (#454). Two transport-authenticated callers enter it: the private
+Product Host lane (`product_host`, which also supplies registered roots) and an
+`AppServerConnection` whose transport granted delivery access (`delivery/read`,
+`delivery/locate`). Transports mint the delivery authority; `connection`
+only routes to its own attachments and registers each request as a
+`delivery_access::Operation` keyed by its exact request id, which
+`delivery/cancel` on the same connection can cancel. The response travels with its
+`Publication` through the bounded outbound queue. The transport writer decides it
+in the same synchronous step in which the transport accepts it (the stdio pipe's
+first bytes, or tungstenite's `start_send` under the WebSocket stream lock that
+`transport::websocket::Socket` shares with the reader), rechecking cancellation,
+delivery authority and the attachment. Every revocation of delivery authority runs
+in the exclusive side of the host's `delivery_access::Revocations`, which
+publication holds shared, so revocations are ordered against publication. Clients consume the same typed committed
+facts. The Web binds them to Harness-derived presentation over its PreviewWorkspace
+owners. The TUI's pure `tool-present` renderer and `/files` selector dispatch
+intents to its own client-local action owner (`delivery-files.ts`). Each
+`/files` overlay owns one abort scope that the app retires through `#closeOverlay`.
+Every way the interaction ends goes through that path, so retiring it cancels the
+native request and any uncommitted local effect.
+
 ## Session preview workspaces (#441)
 
 The browser `PreviewWorkspaceOwner` owns bounded Session-local logical tabs,

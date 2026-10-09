@@ -6,6 +6,10 @@ import type { ArtifactResources } from '../../client/artifacts';
 import { PreviewContext } from './ArtifactPreview';
 import { Button } from '../../presentation/primitives/Button';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
+import { PresentedFileCard, PresentedFiles } from '../../presentation/attachments/PresentedFileCard';
+import cardCss from '../../presentation/attachments/Deliverables.module.css';
+import { IconDownloadOutline16 } from '../../presentation/primitives/icons';
+import { presentedDeliveries, type PresentedDelivery } from '../../bindings/present';
 export const ArtifactContext = createContext<ArtifactResources | undefined>(undefined);
 export function Artifact({ id, name = id, image = false, mimeType }: { id: string; name?: string; image?: boolean; mimeType?: string }) {
   const tx = useTranslation();
@@ -35,16 +39,14 @@ export function Artifact({ id, name = id, image = false, mimeType }: { id: strin
 /** Only successful committed canonical Tool messages contribute cards. */
 export function ToolDeliveries({ messageId, result }: { messageId: string; result: ToolExecutionResult }) {
   const tx = useTranslation(), preview = useContext(PreviewContext);
-  if (result.status.type !== 'success') return null;
-  return <div className="attachment-gallery">{result.deliveries?.map((file, index) => {
-    const artifact = { source: { kind: 'session_file' as const, messageId, index, file }, name: file.name, image: file.mime_type.startsWith('image/'), mimeType: file.mime_type };
-    return <div key={index} data-delivery-card role="group" aria-label={file.name} title={file.path}>
-      <AttachmentCard name={file.name} image={artifact.image} mimeType={file.mime_type} description={file.description} actions={preview && <>
-        <Button size="sm" aria-label={`${tx('artifacts:artifact.preview')} ${file.name}`} onClick={() => preview.openPreview(artifact)}>{tx('artifacts:artifact.preview')}</Button>
-        <Button size="sm" aria-label={`${tx('artifacts:attachment-card.download')} ${file.name}`} onClick={() => preview.download(artifact)}>{tx('artifacts:attachment-card.download')}</Button>
-      </>}/>
-    </div>;
-  })}</div>;
+  const deliveries = presentedDeliveries(messageId, result);
+  const intent = (delivery: PresentedDelivery) => ({ source: { kind: 'session_file' as const, messageId: delivery.messageId, index: delivery.index, file: delivery.file },
+    name: delivery.file.name, image: delivery.file.mime_type.startsWith('image/'), mimeType: delivery.file.mime_type });
+  return <PresentedFiles files={deliveries.map(delivery => ({ key: delivery.key, name: delivery.file.name, path: delivery.file.path, description: delivery.file.description }))}
+    card={view => { const delivery = deliveries.find(item => item.key === view.key)!;
+      return <PresentedFileCard file={view} onPreview={() => preview?.openPreview(intent(delivery))} actions={preview &&
+        <button type="button" className={cardCss.action} aria-label={`${tx('artifacts:attachment-card.download')} ${delivery.file.name}`}
+          title={tx('artifacts:attachment-card.download')} onClick={() => preview.download(intent(delivery))}><IconDownloadOutline16 size={14}/></button>}/>; }}/>;
 }
 
 /** Only typed artifact/image/file facts; arbitrary tool JSON is never interpreted. */

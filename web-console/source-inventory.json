@@ -2078,7 +2078,7 @@
     {
       "upstream": "packages/client/ui-primitives/src/icons/index.tsx",
       "destination": "web-console/src/presentation/primitives/icons/index.tsx",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation #454: Harness IconDeliverDocRegular artwork added as IconDeliverDocOutline14.",
       "upstream_sha256": "0808f16b575502111c00b08181a68da4d065eb6008fd1da4076d458b324bdf78",
       "retained_dependencies": [
         "./props.ts"
@@ -2091,7 +2091,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "dab20ae73fde866385b7b7bc9de8c8a8c63c41b40bb8eb6cf871c49007d3c21b",
+      "local_sha256": "d8d9daade5f5fdf5880de3da3e9bdfbbec032f17b984502a05879c023ba7eb65",
       "classification": "A"
     },
     {
@@ -3315,7 +3315,7 @@
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream_sha256": "664def8bce9e753c3a670f9e9f01fe2280227a0921021e3a08b496f8c5d6effe",
-      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #440: bounded advanced preview composition and translated document controls; native source owners remain authoritative. Aggregate Office boundary repair: bilingual unavailable guidance names systemd user services, cgroup v2 controls and cleanup. Issue #441: bounded Session preview workspace presentation and externally retained view metadata; existing upstream source baseline unchanged. Workspace panel start-page and Session-scoped file/terminal integration; existing preview ownership retained.",
+      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #440: bounded advanced preview composition and translated document controls; native source owners remain authoritative. Aggregate Office boundary repair: bilingual unavailable guidance names systemd user services, cgroup v2 controls and cleanup. Issue #441: bounded Session preview workspace presentation and externally retained view metadata; existing upstream source baseline unchanged. Workspace panel start-page and Session-scoped file/terminal integration; existing preview ownership retained. #454: Harness ui-deliverables presented-file card wording.",
       "destination": "web-console/src/locale/dictionaries/artifacts.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3325,8 +3325,15 @@
         "Host locale persistence",
         "dynamic language registration"
       ],
-      "additional_sources": [],
-      "local_sha256": "92e936fb3689e142130366696b831a9047a65ea82dd9aad72a0998ef1f66b29f"
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-deliverables/src/client/locales.ts",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "treatment": "#454: present row and presented-file card wording, en/zh.",
+          "upstream_sha256": "4840dc1d554a4f2457b51339e9195041b6230822c72fc5b10c8f3c2aad971cdb"
+        }
+      ],
+      "local_sha256": "876d80f01e352387a4419bc2f41fdb594dce3da2526b5b4564be4ce3bcdc4677"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/locales.ts",
@@ -3386,7 +3393,7 @@
       "upstream": "packages/client/ui-workspace/src/client/locales.ts",
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream_sha256": "448cea752f9daa196284e6a8da59c7acd944b3ad05590df5bddc6e153e43c113",
-      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. UI/UX alignment: Harness ask-question row verdict wording.",
+      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. UI/UX alignment: Harness ask-question row verdict wording. #454: Harness ui-deliverables present row wording.",
       "destination": "web-console/src/locale/dictionaries/tools.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3402,9 +3409,15 @@
           "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
           "upstream_sha256": "664def8bce9e753c3a670f9e9f01fe2280227a0921021e3a08b496f8c5d6effe",
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
+        },
+        {
+          "upstream": "packages/client/ui-deliverables/src/client/locales.ts",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "treatment": "#454: present row and presented-file card wording, en/zh.",
+          "upstream_sha256": "4840dc1d554a4f2457b51339e9195041b6230822c72fc5b10c8f3c2aad971cdb"
         }
       ],
-      "local_sha256": "a31243742f029cd4f70208079458418d06428adde34007d1bd0eea1270798258"
+      "local_sha256": "0cbf9a48ca3c5feb8e4126a357d257430887f21bba0ad8302f70f3f250e70506"
     },
     {
       "upstream": "packages/client/ui-sidebar/src/client/locales.ts",
@@ -5678,6 +5691,85 @@
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": []
+    },
+    {
+      "upstream": "packages/client/ui-deliverables/src/client/PresentRow.tsx",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "destination": "web-console/src/presentation/agent/PresentRow.tsx",
+      "upstream_sha256": "5bebbe78a18e62ad3f4da9d2b3931938f056bc53df0b6b3195939108f6fa854b",
+      "classification": "B",
+      "treatment": "#454: Harness PresentRow status/paths summary and expandable result text over the shared DisclosureRow; a rustX adapter supplies the native lifecycle phase. Cordis tool-view props, the Inspect pill and DSH Session events excluded.",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../../locale/react",
+        "../primitives/DisclosureRow",
+        "../primitives/icons",
+        "./PresentRow.module.css",
+        "./Tool.module.css",
+        "./ToolTree.module.css",
+        "react"
+      ],
+      "excluded_dependencies": [
+        "@deepseek-ai/dsh-client-ui-tool ToolCallViewProps",
+        "Cordis slots and PropsLocale",
+        "Harness Inspect navigation"
+      ],
+      "local_sha256": "1df1a482de5e4dc7f1529e47d713c146a0198a8369d8e408d8d1e3c51c13cdc3"
+    },
+    {
+      "upstream": "packages/client/ui-deliverables/src/client/PresentRow.module.css",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "destination": "web-console/src/presentation/agent/PresentRow.module.css",
+      "upstream_sha256": "3bfed0d0ad6bd47d49ca070bfedec611ae355616cf60b19c0c8ec0aed458ed17",
+      "classification": "B",
+      "treatment": "#454: Harness present summary/output styling; the summary flex row and status spacing reuse rustX Tool.module.css; radius-lg resolved to 16px.",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [],
+      "local_sha256": "a443e671c16597cd938f188a4f6a1163b0759c00f28d9c7d87bd836055f7e262"
+    },
+    {
+      "upstream": "packages/client/ui-deliverables/src/client/PresentedFileCard.tsx",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "destination": "web-console/src/presentation/attachments/PresentedFileCard.tsx",
+      "upstream_sha256": "07addc96e0d9664c1d8d7ffbac53c4c0a53deb761ebc4fc95559381585e45fe9",
+      "classification": "B",
+      "treatment": "#454: Harness whole-card Preview gesture, filename/description hierarchy, file-type glyph and separate action slot, plus the Deliverables two-column four-card summary and expand toggle. Host open/reveal phases, desktop metadata, file URLs and native-open controller excluded; rustX PreviewWorkspace owners supply Preview and Download.",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../../locale/react",
+        "../primitives/FileTypeIcon",
+        "../primitives/icons",
+        "./Deliverables.module.css",
+        "react"
+      ],
+      "excluded_dependencies": [
+        "Harness PresentedHost/present-open controller",
+        "dsh-util-workspace-path",
+        "Cordis render slots",
+        "DSH turn-deliverables Session events"
+      ],
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-deliverables/src/client/Deliverables.tsx",
+          "treatment": "#454: presented-files grid, COLLAPSED_PRESENTED_COUNT summary and toggle only; changed-files card, Host status and review store excluded.",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "b8d0a19dc208af7f8f44459adba9afe648cd3c398d75917ccfaf2f8c730cfe74"
+        }
+      ],
+      "local_sha256": "595cfa90d9d74601673dd85ed0d6235612e18de97de2e99f93801a0e2e953d49"
+    },
+    {
+      "upstream": "packages/client/ui-deliverables/src/client/Deliverables.module.css",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "destination": "web-console/src/presentation/attachments/Deliverables.module.css",
+      "upstream_sha256": "99e722476a3ade8cb82bdf7fe6bc903e05bbf0b1921e3226f46180921a0d0772",
+      "classification": "B",
+      "treatment": "#454: Harness delivery card/grid geometry; radius tokens resolved to 16px/8px; Host status and native-open phase styling excluded; quiet rustX Download action added.",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [],
+      "local_sha256": "64ff2dbf5dc7440de2b783cb633efe06be7ba976d596fa65fefe5b7a2b1a236b"
     }
   ],
   "inspected_only": [

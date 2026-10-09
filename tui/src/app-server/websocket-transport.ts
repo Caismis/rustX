@@ -41,11 +41,22 @@ export const APP_SERVER_SUBPROTOCOL = "rustx.app-server.v38";
 /** The credential offer prefix the server's handshake callback matches. */
 export const TOKEN_SUBPROTOCOL_PREFIX = "rustx-token.";
 
+/**
+ * The separate, optional delivery-access credential offer. Additive to the
+ * transport token: the server refuses the whole handshake when it is wrong.
+ */
+export const DELIVERY_ACCESS_SUBPROTOCOL_PREFIX = "rustx-delivery-access.";
+
 export interface WebSocketTransportOptions {
   /** A `ws://` or `wss://` endpoint. The server requires path `/`. */
   endpoint: string;
   /** The dedicated transport token, supplied by the trusted host. */
   token: string;
+  /**
+   * The operator's separate delivery-access credential, when provisioned.
+   * Without it this connection can show delivery metadata but not read bytes.
+   */
+  deliveryAccessToken?: string;
   /**
    * How long the handshake may take before the attempt is abandoned. The
    * server drops an incomplete socket after its own bound; this is the client
@@ -106,6 +117,9 @@ export class WebSocketTransport extends BaseTransport {
       socket = new WebSocket(endpoint, [
         APP_SERVER_SUBPROTOCOL,
         `${TOKEN_SUBPROTOCOL_PREFIX}${options.token}`,
+        ...(options.deliveryAccessToken === undefined
+          ? []
+          : [`${DELIVERY_ACCESS_SUBPROTOCOL_PREFIX}${options.deliveryAccessToken}`]),
       ]);
     } catch (cause) {
       return Promise.reject(

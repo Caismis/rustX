@@ -89,7 +89,7 @@ test('native generated preparation failures survive the remote client and create
   const initializing = AppServerClient.initialize({ transport });
   const [initialize] = await transport.log.awaitMethod('initialize');
   transport.respond(initialize!.id, { type: 'initialized', authority_id: 'fixture-app-server-authority', protocol_version: 38, capabilities: {
-    upload_policy: nativeUploadPolicy, multi_session: true, single_writable_controller: true, headless_interactions: true, experimental_methods: [],
+    upload_policy: nativeUploadPolicy, multi_session: true, single_writable_controller: true, headless_interactions: true, delivery_access: false, experimental_methods: [],
   } });
   const client = await initializing;
   const host = new AppServerHost({ client, ownership: 'external', endpoint: 'ws://remote.example/' });

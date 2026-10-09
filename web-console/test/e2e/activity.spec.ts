@@ -1,10 +1,11 @@
 import { test, expect } from '@playwright/test';
+const fixtureOrigin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 
 test('durable Agent detail remains selected through interruption and resume; Job reaches final settlement', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error' || message.type() === 'warning') errors.push(message.text()); });
-  await page.goto('http://127.0.0.1:5174/test/fixtures/activity.html');
+  await page.goto(`${fixtureOrigin}/test/fixtures/activity.html`);
   await expect(page).toHaveTitle('rustX Jobs and Agents');
   const agent = page.locator('[data-agent-id="agent-worker"]');
   await expect(agent).toHaveAttribute('data-activation-id', 'activation-a');
@@ -35,7 +36,7 @@ test('durable Agent detail remains selected through interruption and resume; Job
 test('image row previews managed bytes and Bash description expands to authoritative command', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.goto('http://127.0.0.1:5174/test/fixtures/activity.html');
+  await page.goto(`${fixtureOrigin}/test/fixtures/activity.html`);
   await expect(page).toHaveTitle('rustX Jobs and Agents');
   const job = page.getByRole('region', { name: 'Job Build' });
   await expect(job).toContainText('Check the build <safely>');

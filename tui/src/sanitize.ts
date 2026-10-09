@@ -147,3 +147,12 @@ export function sanitizeLine(line: string): string {
 function strip(value: string): string {
   return value.replace(FORBIDDEN, "");
 }
+
+/**
+ * Whether a field renders as itself: {@link sanitizeField} would change
+ * nothing. Text that is not renderable must not be placed where it is both
+ * drawn and used as an identity, such as an editable path.
+ */
+export function isRenderableField(value: string): boolean {
+  return sanitizeField(value) === value;
+}

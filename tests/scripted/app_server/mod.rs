@@ -22,12 +22,16 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[derive(Debug)]
 pub(super) struct AsyncGate {
     entered: watch::Sender<bool>,
+    /// Callers waiting at the gate now: arrived, and neither released nor
+    /// dropped. A count, so a test can wait for every party it sent.
+    parked: watch::Sender<usize>,
     release: watch::Sender<bool>,
 }
 impl Default for AsyncGate {
     fn default() -> Self {
         Self {
             entered: watch::channel(false).0,
+            parked: watch::channel(0).0,
             release: watch::channel(true).0,
         }
     }
@@ -38,11 +42,30 @@ impl AsyncGate {
         self.release.send_replace(false);
     }
     pub(super) async fn park(&self) {
+        struct Leave<'a>(&'a watch::Sender<usize>);
+        impl Drop for Leave<'_> {
+            fn drop(&mut self) {
+                self.0.send_modify(|parked| *parked -= 1);
+            }
+        }
+        self.parked.send_modify(|parked| *parked += 1);
+        let _leave = Leave(&self.parked);
         self.entered.send_replace(true);
         self.release.subscribe().wait_for(|v| *v).await.unwrap();
     }
     async fn entered(&self) {
         self.entered.subscribe().wait_for(|v| *v).await.unwrap();
+    }
+    /// Waits until exactly `count` callers are parked at the gate.
+    async fn parked(&self, count: usize) {
+        self.parked
+            .subscribe()
+            .wait_for(|parked| *parked == count)
+            .await
+            .unwrap();
+    }
+    fn parked_now(&self) -> usize {
+        *self.parked.borrow()
     }
     fn release(&self) {
         self.release.send_replace(true);

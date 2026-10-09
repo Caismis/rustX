@@ -61,6 +61,106 @@
           ]
         },
         {
+          "description": "Original bytes (at most 512 KiB) of one committed `present` delivery.\n\nRequires delivery access, which only transport authentication grants\n(an explicitly delegated stdio owner, or the separate WebSocket\ndelivery credential). Without it this fails `session_file_read`\n`unauthorized` before any lookup, whatever the coordinates.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "delivery/read"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "message_id": {
+                  "$ref": "#/$defs/MessageId"
+                },
+                "delivery_index": {
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 0,
+                  "maximum": 7
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "message_id",
+                "delivery_index"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "The verified absolute native path and current leaf identity of one\ncommitted delivery, under the same authority as `delivery/read`.\nTransfers no bytes. Only a client that demonstrably shares the\nserver's filesystem may interpret the path locally.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "delivery/locate"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "message_id": {
+                  "$ref": "#/$defs/MessageId"
+                },
+                "delivery_index": {
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 0,
+                  "maximum": 7
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "message_id",
+                "delivery_index"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Cancels this connection's own in-flight `delivery/read` or\n`delivery/locate` with exactly this request id.\n\n`accepted: true` means the cancellation won before that request's\npublication commit: its one response is `delivery_cancelled`, sent\nafter its native work has physically settled. `false` means no such\nrequest is running on this connection (unknown id, or its response\nwas already committed); its response stands as produced. Other\nrequests and connections are never affected.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "delivery/cancel"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "request_id": {
+                  "$ref": "#/$defs/RequestId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "request_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
           "type": "object",
           "properties": {
             "method": {
@@ -2077,6 +2177,10 @@
       "description": "Identifies a durable artifact produced or referenced by the runtime.\n\nAn artifact is identified by an opaque runtime-owned id, never by a\nlocal filesystem path: paths are executor concerns and are not a\nuniversal durable artifact identity.",
       "type": "string"
     },
+    "MessageId": {
+      "description": "Identifies a committed canonical message block.",
+      "type": "string"
+    },
     "UploadMetadata": {
       "type": "object",
       "properties": {
@@ -2658,10 +2762,6 @@
       "description": "The identity of one exact historical Conversation Surface state.\n\nA revision is a monotonic counter in its own identity domain. The empty\nSurface of a new conversation is [`SurfaceRevision::INITIAL`] (`0`), and\nevery accepted [`SurfaceOp`] advances it by exactly one, so revision `n`\nis precisely \"the Surface after the first `n` accepted operations\".\n\nA revision is deliberately **not** a `MessageId`, an `AttemptId`, a\n`RuntimeClientCursor`, an `InboundSequence`, an Event Journal sequence,\nor a `CapabilityRevision`: none of those identify a Surface state, and\nnone of them may be substituted for one.",
       "type": "string",
       "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-    },
-    "MessageId": {
-      "description": "Identifies a committed canonical message block.",
-      "type": "string"
     },
     "LineageSide": {
       "description": "Which history prefix a lineage operation retains.",
@@ -5497,6 +5597,54 @@
             "type",
             "file",
             "data"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "accepted": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "const": "delivery_cancel"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "accepted"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "file": {
+              "$ref": "#/$defs/SessionFileReference"
+            },
+            "path": {
+              "description": "Absolute path in the server's filesystem namespace.",
+              "type": "string"
+            },
+            "device": {
+              "description": "Lossless decimal device/inode of the verified regular leaf.",
+              "type": "string"
+            },
+            "inode": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "session_file_location"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "file",
+            "path",
+            "device",
+            "inode"
           ]
         },
         {
@@ -14835,6 +14983,10 @@
         "headless_interactions": {
           "type": "boolean"
         },
+        "delivery_access": {
+          "description": "Whether this connection holds transport-granted delivery access.\nReporting it grants nothing; the native seam checks the capability.",
+          "type": "boolean"
+        },
         "experimental_methods": {
           "type": "array",
           "items": {
@@ -14848,6 +15000,7 @@
         "multi_session",
         "single_writable_controller",
         "headless_interactions",
+        "delivery_access",
         "experimental_methods"
       ]
     },
@@ -20280,6 +20433,20 @@
             "kind": {
               "type": "string",
               "const": "already_initialized"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "The client cancelled this delivery request before publication.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "delivery_cancelled"
             }
           },
           "required": [

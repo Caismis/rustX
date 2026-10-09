@@ -102,6 +102,11 @@ export type CommandOutcome =
       notice?: string;
     }
   | {
+      /** The first bounded page of committed `present` deliveries. */
+      kind: "choose_delivery";
+      page: import("../presentation/deliveries.ts").DeliveryPage;
+    }
+  | {
       /** A client display preference. Never a runtime request. */
       kind: "preference";
       preference: PreferenceChange;
@@ -246,6 +251,9 @@ export class CommandDispatcher {
         }
         case "/help":
           return inspect("Help", renderHelp());
+        case "/files":
+          // One bounded native transcript page; older pages load on request.
+          return { kind: "choose_delivery", page: await session.deliveryPage() };
         case "/model":
           return await this.#model(session, state, argument);
         case "/new":

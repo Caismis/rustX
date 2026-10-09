@@ -133,7 +133,7 @@ it('typed committed cards distinguish Preview and Download; prose/JSON/failed fa
   const ui = render(<PreviewContext.Provider value={intents}><ToolDeliveries messageId="canonical-tool" result={result}/></PreviewContext.Provider>);
   expect(ui.queryAllByRole('button')).toHaveLength(0);
   ui.rerender(<PreviewContext.Provider value={intents}><ToolDeliveries messageId="canonical-tool" result={{ ...result, deliveries: [file] }}/></PreviewContext.Provider>);
-  fireEvent.click(ui.getByRole('button', { name: `Preview ${file.name}` }));
+  fireEvent.click(ui.getByRole('button', { name: `Preview ${file.name} in sidebar` }));
   expect(openPreview).toHaveBeenCalledWith(expect.objectContaining({ source, name: file.name }));
   fireEvent.click(ui.getByRole('button', { name: `Download ${file.name}` }));
   expect(download).toHaveBeenCalledWith(expect.objectContaining({ source, name: file.name })); expect(openPreview).toHaveBeenCalledOnce();

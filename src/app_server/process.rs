@@ -35,6 +35,14 @@ pub(crate) struct AppServerArgs {
     /// Separate Product Host-only file-read credential; never the browser token.
     #[arg(long)]
     product_host_token_file: Option<PathBuf>,
+    /// Separate owner-only credential that grants committed-delivery access
+    /// to WebSocket clients offering it beside the transport token
+    #[arg(long)]
+    delivery_access_token_file: Option<PathBuf>,
+    /// Delegate committed-delivery access to the stdio owner (the process
+    /// that spawned this server and owns its pipes); forbidden for WebSocket
+    #[arg(long)]
+    stdio_delivery_access: bool,
 }
 impl AppServerArgs {
     pub(crate) fn into_request(self) -> Request {
@@ -44,6 +52,8 @@ impl AppServerArgs {
             listen: self.listen,
             token: self.token_file,
             product_host_token: self.product_host_token_file,
+            delivery_access_token: self.delivery_access_token_file,
+            stdio_delivery_access: self.stdio_delivery_access,
         }
     }
 }
@@ -56,6 +66,8 @@ pub struct Request {
     listen: String,
     token: Option<PathBuf>,
     product_host_token: Option<PathBuf>,
+    delivery_access_token: Option<PathBuf>,
+    stdio_delivery_access: bool,
 }
 
 // These roots are exposed by SourceSettings in the JSON protocol. This is
@@ -125,6 +137,27 @@ fn compose(options: &Request) -> Result<AppServerHost, String> {
     Ok(AppServerHost::new(manager, policy))
 }
 
+/// Read an owner-only private credential without following symlinks.
+fn private_credential(path: &std::path::Path, lane: &str) -> io::Result<websocket::Credential> {
+    use std::os::unix::fs::MetadataExt;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file()
+        || metadata.uid() != nix::unistd::geteuid().as_raw()
+        || metadata.mode() & 0o077 != 0
+    {
+        return Err(io::Error::other(format!(
+            "{lane} credential requires an owner-only regular file"
+        )));
+    }
+    let mut token = String::new();
+    file.take(130).read_to_string(&mut token)?;
+    websocket::Credential::new(token.strip_suffix('\n').unwrap_or(&token).to_owned())
+}
+
 async fn serve_transport(
     options: Request,
     host: AppServerHost,
@@ -140,13 +173,14 @@ async fn serve_transport(
         let output = std::io::stdout().as_fd().try_clone_to_owned()?;
         let reader = inherited_reader(input)?;
         let writer = inherited_writer(output)?;
-        stdio::serve(
-            Arc::new(AppServerConnection::new(host)),
-            reader,
-            writer,
-            shutdown.clone(),
-        )
-        .await
+        // The stdio peer is whoever spawned this process and owns its pipes.
+        // Delegation is that owner's explicit composition choice, never JSON.
+        let connection = if options.stdio_delivery_access {
+            AppServerConnection::with_delivery_access(host, CancellationToken::new())
+        } else {
+            AppServerConnection::new(host)
+        };
+        stdio::serve(Arc::new(connection), reader, writer, shutdown.clone()).await
     } else {
         let address: std::net::SocketAddr = options
             .listen
@@ -166,31 +200,28 @@ async fn serve_transport(
         }
         let credential =
             websocket::Credential::new(token.strip_suffix('\n').unwrap_or(&token).to_owned())?;
-        if let Some(path) = options.product_host_token {
-            use std::os::unix::fs::MetadataExt;
-            let file = std::fs::OpenOptions::new()
-                .read(true)
-                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-                .open(path)?;
-            let metadata = file.metadata()?;
-            if !metadata.is_file()
-                || metadata.uid() != nix::unistd::geteuid().as_raw()
-                || metadata.mode() & 0o077 != 0
+        let mut private = Vec::new();
+        if let Some(path) = &options.product_host_token {
+            let product_host = private_credential(path, "Product Host")?;
+            private.push(product_host.clone());
+            host.bind_product_host(Some(product_host));
+        }
+        if let Some(path) = &options.delivery_access_token {
+            let delivery = private_credential(path, "delivery access")?;
+            private.push(delivery.clone());
+            host.bind_delivery_access(Some(delivery));
+        }
+        // Each lane's secret authenticates that lane alone.
+        for (index, secret) in private.iter().enumerate() {
+            if credential.same_secret(secret)
+                || private[..index]
+                    .iter()
+                    .any(|other| other.same_secret(secret))
             {
                 return Err(io::Error::other(
-                    "Product Host credential requires an owner-only regular file",
+                    "transport, Product Host and delivery access credentials must differ",
                 ));
             }
-            let mut token = String::new();
-            file.take(130).read_to_string(&mut token)?;
-            let product_host =
-                websocket::Credential::new(token.strip_suffix('\n').unwrap_or(&token).to_owned())?;
-            if credential.same_secret(&product_host) {
-                return Err(io::Error::other(
-                    "Product Host credential must differ from transport credential",
-                ));
-            }
-            host.bind_product_host(Some(product_host));
         }
         let listener = tokio::net::TcpListener::bind(address).await?;
         eprintln!("rustx app-server listening ws://{}", listener.local_addr()?);
@@ -253,8 +284,14 @@ fn inherited_writer(
 async fn run(options: Request) -> Result<(), String> {
     // Transport selection is native process policy, checked before composition.
     if options.listen == "stdio" {
-        if options.token.is_some() || options.product_host_token.is_some() {
-            return Err("stdio does not accept --token-file or --product-host-token-file".into());
+        if options.token.is_some()
+            || options.product_host_token.is_some()
+            || options.delivery_access_token.is_some()
+        {
+            return Err(
+                "stdio does not accept --token-file, --product-host-token-file or --delivery-access-token-file"
+                    .into(),
+            );
         }
     } else {
         options
@@ -265,6 +302,9 @@ async fn run(options: Request) -> Result<(), String> {
             .map_err(|error| error.to_string())?;
         if options.token.is_none() {
             return Err("WebSocket requires --token-file".into());
+        }
+        if options.stdio_delivery_access {
+            return Err("--stdio-delivery-access requires --listen stdio".into());
         }
     }
     // All user-scoped owners and signal listeners exist before readiness.

@@ -309,7 +309,51 @@ def tui_subagent_inspection() -> Scenario:
     )
 
 
+PRESENT_PROMPT = "tui present: deliver the report"
+PRESENT_ARGUMENTS = json.dumps(
+    {
+        "files": [
+            {"path": "报告 final file.md", "description": "Final report"},
+            {"path": "./data set.csv"},
+            # A normalized duplicate is validated and then discarded.
+            {"path": "报告 final file.md", "description": "Duplicate discarded"},
+        ]
+    },
+    separators=(",", ":"),
+    ensure_ascii=False,
+)
+
+
+def tui_present_delivery() -> Scenario:
+    """One ordinary `present` call, then the model's closing turn.
+
+    The TUI reads, saves and locates the delivered files afterwards. None of
+    that may reach the provider: the scenario has exactly these two steps.
+    """
+    return Scenario(
+        "tui_present_delivery",
+        Step(
+            Expect(
+                protocol=OPENAI_CHAT_COMPLETIONS,
+                model=INTEGRATION_MODEL,
+                body_contains=(PRESENT_PROMPT,),
+                tools_include=("present",),
+            ),
+            Stream(ToolCall("call-tui-present", "present", PRESENT_ARGUMENTS), Finish("tool_calls")),
+        ),
+        Step(
+            Expect(
+                protocol=OPENAI_CHAT_COMPLETIONS,
+                model=INTEGRATION_MODEL,
+                body_contains=("Declared 2 deliverable(s)",),
+            ),
+            Stream(Text("Delivered the report."), Finish("stop")),
+        ),
+    )
+
+
 SCENARIOS = {
+    "tui_present_delivery": tui_present_delivery,
     "tui_subagent_inspection": tui_subagent_inspection,
     "app_server_lifecycle": app_server_lifecycle,
     "tui_integration": tui_integration,

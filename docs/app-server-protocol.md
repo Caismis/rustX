@@ -16,6 +16,12 @@ before physical cleanup; missing terminal evidence alone never permits a clock
 to advance. No wire shape or protocol version changes are required by this
 semantic correction. Clients must upgrade together; previous versions are rejected.
 
+App Server v38 adds transport-granted committed-delivery access (#454):
+`delivery/read`, `delivery/locate`, the `session_file_location` result and the
+per-connection `ServerCapabilities.delivery_access` report. Only transport
+authentication grants the access. See
+[Committed delivery access](#committed-delivery-access-v38).
+
 App Server v38 retains the v37 / Runtime Client v59 Trace input ownership contract at the
 current read cut. See [Trace retained-input ownership](#trace-retained-input-ownership-v38).
 
@@ -268,7 +274,10 @@ const socket = new WebSocket("ws://127.0.0.1:8080/", [
 
 The server requires both offers on path `/` without a query, rejects failed admission
 with HTTP 401, and selects only `rustx.app-server.v38` in its response. It never echoes
-the credential. Admission completes before constructing `AppServerConnection`, so
+the credential. A client the operator trusts with committed-delivery bytes may also
+offer `rustx-delivery-access.<separate secret>` (`--delivery-access-token-file`); a
+wrong or unconfigured value fails the whole handshake, and it never substitutes for
+the transport token. Admission completes before constructing `AppServerConnection`, so
 unauthenticated clients cannot initialize or invoke any method. This is a dedicated
 single-user transport secret, never a provider key, MCP secret, or runtime credential.
 It is captured at startup; rotation requires restarting the process.
@@ -865,7 +874,7 @@ use the existing subscription as invalidation signals. Neither historical reads
 nor Trace cursors advance a subscription cursor. See [Trace architecture](trace.md)
 for source authorities, ordering, read cuts, repair, bounds and unavailable facts.
 
-Generated Rust Schema/TypeScript, Web Console and TUI all negotiate version 30.
+Generated Rust Schema/TypeScript, Web Console and TUI all negotiate version 38.
 Earlier versions are rejected; there are no aliases or dual-version paths.
 
 `session/trace` accepts optional `records: TraceCursor[]` (maximum 512) and returns
@@ -1527,8 +1536,9 @@ the returned page offset; an omitted offset always means native latest.
 
 `ToolExecutionResult.deliveries` contains runtime-owned `SessionFileReference`
 facts, distinct from managed `FileReference` / `ArtifactId`. Only committed
-successful Tool results authorize cards. App Server v38 deliberately exposes no
-Session-file read Method or caller-supplied root authorization. Browser actions
+successful Tool results authorize cards. App Server v38 exposes no ordinary
+Session-file read Method or caller-supplied root authorization; `delivery/read`
+requires transport-granted delivery access (below). Browser actions
 use canonical coordinates through the Product Host HTTP carrier; a dedicated
 native WebSocket seam authenticates a separate process-scoped Product Host-only
 credential before accepting Host-owned current registration roots. Browser
@@ -1539,6 +1549,76 @@ The result/reference and closed `session_file_read` error vocabulary are shared
 wire types; their presence does not grant an ordinary request method. See
 [file-delivery.md](file-delivery.md) for provisioning, native admission and read
 fences, current registration policy, historical scope and resource limits.
+
+### Committed delivery access (v38)
+
+`delivery/read { target, message_id, delivery_index }` returns
+`session_file_bytes { file, data }`: the current original bytes (at most 512 KiB,
+base64) of one committed delivery. `delivery/locate` with the same parameters
+returns `session_file_location { file, path, device, inode }`: the absolute path in
+the **server's** filesystem namespace and the verified regular leaf's decimal
+device/inode, after the same descriptor walk, without reading bytes or applying
+the size limit. Both are pure bounded reads: they start no Agent, Attempt, Tool or
+model request, and a lost response is retryable.
+
+Both require *delivery access*, a capability only transport authentication creates:
+
+| Transport | Grant |
+| --- | --- |
+| stdio | `--stdio-delivery-access`: the process owner that spawned the server and owns its pipes delegates it explicitly (the TUI does for its owned child). Forbidden with WebSocket. |
+| WebSocket | `--delivery-access-token-file`: a separate owner-only credential, distinct from the transport token and the Product Host secret, offered as `rustx-delivery-access.<secret>` beside `rustx-token.<token>`. Forbidden with stdio. |
+
+Without it, both Methods fail `session_file_read` / `unauthorized` before any
+lookup, whatever the coordinates, root spelling or `initialize` client name. The
+target must be one of **this connection's** attachments. `initialize` and
+`server/info` report the connection's own `capabilities.delivery_access`; the
+report grants nothing. Connection close and native credential removal revoke the
+grant; admitted reads then fail at their next fence. The native core, fences,
+original-Session mapping, root identity, two shared read permits and closed error
+vocabulary are the Product Host lane's, without its registered-root list. A
+client interprets a location locally only when it demonstrably shares the
+server's filesystem; see [file-delivery.md](file-delivery.md).
+
+**Cancellation.** `delivery/cancel { request_id }` names one of **this
+connection's** in-flight `delivery/read` / `delivery/locate` requests by its exact
+JSON-RPC id and returns `delivery_cancel { accepted }`. Each such request is
+registered under its id before native admission (a second in-flight request with
+the same id is `invalid_params`). `accepted: true` means the cancellation won
+before that request's publication commit: its native fences fail from then on,
+and its one response is the typed failure `delivery_cancelled`, sent only after
+its native work physically settled and released its permit. `accepted: false`
+means no such request is running here (unknown id, or its response was already
+committed) and that response stands as produced. Without delivery access the
+method is `unauthorized`; another connection's ids are never visible. Cancelling
+one request never affects another request or the connection.
+
+**Cancellation capacity.** A connection carries at most `IN_FLIGHT_REQUESTS`
+(16) semantic requests; a seventeenth ends it. `delivery/cancel` is answered at
+once, without awaiting native work, so its slot is held only briefly. A client
+that cancels must therefore keep one slot for it: the TUI counts each request
+until its response arrives (never earlier than the server frees the slot),
+admits at most 15 ordinary requests, and reserves the sixteenth for
+`delivery/cancel`, sending cancellations one at a time in abort order and
+dropping one whose request settled first. No number of ordinary requests can
+then delay a cancellation beyond the previous cancel's answer, or make it a
+seventeenth request. A server that refuses an owed cancellation breaks this
+contract, and the TUI ends the connection rather than lose it silently.
+
+**Publication commit.** A delivery response is serialized (and size-checked)
+into the ordinary bounded outbound queue together with its publication owner.
+It is decided when the transport accepts it (the stdio pipe takes its first
+bytes; tungstenite takes its WebSocket frame), in the same synchronous step,
+and not before. At that point an accepted cancellation yields
+`delivery_cancelled`, and a success (bytes or a native path) additionally
+requires the connection's delivery authority and the exact attachment to be
+current: credential revocation, connection close or process shutdown yields
+`session_file_read` / `unauthorized`, detachment yields `stale_attachment`,
+always for the same id. Failures carry nothing sensitive and keep their own
+reason. A cancellation or revocation that completes before the acceptance
+prevents the success; one that overlaps it waits for it and is ordered after
+it. An accepted response is never retracted. See
+[file delivery](file-delivery.md#delivery-access-for-app-server-clients) for
+the synchronization.
 
 The internal Runtime Client vocabulary is v60. Only App Server v38 clients
 are generated; earlier versions are rejected, with no aliases or compatibility

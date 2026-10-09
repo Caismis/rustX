@@ -1,12 +1,12 @@
 //! Bounded byte delivery only. Semantic work belongs to `AppServerConnection`.
-use std::{io, sync::Arc, time::Duration};
+use std::{io, sync::Arc, task::Poll, time::Duration};
 
 use futures_util::{Stream, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use super::connection::AppServerConnection;
+use super::{connection::AppServerConnection, connection::Reply, delivery_access::Publication};
 
 pub mod resources;
 pub mod stdio;
@@ -44,10 +44,84 @@ impl io::Write for Record {
     }
 }
 
-fn enqueue(sender: &mpsc::Sender<String>, value: &impl Serialize) -> io::Result<()> {
-    let record = serialize_record(value)?;
+/// One encoded, size-checked record and, for a delivery response, the owner
+/// of its publication decision.
+pub(crate) struct Outbound {
+    record: String,
+    publication: Option<(Publication, bool)>,
+}
+
+impl Outbound {
+    /// The response is encoded (and size-checked) now; its publication is
+    /// decided only when a transport accepts it.
+    pub(crate) fn reply(reply: Reply) -> io::Result<Self> {
+        let success = matches!(reply.response, super::protocol::Response::Success(_));
+        Ok(Self {
+            record: serialize_record(&reply.response)?,
+            publication: reply.publication.map(|publication| (publication, success)),
+        })
+    }
+
+    /// Hands this record to the transport. `accept` is the transport's one
+    /// non-suspending acceptance of a record (the stdio pipe taking its first
+    /// bytes, tungstenite taking its frame), returning `Pending` when it took
+    /// nothing; the adapter calls this again when the transport can accept.
+    /// For a delivery response this is the publication linearization point
+    /// ([`Publication::poll_hand_off`]): which record is offered is decided
+    /// in the same synchronous step, and fixed only once the transport
+    /// accepted it. Returns the record as handed over and what `accept`
+    /// returned.
+    pub(super) fn poll_hand_off<T>(
+        &mut self,
+        accept: impl FnOnce(&str) -> Poll<io::Result<T>>,
+    ) -> Poll<io::Result<(String, T)>> {
+        let Self {
+            record,
+            publication,
+        } = self;
+        let Some((publication, success)) = publication else {
+            return accept(record).map_ok(|accepted| (std::mem::take(record), accepted));
+        };
+        publication
+            .poll_hand_off(record, *success, accept)
+            .map_ok(|(replacement, accepted)| {
+                (
+                    replacement.unwrap_or_else(|| std::mem::take(record)),
+                    accepted,
+                )
+            })
+    }
+}
+
+/// The writer's only source of records, in order. Each adapter hands a
+/// record to its transport with [`Outbound::poll_hand_off`] only once every
+/// earlier record has been fully written (stdio) or flushed to the socket
+/// (WebSocket), so backpressure from an earlier record leaves later delivery
+/// responses undecided.
+pub(super) struct Outgoing(mpsc::Receiver<Outbound>);
+impl Outgoing {
+    pub(super) async fn next(&mut self) -> Option<Outbound> {
+        self.0.recv().await
+    }
+}
+
+fn enqueue(sender: &mpsc::Sender<Outbound>, value: &impl Serialize) -> io::Result<()> {
+    send(
+        sender,
+        Outbound {
+            record: serialize_record(value)?,
+            publication: None,
+        },
+    )
+}
+
+fn enqueue_reply(sender: &mpsc::Sender<Outbound>, reply: Reply) -> io::Result<()> {
+    send(sender, Outbound::reply(reply)?)
+}
+
+fn send(sender: &mpsc::Sender<Outbound>, outbound: Outbound) -> io::Result<()> {
     sender
-        .try_send(record)
+        .try_send(outbound)
         .map_err(|_| failure("outbound capacity exhausted"))
 }
 
@@ -75,12 +149,12 @@ async fn serve<S, W, F>(
 ) -> io::Result<()>
 where
     S: Stream<Item = io::Result<String>> + Send,
-    W: FnOnce(mpsc::Receiver<String>) -> F,
+    W: FnOnce(Outgoing) -> F,
     F: Future<Output = io::Result<()>>,
 {
     let _detach = Detach(connection.clone());
     let (outgoing, receiver) = mpsc::channel(OUTBOUND_MESSAGES);
-    let write = writer(receiver);
+    let write = writer(Outgoing(receiver));
     tokio::pin!(incoming, write);
     let mut requests: FuturesUnordered<BoxFuture<'_, _>> = FuturesUnordered::new();
     // Alternate ready observations with protocol progress. Completion priority
@@ -94,6 +168,9 @@ where
                 if connection.server_draining() {
                     // The host has supervised semantic owners. Drain encoded
                     // records with the physical write deadline before close.
+                    // Process shutdown revokes delivery publication first, as
+                    // it does on the Product Host lane.
+                    connection.revoke_delivery_access();
                     drop(requests);
                     drop(outgoing);
                     return write.await;
@@ -106,7 +183,7 @@ where
                 observation_turn = false;
             }
             response = requests.next(), if !requests.is_empty() => {
-                if let Some(Some(response)) = response { enqueue(&outgoing, &response)?; }
+                if let Some(Some(reply)) = response { enqueue_reply(&outgoing, reply)?; }
                 observation_turn = true;
             }
             record = incoming.next() => {
@@ -115,7 +192,7 @@ where
                 if record.len() > MAX_MESSAGE_BYTES { return Err(failure("inbound message exceeds limit")); }
                 if requests.len() == IN_FLIGHT_REQUESTS { return Err(failure("request capacity exhausted")); }
                 let connection = connection.clone();
-                requests.push(Box::pin(async move { connection.handle_json(&record).await }));
+                requests.push(Box::pin(async move { connection.reply_json(&record).await }));
                 observation_turn = true;
             }
             notification = connection.next_notification(), if !observation_turn => {
@@ -137,7 +214,7 @@ mod tests {
         }
         assert!(enqueue(&sender, &0).is_err());
         assert_eq!(receiver.len(), OUTBOUND_MESSAGES);
-        receiver.try_recv().unwrap();
+        assert_eq!(receiver.try_recv().unwrap().record, "0");
         enqueue(&sender, &0).unwrap();
         let mut record = Record(Vec::new());
         std::io::Write::write_all(&mut record, &vec![0; MAX_MESSAGE_BYTES]).unwrap();

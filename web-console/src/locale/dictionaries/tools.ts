@@ -25,7 +25,13 @@ export const en = {
   "ask.cancelled": "cancelled",
   "ask.cancelled-detail": "This question set was cancelled before answers were submitted.",
   "ask.interrupted": "interrupted",
-  "ask.interrupted-detail": "This question set was interrupted before answers were submitted."
+  "ask.interrupted-detail": "This question set was interrupted before answers were submitted.",
+  "present.title": "Present files",
+  "present.preparing": "Preparing deliverables",
+  "present.running": "Delivering",
+  "present.ok": "Delivered",
+  "present.error": "Delivery failed",
+  "present.stopped": "Interrupted"
 } as const;
 export type ToolsKey = keyof typeof en;
 export const zh = {
@@ -54,5 +60,11 @@ export const zh = {
   "ask.cancelled": "已取消",
   "ask.cancelled-detail": "本轮已取消，未提交回答",
   "ask.interrupted": "已中断",
-  "ask.interrupted-detail": "本轮已中断，未提交回答"
+  "ask.interrupted-detail": "本轮已中断，未提交回答",
+  "present.title": "交付文件",
+  "present.preparing": "准备交付",
+  "present.running": "正在交付",
+  "present.ok": "已交付",
+  "present.error": "交付失败",
+  "present.stopped": "已中断"
 } satisfies Record<ToolsKey, string>;

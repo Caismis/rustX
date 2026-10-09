@@ -25,6 +25,7 @@ import {
   METHOD_RESPONSE_LOSS_CLASS,
   type ResponseLossClass,
   UncertainOutcomeError,
+  isDeliveryCancelled,
   isResyncRequired,
   isStaleAttachment,
   isUncertainOutcome,
@@ -48,7 +49,7 @@ import { backgroundExecution, subagent, runtimeCursor, snapshot } from "./suppor
 const CAPABILITIES = {
   upload_policy: nativeUploadPolicy, multi_session: true,
   single_writable_controller: true,
-  headless_interactions: true,
+  headless_interactions: true, delivery_access: false,
   experimental_methods: [],
 };
 
@@ -747,30 +748,153 @@ describe("bounded request ownership", () => {
     const pending: Promise<unknown>[] = [];
     for (let i = 0; i < 4; i++) pending.push(client.call("job/wait", { target: target(), job_id: `job-${i}` }, "job"));
     for (let i = 0; i < 2; i++) pending.push(client.call("agent/sendMessage", { target: target(), agent_id: `agent-${i}`, message: "guidance" }, "agent_message"));
-    for (let i = 0; i < 8; i++) pending.push(client.call("agent/list", { target: target() }, "agents"));
+    for (let i = 0; i < 7; i++) pending.push(client.call("agent/list", { target: target() }, "agents"));
     for (let i = 0; i < 2; i++) pending.push(client.call("job/cancel", { target: target(), job_id: `job-${i}` }, "job"));
     const settled = Promise.allSettled(pending);
-    await transport.log.awaitRequests(17); // initialize plus the finite 16 request budget
-    assert.equal(client.pendingCount, 16);
+    // initialize plus 15 ordinary requests; the sixteenth slot of the server
+    // budget is reserved for delivery cancellation.
+    await transport.log.awaitRequests(16);
+    assert.equal(client.pendingCount, 15);
     await assert.rejects(client.call("job/wait", { target: target(), job_id: "extra" }, "job"), /wait capacity/);
     await assert.rejects(client.call("agent/sendMessage", { target: target(), agent_id: "extra", message: "draft" }, "agent_message"), /admission capacity/);
     await assert.rejects(client.call("agent/list", { target: target() }, "agents"), /rpc capacity/);
     await assert.rejects(client.call("job/cancel", { target: target(), job_id: "extra" }, "job"), /control capacity/);
-    assert.equal(transport.log.requests.length, 17);
+    assert.equal(transport.log.requests.length, 16);
     const [request] = await transport.log.awaitMethod("job/wait");
     transport.respond(request!.id, { type: "job", job: backgroundExecution("exec_c8536561-1a50-7edc-a396-b3a459465efb", "succeeded") });
     await pending[0];
     const next = client.call("job/wait", { target: target(), job_id: "next" }, "job");
     const nextSettled = next.catch(error => error);
     await transport.log.awaitMethod("job/wait", 5);
-    assert.equal(client.pendingCount, 16);
+    assert.equal(client.pendingCount, 15);
     assert.equal(client.closed, undefined);
     transport.fail("input_eof");
     const results = await settled;
     assert.equal(results[0]!.status, "fulfilled");
-    assert.equal(results.filter(result => result.status === "rejected").length, 15);
+    assert.equal(results.filter(result => result.status === "rejected").length, 14);
     assert.ok(await nextSettled instanceof TransportClosedError);
-    assert.equal(transport.log.requests.length, 18, "response loss never replays or cancels domain work");
+    assert.equal(transport.log.requests.length, 17, "response loss never replays or cancels domain work");
   });
 
 });
+
+describe("request-scoped delivery cancellation", () => {
+  const read = { target: target(), message_id: "tool-msg", delivery_index: 0 };
+  const cancelled: RpcError = {
+    code: -32000, message: "Delivery request was cancelled before publication",
+    data: { kind: "delivery_cancelled" },
+  };
+
+  it("cancels exactly its own request and settles it once with the server's terminal outcome", async t => {
+    const { client, transport } = await initialized(); t.after(() => client.close());
+    const owner = new AbortController();
+    const sibling = new AbortController();
+    const outcome = client.callDelivery("delivery/read", read, "session_file_bytes", owner.signal).catch((error: unknown) => error);
+    const other = client.callDelivery("delivery/read", read, "session_file_bytes", sibling.signal);
+    const [first, second] = await transport.log.awaitMethod("delivery/read", 2);
+    owner.abort();
+    owner.abort();
+    const [cancel] = await transport.log.awaitMethod("delivery/cancel");
+    assert.deepEqual(paramsOf(cancel!, "delivery/cancel"), { request_id: first!.id }, "names the exact in-flight id");
+    assert.equal(transport.log.count("delivery/cancel"), 1, "one cancel per owner");
+    assert.equal(client.pendingCount, 3, "the cancelled request keeps its correlation until answered");
+    transport.respond(cancel!.id, { type: "delivery_cancel", accepted: true });
+    transport.respondError(first!.id, cancelled);
+    const error = await outcome;
+    assert.ok(isDeliveryCancelled(error));
+    transport.respond(second!.id, { type: "session_file_bytes", file: REPORT_FILE, data: "QQ==" });
+    assert.equal((await other).data, "QQ==", "an unrelated request is untouched");
+    assert.equal(client.pendingCount, 0);
+    assert.equal(client.closed, undefined, "the late answer is a known id, never a protocol failure");
+  });
+
+  it("keeps a result whose publication won the race, and sends nothing when already aborted", async t => {
+    const { client, transport } = await initialized(); t.after(() => client.close());
+    const owner = new AbortController();
+    const outcome = client.callDelivery("delivery/locate", read, "session_file_location", owner.signal);
+    const [request] = await transport.log.awaitMethod("delivery/locate");
+    owner.abort();
+    const [cancel] = await transport.log.awaitMethod("delivery/cancel");
+    transport.respond(request!.id, { type: "session_file_location", file: REPORT_FILE, path: "/w/r.md", device: "1", inode: "2" });
+    transport.respond(cancel!.id, { type: "delivery_cancel", accepted: false });
+    assert.equal((await outcome).path, "/w/r.md", "a committed response is not represented as unpublished");
+    const aborted = new AbortController();
+    aborted.abort();
+    await assert.rejects(client.callDelivery("delivery/read", read, "session_file_bytes", aborted.signal));
+    assert.equal(transport.log.count("delivery/read"), 0, "nothing sent before admission");
+    assert.equal(client.pendingCount, 0);
+    assert.equal(client.closed, undefined);
+  });
+
+  /** Every request settled so far has reached the log; a data barrier, not a delay. */
+  const drained = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+  it("reaches the server through its reserved slot when every other lane is full, never as a seventeenth request", async t => {
+    const { client, transport } = await initialized(); t.after(() => client.close());
+    const pending: Promise<unknown>[] = [];
+    // Control saturated first: the cancellation must not need a control slot.
+    for (let i = 0; i < 2; i++) pending.push(client.call("job/cancel", { target: target(), job_id: `job-${i}` }, "job"));
+    for (let i = 0; i < 4; i++) pending.push(client.call("job/wait", { target: target(), job_id: `wait-${i}` }, "job"));
+    for (let i = 0; i < 2; i++) pending.push(client.call("agent/sendMessage", { target: target(), agent_id: `agent-${i}`, message: "m" }, "agent_message"));
+    for (let i = 0; i < 4; i++) pending.push(client.call("agent/list", { target: target() }, "agents"));
+    const owners = [new AbortController(), new AbortController(), new AbortController()];
+    const outcomes = owners.map((owner) =>
+      client.callDelivery("delivery/read", read, "session_file_bytes", owner.signal).catch((error: unknown) => error));
+    const settled = Promise.allSettled(pending);
+    const reads = await transport.log.awaitMethod("delivery/read", 3);
+    assert.equal(client.pendingCount, 15, "every ordinary lane is full");
+    await assert.rejects(client.call("agent/list", { target: target() }, "agents"), /rpc capacity/);
+    await assert.rejects(client.call("job/cancel", { target: target(), job_id: "extra" }, "job"), /control capacity/);
+    assert.equal(client.pendingCount, 15, "the cancel slot is not ordinary capacity");
+
+    // Three reads cancelled together: one cancel in flight, the others wait
+    // for the slot, so the server never sees a seventeenth request.
+    for (const owner of owners) owner.abort();
+    const [first] = await transport.log.awaitMethod("delivery/cancel");
+    await drained();
+    assert.equal(transport.log.count("delivery/cancel"), 1);
+    assert.equal(client.pendingCount, 16);
+    assert.deepEqual(paramsOf(first!, "delivery/cancel"), { request_id: reads[0]!.id });
+
+    // The second read's publication wins before its cancel is sent: that
+    // cancel is never sent, and the result stands.
+    transport.respond(reads[1]!.id, { type: "session_file_bytes", file: REPORT_FILE, data: "QQ==" });
+    transport.respond(first!.id, { type: "delivery_cancel", accepted: true });
+    const [, third] = await transport.log.awaitMethod("delivery/cancel", 2);
+    await drained();
+    assert.deepEqual(paramsOf(third!, "delivery/cancel"), { request_id: reads[2]!.id }, "abort order, settled requests skipped");
+    assert.equal(transport.log.count("delivery/cancel"), 2);
+    transport.respond(third!.id, { type: "delivery_cancel", accepted: true });
+    transport.respondError(reads[0]!.id, cancelled);
+    transport.respondError(reads[2]!.id, cancelled);
+    const [one, two, three] = await Promise.all(outcomes);
+    assert.ok(isDeliveryCancelled(one) && isDeliveryCancelled(three));
+    assert.equal((two as { data: string }).data, "QQ==");
+    await drained();
+    assert.equal(transport.log.count("delivery/cancel"), 2, "nothing resent");
+    assert.equal(client.pendingCount, 12, "every delivery and cancel slot recovered; unrelated work untouched");
+    assert.equal(client.closed, undefined);
+    transport.fail("input_eof");
+    await settled;
+  });
+
+  it("ends the connection explicitly when the server refuses a cancellation it owes", async t => {
+    const { client, transport } = await initialized(); t.after(() => client.close());
+    const owner = new AbortController();
+    const outcome = client.callDelivery("delivery/read", read, "session_file_bytes", owner.signal).catch((error: unknown) => error);
+    await transport.log.awaitMethod("delivery/read");
+    owner.abort();
+    const [cancel] = await transport.log.awaitMethod("delivery/cancel");
+    transport.respondError(cancel!.id, { code: -32602, message: "Invalid params", data: { kind: "invalid_params" } });
+    const error = await outcome;
+    assert.ok(error instanceof TransportClosedError, String(error));
+    assert.match(error.message, /refused delivery\/cancel for request/);
+    assert.equal(client.closed, error, "a lost cancellation is never silent");
+    assert.equal(client.pendingCount, 0);
+  });
+});
+
+const REPORT_FILE = {
+  scope: { conversation_id: "conv_bf9033a7-86e2-71aa-8314-b791ebfdbfec", device: "1", inode: "2" },
+  path: "out/r.md", name: "r.md", description: null, mime_type: "text/markdown",
+};

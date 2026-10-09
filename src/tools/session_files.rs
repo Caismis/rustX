@@ -311,6 +311,37 @@ pub(crate) fn read_authorized(
     authorized()?;
     read_with_hook(root, reference, || {}, authorized)
 }
+
+/// The verified native location of a committed delivery: its absolute path
+/// under the original root and the regular leaf's current device/inode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SessionFileLocation {
+    pub path: PathBuf,
+    pub device: u64,
+    pub inode: u64,
+}
+
+/// Resolve a delivery through the same descriptor walk as a read, without
+/// reading bytes. The size limit does not apply: nothing is transferred.
+/// The identity lets a client that shares this filesystem prove its own path
+/// names the same regular file; it confers no authority by itself.
+pub(crate) fn locate_authorized(
+    root: &Path,
+    reference: &SessionFileReference,
+    authorized: impl Fn() -> io::Result<()>,
+) -> io::Result<SessionFileLocation> {
+    authorized()?;
+    let (opened, _) = open_file(root, &reference.path, Some(&reference.scope), || {})?;
+    // The same post-open fence position as a read's pre-byte fence.
+    authorized()?;
+    let metadata = opened.file.metadata()?;
+    opened.verify()?;
+    Ok(SessionFileLocation {
+        path: root.join(&reference.path),
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    })
+}
 fn read_with_hook(
     root: &Path,
     reference: &SessionFileReference,
@@ -504,6 +535,71 @@ mod tests {
                 }
             },
         );
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+    }
+    #[test]
+    fn location_is_the_verified_leaf_identity_without_a_size_bound() {
+        let (_dir, root, file) = fixture();
+        let leaf = root.join(&file.path);
+        std::fs::write(&leaf, vec![b'x'; SESSION_FILE_MAX_BYTES + 1]).unwrap();
+        let located = locate_authorized(&root, &file, || Ok(())).unwrap();
+        let metadata = std::fs::symlink_metadata(&leaf).unwrap();
+        assert_eq!(
+            located,
+            SessionFileLocation {
+                path: leaf.clone(),
+                device: metadata.dev(),
+                inode: metadata.ino(),
+            }
+        );
+        // A removed leaf is Missing. The original stays allocated (moved
+        // aside) while its replacement is created, so the two identities are
+        // distinct by construction: unlink + recreate may reuse an inode.
+        let aside = root.join("sub/original aside");
+        std::fs::rename(&leaf, &aside).unwrap();
+        let missing = locate_authorized(&root, &file, || Ok(())).unwrap_err();
+        assert_eq!(read_failure(&missing), SessionFileReadFailure::Missing);
+        std::fs::write(&leaf, b"replacement").unwrap();
+        // A fresh lookup observes the current leaf, explicitly.
+        let current = std::fs::symlink_metadata(&leaf).unwrap();
+        let relocated = locate_authorized(&root, &file, || Ok(())).unwrap();
+        assert_eq!(
+            (relocated.device, relocated.inode),
+            (current.dev(), current.ino())
+        );
+        assert_ne!(relocated.inode, located.inode);
+        // A swap after the owned leaf open cannot redirect the retained
+        // descriptor: verification fails instead of publishing either identity.
+        let calls = std::cell::Cell::new(0);
+        let swapped = locate_authorized(&root, &file, || {
+            calls.set(calls.get() + 1);
+            if calls.get() == 2 {
+                std::fs::rename(&aside, &leaf).unwrap();
+            }
+            Ok(())
+        })
+        .unwrap_err();
+        assert_eq!(read_failure(&swapped), SessionFileReadFailure::Replaced);
+        // Symlinked leaves and unrelated roots never resolve.
+        std::fs::remove_file(&leaf).unwrap();
+        symlink("/etc/hostname", &leaf).unwrap();
+        assert!(locate_authorized(&root, &file, || Ok(())).is_err());
+        let unrelated = tempfile::tempdir().unwrap();
+        assert!(
+            locate_authorized(&unrelated.path().canonicalize().unwrap(), &file, || Ok(())).is_err()
+        );
+        // Revocation at the post-open fence publishes no location.
+        std::fs::remove_file(&leaf).unwrap();
+        std::fs::write(&leaf, b"x").unwrap();
+        let calls = std::cell::Cell::new(0);
+        let result = locate_authorized(&root, &file, || {
+            calls.set(calls.get() + 1);
+            if calls.get() == 2 {
+                Err(io::Error::new(io::ErrorKind::PermissionDenied, "revoked"))
+            } else {
+                Ok(())
+            }
+        });
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
     }
 }

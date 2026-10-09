@@ -237,6 +237,7 @@ function drawableTool(tool: CorrelatedTool): CorrelatedTool {
     // list this function would have to keep current.
     lifecycle: sanitizeData(tool.lifecycle) as ToolLifecycle,
     committed: tool.committed,
+    resultCommitted: tool.resultCommitted,
     workflow: sanitizeData(tool.workflow) as CorrelatedTool["workflow"],
   };
 }
@@ -317,7 +318,7 @@ function pushResult(
     return;
   }
   const result = tool.lifecycle.result;
-  for (const line of resultBody(renderer, result, args, context)) {
+  for (const line of resultBody(renderer, result, tool.resultCommitted, args, context)) {
     lines.push(`  ${line}`);
   }
   for (const line of terminalDetail(result)) {
@@ -373,11 +374,17 @@ function rawArgumentLines(tool: CorrelatedTool): string[] {
 function resultBody(
   renderer: ToolPresentationRenderer,
   result: ToolExecutionResult,
+  resultCommitted: boolean,
   args: unknown,
   context: ToolRenderContext,
 ): string[] {
+  // Deliveries exist only on a successfully committed canonical result. A
+  // foreground settlement carrying the same field is not yet a delivery.
+  const deliveries = resultCommitted && result.status.type === "success"
+    ? result.deliveries ?? []
+    : [];
   const specialized: ToolResultPresentation | undefined =
-    renderer.renderResult?.({ content: result.content }, args);
+    renderer.renderResult?.({ content: result.content, deliveries }, args);
   const body = specialized ?? genericResultLines(result);
 
   // A failure or denial reason, or an outcome-unknown detail, is
