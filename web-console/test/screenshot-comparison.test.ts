@@ -468,3 +468,15 @@ it('dark attachment measured raster evidence passes while adjacent pixels and la
   const overDelta = copy(expected); nudge(overDelta, 293, 153, 8);
   expect(check(overDelta).ok).toBe(false);
 });
+
+// The former dark-context glyph allowance hid a deterministic sticky-paint
+// displacement. Typography must now be exact in both themes.
+it.each(['light', 'dark'])('Composer context %s rejects a one-pixel model label displacement', theme => {
+  const name = `composer-context-${theme}-390-linux.png`, expected = reference(name);
+  const actual = copy(expected);
+  for (let y = 290; y > 270; y--) for (let x = 119; x < 245; x++) paint(actual, x, y, pixel(expected, x, y - 1));
+  const result = compare(actual, name, expected, noisePolicy);
+  expect(result.totalChanged).toBeGreaterThan(0);
+  expect(result.changedOutsideRegions).toBe(result.totalChanged);
+  expect(result.ok).toBe(false);
+});

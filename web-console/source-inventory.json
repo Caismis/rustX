@@ -1045,7 +1045,7 @@
       "destination": "web-console/src/presentation/agent/ModelSelect.module.css",
       "upstream_sha256": "0c3385a4ffa34b2a534b70a326193f441d5f8ffb0de471bcdf145844dfbe94fa",
       "classification": "A",
-      "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
+      "treatment": "Pinned Harness styles; rustX flex-column sizing removes the inline baseline gap so centered model controls retain their glyph origin across sticky repaints; mutation errors remain below the control.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -1054,7 +1054,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "1a1eddf0485fa42335afc61e66cb1f100fb64741cf04aa0c99f4f4bf21dfd09b"
+      "local_sha256": "062920f816304f3867fced4fafd2ee13aa7a99c27fcc72f0f754a2aa24b36d8d"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",

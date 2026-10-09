@@ -1,6 +1,7 @@
 const fixtureOrigin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 import { test, expect } from '@playwright/test';
 import { expectStableScreenshot } from './screenshot';
+import { compareScreenshot, decodePng } from '../screenshot-comparator';
 // Each reference owns a fresh context/page, including its renderer paint caches.
 for (const mode of ['settled', 'streaming', 'tools', 'error', 'approval', 'questionnaire', 'selectors']) test(`Harness Agent ${mode} reference uses native snapshots`, async ({ page }) => {
  const errors: string[] = [];
@@ -111,8 +112,8 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
       await reader.evaluate(element => { element.scrollTop = element.scrollHeight; });
       await expect.poll(() => reader.evaluate(element => element.scrollTop === element.scrollHeight - element.clientHeight)).toBe(true);
       if (state === 'context' && theme === 'dark' && width === 390) {
-        // Measured raster variants must never excuse different model text or
-        // real layout/style changes. Bind that exception to the exact DOM seat.
+        // Bind the native model/profile labels to the intended centered toolbar
+        // seat as well as their exact catalog text and font metrics.
         const labels = await stack.evaluate(root => {
           const origin = root.getBoundingClientRect();
           return [...root.querySelectorAll('[data-model-select] > span')].map(node => {
@@ -122,8 +123,8 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
           });
         });
         expect(labels).toEqual([
-          { text:'native/coder', x:119, y:270.5, width:70.8125, height:20, fontSize:'13px', fontWeight:'500', lineHeight:'20px', color:'rgb(207, 211, 214)', transform:'none' },
-          { text:'deliberate', x:193.8125, y:270.5, width:50.6875, height:20, fontSize:'13px', fontWeight:'500', lineHeight:'20px', color:'rgb(129, 133, 140)', transform:'none' },
+          { text:'native/coder', x:119, y:271, width:70.8125, height:20, fontSize:'13px', fontWeight:'500', lineHeight:'20px', color:'rgb(207, 211, 214)', transform:'none' },
+          { text:'deliberate', x:193.8125, y:271, width:50.6875, height:20, fontSize:'13px', fontWeight:'500', lineHeight:'20px', color:'rgb(129, 133, 140)', transform:'none' },
         ]);
       }
       await expectStableScreenshot(stack, `composer-${state}-${theme}-${width}.png`);
@@ -163,6 +164,36 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
     await page.evaluate(() => window.composerFixture.docks(true));
     const order = await stack.locator(':scope > *').evaluateAll(nodes => nodes.map(node => (node.hasAttribute('data-context-seat') ? 'Context' : node.getAttribute('aria-label')) ?? 'Composer'));
     expect(order).toEqual(['To-dos', 'Goal', 'Queue', 'Composer']);
+    // Repaint both labels while the footer is sticky, then return to the same
+    // reading position. A 29px inline baseline wrapper around the 28px model
+    // button used to leave a half-pixel local text origin: Chromium could keep
+    // the sticky-pose glyph raster after scrolling, moving it by one pixel.
+    // Compare actual renderings, with no baseline or noise allowance, so a
+    // stable but history-dependent raster cannot pass this regression.
+    if (width === 390) {
+      const reader = page.locator('[data-conversation-scroll]').first();
+      const paint = () => page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      await reader.evaluate(element => { element.scrollTop = element.scrollHeight; });
+      await paint();
+      const model = page.locator('[data-model-select]');
+      const geometry = await model.boundingBox();
+      const before = await model.screenshot({ animations: 'disabled', caret: 'hide', scale: 'css' });
+      await reader.evaluate(element => { element.scrollTop = 0; });
+      await paint();
+      // Controlled paint invalidation, not a timer or a retry against a reference.
+      await model.locator(':scope > span').evaluateAll(nodes => nodes.forEach(node => { (node as HTMLElement).style.color = 'red'; }));
+      await paint();
+      await model.locator(':scope > span').evaluateAll(nodes => nodes.forEach(node => { (node as HTMLElement).style.removeProperty('color'); }));
+      await paint();
+      await reader.evaluate(element => { element.scrollTop = element.scrollHeight; });
+      await paint();
+      expect(await model.boundingBox()).toEqual(geometry);
+      const after = await model.screenshot({ animations: 'disabled', caret: 'hide', scale: 'css' });
+      const comparison = compareScreenshot({ expected: decodePng(before), actual: decodePng(after), referenceName: 'model-sticky-repaint', noisePolicy: [] });
+      await test.info().attach('model-before-sticky-repaint', { body: before, contentType: 'image/png' });
+      await test.info().attach('model-after-sticky-repaint', { body: after, contentType: 'image/png' });
+      expect(comparison.totalChanged, comparison.report).toBe(0);
+    }
     await shot('context');
     await page.evaluate(() => window.composerFixture.docks(false));
     await expect(input).toHaveValue('Review these notes.');
