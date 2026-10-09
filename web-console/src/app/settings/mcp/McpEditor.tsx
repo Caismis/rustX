@@ -1,13 +1,15 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { McpWrite, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v38';
 import { useTranslation } from '../../../locale/react';
+import { mcpTransport } from '../../../bindings/mcp';
 import { Button } from '../../../presentation/primitives/Button';
-import { useUnitEditing } from '../forms/bridge';
+import { UnitOutcomeNotice, useUnitEditing } from '../forms/bridge';
 import { documentAuthoring } from '../projection';
 import type { PageFocus } from '../machines/navigation';
-import { ExtensionDetail, McpDefinition } from '../extensions/ExtensionDetail';
-import { extensionEntries, relationshipLabel, selectionLabel } from '../extensions/inventory';
-import { parseMcpJson } from './json';
+import { ExtensionDetail } from '../extensions/ExtensionDetail';
+import { ConfirmAction } from '../primitives/aria';
+import { McpFormFields } from './McpFormFields';
+import { formatMcpJson, parseMcpJson } from './json';
 import css from './McpPage.module.css';
 
 export function McpEditor({ source, scope, revision, focus, scopeControl, close }: {
@@ -25,17 +27,22 @@ function Editor({ source, scope, revision, focus, scopeControl, close, document 
   const tx = useTranslation();
   const [name, setName] = useState(focus.name ?? '');
   const [mode, setMode] = useState<'form'|'json'>(focus.mode === 'json' ? 'json' : 'form');
-  const [json, setJson] = useState('');
   const [error, setError] = useState('');
   const [imports, setImports] = useState<Record<string,McpWrite>>({});
   const [pendingImport, setPendingImport] = useState<McpWrite>();
   const unit = useUnitEditing<McpWrite>({ authored: document.document[name], revision: document.revision,
     blank: {definition:{type:'stdio',command:'',args:[]},retained_env:[],retained_headers:[]}, mutation: value => ({kind:'mcp',id:name,authored:value}) });
-  const submitted = useRef(false);
-  const value = unit.displayed;
-  const entry = extensionEntries(source, scope, 'mcp').find(entry => entry.name === name);
+  const [json, setJson] = useState(() => formatMcpJson(name, unit.displayed));
+  const submitted = useRef(false), pendingSave = useRef(false), card = useRef<HTMLFormElement>(null);
+  const [invalidFields, setInvalidFields] = useState<Record<string, boolean>>({});
+  const validity = useCallback((field: string, valid: boolean) => setInvalidFields(current => {
+    if (!!current[field] === !valid) return current;
+    return {...current,[field]:!valid};
+  }), []);
+  const validFields = !Object.values(invalidFields).some(Boolean);
+  const value = pendingImport ?? unit.displayed;
   const title = tx(focus.name ? 'settings:mcp.edit' : 'settings:mcp.new');
-  const duplicate = !focus.name && !!document.document[name];
+  const duplicate = !focus.name && !!document.document[name] && !(submitted.current && unit.outcome.kind === 'saved');
   const definition = value.definition;
   const complete = !!name && !duplicate && (definition.type === 'http' || definition.url != null
     ? !!definition.url && /^https?:\/\//.test(definition.url) : !!definition.command?.trim());
@@ -48,11 +55,11 @@ function Editor({ source, scope, revision, focus, scopeControl, close, document 
     if (next === 'form') {
       // An unchanged JSON view may represent an unfinished form. Switching
       // views must not force that draft through completed-import validation.
-      if (json === JSON.stringify(pendingImport ?? value,null,2)) { setMode('form'); setError(''); }
+      if (json === formatMcpJson(name, pendingImport ?? value)) { setMode('form'); setError(''); }
       else applyJson();
       return;
     }
-    setJson(JSON.stringify(pendingImport ?? value,null,2));
+    setJson(formatMcpJson(name, pendingImport ?? value));
     setMode(next); setError('');
   };
   const changeName = (next: string) => {
@@ -68,7 +75,13 @@ function Editor({ source, scope, revision, focus, scopeControl, close, document 
     if (focus.name && id && id !== focus.name) {setError(tx('settings:mcp.name-mismatch'));return;}
     const nextName = focus.name ?? (id || name);
     if (nextName !== name && !duplicate && unit.draft) unit.discard();
-    setPendingImport(next); setImports({}); setName(nextName); setMode('form'); setError('');
+    const sameIdentity = nextName === name;
+    const http = mcpTransport(next.definition) === 'http';
+    setPendingImport({...next,
+      retained_env:next.retained_env ?? (sameIdentity && !http ? value.retained_env : []),
+      retained_headers:next.retained_headers ?? (sameIdentity && http ? value.retained_headers : []),
+    });
+    setImports({}); setName(nextName); setMode('form'); setError('');
   };
   const applyJson = () => {
     try {
@@ -78,27 +91,56 @@ function Editor({ source, scope, revision, focus, scopeControl, close, document 
     } catch (cause) { setError(String(cause)); }
   };
   useEffect(() => { if (pendingImport && !duplicate && unit.writable) {unit.edit(pendingImport);setPendingImport(undefined);} }, [pendingImport,name,duplicate,unit.writable]);
-  const cancel = <Button type="button" disabled={unit.busy} onClick={() => {if (!duplicate) unit.discard();close();}}>{tx('settings:mcp.cancel')}</Button>;
+  useEffect(() => {
+    if (pendingSave.current && !unit.writable) pendingSave.current = false;
+    if (pendingSave.current && !pendingImport && complete && unit.draft && unit.admitted && unit.writable) {
+      pendingSave.current = false; submitted.current = true; unit.submit();
+    }
+  }, [pendingImport,complete,unit.draft,unit.admitted,unit.writable]);
+  let jsonReady = false;
+  if (mode === 'json') {
+    try {
+      const entries = Object.entries(parseMcpJson(json));
+      if (entries.length === 1) {
+        const id = entries[0][0] || name;
+        jsonReady = !!id && (focus.name ? id === focus.name : !document.document[id]);
+      }
+    } catch { /* Invalid text remains editable; never submit a prior value. */ }
+  }
+  const blocked = unit.busy || unit.awaitingObservation;
+  const canSave = !blocked && unit.admitted && unit.writable && !unit.reviewNeeded && (mode === 'json' ? jsonReady : complete && validFields && unit.draft && !pendingImport && unit.writable);
+  const save = () => {
+    if (!canSave) return;
+    if (mode === 'json') { pendingSave.current = true; applyJson(); }
+    else { submitted.current = true; unit.submit(); }
+  };
   if (focus.mode === 'permissions' && name) return <ExtensionDetail source={source} scope={scope} revision={revision} models={[]} family="mcp" name={name} backLabel={tx('settings:mcp.back')} onFocus={close}/>;
   return <>
-    <div className={css.breadcrumb}><button type="button" onClick={close}>{tx('settings:catalog.mcp')}</button><span>›</span><span>{focus.name ?? title}</span></div>
     <div className={css.editorHeader}><div><h3>{title}</h3><p>{tx('settings:mcp.form-help')}</p></div><div className={css.modes} role="group" aria-label={tx('settings:mcp.form')}>
-      <Button size="sm" disabled={unit.busy} aria-pressed={mode === 'form'} variant={mode === 'form' ? 'toolbar' : 'ghost'} onClick={() => chooseMode('form')}>{tx('settings:mcp.form')}</Button><Button size="sm" disabled={unit.busy} aria-pressed={mode === 'json'} variant={mode === 'json' ? 'toolbar' : 'ghost'} onClick={() => chooseMode('json')}>JSON</Button></div></div>
-    <div className={css.form} onSubmitCapture={() => {
-      // A fast native acknowledgement can skip the submitting render. Record
-      // the user's save gesture before the transaction receives it.
-      if (complete && !pendingImport && unit.draft && unit.admitted) submitted.current = true;
-    }}>
-    <div className={css.top}><label>{tx('settings:mcp.name')}<input value={name} placeholder={tx('settings:mcp.name-placeholder')} required disabled={!!focus.name || unit.busy || unit.reviewNeeded} onChange={event => changeName(event.target.value.trim())}/></label><div className={css.scope}>{tx('settings:mcp.scope')}{scopeControl}</div></div>
-    {entry && <p>{relationshipLabel(tx, entry, scope)} · {entry.path} · {selectionLabel(tx, entry)}</p>}
-    {duplicate && <p role="alert">{tx('settings:mcp.duplicate')}</p>}
-    {mode === 'json' ? <>
-      <p>{tx('settings:mcp.json-help')}</p><label>{tx('settings:mcp.json')}<textarea className={css.json} value={json} onChange={event => setJson(event.target.value)}/></label>
-      <Button disabled={unit.busy} onClick={applyJson}>{tx('settings:mcp.apply-json')}</Button>
-      {Object.keys(imports).length > 1 && <div className={css.actions}>{Object.entries(imports).map(([id,data]) => <Button key={id} onClick={() => importValue(id,data)}>{id}</Button>)}</div>}
-    </> : <fieldset disabled={duplicate}><McpDefinition source={source} scope={scope} name={name} family="mcp" models={[]} revision={revision} onFocus={close} editor submitDisabled={!complete || !!pendingImport} actions={duplicate ? undefined : cancel}/></fieldset>}
-    {error && <p role="alert">{tx('settings:mcp.invalid-json',{error})}</p>}
-    {(mode === 'json' || duplicate) && <div className={css.footer}>{cancel}</div>}
-    </div>
+      <Button size="sm" disabled={blocked} aria-pressed={mode === 'form'} variant={mode === 'form' ? 'toolbar' : 'ghost'} onClick={() => chooseMode('form')}>{tx('settings:mcp.form')}</Button><Button size="sm" disabled={blocked || !validFields} aria-pressed={mode === 'json'} variant={mode === 'json' ? 'toolbar' : 'ghost'} onClick={() => chooseMode('json')}>JSON</Button></div></div>
+    <form ref={card} tabIndex={-1} className={css.form} aria-label={title} onSubmit={event => {event.preventDefault();save();}}>
+      <fieldset disabled={blocked} className={css.formBody}>
+        <div className={css.top}>{mode === 'form' && <label>{tx('settings:mcp.name')}<input value={name} placeholder={tx('settings:mcp.name-placeholder')} disabled={!!focus.name || unit.reviewNeeded} onChange={event => changeName(event.target.value.trim())}/></label>}<div className={css.scope}>{tx('settings:mcp.scope')}{scopeControl}</div></div>
+        {duplicate && <p role="alert" className={css.error}>{tx('settings:mcp.duplicate')}</p>}
+        {mode === 'json' ? <>
+          <label>{tx('settings:mcp.json')}<textarea className={css.json} value={json} onChange={event => {setJson(event.target.value);setError('');}}/></label>
+          <p className={css.hint}>{tx('settings:mcp.json-help')}</p>
+          {Object.keys(imports).length > 1 && <div className={css.actions}>{Object.entries(imports).map(([id,data]) => <Button key={id} onClick={() => importValue(id,data)}>{id}</Button>)}</div>}
+        </> : <fieldset disabled={duplicate || !unit.writable} className={css.formBody}>
+          <McpFormFields value={value} change={unit.edit} validity={validity}/>
+        </fieldset>}
+        {unit.override && <div className={css.notice}><p>{tx('settings:mcp.inherited')}</p><Button onClick={unit.override}>{tx('settings:bridge.override')}</Button></div>}
+        {unit.reviewNeeded && <div className={css.notice}><p role="status">{tx('settings:mcp.review')}</p><Button onClick={unit.review}>{tx('settings:bridge.use-reviewed-revision')}</Button></div>}
+        <UnitOutcomeNotice title={tx('settings:extension-detail.mcp-value',{p0:name})} outcome={unit.outcome}/>
+        {error && <p role="alert" className={css.error}>{tx('settings:mcp.invalid-json',{error})}</p>}
+      </fieldset>
+      <div className={css.footer}>
+        {focus.name && unit.authoredPresent && <ConfirmAction label={tx('settings:mcp.remove')} title={tx('settings:mcp.remove-confirm')} description={tx('settings:mcp.remove-help')} confirm={tx('settings:mcp.remove')} tone="destructive" settle={card} disabled={blocked || !unit.admitted} onConfirm={() => {submitted.current=true;unit.submit(true);}}/>}
+        <div className={css.footerButtons}>
+          <Button variant="primary" type="submit" disabled={!canSave}>{tx('settings:mcp.save')}</Button>
+          <Button type="button" disabled={blocked} onClick={() => {if (!duplicate) unit.discard();close();}}>{tx('settings:mcp.cancel')}</Button>
+        </div>
+      </div>
+    </form>
   </>;
 }

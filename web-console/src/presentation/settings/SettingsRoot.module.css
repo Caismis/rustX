@@ -307,3 +307,8 @@
   }
   .options { padding: 16px 16px 20px; }
 }
+
+/* MCP uses the neutral list/editor surfaces in the supplied ZCode references.
+   Keep the surrounding settings shell and every other page on their own tokens. */
+:global(body[data-ds-dark-theme]) .options:has([data-mcp-page]) { background:#262626; }
+:global(body[data-ds-dark-theme]) .options:has([data-mcp-page] > form) { background:#151515; }

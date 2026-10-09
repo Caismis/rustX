@@ -11,7 +11,7 @@ function UserScopeIcon() {
 }
 
 /** Scope changes select an exact registered owner; they never retarget a draft. */
-export function SettingsScopeMenu({ target, host, onSelect }: {target: SettingsTarget; host?: ProductHostWorkspaces; onSelect: (target: SettingsTarget) => void}) {
+export function SettingsScopeMenu({ target, host, onSelect, userLabel }: {target: SettingsTarget; userLabel?: string; host?: ProductHostWorkspaces; onSelect: (target: SettingsTarget) => void}) {
   const tx = useTranslation();
   const [open, setOpen] = useState(false);
   const [workspaces, setWorkspaces] = useState<ProductHostWorkspace[]>([]);
@@ -26,7 +26,7 @@ export function SettingsScopeMenu({ target, host, onSelect }: {target: SettingsT
       .finally(() => { if (!abort.signal.aborted) setLoading(false); });
     return () => abort.abort();
   }, [open, host]);
-  const label = target.kind === 'user' ? tx('settings:catalog.user') : target.displayName;
+  const label = target.kind === 'user' ? userLabel ?? tx('settings:catalog.user') : target.displayName;
   return <div>
     <Menu open={open} onClose={() => setOpen(false)} autoFocus selectedId={settingsTargetKey(target)}
       anchor={<button type="button" className={css.scope} aria-label={tx('settings:catalog.scope')} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(value => !value)}>{target.kind === 'user' ? <UserScopeIcon/> : <IconFolderClose16/>}<span>{label}</span><IconChevronDownOutline14/></button>}

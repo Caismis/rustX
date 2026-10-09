@@ -129,7 +129,7 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     await keyboardPage('MCP servers');
     await tabTo(settings.getByRole('button', { name: '＋ New', exact: true })); await page.keyboard.press('Enter');
     await tabTo(settings.getByLabel('Name', { exact: true })); await page.keyboard.type('keyboard-draft');
-    await tabTo(settings.getByLabel('MCP command', { exact: true })); await page.keyboard.type('inert-draft');
+    await tabTo(settings.getByLabel('Command', { exact: true })); await page.keyboard.type('inert-draft');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     expect(await page.locator('main').evaluate(el => getComputedStyle(el.parentElement!).transitionDuration)).toBe('0s');
     await page.screenshot({ path: `test-results/acceptance-keyboard-${width}.png`, fullPage: true });

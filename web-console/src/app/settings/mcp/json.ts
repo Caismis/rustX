@@ -6,7 +6,8 @@ export function parseMcpJson(text: string): Record<string, McpWrite> {
   try { parsed = JSON.parse(text); } catch { throw new Error('Invalid JSON'); }
   if (!record(parsed)) throw new Error('Expected a JSON object');
   if (record(parsed.mcpServers) && Object.keys(parsed).some(key => key !== 'mcpServers')) throw new Error('Unsupported field');
-  const servers = record(parsed.mcpServers) ? parsed.mcpServers : { '': parsed };
+  const direct = ['type','command','url','definition'].some(key => Object.hasOwn(parsed, key) && !record(parsed[key]));
+  const servers = record(parsed.mcpServers) ? parsed.mcpServers : direct || record(parsed.definition) ? { '': parsed } : parsed;
   const result: Record<string, McpWrite> = Object.create(null);
   for (const [name, input] of Object.entries(servers)) {
     if (!record(input)) throw new Error('Expected a server object');
@@ -30,4 +31,9 @@ export function parseMcpJson(text: string): Record<string, McpWrite> {
   }
   if (!Object.keys(result).length) throw new Error('No MCP servers found');
   return result;
+}
+
+/** Named configuration for the editor; private native retention metadata stays inside the transaction. */
+export function formatMcpJson(name: string, value: McpWrite): string {
+  return JSON.stringify({[name || 'my-mcp-server']: value.definition}, null, 2);
 }

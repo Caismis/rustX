@@ -44,14 +44,15 @@ it('scope menu preserves the resource category and keeps definition drafts bound
   expect(writes(s)).toHaveLength(0);
 });
 
-it('partial MCP grants stay in the detailed selection editor', async () => {
+it('partial MCP grants are preserved by a disabled list toggle without an extra selection editor', async () => {
   const s = cfg3Client();
   s.source.user.authored!.agent = { tools: { sources: { search: ['lookup'] } } };
   await catalog(s);
   const card = within(screen.getByRole('listitem', { name: 'search' }));
-  expect(card.queryByRole('switch')).toBeNull();
-  fireEvent.click(card.getByRole('button', { name: 'Manage selection' }));
-  expect(screen.getByRole('form', { name: 'Source search' })).toBeTruthy();
+  expect(card.queryByRole('button', { name: 'Manage selection' })).toBeNull();
+  const toggle = card.getByRole('switch') as HTMLButtonElement;
+  expect(toggle.disabled).toBe(true);
+  fireEvent.click(toggle);
   expect(writes(s)).toHaveLength(0);
 });
 
@@ -69,12 +70,13 @@ it.each(['skill', 'agent'] as const)('%s quick selection preserves other names a
   expect(writes(s)[0]).toMatchObject({ target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'workspace-1', mutation: { kind: 'config', mutation: { unit, authored: ['existing', 'helper'] } } });
 });
 
-it('a rejected quick write exposes its retained draft through detail rather than retrying', async () => {
+it('a rejected MCP toggle exposes the failure and cannot blindly retry', async () => {
   const s = cfg3Client(async op => { if (op.method === 'configuration/sourceWrite') throw new Error('catalog rejected'); });
   await catalog(s);
   fireEvent.click(within(screen.getByRole('listitem', { name: 'search' })).getByRole('switch'));
-  fireEvent.click(await screen.findByRole('button', { name: 'Manage selection' }));
   await screen.findByText(/catalog rejected/);
+  expect((within(screen.getByRole('listitem', {name:'search'})).getByRole('switch') as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.queryByRole('button', {name:'Manage selection'})).toBeNull();
   expect(writes(s)).toHaveLength(1);
 });
 

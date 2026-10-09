@@ -1824,17 +1824,41 @@ committed Tool message's typed `deliveries` to cards. Preview and Download stay
 with the existing PreviewWorkspace and original-byte owners. Inventory hashes and
 dependency closures describe this final source, including the v38 import renames.
 
-## UI optimization: complete MCP creation form
+## UI optimization: MCP screenshot alignment
 
-Compared the creation flow with local ZCode `McpServerForm.tsx` at
-`29628c9acdb81b703bbd4080c207a0e7ce5e276e`: show the complete form immediately,
-group optional environment/header settings behind a disclosure, and keep Save
-and Cancel together. Existing Harness-derived settings materials remain the
-visual source; no ZCode runtime or form implementation was copied.
+The four user-supplied ZCode screenshots are the visual reference for the
+scope-local empty list, collapsed form, expanded environment field and JSON
+editor. Source comparison used ZCode `29628c9acdb81b703bbd4080c207a0e7ce5e276e`,
+`McpServerForm.tsx`, `McpServerList.tsx`, `McpSettingsSection.tsx`,
+`SettingsFormActions.tsx`, and `mcpSettingsShared.ts`. The dedicated editor now
+uses 192px short fields, 32px controls, a 16px inset outlined card, an optional
+JSON environment field, top-right mode tabs and bottom-right Save/Cancel.
+The list uses a large title, scoped toolbar, outlined actions and dashed empty
+state. Shared Harness-derived controls remain in use, with neutral dark surfaces
+scoped to MCP to match the supplied screenshots; no
+ZCode component implementation or runtime is copied.
 
-The rustX editor keeps exact argument arrays, native-supported stdio/HTTP
-definitions, environment references and retained-key redaction. Unnamed drafts
-cannot be submitted; changing a new identity moves its draft without writing
-either identity. JSON/form switching preserves the draft, and authoritative
-observed saves return to the list even when React batches the submitting state.
-No timeout, protocol-version, SSE or literal-credential controls are introduced.
+The generic unit shell, argument array rows, working-directory/advanced fields,
+retained-secret checkboxes, redundant form explanations and list permission
+metadata are absent from the dedicated MCP surface. JSON shows the named
+server definition, not the internal transaction wrapper, and accepts both
+named objects and `mcpServers` objects. A JSON save submits one identity through
+the existing native CAS transaction and returns after its authoritative read.
+Unexposed native retention metadata remains attached to edits of the same
+identity. Partial tool selections keep their list switch disabled rather than
+replace native grants or expose an additional selection-editor button.
+
+The user explicitly chose to keep rustX's native rules: no timeout,
+protocol-version or literal-credential authoring controls were added. Optional
+environment/header JSON therefore accepts `$VARIABLE` references. Existing
+native cwd and secret retention survive ordinary form edits. Invalid field
+buffers block Save and JSON switching, and new drafts survive renaming without
+writing unnamed or duplicate identities. The single arguments field uses
+`shell-quote` 1.12.0 for reversible argv formatting; it never launches a shell or
+expands environment variables. Its MIT notice is included in generated notices.
+
+Validation includes editor/transaction regressions, desktop and narrow browser
+interaction/geometry checks, and local screenshots of all four Chinese states.
+The browser fixture exercises the real UI against deterministic source
+responses; it does not claim a live MCP server connection or pinned-container
+pixel-baseline equivalence.

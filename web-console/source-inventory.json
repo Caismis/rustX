@@ -479,7 +479,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "cad811cff430368c800c14889304d03ae8ddcb12b3aea93e46d67ceff847535e"
+      "local_sha256": "d24028087535af1db7eb0677da8d0346d8dc2ce3206ec977663ccde627e02efc"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
@@ -531,7 +531,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "aee41eacd55c2e451baba5a0edbacdd884e69f1a4ec7b45905a28dd79fe00244"
+      "local_sha256": "f348f4b5906093277da4d27b3402b49069e9269c5983f44464219dc95a6c3181"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
@@ -2243,7 +2243,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "9fcb2a507c60c18c0d466edabda8eb984133f67e629587f24c5595a45d8aa84c",
+      "local_sha256": "9107ba340e1a4655e649f591db6de524b0dd55cc966653c6f4ccdee31bfeb0cb",
       "retained_dependencies": [],
       "classification": "B"
     },
@@ -3363,7 +3363,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "af30001e10e3d3d83c7b22fead3b54f9df6be55ddbf3cada8430530fa496dc45"
+      "local_sha256": "42536e9aa4e01ded2b4727f03c018c840ae80ba7ef2659c49ef430628a1935ae"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -5685,9 +5685,9 @@
       "upstream": "packages/client/ui-settings-models/src/client/ModelsSection.module.css",
       "destination": "web-console/src/app/settings/mcp/McpPage.module.css",
       "upstream_sha256": "0de105abac343887fbea8508fc0e20b6903505a3f689dd05b1125ff02886e801",
-      "local_sha256": "65eb1d528ecdc2dbbc7132aa957f43c46322b4e8a9c9b397597bf30bb54748a1",
+      "local_sha256": "fb1c16f92b79ff970825e0af0bb0ac55ff5742e0f9a9f3744a6e8b7a7cf79647",
       "classification": "B",
-      "treatment": "MCP catalog and editor adapt Harness settings materials, compact typography, card spacing, inset editor and disclosure; shared rustX Button geometry and settings container sizing. Scope-local configuration observation; native capability generations retain execution ownership. UI optimization: single complete editor card, compact native field shell and optional configuration disclosure.",
+      "treatment": "Harness-derived settings theme and controls with ZCode screenshot geometry: outlined compact form, short fields, footer actions, segmented modes and scoped MCP list.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": []

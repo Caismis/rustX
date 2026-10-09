@@ -177,7 +177,7 @@ function SettingsDialog({ client, host, theme = 'system', setTheme, connection, 
         authority and reports its own state. */}
     {current === 'mcp' && <McpPage source={source} scope={scope} revision={structured ? config.revision : undefined}
       focus={focus.mcp} onFocus={onFocus} refresh={() => actor.send({type:'REFRESH'})} refreshing={busy || reconciling}
-      scopeControl={<SettingsScopeMenu target={mcpTarget} host={host} onSelect={next => { onFocus(undefined); setMcpTarget(next); }}/>} />}
+      scopeControl={<SettingsScopeMenu userLabel={tx('settings:mcp.user')} target={mcpTarget} host={host} onSelect={next => { onFocus(undefined); setMcpTarget(next); }}/>} />}
     {current === 'extensions' && <ExtensionsPage source={source} scope={scope}
       revision={structured ? config.revision : undefined} models={models} focus={focus.extensions} onFocus={onFocus}
       filter={extensionFilter} onFilter={setExtensionFilter} refresh={() => actor.send({type:'RECONCILE'})} refreshing={busy || reconciling}

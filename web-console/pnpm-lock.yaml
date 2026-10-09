@@ -119,6 +119,9 @@ importers:
       saxes:
         specifier: 6.0.0
         version: 6.0.0
+      shell-quote:
+        specifier: 1.12.0
+        version: 1.12.0
       shiki:
         specifier: 4.3.1
         version: 4.3.1
@@ -1659,6 +1662,10 @@ packages:
 
   setimmediate@1.0.5:
     resolution: {integrity: sha512-MATJdZp8sLqDl/68LfQmbP8zKPLQNV6BIZoIgrscFDQ+RsvK/BxeDQOgyxKKoh0y/8h3BqVFnCqQ/gd+reiIXA==}
+
+  shell-quote@1.12.0:
+    resolution: {integrity: sha512-PcByqNyT/38F2kDNi006HAMRJaULuBzq/FOsw3qdZvX/GA9W/jamDaRskgHjubHiftXK5sIFxLNkvrXUwcof6Q==}
+    engines: {node: '>= 0.4'}
 
   shiki@4.3.1:
     resolution: {integrity: sha512-oR+qDVi2OjX1tmDpyv+3KviX01KzO6Af+0NNnKnsp9491UEGz2YpxTuJboS/6VhYpTdqzmuJBuiTlrAWWJAssw==}
@@ -3531,6 +3538,8 @@ snapshots:
   scheduler@0.28.0: {}
 
   setimmediate@1.0.5: {}
+
+  shell-quote@1.12.0: {}
 
   shiki@4.3.1:
     dependencies:
