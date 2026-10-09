@@ -181,7 +181,7 @@ use std::task::{Context, Poll};
 use futures_util::stream::BoxStream;
 use futures_util::{Stream, StreamExt as _};
 use http::{HeaderName, HeaderValue};
-use rmcp::model::{ClientJsonRpcMessage, RequestId};
+use rmcp::model::{ClientJsonRpcMessage, ClientRequest, RequestId};
 use rmcp::transport::streamable_http_client::{
     SseError, StreamableHttpClient, StreamableHttpError, StreamableHttpPostResponse,
 };
@@ -775,9 +775,9 @@ impl McpHttpRequestOwnership {
     /// - `AwaitingDispatch` — no participant has taken the baton, so no POST
     ///   of this request can exist yet.
     ///
-    /// A request with no lifecycle entry — every request rustX sends that is
-    /// not a tool invocation — owns no state a settlement could terminate
-    /// and is registered as untracked.
+    /// A request with no lifecycle entry is registered as untracked. Tool
+    /// invocations enter at the dispatch seam; initialization/discovery enter
+    /// in `owned_post` so a cancelled handshake can settle its startup POST.
     ///
     /// The guard's token is already cancelled when the request was
     /// terminated after its dispatch was owned, so the POST is
@@ -785,8 +785,8 @@ impl McpHttpRequestOwnership {
     fn register(self: &Arc<Self>, id: RequestId) -> RequestOwnershipGuard {
         let mut state = self.state.lock().expect("MCP HTTP ownership lock poisoned");
         let Some(entry) = state.requests.get_mut(&id) else {
-            // Not a tracked tool invocation: nothing terminates it, and it
-            // must not create a lifecycle entry nothing would forget.
+            // Not a tracked invocation or handshake: do not create a
+            // lifecycle entry nothing would forget.
             return RequestOwnershipGuard {
                 ownership: None,
                 id,
@@ -852,6 +852,23 @@ impl McpHttpRequestOwnership {
         let mut state = self.state.lock().expect("MCP HTTP ownership lock poisoned");
         for entry in state.requests.values_mut() {
             entry.terminate.cancel();
+        }
+    }
+
+    /// A failed/cancelled handshake has dropped its outbound transport. Await
+    /// any POST still owned by the worker before its connect owner can settle.
+    pub(crate) async fn settle_failed_handshake(&self) {
+        self.terminate_all();
+        let releases: Vec<_> = self
+            .state
+            .lock()
+            .expect("MCP HTTP ownership lock poisoned")
+            .requests
+            .values()
+            .map(|entry| Arc::clone(&entry.release))
+            .collect();
+        for release in releases {
+            release.released().await;
         }
     }
 
@@ -1154,6 +1171,20 @@ impl McpHttpClient {
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<reqwest::Error>> {
         let Some(id) = request_id(message) else {
             return post.await;
+        };
+        // Initialization has no tool-invocation admission. Own its HTTP
+        // request here so cancelling a handshake can terminate rmcp's startup
+        // POST even while its worker is awaiting response headers/body.
+        let handshake = matches!(message, ClientJsonRpcMessage::Request(request)
+            if matches!(&request.request, ClientRequest::InitializeRequest(_) | ClientRequest::DiscoverRequest(_)));
+        let _handshake_admission = handshake.then(|| self.ownership.admit(&id));
+        let _handshake_dispatch = if handshake {
+            match self.ownership.begin_dispatch(&id) {
+                OutboundDispatch::Owned(dispatch) => Some(dispatch),
+                OutboundDispatch::Refused => return Err(locally_terminated()),
+            }
+        } else {
+            None
         };
         #[cfg(test)]
         self.ownership.note_http_request(&id, message);

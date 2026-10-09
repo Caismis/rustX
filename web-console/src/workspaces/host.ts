@@ -1,9 +1,9 @@
-import type { SourceMutation, SourceSettings } from '../../../protocol/app-server/v38.ts';
+import type { McpProbeResult, SourceMutation, SourceSettings } from '../../../protocol/app-server/v38.ts';
 import type { AttachmentTarget, SessionFileReference } from '../../../protocol/app-server/v38.ts';
 import type { DocumentRequest, DocumentResult } from '../../shared/documents.ts';
 export interface DeliveryRead { target: AttachmentTarget; message_id: string; delivery_index: number }
 export interface DeliveryBytes { file: SessionFileReference; data: string }
-export type WorkspaceConfigurationOperation =  { kind: 'read' | 'reconcile' } | { kind: 'write'; expected_revision: string; mutation: SourceMutation };
+export type WorkspaceConfigurationOperation =  { kind: 'read' | 'reconcile' } | { kind: 'mcp_probe'; id: string; expected_revision: string } | { kind: 'write'; expected_revision: string; mutation: SourceMutation };
 /** The separate authoritative read attempted after a confirmed write. It may
  * succeed or fail without changing the fact that the write committed. */
 export type WorkspaceConfigurationReread =
@@ -20,6 +20,7 @@ export interface WorkspaceConfigurationCommit {
  * authoritative reread stay distinct facts for a write, so a failed reread can
  * never be mistaken for an uncommitted write. */
 export type WorkspaceConfigurationResult =
+  | { kind: 'mcp_probe'; result: McpProbeResult }
   | { kind: 'read' | 'reconcile'; projection: SourceSettings }
   | { kind: 'write'; commit: WorkspaceConfigurationCommit };
 /** Product Host contract. No rustX trust, configuration, or Session ownership. */

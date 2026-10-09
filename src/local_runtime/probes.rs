@@ -12,7 +12,7 @@ use crate::tools::mcp::{McpInvalidationState, McpServerRuntime, OwnedConnect};
 use crate::tools::workspace::Workspace;
 
 const PROBE_TIMEOUT_MS: u64 = 15_000;
-const PROBE_TIMEOUT: Duration = Duration::from_millis(PROBE_TIMEOUT_MS);
+pub(super) const PROBE_TIMEOUT: Duration = Duration::from_millis(PROBE_TIMEOUT_MS);
 
 #[derive(Debug, Serialize)]
 pub(super) struct ProbePlan {
@@ -367,7 +367,7 @@ fn capture_credentials(plan: &ProbePlan) -> crate::credentials::CredentialSnapsh
 
 /// A deadline cancels the existing physical owner and then awaits it. Never
 /// detach work by timing out its waiter. Tests control expiration with a channel.
-async fn await_owned<T, E>(
+pub(super) async fn await_owned<T, E>(
     step: impl std::future::Future<Output = Result<T, E>>,
     cancellation: &CancellationSignal,
     deadline: impl std::future::Future<Output = ()>,

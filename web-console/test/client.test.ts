@@ -795,3 +795,15 @@ it.each(['session/detach', 'session/switchNode'] as const)('terminal unsent Open
   expect(s.requests.filter(({ request }) => request.method === method)).toHaveLength(1);
   expect(s.claims()).toEqual([]);
 });
+
+it('MCP diagnostic settlement does not expire the shared RPC transport',async()=>{
+  const s=server();await s.connect();s.held.add('mcp/probe');
+  vi.useFakeTimers();
+  const check=s.client.request({method:'mcp/probe',params:{target:{kind:'user'},id:'exa',expected_revision:'mcp-1'}},'mcp_probe');
+  await vi.advanceTimersByTimeAsync(120_000);
+  expect(s.client.getSnapshot().connection).toBe('connected');
+  const requests=s.requests.filter(row=>row.request.method==='mcp/probe');
+  expect(requests).toHaveLength(1);
+  s.socket.success(requests[0].request,{type:'mcp_probe',result:{id:'exa',revision:'mcp-1',outcome:'timed_out'}});
+  await expect(check).resolves.toMatchObject({result:{outcome:'timed_out'}});
+});

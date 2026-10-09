@@ -1968,6 +1968,40 @@
           ]
         },
         {
+          "description": "Finite configuration connectivity check; never an Agent connection.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "mcp/probe"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/SourceTarget"
+                },
+                "id": {
+                  "$ref": "#/$defs/McpServerId"
+                },
+                "expected_revision": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "id",
+                "expected_revision"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
           "type": "object",
           "properties": {
             "method": {
@@ -3520,6 +3554,10 @@
         }
       ]
     },
+    "McpServerId": {
+      "description": "Identifies an MCP server bound to the runtime.",
+      "type": "string"
+    },
     "SourceMutation": {
       "oneOf": [
         {
@@ -3612,10 +3650,6 @@
           ]
         }
       ]
-    },
-    "McpServerId": {
-      "description": "Identifies an MCP server bound to the runtime.",
-      "type": "string"
     },
     "McpWrite": {
       "type": "object",
@@ -6652,6 +6686,23 @@
           "required": [
             "type",
             "projection"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "result": {
+              "$ref": "#/$defs/McpProbeResult"
+            },
+            "type": {
+              "type": "string",
+              "const": "mcp_probe"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "result"
           ]
         },
         {
@@ -19593,6 +19644,36 @@
         "generation",
         "model",
         "resources"
+      ]
+    },
+    "McpProbeResult": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/McpServerId"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/McpProbeOutcome"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "outcome"
+      ]
+    },
+    "McpProbeOutcome": {
+      "type": "string",
+      "enum": [
+        "reachable",
+        "connection_failed",
+        "list_failed",
+        "timed_out",
+        "cancelled",
+        "settlement_failed"
       ]
     },
     "SourceSettings": {

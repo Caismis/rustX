@@ -1729,9 +1729,9 @@ PR #457 repair retains the scope-local list and Harness settings primitives, but
 routes both definition entry points through the existing `McpDefinition` and
 Settings transaction actor. JSON import only accepts environment references;
 Header/Env literals are retained by key or removed, never introduced by Web
-configuration writes. Settings inspection and refresh are read-only. The native
-capability lifecycle owns all MCP connections; no settings connection/probe is
-created. Meter scheduling remains separate from native durable folding authority.
+configuration writes. Configuration inspection remains read-only. The native capability lifecycle
+owns Session MCP connections. The MCP list now invokes finite native diagnostics
+as described below. Meter scheduling remains separate from native durable folding authority.
 The client owns two current observations and a total budget of four unconfirmed
 reads across scope changes. Current inventory plus a fair cursor replaces the
 lossy 32-entry pending queue; selected demand gets alternating priority. Exact
@@ -1862,3 +1862,11 @@ interaction/geometry checks, and local screenshots of all four Chinese states.
 The browser fixture exercises the real UI against deterministic source
 responses; it does not claim a live MCP server connection or pinned-container
 pixel-baseline equivalence.
+
+MCP connectivity indicators follow ZCode's automatic settings checks and existing
+Refresh control (`McpSettingsSection.tsx`, `zcode-protocol/mcp.ts`). rustX uses
+finite `mcp/probe` operations instead of ZCode's retained `mcp-status` process
+connections. Green means the authored configuration passed its last handshake
+and tool-list check; tooltips distinguish it from a live Agent connection.
+Source revision, target and transport identity fence results. Workspace probes
+use the existing Product Host registration lane; no browser path grants authority.

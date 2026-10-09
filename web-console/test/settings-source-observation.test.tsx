@@ -312,6 +312,7 @@ it('S10 target replacement fences stale reads, acknowledgements and the stale wo
         return { kind: 'write', commit: { acknowledgement, reread } };
       }
       if (operation.kind === 'reconcile') await s.client.request({ method: 'configuration/reconcile', params: { target } }, 'configuration_application');
+      if (operation.kind === 'mcp_probe') return {kind:'mcp_probe',result:{id:operation.id,revision:operation.expected_revision,outcome:'reachable'}};
       return { kind: operation.kind, projection: (await s.client.request({ method: 'configuration/sourcesRead', params: { target } }, 'source_settings')).projection };
     },
   };
@@ -441,6 +442,7 @@ it('S12 a held Workspace post-write reread cannot regress a newer authoritative 
         return { kind: 'write', commit: { acknowledgement, reread } };
       }
       if (operation.kind === 'reconcile') await s.client.request({ method: 'configuration/reconcile', params: { target } }, 'configuration_application');
+      if (operation.kind === 'mcp_probe') return {kind:'mcp_probe',result:{id:operation.id,revision:operation.expected_revision,outcome:'reachable'}};
       return { kind: operation.kind, projection: (await s.client.request({ method: 'configuration/sourcesRead', params: { target } }, 'source_settings')).projection };
     },
   };
@@ -521,6 +523,7 @@ it('S13 a write-owned reread cannot commit over a newer read that was only initi
         captured.release(); await held.reached;
         return { kind: 'write', commit: { acknowledgement, reread } };
       }
+      if (operation.kind === 'mcp_probe') return {kind:'mcp_probe',result:{id:operation.id,revision:operation.expected_revision,outcome:'reachable'}};
       return { kind: operation.kind, projection: (await s.client.request({ method: 'configuration/sourcesRead', params: { target: native.target } }, 'source_settings')).projection };
     },
   };
@@ -591,6 +594,7 @@ it('S14 a superseded write-owned reread failure publishes no read error and leav
         captured.release(); await held.reached;
         return { kind: 'write', commit: { acknowledgement, reread } };
       }
+      if (operation.kind === 'mcp_probe') return {kind:'mcp_probe',result:{id:operation.id,revision:operation.expected_revision,outcome:'reachable'}};
       return { kind: operation.kind, projection: (await s.client.request({ method: 'configuration/sourcesRead', params: { target: native.target } }, 'source_settings')).projection };
     },
   };

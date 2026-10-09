@@ -461,6 +461,14 @@ export type Request1 =
       };
     }
   | {
+      method: 'mcp/probe';
+      params: {
+        target: SourceTarget;
+        id: McpServerId;
+        expected_revision: string;
+      };
+    }
+  | {
       method: 'configuration/sourceWrite';
       params: {
         target: SourceTarget;
@@ -761,6 +769,10 @@ export type SourceTarget =
       directory: string;
       kind: 'workspace';
     };
+/**
+ * Identifies an MCP server bound to the runtime.
+ */
+export type McpServerId = string;
 export type SourceMutation =
   | {
       document: string;
@@ -780,10 +792,6 @@ export type SourceMutation =
       authored?: AgentProfileDocument | null;
       kind: 'agent';
     };
-/**
- * Identifies an MCP server bound to the runtime.
- */
-export type McpServerId = string;
 /**
  * A validated reference, written as `$ENV_VAR` only in declared secret fields.
  */
@@ -1315,6 +1323,10 @@ export type MethodResult =
   | {
       projection: EffectiveConfiguration;
       type: 'effective_configuration';
+    }
+  | {
+      result: McpProbeResult;
+      type: 'mcp_probe';
     }
   | {
       projection: SourceSettings;
@@ -2841,6 +2853,13 @@ export type Origin =
       base: string;
       kind: 'process';
     };
+export type McpProbeOutcome =
+  | 'reachable'
+  | 'connection_failed'
+  | 'list_failed'
+  | 'timed_out'
+  | 'cancelled'
+  | 'settlement_failed';
 export type ProcessPolicyImpact = 'hot' | 'restart';
 /**
  * Whether native can bind a Session in a Workspace, and its model catalog.
@@ -9796,6 +9815,11 @@ export interface AdmittedConfiguration {
   generation: RuntimeResourceRevision;
   model: SessionModelView;
   resources: CapabilityInspection1;
+}
+export interface McpProbeResult {
+  id: McpServerId;
+  revision: string;
+  outcome: McpProbeOutcome;
 }
 export interface SourceSettings {
   target: SourceTarget;

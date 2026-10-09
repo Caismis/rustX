@@ -89,3 +89,9 @@
   --dsw-alias-border-l3:#484848;
   --dsw-alias-border-l4:#424242;
 }
+
+.dot[data-status="reachable"] { background: #22c55e; }
+.dot[data-status="connection_failed"], .dot[data-status="list_failed"], .dot[data-status="timed_out"], .dot[data-status="settlement_failed"] { background: #ef4444; }
+.dot[data-status="checking"] { background: transparent; border: 2px solid #eab308; border-top-color: transparent; animation: mcp-probe-spin 1s linear infinite; }
+@keyframes mcp-probe-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .dot[data-status="checking"] { animation: none; } }

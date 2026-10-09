@@ -10,12 +10,14 @@ import type { PageFocus } from '../machines/navigation';
 import { extensionEntries } from '../extensions/inventory';
 import { CollectionDiagnostics } from '../extensions/ExtensionsPage';
 import { ResourceAvailability } from '../extensions/ResourceAvailability';
+import type { ProbeState } from './useMcpProbes';
 import { McpStatusIcon } from './McpStatusIcon';
 import { McpEditor } from './McpEditor';
 import css from './McpPage.module.css';
 
 /** Scope-local MCP management using the shared Harness settings presentation. */
-export function McpPage({ source, scope, revision, focus, onFocus, scopeControl, refresh, refreshing }: {
+export function McpPage({ source, scope, revision, focus, onFocus, scopeControl, refresh, refreshing, probeStates = {} }: {
+  probeStates?: Record<string, ProbeState>;
   source: SourceSettings; scope: SourceScope; revision?: string; focus?: PageFocus['mcp'];
   onFocus: (focus?: PageFocus['mcp']) => void; scopeControl: ReactNode; refresh: () => void; refreshing: boolean;
 }) {
@@ -47,7 +49,7 @@ export function McpPage({ source, scope, revision, focus, onFocus, scopeControl,
       </div>
       {rows.length ? <div role="list" className={css.list}>{rows.map(entry => <div key={entry.name} role="listitem" aria-label={entry.name} className={css.row}>
         <button className={css.open} type="button" aria-label={tx('settings:extension-detail.mcp-value',{p0:entry.name})} onClick={() => onFocus({kind:'mcp',name:entry.name})}>
-          <McpStatusIcon entry={entry}/>
+          <McpStatusIcon entry={entry} probe={probeStates[entry.name]}/>
           <span className={css.content}><span>{entry.name}</span><small>{entry.diagnostics[0] ?? description(entry.name,scope,entry.path)}</small></span>
         </button>
         {revision && <ResourceAvailability family="mcp" name={entry.name} valid={entry.valid} source={source} scope={scope} revision={revision}/>}

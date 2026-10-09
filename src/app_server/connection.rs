@@ -933,6 +933,19 @@ impl AppServerConnection {
                     projection: Box::new(projection),
                 })
             }
+            Method::McpProbe {
+                target,
+                id,
+                expected_revision,
+            } => {
+                let result = self
+                    .host
+                    .manager()
+                    .probe_mcp(target, id, expected_revision)
+                    .await
+                    .map_err(source_error)?;
+                Ok(MethodResult::McpProbe { result })
+            }
             Method::SourcesWrite {
                 target,
                 expected_revision,

@@ -395,6 +395,13 @@ pub enum Method {
     SourcesRead {
         target: crate::local_runtime::configuration::settings::SourceTarget,
     },
+    /// Finite configuration connectivity check; never an Agent connection.
+    #[serde(rename = "mcp/probe")]
+    McpProbe {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        id: crate::runtime::identity::McpServerId,
+        expected_revision: String,
+    },
     #[serde(rename = "configuration/sourceWrite")]
     SourcesWrite {
         target: crate::local_runtime::configuration::settings::SourceTarget,
@@ -731,6 +738,9 @@ pub enum MethodResult {
     },
     EffectiveConfiguration {
         projection: Box<crate::local_runtime::configuration::settings::EffectiveConfiguration>,
+    },
+    McpProbe {
+        result: crate::local_runtime::mcp_probe::McpProbeResult,
     },
     SourceSettings {
         projection: Box<crate::local_runtime::configuration::settings::SourceSettings>,

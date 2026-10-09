@@ -159,6 +159,7 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   "session/uploadPrepare": "side_effecting",
   "session/uploadStatus": "read",
   "configuration/sourcesRead": "read",
+  "mcp/probe": "side_effecting",
   "session/effectiveConfiguration": "read",
   "configuration/sourceWrite": "side_effecting",
   "session/model": "read",
@@ -238,7 +239,7 @@ interface PendingRequest {
 const REQUEST_CAPACITY = { wait: 4, admission: 2, control: 2, rpc: 7, cancel: 1 } as const;
 function requestLane(method: MethodName): keyof typeof REQUEST_CAPACITY {
   switch (method) {
-    case "agent/wait": case "job/wait": return "wait";
+    case "mcp/probe": case "agent/wait": case "job/wait": return "wait";
     case "agent/sendMessage": return "admission";
     case "agent/interrupt": case "job/cancel": case "turn/cancel":
     case "interaction/respond": case "interaction/cancel": return "control";

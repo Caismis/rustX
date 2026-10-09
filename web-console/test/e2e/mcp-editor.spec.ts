@@ -77,3 +77,30 @@ test('Chinese MCP reference states contain only the intended controls', async ({
   await form.getByRole('button',{name:'取消',exact:true}).click();
   await expect(surface.getByText('尚未安装 MCP 服务器',{exact:true})).toBeVisible();
 });
+
+for (const width of [1440, 390]) test(`MCP connectivity indicators match across scopes at ${width}px`, async ({page}) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.setViewportSize({width,height:1000});
+  await page.addInitScript(() => localStorage.setItem('rustx-locale-v1','en'));
+  await page.goto(`http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}/test/fixtures/settings.html?scenario=mcp-probe`);
+  await page.getByRole('button',{name:'Settings',exact:true}).click();
+  if (width === 1440) await page.getByRole('button',{name:'Dark',exact:true}).click();
+  await openSettingsPage(page,'MCP servers');
+  const surface=page.locator('[data-mcp-page]');
+  for (const scope of ['User','Workspace A']) {
+    if(scope !== 'User') {
+      await surface.getByRole('button',{name:'Configuration scope',exact:true}).click();
+      await page.getByRole('menuitem',{name:'Workspace A',exact:true}).click();
+    }
+    await expect(surface.getByRole('listitem',{name:'exa'}).locator('[data-status]')).toHaveAttribute('data-status','reachable');
+    await expect(surface.getByRole('listitem',{name:'broken'}).locator('[data-status]')).toHaveAttribute('data-status','connection_failed');
+    await expect(surface.getByRole('listitem',{name:'exa'}).locator('[data-status]')).toHaveCSS('background-color','rgb(34, 197, 94)');
+    await surface.getByRole('button',{name:'Refresh',exact:true}).click();
+    await expect(surface.getByRole('button',{name:'Refresh',exact:true})).toBeEnabled();
+    await expect(surface.getByRole('img',{name:'Connection check passed. This is not the Agent\'s live connection.'})).toBeVisible();
+  }
+  await surface.screenshot({path:`/tmp/rustx-mcp-probes-${width}.png`});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  expect(errors).toEqual([]);
+});

@@ -3,6 +3,7 @@ import { useTranslation } from '../../locale/react';
 import type { Theme } from '../appearance';
 import { useState, type ReactNode } from 'react';
 import { McpIcon } from './mcp/McpIcon';
+import { useMcpProbes } from './mcp/useMcpProbes';
 import { McpPage } from './mcp/McpPage';
 import { SettingsScopeMenu } from './SettingsScopeMenu';
 import { shallowEqual, useSelector } from '@xstate/react';
@@ -124,6 +125,7 @@ function SettingsDialog({ client, host, theme = 'system', setTheme, connection, 
   // and authoring stays closed until that read is adopted.
   const observed = useSelector(actor, snapshot => snapshot.context.observation);
   const source = useSelector(actor, snapshot => snapshot.context.observation ?? snapshot.context.staleObservation);
+  const mcpProbes = useMcpProbes(client, host, activeTarget, observed, current === 'mcp' && !focus.mcp);
   const readError = useSelector(actor, snapshot => snapshot.context.readError);
   const convergenceError = useSelector(actor, snapshot => snapshot.context.convergenceError);
   const reconciling = useSelector(actor, snapshot => snapshot.matches({ maintenance: 'reconciling' }));
@@ -176,7 +178,7 @@ function SettingsDialog({ client, host, theme = 'system', setTheme, connection, 
         about the MCP or named-Agent documents, each of which is its own
         authority and reports its own state. */}
     {current === 'mcp' && <McpPage source={source} scope={scope} revision={structured ? config.revision : undefined}
-      focus={focus.mcp} onFocus={onFocus} refresh={() => actor.send({type:'REFRESH'})} refreshing={busy || reconciling}
+      focus={focus.mcp} onFocus={onFocus} probeStates={mcpProbes.states} refresh={() => { actor.send({type:'REFRESH'}); mcpProbes.refresh(); }} refreshing={busy || reconciling || mcpProbes.busy}
       scopeControl={<SettingsScopeMenu userLabel={tx('settings:mcp.user')} target={mcpTarget} host={host} onSelect={next => { onFocus(undefined); setMcpTarget(next); }}/>} />}
     {current === 'extensions' && <ExtensionsPage source={source} scope={scope}
       revision={structured ? config.revision : undefined} models={models} focus={focus.extensions} onFocus={onFocus}

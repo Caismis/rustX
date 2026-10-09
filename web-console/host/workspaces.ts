@@ -334,6 +334,11 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
         // Resolve again after asynchronous admission, immediately before submission.
         if ((await this.resolveWorkspace(id, endpoint)).cwd !== cwd) throw new Error('Workspace authority changed');
         const target = { kind: 'workspace' as const, directory: cwd };
+        if (operation.kind === 'mcp_probe') {
+          const { result } = await client.call('mcp/probe', { target, id: operation.id, expected_revision: operation.expected_revision }, 'mcp_probe');
+          if ((await this.resolveWorkspace(id, endpoint)).cwd !== cwd) throw new Error('Workspace authority changed');
+          return { kind: 'mcp_probe', result };
+        }
         if (operation.kind === 'write') {
           // The native write is the linearization point. Once it acknowledges,
           // the mutation is committed and nothing below may turn it into a

@@ -233,7 +233,7 @@ function requestLane(method: Request1['method']): 'wait' | 'admission' | 'contro
   switch (method) {
     // Compaction awaits native summary generation and release, just like other
     // long-lived domain waits. It must not expire the shared socket's RPC clock.
-    case 'context/compact': case 'agent/wait': case 'job/wait': return 'wait';
+    case 'mcp/probe': case 'context/compact': case 'agent/wait': case 'job/wait': return 'wait';
     case 'agent/sendMessage': return 'admission';
     case 'agent/interrupt': case 'job/cancel': case 'turn/cancel': return 'control';
     default: return 'rpc';

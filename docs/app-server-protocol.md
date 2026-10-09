@@ -1110,8 +1110,24 @@ identities. New literal `env` or `headers` values are rejected by native authori
 even for direct generic RPC callers. A retained key cannot also be replaced;
 omitting it removes it. Native source provisioning remains outside this Web
 contract, and general protocol diagnostics omit authoring payloads.
+
+`mcp/probe` accepts `target`, `id`, and `expected_revision`. It checks exactly
+that authored MCP source using native credentials and the source's working
+directory. It returns `mcp_probe` with `id`, `revision`, and `outcome`:
+`reachable`, `connection_failed`, `list_failed`, `timed_out`, `cancelled`, or
+`settlement_failed`. Diagnostics never return credential-bearing peer errors.
+A changed source revision rejects the check rather than publishing old success.
+
+There are at most four native probes in flight, with no retained native queue;
+excess admission is rejected. Initialization and tool discovery share a 15-second
+deadline. Cancellation requests shutdown and cleanup is awaited, including when
+the RPC waiter disappears. A successful response requires cleanup settlement.
+No diagnostic connection is retained or installed in a Session. The WebUI starts
+checks from the MCP list and its existing Refresh control; ordinary source reads
+and configuration reconciliation remain inert.
+
 There are no `mcp/connect`, `mcp/status` or `mcp/disconnect` settings methods.
-Configuration reads/refresh never acquire external MCP resources; runtime
+Configuration reads never acquire external MCP resources; runtime
 connections belong exclusively to the native capability generation owner.
 
 Protocol v38 uses one `SourceTarget`: `{kind:"user"}` or

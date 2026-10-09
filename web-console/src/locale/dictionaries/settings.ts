@@ -18,6 +18,13 @@ export const en = {
 
 
   "mcp.status-invalid": "The server configuration is invalid.",
+  "mcp.probe-reachable": "Connection check passed. This is not the Agent's live connection.",
+  "mcp.probe-checking": "Checking MCP connectivity…",
+  "mcp.probe-connection_failed": "Connection check failed during initialization.",
+  "mcp.probe-list_failed": "Connected, but reading the tool list failed.",
+  "mcp.probe-timed_out": "Connection check timed out.",
+  "mcp.probe-cancelled": "Connection check cancelled.",
+  "mcp.probe-settlement_failed": "Connection check cleanup failed.",
   "mcp.status-unknown": "MCP server status is not yet available.",
 
   "mcp.name-mismatch": "The imported name differs from the server being edited.",
@@ -636,6 +643,13 @@ export const zh = {
 
 
   "mcp.status-invalid": "服务器配置无效。",
+  "mcp.probe-reachable": "连接检测成功。这不代表 Agent 当前会话的连接状态。",
+  "mcp.probe-checking": "正在检测 MCP 连通性…",
+  "mcp.probe-connection_failed": "连接检测失败：初始化未成功。",
+  "mcp.probe-list_failed": "已连接，但读取工具列表失败。",
+  "mcp.probe-timed_out": "连接检测超时。",
+  "mcp.probe-cancelled": "连接检测已取消。",
+  "mcp.probe-settlement_failed": "连接检测的资源清理失败。",
   "mcp.status-unknown": "暂时无法获取 MCP 服务器状态。",
 
   "mcp.name-mismatch": "导入的名称与正在编辑的服务器不一致。",
