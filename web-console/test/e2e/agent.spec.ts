@@ -227,15 +227,19 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
       : { input: '消息', queue: '排队', steer: '插话', send: '发送', commands: '添加', attach: '添加' };
     const input = page.getByRole('textbox', { name: names.input, exact: true });
     const primary = page.locator('[data-composer-primary]');
-    // The busy-Enter preference remains available beside the composer controls.
-    await expect(page.getByRole('button', { name: /Enter while running|运行时 Enter/ })).toHaveCount(1);
+    // The busy-Enter preference is configured in General Settings.
+    await expect(page.getByRole('button', { name: /Enter while running|运行时 Enter/ })).toHaveCount(0);
     await page.evaluate(() => window.composerFixture.running(true));
     await input.fill('Queue by default'); await expect(primary).toHaveAccessibleName(names.queue);
     await input.press('Enter'); await expect(input).toHaveValue('');
     await input.fill('Complementary steer'); await input.press('Control+Enter'); await expect(input).toHaveValue('');
     await input.fill('Queue from primary'); await primary.click(); await expect(input).toHaveValue('');
     expect(await page.evaluate(() => window.composerFixture.submissions())).toEqual(['turn/start', 'turn/steer', 'turn/start']);
-    await page.evaluate(() => window.composerFixture.busyEnter('steer'));
+    await page.getByRole('button', { name: locale === 'en' ? 'Settings' : '设置', exact: true }).click();
+    const settings = page.getByRole('dialog', { name: locale === 'en' ? 'Settings' : '设置', exact: true });
+    await settings.getByRole('button', { name: locale === 'en' ? /Send behavior while busy/ : /繁忙时的发送行为/ }).click();
+    await page.getByRole('option', { name: locale === 'en' ? 'Immediately' : '立即', exact: true }).click();
+    await page.getByRole('button', { name: locale === 'en' ? 'Close Settings' : '关闭设置', exact: true }).click();
     expect(await page.evaluate(() => localStorage.getItem('rustx-composer-busy-enter-v1'))).toBe('steer');
     await input.fill('Preferred steer'); await expect(primary).toHaveAccessibleName(names.steer);
     await input.press('Enter'); await expect(input).toHaveValue('');

@@ -170,7 +170,7 @@ async fn detach_then_shutdown(child: &mut Child) {
     terminate(child);
 }
 
-const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":38,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
+const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":39,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
 
 #[tokio::test]
 async fn app_server_stdio_real_process_shared_conformance() {
@@ -232,9 +232,9 @@ async fn app_server_websocket_authentication_framing_and_protocol_errors() {
         let old_offer = format!("rustx.app-server.v9, rustx-token.{}", driver::TOKEN);
         for offer in [
             None,
-            Some("rustx.app-server.v38"),
+            Some("rustx.app-server.v39"),
             Some(old_offer.as_str()),
-            Some("rustx.app-server.v38, rustx-token.wrong"),
+            Some("rustx.app-server.v39, rustx-token.wrong"),
         ] {
             let mut request = url.as_str().into_client_request().unwrap();
             if let Some(offer) = offer {
@@ -1515,6 +1515,150 @@ async fn app_server_failed_attach_composition_leaves_the_catalog_untouched() {
         attach(&client, f.sessions[1].clone(), 3).await;
         client.close().await;
         detach_then_shutdown(&mut child).await;
+        assert!(child.wait().await.unwrap().success());
+    })
+    .await;
+}
+
+// Delivery access is process composition: an explicit stdio-owner delegation,
+// or a separate owner-only WebSocket credential. Invalid compositions fail
+// before readiness; client names and the transport token grant nothing.
+#[tokio::test]
+async fn app_server_delivery_access_is_explicit_transport_composition() {
+    async fn granted(client: &driver::Driver) -> bool {
+        use rustx::app_server::protocol::*;
+        let request: Request = serde_json::from_str(INITIALIZE).unwrap();
+        let Response::Success(response) = rpc(client, 1, request.call).await else {
+            panic!("initialize")
+        };
+        let MethodResult::Initialized { capabilities, .. } = response.result else {
+            panic!("initialized")
+        };
+        capabilities.delivery_access
+    }
+    bounded(async {
+        use std::os::unix::fs::PermissionsExt;
+        let f = Fixture::new().await;
+        let secret = "delivery-secret-000000000000000000000000000000000000";
+        let private = |name: &str, value: &str, mode: u32| {
+            let path = f.root.path().join(name);
+            std::fs::write(&path, value).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+            path
+        };
+        let delivery = private("delivery", secret, 0o600);
+        let reused = private("reused", driver::TOKEN, 0o600);
+        let readable = private("readable", secret, 0o644);
+        let token = f.root.path().join("token");
+        let ws = "ws://127.0.0.1:0";
+        for (listen, args) in [
+            (
+                ws,
+                vec![
+                    ("--token-file", Some(&token)),
+                    ("--stdio-delivery-access", None),
+                ],
+            ),
+            (
+                "stdio",
+                vec![("--delivery-access-token-file", Some(&delivery))],
+            ),
+            (
+                ws,
+                vec![
+                    ("--token-file", Some(&token)),
+                    ("--delivery-access-token-file", Some(&reused)),
+                ],
+            ),
+            (
+                ws,
+                vec![
+                    ("--token-file", Some(&token)),
+                    ("--delivery-access-token-file", Some(&readable)),
+                ],
+            ),
+            (
+                ws,
+                vec![
+                    ("--token-file", Some(&token)),
+                    ("--product-host-token-file", Some(&delivery)),
+                    ("--delivery-access-token-file", Some(&delivery)),
+                ],
+            ),
+        ] {
+            let mut command = f.command(listen);
+            for (flag, value) in &args {
+                command.arg(flag);
+                if let Some(value) = value {
+                    command.arg(value);
+                }
+            }
+            let output = command.output().await.unwrap();
+            assert!(!output.status.success(), "{listen} {args:?}");
+            assert!(output.stdout.is_empty());
+            assert!(
+                !String::from_utf8(output.stderr)
+                    .unwrap()
+                    .contains("listening")
+            );
+        }
+        for delegated in [false, true] {
+            let mut command = f.command("stdio");
+            if delegated {
+                command.arg("--stdio-delivery-access");
+            }
+            let mut child = command.spawn().unwrap();
+            let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+            assert_eq!(granted(&client).await, delegated);
+            client.close().await;
+            detach_then_shutdown(&mut child).await;
+            assert!(child.wait().await.unwrap().success());
+        }
+        let mut child = f
+            .command(ws)
+            .arg("--token-file")
+            .arg(&token)
+            .arg("--delivery-access-token-file")
+            .arg(&delivery)
+            .spawn()
+            .unwrap();
+        let line = BufReader::new(child.stderr.as_mut().unwrap())
+            .lines()
+            .next_line()
+            .await
+            .unwrap()
+            .unwrap();
+        let url = line
+            .strip_prefix("rustx app-server listening ")
+            .unwrap()
+            .to_owned();
+        let ordinary = driver::websocket(&url).await;
+        assert!(!granted(&ordinary).await);
+        ordinary.close().await;
+        let trusted = driver::websocket_offering(
+            &url,
+            &format!(
+                "rustx.app-server.v39, rustx-token.{}, rustx-delivery-access.{secret}",
+                driver::TOKEN
+            ),
+        )
+        .await;
+        assert!(granted(&trusted).await);
+        trusted.close().await;
+        assert!(
+            driver::try_socket(
+                &url,
+                &format!("rustx.app-server.v39, rustx-delivery-access.{secret}")
+            )
+            .await
+            .is_err(),
+            "delivery access never substitutes for the transport credential"
+        );
+        kill(
+            Pid::from_raw(i32::try_from(child.id().unwrap()).unwrap()),
+            Signal::SIGTERM,
+        )
+        .unwrap();
         assert!(child.wait().await.unwrap().success());
     })
     .await;

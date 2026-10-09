@@ -69,9 +69,9 @@ it('an uploaded attachment cannot be discarded by command selection', async () =
   expect(p.onCommand).not.toHaveBeenCalled(); expect(p.onSend).not.toHaveBeenCalled();
 });
 
-// The composer owns the persistent busy Enter preference.
+// General Settings owns the persistent preference; the composer subscribes.
 const preferSteer = () => {
-  expect(screen.getByRole('button', { name: /Enter while running/ })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /Enter while running/ })).toBeNull();
   act(() => composerPreferences().setBusyEnter('steer'));
 };
 it.each(['button', 'Enter', 'Control', 'Meta'])('Steer preference resolves %s and persists across remounts', async gesture => {

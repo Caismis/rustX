@@ -77,7 +77,7 @@ import {
 import { correlateTools } from "../presentation/tools.ts";
 import { selectTodos } from "../presentation/todos.ts";
 import type { PresentationState } from "../presentation/state.ts";
-import { AppServerRequestError } from "../app-server/client.ts";
+import { AppServerRequestError, isDeliveryCancelled } from "../app-server/client.ts";
 import type { AppServerHost } from "../app-server/host.ts";
 import type { AppServerSession } from "../app-server/session.ts";
 import type {
@@ -95,6 +95,25 @@ import {
   BoundarySelector,
 } from "./components/session-selector.ts";
 import { TreeSelector, type TreeSelection } from "./components/tree-selector.ts";
+import {
+  DeliverySelector,
+  type DeliveryAvailability,
+} from "./components/delivery-selector.ts";
+import type { DeliveryPage } from "../presentation/deliveries.ts";
+import {
+  DeliveryResidueError,
+  DeliveryUncertainError,
+  deliveryDestination,
+  launchOpener,
+  localEffect,
+  openDelivery,
+  residueText,
+  saveDelivery,
+  systemOpener,
+  type LocalEffect,
+  type Opener,
+} from "../app-server/delivery-files.ts";
+import { TransportClosedError } from "../app-server/transport.ts";
 import {
   renderBackgroundSection,
   renderInteractionSection,
@@ -163,6 +182,8 @@ export interface RustxTuiAppOptions {
    * as a second opinion about where anything is running.
    */
   cwd?: string;
+  /** The system opener `/files` Open asks; this platform's by default. */
+  opener?: { command: string | undefined; launch: Opener };
 }
 
 /**
@@ -188,6 +209,7 @@ export class RustxTuiApp {
   #connecting: { queued?: string; history?: PresentationState } | undefined;
   #initialResumePage: SessionCatalogPage | undefined;
   readonly #workspace: string | undefined;
+  readonly #opener: { command: string | undefined; launch: Opener };
 
   readonly #tui: TUI;
   readonly #startup = new Container();
@@ -220,6 +242,8 @@ export class RustxTuiApp {
 
   #preferences: PresentationPreferences = defaultPreferences();
   #overlay: OverlayHandle | undefined;
+  /** Retires the work the current overlay owns when it closes or is replaced. */
+  #overlayRetire: (() => void) | undefined;
   #hitlOverlay: HumanInteractionOverlay | undefined;
   /**
    * Presentation-only focus over `pendingInteractions`, reconciled against
@@ -271,6 +295,7 @@ export class RustxTuiApp {
     this.#initialResumePage = options.resumePage;
     this.#initialConnection = options.connecting;
     this.#workspace = options.cwd;
+    this.#opener = options.opener ?? { command: systemOpener(), launch: launchOpener };
 
     this.#tui = new TUI(new ProcessTerminal());
     this.#editor = new ComposerEditor(this.#tui);
@@ -1099,6 +1124,9 @@ export class RustxTuiApp {
           lease,
         );
         break;
+      case "choose_delivery":
+        this.#showDeliverySelector(outcome.page, lease);
+        break;
       case "focus_session":
         await this.#focusSession(
           outcome.sessionId,
@@ -1247,8 +1275,10 @@ export class RustxTuiApp {
   #showPopup(
     content: PopupContent,
     options: { width: SizeValue; heightPercent: number; minWidth?: number },
+    retire?: () => void,
   ): OverlayHandle {
     this.#closeOverlay(true);
+    this.#overlayRetire = retire;
     const frame = new PopupFrame(content);
     const handle = this.#tui.showOverlay(frame, {
       width: options.width,
@@ -1536,6 +1566,110 @@ export class RustxTuiApp {
     };
   }
 
+  /**
+   * `/files`: committed deliveries and explicit client-local actions.
+   *
+   * Availability comes from facts established at composition, never from
+   * paths: delivery access is the connection's transport grant, and a shared
+   * filesystem requires that this TUI spawned the server (Open additionally
+   * verifies the leaf identity before launching anything). Each action is
+   * one owned operation under the interaction's owner: retiring the surface
+   * aborts it, and only an effect that already happened outlives it.
+   */
+  #showDeliverySelector(page: DeliveryPage, lease: PresentationLease): void {
+    const session = lease.session;
+    if (session === undefined || !this.#isCurrentPresentationLease(lease)) return;
+    const sharedHost = this.#host.ownership === "owned_child";
+    const opener = this.#opener.command;
+    const launch = this.#opener.launch;
+    const noAccess = this.#host.ownership === "owned_child"
+      ? "the App Server did not grant delivery access to this connection"
+      : "this connection holds no delivery access; reconnect with --delivery-access-token-file";
+    const availability: DeliveryAvailability = {
+      save: !session.deliveryAccess ? noAccess : undefined,
+      open: !session.deliveryAccess ? noAccess
+        : !sharedHost ? "this App Server's files are not on this machine; use Save"
+          : opener === undefined ? "no system opener on this platform" : undefined,
+    };
+    const selector = new DeliverySelector(page, availability);
+    // The one owner of this interaction's work. Every way it ends — Escape,
+    // another overlay replacing it, Session focus change, attachment or
+    // snapshot replacement, reconnect, terminal failure, quit — closes the
+    // overlay, and closing aborts it: uncommitted local effects stop and the
+    // native read or locate is cancelled on the server.
+    const interaction = new AbortController();
+    const handle = this.#showPopup(selector, { width: "80%", heightPercent: 70 }, () => interaction.abort());
+    let inFlight: { operation: number; abort: AbortController } | undefined;
+    const current = () => this.#isCurrentPresentationLease(lease) && this.#overlay === handle;
+    selector.onChange = () => {
+      if (current()) this.#tui.requestRender();
+    };
+    selector.onCancel = () => {
+      if (current()) this.#closeOverlay();
+    };
+    selector.onAbort = (operation) => {
+      if (inFlight?.operation === operation) inFlight.abort.abort();
+    };
+    selector.onLoadMore = () => {
+      const before = selector.nextCursor;
+      if (before === undefined) return;
+      void session.deliveryPage(before).then((older) => {
+        if (current()) selector.appendPage(older);
+      }).catch((error: unknown) => {
+        if (!current()) return;
+        this.#showTransient("error", `delivery history page failed: ${compactDiagnostic(error)}`);
+        selector.retryPage();
+      });
+    };
+    selector.onAction = (operation, action, record, destination) => {
+      const abort = new AbortController();
+      const signal = AbortSignal.any([interaction.signal, abort.signal]);
+      inFlight = { operation, abort };
+      // What this action has done outside the process, recorded by the
+      // action at the moment it happens.
+      const effect = localEffect();
+      const task = (async () => {
+        if (action === "save") {
+          const saved = await saveDelivery(
+            () => session.readDelivery(record, signal),
+            deliveryDestination(destination ?? ""),
+            signal,
+            undefined,
+            effect,
+          );
+          const text = `Saved ${record.file.name} to ${saved.path}`;
+          return saved.residue === undefined ? text
+            : `${text}; warning: ${residueText(saved.residue.path, saved.residue.staged)} (${compactDiagnostic(saved.residue.cause)})`;
+        }
+        const requested = await openDelivery(() => session.locateDelivery(record, signal), {
+          sharedHost,
+          opener,
+          launch,
+          signal,
+          effect,
+        });
+        return `${requested.opener} accepted the request to open ${requested.path}`;
+      })();
+      // One terminal report per operation. A live surface shows every
+      // outcome. Once the interaction is retired, an outcome is still owed
+      // only if the action committed an external effect (a dispatched save
+      // link or a spawned opener) or left a staged file behind: it is reported
+      // once, on the transient surface, never into a successor surface. A
+      // cancelled or failed action that did neither is not reported.
+      const report = (level: "info" | "error", text: string) => {
+        const safe = sanitizeField(text);
+        if (current()) selector.settle(operation, level, safe);
+        else if (effect.committed || effect.residue) this.#showTransient(level, safe);
+      };
+      void task.then(
+        (text) => report("info", text),
+        (error: unknown) => report("error", deliveryFailure(error, signal, effect)),
+      ).finally(() => {
+        if (inFlight?.operation === operation) inFlight = undefined;
+      });
+    };
+  }
+
   #closeOverlay(replacing = false): void {
     if (this.#childInspection) {
       clearInterval(this.#childInspection.timer);
@@ -1543,6 +1677,9 @@ export class RustxTuiApp {
       this.#childInspection = undefined;
       this.#subagentListFocused = false;
     }
+    const retire = this.#overlayRetire;
+    this.#overlayRetire = undefined;
+    retire?.();
     const handle = this.#overlay;
     if (handle === undefined) return;
     if (this.#resumePresentation) this.#resumeQuery = this.#resumePresentation.reconciliationContext().query;
@@ -2055,4 +2192,31 @@ function compactDiagnostic(error: unknown): string {
 
 function nextTick(): Promise<void> {
   return new Promise((resolve) => process.nextTick(resolve));
+}
+
+/** One bounded line for a failed or cancelled delivery action. */
+function deliveryFailure(error: unknown, signal: AbortSignal, effect: LocalEffect): string {
+  if (error instanceof DeliveryResidueError || error instanceof DeliveryUncertainError) return error.message;
+  // Cancellation won before Save's publication admission, Open's launch, or
+  // the server's response publication. A committed effect is never
+  // described as nothing having happened, whatever aborted afterwards.
+  if (!effect.committed && ((signal.aborted && error === signal.reason) || isDeliveryCancelled(error))) {
+    return "Cancelled; nothing was saved or opened";
+  }
+  if (error instanceof TransportClosedError) return "Disconnected from the App Server; nothing was written";
+  if (error instanceof AppServerRequestError && error.error.data?.kind === "session_file_read") {
+    const reason = error.error.data.reason;
+    const text: Record<typeof reason, string> = {
+      missing: "the delivered file no longer exists",
+      unauthorized: "this connection is not authorized to access it",
+      unavailable: "its original Session or root is unavailable",
+      not_regular: "it is no longer a regular file",
+      replaced: "it was replaced during the operation; try again",
+      too_large: "it exceeds the 512 KiB transfer limit",
+      capacity: "the App Server is busy with other file reads; try again",
+      read_failed: "the App Server could not read it",
+    };
+    return `Failed: ${text[reason]}`;
+  }
+  return `Failed: ${compactDiagnostic(error)}`;
 }

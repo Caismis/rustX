@@ -39,7 +39,11 @@
  * object degrades instead of crashing.
  */
 
-import type { ToolExecutionResult, ToolId } from "../../protocol/app-server.ts";
+import type {
+  SessionFileReference,
+  ToolExecutionResult,
+  ToolId,
+} from "../../protocol/app-server.ts";
 import type { PreviewBudget } from "../preferences.ts";
 import { role, plainText, plainWidth } from "../theme.ts";
 
@@ -84,8 +88,20 @@ export interface ToolRenderContext {
   budget: PreviewBudget;
 }
 
-/** Body adapters receive no status, duration, exit, or effect-certainty authority. */
-export type ToolResultContent = Pick<ToolExecutionResult, "content">;
+/**
+ * Body adapters receive no status, duration, exit, or effect-certainty authority.
+ *
+ * `deliveries` are the typed `present` deliveries of a *successfully committed
+ * canonical* result, supplied by the card shell. They are empty for every
+ * other lifecycle, including a successful foreground settlement that has not
+ * committed yet, so no renderer can draw a delivery from pre-commit facts.
+ */
+export type ToolResultContent = ToolResultBody & {
+  readonly deliveries: readonly SessionFileReference[];
+};
+
+/** The published result content alone, for formatting helpers. */
+export type ToolResultBody = Pick<ToolExecutionResult, "content">;
 
 /**
  * One tool's presentation adapter.
@@ -266,7 +282,7 @@ export function preview(
 }
 
 /** The text of every textual result block, in publication order. */
-export function resultText(result: ToolResultContent): string[] {
+export function resultText(result: ToolResultBody): string[] {
   const lines: string[] = [];
   for (const content of result.content ?? []) {
     if (content.type === "text") {
@@ -277,7 +293,7 @@ export function resultText(result: ToolResultContent): string[] {
 }
 
 /** The first JSON result block, when the runtime published one. */
-export function resultJson(result: ToolResultContent): unknown {
+export function resultJson(result: ToolResultBody): unknown {
   for (const content of result.content ?? []) {
     if (content.type === "json") {
       return content.value;
@@ -339,7 +355,7 @@ export const genericRenderer: ToolPresentationRenderer = {
  * have been without one.
  */
 export function genericResultLines(
-  result: ToolResultContent,
+  result: ToolResultBody,
 ): ToolResultPresentation {
   const detail = resultText(result);
   const json = resultJson(result);
@@ -612,6 +628,44 @@ const todoRenderer: ToolPresentationRenderer = {
 };
 
 /**
+ * `present` declarations.
+ *
+ * The call band shows the declared paths from the published arguments: an
+ * intent, not a delivery. Delivered files come only from the committed typed
+ * `deliveries`, in canonical order; tool output text and argument JSON never
+ * become entries. Before commit, or after failure, the generic body shows the
+ * tool's own output and the card header its runtime status.
+ */
+const presentRenderer: ToolPresentationRenderer = {
+  renderCall(args) {
+    const files = record(args)?.["files"];
+    if (!Array.isArray(files)) {
+      return undefined;
+    }
+    const paths = files.map((file) => text(record(file)?.["path"]));
+    if (paths.length === 0 || paths.some((path) => path === undefined)) {
+      return undefined;
+    }
+    return { title: "Present", subject: role.toolSubject(paths.join(", ")), detail: [] };
+  },
+  renderResult(result) {
+    const files = result.deliveries;
+    if (files.length === 0) {
+      return undefined;
+    }
+    return {
+      summary: [
+        `Delivered ${files.length} file${files.length === 1 ? "" : "s"} · /files to open or save`,
+      ],
+      detail: files.flatMap((file, index) => [
+        `${index + 1}. ${file.name}  ${role.meta(`${file.mime_type} · ${file.path}`)}`,
+        ...(file.description ? [`   ${file.description}`] : []),
+      ]),
+    };
+  },
+};
+
+/**
  * The renderer registry.
  *
  * Small on purpose. A tool without an entry is not degraded — it renders
@@ -632,6 +686,7 @@ const RENDERERS: ReadonlyMap<ToolId, ToolPresentationRenderer> = new Map([
   ["tool-edit", editRenderer],
   ["tool-write", writeRenderer],
   ["tool-todo", todoRenderer],
+  ["tool-present", presentRenderer],
   ...Object.entries({
     job_list: "List Jobs", job_status: "Job status", job_wait: "Wait for Job", job_cancel: "Cancel Job",
     subagent: "Create Agent", list_agents: "List Agents", send_message: "Message Agent",

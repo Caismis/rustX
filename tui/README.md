@@ -30,7 +30,7 @@ arguments (including `init` declarations). Streams and exit status are forwarded
 All [configuration semantics](../docs/configuration-diagnostics.md) stay in Rust.
 
 Foreground Workflow Tool cards expose expandable native execution details under
-App Server protocol v38. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
+App Server protocol v39. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
 execution settlement, business checks and human Review are separate. Responses
 use the root HITL queue and children expose authoritative subagent status. See the
 [native projection contract](../docs/workflow-run-projection.md).
@@ -124,7 +124,10 @@ Connect to an externally managed App Server with:
 pnpm --dir tui start --connect ws://127.0.0.1:8080 --token-file /private/user/socket-token --workspace /srv/project --session SESSION_ID
 ```
 
-Both modes use App Server V7. `--config` and `--runtime-root` bind the owned
+Add `--delivery-access-token-file /private/user/delivery-token` when the server
+operator provisioned committed-delivery access for this client (see `/files`).
+
+Both modes use App Server protocol v39. `--config` and `--runtime-root` bind the owned
 local child process; they do not become Session settings. `--workspace` supplies
 the Session cwd and `--model` supplies explicit Session intent. Remote Workspace
 paths are absolute server paths. The TUI never parses authored configuration or
@@ -160,7 +163,7 @@ application to the native coordinator; context adoption remains explicit.
 
 ```text
 bind stdio child or external WebSocket
-  -> initialize (App Server protocol v38)
+  -> initialize (App Server protocol v39)
   -> session/create or choose a durable Session
   -> session/attach (authoritative snapshot, cursor, subscription)
   -> interactive
@@ -1108,6 +1111,64 @@ even when connected to a remote App Server. Existing files are not overwritten;
 parent directories must exist. Failed transfers remove the partial output when
 possible and report failure. The server receives only the Session ID.
 See [archive format and transport](../docs/session-archive.md).
+
+### Delivered files
+
+A `present` call renders as a `Present` card with the declared paths. After the
+canonical Tool result commits, the card lists the delivered files in their
+committed order. `/files` lists the committed deliveries of the focused Session,
+newest first, one bounded history page at a time (`Load older history`). Each entry
+shows the filename, type, description, original path and Conversation, its
+`message#i/n` address, and whether Save and Open are available. Press Enter for
+actions, or `s`/`o` directly. Escape cancels a running action. No file action sends
+a model request.
+
+- **Save** writes the original bytes (at most 512 KiB) to a path you type on the
+  **TUI machine**, exactly as typed (spaces included). It works the same on Linux
+  and macOS, for a local App Server child and a remote one. The file is created
+  under a new hidden `.rustx-save-*` name beside the destination, written and
+  synced, then appears at the destination in one step. Existing files,
+  directories and symlinks are never overwritten, and a cancelled or failed save
+  leaves no partial file at the destination. "Saved" means the save created the
+  destination and checked that it holds the very file it wrote. The hidden
+  file, and so the saved file, is created with restrictive Unix permissions
+  (mode `0600`) whatever your umask; `chmod` it to share it. Access may also be
+  governed by the directory's ACL or sharing policy (for example a macOS
+  folder whose ACL its new files inherit); Save leaves that policy as it is.
+  Anyone who can change that directory's entries may rename or replace the
+  file later. If that directory changes
+  under the save (for example the hidden file is moved, or the directory is
+  renamed), the save never reports more than it can show: it is "saved" only if
+  the destination holds its own file, otherwise "not saved" or "unknown", and a
+  hidden file left behind, or one the save cannot show it removed, is reported
+  with the path it was created at. Programs that can write that directory are trusted not to
+  tamper with the save while it runs. A destination that already exists, or
+  that cannot be checked, is refused before anything is linked: "not saved"
+  then means nothing was attempted there. Once the final step has been sent,
+  any error it reports leaves the outcome unknown unless the destination is
+  confirmed to hold the saved file, because on a network filesystem an error
+  can answer a repeat of a step that already succeeded; check the destination
+  yourself. That includes filesystems without hard links (for example FAT or
+  exFAT), whose error the message names; nothing is ever written there by
+  another, unsafe route. A filename containing terminal control
+  characters is not prefilled; type the destination yourself. Closing `/files`
+  (or switching Session, reconnecting or quitting) cancels a running action on
+  the server too.
+- **Open** is best effort and is offered only for the App Server child this TUI
+  spawned. It asks the system opener only after the native side verifies the file
+  and this machine's own path names the same regular file at that moment. The
+  opener looks the path up again itself, so a file renamed or replaced in between
+  can be what it opens. Open reports only that the opener accepted or rejected the
+  request, never that an application opened, or which file it showed. Use Save when
+  the exact file matters. An Open the opener already received is still reported
+  after `/files` closes.
+
+The owned stdio child grants delivery access to this TUI by explicit delegation.
+A remote (`--connect`) App Server grants it only for the operator's separate
+credential, passed with `--delivery-access-token-file <path>`. Without that
+credential, `/files` shows metadata only and reports both actions as unavailable.
+Remote server paths are never opened as local paths. See
+[file delivery](../docs/file-delivery.md#tui-consumption).
 
 Upload policy distinguishes per-file and per-transfer bounds from per-User-input
 receipt count/byte bounds. `/attach` uses one file per transfer; native

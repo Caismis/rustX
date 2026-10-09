@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { AttachmentIntake, AttachmentIntakes, intake, pasteText, transferInputs, type UploadPort } from '../src/client/uploads';
 import { AgentComposer } from '../src/app/agent/AgentComposer';
 import { capabilities } from './fixture';
-import type { UploadedFile, UploadOutcome } from '../../protocol/app-server/v38';
+import type { UploadedFile, UploadOutcome } from '../../protocol/app-server/v39';
 const policy = capabilities.upload_policy;
 const file = (name = 'document.md', size = 1) => new File([new Uint8Array(size)], name);
 const ready: UploadedFile = { receipt: { session_id: 'A', batch_id: 'original', token: 'original' }, file: { batch_id: 'original', name: 'document.md' }, path: '/native/document.md' };

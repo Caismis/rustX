@@ -3,13 +3,13 @@
  *
  * ```text
  * ws(s)://host:port/  +  subprotocols
- *     rustx.app-server.v38
+ *     rustx.app-server.v39
  *     rustx-token.<dedicated transport token>
  * ```
  *
  * The admission contract is the server's (`src/app_server/transport/
  * websocket.rs`): path `/` with no query, both subprotocol offers present, and
- * the server selecting only `rustx.app-server.v38` in its response. Failed
+ * the server selecting only `rustx.app-server.v39` in its response. Failed
  * admission is HTTP 401 and the credential is never echoed. This client
  * therefore invents no authentication of its own — it presents the dedicated
  * transport secret the trusted host gave it, exactly the way a browser can.
@@ -36,16 +36,27 @@ import {
 } from "./transport.ts";
 
 /** The only subprotocol the App Server selects. */
-export const APP_SERVER_SUBPROTOCOL = "rustx.app-server.v38";
+export const APP_SERVER_SUBPROTOCOL = "rustx.app-server.v39";
 
 /** The credential offer prefix the server's handshake callback matches. */
 export const TOKEN_SUBPROTOCOL_PREFIX = "rustx-token.";
+
+/**
+ * The separate, optional delivery-access credential offer. Additive to the
+ * transport token: the server refuses the whole handshake when it is wrong.
+ */
+export const DELIVERY_ACCESS_SUBPROTOCOL_PREFIX = "rustx-delivery-access.";
 
 export interface WebSocketTransportOptions {
   /** A `ws://` or `wss://` endpoint. The server requires path `/`. */
   endpoint: string;
   /** The dedicated transport token, supplied by the trusted host. */
   token: string;
+  /**
+   * The operator's separate delivery-access credential, when provisioned.
+   * Without it this connection can show delivery metadata but not read bytes.
+   */
+  deliveryAccessToken?: string;
   /**
    * How long the handshake may take before the attempt is abandoned. The
    * server drops an incomplete socket after its own bound; this is the client
@@ -106,6 +117,9 @@ export class WebSocketTransport extends BaseTransport {
       socket = new WebSocket(endpoint, [
         APP_SERVER_SUBPROTOCOL,
         `${TOKEN_SUBPROTOCOL_PREFIX}${options.token}`,
+        ...(options.deliveryAccessToken === undefined
+          ? []
+          : [`${DELIVERY_ACCESS_SUBPROTOCOL_PREFIX}${options.deliveryAccessToken}`]),
       ]);
     } catch (cause) {
       return Promise.reject(

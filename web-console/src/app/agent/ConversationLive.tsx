@@ -12,7 +12,7 @@ import { todoDock, goalDock, queueRows } from '../../bindings/composer-context';
 import { ChatViewport } from '../../presentation/layout/ChatViewport';
 import { Trajectory } from '../trajectory/Trajectory';
 import type { ResponseAction } from '../commands/native';
-import type { AttachmentTarget, CompletedResponseView } from '../../../../protocol/app-server/v38';
+import type { AttachmentTarget, CompletedResponseView } from '../../../../protocol/app-server/v39';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { UserMessage, AssistantMessage } from '../../presentation/agent/Message';
 import pendingCss from './PendingMessage.module.css';

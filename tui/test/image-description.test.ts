@@ -14,6 +14,6 @@ test('Bash safely renders intent and retains the actual command in detail', () =
 test('image reads use dedicated presentation and canonical artifact identity', () => {
  const renderer = rendererFor('tool-read-image');
  assert.equal(renderer.renderCall?.({ path: 'sample.png' })?.title, 'Read image');
- const result = { content: [{ type: 'image' as const, artifact_id: 'artifact_1' }] };
+ const result = { content: [{ type: 'image' as const, artifact_id: 'artifact_1' }], deliveries: [] };
  assert.match(renderer.renderResult?.(result, {})?.detail?.join('\n') ?? '', /artifact_1/);
 });

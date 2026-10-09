@@ -1435,7 +1435,7 @@ antialiased differently depending on which tile or partial repaint drew them:
 search capture, and other captures varied too. As its own layer it rendered
 identically in 45 of 45 targeted replays.
 
-Trace retained-input ownership repair updates generated imports to App Server v38.
+Trace retained-input ownership repair updates generated imports to App Server v39.
 Source inventory local hashes and dependency closure reflect this mechanical
 protocol change; all Harness upstream pins remain unchanged.
 
@@ -1685,7 +1685,7 @@ admission; navigation/transport replacement never replays the pending gesture.
 
 Quiet connection correction: keep the Harness resident chat/composer layout and
 render the locally submitted user bubble plus generic waiting feedback inside the
-conversation. Opening alone has no connecting notice. App Server v38 adds the
+conversation. Opening alone has no connecting notice. App Server v39 adds the
 read-only `session/history` window so cold stored history can render independently
 of resource preparation; this is a native durable read, never a fabricated runtime
 snapshot. Both clients fence late history reads against the current attachment.
@@ -1722,7 +1722,32 @@ and reproduced in `THIRD-PARTY-NOTICES.txt`. No runtime dependency was added.
 
 The main branch owns the bounded v37 navigation, outline demand scheduler and
 command menu presentation. This integration retains those owners and upgrades
-mandatory generated imports to v38 for the new native Message window selector.
+mandatory generated imports to v39 for the new native Message window selector
+and the upstream committed-delivery contract.
 Fork source navigation performs one indexed native read and validates message
 identity before anchoring. Existing source references and immutable upstream
 pins remain; hashes/import inventories reflect the reviewed combined files.
+## #454 Present call row and delivered-file cards
+
+Source-derived from local `../deepseek-harness` at
+`5badb15009ae1756c3afe0ae0cef1faafc290ccc` (MIT, Copyright (c) 2026 DeepSeek):
+
+- `packages/client/ui-deliverables/src/client/PresentRow.tsx` and
+  `PresentRow.module.css` → `src/presentation/agent/PresentRow.{tsx,module.css}`:
+  the present status row, declared-path summary and expandable result text over
+  the shared `DisclosureRow`.
+- `PresentedFileCard.tsx`, the presented-files grid of `Deliverables.tsx`, and
+  `Deliverables.module.css` → `src/presentation/attachments/PresentedFileCard.tsx`
+  and `Deliverables.module.css`. These provide the whole-card Preview gesture, the
+  filename/description hierarchy, the file-type glyph, the separate action slot,
+  and the one-row or two-column four-card summary with its toggle.
+- `IconDeliverDocRegular` artwork (`ui-primitives` icons) → `IconDeliverDocOutline14`.
+- `locales.ts` present/presented wording, en/zh → `tools` and `artifacts` dictionaries.
+
+Excluded: Cordis, `ToolCallViewProps`, DSH Session events and turn-deliverables,
+the Host open/reveal controller and desktop metadata, workspace path resolution,
+and the Inspect pill. `src/bindings/present.ts` is the rustX-authored adapter. It
+maps native foreground lifecycle to Harness phases and maps only a successful
+committed Tool message's typed `deliveries` to cards. Preview and Download stay
+with the existing PreviewWorkspace and original-byte owners. Inventory hashes and
+dependency closures describe this final source, including the v39 import renames.

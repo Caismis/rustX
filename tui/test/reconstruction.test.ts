@@ -279,7 +279,8 @@ it("pure Tool/footer rendering performs no filesystem, process, or native contro
   const adapter = rendererFor("tool-bash");
   const original = adapter.renderResult!;
   t.mock.method(adapter as Required<typeof adapter>, "renderResult", (content: Parameters<typeof original>[0], args: unknown) => {
-    assert.deepEqual(Object.keys(content), ["content"], "specialized renderers receive no lifecycle authority");
+    // Committed deliveries are typed content facts, never lifecycle authority.
+    assert.deepEqual(Object.keys(content), ["content", "deliveries"], "specialized renderers receive no lifecycle authority");
     return original(content, args);
   });
   const rendered = renderFooter(state, "connected");

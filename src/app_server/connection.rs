@@ -111,7 +111,7 @@ fn release_route(host: &AppServerHost, table: &Mutex<RouteTable>, route: &Arc<Ro
         .is_some_and(|current| Arc::ptr_eq(current, route))
     {
         routes.active.remove(&route.target.session_id);
-        route.attachment.detach();
+        host.revocations().revoke(|| route.attachment.detach());
         host.uploads().revoke_route(route);
         route.external.release();
         route.capacity.release();
@@ -150,6 +150,43 @@ pub struct AppServerConnection {
     summary_invalidations: Arc<crate::local_runtime::session::SessionSummaryInvalidations>,
     summary_invalidations_delivered: Arc<Mutex<u64>>,
     ownership_invalidations_delivered: Arc<Mutex<u64>>,
+    /// Delivery access granted by this connection's transport authentication,
+    /// never by a request. Close cancels it, retiring every admitted fence.
+    delivery_access: Option<tokio_util::sync::CancellationToken>,
+    /// This connection's in-flight delivery requests, by exact request id.
+    deliveries: Arc<super::delivery_access::Operations>,
+}
+
+/// One response and, for a delivery request, the owner of its publication
+/// commit. Transports carry both through the bounded outbound queue and commit
+/// at the physical write; in-process callers commit on return.
+pub(crate) struct Reply {
+    pub(super) response: Response,
+    pub(super) publication: Option<super::delivery_access::Publication>,
+}
+
+impl Reply {
+    fn plain(response: Response) -> Self {
+        Self {
+            response,
+            publication: None,
+        }
+    }
+
+    /// The produced response, before its publication decision.
+    #[cfg(test)]
+    pub(crate) fn produced(&self) -> &Response {
+        &self.response
+    }
+
+    /// Commits now. A delivery cancelled or revoked earlier is replaced by
+    /// its typed failure for the same request id.
+    pub(crate) fn commit(self) -> Response {
+        match &self.publication {
+            Some(publication) => publication.publish(self.response),
+            None => self.response,
+        }
+    }
 }
 
 impl AppServerConnection {
@@ -195,6 +232,93 @@ impl AppServerConnection {
             reader: Arc::new(tokio::sync::Mutex::new(())),
             configuration_versions: Arc::default(),
             next_route: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            delivery_access: None,
+            deliveries: Arc::default(),
+        }
+    }
+
+    /// A connection whose transport authenticated delivery access: the owner
+    /// of an explicitly delegated stdio pair, or a WebSocket client offering
+    /// the separate delivery credential. Only transport composition calls
+    /// this; the token is that transport authority, cancelled by revocation
+    /// or close.
+    #[must_use]
+    pub(crate) fn with_delivery_access(
+        host: AppServerHost,
+        authorization: tokio_util::sync::CancellationToken,
+    ) -> Self {
+        let mut connection = Self::new(host);
+        connection.delivery_access = Some(authorization);
+        connection
+    }
+
+    fn capabilities(&self) -> ServerCapabilities {
+        ServerCapabilities {
+            delivery_access: self.delivery_access.is_some(),
+            ..ServerCapabilities::default()
+        }
+    }
+
+    /// Delivery reads/locations address only this connection's own exact
+    /// attachment. Without transport-granted access nothing is looked up.
+    /// The request registers under its exact id before native admission, so
+    /// `delivery/cancel` on this connection can name it from then on.
+    async fn delivery(
+        &self,
+        id: &RequestId,
+        target: &AttachmentTarget,
+        message_id: crate::runtime::identity::MessageId,
+        delivery_index: usize,
+        access: super::delivery_access::Access,
+    ) -> (
+        Result<MethodResult, RpcError>,
+        Option<super::delivery_access::Publication>,
+    ) {
+        if let Err(error) = self.admitted() {
+            return (Err(error), None);
+        }
+        let Some(authority) = self
+            .delivery_access
+            .clone()
+            .filter(|token| !token.is_cancelled())
+        else {
+            return (Err(super::delivery_access::unauthorized()), None);
+        };
+        let route = match self.route(target) {
+            Ok(route) => route,
+            Err(error) => return (Err(error), None),
+        };
+        let Some(publication) = self.deliveries.register(
+            id,
+            &authority,
+            route.clone(),
+            self.host.revocations().clone(),
+            #[cfg(test)]
+            self.host.file_read_probe(),
+        ) else {
+            return (Err(domain(ErrorData::InvalidParams)), None);
+        };
+        #[cfg(test)]
+        publication.probe().before_admission.enter().await;
+        let result = super::delivery_access::request(
+            self.host.clone(),
+            route,
+            message_id,
+            delivery_index,
+            super::delivery_access::Roots::OriginalMapping,
+            access,
+            publication.token(),
+        )
+        .await;
+        (result, Some(publication))
+    }
+
+    /// Cancels this connection's transport-granted delivery authority: every
+    /// in-flight delivery request fails its next native fence, and no
+    /// uncommitted delivery response is published.
+    pub(crate) fn revoke_delivery_access(&self) {
+        if let Some(access) = &self.delivery_access {
+            self.host.revocations().revoke(|| access.cancel());
         }
     }
 
@@ -207,8 +331,17 @@ impl AppServerConnection {
     pub fn close(&self) {
         let mut routes = self.routes.lock().expect("routes mutex");
         routes.closed = true;
-        for (_, route) in std::mem::take(&mut routes.active) {
-            route.attachment.detach();
+        let active = std::mem::take(&mut routes.active);
+        // One revocation: the delivery authority and every attachment.
+        self.host.revocations().revoke(|| {
+            if let Some(access) = &self.delivery_access {
+                access.cancel();
+            }
+            for route in active.values() {
+                route.attachment.detach();
+            }
+        });
+        for (_, route) in active {
             self.host.uploads().revoke_route(&route);
             route.external.release();
             route.capacity.release();
@@ -221,12 +354,26 @@ impl AppServerConnection {
     /// # Panics
     /// Panics if a connection routing mutex is poisoned.
     pub async fn handle_json(&self, json: &str) -> Option<Response> {
+        Some(self.reply_json(json).await?.commit())
+    }
+
+    /// [`Self::handle_json`] without committing: the transport commits a
+    /// delivery response at its physical write.
+    pub(super) async fn reply_json(&self, json: &str) -> Option<Reply> {
         let value: serde_json::Value = match serde_json::from_str(json) {
             Ok(value) => value,
-            Err(_) => return Some(failure(None, rpc_error(-32700, "Parse error", None))),
+            Err(_) => {
+                return Some(Reply::plain(failure(
+                    None,
+                    rpc_error(-32700, "Parse error", None),
+                )));
+            }
         };
         let Some(object) = value.as_object() else {
-            return Some(failure(None, rpc_error(-32600, "Invalid Request", None)));
+            return Some(Reply::plain(failure(
+                None,
+                rpc_error(-32600, "Invalid Request", None),
+            )));
         };
         let id = object
             .get("id")
@@ -241,13 +388,16 @@ impl AppServerConnection {
                 .any(|key| !matches!(key.as_str(), "jsonrpc" | "id" | "method" | "params"))
             || (object.contains_key("id") && id.is_none())
         {
-            return Some(failure(id, rpc_error(-32600, "Invalid Request", None)));
+            return Some(Reply::plain(failure(
+                id,
+                rpc_error(-32600, "Invalid Request", None),
+            )));
         }
         let id = id?;
         // Decode the original bytes, not the Value above: materializing a Value
         // first would erase duplicate fields before typed validation.
         if let Ok(request) = serde_json::from_str::<Request>(json) {
-            Some(self.handle_request(request).await)
+            Some(self.reply(request).await)
         } else {
             // Probe only the method tag, using the same derived vocabulary.
             // A closed enum mismatch inside params must never be classified
@@ -256,7 +406,7 @@ impl AppServerConnection {
                 "method": object["method"]
             }))
             .is_err_and(|error| error.to_string().starts_with("unknown variant"));
-            Some(failure(
+            Some(Reply::plain(failure(
                 Some(id),
                 rpc_error(
                     if unknown { -32601 } else { -32602 },
@@ -267,7 +417,7 @@ impl AppServerConnection {
                     },
                     None,
                 ),
-            ))
+            )))
         }
     }
 
@@ -275,15 +425,66 @@ impl AppServerConnection {
     /// # Panics
     /// Panics if a connection routing mutex is poisoned.
     pub async fn handle_request(&self, request: Request) -> Response {
+        self.reply(request).await.commit()
+    }
+
+    /// The response plus, for a delivery, its uncommitted publication.
+    pub(crate) async fn reply(&self, request: Request) -> Reply {
         let id = request.id;
         if !valid_request_id(&id) {
-            return failure(None, domain(ErrorData::InvalidParams));
+            return Reply::plain(failure(None, domain(ErrorData::InvalidParams)));
         }
+        let (result, publication) = match request.call {
+            Method::DeliveryRead {
+                target,
+                message_id,
+                delivery_index,
+            } => {
+                self.delivery(
+                    &id,
+                    &target,
+                    message_id,
+                    delivery_index,
+                    super::delivery_access::Access::Bytes,
+                )
+                .await
+            }
+            Method::DeliveryLocate {
+                target,
+                message_id,
+                delivery_index,
+            } => {
+                self.delivery(
+                    &id,
+                    &target,
+                    message_id,
+                    delivery_index,
+                    super::delivery_access::Access::Location,
+                )
+                .await
+            }
+            call => (self.ordinary(call).await, None),
+        };
+        let response = match result {
+            Ok(result) => Response::Success(Box::new(Success {
+                jsonrpc: JsonRpcVersion::V2,
+                id,
+                result,
+            })),
+            Err(error) => failure(Some(id), error),
+        };
+        Reply {
+            response,
+            publication,
+        }
+    }
+
+    async fn ordinary(&self, call: Method) -> Result<MethodResult, RpcError> {
         // Catalog mutations retain their owner if the protocol waiter leaves.
         // Runtime operations already transfer ownership at start_operation;
         // attachment reservations intentionally remain caller-cancellable.
-        let result = if matches!(
-            &request.call,
+        if matches!(
+            &call,
             Method::SessionCreate { .. }
                 | Method::SessionName { .. }
                 | Method::SessionDelete { .. }
@@ -295,20 +496,23 @@ impl AppServerConnection {
                 | Method::AdoptConfiguration { .. }
         ) {
             let connection = self.clone();
-            tokio::spawn(async move { Box::pin(connection.dispatch(request.call)).await })
+            tokio::spawn(async move { Box::pin(connection.dispatch(call)).await })
                 .await
                 .unwrap_or_else(|_| Err(domain(ErrorData::OperationFailed)))
         } else {
-            Box::pin(self.dispatch(request.call)).await
-        };
-        match result {
-            Ok(result) => Response::Success(Box::new(Success {
-                jsonrpc: JsonRpcVersion::V2,
-                id,
-                result,
-            })),
-            Err(error) => failure(Some(id), error),
+            Box::pin(self.dispatch(call)).await
         }
+    }
+
+    /// Every request except `initialize` requires an open, initialized connection.
+    fn admitted(&self) -> Result<(), RpcError> {
+        if self.routes.lock().expect("routes mutex").closed {
+            return Err(domain(ErrorData::StaleAttachment));
+        }
+        if self.initialized.lock().expect("initialize mutex").is_none() {
+            return Err(domain(ErrorData::NotInitialized));
+        }
+        Ok(())
     }
 
     #[allow(clippy::too_many_lines)]
@@ -337,7 +541,7 @@ impl AppServerConnection {
             return Ok(MethodResult::Initialized {
                 authority_id: self.host.authority_id().to_owned(),
                 protocol_version: APP_SERVER_PROTOCOL_VERSION,
-                capabilities: ServerCapabilities::default(),
+                capabilities: self.capabilities(),
             });
         }
         if self.initialized.lock().expect("initialize mutex").is_none() {
@@ -346,6 +550,14 @@ impl AppServerConnection {
         if matches!(method, Method::ServerDiagnostics {}) {
             return Ok(MethodResult::Diagnostics {
                 snapshot: self.host.diagnostics(),
+            });
+        }
+        if let Method::DeliveryCancel { request_id } = method {
+            if self.delivery_access.is_none() {
+                return Err(super::delivery_access::unauthorized());
+            }
+            return Ok(MethodResult::DeliveryCancel {
+                accepted: self.deliveries.cancel(&request_id),
             });
         }
         if let Some(target) = runtime_target(&method) {
@@ -400,7 +612,11 @@ impl AppServerConnection {
             .admit_request(std::convert::identity)
             .map_err(host_error)?;
         match method {
-            Method::Initialize(_) | Method::ServerDiagnostics {} => unreachable!(),
+            Method::Initialize(_)
+            | Method::ServerDiagnostics {}
+            | Method::DeliveryRead { .. }
+            | Method::DeliveryLocate { .. }
+            | Method::DeliveryCancel { .. } => unreachable!(),
             Method::SessionDetach { target } => {
                 // Removing a connection relationship needs no live-runtime lease.
                 let route = self.route(&target)?;
@@ -467,7 +683,7 @@ impl AppServerConnection {
                     .map_err(|_| domain(ErrorData::OperationFailed))?
             }
             Method::ServerInfo {} => Ok(MethodResult::ServerInfo {
-                capabilities: ServerCapabilities::default(),
+                capabilities: self.capabilities(),
             }),
             Method::SessionExportPrepare { session_id } => {
                 let download = super::archive_download::prepare(&self.host, session_id.clone())
@@ -1377,6 +1593,7 @@ pub(super) fn domain(data: ErrorData) -> RpcError {
                 "Session file read failed"
             }
         },
+        ErrorData::DeliveryCancelled => "Delivery request was cancelled before publication",
         ErrorData::AgentNotDelivered { .. } => "Agent input was not delivered",
         ErrorData::AgentDeliveryUnknown { .. } => {
             "Agent input acceptance was not acknowledged; delivery is unknown, do not replay automatically"
@@ -1402,7 +1619,7 @@ fn rpc_error(code: i32, message: &str, data: Option<ErrorData>) -> RpcError {
         data,
     }
 }
-fn failure(id: Option<RequestId>, error: RpcError) -> Response {
+pub(super) fn failure(id: Option<RequestId>, error: RpcError) -> Response {
     Response::Failure(Failure {
         jsonrpc: JsonRpcVersion::V2,
         id,

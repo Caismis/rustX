@@ -71,7 +71,7 @@ import {
 } from "./transport.ts";
 
 /** The protocol version this client speaks. Independent of every other version. */
-export const APP_SERVER_PROTOCOL_VERSION = 38;
+export const APP_SERVER_PROTOCOL_VERSION = 39;
 
 /** How this client identifies itself in `initialize`. */
 export const CLIENT_IDENTITY: ClientIdentity = {
@@ -147,6 +147,11 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   // safely retryable.
   "session/traceDetail": "read",
   "artifact/read": "read",
+  // Bounded pure reads under transport-granted delivery access.
+  "delivery/read": "read",
+  "delivery/locate": "read",
+  // Names an in-flight request of this connection only.
+  "delivery/cancel": "connection_local",
   "session/uploadPrepare": "side_effecting",
   "session/uploadStatus": "read",
   "configuration/sourcesRead": "read",
@@ -204,6 +209,9 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   "session/adoptConfiguration": "side_effecting",
 } satisfies Record<MethodName, ResponseLossClass>);
 
+/** The requests a client may cancel by id on its own connection. */
+export type DeliveryMethod = "delivery/read" | "delivery/locate";
+
 interface PendingRequest {
   readonly method: MethodName;
   readonly expect: ResultType;
@@ -211,16 +219,26 @@ interface PendingRequest {
   reject: (error: Error) => void;
 }
 
-/** At most sixteen requests cross one connection. Observation and admission
- * cannot occupy the capacity reserved for lifecycle control and inspection.
- * Rejection is local, before id allocation/send; no lane queues or replays work. */
-const REQUEST_CAPACITY = { wait: 4, admission: 2, control: 2, rpc: 8 } as const;
+/** At most sixteen requests cross one connection: the App Server's
+ * `IN_FLIGHT_REQUESTS`, which ends a connection that sends a seventeenth.
+ * This client counts a request until its response arrives, which is never
+ * earlier than the server frees its slot, so staying within the lanes below
+ * never trips that limit. Observation and admission cannot occupy the
+ * capacity reserved for lifecycle control and inspection. Rejection is
+ * local, before id allocation/send; no ordinary lane queues or replays work.
+ *
+ * `cancel` is one slot only `delivery/cancel` may use, so no number of
+ * ordinary requests can stop a delivery's cancellation from reaching the
+ * server. Cancellations wait for it in order, at most one per in-flight
+ * delivery request; the server answers each at once, without awaiting work. */
+const REQUEST_CAPACITY = { wait: 4, admission: 2, control: 2, rpc: 7, cancel: 1 } as const;
 function requestLane(method: MethodName): keyof typeof REQUEST_CAPACITY {
   switch (method) {
     case "agent/wait": case "job/wait": return "wait";
     case "agent/sendMessage": return "admission";
     case "agent/interrupt": case "job/cancel": case "turn/cancel":
     case "interaction/respond": case "interaction/cancel": return "control";
+    case "delivery/cancel": return "cancel";
     default: return "rpc";
   }
 }
@@ -239,6 +257,10 @@ export class AppServerClient {
   uploadEndpoint?: string;
   readonly #transport: AppServerTransport;
   readonly #pending = new Map<RequestId, PendingRequest>();
+  /** Aborted delivery requests whose cancellation awaits the cancel slot, in
+   * abort order. An entry leaves when its cancel is sent or its request
+   * settles, so this never outgrows the in-flight delivery requests. */
+  readonly #cancels = new Set<RequestId>();
   readonly #notificationListeners = new Set<NotificationListener>();
   readonly #closeListeners = new Set<CloseListener>();
   #nextRequestId = 1;
@@ -308,7 +330,7 @@ export class AppServerClient {
     if (deleting) this.#deletingSessions.add(id); else this.#deletingSessions.delete(id);
   }
 
-  async call<M extends MethodName, T extends ResultType>(
+  async call<M extends Exclude<MethodName, "delivery/cancel">, T extends ResultType>(
     method: M,
     params: MethodParams<M>,
     expect: T,
@@ -317,6 +339,30 @@ export class AppServerClient {
       throw new Error('Session deletion has disabled controls. Verify its outcome before continuing.');
     }
     const result = await this.#request(method, params, expect);
+    return result as ResultOf<T>;
+  }
+
+  /**
+   * Issues one delivery request whose cancellation `signal` owns.
+   *
+   * Aborting sends `delivery/cancel` for exactly this request id, once,
+   * through the reserved cancel slot: immediately, or after the
+   * cancellations aborted before it, unless this request settles first. The
+   * request still settles exactly once, with the server's terminal outcome:
+   * its result when publication committed first, otherwise
+   * `delivery_cancelled`. Its correlation entry stays until then, so the late
+   * response is never an unknown id. A signal aborted before sending sends
+   * nothing. A healthy server answers every cancel; one that refuses a
+   * cancel breaks this contract and ends the connection, which settles the
+   * request with that terminal failure.
+   */
+  async callDelivery<M extends DeliveryMethod, T extends ResultType>(
+    method: M,
+    params: MethodParams<M>,
+    expect: T,
+    signal: AbortSignal,
+  ): Promise<ResultOf<T>> {
+    const result = await this.#request(method, params, expect, signal);
     return result as ResultOf<T>;
   }
 
@@ -346,16 +392,17 @@ export class AppServerClient {
     return this.#transport.close();
   }
 
-  #request(method: MethodName, params: unknown, expect: ResultType): Promise<MethodResult> {
+  #request(method: MethodName, params: unknown, expect: ResultType, signal?: AbortSignal): Promise<MethodResult> {
     if (this.#closed !== undefined) {
       // After termination a new request fails immediately rather than waiting
       // for a peer that will never answer. Nothing was sent, so nothing is
       // uncertain.
       return Promise.reject(this.#closed);
     }
+    if (signal?.aborted) return Promise.reject(signal.reason);
 
     const lane = requestLane(method);
-    if ([...this.#pending.values()].filter(request => requestLane(request.method) === lane).length >= REQUEST_CAPACITY[lane]) {
+    if (this.#occupied(lane) >= REQUEST_CAPACITY[lane]) {
       return Promise.reject(new Error(`Client ${lane} capacity reached. Request not sent; inspect current operations before retrying.`));
     }
 
@@ -363,13 +410,50 @@ export class AppServerClient {
     this.#nextRequestId += 1;
 
     return new Promise<MethodResult>((resolve, reject) => {
-      this.#pending.set(id, { method, expect, resolve, reject });
+      const cancel = () => {
+        if (!this.#pending.has(id)) return;
+        this.#cancels.add(id);
+        this.#sendCancel();
+      };
+      const release = () => {
+        signal?.removeEventListener("abort", cancel);
+        this.#cancels.delete(id);
+        // A settled cancel frees the slot for the next waiting one.
+        if (method === "delivery/cancel") this.#sendCancel();
+      };
+      this.#pending.set(id, {
+        method,
+        expect,
+        resolve: (result) => { release(); resolve(result); },
+        reject: (error) => { release(); reject(error); },
+      });
+      signal?.addEventListener("abort", cancel, { once: true });
       void this.#transport
         .send({ jsonrpc: "2.0", id, method, params })
         .catch(() => {
           // The transport already terminated and settled every pending
           // request, including this one, with the terminal cause.
         });
+    });
+  }
+
+  #occupied(lane: keyof typeof REQUEST_CAPACITY): number {
+    return [...this.#pending.values()].filter(request => requestLane(request.method) === lane).length;
+  }
+
+  /** Sends the oldest waiting cancellation when the cancel slot is free. Its
+   * answer is not the outcome — the delivery request's own terminal response
+   * is — but a refusal means the server dropped a cancellation it owed. */
+  #sendCancel(): void {
+    if (this.#closed !== undefined || this.#occupied("cancel") >= REQUEST_CAPACITY.cancel) return;
+    const [id] = this.#cancels;
+    if (id === undefined) return;
+    this.#cancels.delete(id);
+    this.#request("delivery/cancel", { request_id: id }, "delivery_cancel").catch((error: unknown) => {
+      if (error instanceof AppServerRequestError) {
+        this.#fail(`the App Server refused delivery/cancel for request ${String(id)}: ${error.message}`);
+      }
+      // Otherwise the connection already ended, settling the request too.
     });
   }
 
@@ -380,7 +464,7 @@ export class AppServerClient {
 
     const record = decodeProtocolMessage(untrusted);
     if (record === undefined) {
-      this.#fail("invalid App Server v38 protocol message");
+      this.#fail("invalid App Server v39 protocol message");
       return;
     }
 
@@ -466,6 +550,11 @@ export function isConnectionClosed(error: unknown): boolean {
   return (
     error instanceof TransportClosedError || error instanceof UncertainOutcomeError
   );
+}
+
+/** Whether a delivery request answered that its cancellation won. */
+export function isDeliveryCancelled(error: unknown): boolean {
+  return error instanceof AppServerRequestError && error.kind === "delivery_cancelled";
 }
 
 /** Whether a side-effecting request's outcome is genuinely unknown. */

@@ -4,7 +4,7 @@ The dev launcher owns the App Server, exact endpoint, transport credential, brow
 launch credential, Host config, carrier and private scratch lifetime. Carrier
 authentication hands admission material to the browser; it adds no App Server RPC,
 proxy, native configuration or Workspace authority. The browser connects directly
-with the existing AppServerClient and App Server protocol **v38**.
+with the existing AppServerClient and App Server protocol **v39**.
 
 `GET /?token=<browser-launch-token>` accepts exactly one bounded 43-character
 base64url credential on the root route. Timing-safe comparison follows format checks.
@@ -139,7 +139,9 @@ The launcher generates a distinct process-ephemeral 256-bit secret, passes an
 owner-only file with `--product-host-token-file` to the native process and its value
 only to Node's private Host configuration. The browser receives neither. File reads
 use the private `/product-host/file-read` WebSocket lane, not an ordinary App Server
-Method. The Host supplies current registered Workspace roots; configured picker
+Method. The browser never offers the separate delivery-access credential that
+`delivery/read` requires; that grant belongs to trusted App Server clients such as
+the TUI (see `docs/file-delivery.md`). The Host supplies current registered Workspace roots; configured picker
 locations or display classification alone do not authorize bytes. Root changes and
 Host retirement abort its owned reads. Native handshake authority, attachment and
 mapping fences independently prevent obsolete publication. See
@@ -206,7 +208,7 @@ browser secret or expiry database. Existing adapted Settings provenance is retai
 
 ## Native upload data lane
 
-App Server v38 advertises ordinary file policy at initialization. Upload prepare
+App Server v39 advertises ordinary file policy at initialization. Upload prepare
 is authenticated through the exact native attachment; a short-lived single-use
 capability authorizes a separate binary socket at the same selected native origin.
 No transport key, Product Host credential or local path appears in the descriptor.

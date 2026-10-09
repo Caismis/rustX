@@ -1,7 +1,8 @@
 //! Private Product Host file-read seam. Never an ordinary App Server Method.
 //! Transport authentication creates the read authority; JSON cannot create it.
 use super::{
-    connection::{Route, client_error, domain, host_error, manager_error},
+    connection::{client_error, domain, host_error, manager_error},
+    delivery_access,
     host::AppServerHost,
     protocol::{
         AttachmentTarget, ErrorData, Failure, JsonRpcVersion, MethodResult, RequestId, Response,
@@ -9,9 +10,8 @@ use super::{
     },
 };
 use crate::tools::session_files::SessionFileReadFailure as FileFailure;
-use base64::Engine;
 use serde::{Deserialize, Serialize};
-use std::{io, path::PathBuf, sync::Arc};
+use std::{io, path::PathBuf};
 use tokio_util::sync::CancellationToken;
 
 pub(crate) const PATH: &str = "/product-host/file-read";
@@ -20,20 +20,101 @@ pub(crate) const SUBPROTOCOL: &str = "rustx.product-host.file-read.v2";
 #[cfg(test)]
 #[derive(Debug)]
 pub(crate) struct ReadProbe {
-    pub before_bytes: Arc<crate::runtime::conversation_runtime::Gate>,
+    /// Delivery operation registered, before native admission.
+    pub before_admission: Pause,
+    /// Admitted and holding a permit, before the descriptor walk opens anything.
+    pub before_open: std::sync::Arc<crate::runtime::conversation_runtime::Gate>,
+    pub before_bytes: std::sync::Arc<crate::runtime::conversation_runtime::Gate>,
     pub completed: tokio::sync::watch::Sender<Option<bool>>,
     pub retirement_waiting: tokio::sync::watch::Sender<bool>,
+    /// A `delivery/cancel` found its request's publication in progress and waited.
+    pub cancel_waited: tokio::sync::watch::Sender<bool>,
+    /// A credential rotation found its slot held by an authentication and waited.
+    pub credential_waited: tokio::sync::watch::Sender<bool>,
+    /// Inside an authentication, holding its credential slot.
+    pub authenticating: std::sync::Arc<crate::runtime::conversation_runtime::Gate>,
+    /// Delivery credentials in the order rotations installed them.
+    pub rotations: Rotations,
     pub authority: std::sync::Mutex<Option<CancellationToken>>,
 }
 #[cfg(test)]
 impl Default for ReadProbe {
     fn default() -> Self {
         Self {
-            before_bytes: Arc::default(),
+            before_admission: Pause::default(),
+            before_open: std::sync::Arc::default(),
+            before_bytes: std::sync::Arc::default(),
             completed: tokio::sync::watch::channel(None).0,
             retirement_waiting: tokio::sync::watch::channel(false).0,
+            cancel_waited: tokio::sync::watch::channel(false).0,
+            credential_waited: tokio::sync::watch::channel(false).0,
+            authenticating: std::sync::Arc::default(),
+            rotations: Rotations::default(),
             authority: std::sync::Mutex::default(),
         }
+    }
+}
+
+/// What each delivery credential rotation installed, in its linearization
+/// order. Secrets are never printed.
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct Rotations(std::sync::Mutex<Vec<Option<super::transport::websocket::Credential>>>);
+#[cfg(test)]
+impl std::fmt::Debug for Rotations {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Rotations")
+    }
+}
+#[cfg(test)]
+impl Rotations {
+    pub(crate) fn record(&self, installed: Option<super::transport::websocket::Credential>) {
+        self.0.lock().expect("rotations").push(installed);
+    }
+    pub(crate) fn take(&self) -> Vec<Option<super::transport::websocket::Credential>> {
+        std::mem::take(&mut self.0.lock().expect("rotations"))
+    }
+}
+
+/// A one-shot async test boundary. Unarmed, it never waits.
+#[cfg(test)]
+#[derive(Debug)]
+pub(crate) struct Pause {
+    armed: std::sync::atomic::AtomicBool,
+    entered: tokio::sync::watch::Sender<bool>,
+    proceed: tokio::sync::watch::Sender<bool>,
+}
+#[cfg(test)]
+impl Default for Pause {
+    fn default() -> Self {
+        Self {
+            armed: std::sync::atomic::AtomicBool::new(false),
+            entered: tokio::sync::watch::channel(false).0,
+            proceed: tokio::sync::watch::channel(false).0,
+        }
+    }
+}
+#[cfg(test)]
+impl Pause {
+    /// The next [`Pause::enter`] parks until [`Pause::release`].
+    pub(crate) fn arm(&self) {
+        self.entered.send_replace(false);
+        self.proceed.send_replace(false);
+        self.armed.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    pub(crate) async fn enter(&self) {
+        if !self.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        let mut proceed = self.proceed.subscribe();
+        self.entered.send_replace(true);
+        let _ = proceed.wait_for(|proceed| *proceed).await;
+    }
+    pub(crate) async fn wait_entered(&self) {
+        let _ = self.entered.subscribe().wait_for(|entered| *entered).await;
+    }
+    pub(crate) fn release(&self) {
+        self.proceed.send_replace(true);
     }
 }
 
@@ -69,6 +150,10 @@ impl Drop for Authority {
 /// One authenticated host-only socket owns one read. Disconnect, authority
 /// replacement and process shutdown synchronously cancel its publication fence.
 /// A close acknowledgement is emitted only after its admitted read retires.
+///
+/// The response is published like an ordinary-lane delivery response: its
+/// [`delivery_access::Publication`] decides at tungstenite's acceptance of the
+/// frame, against the same revocation order.
 pub(crate) async fn serve<S>(
     socket: tokio_tungstenite::WebSocketStream<S>,
     host: AppServerHost,
@@ -78,14 +163,13 @@ pub(crate) async fn serve<S>(
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
 {
-    use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
     let _retire = authorization.clone().drop_guard();
-    let (mut writer, mut reader) = socket.split();
+    let socket = super::transport::websocket::Socket::new(socket);
     let request = tokio::select! {
         () = shutdown.cancelled() => return Ok(()),
         () = authorization.cancelled() => return Ok(()),
-        request = tokio::time::timeout(super::transport::websocket::HANDSHAKE_TIMEOUT, reader.next()) => request.map_err(io::Error::other)?,
+        request = tokio::time::timeout(super::transport::websocket::HANDSHAKE_TIMEOUT, socket.next()) => request.map_err(io::Error::other)?,
     };
     let Some(Ok(Message::Text(text))) = request else {
         return Err(io::Error::other("expected Product Host read"));
@@ -98,11 +182,11 @@ where
         biased;
         () = shutdown.cancelled() => None,
         () = authorization.cancelled() => None,
-        _ = reader.next() => None, // close, EOF, error or a second payload revokes this single operation
+        _ = socket.next() => None, // close, EOF, error or a second payload revokes this single operation
         result = &mut read => Some(result),
     };
-    let Some(result) = result else {
-        authorization.cancel();
+    let Some((result, publication)) = result else {
+        host.revocations().revoke(|| authorization.cancel());
         // Admission owns a detached native operation and possibly a blocking
         // descriptor read. Dropping its receiver cannot release that permit.
         // Do not poll the socket (and flush an automatic close reply) until the
@@ -116,10 +200,9 @@ where
             result
         })
         .await;
-        return tokio::time::timeout(super::transport::WRITE_TIMEOUT, writer.close())
+        return tokio::time::timeout(super::transport::WRITE_TIMEOUT, socket.close())
             .await
-            .map_err(io::Error::other)?
-            .map_err(io::Error::other);
+            .map_err(io::Error::other)?;
     };
     let response = match result {
         Ok(result) => Response::Success(Box::new(Success {
@@ -133,21 +216,23 @@ where
             error,
         }),
     };
-    let record = super::transport::serialize_record(&response)?;
+    let outbound = super::transport::Outbound::reply(super::connection::Reply {
+        response,
+        publication,
+    })?;
     tokio::select! {
         biased;
         () = shutdown.cancelled() => (),
         () = authorization.cancelled() => (),
-        result = tokio::time::timeout(super::transport::WRITE_TIMEOUT, writer.send(Message::Text(record.into()))) => {
-            result.map_err(io::Error::other)?.map_err(io::Error::other)?;
+        result = tokio::time::timeout(super::transport::WRITE_TIMEOUT, socket.send(outbound)) => {
+            result.map_err(io::Error::other)??;
         },
     }
     // A read already retired before cancellation can acknowledge the same clean
     // close, without turning a known settlement into a transport-loss outcome.
-    tokio::time::timeout(super::transport::WRITE_TIMEOUT, writer.close())
+    tokio::time::timeout(super::transport::WRITE_TIMEOUT, socket.close())
         .await
         .map_err(io::Error::other)?
-        .map_err(io::Error::other)
 }
 
 /// Internal one-operation payload, accepted only after host-only authentication.
@@ -170,34 +255,63 @@ pub(crate) enum ReadSource {
         artifact_id: crate::runtime::ArtifactId,
     },
 }
-fn check_authorization(authorization: &CancellationToken) -> io::Result<()> {
-    if authorization.is_cancelled() {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "Product Host authority revoked",
-        ));
-    }
-    Ok(())
-}
-fn check_rpc_authorization(authorization: &CancellationToken) -> Result<(), RpcError> {
-    check_authorization(authorization).map_err(|_| {
-        domain(ErrorData::SessionFileRead {
-            reason: crate::tools::session_files::SessionFileReadFailure::Unauthorized,
-        })
-    })
-}
-
-pub(crate) async fn read(
+/// The read and, once its route is found, the publication that decides its
+/// response.
+async fn read(
     host: AppServerHost,
     request: FileRead,
     authorization: CancellationToken,
+) -> (
+    Result<MethodResult, RpcError>,
+    Option<delivery_access::Publication>,
+) {
+    if let Err(error) = delivery_access::check_rpc(&authorization) {
+        return (Err(error), None);
+    }
+    let Some(route) = host.file_route(&request.target) else {
+        return (Err(domain(ErrorData::StaleAttachment)), None);
+    };
+    // A socket's one operation: its own table, under the fixed id 0.
+    let publication = std::sync::Arc::new(delivery_access::Operations::default())
+        .register(
+            &RequestId::Integer(0),
+            &authorization,
+            route.clone(),
+            host.revocations().clone(),
+            #[cfg(test)]
+            host.file_read_probe(),
+        )
+        .expect("a fresh table has no operation");
+    let token = publication.token();
+    let FileRead { source, roots, .. } = request;
+    let result = match source {
+        ReadSource::SessionFile {
+            message_id,
+            delivery_index,
+        } => {
+            delivery_access::request(
+                host,
+                route,
+                message_id,
+                delivery_index,
+                delivery_access::Roots::Registered(roots),
+                delivery_access::Access::Bytes,
+                token,
+            )
+            .await
+        }
+        ReadSource::Artifact { artifact_id } => artifact(host, route, artifact_id, token).await,
+    };
+    (result, Some(publication))
+}
+
+async fn artifact(
+    host: AppServerHost,
+    route: std::sync::Arc<super::connection::Route>,
+    artifact_id: crate::runtime::ArtifactId,
+    authorization: CancellationToken,
 ) -> Result<MethodResult, RpcError> {
-    check_rpc_authorization(&authorization)?;
-    let route = host
-        .file_route(&request.target)
-        .ok_or_else(|| domain(ErrorData::StaleAttachment))?;
     let client = route.client.clone();
-    let sessions = host.manager().session_controller();
     let owner = host.clone();
     let receiver = host
         .admit_request(|request_owner| {
@@ -205,20 +319,19 @@ pub(crate) async fn read(
                 let authority = route.attachment.read_authority();
                 async move {
                     let _request = request_owner;
-                    #[cfg(test)]
-                    let probe = owner.file_read_probe();
-                    let result = read_admitted(
-                        owner,
-                        request,
-                        route,
-                        authority.map_err(client_error)?,
-                        sessions,
-                        authorization,
-                    )
-                    .await;
-                    #[cfg(test)]
-                    probe.completed.send_replace(Some(result.is_ok()));
-                    result
+                    let authority = authority.map_err(client_error)?;
+                    delivery_access::check_rpc(&authorization)?;
+                    let _permit = owner.file_reads().try_acquire_owned().map_err(|_| {
+                        domain(ErrorData::SessionFileRead {
+                            reason: FileFailure::Capacity,
+                        })
+                    })?;
+                    let data = authority
+                        .artifact_read(&artifact_id)
+                        .map_err(client_error)?;
+                    route.attachment.read_authority().map_err(client_error)?;
+                    delivery_access::check_rpc(&authorization)?;
+                    Ok(MethodResult::ArtifactBytes { data })
                 }
             })
         })
@@ -227,140 +340,4 @@ pub(crate) async fn read(
     receiver
         .await
         .map_err(|_| domain(ErrorData::OperationFailed))?
-}
-#[allow(clippy::too_many_lines)] // Existing native file owner; admission and every read fence stay together.
-async fn read_admitted(
-    host: AppServerHost,
-    request: FileRead,
-    route: Arc<Route>,
-    authority: Arc<crate::runtime_client::host::ClientInner>,
-    sessions: crate::local_runtime::session_controller::SessionController,
-    authorization: CancellationToken,
-) -> Result<MethodResult, RpcError> {
-    check_rpc_authorization(&authorization)?;
-    #[cfg(test)]
-    {
-        *host
-            .file_read_probe()
-            .authority
-            .lock()
-            .expect("read authority probe") = Some(authorization.clone());
-    }
-    let FileRead {
-        source,
-        roots: allowed_roots,
-        ..
-    } = request;
-    let (message_id, delivery_index) = match source {
-        ReadSource::SessionFile {
-            message_id,
-            delivery_index,
-        } => (message_id, delivery_index),
-        ReadSource::Artifact { artifact_id } => {
-            let _permit = host.file_reads().try_acquire_owned().map_err(|_| {
-                domain(ErrorData::SessionFileRead {
-                    reason: FileFailure::Capacity,
-                })
-            })?;
-            let data = authority
-                .artifact_read(&artifact_id)
-                .map_err(client_error)?;
-            route.attachment.read_authority().map_err(client_error)?;
-            check_rpc_authorization(&authorization)?;
-            return Ok(MethodResult::ArtifactBytes { data });
-        }
-    };
-    let failed = |reason| domain(ErrorData::SessionFileRead { reason });
-    if delivery_index >= crate::tools::session_files::PRESENT_MAX_FILES
-        || allowed_roots.is_empty()
-        || allowed_roots.len() > 32
-        || allowed_roots
-            .iter()
-            .any(|p| !p.is_absolute() || p.as_os_str().len() > 4096)
-    {
-        return Err(domain(ErrorData::InvalidParams));
-    }
-    let permit = host
-        .file_reads()
-        .try_acquire_owned()
-        .map_err(|_| failed(FileFailure::Capacity))?;
-    route.attachment.read_authority().map_err(client_error)?;
-    let file = authority
-        .session_file_reference(&message_id, delivery_index)
-        .map_err(|_| failed(FileFailure::Unavailable))?;
-    let (session, node) = sessions
-        .catalog
-        .lock()
-        .await
-        .file_source(&file.scope.conversation_id)
-        .map_err(|_| failed(FileFailure::Unavailable))?;
-    // Native allocation access excludes Session deletion while the read
-    // is owned; acquiring it does not compose or start an Agent.
-    let access = sessions
-        .acquire_session(&session, Some(&node))
-        .await
-        .map_err(|_| failed(FileFailure::Unavailable))?;
-    let reference = file.clone();
-    let read_route = route.clone();
-    let read_authorization = authorization.clone();
-    let catalog = sessions.catalog.clone();
-    #[cfg(test)]
-    let probe = host.file_read_probe();
-    let bytes = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let _allocation = access.allocation;
-        let mapped_cwd = access.settings.cwd;
-        #[cfg(test)]
-        let fences = std::sync::atomic::AtomicUsize::new(0);
-        let authorized = || {
-            // Third fence: after the unchanged descriptor owner's leaf open,
-            // immediately before it reads any bytes.
-            #[cfg(test)]
-            if fences.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 2 {
-                probe.before_bytes.enter();
-            }
-            check_authorization(&read_authorization)?;
-            let mapping_current = catalog.blocking_lock().file_mapping_matches(
-                &reference.scope.conversation_id,
-                &session,
-                &node,
-                &mapped_cwd,
-            );
-            if !mapping_current {
-                return Err(crate::tools::session_files::unavailable());
-            }
-            read_route
-                .attachment
-                .read_authority()
-                .map(|_| ())
-                .map_err(|_| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        "delivery attachment revoked",
-                    )
-                })
-        };
-        authorized()?;
-        // Current native mapping only. No textual Host-path fallback.
-        let root = std::fs::canonicalize(&mapped_cwd)
-            .map_err(|_| crate::tools::session_files::unavailable())?;
-        if !allowed_roots.contains(&root) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "delivery Workspace not authorized by Product Host",
-            ));
-        }
-        let bytes = crate::tools::session_files::read_authorized(&root, &reference, authorized)?;
-        authorized()?;
-        Ok::<_, std::io::Error>(bytes)
-    })
-    .await
-    .map_err(|_| domain(ErrorData::OperationFailed))?
-    .map_err(|error| failed(crate::tools::session_files::read_failure(&error)))?;
-    route.attachment.read_authority().map_err(client_error)?;
-    check_rpc_authorization(&authorization)?;
-    Ok(MethodResult::SessionFileBytes {
-        file,
-        data: base64::engine::general_purpose::STANDARD.encode(bytes),
-    })
 }

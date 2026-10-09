@@ -121,6 +121,14 @@ export interface CorrelatedTool {
    * settled execution.
    */
   committed: boolean;
+  /**
+   * Whether `lifecycle.result` is the committed canonical Tool-result message.
+   *
+   * A foreground settlement precedes that commit and is execution evidence
+   * only. Typed result facts that canonical commit alone makes authoritative,
+   * such as `present` deliveries, are read only when this is true.
+   */
+  resultCommitted: boolean;
 }
 
 /** The correlated tool view of one presentation state. */
@@ -207,6 +215,7 @@ export function correlateTools(state: PresentationState): ToolCorrelation {
       argumentsText: existing?.argumentsText ?? "",
       lifecycle: { type: "settled", result: message.result },
       committed: true,
+      resultCommitted: true,
     });
   });
 
@@ -224,6 +233,9 @@ export function correlateTools(state: PresentationState): ToolCorrelation {
       argumentsText: existing?.argumentsText || argumentsOf(execution),
       lifecycle: laterOf(existing?.lifecycle, lifecycle),
       committed: existing?.committed ?? false,
+      // A tie keeps the committed result, so only a committed lifecycle
+      // keeps this true; a foreground settlement never sets it.
+      resultCommitted: existing?.resultCommitted ?? false,
     });
   }
 
@@ -411,6 +423,7 @@ function transcriptCalls(entry: TranscriptEntry): CorrelatedTool[] {
         argumentsText: block.argumentsText,
         lifecycle: { type: "assembled" } as ToolLifecycle,
         committed: false,
+        resultCommitted: false,
       }));
   }
   if (entry.kind !== "committed") {
@@ -430,6 +443,7 @@ function transcriptCalls(entry: TranscriptEntry): CorrelatedTool[] {
       argumentsText: stringifyArguments(block.arguments),
       lifecycle: { type: "assembled" } as ToolLifecycle,
       committed: true,
+      resultCommitted: false,
     }));
 }
 

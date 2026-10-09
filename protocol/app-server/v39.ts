@@ -25,6 +25,28 @@ export type Request1 =
       };
     }
   | {
+      method: 'delivery/read';
+      params: {
+        target: AttachmentTarget;
+        message_id: MessageId;
+        delivery_index: number;
+      };
+    }
+  | {
+      method: 'delivery/locate';
+      params: {
+        target: AttachmentTarget;
+        message_id: MessageId;
+        delivery_index: number;
+      };
+    }
+  | {
+      method: 'delivery/cancel';
+      params: {
+        request_id: RequestId;
+      };
+    }
+  | {
       method: 'session/uploadPrepare';
       params: {
         target: AttachmentTarget;
@@ -463,6 +485,10 @@ export type AttachmentId = string;
  * universal durable artifact identity.
  */
 export type ArtifactId = string;
+/**
+ * Identifies a committed canonical message block.
+ */
+export type MessageId = string;
 export type SessionNodeId = string;
 /**
  * Opaque Trace-only exclusive boundary, valid only in its conversation.
@@ -512,10 +538,6 @@ export type TranscriptCursor = string;
  * Identifies one attempt to execute an agent manifest.
  */
 export type AttemptId = string;
-/**
- * Identifies a committed canonical message block.
- */
-export type MessageId = string;
 /**
  * The identity of one reasoning profile declared by a model.
  *
@@ -1013,6 +1035,23 @@ export type MethodResult =
       file: SessionFileReference;
       data: string;
       type: 'session_file_bytes';
+    }
+  | {
+      accepted: boolean;
+      type: 'delivery_cancel';
+    }
+  | {
+      file: SessionFileReference;
+      /**
+       * Absolute path in the server's filesystem namespace.
+       */
+      path: string;
+      /**
+       * Lossless decimal device/inode of the verified regular leaf.
+       */
+      device: string;
+      inode: string;
+      type: 'session_file_location';
     }
   | {
       download: ArchiveDownloadDescriptor;
@@ -2872,6 +2911,9 @@ export type ErrorData =
     }
   | {
       kind: 'already_initialized';
+    }
+  | {
+      kind: 'delivery_cancelled';
     }
   | {
       kind: 'stale_attachment';
@@ -7729,6 +7771,11 @@ export interface ServerCapabilities {
   multi_session: boolean;
   single_writable_controller: boolean;
   headless_interactions: boolean;
+  /**
+   * Whether this connection holds transport-granted delivery access.
+   * Reporting it grants nothing; the native seam checks the capability.
+   */
+  delivery_access: boolean;
   experimental_methods: string[];
 }
 /**

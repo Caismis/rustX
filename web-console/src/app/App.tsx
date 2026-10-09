@@ -20,7 +20,7 @@ import { WorkspaceSessionNavigation } from '../workspaces/navigation';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useActorRef } from '@xstate/react';
 import type { AppServerClient } from '../client/app-server';
-import type { AttachmentTarget, CompletedResponseView, MethodResult, SessionNode, SourceTarget, UserInputBlock } from '../../../protocol/app-server/v38';
+import type { AttachmentTarget, CompletedResponseView, MethodResult, SessionNode, SourceTarget, UserInputBlock } from '../../../protocol/app-server/v39';
 import type { ForkOrigin } from './agent/ForkPoint';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
 import { CommandSession, type ResponseAction } from './commands/native';

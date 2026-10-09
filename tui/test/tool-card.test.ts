@@ -39,6 +39,7 @@ function tool(overrides: Partial<CorrelatedTool> = {}): CorrelatedTool {
     argumentsText: "{}",
     lifecycle: { type: "assembled" },
     committed: false,
+    resultCommitted: false,
     ...overrides,
   };
 }
