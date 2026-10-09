@@ -227,7 +227,8 @@ describe('native App Server connection', () => {
   it('explicit reopen waits for a pending detach and acquires one fresh authoritative attachment', async () => {
     const s = server(); await s.attached('A'); s.held.add('session/detach');
     const closing = s.client.release('A'); const request = await s.waitFor('session/detach', 1);
-    const oldTarget = s.client.target('A');
+    const oldTarget = s.client.getSnapshot().views.A.target;
+    expect(() => s.client.target('A')).toThrow('not authoritatively attached');
     const opening = s.client.attach('A'); const duplicate = s.client.attach('A');
     expect(s.client.getSnapshot().views.A.attachmentIntent).toBe('wanted');
     expect(s.requests.filter(({ request }) => request.method === 'session/attach')).toHaveLength(1);
@@ -475,7 +476,8 @@ it('native attach acknowledgement after Release and queued Open retains detach i
   const first = s.client.attach('A'), request = await s.waitFor('session/attach', 1);
   const closing = s.client.release('A'), reopening = s.client.attach('A');
   s.reply(request); await first;
-  const retained = s.client.target('A');
+  const retained = s.client.getSnapshot().views.A.target;
+  expect(() => s.client.target('A')).toThrow('not authoritatively attached');
   expect(s.client.getSnapshot().views.A.attachmentObservation).toBeUndefined();
   expect(s.client.getSnapshot().views.A.attachmentIntent).toBe('wanted');
   const detach = await s.waitFor('session/detach', 1);

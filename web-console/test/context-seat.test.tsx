@@ -117,7 +117,11 @@ it.each(['conversation', 'incarnation', 'authority'] as const)('reconnect retire
   if (replacement === 'incarnation') server.loaded.delete('A');
   if (replacement === 'authority') server.authorityId = 'replacement-server';
   await server.connect();
-  if (replacement === 'conversation') await server.client.attach('A', 'replacement-node');
+  if (replacement === 'conversation') {
+    await server.client.attach('A');
+    await server.client.switchNode('A', 'replacement-node');
+    await server.client.attach('A', 'replacement-node');
+  }
   expect(server.client.getSnapshot().views.A?.compactionRequest).toBeUndefined();
   const current = server.client.getSnapshot(); oldSocket.deliver(response);
   oldSocket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: pending.method === 'context/compact' ? pending.params.target : server.client.target('A'), cursor: String(server.cursor + 1n), event: { type: 'context_compaction_failed', error: 'obsolete poison', context: { ...base, compaction_error: 'obsolete poison' } } } });

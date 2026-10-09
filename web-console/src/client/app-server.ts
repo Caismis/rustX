@@ -292,7 +292,7 @@ export class AppServerClient {
   private dirty = new Set<string>();
   private acquiring = new Set<string>();
   private resubscribe = new Set<string>();
-  private attachmentChanges = new Map<string, { kind: 'attach' | 'detach' | 'switch'; work: Promise<void> }>();
+  private attachmentChanges = new Map<string, { kind: 'attach' | 'detach' | 'switch'; work: Promise<void>; switching?: Promise<void> }>();
   private attachmentChangeCount = 0;
   private attachmentEpochs = new Map<string, number>();
   private readingIntents = new Map<string, number>();
@@ -520,6 +520,9 @@ export class AppServerClient {
     this.socket = undefined;
     this.initialized = false;
     const uncertain = [...this.state.uncertain];
+    // Includes a decoded ACK whose lifecycle continuation has not settled yet.
+    // Connection replacement cannot reinterpret that unfinished transition.
+    const interruptedSwitches = new Set([...this.attachmentChanges].filter(([, change]) => change.switching).map(([id]) => id));
     for (const [id, pending] of this.pending) {
       clearTimeout(pending.timer); pending.validation?.abort(); pending.validation = undefined;
       if (pending.sent && pending.mutation) {
@@ -544,7 +547,7 @@ export class AppServerClient {
     for (const item of uncertain) if (item.interactionKey) operations[item.interactionKey] = { sessionId: item.sessionId!, status: 'uncertain' };
     this.publish({ connection, generation: this.state.generation + 1, uncertain, interactionOperations: operations,
       views: Object.fromEntries(Object.entries(this.state.views).map(([id, view]) => [id, {
-        ...view, attachmentObservation: undefined, modelIntent: undefined, ...(view.recoveringDeletion ? { recoveringDeletion: false, deletionRecovery: undefined } : {}), history: undefined, turnOutline: undefined, turnNavigation: undefined, target: undefined, submissions: undefined, inboundRequests: undefined, attachment: view.target || ['attaching', 'attached', 'resynchronizing'].includes(view.attachment) ? 'stale' : view.attachment,
+        ...view, ...(interruptedSwitches.has(id) ? { attachmentIntent: 'released' as const, nodeId: undefined, nodeConversationId: undefined } : {}), attachmentObservation: undefined, modelIntent: undefined, ...(view.recoveringDeletion ? { recoveringDeletion: false, deletionRecovery: undefined } : {}), history: undefined, turnOutline: undefined, turnNavigation: undefined, target: undefined, submissions: undefined, inboundRequests: undefined, attachment: view.target || ['attaching', 'attached', 'resynchronizing'].includes(view.attachment) ? 'stale' : view.attachment,
       }])),
     });
     if (oldSocket && !this.closedSockets.has(oldSocket)) {
@@ -561,6 +564,21 @@ export class AppServerClient {
   async request<T extends MethodResult['type']>(operation: Request1, expected: T, acknowledged?: (result: Extract<MethodResult, { type: T }>) => void, dispatchCurrent?: (() => boolean) | OperationAdmission): Promise<Extract<MethodResult, { type: T }>> {
     if (!this.socket || (!this.initialized && operation.method !== 'initialize')) throw new RequestNotDispatched('Connect and initialize first.');
     if ('target' in operation.params && 'session_id' in operation.params.target && this.state.views[operation.params.target.session_id]?.deleting && !READS.has(operation.method) && operation.method !== 'session/detach') throw new RequestNotDispatched('Session deletion has disabled controls. Verify its outcome before continuing.');
+    // AppServerClient owns control admission. Retained targets authorize only
+    // lifecycle settlement and reads; new effects require the exact committed
+    // attachment proof, captured once and checked again adjacent to socket send.
+    if ('target' in operation.params && 'session_id' in operation.params.target
+      && !READS.has(operation.method) && !(operation.method === 'goal/control' && operation.params.control.action === 'show')
+      && operation.method !== 'session/detach' && operation.method !== 'session/switchNode' && operation.method !== 'session/subscribe') {
+      const target = operation.params.target, id = target.session_id;
+      const admission = this.state.views[id]?.attachmentObservation;
+      const current = () => this.isAttachmentObservationCurrent(id, admission) && sameTarget(admission?.target, target);
+      if (!current()) throw new RequestNotDispatched('Attachment control authority was revoked.');
+      const supplied = dispatchCurrent;
+      dispatchCurrent = typeof supplied === 'object'
+        ? { current: () => current() && supplied.current(), validate: signal => supplied.validate(signal) }
+        : () => current() && (!supplied || supplied());
+    }
     if (operation.method.startsWith('artifact/') && [...this.pending.values()].filter(item => item.request.method.startsWith('artifact/')).length >= 2) throw new RequestNotDispatched('Artifact transfer capacity reached. Retry after current transfers finish.');
     const lane = requestLane(operation.method);
     if (lane !== 'rpc' && [...this.pending.values()].filter(item => requestLane(item.request.method) === lane).length >= DOMAIN_CAPACITY[lane]) {
@@ -948,7 +966,8 @@ export class AppServerClient {
   async deleteSession(id: string, expectedRevision: string) {
     const generation = this.state.generation;
     if (this.state.views[id]?.deleting) throw new Error('Session deletion is already pending verification.');
-    this.setSession(id, { deleting: true, error: undefined });
+    this.setSession(id, { deleting: true, attachmentObservation: undefined,
+      attachmentIntentRevision: (this.state.views[id]?.attachmentIntentRevision ?? 0) + 1, error: undefined });
     const result = await this.request({ method: 'session/delete', params: { session_id: id, expected_target_revision: expectedRevision } }, 'deletion').catch(error => {
       if (this.current(generation)) this.setSession(id, { error: String(error) });
       throw error;
@@ -1020,7 +1039,7 @@ export class AppServerClient {
     const generation = this.state.generation, revision = view?.attachmentIntentRevision ?? 0;
     // Resolve an omitted selector from native metadata before admitting the Open.
     // Once queued, it always addresses this exact Node, never a mutable default.
-    let node = nodeId ?? view?.nodeId ?? this.state.sessions.find(row => row.id === id)?.active_node;
+    let node = nodeId ?? view?.nodeId ?? (view ? undefined : this.state.sessions.find(row => row.id === id)?.active_node);
     if (!node) {
       const current = () => this.current(generation) && navigationCurrent() && (this.state.views[id]?.attachmentIntentRevision ?? 0) === revision
         && this.state.views[id]?.nodeId === view?.nodeId && !this.attachmentChanges.has(id);
@@ -1035,7 +1054,7 @@ export class AppServerClient {
       }
     }
     const latest = this.state.views[id];
-    if (this.attachmentChanges.get(id)?.kind === 'switch') throw new Error('Wait for the current Node switch before opening.');
+    if (this.attachmentChanges.get(id)?.switching) throw new Error('Wait for the current Node switch before opening.');
     if (latest && latest.nodeId !== node
       && (latest.attachmentIntent === 'wanted' && this.attachmentChanges.has(id)
         || latest.target && this.attachmentChanges.get(id)?.kind !== 'detach')) throw new Error('Use branch switching to open another node.');
@@ -1059,6 +1078,7 @@ export class AppServerClient {
       const existing = this.state.views[id]?.target;
       if (existing) {
         if (this.state.views[id]?.attachmentNodeId !== nodeId) throw new Error('The previous Node still owns an attachment. Release it before opening another node.');
+        if (!this.isAttachmentObservationCurrent(id, this.state.views[id]?.attachmentObservation)) throw new Error('Release the retained attachment before opening again.');
         attached?.(existing); return this.refresh(id);
       }
       this.setSession(id, { attachment: 'attaching', modelIntent: undefined, preview: undefined, statisticsPreview: undefined, tracePreview: undefined, error: undefined });
@@ -1178,7 +1198,8 @@ export class AppServerClient {
       if (!this.current(generation)) return;
       await operation(generation);
     })();
-    const change = { kind, work };
+    const change = { kind, work, switching: kind === 'switch' ? work : previous?.switching };
+    if (change.switching) void change.switching.finally(() => { change.switching = undefined; }).catch(() => {});
     this.attachmentChanges.set(id, change);
     void work.finally(() => {
       this.attachmentChangeCount--;
@@ -1659,7 +1680,7 @@ export class AppServerClient {
   }
   target(id: string) {
     const view = this.state.views[id];
-    if (view?.deleting || !this.initialized || view?.attachment !== 'attached' || !view.target || view.nodeId !== view.attachmentNodeId) throw new Error('Session is not authoritatively attached. Refresh or reconnect.');
+    if (!this.initialized || !this.isAttachmentObservationCurrent(id, view?.attachmentObservation) || !view?.target) throw new Error('Session is not authoritatively attached. Refresh or reconnect.');
     return view.target;
   }
   /** Validate command/tree evidence against the acquired Node. Observation
@@ -1680,11 +1701,11 @@ export class AppServerClient {
   async upload(id: string, files: readonly File[], evidence?: { current: () => boolean; acknowledged: (files: UploadedFile[]) => void }, operationId = uploadOperationId()): Promise<UploadedFile[]> {
     let target: AttachmentTarget;
     try { target = this.target(id); } catch (error) { throw new UploadFailure('failed', error); }
-    const generation = this.state.generation;
     const policy = this.state.capabilities?.upload_policy;
     if (!policy) throw new UploadFailure('failed', 'Upload policy unavailable');
     if (!files.length || files.length > policy.max_files_per_transfer || files.some(file => file.size > policy.max_file_bytes) || files.reduce((sum, file) => sum + file.size, 0) > policy.max_transfer_bytes) throw new UploadFailure('failed', 'Selection exceeds native upload policy');
-    const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target) && (!evidence || evidence.current());
+    const admission = this.state.views[id]?.attachmentObservation;
+    const current = () => this.isAttachmentObservationCurrent(id, admission) && sameTarget(admission?.target, target) && (!evidence || evidence.current());
     if (!current()) throw new UploadFailure('failed', 'Upload authority changed');
     const read = async () => {
       const outcome = await this.uploadStatus(id, operationId).catch(error => { throw new UploadFailure('uncertain', error); });
@@ -1912,7 +1933,7 @@ export class AppServerClient {
   }
   cancellationTarget(id: string): CancellationTarget | undefined {
     const view = this.state.views[id], attempt = view?.snapshot?.attempt;
-    if (!this.initialized || this.state.connection !== 'connected' || view?.attachmentIntent !== 'wanted' || view.attachment !== 'attached'
+    if (!this.isAttachmentObservationCurrent(id, view?.attachmentObservation) || !this.initialized || this.state.connection !== 'connected' || view?.attachmentIntent !== 'wanted' || view.attachment !== 'attached'
       || !view.target || view.deleting || view.cancellation || !attempt || attempt.phase.type === 'settled'
       || view.snapshot?.shutting_down || view.snapshot?.durability_failure || view.snapshot?.pending_interactions?.length) return;
     return { generation: this.state.generation, target: view.target, attemptId: attempt.attempt_id };
@@ -1978,7 +1999,13 @@ export class AppServerClient {
       const target = this.state.views[id]?.target;
       if (!target) return;
       const epoch = this.attachmentEpochs.get(id);
-      await this.request({ method: 'session/detach', params: { target } }, 'detached');
+      try {
+        await this.request({ method: 'session/detach', params: { target } }, 'detached');
+      } catch (error) {
+        // Exact native evidence that this retained Route is already retired.
+        // Other failures and transmitted uncertainty keep the cleanup identity.
+        if (!(error instanceof RpcFailure) || error.error.data?.kind !== 'stale_attachment') throw error;
+      }
       if (this.current(generation) && this.attachmentEpochs.get(id) === epoch) {
         this.retireAttachmentWork(id);
         this.setSession(id, { target: undefined, attachment: 'detached', error: undefined });
@@ -1991,17 +2018,38 @@ export class AppServerClient {
     const intentRevision = (this.state.views[id]?.attachmentIntentRevision ?? 0) + 1;
     this.setSession(id, { attachmentObservation: undefined, attachmentIntentRevision: intentRevision });
     return this.changeAttachment(id, 'switch', async generation => {
-      const current = () => this.current(generation) && this.attachmentEpochs.get(id) === epoch && sameTarget(this.state.views[id]?.target, target);
-      const dispatchCurrent = () => current() && this.state.views[id]?.attachmentIntent === 'wanted'
+      // Native can publish session/closed before the correlated switch reply.
+      // Serialization excludes replacement acquisition; absence of the old Route
+      // does not invalidate the outstanding transition's settlement authority.
+      const current = () => this.current(generation) && this.attachmentEpochs.get(id) === epoch
+        && !!this.state.views[id] && !this.state.views[id].deleting
+        && (!this.state.views[id].target || sameTarget(this.state.views[id].target, target));
+      const dispatchCurrent = () => current() && sameTarget(this.state.views[id]?.target, target) && this.state.views[id]?.attachmentIntent === 'wanted'
         && (this.state.views[id]?.attachmentIntentRevision ?? 0) === intentRevision;
-      const result = await this.request({ method: 'session/switchNode', params: { target, node_id: nodeId } }, 'session', undefined, dispatchCurrent);
-      if (current()) {
+      try {
+        const result = await this.request({ method: 'session/switchNode', params: { target, node_id: nodeId } }, 'session', undefined, dispatchCurrent);
+        if (!current()) return;
         if (result.session.id !== id || result.session.active_node !== nodeId) throw new Error('Mismatched switched Node identity.');
+        // Opens cannot overtake this transition. Release changes interest, not
+        // the native committed selection or the successor's actual residency.
         this.retireAttachmentWork(id);
         this.setSession(id, { target: undefined, attachmentNodeId: undefined, attachment: 'detached', error: undefined,
-          // The ACK settles the old claim, but cannot replace a newer Open's Node.
-          ...((this.state.views[id]?.attachmentIntentRevision ?? 0) === intentRevision
-            ? { nodeId, nodeConversationId: result.session.active_conversation_id } : {}) });
+          nodeId, nodeConversationId: result.session.active_conversation_id, snapshot: undefined, cursor: undefined, trace: undefined });
+      } catch (error) {
+        if (current()) {
+          this.retireAttachmentWork(id);
+          if (error instanceof RequestNotDispatched) {
+            // Native never saw the switch: retain the exact claim for Release.
+            this.setSession(id, { attachment: 'stale', error: String(error) });
+          } else {
+            // A generic refusal cannot distinguish pre-transition rejection
+            // from a failed unload/selection/load. Retain only cleanup identity
+            // until Release confirms detach or exact stale-Route evidence.
+            this.setSession(id, { nodeId: undefined, nodeConversationId: undefined,
+              attachmentIntent: 'released', attachment: 'stale', error: String(error) });
+          }
+        }
+        throw error;
       }
     });
   }

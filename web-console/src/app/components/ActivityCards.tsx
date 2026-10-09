@@ -39,7 +39,7 @@ function useActivityRequest({ client, sessionId }: Controls) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<DisplayText>();
   const view = sessionId ? client?.getSnapshot().views[sessionId] : undefined;
-  const enabled = !!client && !!sessionId && view?.attachment === 'attached' && view.attachmentIntent === 'wanted' && !view.deleting;
+  const enabled = !!client && !!sessionId && client.isAttachmentObservationCurrent(sessionId, view?.attachmentObservation);
   async function run(operation: (client: AppServerClient, target: ReturnType<AppServerClient['target']>, current: () => boolean) => Promise<void>) {
     if (!enabled || pending || !client || !sessionId) return;
     const target = client.target(sessionId), generation = client.getSnapshot().generation;

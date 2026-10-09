@@ -421,3 +421,19 @@ it('cold /model uses the workspace catalog and applies the last choice before th
   expect(server.client.getSnapshot().views.A.modelIntent).toBeUndefined();
   await act(async () => server.reply(start));
 });
+
+it.each(['release', 'switch'] as const)('Composer controls agree with synchronous %s revocation while the native reply is held', async transition => {
+  await server.attached('A');
+  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
+  await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
+  fireEvent.change(input(), { target: { value: 'preserved draft' } });
+  const send = screen.getByRole('button', { name: 'Send' });
+  expect(send).toHaveProperty('disabled', false);
+  const method = transition === 'release' ? 'session/detach' : 'session/switchNode'; server.held.add(method);
+  let work!: Promise<void>;
+  await act(async () => { work = transition === 'release' ? server.client.release('A') : server.client.switchNode('A', 'node-A'); });
+  expect(send).toHaveProperty('disabled', true); expect(input().value).toBe('preserved draft');
+  await expect(server.client.send('A', 'not admitted')).rejects.toThrow('not authoritatively attached');
+  expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(0);
+  await act(async () => { server.reply(await server.waitFor(method, 1)); await work; });
+});

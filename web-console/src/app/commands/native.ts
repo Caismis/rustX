@@ -14,14 +14,16 @@ export type ResponseAction = Extract<HistoryAction, 'fork' | 'retry'>;
 export class CommandSession {
   readonly target: AttachmentTarget;
   private readonly generation: number;
+  private readonly admission: ReturnType<AppServerClient['getSnapshot']>['views'][string]['attachmentObservation'];
   constructor(readonly client: AppServerClient, readonly sessionId: string, private readonly navigationCurrent: () => boolean) {
     this.target = client.target(sessionId);
+    this.admission = client.getSnapshot().views[sessionId].attachmentObservation;
     this.generation = client.getSnapshot().generation;
   }
   current = () => {
     const state = this.client.getSnapshot(), view = state.views[this.sessionId];
     return this.navigationCurrent() && state.connection === 'connected' && state.generation === this.generation
-      && !view?.deleting && view?.attachment === 'attached' && view.attachmentIntent === 'wanted' && sameTarget(view.target, this.target);
+      && this.client.isAttachmentObservationCurrent(this.sessionId, this.admission) && sameTarget(view?.target, this.target);
   };
   private requireCurrent() { if (!this.current()) throw new Error('Obsolete command view. Inspect current authoritative state.'); }
   async models() {

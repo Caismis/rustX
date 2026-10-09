@@ -200,7 +200,7 @@ it('Release and batched Open cannot admit any replacement scope against T1 befor
   await act(async () => { release = server.client.release('A'); reopen = server.client.attach('A'); expect(old.current()).toBe(false); });
   const replacement = server.client.agentMeters.getSnapshot().scope!;
   expect(replacement).not.toBe(old); expect(replacement.current()).toBe(false);
-  expect(server.client.target('A')).toEqual(oldTarget); expect(reads()).toHaveLength(2);
+  expect(server.client.getSnapshot().views.A.target).toEqual(oldTarget); expect(() => server.client.target('A')).toThrow('not authoritatively attached'); expect(reads()).toHaveLength(2);
   for (const row of reads()) {
     await act(async () => { server.reply(row.request); });
     expect(reads()).toHaveLength(2); expect(ui.getByText('0')).toBeTruthy();
@@ -240,7 +240,7 @@ it('failed detach retains T1 but Open and refresh cannot mint observation admiss
   await server.waitFor('agent/statistics', 2); const target = server.target('A');
   await act(async () => {
     const rejected = expect(server.client.release('A')).rejects.toThrow('detach refused');
-    const opening = server.client.attach('A');
+    const opening = expect(server.client.attach('A')).rejects.toThrow('Release the retained attachment');
     server.socket.deliver({ jsonrpc: '2.0', id: (await server.waitFor('session/detach', 1)).id, error: { code: -32000, message: 'detach refused' } });
     await rejected; await opening;
     for (const row of reads()) server.reply(row.request);
