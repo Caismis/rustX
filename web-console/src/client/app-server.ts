@@ -734,14 +734,19 @@ export class AppServerClient {
     if (pending.request.method === 'turn/start' || pending.request.method === 'turn/steer') this.publishInbound(pending.request.params.target.session_id);
   }
   private sendPending(pending: Pending) {
+    const socket = this.socket, generation = this.state.generation;
     let raw: string;
     try { raw = JSON.stringify(pending.request); }
     catch (cause) { this.refuse(pending, cause); return; }
-    const generation = this.state.generation;
+    if (!this.dispatchAllowed(pending)) { this.refuse(pending); return; }
+    if (!socket || this.socket !== socket || !this.current(generation)
+      || this.pending.get(String(pending.request.id)) !== pending || pending.sent) return;
+    // No external observer runs between this final proof and send invocation.
+    // sent means transmission attempted, never native acceptance.
     pending.sent = true;
     this.log.observe('out', generation, raw, pending.context);
     if (requestLane(pending.request.method) === 'rpc') pending.timer = setTimeout(() => this.lose(generation), this.timeoutMs);
-    try { this.socket!.send(raw); } catch { this.lose(generation); }
+    try { socket.send(raw); } catch { this.lose(generation); }
     if (typeof pending.dispatchCurrent === 'object') pending.dispatchCurrent.sent?.();
   }
   private receive(data: unknown, generation: number) {
@@ -859,6 +864,7 @@ export class AppServerClient {
       }
       if (value.params.event.type === 'pending_inbound_changed') {
         this.invalidateReading(target.session_id);
+        if (!observation.current()) return;
         this.retireOutline(target.session_id);
         const error = 'History changed. Reload the Turn outline to navigate again.';
         this.setSession(target.session_id, { turnOutline: { paging: view.turnOutline?.paging ?? { type: 'latest' }, error },
@@ -1335,8 +1341,6 @@ export class AppServerClient {
   }
   /** A new navigation or an explicit reload retires the previous jump's landing. */
   invalidateReading(id: string) {
-    const previous = this.state.views[id]?.history;
-    if (previous?.loading) this.setSession(id, { history: { ...previous, loading: false } });
     const intent = (this.readingIntents.get(id) ?? 0) + 1;
     this.readingIntents.set(id, intent);
     const history = this.state.views[id]?.history;

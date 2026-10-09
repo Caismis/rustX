@@ -195,3 +195,45 @@ it('final async validation cannot dispatch a revoked Snapshot or retain its rese
   vi.restoreAllMocks(); await s.client.attach('A'); await s.client.refresh('A');
   expect(count(s, 'session/snapshot')).toBe(1); expect(s.claims()).toHaveLength(1);
 });
+
+it.each([true, false])('pending inbound invalidation rechecks after synchronous publication (Release=%s)', async releaseDuringInvalidation => {
+  const s = await setup(), cut = { conversation_id: 'conversation-A', journal: '10', transcript: '10', mutation_revision: '0' };
+  s.handlers.set('session/turns', () => ({ type: 'conversation_turns', page: { cut, offset: 0, total: 0, turns: [] } }));
+  await s.client.readTurns('A'); s.held.add('session/transcript'); s.held.add('session/detach');
+  const page = s.client.loadEarlier('A'), read = await s.waitFor('session/transcript', 1);
+  const before = view(s); let released: ReturnType<typeof view> | undefined, release: Promise<void> | undefined;
+  const stop = s.client.subscribe(() => {
+    if (releaseDuringInvalidation && !released && view(s).history?.loading === false) {
+      released = view(s); release = s.client.release('A'); void release.catch(() => {}); released = view(s);
+    }
+  });
+  const reconcile = vi.spyOn(s.client as unknown as { reconcileInteractions(id: string): void }, 'reconcileInteractions');
+  const submissions = vi.spyOn(s.client as unknown as { settleSubmissions(id: string): void }, 'settleSubmissions');
+  s.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: s.target('A'), cursor: '1', event: { type: 'pending_inbound_changed', pending: [] } } }); stop();
+  if (releaseDuringInvalidation) {
+    expect(released).toBeDefined(); expect(view(s)).toBe(released);
+    expect(view(s).snapshot).toBe(before.snapshot); expect(view(s).cursor).toBe(before.cursor);
+    expect(view(s).history?.page).toBe(before.history?.page); expect(view(s).turnOutline?.page).toBe(before.turnOutline?.page);
+    expect(reconcile).not.toHaveBeenCalled(); expect(submissions).not.toHaveBeenCalled(); expect(view(s).target).toBe(before.target);
+  } else {
+    expect(view(s).cursor).toBe('1'); expect(view(s).snapshot?.inbound.pending).toEqual([]);
+    expect(view(s).turnOutline?.error).toContain('History changed'); expect(view(s).history?.loading).toBe(false);
+    expect(reconcile).toHaveBeenCalledTimes(1); expect(submissions).toHaveBeenCalledTimes(1);
+  }
+  s.socket.success(read, { type: 'transcript_window', window: { cut, page: { entries: [entry(1)] } } }); await page;
+  expect(count(s, 'session/snapshot')).toBe(0); expect(count(s, 'turn/start')).toBe(0);
+  if (release) { s.reply(await s.waitFor('session/detach', 1)); await release; expect(s.claims()).toHaveLength(0); }
+  else expect(s.claims()).toHaveLength(1);
+});
+it('pending inbound replay during resync observes without restoring control before subscribe ACK', async () => {
+  const s = await setup(), proof = view(s).attachmentObservation, target = s.target('A');
+  s.held.add('session/snapshot'); s.held.add('session/subscribe');
+  s.socket.deliver({ jsonrpc: '2.0', method: 'session/resyncRequired', params: { target, after_cursor: '0', earliest_serviceable: '1' } });
+  s.socket.success(await s.waitFor('session/snapshot', 1), { type: 'snapshot', snapshot: snapshot(), cursor: '20' });
+  const subscription = await s.waitFor('session/subscribe', 1);
+  s.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target, cursor: '21', event: { type: 'pending_inbound_changed', pending: [] } } });
+  expect(view(s).cursor).toBe('21'); expect(view(s).snapshot?.inbound.pending).toEqual([]); expect(view(s).turnOutline?.error).toContain('History changed');
+  expect(s.client.isAttachmentObservationCurrent('A', proof)).toBe(true); expect(s.client.isAttachmentControlCurrent('A', proof)).toBe(false);
+  const ready = published(s, () => view(s).attachment === 'attached'); s.reply(subscription); await ready;
+  expect(s.client.isAttachmentControlCurrent('A', proof)).toBe(true); expect(count(s, 'session/snapshot')).toBe(1); expect(count(s, 'session/subscribe')).toBe(1); expect(s.claims()).toHaveLength(1);
+});

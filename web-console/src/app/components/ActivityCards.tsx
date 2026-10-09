@@ -5,7 +5,8 @@ import { displayText, message as uiMessage, type DisplayText } from '../../local
 import { useTranslation } from '../../locale/react';
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { AgentStatistics, RuntimeClientAgent, RuntimeClientJob, RuntimeClientTranscriptPage, MethodResult, WorkflowRunView, WorkflowRunId } from '../../../../protocol/app-server/v38';
-import { AppServerClient, RpcFailure, sameTarget } from '../../client/app-server';
+import type { Observation } from '../../client/session-lifecycle/port';
+import { AppServerClient, RpcFailure } from '../../client/app-server';
 import { json } from '../../bindings/projection';
 import { Badge, SettingsCard } from '../../presentation/settings/SettingsContent';
 import { Button } from '../../presentation/primitives/Button';
@@ -37,18 +38,21 @@ function activityFailure(cause: unknown): DisplayText {
 /** Request presentation only: native state always comes from the next snapshot.
  * A lost response is never retried, and a changed attachment cannot adopt it. */
 function useActivityRequest({ client, sessionId }: Controls) {
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<DisplayText>();
-  const view = sessionId ? client?.getSnapshot().views[sessionId] : undefined;
-  const enabled = !!client && !!sessionId && client.isAttachmentControlCurrent(sessionId, view?.attachmentObservation);
+  const view = useSyncExternalStore(client?.subscribe ?? noSubscription, () => sessionId ? client?.getSnapshot().views[sessionId] : undefined);
+  const proof = view?.attachmentObservation;
+  const [state, setState] = useState<{ operation: { proof: Observation }; pending: boolean; error?: DisplayText }>();
+  const visible = !!client && !!sessionId && client.isAttachmentObservationCurrent(sessionId, proof) && state?.operation.proof === proof;
+  const pending = visible && !!state?.pending, error = visible ? state?.error : undefined;
+  const enabled = !!client && !!sessionId && client.isAttachmentControlCurrent(sessionId, proof);
   async function run(operation: (client: AppServerClient, target: ReturnType<AppServerClient['target']>, current: () => boolean) => Promise<void>) {
-    if (!enabled || pending || !client || !sessionId) return;
-    const target = client.target(sessionId), generation = client.getSnapshot().generation;
-    const current = () => client.getSnapshot().generation === generation && sameTarget(client.getSnapshot().views[sessionId]?.target, target);
-    setPending(true); setError(undefined);
+    if (!enabled || pending || !client || !sessionId || !proof) return;
+    const target = client.target(sessionId), owner = { proof };
+    const current = () => client.isAttachmentObservationCurrent(sessionId, owner.proof);
+    if (!current()) return;
+    setState({ operation: owner, pending: true });
     try { await operation(client, target, current); if (current()) await client.refresh(sessionId); }
-    catch (cause) { if (current()) setError(activityFailure(cause)); }
-    finally { setPending(false); }
+    catch (cause) { if (current()) setState(previous => current() && previous?.operation === owner ? { ...previous, error: activityFailure(cause) } : previous); }
+    finally { setState(previous => previous?.operation === owner ? { ...previous, pending: false } : previous); }
   }
   return { run, disabled: !enabled || pending, pending, error };
 }
@@ -59,8 +63,10 @@ export function AgentCard({ agent, metrics, metricsError, ...controls }: { agent
   const request = useActivityRequest(controls);
   const waitRequest = useActivityRequest(controls);
   const interruptRequest = useActivityRequest(controls);
-  const [settledActivation, setSettledActivation] = useState<Pick<AgentWait, 'activation_id' | 'outcome'>>();
-  const observeSettlement = (result: AgentWait) => setSettledActivation({ activation_id: result.activation_id, outcome: result.outcome });
+  const [settledActivation, setSettledActivation] = useState<Pick<AgentWait, 'activation_id' | 'outcome'> & { proof: Observation }>();
+  const observeSettlement = (result: AgentWait, current: () => boolean) => {
+    if (admission) setSettledActivation(previous => current() ? { proof: admission, activation_id: result.activation_id, outcome: result.outcome } : previous);
+  };
   const [message, setMessage] = useState('');
   const [transcript, setTranscript] = useState<RuntimeClientTranscriptPage>();
   const [transcriptRefresh, refreshTranscript] = useState(0);
@@ -101,8 +107,8 @@ export function AgentCard({ agent, metrics, metricsError, ...controls }: { agent
       <span>{agent.state === 'active' ? agent.observation.activity.type === 'waiting' ? tx('common:activity.waiting-for', { state: tx(`common:state.${agent.observation.activity.on.type}`) }) : tx('common:activity.working') : agent.state === 'admitting' ? tx('common:activity.admitting') : agent.state === 'stopping' ? tx('common:activity.stopping') : unavailable ? tx('common:activity.unavailable') : tx(`common:state.${agent.activation_state}`)}</span>
       <div className={css.agentActions}>
         <Button size="sm" disabled={request.disabled} onClick={() => refreshTranscript(value => value + 1)}>{tx('common:activity.transcript')}</Button>
-        <Button size="sm" disabled={waitRequest.disabled || unavailable} onClick={() => void waitRequest.run(async (client, target, current) => { const result = await client.request({ method: 'agent/wait', params: { target, agent_id: agent.agent_id } }, 'agent_wait'); if (current()) observeSettlement(result); })}>{tx('common:activity.wait-activation')}</Button>
-        <Button size="sm" disabled={interruptRequest.disabled || unavailable || agent.state === 'inactive'} onClick={() => void interruptRequest.run(async (client, target, current) => { const result = await client.request({ method: 'agent/interrupt', params: { target, agent_id: agent.agent_id } }, 'agent_wait'); if (current()) observeSettlement(result); })}>{tx('common:activity.interrupt')}</Button>
+        <Button size="sm" disabled={waitRequest.disabled || unavailable} onClick={() => void waitRequest.run(async (client, target, current) => { const result = await client.request({ method: 'agent/wait', params: { target, agent_id: agent.agent_id } }, 'agent_wait', undefined, current); if (current()) observeSettlement(result, current); })}>{tx('common:activity.wait-activation')}</Button>
+        <Button size="sm" disabled={interruptRequest.disabled || unavailable || agent.state === 'inactive'} onClick={() => void interruptRequest.run(async (client, target, current) => { const result = await client.request({ method: 'agent/interrupt', params: { target, agent_id: agent.agent_id } }, 'agent_wait', undefined, current); if (current()) observeSettlement(result, current); })}>{tx('common:activity.interrupt')}</Button>
       </div>
     </div>
     <ChatViewport latestLabel={tx('agent:agent-transcript.return-to-latest')}><div className={chatCss.column}>
@@ -113,10 +119,10 @@ export function AgentCard({ agent, metrics, metricsError, ...controls }: { agent
       {metricsError && <p role="alert">{metricsError}</p>}
       {transcriptError && <p role="alert">{transcriptError}</p>}
       {agent.detail && <p>{detail(agent.detail)}</p>}
-      {settledActivation && <small role="status">{settledActivation.outcome ? tx(`common:state.${settledActivation.outcome}`) : tx('common:activity.observed-inactive')}</small>}
+      {settledActivation && settledActivation.proof === admission && <small role="status">{settledActivation.outcome ? tx(`common:state.${settledActivation.outcome}`) : tx('common:activity.observed-inactive')}</small>}
       {[request.error, waitRequest.error, interruptRequest.error].filter(Boolean).map((error, index) => <p role="alert" key={index}>{displayText(tx, error!)}</p>)}
     </div></ChatViewport>
-    {client && <form className={css.agentComposer} onSubmit={event => { event.preventDefault(); if (!acceptsMessage || !message.trim()) return; const submitted = message; void request.run(async (client, target, current) => { await client.request({ method: 'agent/sendMessage', params: { target, agent_id: agent.agent_id, message: submitted } }, 'agent_message'); if (current()) { setMessage(value => value === submitted ? '' : value); refreshTranscript(value => value + 1); } }); }}>
+    {client && <form className={css.agentComposer} onSubmit={event => { event.preventDefault(); if (!acceptsMessage || !message.trim()) return; const submitted = message; void request.run(async (client, target, current) => { await client.request({ method: 'agent/sendMessage', params: { target, agent_id: agent.agent_id, message: submitted } }, 'agent_message', undefined, current); if (current()) { setMessage(value => current() && value === submitted ? '' : value); refreshTranscript(value => current() ? value + 1 : value); } }); }}>
       <textarea aria-label={tx('common:activity.message-label', { name: agent.agent })} placeholder={agent.state === 'inactive' ? tx('common:activity.resume') : tx('common:activity.message')} value={message} onChange={event => setMessage(event.target.value)} disabled={request.disabled || !acceptsMessage}/>
       <div><small>{request.pending ? tx('common:activity.waiting-runtime') : agent.agent}</small><Button size="sm" type="submit" disabled={request.disabled || !acceptsMessage || !message.trim()}>{tx('common:activity.send')}</Button></div>
     </form>}
@@ -140,9 +146,9 @@ export function JobCard({ job, ...controls }: { job: RuntimeClientJob } & Contro
       {'diagnostic' in job.result.managed_output && <p>{detail(job.result.managed_output.diagnostic)}</p>}
     </details>}
     {controls.client && <div className={css.controls}>
-      <Button size="sm" variant="outline" disabled={request.disabled} onClick={() => void request.run(async (client, target) => { await client.request({ method: 'job/status', params: { target, job_id: job.job_id } }, 'job'); })}>{tx('common:activity.status')}</Button>
-      <Button size="sm" variant="outline" disabled={waitRequest.disabled || !active} onClick={() => void waitRequest.run(async (client, target) => { await client.request({ method: 'job/wait', params: { target, job_id: job.job_id } }, 'job'); })}>{tx('common:activity.wait-job')}</Button>
-      <Button size="sm" variant="outline" disabled={request.disabled || !active || job.state === 'cancelling'} onClick={() => void request.run(async (client, target) => { await client.request({ method: 'job/cancel', params: { target, job_id: job.job_id } }, 'job'); })}>{tx('common:activity.cancel-job')}</Button>
+      <Button size="sm" variant="outline" disabled={request.disabled} onClick={() => void request.run(async (client, target, current) => { await client.request({ method: 'job/status', params: { target, job_id: job.job_id } }, 'job', undefined, current); })}>{tx('common:activity.status')}</Button>
+      <Button size="sm" variant="outline" disabled={waitRequest.disabled || !active} onClick={() => void waitRequest.run(async (client, target, current) => { await client.request({ method: 'job/wait', params: { target, job_id: job.job_id } }, 'job', undefined, current); })}>{tx('common:activity.wait-job')}</Button>
+      <Button size="sm" variant="outline" disabled={request.disabled || !active || job.state === 'cancelling'} onClick={() => void request.run(async (client, target, current) => { await client.request({ method: 'job/cancel', params: { target, job_id: job.job_id } }, 'job', undefined, current); })}>{tx('common:activity.cancel-job')}</Button>
       {request.pending && <small role="status">{tx('common:activity.pending')}</small>}
       {waitRequest.pending && <small role="status">{tx('common:activity.settling')}</small>}
       {waitRequest.error && <p role="alert">{displayText(tx, waitRequest.error)}</p>}

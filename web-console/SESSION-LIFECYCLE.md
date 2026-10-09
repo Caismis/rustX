@@ -214,3 +214,36 @@ Attachment starts a fresh child page scope. Held-response component regressions
 verify revoked publication, retained historical display during cleanup, and fresh
 read admission after explicit reopening. Both child regressions also fail on
 `71ba45c5` for actual obsolete publication, bringing the negative controls to eight.
+
+## Synchronous dispatch and publication boundaries
+
+The transport rechecks the captured admission and exact Pending/socket ownership
+immediately before starting a synchronous `send`. `sent` denotes attempted
+transmission, not native acceptance; a synchronous send failure remains uncertain
+for mutations. Serialization cannot bypass the final check. ProtocolLog records
+ordered, bounded frames synchronously but coalesces subscriber notification into
+one microtask after the current stack. Diagnostic subscribers therefore cannot
+intervene between admission and dispatch or interrupt response correlation, and
+subscriber exceptions do not block other observers or semantic settlement.
+
+Child activity continuations capture the original actor Observation. Wait,
+interrupt, message and Job request presentation use that proof and an exact local
+request identity; old completions cannot publish status/errors, clear a new
+request's pending marker or draft, or start a current Snapshot refresh. Separate
+request owners keep wait and interrupt independent. This presentation ownership
+never cancels or reclassifies a transmitted native operation.
+
+Pending-inbound invalidation publishes its navigation/loading change once. The
+Runtime event continuation rechecks its original proof immediately afterwards,
+before History/Outline publication or event folding. Authorized subscription
+replay still advances the contiguous cursor while execution controls wait for
+the subscribe acknowledgement.
+
+`dispatch-linearization.test.ts` asserts socket invocation before diagnostic
+Release, proven-unsent capacity/validation revocation, single uncertain send
+failure/close settlement, and synchronous response correlation despite failing
+diagnostic observers. Activity and observation tests hold native results across
+Release/Switch, isolate fresh-proof pending state, keep wait/interrupt independent,
+and exercise subscriber-triggered Release inside pending-inbound invalidation.
+Seven negative controls fail at their intended assertions on `66417757`; the
+repair adds fifteen deterministic cases without timing sleeps.

@@ -316,3 +316,58 @@ it('older child transcript retains its original observation proof through native
   expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(2);
   expect(server.requests.filter(row => row.request.method === 'session/detach')).toHaveLength(1); expect(server.claims()).toHaveLength(1);
 });
+
+it.each(['wait-release', 'interrupt-switch', 'message-release'] as const)('%s cannot publish through a retained cleanup target', async kind => {
+  const server = new Server(); servers.push(server); await server.attached('A');
+  const agent = agentFixture(), method = kind === 'wait-release' ? 'agent/wait' : kind === 'interrupt-switch' ? 'agent/interrupt' : 'agent/sendMessage';
+  server.nodeSnapshots.set('right', { ...snapshot(), conversation_id: 'conversation-right' });
+  server.held.add(method); server.held.add('session/detach'); server.held.add('session/switchNode');
+  const ui = render(<AgentCard agent={agent} client={server.client} sessionId="A"/>);
+  await act(async () => {
+    if (kind === 'message-release') { fireEvent.change(ui.getByRole('textbox'), { target: { value: 'Preserve draft' } }); fireEvent.click(ui.getByRole('button', { name: 'Send message' })); }
+    else fireEvent.click(ui.getByRole('button', { name: kind === 'wait-release' ? 'Wait for activation' : 'Interrupt' }));
+    await server.waitFor(method, 1);
+  });
+  const old = await server.waitFor(method, 1); let cleanup!: Promise<void>;
+  await act(async () => { cleanup = kind === 'interrupt-switch' ? server.client.switchNode('A', 'right') : server.client.release('A'); void cleanup.catch(() => {}); await server.waitFor(kind === 'interrupt-switch' ? 'session/switchNode' : 'session/detach', 1); });
+  const retained = server.client.getSnapshot().views.A.target; expect(retained).toEqual(server.target('A')); expect(server.claims()).toHaveLength(1);
+  await act(async () => { server.socket.success(old, kind === 'message-release'
+    ? { type: 'agent_message', agent_id: agent.agent_id, activation_id: agent.activation_id, resumed: false }
+    : { type: 'agent_wait', agent_id: agent.agent_id, activation_id: 'obsolete', outcome: 'succeeded', agent }); });
+  expect(ui.queryByText('succeeded')).toBeNull(); expect(ui.queryByRole('alert')).toBeNull();
+  if (kind === 'message-release') expect((ui.getByRole('textbox') as HTMLTextAreaElement).value).toBe('Preserve draft');
+  expect(server.requests.filter(r => r.request.method === 'session/snapshot')).toHaveLength(0);
+  expect(server.requests.filter(r => r.request.method === method)).toHaveLength(1);
+  await act(async () => { server.reply(await server.waitFor(kind === 'interrupt-switch' ? 'session/switchNode' : 'session/detach', 1)); await cleanup; });
+  expect(server.claims()).toHaveLength(0);
+});
+
+it('old child completion cannot clear a fresh proof operation or restore its error', async () => {
+  const server = new Server(); servers.push(server); await server.attached('A'); const agent = agentFixture(); server.held.add('agent/wait');
+  const ui = render(<AgentCard agent={agent} client={server.client} sessionId="A"/>);
+  await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Wait for activation' })); await server.waitFor('agent/wait', 1); });
+  const old = await server.waitFor('agent/wait', 1);
+  await act(async () => { await server.client.release('A'); await server.client.attach('A'); });
+  expect((ui.getByRole('button', { name: 'Wait for activation' }) as HTMLButtonElement).disabled).toBe(false);
+  await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Wait for activation' })); await server.waitFor('agent/wait', 2); });
+  await act(async () => { server.socket.deliver({ jsonrpc: '2.0', id: old.id, error: { code: -32000, message: 'obsolete error', data: { kind: 'operation_failed' } } }); });
+  expect(ui.queryByText('obsolete error')).toBeNull(); expect((ui.getByRole('button', { name: 'Wait for activation' }) as HTMLButtonElement).disabled).toBe(true);
+  await act(async () => { server.socket.success(await server.waitFor('agent/wait', 2), { type: 'agent_wait', agent_id: agent.agent_id, activation_id: 'fresh', outcome: 'cancelled', agent }); });
+  expect(ui.getByText('cancelled')).toBeTruthy(); expect((ui.getByRole('button', { name: 'Wait for activation' }) as HTMLButtonElement).disabled).toBe(false);
+  expect(server.requests.filter(r => r.request.method === 'agent/wait')).toHaveLength(2); expect(server.requests.filter(r => r.request.method === 'session/snapshot')).toHaveLength(1);
+  expect(server.claims()).toHaveLength(1); expect(server.maxClaims).toBe(1);
+});
+
+it('current wait settlement remains independent from interrupt completion', async () => {
+  const server = new Server(); servers.push(server); await server.attached('A'); const agent = agentFixture();
+  const result = { type: 'agent_wait' as const, agent_id: agent.agent_id, activation_id: agent.activation_id, outcome: 'cancelled' as const, agent };
+  server.held.add('agent/wait'); server.handlers.set('agent/interrupt', () => result);
+  const ui = render(<AgentCard agent={agent} client={server.client} sessionId="A"/>);
+  await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Wait for activation' })); await server.waitFor('agent/wait', 1); });
+  expect((ui.getByRole('button', { name: 'Interrupt' }) as HTMLButtonElement).disabled).toBe(false);
+  await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Interrupt' })); await server.waitFor('session/snapshot', 1); });
+  expect(ui.getByText('cancelled')).toBeTruthy(); expect((ui.getByRole('button', { name: 'Wait for activation' }) as HTMLButtonElement).disabled).toBe(true);
+  await act(async () => { server.socket.success(await server.waitFor('agent/wait', 1), result); await server.waitFor('session/snapshot', 2); });
+  expect(ui.getByText('cancelled')).toBeTruthy(); expect((ui.getByRole('button', { name: 'Wait for activation' }) as HTMLButtonElement).disabled).toBe(false);
+  expect(server.requests.filter(r => r.request.method === 'agent/wait')).toHaveLength(1); expect(server.requests.filter(r => r.request.method === 'agent/interrupt')).toHaveLength(1); expect(server.claims()).toHaveLength(1);
+});
