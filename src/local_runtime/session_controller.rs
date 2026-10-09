@@ -397,7 +397,6 @@ impl SessionController {
     > {
         let access = self.acquire_session(id, node).await?;
         tokio::task::spawn_blocking(move || {
-            use crate::durable::ConversationStore as _;
             let store = crate::durable::SqliteConversationStore::open_existing(
                 access.node.conversation_id.clone(),
                 &access.database_path,
@@ -429,6 +428,67 @@ impl SessionController {
                     target_cursor: read.target_cursor.map(Into::into),
                 },
             ))
+        })
+        .await
+        .map_err(|error| SessionError::Catalog {
+            detail: error.to_string(),
+        })?
+    }
+    pub(crate) async fn read_statistics(
+        &self,
+        id: &SessionId,
+        node: Option<&SessionNodeId>,
+    ) -> Result<
+        (
+            crate::runtime::identity::ConversationId,
+            crate::runtime_client::response::ConversationStatistics,
+            Option<crate::context::occupancy::ContextOccupancy>,
+        ),
+        SessionError,
+    > {
+        let access = self.acquire_session(id, node).await?;
+        tokio::task::spawn_blocking(move || {
+            let store = crate::durable::SqliteConversationStore::open_existing(
+                access.node.conversation_id.clone(),
+                &access.database_path,
+            )
+            .map_err(SessionError::Store)?
+            .with_lifecycle(access.allocation);
+            let through = store.presentation_frontier().map_err(SessionError::Store)?;
+            let occupancy =
+                crate::context::occupancy::read(&store, through).map_err(SessionError::Store)?;
+            let statistics = crate::runtime_client::response::statistics(&store, through)
+                .map_err(SessionError::Store)?;
+            Ok((access.node.conversation_id, statistics, occupancy))
+        })
+        .await
+        .map_err(|error| SessionError::Catalog {
+            detail: error.to_string(),
+        })?
+    }
+    /// Durable inspection uses the same projection as live trace, without runtime startup.
+    pub(crate) async fn read_trace<T: Send + 'static>(
+        &self,
+        id: &SessionId,
+        node: Option<&SessionNodeId>,
+        read: impl FnOnce(
+            crate::runtime_client::trace::TraceProjection<'_>,
+        ) -> Result<T, crate::durable::ConversationStoreError>
+        + Send
+        + 'static,
+    ) -> Result<(crate::runtime::identity::ConversationId, T), SessionError> {
+        let access = self.acquire_session(id, node).await?;
+        tokio::task::spawn_blocking(move || {
+            let store = crate::durable::SqliteConversationStore::open_existing(
+                access.node.conversation_id.clone(),
+                &access.database_path,
+            )
+            .map_err(SessionError::Store)?
+            .with_lifecycle(access.allocation);
+            let projection = crate::runtime_client::trace::TraceProjection::new(&store)
+                .map_err(SessionError::Store)?;
+            let result = read(projection).map_err(SessionError::Store)?;
+            Ok((access.node.conversation_id, result))
         })
         .await
         .map_err(|error| SessionError::Catalog {
@@ -1461,6 +1521,42 @@ mod tests {
             std::fs::read(root.path().join("sessions/catalog.json")).unwrap(),
             bytes
         );
+    }
+    #[tokio::test]
+    async fn cold_trace_reads_without_runtime_or_valid_configuration() {
+        let root = tempfile::tempdir().unwrap();
+        let controller = SessionController::open(root.path()).unwrap();
+        let session = controller
+            .create_session(settings(root.path()))
+            .await
+            .unwrap()
+            .session;
+        std::fs::write(root.path().join("rustx.toml"), "malformed = [").unwrap();
+        let (conversation, page) = controller
+            .read_trace(&session.id, None, |projection| projection.page(None, 32))
+            .await
+            .unwrap();
+        assert_eq!(conversation, session.active_conversation_id);
+        assert!(page.records.is_empty());
+        let (_, detail) = controller
+            .read_trace(&session.id, None, |projection| {
+                projection.detail("trace:999")
+            })
+            .await
+            .unwrap();
+        assert!(detail.is_none());
+        assert!(
+            controller
+                .read_trace(&session.id, None, |projection| projection.page(None, 33))
+                .await
+                .is_err()
+        );
+        let (owner, statistics, occupancy) =
+            controller.read_statistics(&session.id, None).await.unwrap();
+        assert_eq!(owner, session.active_conversation_id);
+        assert_eq!(statistics.turns, 0);
+        assert!(occupancy.is_none());
+        assert!(controller.runtime_owner.get().is_none());
     }
     #[tokio::test]
     async fn bounded_cwd_projection_reads_the_only_durable_owner_without_runtime() {

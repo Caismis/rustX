@@ -1,5 +1,10 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
+  "subagents.list": "Subagents",
+  "subagents.message": "Message from {name}",
+  "subagents.count": "{count} subagents",
+  "subagents.result": "Call result",
+  "subagents.view": "View agent",
   "activity.not-delivered": "Agent {id} input was not delivered",
   "activity.delivery-unknown": "Agent {id} input acceptance was not acknowledged; delivery is unknown, do not replay automatically",
   "activity.publication-abandoned": "Job {id} terminal publication was abandoned; no durable terminal result is available",
@@ -234,6 +239,11 @@ export const en = {
 } as const;
 export type CommonKey = keyof typeof en;
 export const zh = {
+  "subagents.list": "子智能体",
+  "subagents.message": "{name} 发来消息",
+  "subagents.count": "{count} 个子智能体",
+  "subagents.result": "调用结果",
+  "subagents.view": "查看子智能体",
   "activity.not-delivered": "智能体 {id} 的输入未送达",
   "activity.delivery-unknown": "智能体 {id} 的输入接收未获确认；送达情况未知，请勿自动重发",
   "activity.publication-abandoned": "作业 {id} 已放弃发布结束状态；没有可用的持久结束结果",

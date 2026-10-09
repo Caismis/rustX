@@ -6,7 +6,7 @@ import { AppServerClient } from '../src/client/app-server';
 import { ConnectionController } from '../src/connection/controller';
 import { App } from '../src/app/App';
 import { ConnectionSettings } from '../src/app/settings/ConnectionSettings';
-import { Server, TOKEN, endpoint, interaction } from './fixture';
+import { Server, TOKEN, endpoint, interaction, snapshot } from './fixture';
 
 const remote = 'wss://remote.example/';
 function pair() {
@@ -184,7 +184,7 @@ it('detached evidence capacity refusal preserves Remote and its material until e
 it('Session diagnostic capacity refuses before closing the current Remote socket', async () => {
   const { a, client, owner, b } = pair(); await owner.select('remote'); await owner.connectRemote(remote, TOKEN);
   client.setAttachmentAdmission(async () => { throw new Error('Review this Session'); });
-  for (let i = 0; i < 65; i++) await client.attach(`diagnostic-${i}`).catch(() => {});
+  for (let i = 0; i < 65; i++) { b.snapshots.set(`diagnostic-${i}`, snapshot(`diagnostic-${i}`)); await client.attach(`diagnostic-${i}`).catch(() => {}); }
   const before = client.getSnapshot(), close = vi.spyOn(b.socket, 'close');
   await owner.select('local');
   expect(owner.getSnapshot().error).toContain('Too many unresolved Session diagnostics');
@@ -303,7 +303,7 @@ it.each(['en', 'zh'] as const)('disconnected current diagnostic acknowledgement 
   a.handlers.set('session/delete', () => ({ type: 'deletion', result: { status: 'committed_cleanup_pending', session_id: 'A' } }));
   await client.deleteSession('A', 'old');
   client.setAttachmentAdmission(async () => { throw new Error('diagnostic'); });
-  for (let index = 0; index < 64; index++) await client.attach(`diagnostic-${index}`).catch(() => {});
+  for (let index = 0; index < 64; index++) { a.snapshots.set(`diagnostic-${index}`, snapshot(`diagnostic-${index}`)); await client.attach(`diagnostic-${index}`).catch(() => {}); }
   await owner.disconnect(); a.authorityId = 'replacement'; await owner.reconnect();
   expect(client.getSnapshot().connection).toBe('error');
   expect(client.getSnapshot().views.A.deletionCommitted).toBe('committed_cleanup_pending');

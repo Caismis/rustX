@@ -359,7 +359,9 @@
    sticky). The scroll body holds the transcript and the sticky composer seat
    so wheel over the footer moves the flow. */
 .root[data-phase='active'] {
-  overflow: hidden;
+  /* Clip chrome without admitting a second scroll offset during focus/resize.
+     ChatViewport owns the descendant reading scrollport. */
+  overflow: clip;
 }
 
 .root[data-phase='active'] .header {
@@ -460,7 +462,7 @@
    seat above the back-to-bottom control (z-index 8, ui-chat ChatView) while
    the menu is open. The steady state stays 7 so the control keeps painting
    over the card. */
-.root[data-phase='active'] .composerSeat:has([data-trigger-menu]) {
+.root[data-phase='active'] .composerSeat:has([data-trigger-menu], [data-model-picker]) {
   z-index: 9;
 }
 
@@ -547,15 +549,7 @@
   visibility: hidden;
 }
 
-/* The native-bound view and resident seat are direct siblings in WebUI.
-   Keep Harness's overlay and fixed 36px seat fade over the full-height ledger. */
-.body:has(> [data-conversation-composer-overlay]) {
-  overflow: hidden;
+/* Native trajectory and the resident composer share the same session seat. */
+.scrollBody:has([data-conversation-composer-overlay]) {
   --dsh-trajectory-bottom-clearance: calc(var(--dsh-composer-height) + 16px);
-}
-.root[data-phase='active'] .body:has(> [data-conversation-composer-overlay]) > .composerSeat {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
 }

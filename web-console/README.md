@@ -360,6 +360,15 @@ succeed. Missing browser, Rust binary or emulator is a failure, never a silent s
 Runtime screenshots and failure traces go to ignored `test-results/`. The ten deterministic
 #345 shell references are checked in under `test/e2e/shell.spec.ts-snapshots/`.
 
+The Composer model selector uses flex sizing rather than an inherited inline
+baseline gap: its 28px button is centered as a control, not as a line of text.
+The narrow-screen regression repaints its model/profile labels while the footer
+is sticky, returns to the original reading position, then requires exact RGBA
+identity. This detects the previously history-dependent one-pixel glyph shift;
+it does not use a screenshot baseline or a rasterizer-noise allowance. The
+intentional half-pixel toolbar alignment correction has updated references,
+and the old dark-context model-label noise allowance has been removed.
+
 ## Manual dogfooding procedure
 
 Follow [DOGFOODING.md](DOGFOODING.md). It supplies the Product Host configuration,

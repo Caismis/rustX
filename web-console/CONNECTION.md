@@ -215,3 +215,49 @@ No transport key, Product Host credential or local path appears in the descripto
 Remote descriptors cannot select loopback ports or foreign origins. The binary
 carrier never writes files or issues receipts; status reads use native operation
 correlation. Control JSON limits and image/preview policy remain independent.
+
+### Attachment controls and native Node residency
+
+New target-bound effects require the exact committed `attachmentObservation`
+(generation, Session/Node, Conversation, runtime incarnation, target and intent
+revision). `target()` is a control admission API. A retained `view.target` is
+settlement evidence, not execution permission. The client composes that proof
+with each request's existing admission and checks it immediately before socket
+send, including after backpressure and asynchronous validation. Native reads and
+subscription repair remain observations; serialized detach and switch use their
+own settlement proofs. Cancellation retains its dedicated transport lane and
+correlated outcome semantics, but cannot start under revoked authority.
+
+Release and switch synchronously revoke observation/control admission. Release
+can queue behind a switch, but Open is refused until that switch has settled,
+even when Release is the queue tail. Switch is a native unload, catalog selection
+and successor load transaction; it is not a browser target replacement. Its
+correlated acknowledgement remains authoritative after an old-Route closure
+notification or local Release. Release does not reverse committed selection.
+
+The same actor-owned unresolved switch transaction excludes Session deletion before any deletion
+state change or RPC, including behind queued Release and between ACK decoding
+and lifecycle settlement. Retry requires a fresh native deletion preview after
+settlement. Deletion admitted first revokes the proof required to begin Switch.
+This exclusion is Session-scoped; deletion presentation is not a native switch
+result settlement predicate. Connection generation, epoch and Route identity
+still fence the correlated result, and uncertain outcomes are never replayed.
+
+Switch failure cannot prove the old Runtime survived: the server retires its
+Route even when successor composition fails. The client retires old authority
+and retains cleanup identity until explicit Release confirms detach or an exact
+`stale_attachment` response. Open then rereads native selection. A transmitted switch
+with a lost response remains uncertain, disables automatic reattachment, and is
+never replayed. A provably unsent switch retains its old target only for explicit
+Release. Detach releases a claim without unloading the resident Runtime; opening
+another Node requires the explicit native switch lifecycle, not Release/Open.
+
+
+## Session lifecycle actor
+
+`AppServerClient` owns a `SessionLifecycles` registry for its App Server authority
+lifetime. Each demanded Session has one XState v5 actor; the client exposes a
+readonly projection and supplies finite port I/O. React cannot create control
+proofs or decide native settlement. The former imperative attachment queue and
+settlement methods are removed. See [the formal lifecycle contract](SESSION-LIFECYCLE.md)
+for the gesture matrix, transaction correlation, revocation boundaries and bounds.

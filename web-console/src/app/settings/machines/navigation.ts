@@ -7,15 +7,15 @@ import {
   type ExtensionFamily, type SettingsTarget,
 } from '../projection';
 
-/** The six product pages Settings is organized around.
+/** The product pages Settings is organized around.
  *
  * They are user tasks, not native semantic-unit names: a user configures a
  * Provider, chooses a default model, writes guidance, grants Tool access or
  * inspects an extension without ever meeting `root_model`, `native_tools` or
  * `source_tools`. Native identities, exact CAS writes and application facts are
  * unchanged underneath — only what the browser groups them into is new. */
-export type SettingsPage = 'general' | 'models' | 'agent' | 'tools' | 'extensions' | 'advanced';
-const globalSettingsPages: readonly SettingsPage[] = ['general', 'models', 'agent', 'tools', 'extensions', 'advanced'];
+export type SettingsPage = 'general' | 'models' | 'agent' | 'tools' | 'mcp' | 'extensions' | 'advanced';
+const globalSettingsPages: readonly SettingsPage[] = ['general', 'models', 'agent', 'tools', 'mcp', 'extensions', 'advanced'];
 
 /** The secondary focus of each primary page, by page.
  *
@@ -32,6 +32,7 @@ export interface PageFocus {
   models: { kind: 'provider'; id: string } | { kind: 'model'; id: string; provider?: string };
   agent: never;
   tools: never;
+  mcp: { kind: 'mcp'; name?: string; mode?: 'json' | 'permissions' };
   extensions: { kind: 'extension'; family: ExtensionFamily; name: string };
   /** Connection is the client-owned sub-surface of Advanced. */
   advanced: { kind: 'connection' };
@@ -71,7 +72,8 @@ export function admitsFocus(target: SettingsTarget, page: SettingsPage, focus: S
   if (!admitsPage(target, page)) return false;
   switch (focus.kind) {
     case 'provider': case 'model': return page === 'models';
-    case 'extension': return page === 'extensions';
+    case 'mcp': return page === 'mcp';
+    case 'extension': return page === 'extensions' && focus.family !== 'mcp';
     case 'connection': return page === 'advanced' && target.kind === 'user';
   }
 }

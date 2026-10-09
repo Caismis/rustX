@@ -1,6 +1,7 @@
 // Isolated deterministic wire fixture. Never imported by the production entry.
 import { createRoot } from 'react-dom/client';
 import { App } from '../../src/app/App';
+import { traceRecord } from '../trace-fixture';
 import { cfg3Source } from '../cfg3-data';
 import { RpcFailure } from '../../src/client/app-server';
 import { Server, interaction, snapshot, endpoint } from '../fixture';
@@ -33,12 +34,26 @@ server.workspaceHost.configureWorkspace = async (_id, _endpoint, operation) => {
   if (operation.kind === 'write') return { kind: 'write', commit: { acknowledgement: projection, reread: { status: 'observed', projection } } };
   return { kind: operation.kind, projection };
 };
-await server.attached('A', 'B');
+const cold = new URL(location.href).searchParams.get('initial') === 'cold';
+if (cold) {
+  server.snapshots.get('A')!.attempt = null;
+  server.snapshots.get('A')!.transcript.statistics = { turns: '8', steps: '46', completed_responses: '8', model_requests: '46', requests_with_usage: '46', reported_usage: { input_tokens: 900000, output_tokens: 100000, total_tokens: 1000000 } };
+  server.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: '/workspace/A', model: { model: 'DeepSeek/deepseek-flash' } } }));
+  server.snapshots.get('A')!.trace = { records: [traceRecord(1)] };
+  server.held.add('session/attach'); server.held.add('turn/start');
+  await server.connect();
+} else await server.attached('A', 'B');
 localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A', 'B'] }));
 
 // Isolated fixture controls, never reachable from the production application.
 window.sessionFixture = {
   releaseAssociations,
+  async releaseCold() {
+    server.reply(await server.waitFor('session/attach', 1));
+    const start = await server.waitFor('turn/start', 1);
+    server.reply(start);
+    return server.requests.filter(row => row.request.method === 'turn/start').length;
+  },
   async activity(id, timestamp) {
     server.summaries.set(id, { ...server.summaries.get(id), updated_at: timestamp });
     server.invalidateSummary(id, server.socket, true);
@@ -89,4 +104,4 @@ window.sessionFixture = {
 if (new URL(location.href).searchParams.get('initial') === 'other-uncertain') await window.sessionFixture.presentation('other-uncertain');
 createRoot(document.getElementById('root')!).render(<App client={server.client} workspaceHost={server.workspaceHost} />);
 
-declare global { interface Window { sessionFixture: { activity(id: string, timestamp: string): Promise<void>; releaseAssociations(): void; stream(text: string): Promise<void>; state(mode: 'idle' | 'queued' | 'stopping' | 'reconnect' | 'uncertain'): Promise<void>; presentation(mode: 'empty' | 'preview' | 'named' | 'delete' | 'other-uncertain' | 'many'): Promise<void> } } }
+declare global { interface Window { sessionFixture: { releaseCold(): Promise<number>; activity(id: string, timestamp: string): Promise<void>; releaseAssociations(): void; stream(text: string): Promise<void>; state(mode: 'idle' | 'queued' | 'stopping' | 'reconnect' | 'uncertain'): Promise<void>; presentation(mode: 'empty' | 'preview' | 'named' | 'delete' | 'other-uncertain' | 'many'): Promise<void> } } }

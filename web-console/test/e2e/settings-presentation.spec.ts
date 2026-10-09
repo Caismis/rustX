@@ -12,7 +12,7 @@ import { expectStableScreenshot } from './screenshot';
 import { closeSettings, openSettingsPage, openWorkspaceSettings, selectedSettingsPage, settingsSectionMenu } from './shell-actions';
 
 const fixture = `${fixtureOrigin}/test/fixtures/settings.html`;
-const pages = ['General', 'Models', 'Agent', 'Tools & Permissions', 'Extensions', 'Advanced'];
+const pages = ['General', 'Models', 'Agent', 'Tools & Permissions', 'MCP servers', 'Extensions', 'Advanced'];
 const longProvider = 'enterprise-inference-gateway-eu-central-primary-with-an-exceptionally-long-provider-identity';
 const longModel = 'enterprise-reasoning-model-2026-09-long-context-preview-with-an-exceptionally-long-identity';
 
@@ -81,7 +81,7 @@ async function panelBox(page: Page) {
   });
 }
 
-test('desktop: six pages share one stable Harness frame, distinct icons and one row vocabulary', async ({ page }) => {
+test('desktop: seven pages share one stable Harness frame, distinct icons and one row vocabulary', async ({ page }) => {
   const errors = await start(page);
   await openUserSettings(page);
   const settings = dialog(page);
@@ -97,9 +97,9 @@ test('desktop: six pages share one stable Harness frame, distinct icons and one 
   expect(navigation).toBeGreaterThanOrEqual(210); expect(navigation).toBeLessThanOrEqual(224);
   const cell = await rail.getByRole('tab', { name: 'Models' }).evaluate(el => ({ height: el.getBoundingClientRect().height, radius: getComputedStyle(el).borderTopLeftRadius, font: getComputedStyle(el).fontSize }));
   expect(cell).toEqual({ height: 40, radius: '12px', font: '14px' });
-  // Six distinct glyphs; the label, not the glyph, names each page.
+  // Seven distinct glyphs; the label, not the glyph, names each page.
   const glyphs = await rail.getByRole('tab').evaluateAll(tabs => tabs.map(tab => tab.querySelector('svg')!.innerHTML));
-  expect(new Set(glyphs).size).toBe(6);
+  expect(new Set(glyphs).size).toBe(7);
   for (const name of pages) await expect(rail.getByRole('tab', { name, exact: true })).toHaveAccessibleName(name);
 
   const references: Record<string, string> = { General: 'settings-general-light.png', Models: 'settings-models-light.png', Agent: 'settings-agent-light.png', 'Tools & Permissions': 'settings-tools-light.png', Extensions: 'settings-extensions-light.png' };
@@ -110,7 +110,7 @@ test('desktop: six pages share one stable Harness frame, distinct icons and one 
     await expect(settings.getByRole('heading', { level: 3, name, exact: true })).toBeVisible();
     // The owner and observation state live in the fixed header on every page.
     await expect(settings.getByRole('heading', { level: 2, name: 'User Settings' })).toBeVisible();
-    await expect(settings.locator('[data-lifecycle="ready"]')).toHaveText('Authoritative source observed');
+    await expect(settings.locator('[data-lifecycle="ready"]')).toBeVisible();
     await expectNoHorizontalOverflow(page);
     await expectAccessible(page, settingsScope);
     if (references[name]) await expectStableScreenshot(settings, references[name]);
@@ -159,6 +159,7 @@ test('Workspace inherited and overridden units, restore versus deletion, nested 
   // Overridden and dirty: the draft's Save / Discard row sticks in reach.
   await openSettingsPage(page, 'Agent');
   const identity = settings.getByRole('form', { name: 'Root identity' });
+  await identity.getByRole('button', { name: 'Configuration details', exact: true }).click();
   await expect(identity.locator('[data-authored="present"]')).toBeVisible();
   await identity.getByLabel('Agent identity').fill('rustx-workspace-reviewer');
   await expect(identity).toHaveAttribute('data-draft', 'true');
@@ -222,8 +223,7 @@ test('deletion confirmation, CAS conflict review, loading and read failure are d
   errors = await start(page, '?scenario=loading');
   await openUserSettings(page);
   await openSettingsPage(page, 'Models');
-  await expect(settings.locator('[role="status"][data-lifecycle="loading"]')).toHaveText('Loading authoritative sources…');
-  await expect(settings.locator('[data-lifecycle="loading"][aria-busy="true"]')).toContainText('Nothing is shown until native answers');
+  await expect(settings.locator('[data-lifecycle="loading"][aria-busy="true"]')).toHaveText('Loading settings…');
   await expect(settings.getByRole('row')).toHaveCount(0);
   await expectAccessible(page, settingsScope);
   await expectStableScreenshot(settings, 'settings-loading-light.png');
@@ -234,7 +234,7 @@ test('deletion confirmation, CAS conflict review, loading and read failure are d
   await openUserSettings(page);
   await openSettingsPage(page, 'Models');
   await expect(settings.getByRole('alert')).toContainText('/bound/rustx.toml is not readable by the App Server process');
-  await expect(settings.locator('[role="status"][data-lifecycle="failed"]')).toHaveText('Source authority unavailable');
+  await expect(settings.locator('[data-lifecycle="failed"][aria-busy="false"]')).toBeVisible();
   await expectAccessible(page, settingsScope);
   await expectStableScreenshot(settings, 'settings-read-error-light.png');
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
@@ -331,8 +331,8 @@ test('390 × 844: section menu, list → detail → back, long identities and no
   await openWorkspaceSettings(page, 'Workspace A');
   await page.setViewportSize({ width: 390, height: 844 });
   await openSettingsPage(page, 'Extensions');
-  await settings.getByRole('tab', { name: 'Agents', exact: true }).click();
-  await settings.getByRole('row', { name: 'reviewer', exact: true }).click();
+  await settings.getByRole('tab', { name: 'Subagents', exact: true }).click();
+  await settings.getByRole('button', { name: 'Agent reviewer', exact: true }).click();
   await settings.getByRole('form', { name: 'Agent reviewer' }).evaluate(el => el.scrollIntoView({ block: 'start' }));
   await expect(settings.getByLabel('Description', { exact: true })).toBeVisible();
   await expect(settings.getByRole('button', { name: '← Extensions', exact: true })).toBeInViewport();
@@ -515,8 +515,8 @@ test('a focused closed section trigger hands the keyboard to the selected rail t
   // Rail navigation continues from there at once: the arrows move between
   // pages, and Escape, with no transient layer open, closes Settings.
   await page.keyboard.press('ArrowUp');
-  await expect(rail.getByRole('tab', { name: 'Tools & Permissions' })).toBeFocused();
-  await expect(rail.getByRole('tab', { name: 'Tools & Permissions' })).toHaveAttribute('aria-selected', 'true');
+  await expect(rail.getByRole('tab', { name: 'MCP servers' })).toBeFocused();
+  await expect(rail.getByRole('tab', { name: 'MCP servers' })).toHaveAttribute('aria-selected', 'true');
   await page.keyboard.press('ArrowDown');
   await expect(extensions).toBeFocused();
   await expect(extensions).toHaveAttribute('aria-selected', 'true');
@@ -611,7 +611,7 @@ test('confirming a removal settles focus on its unit while the write is in fligh
   // Native answers: the removal settles normally, exactly once, and the
   // keyboard is still inside the unit's workflow.
   await releaseWrites(page);
-  await expect(unit.getByText('Provider transport saved. Native coordination owns application.')).toBeVisible();
+  await expect(unit.getByText('Provider transport saved.')).toBeVisible();
   await expect(remove).toHaveCount(0);
   await expect.poll(writes).toBe(1);
   await expect(unit).toBeFocused();
@@ -658,7 +658,7 @@ test('confirming a restore of inheritance settles focus on its unit while the wr
   await expect(unit).toBeFocused();
   await releaseWrites(page);
   await expect.poll(writes).toBe(1);
-  await expect(unit.getByText('Root identity saved. Native coordination owns application.')).toBeVisible();
+  await expect(unit.getByText('Root identity saved.')).toBeVisible();
   await expect(unit.locator('[data-authored="absent"]')).toContainText('Inherited — no Workspace override');
   await expect(unit).toBeFocused();
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);

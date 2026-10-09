@@ -138,3 +138,7 @@
   overflow: visible;
   scrollbar-gutter: auto;
 }
+
+.title[hidden] {
+  display: none;
+}

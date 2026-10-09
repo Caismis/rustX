@@ -227,7 +227,7 @@ fn s1_mcp_literal_environment_and_headers_stay_redacted() {
         env: BTreeMap::from([("TOKEN".to_string(), SENTINEL.to_string())]),
         cwd: None,
     };
-    let saved = manager
+    let rejected = manager
         .write_source_settings(
             &user,
             &before.user_mcp.revision,
@@ -237,6 +237,35 @@ fn s1_mcp_literal_environment_and_headers_stay_redacted() {
                     definition,
                     retained_env: Vec::new(),
                     retained_headers: Vec::new(),
+                }),
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(
+        rejected,
+        crate::local_runtime::configuration::settings::SettingsError::Invalid
+    ));
+    // Literal provisioning belongs to the native source owner, not generic RPC.
+    std::fs::create_dir_all(before.user_mcp.path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &before.user_mcp.path,
+        format!("[mcp_servers.probe]\ncommand = 'server'\nenv = {{ TOKEN = '{SENTINEL}' }}\n"),
+    )
+    .unwrap();
+    let source = manager.read_source_settings(&user).unwrap();
+    let saved = manager
+        .write_source_settings(
+            &user,
+            &source.user_mcp.revision,
+            SourceMutation::Mcp {
+                id: crate::runtime::identity::McpServerId::new("probe"),
+                authored: Some(crate::local_runtime::configuration::settings::McpWrite {
+                    definition: serde_json::from_value(
+                        serde_json::json!({"command":"updated-server"}),
+                    )
+                    .unwrap(),
+                    retained_env: vec!["TOKEN".into()],
+                    retained_headers: vec![],
                 }),
             },
         )

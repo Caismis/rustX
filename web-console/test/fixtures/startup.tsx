@@ -1,3 +1,4 @@
+import { agentMetrics } from '../agent-statistics-fixture';
 import { createRoot } from 'react-dom/client';
 import { App } from '../../src/app/App';
 import { Server, snapshot } from '../fixture';
@@ -17,19 +18,51 @@ import '../../src/app/console.css';
 const server = new Server();
 if (!new URL(location.href).searchParams.has('existing')) server.snapshots.clear();
 else server.snapshots.get('A')!.transcript.entries = [{ cursor: '1', item: { type: 'message', message: { id: 'saved-user', role: 'user', source: 'human', content: [{ type: 'text', text: 'Previously saved message' }] } } }];
+for (const saved of server.snapshots.values()) saved.model = cfg3Effective().effective_model;
+server.handlers.set('session/model', request => {
+  if (request.method !== 'session/model') throw new Error('Wrong operation');
+  const model = server.snapshots.get(request.params.target.session_id)?.model;
+  if (!model) throw new Error('Missing native fixture model');
+  return { type: 'model', model };
+});
 server.workspaceHost.resolveWorkspace = async () => ({ cwd: '/workspace/A' });
 server.workspaceHost.classifyLocations = async paths => paths.map(() => ({ authorized: true, workspaceId: 'workspace-a' }));
 const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], toolCalls: true, reasoning: false };
-server.workspaceHost.configureWorkspace = async () => ({ kind: 'read', projection: { ...cfg3Source(), session_models: { kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: ['fixture/native', 'fixture/second'].map(model => ({ model, protocol: 'openai_responses', contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'environment', variable: 'KEY' }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [] })) } }, prospective_approval_mode: 'policy', target: { kind: 'workspace', directory: '/workspace/A' } } });
+server.workspaceHost.configureWorkspace = async () => ({ kind: 'read', projection: { ...cfg3Source(), session_models: { kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: ['fixture/native', 'fixture/second'].map(model => ({ model, protocol: 'openai_responses' as const, contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'environment', variable: 'KEY' }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [] })) } }, prospective_approval_mode: 'policy', target: { kind: 'workspace', directory: '/workspace/A' } } });
 if (new URL(location.href).searchParams.has('models')) {
   const saved = server.snapshots.get('A')!;
   saved.model = cfg3Effective().effective_model;
   saved.transcript.entries = Array.from({ length: 20 }, (_, index) => ({ cursor: String(index + 1), item: { type: 'message' as const, message: { id: `saved-${index}`, role: index % 2 ? 'assistant' as const : 'user' as const, source: 'human' as const, content: [{ type: 'text' as const, text: `Saved message ${index}: ` + 'Previously saved conversation content. '.repeat(12) }] } } }));
-  server.handlers.set('session/models', () => ({ type: 'models', catalog: { models: [{ model: saved.model!.configured.model, protocol: 'openai_responses', contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'literal' }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [] }] } }));
-  server.handlers.set('session/model', () => ({ type: 'model', model: saved.model! }));
+  server.handlers.set('session/models', () => ({ type: 'models', catalog: { models: [{ model: saved.model!.configured.model, protocol: 'openai_responses' as const, contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'literal' }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [] }] } }));
+}
+if (new URL(location.href).searchParams.has('cold-model')) {
+  const models = ['fixture/native', 'fixture/second'].map(model => ({ model, protocol: 'openai_responses' as const, contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'literal' as const }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [{ id: 'low', reasoningEnabled: true }, { id: 'high', reasoningEnabled: true }], defaultProfile: 'high' }));
+  const configure = server.workspaceHost.configureWorkspace;
+  server.workspaceHost.configureWorkspace = async (...args) => {
+    const result = await configure(...args);
+    if (result.kind === 'read') result.projection.session_models = { kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models } };
+    return result;
+  };
+  server.handlers.set('session/models', () => ({ type: 'models', catalog: { models } }));
+  server.handlers.set('session/setModel', request => {
+    if (request.method !== 'session/setModel') throw Error('Wrong method');
+    const saved = server.snapshots.get(request.params.target.session_id)!;
+    saved.model = { ...saved.model!, configured: request.params.config, effective: { ...saved.model!.effective, model: request.params.config.model, profile: request.params.config.profile } };
+    return { type: 'model', model: saved.model };
+  });
 }
 if (new URL(location.href).searchParams.has('trajectory')) {
   server.snapshots.get('A')!.trace.records = Array.from({ length: 160 }, (_, index) => traceRecord(index, { kind: 'user', request: null, location: {}, preview: { text: `Saved trace ${index}`, truncated: false } }));
+}
+if (new URL(location.href).searchParams.has('subagents')) {
+  const saved = server.snapshots.get('A')!;
+  saved.agents = ['Research sources', 'Verify findings', 'Write report'].map((agent, index) => ({ agent, agent_id: `child-${index}`, parent_agent_id: 'root', child_conversation_id: `child-conversation-${index}`, activation_id: `activation-${index}`, current_activation: index === 0 ? 'activation-0' : null, state: index === 0 ? 'active' : 'inactive', activation_state: index === 0 ? 'running' : 'succeeded', definition_digest: 'definition', profile_digest: 'profile', started_at: '2026-10-08T08:00:00Z', observation: { revision: '1', activity: { type: 'awaiting_activity' }, counters: { model_requests: 3, model_retries: 0, tool_executions: 2 } }, workspace: { logical_workspace: '/workspace/A', isolation: { type: 'shared' }, resource_state: 'none' } }));
+  saved.transcript.entries!.push({ cursor: '21', item: { type: 'message', message: { role: 'user', id: 'agent-report', source: { agent: { agent_id: 'child-1' } }, content: [{ type: 'text', text: 'Verified report: the original sources agree.\n\n**Evidence**\n\n- Source one\n- Source two' }] } } });
+  server.handlers.set('agent/statistics', () => ({ type: 'agent_statistics', metrics: agentMetrics }));
+  server.handlers.set('agent/transcript', request => {
+    if (request.method !== 'agent/transcript') throw Error('Wrong method');
+    return { type: 'transcript', page: { entries: [{ cursor: '1', item: { type: 'message', message: { role: 'assistant', id: `${request.params.agent_id}-reply`, content: [{ type: 'text', text: `# Child research report\n\nSelected agent: ${request.params.agent_id}\n\nSources have been checked.\n\n` + 'Detailed findings and supporting evidence. '.repeat(120) }] } } }] } };
+  });
 }
 let nativeDefault = 'fixture/native';
 server.handlers.set('session/create', request => {
@@ -54,7 +87,7 @@ const handled = new Set<Request>(server.requests.filter(row => row.request.metho
     await server.client.refresh('A');
   },
   defaultModel(model: string) { nativeDefault = model; },
-  model: () => server.client.getSnapshot().views.created?.snapshot?.model,
+  model: (id = 'created') => server.client.getSnapshot().views[id]?.snapshot?.model,
   operation: () => server.client.firstSubmissions.session('created'),
   async release(method: Request['method'], failure?: string) {
     const request = server.requests.find(row => row.request.method === method && !handled.has(row.request))?.request;

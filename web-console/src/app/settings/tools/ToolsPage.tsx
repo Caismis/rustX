@@ -44,7 +44,6 @@ export function ToolsPage({ source, document, scope, revision }: {
   ];
   return <section aria-label={tx('settings:tools-page.tools-permissions')}>
     <h3>{tx('settings:tools-page.tools-amp-permissions')}</h3>
-    <p>{tx('settings:tools-page.what-the-root-agent-may-use-and-under-what-policy-defining-a-res')}</p>
 
     <h4>{tx('settings:tools-page.approval')}</h4>
     <UnitForm<ApprovalMode> title={tx('settings:tools-page.approval-mode')} authored={document.approval_mode ?? undefined} blank="policy" revision={revision}
@@ -63,7 +62,6 @@ export function ToolsPage({ source, document, scope, revision }: {
     </UnitForm>
 
     <h4>{tx('settings:tools-page.tool-sources')}</h4>
-    <p>{tx('settings:tools-page.mcp-servers-and-managed-python-packages-are-inert-until-the-root')}</p>
     {sources.map(id => <UnitForm<SourceToolSelection> key={id} title={tx('settings:extension-detail.source-value', { p0: id })}
       authored={agent?.tools?.sources?.[id] ?? undefined} blank={[]} revision={revision}
       mutation={authored => ({ kind: 'config', mutation: { unit: 'source_tools', id, authored } })}>
@@ -76,7 +74,7 @@ export function ToolsPage({ source, document, scope, revision }: {
     </div>
 
     <h4>{tx('settings:tools-page.skills')}</h4>
-    <p>{tx('settings:tools-page.skill-selection-controls-which-skill-descriptions-are-advertised')}</p>
+    <p className={css.hint}>{tx('settings:tools-page.skill-selection-controls-which-skill-descriptions-are-advertised')}</p>
     <dl><dt>{tx('settings:tools-page.user-skill-root')}</dt><dd>{skillRoots[0]}</dd><dt>{tx('settings:tools-page.workspace-skill-root')}</dt><dd>{skillRoots[1]}</dd></dl>
     <UnitForm<AgentSkillSelection> title={tx('settings:extension-detail.skill-visibility')} authored={agent?.skills ?? undefined} blank={[]} revision={revision}
       mutation={authored => ({ kind: 'config', mutation: { unit: 'skills', authored } })}>
@@ -84,7 +82,6 @@ export function ToolsPage({ source, document, scope, revision }: {
     </UnitForm>
 
     <h4>{tx('settings:tools-page.delegation')}</h4>
-    <p>{tx('settings:tools-page.a-defined-named-agent-or-workflow-is-not-a-delegation-target-the')}</p>
     {(['agents', 'workflows'] as const).map(unit => <UnitForm<string[]> key={unit}
       title={unit === 'agents' ? tx('settings:extension-detail.agent-allowlist') : tx('settings:extension-detail.workflow-allowlist')} authored={agent?.[unit] ?? undefined} blank={[]} revision={revision}
       mutation={authored => ({ kind: 'config', mutation: { unit, authored } })}>

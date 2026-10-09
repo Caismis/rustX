@@ -131,7 +131,9 @@ describe('single-anchor Agent Status placement', () => {
   it('is a subordinate annotation, not a conversation speaker or a response with actions', () => {
     const ui = render(<AgentTranscript snapshot={withTranscript(CONVERSATION(), [status('s1', fresh('u1'))])} />);
     expect(ui.container.querySelectorAll('[aria-label="Your message"]')).toHaveLength(1);
-    expect(ui.container.querySelectorAll('[aria-label="Assistant response"]')).toHaveLength(1);
+    // The one native Assistant message has separate response and process segments.
+    expect(ui.container.querySelectorAll('[data-chat-anchor-key="message:a1"]')).toHaveLength(1);
+    expect(ui.container.querySelectorAll('[aria-label="Assistant response"]')).toHaveLength(2);
     const note = screen.getByRole('note', { name: 'Agent Status' });
     expect(note.closest('[aria-label="Your message"], [data-assistant-message]')).toBeNull();
     expect(within(note).queryByRole('button', { name: 'Copy' })).toBeNull();
@@ -144,7 +146,7 @@ describe('single-anchor Agent Status placement', () => {
     expect(screen.getByRole('button', { name: 'Load earlier' })).toBeTruthy();
     expect(screen.getByLabelText('Streaming response').textContent).toContain('Still answering');
     expect(anchorKeys(ui.container)).toEqual(['message:u1', 'message:a1', 'message:t1', 'message:live']);
-    expect([...ui.container.querySelectorAll('[data-chat-turn-owner]')].map(row => row.getAttribute('data-chat-turn-owner'))).toEqual(['turn:["conversation-A","attempt-A"]', 'turn:["conversation-A","attempt-A"]']);
+    expect([...ui.container.querySelectorAll('[data-chat-turn-owner]')].map(row => row.getAttribute('data-chat-turn-owner'))).toEqual(['turn:["conversation-A","attempt-A"]']);
     expect(annotations(ui.container)).toEqual([['s2', 'message:t1']]);
   });
 });

@@ -15,7 +15,7 @@ export function Interactions({ client, state, view }: {
   return view.snapshot?.pending_interactions?.map(item => {
     const key = interactionKey(item.interaction);
     const operation = state.interactionOperations[key]?.status;
-    const disabled = view.attachmentIntent !== 'wanted' || view.attachment !== 'attached' || !!operation;
+    const disabled = !client.isAttachmentControlCurrent(view.id, view.attachmentObservation) || !!operation;
     const status = operation === 'uncertain' ? tx('interactions:copy.needs-verification-your-response-may-have-been-received')
       : operation === 'acknowledged' ? tx('interactions:copy.response-received-updating')
       : operation === 'in-flight' ? tx('interactions:copy.sending-response') : disabled ? tx('interactions:copy.reconnect-to-respond') : tx('interactions:copy.waiting-for-your-response');

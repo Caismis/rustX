@@ -47,7 +47,7 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
     await fixture.gate('document-stream');
     await page.evaluate(() => document.fonts.ready); documentFonts = await page.evaluate(() => document.fonts.size);
     await open('sample.pdf'); await expect(panel.locator('.textLayer')).toContainText('page 1');
-    const viewport = page.locator('.conversation-scroll');
+    const viewport = page.locator('[data-conversation-scroll]').first();
     await viewport.hover(); await page.mouse.wheel(0, -600);
     await expect.poll(() => viewport.evaluate(el => el.scrollTop)).toBe(0);
     // The live tool activity folds at settlement; the original user message is the reading anchor.
@@ -118,12 +118,12 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
       await expect(page.locator('[data-harness-frame]')).toHaveCSS('grid-template-columns', `${sidebar}px ${width - sidebar}px 0px`);
       await page.getByRole('button', { name: 'Preview sample.pdf in sidebar', exact: true }).scrollIntoViewIfNeeded();
       await page.getByRole('button', { name: 'Preview sample.pdf in sidebar', exact: true }).focus();
-      const scroll = await page.locator('.conversation-scroll').evaluate(el => el.scrollTop);
+      const scroll = await page.locator('[data-conversation-scroll]').first().evaluate(el => el.scrollTop);
       await page.keyboard.press('Enter');
       await expect(panel.locator('.textLayer')).toContainText('page 1');
       if (width === 390) await page.screenshot({ animations: 'disabled', path: info.outputPath('pdf-narrow.png') });
       await close();
-      expect(await page.locator('.conversation-scroll').evaluate(el => el.scrollTop)).toBeCloseTo(scroll, 0);
+      expect(await page.locator('[data-conversation-scroll]').first().evaluate(el => el.scrollTop)).toBeCloseTo(scroll, 0);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     }
     await page.route('**/pdf.worker*.mjs', route => route.abort());

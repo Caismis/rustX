@@ -228,6 +228,13 @@ fn empty_identity_maps_do_not_erase_unmentioned_identities() {
 
 #[test]
 fn mcp_destination_replacement_drops_lower_secrets_and_headers() {
+    // Selection is a different native dimension from definition ownership:
+    // Workspace replaces the definition while inheriting User's Root selection.
+    let (config, _) = effective(&format!("{LOWER}\n[agent.tools.sources]\ndocs = 'all'"), "");
+    assert_eq!(
+        serde_json::to_value(&config.agent.tools).unwrap()["sources"]["docs"],
+        "all"
+    );
     let root = tempfile::tempdir().unwrap();
     let user = root.path().join("user/.agents");
     let workspace = root.path().join("workspace");

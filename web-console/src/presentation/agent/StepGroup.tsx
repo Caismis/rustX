@@ -3,8 +3,8 @@ import { useTranslation } from '../../locale/react';
 // Adapted from DeepSeek Harness ui-chat ChatGroupSeat ProcessGroupHeader and
 // step-process processTitle: a settled process group's activity title with its
 // hover/expanded chevron, over a capped body whose scrollable ends fade.
-// Live titles, follow scrolling, presentation modes and searchable-hidden
-// reveal belong to Harness's Session store and are excluded.
+// Native composition supplies live titles and whether a presentation mode
+// exposes the body directly; manual disclosure state remains with its owner.
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import clsx from 'clsx';
 import { IconAgentPresetOutline16, IconApiOutline14, IconBrowseOutline16, IconChevronDownOutline14, IconChevronUpOutline14, IconCodeOutline16, IconEditOutline16, IconGlobeOutline14, IconPlanOutline14, IconQuestionOutline14, IconSearchOutline16, IconSparkle16, IconThinkOutline14 } from '../primitives/icons';
@@ -49,10 +49,11 @@ function useProcessTitle(counts: StepCounts) {
   return counts.length > 3 ? tx('agent:step-process.more', { title }) : title;
 }
 
-export function StepGroup({ id, counts, open, onToggle, hidden = false, children }: {
-  id: string; counts: StepCounts; open: boolean; onToggle: () => void; hidden?: boolean; children: ReactNode;
+export function StepGroup({ id, counts, open, onToggle, hidden = false, direct = false, activityTitle, detail, children }: {
+  id: string; counts: StepCounts; open: boolean; onToggle: () => void; hidden?: boolean; direct?: boolean; activityTitle?: string; detail?: string; children: ReactNode;
 }) {
-  const title = useProcessTitle(counts);
+  const defaultTitle = useProcessTitle(counts);
+  const title = activityTitle ?? defaultTitle;
   const bodyId = useId();
   const body = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
@@ -75,16 +76,16 @@ export function StepGroup({ id, counts, open, onToggle, hidden = false, children
   }, [open]);
   const activity = counts[0]?.kind ?? 'thinking';
   return <div className={css.root} hidden={hidden} data-step-process={id}>
-    <button type="button" className={css.title} aria-expanded={open} aria-controls={bodyId}
+    <button hidden={direct} type="button" className={css.title} aria-expanded={open} aria-controls={bodyId}
       data-process-activity={activity} onClick={event => { event.currentTarget.focus(); onToggle(); }}>
       <span className={css.leading} aria-hidden="true">
         <span className={css.activityIcon}>{ICONS[activity]}</span>
         <span className={css.chevron}>{open ? <IconChevronUpOutline14/> : <IconChevronDownOutline14/>}</span>
       </span>
-      <span className={css.label}>{title}</span>
+      <span className={css.label}>{title}{detail && ` · ${detail}`}</span>
     </button>
-    <div ref={body} id={bodyId} hidden={!open} data-step-process-body
-      className={clsx(css.body, open && edges.up && css.fadeTop, open && edges.down && css.fadeBottom)}>
+    <div ref={body} id={bodyId} hidden={!open && !direct} data-step-process-body
+      className={clsx(css.body, direct && css.expandedBody, !direct && open && edges.up && css.fadeTop, !direct && open && edges.down && css.fadeBottom)}>
       <div ref={content} className={css.content}>{children}</div>
     </div>
   </div>;

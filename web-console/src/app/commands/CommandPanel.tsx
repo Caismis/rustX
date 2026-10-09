@@ -11,9 +11,9 @@ import { CommandSession, type HistoricalSelection, type HistoryAction } from './
 import type { CommandId } from './registry';
 import css from './Commands.module.css';
 
-type Choice = { kind: 'model'; model: string; profile?: string } | { kind: 'history'; action: HistoryAction; selection: HistoricalSelection } | { kind: 'node'; nodeId: string; conversationId: string };
+type Choice = { kind: 'history'; action: HistoryAction; selection: HistoricalSelection } | { kind: 'node'; nodeId: string; conversationId: string };
 interface Row { id: string; label: DisplayText; detail?: DisplayText; choice: Choice }
-export interface CommandRequest { id: Exclude<CommandId, 'new' | 'compact'> | 'tree'; messageId?: string }
+export interface CommandRequest { id: Exclude<CommandId, 'new' | 'compact' | 'model'> | 'tree'; messageId?: string }
 export function CommandPanel({ request, client, sessionId, current, close, succeeded, opened }: {
   request: CommandRequest; client: AppServerClient; sessionId: string; current: () => boolean;
   close: () => void; succeeded: () => void; opened: (result: { session: SessionSnapshot; content: UserInputBlock[] }) => void;
@@ -56,14 +56,6 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
     alive.current = true;
     const load = async () => {
       switch (request.id) {
-        case 'model': {
-          const result = await scope.models(); if (!valid()) return;
-          setDetail(message('commands:copy.current-value-choosing-a-model-uses-its-native-defaults', { p0: result.current.configured.model }));
-          setRows((result.catalog.models ?? []).flatMap(model => [
-            { id: model.model, label: model.model, detail: message('commands:copy.native-defaultvalue', { p0: model.defaultProfile ? ` · ${model.defaultProfile}` : '' }), choice: { kind: 'model' as const, model: model.model } },
-            ...(model.profiles ?? []).map(profile => ({ id: `${model.model}:${profile.id}`, label: message('commands:command-panel.value-value', { p0: model.model, p1: profile.id }), detail: message('commands:copy.model-profile'), choice: { kind: 'model' as const, model: model.model, profile: profile.id } })),
-          ])); break;
-        }
         case 'fork': case 'branch':
           setDetail(request.id === 'fork' ? message('commands:copy.independent-session-choose-the-exact-user-boundary-its-prompt-returns-to-the-composer') : message('commands:copy.create-a-native-branch-and-switch-the-idle-session-to-it-the-selected-prompt-returns-to-th'));
           await loadBoundaries(0); break;
@@ -81,7 +73,6 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
     selecting.current = true; setBusy(true); setError('');
     try {
       switch (choice.kind) {
-        case 'model': await scope.setModel(choice.model, choice.profile); if (valid() && scope.current()) { succeeded(); close(); } break;
         case 'node': if (await scope.openNode(choice.nodeId, choice.conversationId) && valid()) close(); break;
         case 'history': {
           const result = await scope.transition(choice.action, choice.selection);
@@ -101,7 +92,7 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
     {blocked && <p role="status">{tx('commands:command-panel.waiting-for-native-execution-and-accepted-inbound-to-settle')}</p>}
     {!busy && stale && <p role="status">{tx('commands:command-panel.attachment-changed-close-and-reopen-to-read-current-native-state')}</p>}
     {busy && <p role="status">{tx('commands:command-panel.waiting-for-native-acknowledgement')}</p>}
-    {!busy && !error && !rows.length && (historical || request.id === 'tree' || request.id === 'model') && <p role="status">{tx('commands:command-panel.no-native-choices-available')}</p>}
+    {!busy && !error && !rows.length && (historical || request.id === 'tree') && <p role="status">{tx('commands:command-panel.no-native-choices-available')}</p>}
     {!!rows.length && <><input autoFocus className={css.search} aria-label={tx('commands:command-panel.filter-options')} value={query} disabled={busy}
       onChange={event => { setQuery(event.target.value); setActive(0); }} aria-controls="command-options" aria-activedescendant={filtered[active] ? `choice-${active}` : undefined}
       onKeyDown={event => {

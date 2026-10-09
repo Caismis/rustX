@@ -32,6 +32,7 @@
         "../commands/CommandMenu",
         "../commands/matching",
         "../commands/registry",
+        "../composer/ModelPicker",
         "../composer/editor-content",
         "../composer/input-trigger",
         "../composer/preferences",
@@ -47,7 +48,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "dfe3e1444655a03ca87eb4bcdf6873164fc4e37b0fbd72faac99b436ed996aa7",
+      "local_sha256": "d28eada426421f9b8013443e5d171dc33e29b268953d5a85bc23f1085aa93b78",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
@@ -132,7 +133,7 @@
         "Harness queue and retry authority"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "f0b9726d44fb6114f36f569365c7774fa639e2d6834138bf8ce83d2052128eee"
+      "local_sha256": "67aec2f02ac782ea099e61b31ef330f9fe5de1ec48f9891e4baa47e8de9b4030"
     },
     {
       "upstream": "packages/client/ui-commands/src/client/PopupSelectView.module.css",
@@ -478,7 +479,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "d6840d6c9cde6f3cf9c513659e4669a76cb459a7d577260dce1e9407e59e8619"
+      "local_sha256": "33763f05a5dc7f70a6b607f612eeb53efc5a03db6fc6f1a631130ff809f978da"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
@@ -497,6 +498,7 @@
         "../../workspaces/host",
         "../appearance",
         "./ConnectionSettings",
+        "./SettingsScopeMenu",
         "./advanced/AdvancedPage",
         "./agent/AgentPage",
         "./extensions/ExtensionsPage",
@@ -506,6 +508,8 @@
         "./machines/react",
         "./machines/settings-target",
         "./machines/system",
+        "./mcp/McpIcon",
+        "./mcp/McpPage",
         "./models/ModelsPage",
         "./projection",
         "./source-context",
@@ -527,7 +531,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "38b9e4af3b28fab3633eb11767114961df793b131db94b57cea88048bd1b5e19"
+      "local_sha256": "6a8ea789eaabbf59d14ff3db96709ab431c8b801393cfb1a6b4244bb070b0d50"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
@@ -804,7 +808,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "0dff14e208b25fa6db8ceab835929b60f02accb32d81cf8a6fa96b94f6c8f2ac",
+      "local_sha256": "4b84966ddc15726518444282b67457f6c19861dcc35f2b6ae92654055b4bc743",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/layout.ts",
@@ -919,12 +923,12 @@
       "local_sha256": "85454af52fe48c27419bc91c19101098a49c18001ad450fbfe68c7bb75d9cdba"
     },
     {
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream": "packages/client/ui-chat/src/client/chat/ChatView.module.css",
       "destination": "web-console/src/presentation/agent/Chat.module.css",
-      "upstream_sha256": "f2696301b4ec912ecdf1df83229a87140566a1c6dabca8bac55259df2c29a695",
+      "upstream_sha256": "73e746a051e6077e92d91fa59ade9fb65a4ec48e57922616458df95a56a04dcd",
       "classification": "A",
-      "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
+      "treatment": "Pinned Harness styles; native textarea environment adaptation where required. Information-flow spacing, Turn heading and bubble geometry aligned to the referenced revision; native seat wrappers remain rustX-owned.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -933,7 +937,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "34a782ebaeaa1a5c17646c1f823f9f2d454d8251551b24f1cf21774ab77504d3"
+      "local_sha256": "cd4df3f70e684c3d074277c310cf6a2cd44904a3c2b786b729a6c4cbb5562c1e"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -967,7 +971,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "884f1ed75d4a1a493e40ba9d03447c7b98771eea023ce3e8b1e5e3d7c508be4b",
+      "local_sha256": "0c8eb2f423659bb0c50280645345823f5cb2ad723e66afc63c91bf2ed32221cb",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css",
@@ -990,12 +994,12 @@
       ]
     },
     {
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream": "packages/client/ui-chat/src/client/chat/MessageItem.module.css",
       "destination": "web-console/src/presentation/agent/Message.module.css",
-      "upstream_sha256": "998c35f8b412380fb64819d8036f136dd0661d6fbc31692656c7ce0514fb9308",
+      "upstream_sha256": "e52ee9df23a65396983f2f22b3186a1e6fd72e4ba4fd0f48d5bee746205870f1",
       "classification": "A",
-      "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
+      "treatment": "Pinned Harness styles; native textarea environment adaptation where required. Information-flow spacing, Turn heading and bubble geometry aligned to the referenced revision; native seat wrappers remain rustX-owned.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -1004,7 +1008,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "8de9fedd2016833e52f355cfd1cd7c83a691e13f1467a4ee9dcde56b4f09488e"
+      "local_sha256": "01a1a8db3bf2942501c1d7f0c731aaa65e207663c27bfeee67d47b56839286bb"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -1041,7 +1045,7 @@
       "destination": "web-console/src/presentation/agent/ModelSelect.module.css",
       "upstream_sha256": "0c3385a4ffa34b2a534b70a326193f441d5f8ffb0de471bcdf145844dfbe94fa",
       "classification": "A",
-      "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
+      "treatment": "Pinned Harness styles; rustX flex-column sizing removes the inline baseline gap so centered model controls retain their glyph origin across sticky repaints; mutation errors remain below the control.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -1050,7 +1054,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "1a1eddf0485fa42335afc61e66cb1f100fb64741cf04aa0c99f4f4bf21dfd09b"
+      "local_sha256": "062920f816304f3867fced4fafd2ee13aa7a99c27fcc72f0f754a2aa24b36d8d"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -1139,7 +1143,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "40ac5e15c864cdf0779d76cb098d6e2d817ffccafb381468555dea38f3c8f7d5"
+      "local_sha256": "d367dc5c2ce4409a53ada0ded50098b9248205cfd308507cc2c937ffdfc3d84a"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -1156,7 +1160,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "e0e8e23387c0e6876f991579944e507d8fcbd8ab962b5d8bc14f3ac1f5c59953"
+      "local_sha256": "b7ef87cdf58aad7da3e7ed46003b713d5ca6f723fa48b96ee04ab5046b9a2eaa"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -1303,7 +1307,8 @@
       "upstream_sha256": "5f6ba885fc60f79cefd212f8b0cb89ceaf72115d971db771fa40c190df89f414",
       "retained_dependencies": [
         "../primitives/icons/index.tsx",
-        "react"
+        "react",
+        "react-dom"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -1312,7 +1317,7 @@
         "Harness attachment identity and storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "5cc8adf7f44414adf42d89c85afe82435a4fd35d0393206443b3d1d51056e6d7",
+      "local_sha256": "23988041ca381fc151eb5a2640dfeef0bde994843f07138f798c07460f0966b5",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/ChatView.tsx",
@@ -2361,9 +2366,17 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "ac3b8d8e0224af953536861982fd3ad43f6ff24c80257a01dd404cb615c98664",
+      "local_sha256": "db3b2436022d04f5ff78aa87eca26fc3595da61f9e19ad7f7e0b4bef8a658809",
       "retained_dependencies": [],
-      "classification": "A"
+      "classification": "A",
+      "additional_sources": [
+        {
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream": "packages/client/ui-theme/src/styles/design-platform.css",
+          "upstream_sha256": "809b20ae477324fdf5181a2d338655a19919cabbf1b0e60adc149908462c5a66",
+          "treatment": "Deep-diving light/dark text and shimmer color tokens."
+        }
+      ]
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -2385,9 +2398,9 @@
     {
       "destination": "web-console/src/presentation/theme/scrollbar.css",
       "upstream": "packages/client/ui-theme/src/styles/scrollbar.css",
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
-      "upstream_sha256": "16d27a2a4600d6439b9ed6c5cfb504885bb5e9d0a7d8a5120c23e7516bf1c1d5",
+      "upstream_sha256": "673450184fe82a679b5759a7f93ceab17895b9f12e1196f7efb281304afd8398",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
         "Cordis/slot registry",
@@ -2395,7 +2408,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "2c39c9597d541eb40bd49f4ad6f54cf6af18a46e576a49c97facc041a0d7f8d5",
+      "local_sha256": "a6f9bda0d1024de6db782231dec11030cd0b0c42e4a6e39afaf7d74bb818c844",
       "retained_dependencies": [],
       "classification": "A"
     },
@@ -2645,7 +2658,7 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "ec906ad79ec7e40b88d74361e2bac34a7dfdf9086cf81373b7d9a1f878c3059d"
+      "local_sha256": "cef973426369156c78c7857026c8c2b26e0fcef892995e25b9406e239412e21a"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
@@ -2748,7 +2761,7 @@
           "treatment": "Issue #421 semantic ledger adaptation; exact rustX native ownership replaces Harness runtime relationships."
         }
       ],
-      "local_sha256": "3e1f3b3f215fbfc1635d93663ec05f194f9c0076ef27ca90fed31e09bcd11410"
+      "local_sha256": "e8d7b3875a8f9e8bc08712b3456454e9e269c3456143a20534004d03991b51e6"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -2777,6 +2790,7 @@
         "../agent/AgentComposer",
         "../agent/AgentControls",
         "../composer/ComposerContextStack",
+        "../composer/ModelPicker",
         "../composer/use-attachment-intake",
         "../model-preference",
         "./FirstSubmission.module.css",
@@ -2789,7 +2803,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "165fd8be549dbe74bb888a344cf3686686dfd1364bb178c7d7379b9cf84d7017",
+      "local_sha256": "76868a46f8dfd7691a22d86b3faa11c1b97724520c91a7737855526c61598155",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-workspace/src/client/WorkspacePicker.tsx",
@@ -2819,7 +2833,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "0e020066128ecca068f94bb98d8a869d1dba33e7d2132008bba97dc3dadbf727",
+      "local_sha256": "7d72202502bcbb9b809a0eeb76e538eb176034231c284d1bbbf4a3d74bfd73db",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css",
@@ -2925,12 +2939,12 @@
       ]
     },
     {
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream": "packages/client/ui-chat/src/client/chat/TurnProcessNodeView.module.css",
       "destination": "web-console/src/presentation/agent/TurnProcess.module.css",
-      "upstream_sha256": "94f400f0120a6a773fd65be6869c9b7d895590e31cc3cc8943e5d63eec7173d5",
+      "upstream_sha256": "2fb00c2a24da7f9946dac118eaa076bd55133ca972d159c8b72d7ffee1ba2292",
       "classification": "B",
-      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes. Issue #406: Current process-row typography, disabled/hover treatment, chevron geometry and reduced-motion behavior.",
+      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes. Issue #406: Current process-row typography, disabled/hover treatment, chevron geometry and reduced-motion behavior. Information-flow spacing, Turn heading and bubble geometry aligned to the referenced revision; native seat wrappers remain rustX-owned.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -2938,7 +2952,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "6a30a10e045170ea1ae11978634fdcb7d43f24d7ce8b8c5c6646632296163353",
+      "local_sha256": "b793df7c610fcf2ef9a37d7644c24fcf67e83c54f24dff12b31fadebbb495381",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/TurnProcessNodeView.module.css",
@@ -3229,7 +3243,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "e3d14817730a15d0c2041325a93795a24a39063ae3ba37ee56dd49ac706eb684"
+      "local_sha256": "856e7370a5822e35e398bc99e062fa81b2f236e72b58c169a0086601b2a978fc"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -3253,7 +3267,7 @@
           "treatment": "Compaction checkpoint disclosure and bilingual summary wording adapted to native Ledger messages; no Harness runtime or command authority."
         }
       ],
-      "local_sha256": "a51cc2117302ade719ade88bb1ad2581831449024810610c07c820c71337891a"
+      "local_sha256": "99529db76f6d436898a33843587bc5dbc85eba5d98cfffa548ecbbde66632606"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",
@@ -3349,7 +3363,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "787352d09648d6cf57857e2727b258d5a0150b967605c234612a473d1a5ca309"
+      "local_sha256": "0cc5f426c92677f5b783c5fd8b1066af8bfccf72ac15efe7ee28c437140a3dd4"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -3555,7 +3569,7 @@
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [],
-      "local_sha256": "eb8d08d9c6ca22e5f0bb42921b0861d78392c130e6de6544c2ac4afbe44e716a"
+      "local_sha256": "e586b93054ed12e67dac7c2b96556225366b7a9eb99a0564245ade15c3c06685"
     },
     {
       "upstream": "packages/client/ui-chat/tests/turn-navigator-fixture.ts",
@@ -3619,7 +3633,7 @@
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "59e36a3292a29ccea3f533aeaa130f0bdaf5baf9212ea8ccdede401c7b248e36"
+      "local_sha256": "e3905fc83c91117b6112733c54234aab472d00c9b56ea189d5a66f0b2d251c8d"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/ChatGroupSeat.module.css",
@@ -3631,7 +3645,7 @@
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [],
-      "local_sha256": "890208b55b25a278588f5a107c3e59e698a2bd8277a65b0452f30c6083b8eba3"
+      "local_sha256": "5cb56e2e856025728dffba5b2be33093b7cf40d09847556ac34683d9803e445a"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/stat-dialog.ts",
@@ -5525,6 +5539,158 @@
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "local_sha256": "d94ebe864be9009234d11abc16e8ba41458219dc8516243b1c38190e7e6dbb9d",
       "classification": "A"
+    },
+    {
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream": "packages/client/ui-chat/src/client/chat/RunningStatus.tsx",
+      "destination": "web-console/src/presentation/agent/RunningStatus.tsx",
+      "upstream_sha256": "a1b1a866e7c6a07ab4233f27fe186079f24bfec3478a7b326ef248d3bdfcb225",
+      "classification": "A",
+      "treatment": "Harness running indicator, whale animation and reduced-motion artwork. Clock and translation adapted to native rustX Turn facts.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../../locale/react",
+        "../primitives/TextShimmer",
+        "./Chat.module.css",
+        "./RunningWhaleTail",
+        "react"
+      ],
+      "excluded_dependencies": [
+        "Harness Session store and slot contracts"
+      ],
+      "local_sha256": "ce2058013adaa706761202a70b0a32a0794a366d33482c12be5f4668c97439e0"
+    },
+    {
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream": "packages/client/ui-chat/src/client/chat/RunningWhaleTail.tsx",
+      "destination": "web-console/src/presentation/agent/RunningWhaleTail.tsx",
+      "upstream_sha256": "0ddb0ab3819c0eb3b8a5ab96d8c3d5ada30771fa66d16e594faa5e552161905d",
+      "classification": "A",
+      "treatment": "Harness whale artwork retained unchanged; local stylesheet import adapted.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "./Chat.module.css"
+      ],
+      "excluded_dependencies": [
+        "Harness Session store and slot contracts"
+      ],
+      "local_sha256": "cf8f93d8082702e342191dd46dd8f70dffb68fc69dd575fcd072b01f15363d50"
+    },
+    {
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream": "packages/client/ui-chat/src/client/chat/running-whale@2x.png",
+      "destination": "web-console/src/presentation/agent/running-whale@2x.png",
+      "upstream_sha256": "0fd990d118113d19af7af4480f2b55d610b103451a08be6f7bf5a146823f8bd3",
+      "classification": "A",
+      "treatment": "Harness whale artwork retained unchanged; local stylesheet import adapted.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "Harness Session store and slot contracts"
+      ],
+      "local_sha256": "0fd990d118113d19af7af4480f2b55d610b103451a08be6f7bf5a146823f8bd3"
+    },
+    {
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream": "packages/client/ui-theme/src/client/FontSizeRow.module.css",
+      "destination": "web-console/src/app/settings/general/ConversationPreferences.module.css",
+      "classification": "B",
+      "treatment": "Font-size row and stepper reused for browser-owned conversation preferences; responsive row and selector styles added.",
+      "upstream_sha256": "f64c8437d6a46f279a7359e68655b88fa9d2376138e7af9297f19e5ec0548ba2",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [],
+      "local_sha256": "d8eb7159650158fbdbcc2a88b54496c2d5d37c2013260d072aafa67c5bac0e9b",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-chat/src/client/settings/PreferenceRow.module.css",
+          "upstream_sha256": "1e1d409eb08a85038358d116378493b62593dcbce71033334882da78b2cd0741",
+          "treatment": "Selector pill and chevron styling."
+        }
+      ]
+    },
+    {
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream": "packages/client/ui-theme/src/client/FontSizeRow.tsx",
+      "destination": "web-console/src/app/settings/general/ConversationPreferenceRows.tsx",
+      "classification": "B",
+      "treatment": "General settings font stepper, work-detail selector and coding-view switch adapted to browser-owned rustX preferences and existing presentation primitives.",
+      "upstream_sha256": "36dd81c778cf745a61c93ee28c9e3383c71510fcd2862c7fa7ae4bd125d1a3d2",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../../../locale/react",
+        "../../../presentation/primitives/Menu",
+        "../../../presentation/primitives/Switch",
+        "../../../presentation/primitives/icons",
+        "../../conversation-preferences",
+        "./ConversationPreferences.module.css",
+        "react"
+      ],
+      "excluded_dependencies": [],
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-chat/src/client/settings/PreferenceRow.tsx",
+          "upstream_sha256": "f16f2b1103247e918e5831340677dbb78c225a27697ca3025ae65cc2a2559979",
+          "treatment": "Settings row layout and selection interaction."
+        },
+        {
+          "upstream": "packages/client/ui-settings-general/src/client/DeveloperToolsRow.tsx",
+          "upstream_sha256": "826d5a0f4981770dd994a754a8c4fbf29819d3db11080311f7a465d74371446b",
+          "treatment": "Settings row layout and selection interaction."
+        }
+      ],
+      "local_sha256": "30aa7f9e4e64dc3ddc01c5ac65f44fc1463e138cf82e4aa04d430f8737b680e0"
+    },
+    {
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream": "packages/client/ui-subagent/src/client/SubagentHeaderLineage.tsx",
+      "destination": "web-console/src/app/agent/Subagents.tsx",
+      "classification": "B",
+      "treatment": "Compact header catalog, status dots, two-line entries and parent breadcrumb adapted to native durable Agent roster and agent/transcript; Harness session runtime and metrics projection excluded. Issue #456: general Model Profile selection fields and generated App Server v39 imports.",
+      "upstream_sha256": "a071eba1e77ee78bc4d7d90e0fd774f7242c200b4b39aa88f7424df41a95db4b",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../../../../protocol/app-server/v39",
+        "../../client/agent-meters",
+        "../../client/app-server",
+        "../../client/selectors",
+        "../../locale/react",
+        "../../presentation/agent/Conversation.module.css",
+        "../../presentation/primitives/Menu",
+        "../../presentation/primitives/StateDot",
+        "../../presentation/primitives/icons",
+        "../components/ActivityCards",
+        "./Subagents.module.css",
+        "./subagent-context",
+        "./token-format",
+        "react"
+      ],
+      "excluded_dependencies": [],
+      "local_sha256": "db908f0ff945e4c45ab498685e80520689437ee49fe14ef02266cb9c2934dbca"
+    },
+    {
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream": "packages/client/ui-subagent/src/client/SubagentHeaderLineage.module.css",
+      "destination": "web-console/src/app/agent/Subagents.module.css",
+      "classification": "B",
+      "treatment": "Compact header catalog, status dots, two-line entries and parent breadcrumb adapted to native durable Agent roster and agent/transcript; Harness session runtime and metrics projection excluded.",
+      "upstream_sha256": "888a73eb6014ee29cc2dd9f4e9692fb4719cfd62e8798af3009f1b2ec3d82609",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [],
+      "local_sha256": "71a34428e36706458fb6b8c69a253670d3b491adfe4478a7da4a3b662863f2a2"
+    },
+    {
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream": "packages/client/ui-settings-models/src/client/ModelsSection.module.css",
+      "destination": "web-console/src/app/settings/mcp/McpPage.module.css",
+      "upstream_sha256": "0de105abac343887fbea8508fc0e20b6903505a3f689dd05b1125ff02886e801",
+      "local_sha256": "64c372df486b7fe157c335f74f8715af0aa99ecac1880d70121e93cb3a977a56",
+      "classification": "B",
+      "treatment": "MCP catalog and editor adapt Harness settings materials, compact typography, card spacing, inset editor and disclosure; shared rustX Button geometry and settings container sizing. Scope-local configuration observation; native capability generations retain execution ownership.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": []
     },
     {
       "upstream": "packages/client/ui-deliverables/src/client/PresentRow.tsx",

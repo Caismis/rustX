@@ -6763,3 +6763,216 @@ async fn explicit_node_switch_commits_aba_ownership_and_coalesces_exact_retireme
     })
     .await;
 }
+
+// Real Route, Controller and Runtime Manager evidence for browser switch policy.
+async fn switch_fixture(
+    f: &Fixture,
+) -> (
+    std::sync::Arc<AppServerConnection>,
+    AttachmentTarget,
+    crate::local_runtime::session::SessionSnapshot,
+) {
+    use crate::durable::{ConversationStore, SqliteConversationStore};
+    use crate::local_runtime::session::LineageSide;
+    use crate::message::TextBlock;
+    use crate::message::types::{
+        InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+    };
+    use crate::runtime::identity::MessageId;
+    let source = &f.sessions[0];
+    let controller = f.manager.session_controller();
+    let access = controller.acquire_session(&source.id, None).await.unwrap();
+    let store =
+        SqliteConversationStore::open(source.active_conversation_id.clone(), &access.database_path)
+            .unwrap();
+    store
+        .append_canonical(&MessageBlock::User(UserMessageBlock {
+            id: MessageId::new("ownership-seed"),
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            timestamp: None,
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: "ownership seed".into(),
+            })],
+        }))
+        .unwrap();
+    let revision = store.load_head().unwrap().revision;
+    drop(store);
+    drop(access);
+    let connection = std::sync::Arc::new(AppServerConnection::new(f.host.clone()));
+    initialize(&connection).await;
+    let target_a = attach(&connection, f, 0).await;
+    let MethodResult::SessionTransition {
+        session: branch, ..
+    } = call(
+        &connection,
+        8000,
+        Method::SessionBranch {
+            session_id: source.id.clone(),
+            node_id: source.active_node.clone(),
+            surface_revision: revision,
+            boundary: MessageId::new("ownership-seed"),
+            side: LineageSide::Before,
+        },
+    )
+    .await
+    else {
+        panic!("branch committed")
+    };
+    // Branch authors B and selects it. Restore A before switch so this test
+    // proves switch itself commits selection, not merely an earlier branch.
+    controller
+        .set_current_node(&source.id, &source.active_node)
+        .await
+        .unwrap();
+    (connection, target_a, branch)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn switch_residency_settlement_survives_failure_and_lost_acknowledgement() {
+    bounded(async {
+        use crate::local_runtime::session_runtime_manager::ResidencyState;
+        use std::sync::atomic::Ordering;
+        for outcome in ["success", "composition_failure", "lost_ack"] {
+            let f = Fixture::new().await;
+            let (connection, target_a, branch) = switch_fixture(&f).await;
+            let probe = f.manager.probe(&branch.active_conversation_id);
+            probe.before_compose.arm();
+            if outcome == "composition_failure" {
+                probe.fail_compose_once.store(true, Ordering::SeqCst);
+            }
+            let pending = connection.clone();
+            let original = target_a.clone();
+            let node_id = branch.active_node.clone();
+            let work = tokio::spawn(async move {
+                pending
+                    .handle_request(Request {
+                        jsonrpc: JsonRpcVersion::V2,
+                        id: RequestId::Integer(8100),
+                        call: Method::SessionSwitchNode {
+                            target: original,
+                            node_id,
+                        },
+                    })
+                    .await
+            });
+            probe.before_compose.entered().await;
+            // This barrier is after unload and catalog selection, before B is
+            // resident. Missing browser target cannot describe this transition.
+            assert_eq!(
+                f.manager.residency(&target_a.conversation_id),
+                ResidencyState::Unloaded
+            );
+            assert_eq!(
+                f.manager.residency(&branch.active_conversation_id),
+                ResidencyState::Loading
+            );
+            assert_eq!(
+                f.manager
+                    .session_controller()
+                    .read_session_summary(&branch.id)
+                    .await
+                    .unwrap()
+                    .active_node,
+                branch.active_node
+            );
+            assert_eq!(connection.attachment_counts(), (1, 0));
+            assert_eq!(f.host.diagnostics().external_attachments, 1);
+            // Retained Route identity cannot execute against the unloaded A.
+            assert_eq!(
+                rejected(
+                    &connection,
+                    Method::TurnStart {
+                        target: target_a.clone(),
+                        content: vec![UserInputBlock::Text(crate::message::TextBlock {
+                            text: "must not execute".into()
+                        })],
+                    }
+                )
+                .await,
+                ErrorData::StaleRuntime,
+            );
+            // Even another connection cannot bypass in-progress B residency.
+            let inspector = AppServerConnection::new(f.host.clone());
+            initialize(&inspector).await;
+            assert_eq!(
+                rejected(
+                    &inspector,
+                    Method::SessionAttach {
+                        session_id: branch.id.clone(),
+                        node_id: Some(f.sessions[0].active_node.clone()),
+                    }
+                )
+                .await,
+                ErrorData::OperationFailed
+            );
+            if outcome == "lost_ack" {
+                connection.close();
+            }
+            probe.before_compose.release();
+            let response = work.await.unwrap();
+            if outcome == "composition_failure" {
+                assert!(matches!(response, Response::Failure(_)), "{response:?}");
+                assert_eq!(
+                    f.manager.residency(&branch.active_conversation_id),
+                    ResidencyState::Unloaded
+                );
+            } else {
+                assert!(matches!(response, Response::Success(_)), "{response:?}");
+                assert_eq!(
+                    f.manager.residency(&branch.active_conversation_id),
+                    ResidencyState::Loaded
+                );
+            }
+            assert_eq!(connection.attachment_counts(), (0, 0));
+            assert_eq!(f.host.diagnostics().external_attachments, 0);
+            assert_eq!(probe.compositions.load(Ordering::SeqCst), 1);
+            let MethodResult::Session { session } = call(
+                &inspector,
+                8101,
+                Method::SessionRead {
+                    session_id: branch.id.clone(),
+                },
+            )
+            .await
+            else {
+                panic!("native selection")
+            };
+            assert_eq!(session.active_node, branch.active_node);
+            assert_eq!(
+                session.active_conversation_id,
+                branch.active_conversation_id
+            );
+            if outcome != "lost_ack" {
+                assert_eq!(
+                    rejected(
+                        &connection,
+                        Method::SessionSnapshot {
+                            target: target_a,
+                            trace_records: vec![]
+                        }
+                    )
+                    .await,
+                    ErrorData::StaleAttachment
+                );
+            }
+            // Explicit recovery uses observed B. It does not replay switch or
+            // invent A's retired Route, including after composition failure.
+            let target_b = attach(&inspector, &f, 0).await;
+            assert_eq!(target_b.conversation_id, branch.active_conversation_id);
+            assert_eq!(inspector.attachment_counts(), (1, 0));
+            assert_eq!(f.host.diagnostics().external_attachments, 1);
+            call(&inspector, 8102, Method::SessionDetach { target: target_b }).await;
+            assert_eq!(f.host.diagnostics().external_attachments, 0);
+            assert_eq!(
+                f.manager.residency(&branch.active_conversation_id),
+                ResidencyState::Loaded
+            );
+            assert!(f.provider.request_bodies().is_empty());
+            inspector.close();
+            connection.close();
+            f.close().await;
+        }
+    })
+    .await;
+}

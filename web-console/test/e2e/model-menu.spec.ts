@@ -6,7 +6,7 @@ for (const width of [1440, 390]) test(`saved conversation model menu keeps compo
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(fixture);
-  await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.resumeCatalog(); });
+  await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.hold('session/models'); f.resumeCatalog(); });
   await page.locator('button[data-session-id=A]').click();
   await page.evaluate(() => (window as any).startupFixture.release('session/attach'));
   const trigger = page.getByRole('button', { name: 'Model and profile' });
@@ -21,23 +21,24 @@ for (const width of [1440, 390]) test(`saved conversation model menu keeps compo
     });
   }
   await expect(page.getByText(/Saved message 19:/)).toBeVisible();
-  await page.evaluate(() => (window as any).startupFixture.hold('session/models'));
+  await expect.poll(() => page.evaluate(() => (window as any).startupFixture.requests().filter((request: any) => request.method === 'session/models').length)).toBe(1);
+  await page.evaluate(() => (window as any).startupFixture.release('session/models'));
+  expect(await page.evaluate(() => (window as any).startupFixture.requests().filter((request: any) => request.method === 'session/model' || request.method === 'session/snapshot').length)).toBe(0);
   const geometry = () => page.locator('textarea').evaluate(element => {
     const rect = element.getBoundingClientRect();
-    const scroll = document.querySelector('.conversation-scroll')!;
+    const scroll = document.querySelector('[data-conversation-scroll]')!;
     return { x: rect.x, y: rect.y, height: rect.height, scroll: scroll.scrollTop };
   });
   const before = await geometry();
   for (let opening = 0; opening < 3; opening++) {
     await trigger.click();
-    await expect(page.getByText('Reading native models…')).toBeVisible();
+    await expect(page.getByText('Reading native models…')).toHaveCount(0);
     expect(await geometry()).toEqual(before);
     await expect(trigger).toBeEnabled();
     await trigger.click();
     await expect(page.getByRole('menu')).toHaveCount(0);
     await trigger.click();
-    await expect(page.getByText('Reading native models…')).toBeVisible();
-    await page.evaluate(() => (window as any).startupFixture.release('session/models'));
+    await expect(page.getByText('Reading native models…')).toHaveCount(0);
     await expect(page.getByText('Reading native models…')).toHaveCount(0);
     await expect(page.getByRole('menuitem', { name: 'Model', exact: true })).toBeVisible();
     expect(await geometry()).toEqual(before);
@@ -52,6 +53,6 @@ for (const width of [1440, 390]) test(`saved conversation model menu keeps compo
     expect(await geometry()).toEqual(before);
   }
   const reads = await page.evaluate(() => (window as any).startupFixture.requests().filter((request: any) => request.method === 'session/models').length);
-  expect(reads).toBe(3);
+  expect(reads).toBe(1);
   expect(errors).toEqual([]);
 });

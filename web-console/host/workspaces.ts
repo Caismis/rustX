@@ -325,7 +325,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   }
   async resolveWorkspace(id: string, endpoint: string) { this.route(endpoint); return { cwd: this.cwd(this.registered(id).location) }; }
   async configureWorkspace(id: string, endpoint: string, operation: WorkspaceConfigurationOperation): Promise<WorkspaceConfigurationResult> {
-    return this.lane(id, async () => {
+    const run = async (): Promise<WorkspaceConfigurationResult> => {
       const { cwd } = await this.resolveWorkspace(id, endpoint);
       if (!this.config.transportToken) throw new Error('Workspace Host has no native configuration connection');
       const transport = await WebSocketTransport.connect({ endpoint: this.config.endpoint, token: this.config.transportToken });
@@ -354,7 +354,8 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
         if ((await this.resolveWorkspace(id, endpoint)).cwd !== cwd) throw new Error('Workspace authority changed');
         return { kind: operation.kind, projection: result.projection };
       } finally { await client.close(); }
-    });
+    };
+    return this.lane(id, run);
   }
   async classifyLocations(cwds: readonly string[], endpoint: string, authorityId?: string): Promise<SessionLocation[]> {
     this.route(endpoint);

@@ -12,7 +12,8 @@ test('durable Agent detail remains selected through interruption and resume; Job
   await agent.getByRole('button', { name: 'Transcript', exact: true }).click();
   await expect(agent.getByRole('heading', { name: 'Final report' })).toBeVisible();
   await agent.getByRole('button', { name: 'Interrupt', exact: true }).click();
-  await expect(agent.getByText('Inactive', { exact: true })).toBeVisible();
+  await expect(agent).toHaveAttribute('data-agent-state', 'inactive');
+  await expect(agent.getByRole('status').filter({ hasText: /^cancelled$/ })).toBeVisible();
   await agent.getByRole('textbox', { name: 'Message Agent Worker' }).fill('Continue reviewing');
   await agent.getByRole('button', { name: 'Send message', exact: true }).click();
   await expect(agent).toHaveAttribute('data-activation-id', 'activation-b');

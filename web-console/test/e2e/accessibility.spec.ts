@@ -4,7 +4,7 @@ import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { openEmptySession, selectedSettingsPage, settingsSectionMenu } from './shell-actions';
 
-const settingsPageOrder = ['General', 'Models', 'Agent', 'Tools & Permissions', 'Extensions', 'Advanced'];
+const settingsPageOrder = ['General', 'Models', 'Agent', 'Tools & Permissions', 'MCP servers', 'Extensions', 'Advanced'];
 
 for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and editor reachability at ${width}px`, async ({ page }) => {
   const fixture = await startDogfood();
@@ -79,7 +79,7 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     await tabTo(message); await page.keyboard.type('/mdl');
     await expect(page.getByRole('option', { name: /Model/ })).toBeVisible();
     await page.keyboard.press('Enter');
-    const dialog = page.getByRole('dialog', { name: '/model', exact: true }); await expect(dialog).toBeVisible();
+    const dialog = page.getByRole('listbox', { name: 'Model', exact: true }); await expect(dialog).toBeVisible();
     await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0); await expect(message).toBeFocused();
     // The composer paints keyboard focus on its rounded card, not a second
     // rectangular outline around the native text scrollport.
@@ -110,7 +110,7 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     await page.keyboard.press('Escape'); await expect(page.getByRole('listbox')).toHaveCount(0);
     await expect(credential).toBeFocused();
     // A disclosure toggles from the keyboard.
-    const revision = settings.getByRole('button', { name: 'Source revision & replacement', exact: true });
+    const revision = settings.getByRole('button', { name: 'Configuration details', exact: true });
     await tabTo(revision); await page.keyboard.press('Enter');
     await expect(revision).toHaveAttribute('aria-expanded', 'true');
     // A destructive action opens a modal confirmation that holds focus, is
@@ -125,14 +125,10 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     await page.keyboard.press('Escape');
     await expect(confirmation).toHaveCount(0); await expect(remove).toBeFocused();
     await expect(endpoint).toHaveValue(/\/draft-only$/);
-    // Across pages to Extensions, then the extension-kind filter, all from
-    // the keyboard.
-    await keyboardPage('Extensions');
-    const filterTab = (name: string) => settings.getByRole('tablist', { name: 'Extension kinds' }).getByRole('tab', { name, exact: true });
-    await tabTo(filterTab('All')); await page.keyboard.press('ArrowRight');
-    await expect(filterTab('MCP')).toHaveAttribute('aria-selected', 'true');
-    await tabTo(settings.getByLabel('New MCP identity')); await page.keyboard.type('keyboard-draft');
-    await tabTo(settings.getByRole('button', { name: 'Add MCP', exact: true })); await page.keyboard.press('Enter');
+    // The dedicated MCP page and create flow are keyboard reachable.
+    await keyboardPage('MCP servers');
+    await tabTo(settings.getByRole('button', { name: '＋ New', exact: true })); await page.keyboard.press('Enter');
+    await tabTo(settings.getByLabel('Name', { exact: true })); await page.keyboard.type('keyboard-draft');
     await tabTo(settings.getByLabel('MCP command', { exact: true })); await page.keyboard.type('inert-draft');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     expect(await page.locator('main').evaluate(el => getComputedStyle(el.parentElement!).transitionDuration)).toBe('0s');

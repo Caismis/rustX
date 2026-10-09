@@ -31,16 +31,16 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await expect(facts).toContainText(/"ConversationId": "conv_/);
     const originalId = JSON.parse(await facts.innerText()).SessionId as string;
     const originalConversation = JSON.parse(await facts.innerText()).ConversationId as string;
-    await message.fill('/model'); await expect(page.getByRole('option', { name: 'Model model', exact: true })).toBeVisible(); await message.press('Enter');
-    let popup = page.getByRole('dialog', { name: '/model', exact: true });
-    await popup.getByLabel('Filter options').fill('second');
+    await message.fill('/model');
+    let popup = page.locator('[data-model-picker]');
+    await popup.getByRole('combobox', { name: 'Search models…' }).fill('second');
     await popup.getByRole('option', { name: /fixture\/second-model/ }).click();
     await expect(popup).toHaveCount(0); await expect(message).toHaveValue('');
     await expect(facts).toContainText('fixture/second-model');
     popup = await command('tools');
     await expect(message).toHaveValue(''); await expect(popup).toBeVisible();
     await popup.getByRole('button', { name: 'Close dialog' }).click();
-    popup = await command('model'); await popup.getByLabel('Filter options').press('Escape');
+    await message.fill('/model'); popup = page.locator('[data-model-picker]'); await popup.getByRole('combobox', { name: 'Search models…' }).press('Escape');
     await expect(popup).toHaveCount(0); await expect(message).toBeFocused();
     await expect(message).toHaveValue('/model');
     await connectionAction(page, 'Reconnect');
@@ -86,7 +86,7 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
       expect(JSON.parse(await facts.innerText()).SessionId).toBe(originalId);
       expect(JSON.parse(await facts.innerText()).ConversationId).not.toBe(originalConversation);
       await expect(page.getByLabel('Session status')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: /^Deep diving/ }).first()).toBeVisible();
+    await expect(page.getByRole('status').filter({ hasText: 'Deep diving' }).first()).toBeVisible();
       await expect(page.getByText('Regenerated native answer', { exact: true })).toHaveCount(0);
     });
     phase = 'validated retry request reached; awaiting provider output and canonical settlement';
@@ -150,7 +150,7 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await expect(page.getByRole('dialog', { name: 'Turn usage', exact: true })).toBeVisible();
     await page.screenshot({ path: 'test-results/turn-usage-mobile.png' });
     await page.keyboard.press('Escape');
-    popup = await command('model'); await expect(popup.getByRole('option', { name: /fixture\/second-model/ })).toBeVisible();
+    await message.fill('/model'); popup = page.locator('[data-model-picker]'); await expect(popup.getByRole('option', { name: /fixture\/second-model/ })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: 'test-results/commands-selector-mobile.png' });
     expect(errors).toEqual([]); passed = true;

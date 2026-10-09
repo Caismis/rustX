@@ -183,6 +183,13 @@ export type Request1 =
       };
     }
   | {
+      method: 'agent/statistics';
+      params: {
+        target: AttachmentTarget;
+        agent_id: AgentId;
+      };
+    }
+  | {
       method: 'agent/sendMessage';
       params: {
         target: AttachmentTarget;
@@ -265,6 +272,30 @@ export type Request1 =
         node_id?: SessionNodeId | null;
         at: ConversationWindowAt;
         limit: number;
+      };
+    }
+  | {
+      method: 'session/traceHistory';
+      params: {
+        session_id: SessionId;
+        node_id?: SessionNodeId | null;
+        before?: TraceCursor | null;
+        limit: number;
+      };
+    }
+  | {
+      method: 'session/traceHistoryDetail';
+      params: {
+        session_id: SessionId;
+        node_id?: SessionNodeId | null;
+        record_id: string;
+      };
+    }
+  | {
+      method: 'session/statistics';
+      params: {
+        session_id: SessionId;
+        node_id?: SessionNodeId | null;
       };
     }
   | {
@@ -1092,6 +1123,22 @@ export type MethodResult =
       type: 'session_history';
     }
   | {
+      conversation_id: ConversationId;
+      statistics: ConversationStatistics;
+      occupancy?: ContextOccupancy | null;
+      type: 'session_statistics';
+    }
+  | {
+      conversation_id: ConversationId;
+      page: TracePage;
+      type: 'session_trace_history';
+    }
+  | {
+      conversation_id: ConversationId;
+      detail?: TraceDetail | null;
+      type: 'session_trace_history_detail';
+    }
+  | {
       window: ConversationWindow;
       type: 'transcript_window';
     }
@@ -1118,6 +1165,10 @@ export type MethodResult =
   | {
       agent: RuntimeClientAgent;
       type: 'agent';
+    }
+  | {
+      metrics: AgentStatistics;
+      type: 'agent_statistics';
     }
   | {
       agents: RuntimeClientAgent[];
@@ -7700,6 +7751,32 @@ export interface RuntimeClientWorkspaceHandoff {
    * `head_commit` and `base_commit`.
    */
   dirty: boolean;
+}
+export interface AgentStatistics {
+  statistics: ConversationStatistics;
+  occupancy?: ContextOccupancy | null;
+  duration: AgentDuration;
+}
+export interface AgentDuration {
+  /**
+   * Sum of this child's closed working intervals, excluding inactive gaps.
+   */
+  settled_ms: string;
+  /**
+   * Last interval, if its terminal event has not been observed.
+   */
+  active?: AgentActiveInterval | null;
+}
+export interface AgentActiveInterval {
+  started_at: string;
+  /**
+   * Last durable evidence. Non-running children freeze here, including recovery.
+   */
+  observed_at: string;
+  /**
+   * Authoritative live lifecycle, never inferred from a missing terminal.
+   */
+  running: boolean;
 }
 /**
  * User-recoverable facts about the project workspace authority of one

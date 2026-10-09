@@ -155,6 +155,14 @@ pub(crate) fn decorate_through(
     decorate_projection(store, page, through, None)
 }
 
+/// Read whole-conversation usage independently of runtime/resource initialization.
+pub(crate) fn statistics(
+    store: &dyn ConversationStore,
+    through: u64,
+) -> Result<ConversationStatistics, ConversationStoreError> {
+    Ok(project(store, &BTreeSet::new(), &BTreeSet::new(), through, None)?.statistics)
+}
+
 pub(crate) fn decorate_window(
     store: &dyn ConversationStore,
     page: &mut RuntimeClientTranscriptPage,

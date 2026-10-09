@@ -609,3 +609,21 @@ model = "vision"
 [agent.tools]
 builtin = ["read", "read_image", "bash"]
 ```
+
+### MCP settings observation
+
+Settings opening, closing, scope switching and refresh only inspect sources.
+They never connect, reconnect or disconnect an MCP server. The existing native
+capability generation owner remains the only runtime connection owner. Native
+prospective preparation and Root selection are separate from admitted runtime
+state; absent live connection evidence is explicitly not observed.
+
+Ordinary `configuration/sourceWrite` rejects new literal MCP environment/header
+values. Use `sensitive_env` / `sensitive_headers` environment references instead.
+Existing literals may be retained by key or removed, on the exact source revision;
+replacing them requires editing through the native source owner, outside the Web
+configuration protocol. No Host credential-writing API is introduced.
+
+The earlier trust-gate planning in issues #303/#312 predates accepted CFG3:
+there is no native Workspace trust gate. Product Host Workspace authorization
+remains distinct from native whole-entry User/Workspace precedence.

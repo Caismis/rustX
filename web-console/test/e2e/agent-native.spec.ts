@@ -39,6 +39,9 @@ test('native interrupt and wait capture one activation; the same Agent resumes w
     expect(parentIndex).toBeDefined();
     const parentGate = `agent-initial-${parentIndex - 1}`;
     const childGate = `agent-initial-${2 - parentIndex}`;
+    const parentTitle = await page.locator('#session-title').innerText();
+    await page.getByRole('button', { name: 'Subagents', exact: true }).click();
+    await page.getByRole('menuitem', { name: /reviewer/ }).click();
     const agent = page.locator('[data-agent-id]');
     await expect(agent).toHaveCount(1);
     await expect(agent).toHaveAttribute('data-agent-state', 'active');
@@ -49,7 +52,7 @@ test('native interrupt and wait capture one activation; the same Agent resumes w
     await agent.getByRole('button', { name: 'Wait for activation', exact: true }).click();
     await agent.getByRole('button', { name: 'Interrupt', exact: true }).click();
     await expect(agent).toHaveAttribute('data-agent-state', 'inactive');
-    await expect(agent.getByText(`Activation ${first}: cancelled.`, { exact: true })).toBeVisible();
+    await expect(agent.getByRole('status').filter({ hasText: /^cancelled$/ })).toBeVisible();
     await initialSettlements;
     expect(settlements.filter(row => row.result.activation_id === first)).toHaveLength(2);
     expect(settlements).toEqual(expect.arrayContaining(['agent/wait', 'agent/interrupt'].map(method => ({
@@ -69,10 +72,11 @@ test('native interrupt and wait capture one activation; the same Agent resumes w
     expect(second).not.toBe(first);
     await agent.getByRole('button', { name: 'Wait for activation', exact: true }).click();
     await fixture.release('agent-resumed');
-    await expect(agent.getByText(`Activation ${second}: succeeded.`, { exact: true })).toBeVisible();
+    await expect(agent.getByRole('status').filter({ hasText: /^succeeded$/ })).toBeVisible();
     await expect(agent.getByText('Resumed canonical child report.', { exact: true })).toBeVisible();
     await expect(agent).toHaveCount(1);
     await expect(agent.getByRole('alert')).toHaveCount(0);
+    await page.getByRole('button', { name: parentTitle, exact: true }).click();
     await fixture.release(parentGate);
     await expect(page.getByText('Parent received the resumed child report.', { exact: true })).toBeVisible();
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
