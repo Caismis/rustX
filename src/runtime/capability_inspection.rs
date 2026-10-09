@@ -446,7 +446,7 @@ mod tests {
     #[test]
     fn cfg275_wire_fixture_preserves_native_tags_and_order() {
         let value: serde_json::Value = serde_json::from_str(include_str!(
-            "../../tests/fixtures/runtime-client/capabilities-v39.json"
+            "../../tests/fixtures/runtime-client/capabilities-v38.json"
         ))
         .unwrap();
         let inspection: CapabilityInspection = serde_json::from_value(value.clone()).unwrap();

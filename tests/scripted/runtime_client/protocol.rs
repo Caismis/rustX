@@ -430,7 +430,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
             requested: 24,
         })
     ));
-    // v39's GoalView still has `armed`, so it could represent an Active Goal
+    // v38's GoalView still has `armed`, so it could represent an Active Goal
     // that is not actually authorized to continue. Issue #351 removed that
     // member; the prior version is refused, not shimmed.
     assert!(matches!(

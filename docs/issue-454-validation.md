@@ -102,7 +102,7 @@ the cancellation test fails ("never admitted"). With the interaction abort remov
 the app retirement test fails on overlay replacement. With the raw `Input` and raw
 prefill, the hostile-name test fails on ESC/CSI.
 
-The protocol stays v39: v39 is introduced by this unmerged PR, and main is v37.
+The protocol stays v38: v38 is introduced by this unmerged PR, and main is v37.
 
 ## Save publication repair
 

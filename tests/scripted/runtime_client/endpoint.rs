@@ -214,11 +214,11 @@ async fn unsupported_protocol_version_is_a_correlated_typed_error() {
     assert_eq!(response["error"]["requested"], 33);
     assert_eq!(adapter.endpoint.attachment_id(), None);
 
-    // v39 is an earlier contract. Its `GoalView` carries the
+    // v38 is an earlier contract. Its `GoalView` carries the
     // obsolete `armed` member, so it can spell `Active + disarmed` — a state
     // that no longer exists (Issue #351). It is refused by strict negotiation
     // rather than served a view it would misread.
-    let response = adapter.exchange(r#"{"method":"initialize","id":38,"protocol_version":39}"#);
+    let response = adapter.exchange(r#"{"method":"initialize","id":38,"protocol_version":38}"#);
     assert!(response.get("result").is_none());
     assert_eq!(response["error"]["type"], "unsupported_protocol_version");
     assert_eq!(

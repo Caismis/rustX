@@ -24,7 +24,7 @@ The prior `a4a2cad` atomic-overlay checkpoint is retained in this branch.
 | Generation | `ConversationRuntime` coordinator owns an immutable `RuntimeResourceSnapshot` containing `RuntimeConfiguration`, catalog, bindings, policy, profiles and prepared capabilities. |
 | Session | `SessionPersistentState { cwd, model }`: Workspace selection and optional explicit model intent only. |
 | Authoring CAS | `configuration/settings.rs` and native source lock/revision primitives; canonical whole-document TOML writer, no browser merge. |
-| Protocol | App Server v6, generated from Rust; source/effective/write/reload operations, typed reload errors. Internal projection protocol v39 remains a separate native boundary. |
+| Protocol | App Server v6, generated from Rust; source/effective/write/reload operations, typed reload errors. Internal projection protocol v38 remains a separate native boundary. |
 | Clients | TUI calls native commands; Web owns presentation/drafts with Effective/User/Workspace. Both reconstruct observations without replaying Save/Reload. |
 | Storage | `SessionCatalog`, `runtime::local_storage`, typed UUIDv7 identities, explicit ordinals, one SQLite DB per Conversation. |
 | Tool output | `ManagedToolOutput`, Conversation-owned results/tasks, UUID names, create-new/no-overwrite, no TTL or OS-temp stable locator. |
