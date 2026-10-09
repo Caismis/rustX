@@ -291,9 +291,9 @@ enum Resolved {
 #[derive(Default)]
 pub(crate) struct Revocations {
     order: RwLock<()>,
-    /// Set when a revocation found a publication in progress and waited.
+    /// How many revocations found a publication in progress and waited.
     #[cfg(test)]
-    pub(crate) waited: tokio::sync::watch::Sender<bool>,
+    pub(crate) waited: tokio::sync::watch::Sender<usize>,
 }
 impl std::fmt::Debug for Revocations {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -307,7 +307,7 @@ impl Revocations {
     pub(crate) fn revoke<T>(&self, revoke: impl FnOnce() -> T) -> T {
         #[cfg(test)]
         if self.order.try_write().is_err() {
-            self.waited.send_replace(true);
+            self.waited.send_modify(|waited| *waited += 1);
         }
         let _exclusive = self.order.write().expect("delivery revocations");
         revoke()

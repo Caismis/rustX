@@ -105,22 +105,21 @@ impl AppServerHost {
         &self,
         credential: Option<super::transport::websocket::Credential>,
     ) {
-        let previous = std::mem::replace(
-            &mut *self.0.product_host.lock().expect("Product Host authority"),
+        self.rotate(
+            &self.0.product_host,
             credential.map(super::product_host::Authority::new),
+            #[cfg(test)]
+            || {},
         );
-        self.revocations().revoke(|| drop(previous));
     }
-    pub(super) fn authenticate_product_host(
+    pub(crate) fn authenticate_product_host(
         &self,
         offered: &[&str],
     ) -> Option<tokio_util::sync::CancellationToken> {
-        self.0
-            .product_host
-            .lock()
-            .expect("Product Host authority")
-            .as_ref()?
-            .authenticate(offered)
+        let authority = self.0.product_host.lock().expect("credential slot");
+        #[cfg(test)]
+        self.0.file_read_probe.authenticating.enter();
+        authority.as_ref()?.authenticate(offered)
     }
     /// Native process composition only, like the Product Host credential.
     /// Replacing or removing it revokes every connection it admitted.
@@ -128,11 +127,49 @@ impl AppServerHost {
         &self,
         credential: Option<super::transport::websocket::Credential>,
     ) {
-        let previous = std::mem::replace(
-            &mut *self.0.delivery_access.lock().expect("delivery access"),
+        #[cfg(test)]
+        let installed = {
+            let (probe, installed) = (self.0.file_read_probe.clone(), credential.clone());
+            move || probe.rotations.record(installed)
+        };
+        self.rotate(
+            &self.0.delivery_access,
             credential.map(super::delivery_access::Grant::new),
+            #[cfg(test)]
+            installed,
         );
-        self.revocations().revoke(|| drop(previous));
+    }
+    /// One authority transition of a credential slot, linearized in the
+    /// exclusive side of [`Self::revocations`] and the slot's own mutex.
+    ///
+    /// Holding both, the previous authority is dropped, which cancels its
+    /// token and so every connection or socket token it minted, and `next`
+    /// is installed. Authentication takes only the slot's mutex, so it sees
+    /// the slot before the transition (its token is then cancelled by it) or
+    /// after, never between. No publication is between its decision and its
+    /// acceptance meanwhile, so one either completed before the transition
+    /// or decides after it with the old tokens cancelled. Transitions take
+    /// the exclusive side one at a time, in one total order.
+    ///
+    /// Lock order: the revocation order, then the slot. Nothing takes the
+    /// slot and then the revocation order, and cancelling a token runs no
+    /// code of ours.
+    fn rotate<T>(
+        &self,
+        slot: &Mutex<Option<T>>,
+        next: Option<T>,
+        #[cfg(test)] installed: impl FnOnce(),
+    ) {
+        self.revocations().revoke(|| {
+            #[cfg(test)]
+            if slot.try_lock().is_err() {
+                self.0.file_read_probe.credential_waited.send_replace(true);
+            }
+            let mut current = slot.lock().expect("credential slot");
+            drop(std::mem::replace(&mut *current, next));
+            #[cfg(test)]
+            installed();
+        });
     }
     /// Orders every revocation of delivery authority against publication.
     pub(crate) fn revocations(&self) -> &Arc<super::delivery_access::Revocations> {
@@ -140,7 +177,7 @@ impl AppServerHost {
     }
     /// `Ok(None)`: no delivery credential was offered. An offered credential
     /// that does not authenticate fails the whole handshake closed.
-    pub(super) fn authenticate_delivery_access(
+    pub(crate) fn authenticate_delivery_access(
         &self,
         offered: &[&str],
     ) -> Result<Option<tokio_util::sync::CancellationToken>, ()> {
@@ -150,10 +187,10 @@ impl AppServerHost {
         {
             return Ok(None);
         }
-        self.0
-            .delivery_access
-            .lock()
-            .expect("delivery access")
+        let grant = self.0.delivery_access.lock().expect("credential slot");
+        #[cfg(test)]
+        self.0.file_read_probe.authenticating.enter();
+        grant
             .as_ref()
             .and_then(|grant| grant.authenticate(offered))
             .map(Some)

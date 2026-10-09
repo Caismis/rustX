@@ -38,7 +38,11 @@ message. The step holds the request's state lock and the shared side of the host
 revocation order. `delivery/cancel` (only for that connection's own id) takes the
 state lock. Every revocation of delivery authority (credential replacement or
 removal, connection revocation and drain, close, attachment detach, Product Host
-disconnect or replacement) runs in the order's exclusive side. So a cancellation or
+disconnect or replacement) runs in the order's exclusive side. Replacing or removing
+the delivery or Product Host credential is one transition: under that exclusive side
+and the credential slot's mutex, the previous grant is dropped, cancelling every token
+it minted, and the next is installed. Authentication, which takes only the slot's
+mutex, sees one side of it, and concurrent rotations take one total order. So a cancellation or
 revocation that completes before the acceptance prevents that response from
 publishing bytes or a native path, including while the transport is backpressured.
 One that overlaps the step waits for the acceptance and is ordered after it. Neither

@@ -170,8 +170,34 @@ non-suspending transport poll, and the exclusive side covers a token cancellatio
 or an attachment detach. Publications share the order, so they never wait for one
 another, only briefly for a revocation in progress. The lock order is fixed: the
 WebSocket stream, then the revocation order, then the request's state. Revocations
-take the connection's route table before the revocation order and never take
-either of the others. No path takes them in another order. A Session runtime
+take the connection's route table before the revocation order, and a credential
+slot after it, and never take the stream or a request's state. Authentication
+takes only a credential slot. No path takes them in another order.
+
+**Credential rotation.** The WebSocket delivery credential and the Product Host
+credential each live in one slot owned by `AppServerHost`, and only
+`bind_delivery_access` / `bind_product_host` change it, through one transition
+(`AppServerHost::rotate`). The transition takes the exclusive side of the
+revocation order, then the slot's mutex. Holding both, it drops the previous
+grant, which cancels its token and so every connection or socket token it
+minted, and installs the next one, or none. That critical section is the
+rotation's linearization point, for every observer:
+
+- **Authentication** takes only the slot's mutex, so it sees the slot before
+  the transition or after it, never between. A token minted before it is a
+  child of the previous grant and is cancelled by it. After it, only the new
+  credential authenticates, and after a removal nothing does.
+- **Publication** holds the shared side across its decision and acceptance, so
+  the lock orders it against the transition. If the publication holds the
+  shared side first, the rotation waits until the transport has accepted it,
+  and it stands. If the rotation holds the exclusive side first, the
+  publication decides after it, with the old tokens cancelled, and a success
+  is replaced by its typed failure.
+- **Concurrent rotations** take the exclusive side one at a time, so they have
+  one total order, and the slot ends in the state of the last one.
+
+Neither lock spans a suspension. Cancelling a token wakes waiters but runs none of
+the App Server's code, so it cannot re-enter either lock. A Session runtime
 ending its residency is not a revocation; an attached route pins residency until
 after its detach.
 
@@ -259,7 +285,8 @@ Registration-root changes synchronously abort the Host's owned reads after the
 metadata commit; later operations rebuild policy from the current registrations.
 Host close/replacement and caller disconnect abort too. Rename/reorder alone keep
 the same file policy. Socket disconnect, process shutdown, or native credential
-replacement/removal cancels captured native authority. Credential replacement is a
+replacement/removal cancels captured native authority, as one transition (see
+credential rotation above). Credential replacement is a
 native owner seam, never a public RPC; a restarted native process uses a new secret.
 
 ### Native fences and containment (both callers)

@@ -700,6 +700,52 @@ Negative controls, each applied alone from a byte-checked backup and restored (s
 | D. A dispatched link's `ENOENT` is a definite refusal again | test 13 (case 4), test 3 and test 9 fail. |
 | E. The preflight lets the link decide for an uninspectable destination | test 13 (`ENAMETOOLONG`, no link dispatched) fails. |
 
+## Atomic credential rotation repair
+
+The review of `432dcc14` found that credential rotation was not one transition.
+This section supersedes the previous section's description of `bind_delivery_access`
+and `bind_product_host` ("the old credential dropped inside it").
+
+**Root cause.** Both methods swapped the credential slot under the slot's mutex,
+released it, and only then dropped the previous grant in `Revocations::revoke`.
+Between the two steps the new credential authenticated, a removal was already
+visible, and the previous grant's token, and so every connection or Product Host
+socket token minted from it, was still uncancelled. A publication could decide a
+success on that old authority after the replacement became observable.
+Counterexample: A is bound and an A-admitted connection has a publication in
+progress; `bind_delivery_access(Some(B))` installs B, then waits for the
+publication; B authenticates while A's connection can still publish.
+
+**Invariant.** Replacing or removing a credential is one linearizable authority
+transition: once the new state is observable the previous grant is revoked, and
+no previous authority publishes a success afterwards.
+
+**Repair.** One helper, `AppServerHost::rotate`, used by both bind methods. It
+takes the exclusive side of `Revocations`, then the slot's mutex, and, holding
+both, drops the previous grant (cancelling its token and every child token) and
+installs the next. That critical section is the linearization point.
+Authentication takes only the slot's mutex, so it sees one side. Publication holds
+the shared side across decision and acceptance, so it is ordered by the lock.
+Rotations take the exclusive side one at a time, in one total order. Lock order:
+route table, then revocation order, then credential slot; authentication takes
+only the slot; publication takes the WebSocket stream, then the revocation order,
+then request state. Nothing takes the slot and then the revocation order, and
+token cancellation runs no App Server code.
+
+| Regression | Synchronization | What it proves |
+| --- | --- | --- |
+| `delivery_credential_rotation_is_one_transition_ordered_against_publication` (cases: rotate to B, remove) | an A-admitted WebSocket connection; a write `Hold` matching only id 30's success frame parks it inside tungstenite's acceptance; `Revocations::waited` counts waiting revocations | The rotation reports waiting and has not completed. Meanwhile B does not authenticate, and A does (state before). The release lets the success stand; the rotation completes; the token minted meanwhile and the connection's token are cancelled; only B authenticates (none after removal); the connection's next delivery is `unauthorized`; one response per id; permits back. |
+| `product_host_credential_rotation_is_one_transition_ordered_against_publication` | a real Product Host socket admitted with A over a `Valve`; its id-0 success frame held | Same ordering on the Product Host path: B refused while the rotation waits, A then revoked, the accepted success stands with the delivered bytes, only B authenticates. The delivery-access credential, its token and an ordinary connection are unaffected. |
+| `overlapping_delivery_credential_rotations_take_one_total_order` | the held publication; rotations to B, C and none started one after another, each observed waiting (counter 1, 2, 3) | The cfg(test) rotation log, recorded inside the critical section, holds exactly those three installations. The final authentication state is the last one's; every superseded credential is refused; the A connection is revoked; the publication stands. |
+| `authentication_racing_a_rotation_sees_one_side_of_it` | an authentication with A parked (`ReadProbe::authenticating`) while it holds the slot; the rotation to B reports waiting for the slot (`credential_waited`) | The authentication returns a token minted from A, the state before; the rotation then cancels it; afterwards only B authenticates. |
+
+Negative control, from a byte-checked backup (sha256 verified on restore): the
+original replace-then-revoke body, with the test hooks kept. The delivery and Product
+Host rotation tests fail with "B observable before A is revoked", and the removal
+case alone fails with "A, before the rotation" (the removal was visible before A's
+tokens were revoked). The overlapping-rotations and authentication-race tests pass
+under the control: they verify ordering properties that the old code also met.
+
 ## Validation
 
 See the pull request for the final command list and results; the PR description

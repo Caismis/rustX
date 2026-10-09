@@ -962,38 +962,43 @@ impl ValveControl {
     }
 }
 
+/// Which offers an armed [`Hold`] parks.
+type Offers = Box<dyn Fn(&[u8]) -> bool + Send>;
 /// A test-controlled point inside one transport poll. Once armed, the next
-/// poll to reach it blocks its thread right there, still holding whatever
-/// that poll holds (the delivery decision, the shared stream), until the
-/// test releases it. `entered` reports what that poll was offering.
+/// poll to reach it with a matching offer blocks its thread right there,
+/// still holding whatever that poll holds (the delivery decision, the shared
+/// stream), until the test releases it. `entered` reports that offer.
 struct Hold {
-    armed: std::sync::Mutex<bool>,
+    armed: std::sync::Mutex<Option<Offers>>,
     released: std::sync::Condvar,
     entered: tokio::sync::watch::Sender<Option<Vec<u8>>>,
 }
 impl Hold {
     fn new() -> Self {
         Self {
-            armed: std::sync::Mutex::new(false),
+            armed: std::sync::Mutex::new(None),
             released: std::sync::Condvar::new(),
             entered: tokio::sync::watch::channel(None).0,
         }
     }
     fn arm(&self) {
+        self.arm_for(|_| true);
+    }
+    fn arm_for(&self, offers: impl Fn(&[u8]) -> bool + Send + 'static) {
         self.entered.send_replace(None);
-        *self.armed.lock().unwrap() = true;
+        *self.armed.lock().unwrap() = Some(Box::new(offers));
     }
     fn release(&self) {
-        *self.armed.lock().unwrap() = false;
+        *self.armed.lock().unwrap() = None;
         self.released.notify_all();
     }
     fn enter(&self, offered: &[u8]) {
         let mut armed = self.armed.lock().unwrap();
-        if !*armed {
+        if !armed.as_ref().is_some_and(|offers| offers(offered)) {
             return;
         }
         self.entered.send_replace(Some(offered.to_vec()));
-        while *armed {
+        while armed.is_some() {
             armed = self.released.wait(armed).unwrap();
         }
     }
@@ -1384,7 +1389,7 @@ async fn delivery_revocation_overlapping_a_hand_off_is_ordered_after_its_accepta
             });
             initialize(&client).await;
             let target = attach(&client, &f).await;
-            revocations.waited.send_replace(false);
+            revocations.waited.send_replace(0);
             probe.cancel_waited.send_replace(false);
             valve.grant(0);
             let (outcome, ()) = tokio::join!(
@@ -1421,14 +1426,16 @@ async fn delivery_revocation_overlapping_a_hand_off_is_ordered_after_its_accepta
                         }
                     });
                     tokio::pin!(revoking);
-                    let mut waited = if case == "cancel" {
-                        probe.cancel_waited.subscribe()
-                    } else {
-                        revocations.waited.subscribe()
+                    let waited = async {
+                        if case == "cancel" {
+                            let _ = probe.cancel_waited.subscribe().wait_for(|waited| *waited).await;
+                        } else {
+                            let _ = revocations.waited.subscribe().wait_for(|waited| *waited > 0).await;
+                        }
                     };
                     tokio::select! {
                         biased;
-                        _ = waited.wait_for(|waited| *waited) => {}
+                        () = waited => {}
                         _ = &mut revoking => panic!(
                             "{case} completed between the decision and the transport's acceptance"
                         ),
@@ -1707,6 +1714,472 @@ async fn websocket_delivery_publication_is_decided_when_tungstenite_takes_the_fr
             client.close().await;
             let _ = serving.await.unwrap();
         }
+        f.close().await;
+    })
+    .await;
+}
+
+const ROTATION_A: &str = "rotation-secret-a-0000000000000000000000000000000000000";
+const ROTATION_B: &str = "rotation-secret-b-0000000000000000000000000000000000000";
+const ROTATION_C: &str = "rotation-secret-c-0000000000000000000000000000000000000";
+fn rotation_credential(secret: &str) -> websocket::Credential {
+    websocket::Credential::new(secret.into()).unwrap()
+}
+/// Authenticates `secret` as a delivery credential through the handshake's
+/// own authority path: a fresh token, or `None` when refused.
+fn delivery_token(f: &Fixture, secret: &str) -> Option<CancellationToken> {
+    let offered = format!(
+        "{}{secret}",
+        crate::app_server::delivery_access::CREDENTIAL_PREFIX
+    );
+    f.host
+        .authenticate_delivery_access(&[offered.as_str()])
+        .ok()
+        .flatten()
+}
+/// The same, for the Product Host credential.
+fn product_host_token(f: &Fixture, secret: &str) -> Option<CancellationToken> {
+    let offered = format!("rustx-product-host.{secret}");
+    f.host.authenticate_product_host(&[
+        crate::app_server::product_host::SUBPROTOCOL,
+        offered.as_str(),
+    ])
+}
+/// Waits until `count` revocations found a publication in progress, failing
+/// if any of `revoking` completed first.
+async fn revocations_waiting(
+    f: &Fixture,
+    count: usize,
+    revoking: &mut [std::pin::Pin<&mut tokio::task::JoinHandle<()>>],
+) {
+    let mut waited = f.host.revocations().waited.subscribe();
+    let completed = futures_util::future::select_all(revoking.iter_mut());
+    tokio::select! {
+        biased;
+        _ = waited.wait_for(|waited| *waited >= count) => {}
+        _ = completed => panic!("a rotation completed while a publication was between its decision and its acceptance"),
+    }
+}
+/// An ordinary App Server WebSocket connection over a [`Valve`], admitted
+/// with `credential` as its delivery access, initialized and attached.
+async fn delivery_websocket(
+    f: &Fixture,
+    credential: &str,
+    valve: &Arc<ValveControl>,
+) -> (
+    driver::Driver,
+    Received,
+    tokio::task::JoinHandle<io::Result<()>>,
+    AttachmentTarget,
+) {
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
+    let (client, server) = tokio::io::duplex(1 << 20);
+    let serving = tokio::spawn(websocket::connection(
+        Valve {
+            inner: server,
+            control: valve.clone(),
+        },
+        f.host.clone(),
+        websocket::Credential::new(driver::TOKEN.into()).unwrap(),
+        CancellationToken::new(),
+    ));
+    let mut request = "ws://localhost/".into_client_request().unwrap();
+    request.headers_mut().insert(
+        "sec-websocket-protocol",
+        format!(
+            "rustx.app-server.v38, rustx-token.{}, rustx-delivery-access.{credential}",
+            driver::TOKEN
+        )
+        .parse()
+        .unwrap(),
+    );
+    let (socket, _) = tokio_tungstenite::client_async(request, client)
+        .await
+        .unwrap();
+    let (mut sink, stream) = socket.split();
+    let texts = stream.filter_map(|message| async move {
+        match message {
+            Ok(Message::Text(text)) => Some(text.to_string()),
+            _ => None,
+        }
+    });
+    let (incoming, received) = recording(texts);
+    let client = driver::Driver::new(incoming, |mut outgoing| async move {
+        while let Some(record) = outgoing.recv().await {
+            sink.send(Message::Text(record.into())).await.unwrap();
+        }
+    });
+    initialize(&client).await;
+    let target = attach(&client, f).await;
+    (client, received, serving, target)
+}
+
+/// Replacing or removing the delivery credential is one authority
+/// transition, ordered against publication by the revocation order.
+///
+/// An A-admitted WebSocket connection's success for 30 is decided and held
+/// inside tungstenite's acceptance. A rotation to B (or a removal) then
+/// reports that it waits for that publication and has not completed. While it
+/// waits, B does not authenticate, and A still does (a token minted then is
+/// revoked by the rotation). After the release the success stands, the
+/// rotation completes, A's tokens (including the connection's) are cancelled,
+/// only B authenticates, and the A connection's next delivery is
+/// `unauthorized`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn delivery_credential_rotation_is_one_transition_ordered_against_publication() {
+    use super::protocol::{
+        DELIVERED, committed_delivery, delivered_bytes, delivery_request, failed_with,
+    };
+    use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
+    bounded(async {
+        let f = Fixture::with_tool(Some("present")).await;
+        let tool = committed_delivery(&f).await;
+        let permits = f.host.file_reads();
+        for next in [Some(ROTATION_B), None] {
+            f.host
+                .bind_delivery_access(Some(rotation_credential(ROTATION_A)));
+            let valve = ValveControl::new();
+            let _released = valve.released_on_drop();
+            let (client, received, serving, target) =
+                delivery_websocket(&f, ROTATION_A, &valve).await;
+            f.host.revocations().waited.send_replace(0);
+            valve
+                .writes
+                .arm_for(|frame| response(frame_payload(frame), 30) == Some(true));
+            let (outcome, ()) = tokio::join!(
+                client.request(delivery_request(30, &target, &tool, false)),
+                async {
+                    valve.writes.entered().await;
+                    let rotating = tokio::task::spawn_blocking({
+                        let host = f.host.clone();
+                        move || host.bind_delivery_access(next.map(rotation_credential))
+                    });
+                    tokio::pin!(rotating);
+                    revocations_waiting(&f, 1, &mut [rotating.as_mut()]).await;
+                    // The previous credential is not revoked yet, so the
+                    // next one is not observable either.
+                    assert!(
+                        delivery_token(&f, ROTATION_B).is_none(),
+                        "B observable before A is revoked"
+                    );
+                    let early = delivery_token(&f, ROTATION_A).expect("A, before the rotation");
+                    valve.writes.release();
+                    rotating.await.unwrap();
+                    assert!(
+                        early.is_cancelled(),
+                        "a token minted before the rotation is revoked by it"
+                    );
+                }
+            );
+            assert_eq!(
+                delivered_bytes(&outcome),
+                DELIVERED,
+                "accepted before the rotation: the success stands"
+            );
+            assert!(delivery_token(&f, ROTATION_A).is_none(), "A is revoked");
+            match next {
+                Some(_) => assert!(
+                    !delivery_token(&f, ROTATION_B)
+                        .expect("B after the rotation")
+                        .is_cancelled()
+                ),
+                None => assert!(delivery_token(&f, ROTATION_B).is_none()),
+            }
+            failed_with(
+                &client
+                    .request(delivery_request(34, &target, &tool, false))
+                    .await,
+                &ErrorData::SessionFileRead {
+                    reason: SessionFileReadFailure::Unauthorized,
+                },
+            );
+            assert!(matches!(
+                client.request(server_info(32)).await,
+                Response::Success(_)
+            ));
+            answered_once(&received, 30, 1);
+            answered_once(&received, 34, 1);
+            assert_eq!(permits.available_permits(), SESSION_FILE_MAX_READS);
+            client.close().await;
+            let _ = serving.await.unwrap();
+        }
+        f.close().await;
+    })
+    .await;
+}
+
+/// Product Host credential rotation follows the same transition. A real
+/// Product Host socket, admitted with A, reads a committed delivery; its
+/// success is decided and held inside tungstenite's acceptance. The rotation
+/// to B waits; meanwhile B does not authenticate and A does. After the
+/// release the success stands, A (and every socket token it minted) is
+/// revoked, and only B authenticates. The unrelated delivery-access
+/// credential and an ordinary connection keep their authority.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn product_host_credential_rotation_is_one_transition_ordered_against_publication() {
+    use super::protocol::{DELIVERED, committed_delivery};
+    use crate::tools::session_files::SESSION_FILE_MAX_READS;
+    use base64::Engine;
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
+    bounded(async {
+        let f = Fixture::with_tool(Some("present")).await;
+        let tool = committed_delivery(&f).await;
+        let permits = f.host.file_reads();
+        f.host
+            .bind_product_host(Some(rotation_credential(ROTATION_A)));
+        f.host
+            .bind_delivery_access(Some(rotation_credential(ROTATION_C)));
+        let unrelated = delivery_token(&f, ROTATION_C).unwrap();
+        let browser = AppServerConnection::new(f.host.clone());
+        let direct = app_server_conformance::DirectDriver(&browser);
+        initialize(&direct).await;
+        let target = attach(&direct, &f).await;
+
+        let valve = ValveControl::new();
+        let _released = valve.released_on_drop();
+        let (client, server) = tokio::io::duplex(1 << 20);
+        let serving = tokio::spawn(websocket::connection(
+            Valve {
+                inner: server,
+                control: valve.clone(),
+            },
+            f.host.clone(),
+            websocket::Credential::new(driver::TOKEN.into()).unwrap(),
+            CancellationToken::new(),
+        ));
+        let mut request = "ws://localhost/product-host/file-read"
+            .into_client_request()
+            .unwrap();
+        request.headers_mut().insert(
+            "sec-websocket-protocol",
+            format!("rustx.product-host.file-read.v2, rustx-product-host.{ROTATION_A}")
+                .parse()
+                .unwrap(),
+        );
+        let (mut socket, _) = tokio_tungstenite::client_async(request, client)
+            .await
+            .unwrap();
+        f.host.revocations().waited.send_replace(0);
+        valve
+            .writes
+            .arm_for(|frame| response(frame_payload(frame), 0) == Some(true));
+        socket
+            .send(Message::Text(
+                serde_json::to_string(&crate::app_server::product_host::FileRead {
+                    target: target.clone(),
+                    source: crate::app_server::product_host::ReadSource::SessionFile {
+                        message_id: tool,
+                        delivery_index: 0,
+                    },
+                    roots: vec![f.workspaces[0].clone()],
+                })
+                .unwrap()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        let (frame, ()) = tokio::join!(socket.next(), async {
+            valve.writes.entered().await;
+            let rotating = tokio::task::spawn_blocking({
+                let host = f.host.clone();
+                move || host.bind_product_host(Some(rotation_credential(ROTATION_B)))
+            });
+            tokio::pin!(rotating);
+            revocations_waiting(&f, 1, &mut [rotating.as_mut()]).await;
+            assert!(
+                product_host_token(&f, ROTATION_B).is_none(),
+                "B observable before A is revoked"
+            );
+            let early = product_host_token(&f, ROTATION_A).expect("A, before the rotation");
+            valve.writes.release();
+            rotating.await.unwrap();
+            assert!(early.is_cancelled(), "revoked by the rotation");
+        });
+        let Some(Ok(Message::Text(text))) = frame else {
+            panic!("the accepted response")
+        };
+        let Response::Success(success) = serde_json::from_str(&text).unwrap() else {
+            panic!("accepted before the rotation: the success stands")
+        };
+        let MethodResult::SessionFileBytes { data, .. } = success.result else {
+            panic!("bytes")
+        };
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(data)
+                .unwrap(),
+            DELIVERED
+        );
+        assert!(product_host_token(&f, ROTATION_A).is_none(), "A is revoked");
+        assert!(!product_host_token(&f, ROTATION_B).unwrap().is_cancelled());
+        // Unrelated authority is untouched.
+        assert!(!unrelated.is_cancelled());
+        assert!(delivery_token(&f, ROTATION_C).is_some());
+        assert!(matches!(
+            browser.handle_request(server_info(40)).await,
+            Response::Success(_)
+        ));
+        drop(socket);
+        let _ = serving.await.unwrap();
+        assert_eq!(permits.available_permits(), SESSION_FILE_MAX_READS);
+        browser.close();
+        f.close().await;
+    })
+    .await;
+}
+
+/// Overlapping rotations take one total order. With an A-admitted
+/// publication held inside its acceptance, rotations to B, to C and to none
+/// are started one after another, each observed waiting behind that
+/// publication before the next starts, so all three overlap. After the
+/// release each is linearized in turn: the rotation log holds exactly those
+/// three installations, the final credential state is the last one's, every
+/// superseded credential is refused, and the A connection's authority is
+/// revoked.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn overlapping_delivery_credential_rotations_take_one_total_order() {
+    use super::protocol::{
+        DELIVERED, committed_delivery, delivered_bytes, delivery_request, failed_with,
+    };
+    use crate::tools::session_files::SessionFileReadFailure;
+    bounded(async {
+        let f = Fixture::with_tool(Some("present")).await;
+        let tool = committed_delivery(&f).await;
+        let probe = f.host.file_read_probe();
+        f.host
+            .bind_delivery_access(Some(rotation_credential(ROTATION_A)));
+        let valve = ValveControl::new();
+        let _released = valve.released_on_drop();
+        let (client, _received, serving, target) = delivery_websocket(&f, ROTATION_A, &valve).await;
+        probe.rotations.take();
+        f.host.revocations().waited.send_replace(0);
+        valve
+            .writes
+            .arm_for(|frame| response(frame_payload(frame), 30) == Some(true));
+        let nexts = [Some(ROTATION_B), Some(ROTATION_C), None];
+        let (outcome, ()) = tokio::join!(
+            client.request(delivery_request(30, &target, &tool, false)),
+            async {
+                valve.writes.entered().await;
+                let mut rotations = Vec::new();
+                for (started, next) in nexts.into_iter().enumerate() {
+                    rotations.push(Box::pin(tokio::task::spawn_blocking({
+                        let host = f.host.clone();
+                        move || host.bind_delivery_access(next.map(rotation_credential))
+                    })));
+                    let mut waiting: Vec<_> = rotations
+                        .iter_mut()
+                        .map(|rotation| rotation.as_mut())
+                        .collect();
+                    revocations_waiting(&f, started + 1, &mut waiting).await;
+                }
+                valve.writes.release();
+                for rotation in rotations {
+                    rotation.await.unwrap();
+                }
+            }
+        );
+        assert_eq!(
+            delivered_bytes(&outcome),
+            DELIVERED,
+            "the publication stands"
+        );
+        let order = probe.rotations.take();
+        let named = |installed: &Option<websocket::Credential>| {
+            nexts
+                .into_iter()
+                .position(|next| match (next, installed) {
+                    (None, None) => true,
+                    (Some(secret), Some(installed)) => {
+                        installed.same_secret(&rotation_credential(secret))
+                    }
+                    _ => false,
+                })
+                .expect("one of the three rotations")
+        };
+        let mut seen: Vec<_> = order.iter().map(named).collect();
+        let last = nexts[*seen.last().expect("three linearized rotations")];
+        seen.sort_unstable();
+        assert_eq!(seen, [0, 1, 2], "each rotation linearized exactly once");
+        for secret in [ROTATION_A, ROTATION_B, ROTATION_C] {
+            assert_eq!(
+                delivery_token(&f, secret).is_some(),
+                last == Some(secret),
+                "only the last rotation's credential authenticates"
+            );
+        }
+        failed_with(
+            &client
+                .request(delivery_request(34, &target, &tool, false))
+                .await,
+            &ErrorData::SessionFileRead {
+                reason: SessionFileReadFailure::Unauthorized,
+            },
+        );
+        client.close().await;
+        let _ = serving.await.unwrap();
+        f.close().await;
+    })
+    .await;
+}
+
+/// Authentication racing a rotation sees one side of it. An authentication
+/// with A is parked while it holds the credential slot; a rotation to B then
+/// reports that it waits for that slot and has not completed. Released, the
+/// authentication returns a token minted from A, the state before the
+/// rotation, and the rotation then revokes it: no token escapes its grant.
+/// Afterwards only B authenticates.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn authentication_racing_a_rotation_sees_one_side_of_it() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let probe = f.host.file_read_probe();
+        f.host
+            .bind_delivery_access(Some(rotation_credential(ROTATION_A)));
+        probe.credential_waited.send_replace(false);
+        let _gate = probe.authenticating.arm_scoped();
+        let authenticating = tokio::task::spawn_blocking({
+            let host = f.host.clone();
+            move || {
+                let offered = format!(
+                    "{}{ROTATION_A}",
+                    crate::app_server::delivery_access::CREDENTIAL_PREFIX
+                );
+                host.authenticate_delivery_access(&[offered.as_str()])
+            }
+        });
+        tokio::task::spawn_blocking({
+            let probe = probe.clone();
+            move || probe.authenticating.wait_entered()
+        })
+        .await
+        .unwrap();
+        let rotating = tokio::task::spawn_blocking({
+            let host = f.host.clone();
+            move || host.bind_delivery_access(Some(rotation_credential(ROTATION_B)))
+        });
+        tokio::pin!(rotating);
+        let mut waited = probe.credential_waited.subscribe();
+        tokio::select! {
+            biased;
+            _ = waited.wait_for(|waited| *waited) => {}
+            _ = &mut rotating => panic!("the rotation completed inside an authentication"),
+        }
+        probe.authenticating.release();
+        let early = authenticating
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("minted from A, before the rotation");
+        rotating.await.unwrap();
+        assert!(
+            early.is_cancelled(),
+            "no token escapes its grant's revocation"
+        );
+        assert!(delivery_token(&f, ROTATION_A).is_none());
+        assert!(!delivery_token(&f, ROTATION_B).unwrap().is_cancelled());
         f.close().await;
     })
     .await;
