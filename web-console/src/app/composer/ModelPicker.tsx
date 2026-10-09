@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { ModelChoice, ModelSelectionIntent } from '../../presentation/agent/ModelSelect';
+import { modelDefaultLabel, offersModelDefault, profileUnavailable, type ModelChoice, type ModelSelectionIntent } from '../../presentation/agent/ModelSelect';
 import { selectionChanges } from '../../bindings/model-catalog';
 import { useTranslation } from '../../locale/react';
 import menuCss from '../commands/Commands.module.css';
@@ -13,21 +13,24 @@ export interface ModelPickerState {
 }
 /** The composer and slash picker share the same attachment-scoped catalog.
  * Each row is one unambiguous gesture: a Model row never clears a pinned
- * Profile; a Model's default-Profile row is the explicit return to following
- * its default. */
+ * Profile; a Model's default row is the explicit return to following its
+ * default, offered too for clearing a pinned Profile the Model no longer
+ * declares. */
 export function ModelPicker({ state, close, chosen }: { state: ModelPickerState; close: () => void; chosen: () => void }) {
   const tx = useTranslation();
   const [query, setQuery] = useState('');
   // The configured selection's own row: its pinned Profile, else its default-
-  // Profile row, else the Model row.
-  const [active, setActive] = useState<string | undefined>(() => JSON.stringify(state.profile !== undefined ? [state.current, state.profile]
-    : state.choices.find(choice => choice.id === state.current)?.profiles.length ? [state.current, null] : [state.current]));
+  // Profile row, else the Model row — also for an unavailable pinned Profile,
+  // which has no row.
+  const selected = state.choices.find(choice => choice.id === state.current);
+  const stale = selected && profileUnavailable(selected, state.profile);
+  const [active, setActive] = useState<string | undefined>(() => JSON.stringify(state.profile !== undefined && !stale ? [state.current, state.profile]
+    : state.profile === undefined && selected?.profiles.length ? [state.current, null] : [state.current]));
   const [pending, setPending] = useState(false);
   const root = useRef<HTMLDivElement>(null);
-  const defaultLabel = (choice: ModelChoice) => choice.defaultProfile ? tx('agent:model-select.model-default-profile-value', { p0: choice.defaultProfile }) : tx('agent:model-select.model-default-profile');
   const rows = state.choices.flatMap(choice => [
     { key: JSON.stringify([choice.id]), intent: { kind: 'model', model: choice.id } as ModelSelectionIntent, label: choice.id, suffix: undefined as string | undefined },
-    ...(choice.profiles.length ? [{ key: JSON.stringify([choice.id, null]), intent: { kind: 'model-default', model: choice.id } as ModelSelectionIntent, label: `${choice.id} / ${defaultLabel(choice)}`, suffix: defaultLabel(choice) }] : []),
+    ...(offersModelDefault(choice, state.current, state.profile) ? [{ key: JSON.stringify([choice.id, null]), intent: { kind: 'model-default', model: choice.id } as ModelSelectionIntent, label: `${choice.id} / ${modelDefaultLabel(tx, choice)}`, suffix: modelDefaultLabel(tx, choice) }] : []),
     ...choice.profiles.map(profile => ({ key: JSON.stringify([choice.id, profile.id]), intent: { kind: 'profile', model: choice.id, profile: profile.id } as ModelSelectionIntent, label: `${choice.id} / ${profile.id}`, suffix: profile.id })),
   ]).filter(row => row.label.toLowerCase().includes(query.trim().toLowerCase()));
   const index = Math.max(0, rows.findIndex(row => row.key === active));
@@ -65,6 +68,7 @@ export function ModelPicker({ state, close, chosen }: { state: ModelPickerState;
       </Fragment>)}
       {!rows.length && <p role="status">{tx(state.loading ? 'agent:model-select.reading-native-models' : 'agent:model-picker.empty')}</p>}
     </div>
+    {!state.loading && stale && <p role="status">{tx('agent:model-select.profile')}{' '}{state.profile} {tx('agent:model-select.is-unavailable-for')}{' '}{state.current} {tx('agent:model-select.in-this-workspace')}</p>}
     {state.error && <p role="alert">{state.error}</p>}
   </div>;
 }

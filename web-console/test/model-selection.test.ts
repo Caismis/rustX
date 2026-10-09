@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
 import type { SessionModelConfig } from '../../protocol/app-server/v39';
 import { nextModelSelection, selectionChanges } from '../src/bindings/model-catalog';
-import type { ModelSelectionIntent } from '../src/presentation/agent/ModelSelect';
+import { offersModelDefault, profileUnavailable, type ModelChoice, type ModelSelectionIntent } from '../src/presentation/agent/ModelSelect';
 
 const chat = 'example/chat';
 const pin = (profile: string): ModelSelectionIntent => ({ kind: 'profile', model: chat, profile });
@@ -58,4 +58,27 @@ it('a same-Model Profile change keeps every independent setting; a different Mod
   // No configured selection yet: the gesture is the whole selection.
   expect(nextModelSelection(undefined, pin('balanced'))).toEqual({ model: chat, profile: 'balanced' });
   expect(nextModelSelection(undefined, followDefault)).toEqual({ model: chat });
+});
+
+it('a pinned Profile the Model no longer declares is cleared by the explicit default action alone, keeping every independent setting', () => {
+  const stale: SessionModelConfig = { model: chat, profile: 'fast', requestParams: { top_k: 40 }, maxOutputTokens: 1024, summaryModel: { mode: 'explicit', model: 'example/summary' } };
+  const withoutProfiles: ModelChoice = { id: chat, profiles: [] };
+  const withOthers: ModelChoice = { id: chat, profiles: [{ id: 'balanced', label: 'balanced' }], defaultProfile: 'balanced' };
+  // Offered on the configured Model only while its pin is unavailable; no
+  // default Profile is named for a Model without Profiles.
+  expect(profileUnavailable(withoutProfiles, 'fast')).toBe(true);
+  expect(profileUnavailable(withOthers, 'fast')).toBe(true);
+  expect(profileUnavailable(withOthers, 'balanced')).toBe(false);
+  expect(profileUnavailable(withoutProfiles, undefined)).toBe(false);
+  expect(offersModelDefault(withoutProfiles, chat, 'fast')).toBe(true);
+  expect(offersModelDefault(withoutProfiles, chat, undefined)).toBe(false);
+  expect(offersModelDefault(withoutProfiles, 'example/other', 'fast')).toBe(false);
+  expect(offersModelDefault(withOthers, chat, undefined)).toBe(true);
+  // Choosing the selected Model keeps the stale pin; the default action
+  // removes only the pin, and repeating it is a no-op.
+  expect(nextModelSelection(stale, { kind: 'model', model: chat })).toBeUndefined();
+  const recovered = nextModelSelection(stale, followDefault)!;
+  expect(recovered).toEqual({ model: chat, requestParams: { top_k: 40 }, maxOutputTokens: 1024, summaryModel: { mode: 'explicit', model: 'example/summary' } });
+  expect(Object.hasOwn(recovered, 'profile')).toBe(false);
+  expect(nextModelSelection(recovered, followDefault)).toBeUndefined();
 });

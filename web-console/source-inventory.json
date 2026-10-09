@@ -1062,7 +1062,7 @@
       "destination": "web-console/src/presentation/agent/ModelSelect.tsx",
       "upstream_sha256": "4726d9ddcffd63295b0635fac728512308d56ef412ed9f6b037b3eddc552d1c0",
       "classification": "B",
-      "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority. #393: no longer passes the removed Menu portal prop. Issue #406: One model/profile control and unavailable selection presentation with explicit binding reset, over native catalog admission. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Model menu layout repair: render catalog loading and unavailable-selection status inside the existing portaled menu, disable pending root rows and focus only when ready; upstream baseline unchanged. Issue #456: general Model Profiles and JSON-object request-parameter editing replace reasoning profiles, with mandatory App Server v39 imports; upstream reference unchanged. Issue #456 selection review: configured versus effective Profile, typed selection intents, submenu selection marker.",
+      "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority. #393: no longer passes the removed Menu portal prop. Issue #406: One model/profile control and unavailable selection presentation with explicit binding reset, over native catalog admission. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Model menu layout repair: render catalog loading and unavailable-selection status inside the existing portaled menu, disable pending root rows and focus only when ready; upstream baseline unchanged. Issue #456: general Model Profiles and JSON-object request-parameter editing replace reasoning profiles, with mandatory App Server v39 imports; upstream reference unchanged. Issue #456 selection review: configured versus effective Profile, typed selection intents, submenu selection marker. Issue #456 stale Profile recovery: explicit model-default action for a pinned Profile the Model no longer declares.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../locale/react",
@@ -1077,7 +1077,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "e4d58b59526bf8c5d77265e01827c7e9d7945eabbd1d8200a9318e0f65378c73",
+      "local_sha256": "2293cbddc68e46de0ea015d3a349ef0389a325682f7e5b0a037b13d1b59b9079",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-model-selection/src/client/ModelSelect.tsx",
@@ -3249,7 +3249,7 @@
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream_sha256": "664def8bce9e753c3a670f9e9f01fe2280227a0921021e3a08b496f8c5d6effe",
-      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Repair: localized incomplete historical process outcome. #439: bilingual Busy Enter preference, complementary modifier help and double-Escape Stop wording. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. UI repair: Web last-request context occupancy disclosure removed for Harness parity; its wording is deleted. UI repair: busy-Enter Queue/Steer preference moved from below the Composer card to the General Settings row, matching Harness composer-enter. UI repair: turn-rail wording follows Harness (turn fallback, load-and-jump); paging and ordinal strings removed. UI/UX alignment: Harness step-process done titles and joining wording. UI/UX alignment: Harness usage, session statistics and context meter wording. UI/UX alignment: Harness single branch label and Regenerate wording. Header/Trajectory chrome alignment: Harness title crumb, compact header controls, toolbar, role tags, turn label and detail header. Issue #456: general Model Profiles and JSON-object request-parameter editing replace reasoning profiles, with mandatory App Server v39 imports; upstream reference unchanged. Issue #456 selection review: configured versus effective Profile, typed selection intents, submenu selection marker.",
+      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Repair: localized incomplete historical process outcome. #439: bilingual Busy Enter preference, complementary modifier help and double-Escape Stop wording. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. UI repair: Web last-request context occupancy disclosure removed for Harness parity; its wording is deleted. UI repair: busy-Enter Queue/Steer preference moved from below the Composer card to the General Settings row, matching Harness composer-enter. UI repair: turn-rail wording follows Harness (turn fallback, load-and-jump); paging and ordinal strings removed. UI/UX alignment: Harness step-process done titles and joining wording. UI/UX alignment: Harness usage, session statistics and context meter wording. UI/UX alignment: Harness single branch label and Regenerate wording. Header/Trajectory chrome alignment: Harness title crumb, compact header controls, toolbar, role tags, turn label and detail header. Issue #456: general Model Profiles and JSON-object request-parameter editing replace reasoning profiles, with mandatory App Server v39 imports; upstream reference unchanged. Issue #456 selection review: configured versus effective Profile, typed selection intents, submenu selection marker. Issue #456 stale Profile recovery: explicit model-default action for a pinned Profile the Model no longer declares.",
       "destination": "web-console/src/locale/dictionaries/agent.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3267,7 +3267,7 @@
           "treatment": "Compaction checkpoint disclosure and bilingual summary wording adapted to native Ledger messages; no Harness runtime or command authority."
         }
       ],
-      "local_sha256": "db55a77ee1ae485ca3b6715a36f64c13b983b71ad3c99a6f9d288a9ba7e0ffc5"
+      "local_sha256": "c91f6f071ce92306c233b57519203a7442123831a928af366b6be0bd84e3d3eb"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",

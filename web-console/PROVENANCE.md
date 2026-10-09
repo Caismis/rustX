@@ -1844,3 +1844,6 @@ profile" row, rows emit a typed selection intent instead of `(model, profile?)`,
 and the current marker follows the configured Profile while the trigger shows
 the effective one. The shared `Menu` now marks and announces the selected row of
 a submenu (`aria-current`, trailing check) exactly as it does a top-level row.
+The #456 stale Profile review also offers that Profile submenu, with a single
+"Use model defaults" row, on a Model that declares no Profiles while its
+configured Profile is pinned, so the pin can be cleared.

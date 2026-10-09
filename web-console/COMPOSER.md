@@ -433,7 +433,12 @@ only repeating the configured choice is a no-op. A same-Model Profile gesture
 replaces only `profile` in the whole-state `SessionModelConfig`, keeping request
 overrides, output limit and explicit Summary for native validation; a different
 Model starts from its native defaults. Draft Sessions and the new-Session
-preference keep a pinned and an absent Profile distinct.
+preference keep a pinned and an absent Profile distinct. A pinned Profile the
+catalog no longer declares for the configured Model is reported as unavailable
+and blocks a new Session; both controls then offer the same `model-default`
+gesture to clear it, labelled "Use model defaults" when the Model declares no
+Profiles (no default Profile is named). Only that explicit row clears it —
+choosing the selected Model still keeps the pin.
 `session/setModel` is the dedicated operation for later intentional Session model changes.
 Initial explicit intent belongs to `session/create.settings.model`; a projected
 native default is omitted. See [startup ownership](../docs/issue-419/ownership.md).

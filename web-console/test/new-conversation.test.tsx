@@ -322,3 +322,40 @@ it('the persisted new-Session preference keeps a pinned Profile and an absent on
   reloaded.select('authority-a', { model: 'fixture/native' });
   expect(new NewSessionModelPreference(storage).read('authority-a')).toEqual({ model: 'fixture/native' });
 });
+
+it('a persisted Profile the catalog stops declaring blocks Send until it is cleared explicitly, then creates the Session without it', async () => {
+  // A preference saved while `example/chat` declared `fast`, read after reload
+  // against a catalog whose same Model declares no Profiles.
+  const stored = new Map([['rustx-new-session-model-v1', JSON.stringify({ [endpoint]: { model: 'example/chat', profile: 'fast' } })]]);
+  const reloaded = new NewSessionModelPreference({ getItem: key => stored.get(key) ?? null, setItem: (key, value) => { stored.set(key, value); } });
+  vi.mocked(modelPreferences().read).mockImplementation(reloaded.read);
+  vi.spyOn(modelPreferences(), 'subscribe').mockImplementation(reloaded.subscribe);
+  vi.spyOn(modelPreferences(), 'select').mockImplementation((authority, selection) => reloaded.select(authority, selection));
+  await mount({ source: workspaceSource({ kind: 'available', default_model: { model: 'example/chat' }, catalog: { models: [nativeModel('example/chat')] } }), ready: false });
+  const send = () => screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement;
+  const trigger = () => screen.getByRole('button', { name: 'Model and profile' });
+  await waitFor(() => expect(screen.getByText(/not in this Workspace's native model catalog/)).toBeTruthy());
+  expect(send().disabled).toBe(true);
+  expect(trigger().textContent).toBe('example/chatfast');
+  // Choosing the selected Model keeps the stale pin.
+  fireEvent.click(trigger());
+  expect(screen.getByText('Profile fast is unavailable for example/chat in this Workspace.')).toBeTruthy();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
+  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'example/chat' })));
+  expect(send().disabled).toBe(true);
+  // The explicit recovery action clears only the pin.
+  fireEvent.click(trigger());
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Profile' }));
+  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Use model defaults' })));
+  await waitFor(() => expect(send().disabled).toBe(false));
+  expect(trigger().textContent).toBe('example/chat');
+  expect(screen.queryByText(/not in this Workspace's native model catalog/)).toBeNull();
+  server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } }));
+  server.held.add('session/attach');
+  await act(async () => fireEvent.click(send()));
+  expect((await server.waitFor('session/create', 1)).params).toEqual({ settings: { cwd: '/workspace', model: { model: 'example/chat' } } });
+  expect(methods().filter(method => method === 'session/create' || method === 'session/setModel')).toEqual(['session/create']);
+  // The committed creation persists the recovered intent: no Profile at all.
+  expect(JSON.parse(stored.get('rustx-new-session-model-v1')!)).toEqual({ [endpoint]: { model: 'example/chat' } });
+  expect(new NewSessionModelPreference({ getItem: key => stored.get(key) ?? null, setItem: () => {} }).read(endpoint)).toEqual({ model: 'example/chat' });
+});
