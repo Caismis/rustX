@@ -1059,7 +1059,7 @@
       "destination": "web-console/src/presentation/agent/ModelSelect.tsx",
       "upstream_sha256": "4726d9ddcffd63295b0635fac728512308d56ef412ed9f6b037b3eddc552d1c0",
       "classification": "B",
-      "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority. #393: no longer passes the removed Menu portal prop. Issue #406: One model/profile control and unavailable selection presentation with explicit binding reset, over native catalog admission. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Model menu layout repair: render catalog loading and unavailable-selection status inside the existing portaled menu, disable pending root rows and focus only when ready; upstream baseline unchanged.",
+      "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority. #393: no longer passes the removed Menu portal prop. Issue #406: One model/profile control and unavailable selection presentation with explicit binding reset, over native catalog admission. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Model menu layout repair: render catalog loading and unavailable-selection status inside the existing portaled menu, disable pending root rows and focus only when ready; upstream baseline unchanged. Model selection failures use a transient composer-centered Harness Toast; catalog diagnostics and reread controls stay in the menu.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../locale/react",
@@ -1074,7 +1074,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "0a0fb4c46e2e5c2f85315d44deb21bb5573ef4696d2fd1bf5b248dd962100543",
+      "local_sha256": "3f3705d08854689c452a8820a650e247f71a3150b6d4bb7537d97f028fc03173",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-model-selection/src/client/ModelSelect.tsx",
@@ -5605,6 +5605,39 @@
           "treatment": "inspected and inlined: block/inline text projection"
         }
       ]
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/Toast.tsx",
+      "destination": "web-console/src/presentation/primitives/Toast.tsx",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "classification": "B",
+      "treatment": "Harness transient warning announcement adapted to rustX: body portal, composer-centered top placement, three-second hold and one-second fade. Floating UI owns viewport clamping and layout tracking; only the required warning/text surface is retained. Existing rustX theme tokens replace upstream-only aliases.",
+      "upstream_sha256": "85ed92693c910decadb38f095764bbdb3a1c6992b60bf63dedabdbebccd309b6",
+      "local_sha256": "bd46fd332ffb292ea53fcd014556643cea7101278764128cc62bcda2477b2db0",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "./Toast.module.css",
+        "@floating-ui/react-dom",
+        "react",
+        "react-dom"
+      ],
+      "excluded_dependencies": [
+        "Success tone and inline actions (unused by model-selection errors)"
+      ]
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/Toast.module.css",
+      "destination": "web-console/src/presentation/primitives/Toast.module.css",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "classification": "A",
+      "treatment": "Harness transient warning announcement adapted to rustX: body portal, composer-centered top placement, three-second hold and one-second fade. Floating UI owns viewport clamping and layout tracking; only the required warning/text surface is retained. Existing rustX theme tokens replace upstream-only aliases.",
+      "upstream_sha256": "74cab625e372a6cdaff92fa468b7d59bc037212d738e476ea0f8d485e4f8dbcb",
+      "local_sha256": "5df91e370be74f238020400f4ea42847d1b8a1f33ed8f0874fa90c1ea1b9eda9",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "Success tone and inline actions (unused by model-selection errors)"
+      ]
     }
   ],
   "inspected_only": [
@@ -6495,6 +6528,12 @@
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "ce50fb9b16abd6f1fef92d73158552df369928327a4c7876a6f5588e249ab381",
       "treatment": "Compared Session recency semantics: last human prompt or creation, descending time and identity tie-break. Native rustX projects durable human-message time and sorts before paging; browser preserves native order. No Harness runtime or storage source copied."
+    },
+    {
+      "upstream": "packages/client/ui-model-selection/src/client/ModelSelect.tsx",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "24dc378e765ef02ebf95b03093ae56e2fd92933de4dc157e8b0abe79265e9caf",
+      "treatment": "Compared selection-failure Toast and catalog-load Retry separation. Native rustX model-selection and reread authority remain unchanged; no Harness model directory or backend copied."
     }
   ],
   "historical_inspection": {

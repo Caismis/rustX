@@ -105,6 +105,51 @@ it('lost model mutation is visible uncertainty; reconnect invalidates catalog an
  fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
  expect(screen.queryByRole('menuitem', { name: 'exact/model' })).toBeNull();
 });
+it('a rejected model selection announces outside the composer and retains the native selection until reread', async () => {
+ modelFixture(); await server.attached('A');
+ const diagnostic = 'provider other credential environment variable OTHER_KEY is not set';
+ server.handlers.set('session/setModel', () => { throw new RpcFailure({ code: -32000, message: diagnostic }); });
+ const ui = render(<div data-composer-card><Control/></div>);
+ await openModels(); fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
+ await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'other' })));
+ const toast = await screen.findByRole('alert');
+ expect(toast.textContent).toContain(diagnostic);
+ expect(toast.parentElement).toBe(document.body);
+ expect(ui.container.querySelector('[role="alert"]')).toBeNull();
+ expect(screen.queryByRole('menu')).toBeNull();
+ expect(screen.getByRole('button', { name: 'Model and reasoning' }).textContent).toContain('exact/model');
+ await expect(server.client.send('A', 'dependent turn')).rejects.toThrow('Reread native model state');
+ expect(count('turn/start')).toBe(0);
+ await openModels();
+ expect(server.client.getSnapshot().views.A.modelMutation).toBeUndefined();
+ expect(count('session/setModel')).toBe(1);
+ fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
+ await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'other' })));
+ expect(await screen.findByRole('alert')).not.toBe(toast);
+ expect(count('session/setModel')).toBe(2);
+});
+it('catalog read errors remain retryable inside the model menu without a selection toast', async () => {
+ modelFixture(); await server.attached('A'); render(<Control/>);
+ server.handlers.set('session/models', () => { throw new RpcFailure({ code: -32000, message: 'Catalog read unavailable' }); });
+ fireEvent.click(screen.getByRole('button', { name: 'Model and reasoning' }));
+ const error = await screen.findByRole('alert');
+ expect(error.textContent).toContain('Catalog read unavailable');
+ expect(error.closest('[role="menu"]')).not.toBeNull();
+ expect(document.querySelector('[data-toast]')).toBeNull();
+ modelFixture();
+ await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Reread models' })));
+ await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+ expect(count('session/models')).toBe(2);
+});
+it('a Session replacement retires its model-selection error announcement', async () => {
+ modelFixture(); await server.attached('A'); render(<Control/>); await openModels();
+ server.handlers.set('session/setModel', () => { throw new RpcFailure({ code: -32000, message: 'Missing provider credential' }); });
+ fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
+ await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'other' })));
+ await screen.findByRole('alert');
+ await act(async () => server.client.release('A'));
+ expect(screen.queryByRole('alert')).toBeNull();
+});
 it('Session controls never expose source-authoring permission controls', async () => {
  modelFixture(); await server.attached('A'); render(<Control/>); await openModels();
  expect(screen.queryByRole('button', { name: 'Approval mode' })).toBeNull();

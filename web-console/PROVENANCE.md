@@ -1692,6 +1692,20 @@ snapshot. Both clients fence late history reads against the current attachment.
 
 Model menu layout repair: compared the local DeepSeek-harness `packages/client/ui-model-selection/src/client/ModelSelect.tsx` in-menu loading/error presentation. The rustX adapter keeps catalog-loading and unavailable-selection notices inside its existing portaled menu, so opening it does not resize the Composer or history viewport. Pending root rows are disabled and initial keyboard focus waits for usable choices. Native model mutation/read authority and the pinned source baseline remain unchanged.
 
+Model-selection failure announcements follow Harness `ModelSelect.tsx` and
+`packages/client/ui-primitives/src/Toast.tsx` / `Toast.module.css` at
+`5badb15009ae1756c3afe0ae0cef1faafc290ccc`, inspected from immutable upstream
+source. Rejected selections announce through a warning Toast in a body portal,
+centered horizontally over the Composer and positioned near the viewport top.
+The three-second hold and one-second fade do not move chat layout or take focus.
+Floating UI, already used by the menu, owns positioning, viewport clamping and
+layout tracking. Success/action variants are excluded; existing theme tokens
+supply the surface. Catalog-load errors and reread actions remain in the menu.
+Expiry hides the announcement only: native selection and reread fences remain
+authoritative, repeated failures restart the announcement, and attachment
+replacement retires it. Tests cover rejection, recovery without mutation replay,
+catalog errors, attachment retirement and timer lifetime.
+
 Trajectory bottom fade: compared local Harness ConversationRoot.module.css,
 TrajectoryView.tsx, views.module.css and TrajectoryTable.module.css. The native-bound
 WebUI view now elects the resident composer overlay, retaining the fixed 36px
