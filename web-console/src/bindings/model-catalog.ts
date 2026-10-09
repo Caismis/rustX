@@ -8,3 +8,9 @@ export function catalogChoices(catalog?: ModelCatalogView): ModelChoice[] {
 export function catalogAdmits(catalog: ModelCatalogView | undefined, model: string, profile?: string) {
   return !!catalog?.models?.some(value => value.model === model && (profile === undefined || value.reasoningProfiles?.some(item => item.id === profile)));
 }
+
+/** Equivalent model selection preserves the configured override; a different
+ * model uses native defaults unless an exact profile is explicitly selected. */
+export function modelSelectionChanges(choices: readonly ModelChoice[], current: string | undefined, profile: string | undefined, model: string, selectedProfile?: string) {
+  return model !== current || selectedProfile !== undefined && selectedProfile !== (profile ?? choices.find(choice => choice.id === current)?.defaultProfile);
+}

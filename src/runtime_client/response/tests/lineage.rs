@@ -171,7 +171,7 @@ fn deep_lineage_reopen_preserves_response_facts_without_execution_ownership() {
         Some(1280)
     );
     let owned = crate::runtime_client::agent_statistics::StatisticsFold::default()
-        .read(&store, store.presentation_frontier().unwrap(), None)
+        .read(&store, store.presentation_frontier().unwrap(), || None)
         .unwrap();
     assert_eq!(owned.statistics.turns, 1);
     assert_eq!(

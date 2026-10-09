@@ -10,7 +10,11 @@ The read uses only the parent's owned child store, never starts or resumes a
 child, and is independent of transcript pagination. Repeated reads fold only
 new facts; recovery replays durable evidence. Active clocks carry native
 `started_at`, `observed_at` and `running`; non-running clocks freeze at the last
-observed fact. Clients must upgrade together; previous versions are rejected.
+observed fact. `running` is current driver execution evidence, not `AgentState ==
+Active`: Stopping may still own work. A durable Attempt terminal ends its interval
+before physical cleanup; missing terminal evidence alone never permits a clock
+to advance. No wire shape or protocol version changes are required by this
+semantic correction. Clients must upgrade together; previous versions are rejected.
 
 App Server v38 retains the v37 / Runtime Client v59 Trace input ownership contract at the
 current read cut. See [Trace retained-input ownership](#trace-retained-input-ownership-v38).

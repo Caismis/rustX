@@ -191,7 +191,7 @@ describe('native App Server connection', () => {
     s.socket.close(); await rejected;
     expect(s.client.getSnapshot().views.A).toMatchObject({ attachmentIntent: 'released', attachment: 'stale' });
     await s.connect();
-    expect(s.requests.slice(baseline).filter(({ request }) => request.method === 'session/attach').map(({ request }) => request.params)).toEqual([{ session_id: 'B' }]);
+    expect(s.requests.slice(baseline).filter(({ request }) => request.method === 'session/attach').map(({ request }) => request.params)).toEqual([{ session_id: 'B', node_id: 'node-B' }]);
     expect(s.requests.filter(({ request }) => request.method === method)).toHaveLength(1);
     expect(s.loaded.has('A')).toBe(true); expect(s.coldLoads.get('A')).toBe(1);
     expect(s.client.getSnapshot().uncertain).toEqual([expect.objectContaining({ method, sessionId: 'A' })]);
@@ -212,7 +212,7 @@ describe('native App Server connection', () => {
     }
     expect(s.maxClaims).toBe(2);
     const baseline = s.requests.length; await s.connect();
-    expect(s.requests.slice(baseline).filter(({ request }) => request.method === 'session/attach').map(({ request }) => request.params)).toEqual([{ session_id: 'B' }]);
+    expect(s.requests.slice(baseline).filter(({ request }) => request.method === 'session/attach').map(({ request }) => request.params)).toEqual([{ session_id: 'B', node_id: 'node-B' }]);
   });
   it('close during attach waits for its exact target, then detaches without changing runtime facts', async () => {
     const s = server(); await s.connect(); s.held.add('session/attach');
@@ -241,7 +241,7 @@ describe('native App Server connection', () => {
     const s = server(); s.client.restoreViews(['A', 'B']); s.held.add('session/attach');
     const connecting = s.connect(); const request = await s.waitFor('session/attach', 1);
     await s.client.release('B'); s.reply(request); await connecting;
-    expect(s.requests.filter(({ request }) => request.method === 'session/attach').map(({ request }) => request.params)).toEqual([{ session_id: 'A' }]);
+    expect(s.requests.filter(({ request }) => request.method === 'session/attach').map(({ request }) => request.params)).toEqual([{ session_id: 'A', node_id: 'node-A' }]);
     expect(s.client.getSnapshot().views.B.attachmentIntent).toBe('released');
   });
   it('a rejected release does not restore attachment intent or claim successful detach', async () => {
@@ -541,7 +541,7 @@ it('Release permanently revokes an Open suspended in Product Host admission', as
 });
 
 it('Release revokes an Open waiting for RPC capacity before final dispatch', async () => {
-  const s = server(); await s.connect(); s.held.add('session/settings');
+  const s = server(); await s.connect(); await s.client.attach('A'); await s.client.release('A'); s.requests.length = 0; s.held.add('session/settings');
   const reads = Array.from({ length: 8 }, () => s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings'));
   await s.waitFor('session/settings', 8);
   const entered = deferred<void>();
@@ -648,7 +648,7 @@ it('terminal local Release permits a later explicit Open through normal native a
 });
 
 it('terminal Release after RPC backpressure settles an unsent Open without publishing an obsolete error', async () => {
-  const s = server(); await s.connect(); s.held.add('session/settings');
+  const s = server(); await s.connect(); await s.client.attach('A'); await s.client.release('A'); s.requests.length = 0; s.held.add('session/settings');
   const reads = Array.from({ length: 8 }, () => s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings'));
   await s.waitFor('session/settings', 8);
   const entered = deferred<void>(), request = s.client.request.bind(s.client);
@@ -678,11 +678,12 @@ it('terminal Release during final validation aborts the reservation and settles 
   const signal = await entered.promise; expect(signal.aborted).toBe(false);
   const closing = s.client.release('A'); gate.resolve(true); await Promise.all([refused, closing]);
   expect(signal.aborted).toBe(true); expectReleased(s); expect(states).not.toContain('error');
-  expect(s.requests.slice(baseline)).toEqual([]);
+  expect(s.requests.slice(baseline).map(({ request }) => request.method)).toEqual(['session/tree']);
+  const afterIdentity = s.requests.length;
   s.held.add('session/settings');
   const reads = Array.from({ length: 8 }, () => s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings'));
-  expect(s.requests.slice(baseline)).toHaveLength(8);
-  for (const { request } of s.requests.slice(baseline)) s.reply(request);
+  expect(s.requests.slice(afterIdentity)).toHaveLength(8);
+  for (const { request } of s.requests.slice(afterIdentity)) s.reply(request);
   await Promise.all(reads);
 });
 

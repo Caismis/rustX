@@ -1029,7 +1029,7 @@ fn agent_statistics_replays_incrementally_with_full_native_metrics() {
     );
     let cut = store.presentation_frontier().unwrap();
     let first_cut = cut;
-    let first = fold.read(&store, cut, None).unwrap();
+    let first = fold.read(&store, cut, || None).unwrap();
     assert_eq!(first.statistics, statistics(&store, cut).unwrap());
     assert_eq!(
         first.occupancy,
@@ -1046,7 +1046,7 @@ fn agent_statistics_replays_incrementally_with_full_native_metrics() {
             .is_some()
     );
     assert_eq!(first.duration.settled_ms, 10_000);
-    assert_eq!(first, fold.read(&store, cut, None).unwrap());
+    assert_eq!(first, fold.read(&store, cut, || None).unwrap());
 
     // A later activation accumulates work, never the ninety-second idle gap.
     append_at(
@@ -1060,7 +1060,7 @@ fn agent_statistics_replays_incrementally_with_full_native_metrics() {
     append_at("two", 110, RuntimeEvent::TurnStarted);
     let cut = store.presentation_frontier().unwrap();
     let live = fold
-        .read(&store, cut, Some(base + chrono::Duration::seconds(100)))
+        .read(&store, cut, || Some(base + chrono::Duration::seconds(100)))
         .unwrap();
     assert_eq!(live.statistics.model_requests, 2);
     assert_eq!(live.statistics.requests_with_usage, 1);
@@ -1068,12 +1068,12 @@ fn agent_statistics_replays_incrementally_with_full_native_metrics() {
     assert!(live.occupancy.is_none());
     assert!(live.duration.active.as_ref().unwrap().running);
     assert_eq!(live.duration.settled_ms, 10_000);
-    let frozen = fold.read(&store, cut, None).unwrap();
+    let frozen = fold.read(&store, cut, || None).unwrap();
     assert!(!frozen.duration.active.as_ref().unwrap().running);
     // A new activation must not restart the abandoned previous clock.
     assert!(
         !fold
-            .read(&store, cut, Some(base + chrono::Duration::seconds(200)))
+            .read(&store, cut, || Some(base + chrono::Duration::seconds(200)))
             .unwrap()
             .duration
             .active
@@ -1082,10 +1082,12 @@ fn agent_statistics_replays_incrementally_with_full_native_metrics() {
     );
     drop(store);
     let store = SqliteConversationStore::open_existing(id, &path).unwrap();
-    assert_eq!(first, fold.read(&store, first_cut, None).unwrap());
-    assert_eq!(frozen, fold.read(&store, cut, None).unwrap());
+    assert_eq!(first, fold.read(&store, first_cut, || None).unwrap());
+    assert_eq!(frozen, fold.read(&store, cut, || None).unwrap());
     assert_eq!(
         frozen,
-        StatisticsFold::default().read(&store, cut, None).unwrap()
+        StatisticsFold::default()
+            .read(&store, cut, || None)
+            .unwrap()
     );
 }

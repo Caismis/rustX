@@ -78,7 +78,7 @@ impl StatisticsFold {
         &mut self,
         store: &dyn ConversationStore,
         through: u64,
-        running_since: Option<DateTime<Utc>>,
+        running_since: impl FnOnce() -> Option<DateTime<Utc>>,
     ) -> Result<AgentStatistics, ConversationStoreError> {
         if through != self.through {
             let mut next = if through < self.through {
@@ -129,7 +129,7 @@ impl StatisticsFold {
         }
         let mut view = self.view.clone();
         if let Some(active) = &mut view.duration.active {
-            active.running = running_since.is_some_and(|since| active.started_at >= since);
+            active.running = running_since().is_some_and(|since| active.started_at >= since);
         }
         Ok(view)
     }
@@ -287,7 +287,7 @@ mod tests {
                 .entry(b)
                 .lock()
                 .unwrap()
-                .read(&store, through, None)
+                .read(&store, through, || None)
                 .unwrap()
         })
         .await

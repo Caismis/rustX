@@ -69,12 +69,15 @@ export interface SessionView {
   /** Release revokes old observation proofs even if Open restores intent in the same render batch. */
   attachmentIntentRevision?: number;
   /** Committed native attachment observation authority; intent or retained target cannot mint it. */
-  attachmentObservation?: { readonly generation: number; readonly target: AttachmentTarget; readonly intentRevision: number };
+  attachmentObservation?: { readonly generation: number; readonly target: AttachmentTarget; readonly nodeId: string; readonly intentRevision: number };
   // Last server observation, independent of focus and local intent.
   attachment: 'detached' | 'attaching' | 'attached' | 'resynchronizing' | 'stale' | 'error';
   target?: AttachmentTarget;
   /** Exact native node explicitly opened by this view; retained across reconnect. */
   nodeId?: string;
+  /** Native tree evidence for the desired Node, separate from a retained claim. */
+  nodeConversationId?: string;
+  attachmentNodeId?: string;
   snapshot?: RuntimeClientSnapshot;
   trace?: TraceCache;
   cursor?: RuntimeClientCursor;
@@ -339,6 +342,7 @@ export class AppServerClient {
     const state = this.getSnapshot(), view = state.views[id];
     return !!admission && view?.attachmentObservation === admission && state.generation === admission.generation
       && view.attachmentIntent === 'wanted' && (view.attachmentIntentRevision ?? 0) === admission.intentRevision
+      && view.nodeId === admission.nodeId && view.attachmentNodeId === admission.nodeId
       && view.attachment === 'attached' && !view.deleting && sameTarget(view.target, admission.target);
   }
   private publish(patch: Partial<ClientView>) {
@@ -469,7 +473,7 @@ export class AppServerClient {
           this.settleDeletion(id, observed.result);
           if (!this.state.views[id] || this.state.views[id].deletionRecovery) continue;
         }
-        if (this.state.views[id]?.attachmentIntent === 'wanted') await this.acquireAttachment(id).catch(() => {});
+        if (this.state.views[id]?.attachmentIntent === 'wanted') await this.attach(id).catch(() => {});
       }
       if (this.current(generation)) this.publish({ connection: 'connected' });
     } catch (error) {
@@ -1009,45 +1013,88 @@ export class AppServerClient {
     }
   }
   /** Explicit Open / Attach gesture. Visibility itself does not acquire a claim. */
-  attach(id: string, nodeId?: string, navigationCurrent: () => boolean = () => true, attached?: (target: AttachmentTarget) => void): Promise<void> {
-    if (nodeId && this.state.views[id]?.target && this.state.views[id]?.nodeId !== nodeId) return Promise.reject(new Error('Use branch switching to open another node.'));
-    if (this.state.views[id]?.deleting) return Promise.reject(new Error('Verify the pending Session deletion before opening it.'));
-    this.setSession(id, { attachmentIntent: 'wanted', ...(nodeId ? { nodeId } : {}) });
+  async attach(id: string, nodeId?: string, navigationCurrent: () => boolean = () => true, attached?: (target: AttachmentTarget) => void): Promise<void> {
+    if (!navigationCurrent()) return;
+    const view = this.state.views[id];
+    if (view?.deleting) throw new Error('Verify the pending Session deletion before opening it.');
+    const generation = this.state.generation, revision = view?.attachmentIntentRevision ?? 0;
+    // Resolve an omitted selector from native metadata before admitting the Open.
+    // Once queued, it always addresses this exact Node, never a mutable default.
+    let node = nodeId ?? view?.nodeId ?? this.state.sessions.find(row => row.id === id)?.active_node;
+    if (!node) {
+      const current = () => this.current(generation) && navigationCurrent() && (this.state.views[id]?.attachmentIntentRevision ?? 0) === revision
+        && this.state.views[id]?.nodeId === view?.nodeId && !this.attachmentChanges.has(id);
+      try {
+        const result = await this.request({ method: 'session/read', params: { session_id: id } }, 'session', undefined, current);
+        if (!current()) return;
+        if (result.session.id !== id) throw new Error('Mismatched Session identity.');
+        node = result.session.active_node;
+      } catch (error) {
+        if (current()) this.setSession(id, { attachmentIntent: 'wanted', attachment: 'error', error: String(error) });
+        throw error;
+      }
+    }
+    const latest = this.state.views[id];
+    if (this.attachmentChanges.get(id)?.kind === 'switch') throw new Error('Wait for the current Node switch before opening.');
+    if (latest && latest.nodeId !== node
+      && (latest.attachmentIntent === 'wanted' && this.attachmentChanges.has(id)
+        || latest.target && this.attachmentChanges.get(id)?.kind !== 'detach')) throw new Error('Use branch switching to open another node.');
+    // A Release may queue a new Node behind cleanup; failed cleanup cannot make
+    // the old target satisfy it (the queued acquisition checks claim identity).
+    this.setSession(id, { attachmentIntent: 'wanted', nodeId: node,
+      ...(latest?.nodeId !== node ? { nodeConversationId: undefined, snapshot: undefined, cursor: undefined, history: undefined, trace: undefined, preview: undefined, statisticsPreview: undefined, tracePreview: undefined } : {}) });
     return this.acquireAttachment(id, navigationCurrent, attached);
   }
   private acquireAttachment(id: string, navigationCurrent: () => boolean = () => true, attached?: (target: AttachmentTarget) => void): Promise<void> {
     // Capture the Open's revision before it waits behind earlier gestures.
     const intentRevision = this.state.views[id]?.attachmentIntentRevision ?? 0;
+    const nodeId = this.state.views[id]?.nodeId;
+    if (!nodeId) return Promise.reject(new Error('Open requires an observed native Session Node.'));
     return this.changeAttachment(id, 'attach', async generation => {
       const openCurrent = () => this.current(generation) && navigationCurrent()
         && this.state.views[id]?.attachmentIntent === 'wanted'
-        && (this.state.views[id]?.attachmentIntentRevision ?? 0) === intentRevision;
+        && (this.state.views[id]?.attachmentIntentRevision ?? 0) === intentRevision
+        && this.state.views[id]?.nodeId === nodeId;
       if (!openCurrent()) return;
       const existing = this.state.views[id]?.target;
-      if (existing) { attached?.(existing); return this.refresh(id); }
+      if (existing) {
+        if (this.state.views[id]?.attachmentNodeId !== nodeId) throw new Error('The previous Node still owns an attachment. Release it before opening another node.');
+        attached?.(existing); return this.refresh(id);
+      }
       this.setSession(id, { attachment: 'attaching', modelIntent: undefined, preview: undefined, statisticsPreview: undefined, tracePreview: undefined, error: undefined });
       const epoch = (this.attachmentEpochs.get(id) ?? 0) + 1;
       this.attachmentEpochs.set(id, epoch);
       this.summarySettled.delete(id);
-      await this.performAttach(id, generation, epoch, intentRevision, openCurrent, attached);
+      await this.performAttach(id, nodeId, generation, epoch, intentRevision, openCurrent, attached);
     });
   }
-  private async readHistoryPreview(id: string, generation: number, epoch: number, admissionCurrent: () => boolean) {
-    const node = this.state.views[id]?.nodeId;
-    const current = () => this.current(generation) && admissionCurrent() && this.attachmentEpochs.get(id) === epoch
-      && this.state.views[id]?.attachment === 'attaching' && this.state.views[id]?.nodeId === node;
+  /** One observation scope for all cold durable reads. The Conversation is
+   * native tree evidence, never inferred from whichever response arrives first. */
+  private coldReadScope(id: string, admitted: () => boolean = () => true) {
+    const view = this.state.views[id];
+    if (!view?.nodeId || !view.nodeConversationId) return;
+    const node = view.nodeId, conversation = view.nodeConversationId;
+    const generation = this.state.generation, epoch = this.attachmentEpochs.get(id), revision = view.attachmentIntentRevision ?? 0;
+    const current = () => admitted() && this.current(generation) && this.attachmentEpochs.get(id) === epoch
+      && this.state.views[id]?.attachment === 'attaching' && this.state.views[id]?.attachmentIntent === 'wanted'
+      && (this.state.views[id]?.attachmentIntentRevision ?? 0) === revision
+      && this.state.views[id]?.nodeId === node && this.state.views[id]?.nodeConversationId === conversation;
+    return { node, conversation, current };
+  }
+  private async readHistoryPreview(id: string, admitted: () => boolean) {
+    const scope = this.coldReadScope(id, admitted); if (!scope) return;
+    const { node, conversation, current } = scope;
     try {
       const result = await this.request({ method: 'session/history', params: { session_id: id, node_id: node, at: { type: 'latest' }, limit: HISTORY_PAGE_SIZE } }, 'session_history', undefined, current);
-      if (current()) this.setSession(id, { preview: { conversationId: result.conversation_id, history: replaceTranscript(result.window.page) } });
+      if (current() && result.conversation_id === conversation && result.window.cut.conversation_id === conversation) this.setSession(id, { preview: { conversationId: conversation, history: replaceTranscript(result.window.page) } });
     } catch { /* Attachment recovery owns errors; a late read cannot replace the live view. */ }
   }
-  private async readColdMetadata(id: string, generation: number, epoch: number, admitted: () => boolean) {
-    const node = this.state.views[id]?.nodeId;
-    const current = () => admitted() && this.current(generation) && this.attachmentEpochs.get(id) === epoch
-      && this.state.views[id]?.attachment === 'attaching' && this.state.views[id]?.attachmentIntent === 'wanted';
+  private async readColdMetadata(id: string, admitted: () => boolean) {
+    const scope = this.coldReadScope(id, admitted); if (!scope) return;
+    const { node, conversation, current } = scope;
     await Promise.allSettled([
       this.request({ method: 'session/statistics', params: { session_id: id, node_id: node } }, 'session_statistics', undefined, current)
-        .then(result => { if (current()) this.setSession(id, { statisticsPreview: { conversationId: result.conversation_id, statistics: result.statistics, occupancy: result.occupancy } }); }),
+        .then(result => { if (current() && result.conversation_id === conversation) this.setSession(id, { statisticsPreview: { conversationId: result.conversation_id, statistics: result.statistics, occupancy: result.occupancy } }); }),
       this.request({ method: 'session/settings', params: { session_id: id } }, 'settings', undefined, current)
         .then(result => { if (current()) this.setSession(id, { settings: result.settings }); }),
     ]);
@@ -1056,10 +1103,9 @@ export class AppServerClient {
   private async readTracePreview(id: string, admitted: () => boolean, older = false) {
     const view = this.state.views[id], previous = older ? view?.tracePreview : undefined;
     if (older && (!previous || previous.cache.loading || previous.cache.page.next_cursor == null)) return;
-    const generation = this.state.generation, epoch = this.attachmentEpochs.get(id), node = view?.nodeId;
-    const current = () => admitted() && this.current(generation) && this.attachmentEpochs.get(id) === epoch
-      && this.state.views[id]?.attachment === 'attaching' && this.state.views[id]?.attachmentIntent === 'wanted'
-      && this.state.views[id]?.nodeId === node;
+    const scope = this.coldReadScope(id, admitted); if (!scope) return;
+    const { node, conversation, current } = scope;
+    if (previous && previous.conversationId !== conversation) return;
     const cache = previous?.cache ?? replaceTrace({ records: [], next_cursor: null });
     const limit = Math.min(TRACE_PAGE_SIZE, TRACE_LIMIT - cache.page.records.length);
     if (limit < 1 || !current()) return;
@@ -1069,7 +1115,7 @@ export class AppServerClient {
       if (!admission) return;
       const result = await this.request({ method: 'session/traceHistory', params: { session_id: id, node_id: node, before: older ? cache.page.next_cursor : null, limit } }, 'session_trace_history', undefined, admission);
       if (!current()) return;
-      if (previous && result.conversation_id !== previous.conversationId) throw new Error('Trace conversation changed.');
+      if (result.conversation_id !== conversation) throw new Error('Trace conversation changed.');
       this.setSession(id, { tracePreview: { conversationId: result.conversation_id, cache: older ? prependTrace(this.state.views[id].tracePreview!.cache, result.page) : replaceTrace(result.page) } });
     } catch (error) {
       if (current()) this.setSession(id, { tracePreview: { conversationId: previous?.conversationId ?? '', cache: { ...(this.state.views[id]?.tracePreview?.cache ?? cache), loading: false, error: String(error) } } });
@@ -1078,10 +1124,10 @@ export class AppServerClient {
   private async readTracePreviewDetail(id: string, record: string) {
     const preview = this.state.views[id]?.tracePreview;
     if (!preview || preview.cache.details[record]?.loading || preview.cache.details[record]?.detail) return;
-    const generation = this.state.generation, epoch = this.attachmentEpochs.get(id), node = this.state.views[id]?.nodeId;
+    const scope = this.coldReadScope(id); if (!scope || preview.conversationId !== scope.conversation) return;
+    const node = scope.node;
     const pending = beginTraceDetail(preview.cache, record);
-    const current = () => this.current(generation) && this.attachmentEpochs.get(id) === epoch
-      && this.state.views[id]?.attachment === 'attaching' && this.state.views[id]?.attachmentIntent === 'wanted'
+    const current = () => scope.current() && this.state.views[id]?.tracePreview?.conversationId === scope.conversation
       && this.state.views[id]?.tracePreview?.cache.details[record] === pending.details[record];
     this.setSession(id, { tracePreview: { ...preview, cache: pending } });
     try {
@@ -1098,16 +1144,17 @@ export class AppServerClient {
   async loadEarlierPreview(id: string): Promise<void> {
     const view = this.state.views[id], preview = view?.preview, before = preview?.history.page.next_cursor;
     if (!preview || preview.history.loading || before == null || view.attachment !== 'attaching') return;
-    const generation = this.state.generation, epoch = preview.history.epoch, node = view.nodeId;
-    const current = () => this.current(generation) && this.state.views[id]?.attachment === 'attaching'
-      && this.state.views[id]?.nodeId === node && this.state.views[id]?.preview?.history.epoch === epoch;
+    const scope = this.coldReadScope(id); if (!scope || preview.conversationId !== scope.conversation) return;
+    const epoch = preview.history.epoch, node = scope.node;
+    const current = () => scope.current() && this.state.views[id]?.preview?.conversationId === scope.conversation
+      && this.state.views[id]?.preview?.history.epoch === epoch;
     this.setSession(id, { preview: { ...preview, history: { ...preview.history, loading: true, error: undefined } } });
     try {
       const admission = await this.admitAttachment(id, current);
       if (!admission) return;
       const result = await this.request({ method: 'session/history', params: { session_id: id, node_id: node, at: { type: 'older', before }, limit: HISTORY_PAGE_SIZE } }, 'session_history', undefined, admission);
       if (!current()) return;
-      if (result.conversation_id !== preview.conversationId || result.window.page.next_cursor != null && BigInt(result.window.page.next_cursor) >= BigInt(before)) throw new Error('Invalid history page.');
+      if (result.conversation_id !== preview.conversationId || result.window.cut.conversation_id !== preview.conversationId || result.window.page.next_cursor != null && BigInt(result.window.page.next_cursor) >= BigInt(before)) throw new Error('Invalid history page.');
       this.setSession(id, { preview: { ...preview, history: prependTranscript(preview.history, result.window.page) } });
     } catch (error) {
       if (current()) this.setSession(id, { preview: { ...preview, history: { ...preview.history, error: String(error) } } });
@@ -1139,7 +1186,7 @@ export class AppServerClient {
     }).catch(() => {});
     return work;
   }
-  private async performAttach(id: string, generation: number, epoch: number, intentRevision: number, openCurrent: () => boolean, attached?: (target: AttachmentTarget) => void) {
+  private async performAttach(id: string, nodeId: string, generation: number, epoch: number, intentRevision: number, openCurrent: () => boolean, attached?: (target: AttachmentTarget) => void) {
     const current = () => this.current(generation) && this.attachmentEpochs.get(id) === epoch;
     // Dispatch authority expires with this Open; response settlement below
     // deliberately keeps the generation/epoch fence after a request is sent.
@@ -1151,28 +1198,51 @@ export class AppServerClient {
     try {
       const admitted = await this.admitAttachment(id, admissionCurrent);
       if (!admitted || !admitted.current()) return;
+      // Node -> Conversation is immutable native graph evidence. Retain it
+      // across Release, but never reuse another Node's mapping.
+      let conversationId = this.state.views[id]?.nodeConversationId;
+      let offset: number | null | undefined = 0;
+      while (offset != null && !conversationId) {
+        const tree: Extract<MethodResult, { type: 'tree' }> = await this.request({ method: 'session/tree', params: { session_id: id, offset, limit: 32 } }, 'tree', undefined, admitted.current);
+        if (!admitted.current()) return;
+        conversationId = tree.nodes.find(node => node.id === nodeId)?.conversation_id;
+        if (tree.next_offset != null && tree.next_offset <= offset) throw new Error('Invalid Session tree page.');
+        offset = tree.next_offset;
+      }
+      if (!conversationId) throw new Error('Open Node is absent from the native Session tree.');
+      this.setSession(id, { nodeConversationId: conversationId });
       const opening = { current: admitted.current, validate: async (signal: AbortSignal) => {
         const valid = await admitted.validate(signal);
         // Both reads belong to the same explicitly admitted Open gesture. Start
         // durable history at its final validation, independently of runtime load.
         if (valid && admitted.current()) {
-          void this.readHistoryPreview(id, generation, epoch, admitted.current);
-          void this.readColdMetadata(id, generation, epoch, admitted.current);
+          void this.readHistoryPreview(id, admitted.current);
+          void this.readColdMetadata(id, admitted.current);
           void this.readTracePreview(id, admitted.current);
         }
         return valid;
       } };
       nativeAbsenceProven = false;
-      const result = await this.request({ method: 'session/attach', params: { session_id: id, node_id: this.state.views[id]?.nodeId } }, 'attached', undefined, opening);
+      const result = await this.request({ method: 'session/attach', params: { session_id: id, node_id: nodeId } }, 'attached', undefined, opening);
       if (!current()) return;
       target = result.target;
       if (result.configuration) this.publish({ configuration: { ...this.state.configuration, [id]: result.configuration } });
-      if (result.target.session_id !== id || result.target.conversation_id !== result.snapshot.conversation_id) throw new Error('Mismatched attachment identity.');
+      // Even a malformed/obsolete acknowledgement retains its native claim for Release.
+      this.setSession(id, { target, attachmentNodeId: nodeId });
+      if (result.target.session_id !== id || result.target.conversation_id !== conversationId
+        || result.snapshot.conversation_id !== conversationId) throw new Error('Mismatched attachment identity.');
       // Commit only this operation's native admission. Release during an in-flight
       // attach still retains its target for detach, but cannot restore observation.
       const attachmentObservation = this.state.views[id]?.attachmentIntent === 'wanted'
         && (this.state.views[id]?.attachmentIntentRevision ?? 0) === intentRevision
-        ? { generation, target: result.target, intentRevision } : undefined;
+        && this.state.views[id]?.nodeId === nodeId
+        ? { generation, target: result.target, nodeId, intentRevision } : undefined;
+      if (!attachmentObservation) {
+        // Native ownership is settled, but its Snapshot is not evidence for the
+        // newer desired Node. The queued Release alone owns claim cleanup.
+        this.setSession(id, { attachment: 'attached' });
+        return;
+      }
       this.setSession(id, { attachmentObservation, target: result.target, snapshot: result.snapshot, preview: undefined, statisticsPreview: undefined, tracePreview: undefined, cursor: result.cursor, history: replaceTranscript(result.snapshot.transcript, this.state.views[id]?.history), turnOutline: undefined, turnNavigation: undefined, trace: this.supersedeTrace(id, replaceTrace(result.snapshot.trace, this.state.views[id]?.trace)), attachment: 'attached' });
       attached?.(result.target);
       this.reconcileInteractions(id); this.settleSubmissions(id);
@@ -1221,6 +1291,7 @@ export class AppServerClient {
     if (existing) return existing;
     const target = this.state.views[id]?.target;
     if (!target) return Promise.resolve();
+    if (this.state.views[id]?.nodeId !== this.state.views[id]?.attachmentNodeId) return Promise.reject(new Error('The retained attachment belongs to another Node.'));
     const generation = this.state.generation;
     const work = this.performRefresh(id, target, generation);
     this.refreshes.set(id, work);
@@ -1229,7 +1300,8 @@ export class AppServerClient {
   }
   private async performRefresh(id: string, target: AttachmentTarget, generation: number) {
     let replayRepairs = 0;
-    const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
+    const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target)
+      && this.state.views[id]?.nodeId === this.state.views[id]?.attachmentNodeId;
     try {
       while (this.dirty.has(id) && current()) {
         this.dirty.delete(id);
@@ -1587,13 +1659,14 @@ export class AppServerClient {
   }
   target(id: string) {
     const view = this.state.views[id];
-    if (view?.deleting || !this.initialized || view?.attachment !== 'attached' || !view.target) throw new Error('Session is not authoritatively attached. Refresh or reconnect.');
+    if (view?.deleting || !this.initialized || view?.attachment !== 'attached' || !view.target || view.nodeId !== view.attachmentNodeId) throw new Error('Session is not authoritatively attached. Refresh or reconnect.');
     return view.target;
   }
-  /** Retain an observed tree identity as navigation intent, never infer it from
-   * the Session's mutable default. Reconnect then opens the same lineage. */
-  rememberNode(target: AttachmentTarget, nodeId: string) {
-    if (sameTarget(this.state.views[target.session_id]?.target, target)) this.setSession(target.session_id, { nodeId });
+  /** Validate command/tree evidence against the acquired Node. Observation
+   * never changes desired identity; switching belongs to its explicit lifecycle. */
+  assertAttachmentNode(target: AttachmentTarget, nodeId: string) {
+    const view = this.state.views[target.session_id];
+    if (!sameTarget(view?.target, target) || view?.attachmentNodeId !== nodeId) throw new Error('Node does not own the current attachment.');
   }
   async uploadStatus(id: string, operationId: string) {
     const target = this.target(id), generation = this.state.generation;
@@ -1913,12 +1986,22 @@ export class AppServerClient {
     });
   }
   switchNode(id: string, nodeId: string): Promise<void> {
-    const target = this.target(id);
+    if (this.attachmentChanges.has(id)) return Promise.reject(new Error('Wait for the current attachment operation before switching nodes.'));
+    const target = this.target(id), epoch = this.attachmentEpochs.get(id);
+    const intentRevision = (this.state.views[id]?.attachmentIntentRevision ?? 0) + 1;
+    this.setSession(id, { attachmentObservation: undefined, attachmentIntentRevision: intentRevision });
     return this.changeAttachment(id, 'switch', async generation => {
-      await this.request({ method: 'session/switchNode', params: { target, node_id: nodeId } }, 'session');
-      if (this.current(generation)) {
+      const current = () => this.current(generation) && this.attachmentEpochs.get(id) === epoch && sameTarget(this.state.views[id]?.target, target);
+      const dispatchCurrent = () => current() && this.state.views[id]?.attachmentIntent === 'wanted'
+        && (this.state.views[id]?.attachmentIntentRevision ?? 0) === intentRevision;
+      const result = await this.request({ method: 'session/switchNode', params: { target, node_id: nodeId } }, 'session', undefined, dispatchCurrent);
+      if (current()) {
+        if (result.session.id !== id || result.session.active_node !== nodeId) throw new Error('Mismatched switched Node identity.');
         this.retireAttachmentWork(id);
-        this.setSession(id, { target: undefined, attachment: 'detached', nodeId, error: undefined });
+        this.setSession(id, { target: undefined, attachmentNodeId: undefined, attachment: 'detached', error: undefined,
+          // The ACK settles the old claim, but cannot replace a newer Open's Node.
+          ...((this.state.views[id]?.attachmentIntentRevision ?? 0) === intentRevision
+            ? { nodeId, nodeConversationId: result.session.active_conversation_id } : {}) });
       }
     });
   }

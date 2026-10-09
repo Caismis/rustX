@@ -84,7 +84,7 @@ it('an obsolete attachment cannot publish late meters or overwrite its successor
     if(++calls===1)return new Promise(resolve=>{release=resolve;});
     return {type:'agent_statistics',metrics:{...agentMetrics,duration:{settled_ms:'999',active:null}}};
   });
-  const publish=(attachment:string)=>s.publish({views:{[cfg3Session]:{...s.client.getSnapshot().views[cfg3Session],target:{...cfg3Target,attachment_id:attachment},attachmentObservation:{generation:1,target:{...cfg3Target,attachment_id:attachment},intentRevision:0},snapshot:{...snapshot(),agents:[agent]}}}});
+  const publish=(attachment:string)=>s.publish({views:{[cfg3Session]:{...s.client.getSnapshot().views[cfg3Session],target:{...cfg3Target,attachment_id:attachment},attachmentObservation:{generation:1,nodeId:'node-fixture',target:{...cfg3Target,attachment_id:attachment},intentRevision:0},snapshot:{...snapshot(),agents:[agent]}}}});
   publish('old');
   function Meter(){return <output>{useSubagents()?.metrics.child?.duration.settled_ms ?? 'unknown'}</output>;}
   const ui=render(<SubagentScope client={s.client} sessionId={cfg3Session}><Meter/></SubagentScope>);

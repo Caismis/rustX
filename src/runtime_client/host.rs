@@ -1758,12 +1758,11 @@ impl ClientInner {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let through = store.presentation_frontier().map_err(failed)?;
         let metrics = fold
-            .read(
-                &store,
-                through,
-                (agent.state == crate::runtime::subagent::AgentState::Active)
-                    .then_some(agent.started_at),
-            )
+            .read(&store, through, || {
+                self.agent_registry()
+                    .ok()?
+                    .execution_started_at(&agent.activation_id)
+            })
             .map_err(failed)?;
         Ok(RuntimeClientResult::AgentStatistics { metrics })
     }

@@ -57,7 +57,7 @@ export class CommandSession {
     }
     this.requireCurrent();
     if (!nodeId) throw new Error('Attached Conversation is absent from the native Session tree.');
-    this.client.rememberNode(this.target, nodeId);
+    this.client.assertAttachmentNode(this.target, nodeId);
     return { selections: page.boundaries.map(boundary => ({ target: this.target, nodeId: nodeId!, boundary })), nextOffset: page.next_offset };
   }
   async responseSelection(response: CompletedResponseView): Promise<HistoricalSelection> {
@@ -119,7 +119,7 @@ export class CommandSession {
     const result = await this.client.request({ method: 'session/tree', params: { session_id: this.sessionId, offset, limit: 32 } }, 'tree');
     this.requireCurrent();
     const attached = result.nodes.find(node => node.conversation_id === this.target.conversation_id);
-    if (attached) this.client.rememberNode(this.target, attached.id);
+    if (attached) this.client.assertAttachmentNode(this.target, attached.id);
     return result;
   }
   async openNode(nodeId: string, conversationId: string) {

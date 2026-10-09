@@ -83,7 +83,7 @@ function nativeFixture() {
   server.handlers.set('session/models', () => ({ type: 'models', catalog: { models: [{ model: 'fixture/first' }, { model: 'fixture/second' }] } } as Extract<MethodResult, { type: 'models' }>));
   server.handlers.set('session/setModel', request => { if (request.method !== 'session/setModel') throw new Error('wrong method'); model = request.params.config.model; return { type: 'model', model: modelView() }; });
   server.handlers.set('session/boundaries', () => ({ type: 'boundaries', surface_revision: boundary.surface_revision, boundaries: [boundary] }));
-  server.handlers.set('session/tree', () => ({ type: 'tree', nodes }));
+  server.handlers.set('session/tree', request => ({ type: 'tree', nodes: request.method === 'session/tree' && request.params.session_id === 'B' ? [{ id: 'node-B', conversation_id: 'conversation-B', ordinal: '1', origin: { type: 'new' } }] : nodes }));
   const transition = (request: Request): MethodResult => {
     if (request.method !== 'session/fork' && request.method !== 'session/branch') throw new Error('wrong method');
     if (request.params.surface_revision !== boundary.surface_revision || request.params.boundary !== boundary.message.id) throw new RpcFailure({ code: -32602, message: 'Invalid historical Surface revision or user boundary' });

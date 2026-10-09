@@ -6936,8 +6936,14 @@ execution. Missing provider reports stay explicit through usage coverage.
 Timing uses the existing native generation evidence and foreground tool spans.
 Elapsed working time sums Attempt intervals across activations, excluding idle
 gaps. An unfinished interval advances in the UI only when its start belongs to
-the currently active activation; otherwise it freezes at the last observed
-fact. Durable store opening, frontier, replay and occupancy reads execute on the
+the exact current activation and its child driver still attests execution. The
+lease starts at the child's reliable DelegateAccepted frame, survives cancellation
+and sealing (Stopping closes admission, not execution), and ends on a terminal
+frame, control loss, or driver drop. It is independent of physical containment
+and terminal publication. Durable Attempt terminal events end the working
+interval even before physical cleanup completes. An unconfirmed interval freezes
+at its last durable fact; recovery has no live driver lease. The lease is read
+after the durable fold, so blocking store work cannot preserve an expired proof. Durable store opening, frontier, replay and occupancy reads execute on the
 blocking pool. The cache map lock only locates a per-Conversation fold; each fold
 has its own lock, so a blocked child does not serialize unrelated meter reads or
 hold up async dispatch. The TUI transport recognizes the same read method.
@@ -6962,9 +6968,28 @@ Attachment observation admission belongs to the client's existing serialized
 attachment lifecycle. Desired `attachmentIntent`, retained native `target`, and
 committed `attachmentObservation` are distinct facts. `performAttach` commits the
 observation identity with the validated native attach result, binding generation,
-exact target and the operation's intent revision captured before queueing Open. It cannot commit that
+exact target, Node and the operation's intent revision captured before queueing Open. It cannot commit that
 identity if Release revoked the operation while its acknowledgement was pending;
 the returned target is still retained so the queued detach can settle normally.
+
+Every Open captures an immutable Node before joining the attachment queue. An
+omitted selector is resolved from observed Session metadata, never reread from
+mutable view state at dispatch. The native Session tree establishes its immutable
+Node/Conversation mapping before attach dispatch; the acknowledgement must match
+that mapping as well as its own snapshot. Conflicting cross-Node Opens are
+rejected without changing desired Node while an acquisition or claim is owned.
+Callers use the explicit switch lifecycle, or Release followed by Open. A queued
+Open for another Node cannot refresh a retained target after failed detach.
+Desired Node and retained claim Node remain separate; target access and refresh
+cannot route new operations into that mismatch. Obsolete successful attach responses
+retain only cleanup ownership, not Snapshot publication. A switch acknowledgement
+settles its original claim without overwriting a later Release/Open Node intent.
+
+Cold history, statistics, Trace pages and Trace details share one proof of
+Session, Node, native Conversation, generation, attachment epoch and intent
+revision. The same proof fences dispatch and publication; history cuts and every
+response Conversation must match it. These reads use only durable inspection and
+never acquire an attachment or start a runtime on their own.
 
 Release synchronously clears observation admission in the same state transition
 that sets `attachmentIntent` to released and advances its revision. An immediate
@@ -7015,3 +7040,11 @@ previous reads remain unresolved. Unlimited switching past permanently stalled
 work cannot guarantee progress without native cancellable-read settlement; this
 repair does not invent that protocol or release physical capacity on a timer.
 Other client instances have independent budgets; this is not a server-wide quota.
+
+The Composer model menu and `/model` picker consume the same native catalog and
+selection policy. Model and profile identifiers retain native order and defaults;
+a different model without an explicit profile uses native defaults. Selecting the
+current model or its effective profile preserves the configured choice and sends
+no mutation. Both controls use the existing Session model mutation/confirmation
+owner; a cold choice is only local intent until native acknowledgement and the
+authoritative reread. Unknown outcomes remain visible and are never replayed.
