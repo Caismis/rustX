@@ -37,6 +37,7 @@ import { describe, it } from "node:test";
 import {
   DELIVERY_MAX_BASE64,
   DELIVERY_MAX_BYTES,
+  DeliveryActionError,
   DeliveryResidueError,
   DeliveryUncertainError,
   SAVE_CHUNK_BYTES,
@@ -386,7 +387,14 @@ describe("atomic Save publication", () => {
       const settled = await Promise.allSettled(contenders);
       const won = settled.findIndex((result) => result.status === "fulfilled");
       assert.equal(settled.filter((result) => result.status === "fulfilled").length, 1);
-      assert.match(String((settled[1 - won] as PromiseRejectedResult).reason), /already exists/);
+      // Both found the name free, so the loser's EEXIST came from its own
+      // link: what a retransmitted link it performed would also return. The
+      // other save's file there does not show this one created nothing.
+      const lost = (settled[1 - won] as PromiseRejectedResult).reason as unknown;
+      assert.ok(lost instanceof DeliveryUncertainError, String(lost));
+      assert.equal(lost.linked, false);
+      assert.deepEqual(lost.observed, { kind: "foreign" });
+      assert.match(lost.message, /linking .* failed \(EEXIST\) and it now names another file; this save may have created it$/);
       assert.equal(readFileSync(contested, "utf8"), `save ${won}`);
 
       // A symlink, dangling or not, and a directory are entries too; nothing
@@ -543,8 +551,19 @@ describe("atomic Save publication", () => {
           if (code !== undefined) throw failure(code);
         },
       });
-      const outcome = (destination: string, files: SaveFiles) =>
-        saveDelivery(answer, destination, undefined, files).catch((error: unknown) => error);
+      /** Every link this test's saves dispatched, by destination: one each,
+       * never a second attempt, never a rollback. */
+      const dispatched = new Map<string, number>();
+      const outcome = (destination: string, files: SaveFiles) => {
+        const counted = {
+          ...files,
+          link: async (existing: string, path: string) => {
+            dispatched.set(path, (dispatched.get(path) ?? 0) + 1);
+            return files.link(existing, path);
+          },
+        };
+        return saveDelivery(answer, destination, undefined, counted).catch((error: unknown) => error);
+      };
       /** Someone replaces `path` with a new file of their own. */
       const replace = (path: string) => {
         writeFileSync(join(dir, "replacement"), "theirs");
@@ -608,23 +627,47 @@ describe("atomic Save publication", () => {
       assert.equal(blind.residue, undefined, "staging was removed; uncertainty stays");
       assert.match(blind.message, /cannot be inspected \(EACCES\)/);
 
-      // A code that is not a known rejection is not one either.
+      // An error with no code: uncertain, and nothing else shows otherwise.
       const unexplained = await outcome(join(dir, "unexplained"), saveFiles({
         link: async () => { throw new Error("no code"); },
       }));
       assert.ok(unexplained instanceof DeliveryUncertainError);
+      assert.deepEqual(unexplained.observed, { kind: "absent" });
 
-      // B. A definite rejection with a foreign destination is a refusal.
+      // H. EEXIST as a retransmitted link returns it: the link committed, then
+      // someone removed or replaced the entry, then EEXIST. That proves only
+      // that the name existed, not whose it was: uncertain, never refused.
+      for (const [name, meanwhile] of [["retransmitted removed", rmSync], ["retransmitted replaced", replace]] as const) {
+        const destination = join(dir, name);
+        const retransmitted = await outcome(destination, linkedThen("EEXIST", meanwhile));
+        assert.ok(retransmitted instanceof DeliveryUncertainError, String(retransmitted));
+        assert.equal(retransmitted.linked, false);
+        assert.equal((retransmitted.cause as NodeJS.ErrnoException).code, "EEXIST");
+        assert.match(retransmitted.message, /failed \(EEXIST\) and it (is now absent|now names another file); this save may have created it$/);
+      }
+      assert.equal(readFileSync(join(dir, "retransmitted replaced"), "utf8"), "theirs");
+
+      // B. An entry already there is refused before any link is dispatched,
+      // so "already exists" is definite and the entry is untouched.
       writeFileSync(join(dir, "occupied"), "kept");
-      const refused = await outcome(join(dir, "occupied"), saveFiles({
-        link: async () => { throw failure("EEXIST"); },
-      }));
+      const refused = await outcome(join(dir, "occupied"), saveFiles());
       assert.ok(!(refused instanceof DeliveryUncertainError));
       assert.match(String(refused), /already exists/);
+      assert.equal(dispatched.get(join(dir, "occupied")), undefined, "no link dispatched");
       assert.equal(readFileSync(join(dir, "occupied"), "utf8"), "kept");
 
+      // A definite rejection of the link itself (it creates nothing, and no
+      // repeat of a performed link returns it): refused.
+      const denied = await outcome(join(dir, "denied"), saveFiles({
+        link: async () => { throw failure("EACCES"); },
+      }));
+      assert.ok(!(denied instanceof DeliveryUncertainError), String(denied));
+      assert.equal((denied as NodeJS.ErrnoException).code, "EACCES");
+      assert.equal(existsSync(join(dir, "denied")), false);
+
+      for (const [path, count] of dispatched) assert.equal(count, 1, `one link to ${path}`);
       assert.deepEqual(staging(dir), [], "every staged file was removed");
-      assert.deepEqual(listing(dir), ["created EEXIST", "created EIO", "occupied", "overtaken", "replaced"]);
+      assert.deepEqual(listing(dir), ["created EEXIST", "created EIO", "occupied", "overtaken", "replaced", "retransmitted replaced"]);
     });
   });
 
@@ -791,8 +834,11 @@ describe("atomic Save publication", () => {
       const outcome = await saveDelivery(answer, destination, undefined, files).catch((error: unknown) => error);
       assert.ok(outcome instanceof DeliveryResidueError, String(outcome));
       assert.equal((outcome.cause as NodeJS.ErrnoException).code, "ENOENT", "the staged name no longer resolves");
-      assert.match(String((outcome.cleanup as Error).message), /linked elsewhere, so it was not removed/);
-      assert.match(outcome.message, /^Nothing was saved, but this save's staged file \(created at .*\) was not removed$/);
+      // F keeps one link, but no observation after the unlink can say whose:
+      // neither the staged name nor the destination names it.
+      assert.equal(outcome.staged, "unknown");
+      assert.match(String((outcome.cleanup as Error).message), /neither at its staged name nor at the destination/);
+      assert.match(outcome.message, /^Nothing was saved, but whether this save's staged file \(created at .*\) was removed could not be established$/);
       assert.equal(outcome.residue, files.staged());
       assert.equal(existsSync(destination), false);
       assert.equal(identity(away), ours);
@@ -1060,7 +1106,7 @@ describe("atomic Save publication", () => {
     });
   });
 
-  it("reports cleanup as removed only on evidence: an uninspectable destination proves nothing", async () => {
+  it("reports cleanup only on fresh evidence taken after its unlink, never on the publication's", async () => {
     await inDir("rustx-save-cleanup-evidence-", async (dir) => {
       /** An unlink that fails without removing anything. */
       const unlinkFails = { unlink: async () => { throw failure("EIO"); } };
@@ -1073,41 +1119,53 @@ describe("atomic Save publication", () => {
           return SAVE_FILES.lstat(target, options);
         },
       });
+      /** Someone who may change the parent acts after publication was
+       * observed and before cleanup, then the real unlink runs. */
+      const beforeCleanup = (act: (staged: string) => void) => ({
+        unlink: async (path: string) => { act(path); return SAVE_FILES.unlink(path); },
+      });
       const outcome = async (name: string, over: Partial<SaveFiles>, hooks: HandleHooks = {}) => {
-        const files = saveFiles(over, hooks);
+        let links = 0;
+        const files = saveFiles({
+          ...over,
+          link: async (existing, path) => { links += 1; return (over.link ?? SAVE_FILES.link)(existing, path); },
+        }, hooks);
         const effect = localEffect();
         const result = await saveDelivery(answer, join(dir, name), undefined, files, effect).catch((error: unknown) => error);
-        return { result, effect, staged: files.staged(), destination: join(dir, name) };
+        return { result, effect, links, staged: files.staged(), destination: join(dir, name) };
       };
+      const residue = (result: unknown) => (result as { residue?: { staged: string } }).residue;
       /** The staged file is still on disk, linked once, holding the saved bytes. */
       const stillStaged = (staged: string) => {
         assert.equal(lstatSync(staged).nlink, 1);
         assert.deepEqual(readFileSync(staged), BODY_BYTES);
       };
 
-      // Destination names F; unlink succeeds: published, clean.
+      // Destination names F; unlink succeeds: published, and removed because
+      // the destination's own lstat shows it is F's only link.
       const one = await outcome("one", {});
       assert.deepEqual(one.result, { path: one.destination });
       assert.equal(existsSync(one.staged), false);
       assert.equal(lstatSync(one.destination).nlink, 1);
       assert.deepEqual(one.effect, { committed: true, residue: false });
 
-      // Destination names F; unlink fails, F keeps its staged link: published with residue.
+      // Destination names F; unlink fails: F's count is 2, so a link besides
+      // the destination remains.
       const two = await outcome("two", unlinkFails);
       assert.equal((two.result as { path: string }).path, two.destination);
-      assert.deepEqual((two.result as { residue?: unknown }).residue, { path: two.staged, staged: "remains", cause: failure("EIO") });
+      assert.deepEqual(residue(two.result), { path: two.staged, staged: "remains", cause: failure("EIO") });
       assert.equal(identity(two.staged), identity(two.destination));
-      assert.equal(lstatSync(two.destination).nlink, 2);
       assert.deepEqual(two.effect, { committed: true, residue: true });
 
-      // Definite refusal; unlink succeeds, F has no links: refused, clean.
+      // An existing destination: refused before any link, so definitely.
       writeFileSync(join(dir, "three"), "kept");
       const three = await outcome("three", {});
       assert.match(String(three.result), /already exists/);
+      assert.equal(three.links, 0, "no link was dispatched");
       assert.equal(existsSync(three.staged), false);
-      assert.deepEqual(three.effect, { committed: true, residue: false });
+      assert.deepEqual(three.effect, { committed: false, residue: false });
 
-      // Definite refusal; unlink fails, F keeps its staged link: refused with residue.
+      // The same with a failing unlink: the staged name still names F.
       writeFileSync(join(dir, "four"), "kept");
       const four = await outcome("four", unlinkFails);
       assert.ok(four.result instanceof DeliveryResidueError, String(four.result));
@@ -1116,11 +1174,15 @@ describe("atomic Save publication", () => {
       stillStaged(four.staged);
       assert.equal(readFileSync(join(dir, "four"), "utf8"), "kept");
 
-      // Ambiguous link error, destination absent or foreign; unlink fails:
-      // uncertain, and the remaining link is attributed to the staged file.
-      writeFileSync(join(dir, "six"), "theirs");
+      // Ambiguous link error, destination absent or (created by someone else
+      // during the link) foreign; unlink fails: uncertain, and the staged
+      // name, observed after the unlink, holds F.
       for (const name of ["five", "six"]) {
-        const ambiguousThen = await outcome(name, { ...ambiguous, ...unlinkFails });
+        const link = async (_staged: string, path: string) => {
+          if (name === "six") writeFileSync(path, "theirs");
+          throw failure("EIO");
+        };
+        const ambiguousThen = await outcome(name, { link, ...unlinkFails });
         assert.ok(ambiguousThen.result instanceof DeliveryUncertainError, String(ambiguousThen.result));
         assert.deepEqual(ambiguousThen.result.observed, { kind: name === "five" ? "absent" : "foreign" });
         assert.equal(ambiguousThen.result.residue, ambiguousThen.staged);
@@ -1131,20 +1193,33 @@ describe("atomic Save publication", () => {
       }
 
       // The combined failure: link EIO without publishing, destination lstat
-      // EACCES, unlink EIO without removing. F, nlink 1, is still on disk; its
-      // one link may be an uninspectable destination's, so cleanup is not
-      // established, and the outcome says so.
+      // EACCES, unlink EIO without removing. F, nlink 1, is still on disk,
+      // and its staged name, observed after the unlink, proves it remains.
       const seven = await outcome("seven", { ...ambiguous, ...uninspectable(join(dir, "seven")), ...unlinkFails });
       assert.ok(seven.result instanceof DeliveryUncertainError, String(seven.result));
       assert.equal(seven.result.observed.kind, "uninspectable");
       assert.equal(seven.result.residue, seven.staged);
-      assert.equal(seven.result.staged, "unknown", "never reported clean without proof");
-      assert.match(seven.result.message, /; whether its staged file \(created at .*\) was removed could not be established$/);
+      assert.equal(seven.result.staged, "remains", "never reported clean without proof");
       stillStaged(seven.staged);
       assert.equal(existsSync(seven.destination), false);
       assert.deepEqual(seven.effect, { committed: true, residue: true }, "owed after /files retires");
 
-      // Uninspectable destination; unlink succeeds, F has no links: established.
+      // As seven, but the staged name was moved away before the unlink: F's
+      // one link is neither the staged name nor a destination anyone could
+      // inspect, so cleanup is not established.
+      const sevenMoved = join(dir, "seven moved");
+      const sevenB = await outcome("seven-b", {
+        ...ambiguous,
+        ...uninspectable(join(dir, "seven-b")),
+        ...beforeCleanup((staged) => moved(staged, sevenMoved)),
+      });
+      assert.ok(sevenB.result instanceof DeliveryUncertainError, String(sevenB.result));
+      assert.equal(sevenB.result.staged, "unknown");
+      assert.match(sevenB.result.message, /; whether its staged file \(created at .*\) was removed could not be established$/);
+      stillStaged(sevenMoved);
+      assert.equal(sevenB.effect.residue, true);
+
+      // Uninspectable destination; unlink succeeds, F has no links: removed.
       const eight = await outcome("eight", { ...ambiguous, ...uninspectable(join(dir, "eight")) });
       assert.ok(eight.result instanceof DeliveryUncertainError, String(eight.result));
       assert.equal(eight.result.residue, undefined);
@@ -1152,8 +1227,7 @@ describe("atomic Save publication", () => {
       assert.equal(existsSync(eight.staged), false);
       assert.deepEqual(eight.effect, { committed: true, residue: false });
 
-      // Uninspectable destination; the link count cannot be read after the
-      // unlink: cleanup is unknown, whatever the unlink did.
+      // Uninspectable destination and an unreadable count: unknown.
       const nine = await outcome("nine", { ...ambiguous, ...uninspectable(join(dir, "nine")) }, {
         stat: async (call, stat) => { if (call === 2) throw failure("EIO"); return stat(); },
       });
@@ -1162,15 +1236,68 @@ describe("atomic Save publication", () => {
       assert.equal(nine.result.residue, nine.staged);
       assert.equal(nine.effect.residue, true);
 
-      // A link count that cannot be read after a verified publication is not
-      // proof of removal either.
+      // An unreadable count after a verified publication: the destination's
+      // own lstat, taken after the unlink, shows it is F's only link.
       const ten = await outcome("ten", {}, {
         stat: async (call, stat) => { if (call === 2) throw failure("EIO"); return stat(); },
       });
-      assert.deepEqual((ten.result as { residue?: unknown }).residue, { path: ten.staged, staged: "unknown", cause: failure("EIO") });
-      assert.deepEqual(readFileSync(ten.destination), BODY_BYTES);
-      // The staged name replaced after publication is case 6 above: only
-      // facts this save's own handle shows are reported.
+      assert.deepEqual(ten.result, { path: ten.destination });
+      assert.equal(lstatSync(ten.destination).nlink, 1);
+
+      // The review's counterexample. Published and observed; then the staged
+      // name is moved and the destination removed; the unlink finds nothing.
+      // F's one link is the moved file, so cleanup is never reported removed:
+      // no fresh observation names it, so it is unknown. Nothing is deleted.
+      writeFileSync(join(dir, "unrelated"), "unrelated");
+      const elsewhere = join(dir, "eleven moved");
+      let eleventh = "";
+      const eleven = await outcome("eleven", beforeCleanup((staged) => {
+        eleventh = identity(staged);
+        moved(staged, elsewhere);
+        rmSync(join(dir, "eleven"));
+      }));
+      assert.equal((eleven.result as { path: string }).path, eleven.destination, "publication stands as observed");
+      assert.equal(residue(eleven.result)?.staged, "unknown", "never removed on stale evidence");
+      assert.equal(identity(elsewhere), eleventh);
+      stillStaged(elsewhere);
+      assert.equal(existsSync(eleven.destination), false);
+      assert.equal(readFileSync(join(dir, "unrelated"), "utf8"), "unrelated");
+      assert.deepEqual(eleven.effect, { committed: true, residue: true });
+
+      // Destination replaced after publication; the unlink removes the staged
+      // name: F has no links, so removed. The replacement is untouched.
+      const twelve = await outcome("twelve", beforeCleanup(() => {
+        rmSync(join(dir, "twelve"));
+        writeFileSync(join(dir, "twelve"), "replacement");
+      }));
+      assert.deepEqual(twelve.result, { path: twelve.destination });
+      assert.equal(readFileSync(twelve.destination, "utf8"), "replacement");
+
+      // Staged name moved after publication, destination intact: F's count is
+      // 2, so a link besides the destination remains.
+      const thirteenMoved = join(dir, "thirteen moved");
+      const thirteen = await outcome("thirteen", beforeCleanup((staged) => moved(staged, thirteenMoved)));
+      assert.deepEqual(residue(thirteen.result), {
+        path: thirteen.staged,
+        staged: "remains",
+        cause: new DeliveryActionError("it is linked elsewhere, so it was not removed"),
+      });
+      assert.equal(identity(thirteenMoved), identity(thirteen.destination));
+
+      // Staged name replaced by a foreign file after publication: the unlink
+      // removes that file (no call removes a name only while it names F), and
+      // the destination's lstat shows it is F's only link: removed.
+      const fourteen = await outcome("fourteen", beforeCleanup((staged) => {
+        writeFileSync(join(dir, "foreign"), "foreign");
+        renameSync(join(dir, "foreign"), staged);
+      }));
+      assert.deepEqual(fourteen.result, { path: fourteen.destination });
+      assert.deepEqual(readFileSync(fourteen.destination), BODY_BYTES);
+      assert.equal(lstatSync(fourteen.destination).nlink, 1);
+
+      // A permission failure of the unlink after publication: remains.
+      const fifteen = await outcome("fifteen", { unlink: async () => { throw failure("EACCES"); } });
+      assert.deepEqual(residue(fifteen.result), { path: fifteen.staged, staged: "remains", cause: failure("EACCES") });
     });
   });
 

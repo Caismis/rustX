@@ -209,13 +209,17 @@ export const SAVE_FILES: SaveFiles = { open, link, lstat, unlink };
 /** Link errors meaning this filesystem cannot create the name by a hard link. */
 const UNSUPPORTED_LINK = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"]);
 /**
- * Link errors that are rejections of the request itself (the name exists, a
- * path or permission check failed, the filesystem or quota refused, hard
- * links are unsupported): `link(2)` reports them without creating the entry.
+ * Link errors that are rejections of the request itself (a path or
+ * permission check failed, the filesystem or quota refused, hard links are
+ * unsupported): `link(2)` reports them without creating the entry, and a
+ * repeated request (a network filesystem retransmitting a link it already
+ * performed) cannot produce them unless someone also changed the staged name
+ * or the parent in between. EEXIST is not among them: it is exactly what such
+ * a repeat returns, so it shows only that the name exists, not whose it is.
  * Any other error, such as EIO, or no code at all, leaves the outcome open.
  */
 const DEFINITE_REFUSAL = new Set([
-  "EEXIST", "ENOENT", "ENOTDIR", "EACCES", "EROFS", "EXDEV", "ELOOP", "ENAMETOOLONG",
+  "ENOENT", "ENOTDIR", "EACCES", "EROFS", "EXDEV", "ELOOP", "ENAMETOOLONG",
   "EMLINK", "ENOSPC", "EDQUOT", "EINVAL", ...UNSUPPORTED_LINK,
 ]);
 
@@ -234,10 +238,11 @@ const { O_WRONLY, O_CREAT, O_EXCL } = constants;
  * read (cancellable on the server) -> abort?
  *   -> open <parent>/.rustx-save-<random>  O_CREAT|O_EXCL      held: F
  *   -> chunked writes through F, abort? between chunks -> fsync F
+ *   -> lstat(destination) finds an entry?  refused (already exists), no link
  *   -> abort?   <- publication admission: the last cancellation point
  *   -> link(staged name, destination)   <- publication commit (atomic, no clobber)
  *   -> lstat(destination) names F's (dev, ino)?  published : refused | uncertain
- *   -> unlink(staged name), once; F's link count decides whether F is residue
+ *   -> unlink(staged name), once; fresh observations decide whether F is residue
  * ```
  *
  * One owner: the handle the exclusive create returned. O_EXCL fails on any
@@ -254,8 +259,8 @@ const { O_WRONLY, O_CREAT, O_EXCL } = constants;
  * trusted with the bytes: Save requests mode 0600 and grants nothing else.
  * A substitution cannot make Save claim more than it did: publication is
  * claimed only when the destination, observed after the commit, names F, and
- * cleanup is judged by F's link count, so a staged file moved elsewhere is
- * residue even though its name is gone.
+ * cleanup only on observations taken after its unlink, so a staged file moved
+ * elsewhere is never reported removed even though its name is gone.
  *
  * The destination is a pathname resolved at the commit: `link` creates a new
  * name there and fails with EEXIST for any existing entry, including a
@@ -288,15 +293,15 @@ export async function saveDelivery(
   const staged = childPath(dirname(destination), `.rustx-save-${randomBytes(16).toString("hex")}`);
   const file = await files.open(staged, O_WRONLY | O_CREAT | O_EXCL, 0o600);
   let publication: Publication;
+  let identity: BigIntStats | undefined;
   try {
-    const identity = await file.stat({ bigint: true });
+    identity = await file.stat({ bigint: true });
     await writeStaged(file, bytes, signal);
-    signal?.throwIfAborted();
-    publication = await publish(files, staged, destination, identity, effect);
+    publication = await publish(files, staged, destination, identity, effect, signal);
   } catch (error) {
     publication = { kind: "refused", error };
   }
-  const cleanup = await removeStaged(files, file, staged, publication);
+  const cleanup = await removeStaged(files, file, staged, destination, identity);
   // The outcome and the cleanup are decided, and published bytes were synced
   // before the link, so closing cannot change what this Save did.
   await file.close().catch(() => {});
@@ -333,13 +338,15 @@ async function writeStaged(file: FileHandle, bytes: Uint8Array, signal?: AbortSi
 /**
  * The publication commit and what it proves.
  *
- * Only the destination naming the staged file, observed after the commit,
+ * An entry already at the destination is refused before anything is linked,
+ * so "already exists" is definite: this save dispatched no link. After that,
+ * only the destination naming the staged file, observed after the commit,
  * proves publication, whatever link(2) answered: a network filesystem can
- * fail a retransmitted link it performed, and a successful link of the staged
- * name says nothing about which file that name held. Otherwise only a
- * definite rejection proves refusal: an absent or foreign destination does
- * not show that this link created nothing, because someone may have removed
- * or replaced the entry in between. Anything else is uncertain.
+ * fail a retransmitted link it performed (with EEXIST), and a successful link
+ * of the staged name says nothing about which file that name held. Otherwise
+ * only a definite rejection proves refusal: an absent or foreign destination
+ * does not show that this link created nothing, because someone may have
+ * removed or replaced the entry in between. Anything else is uncertain.
  */
 async function publish(
   files: SaveFiles,
@@ -347,12 +354,27 @@ async function publish(
   destination: string,
   identity: BigIntStats,
   effect: LocalEffect,
+  signal: AbortSignal | undefined,
 ): Promise<Publication> {
+  let existing = false;
+  try {
+    await files.lstat(destination, { bigint: true });
+    existing = true;
+  } catch {
+    // Absent, or not inspectable: the link itself decides.
+  }
+  if (existing) {
+    return { kind: "refused", error: new DeliveryActionError(`Not saved: ${destination} already exists`) };
+  }
   let failure: { error: unknown } | undefined;
   try {
+    // Admission and dispatch in one synchronous step: no abort can be
+    // observed between them.
+    signal?.throwIfAborted();
     effect.committed = true;
     await files.link(staged, destination);
   } catch (error) {
+    if (!effect.committed) throw error;
     failure = { error };
   }
   let observed: DestinationObservation;
@@ -372,7 +394,6 @@ async function publish(
 
 function refusal(error: unknown, destination: string): unknown {
   const code = errorCode(error);
-  if (code === "EEXIST") return withCause(new DeliveryActionError(`Not saved: ${destination} already exists`), error);
   if (code !== undefined && UNSUPPORTED_LINK.has(code)) {
     return withCause(
       new DeliveryActionError(`Not saved: this filesystem cannot publish ${destination} atomically without overwriting (${code})`),
@@ -382,16 +403,36 @@ function refusal(error: unknown, destination: string): unknown {
   return error;
 }
 
+/** What one lstat of `path` shows about the staged file F, at its instant. */
+type LinkObservation = { kind: "names"; nlink: bigint } | { kind: "other" } | { kind: "uninspectable" };
+async function linkAt(files: SaveFiles, path: string, identity: BigIntStats): Promise<LinkObservation> {
+  try {
+    const entry = await files.lstat(path, { bigint: true });
+    return entry.dev === identity.dev && entry.ino === identity.ino ? { kind: "names", nlink: entry.nlink } : { kind: "other" };
+  } catch (error) {
+    return errorCode(error) === "ENOENT" ? { kind: "other" } : { kind: "uninspectable" };
+  }
+}
+
 /**
  * The one cleanup: a single unlink of the staged name, whatever the outcome,
- * judged by the staged file's own link count rather than by the name.
+ * then fresh evidence of where the staged file F is still linked.
  *
- * Only a destination seen naming the file accounts for one of its links, so
- * the file is `removed` when its count is at most that. A link an
- * uninspectable destination might explain is not proof: a count it could
- * explain is `unknown`, as is a count that cannot be read. Any other link
- * (the unlink failed, or the file was moved) means the file `remains`. No
- * call removes a name only while it names a given file, so this unlink
+ * Every conclusion rests on one observation taken after the unlink, and
+ * atomic on its own. Earlier observations, including the one that proved
+ * publication, are never reused, since entries may have changed since, and
+ * observations made at different instants are never combined into one:
+ *
+ * - removed: F's own link count is 0; or the destination names F and its
+ *   count, read in that same lstat, is 1, so the destination is F's only link.
+ * - remains: F's count is 2 or more (one name holds one link, so another
+ *   link besides any destination exists); or the staged name still names F;
+ *   or the destination names F with a count of 2 or more.
+ * - unknown: none of these. For example, F has one link but neither the
+ *   staged name nor the destination names it, the destination cannot be
+ *   inspected, or nothing can be read.
+ *
+ * No call removes a name only while it names a given file, so this unlink
  * removes whatever the staged name holds; it never removes a directory,
  * which unlink refuses, and never the destination.
  */
@@ -399,30 +440,34 @@ async function removeStaged(
   files: SaveFiles,
   file: FileHandle,
   staged: string,
-  publication: Publication,
+  destination: string,
+  identity: BigIntStats | undefined,
 ): Promise<{ staged: "removed" } | { staged: StagedResidue; error: unknown }> {
-  const proven = publication.kind === "published" ? 1n : 0n;
-  const possible = publication.kind === "uncertain" && publication.observed.kind === "uninspectable" ? 1n : 0n;
   let failure: unknown;
   try {
     await files.unlink(staged);
   } catch (error) {
     if (errorCode(error) !== "ENOENT") failure = error;
   }
-  let nlink: bigint;
+  const remains = (reason: string) => ({ staged: "remains" as const, error: failure ?? new DeliveryActionError(reason) });
+  let unread: unknown;
   try {
-    ({ nlink } = await file.stat({ bigint: true }));
+    const { nlink } = await file.stat({ bigint: true });
+    if (nlink === 0n) return { staged: "removed" };
+    if (nlink >= 2n) return remains("it is linked elsewhere, so it was not removed");
   } catch (error) {
-    return { staged: "unknown", error: failure ?? error };
+    unread = error;
   }
-  if (nlink <= proven) return { staged: "removed" };
-  if (nlink <= proven + possible) {
-    return {
-      staged: "unknown",
-      error: failure ?? new DeliveryActionError("its remaining link may be the destination, which could not be inspected"),
-    };
+  let reason = "it is still linked, but neither at its staged name nor at the destination";
+  if (identity !== undefined) {
+    if ((await linkAt(files, staged, identity)).kind === "names") return remains("its staged name still holds it");
+    const at = await linkAt(files, destination, identity);
+    if (at.kind === "names") {
+      return at.nlink === 1n ? { staged: "removed" } : remains("it is linked elsewhere, so it was not removed");
+    }
+    if (at.kind === "uninspectable") reason = "its remaining link may be the destination, which could not be inspected";
   }
-  return { staged: "remains", error: failure ?? new DeliveryActionError("it is linked elsewhere, so it was not removed") };
+  return { staged: "unknown", error: failure ?? unread ?? new DeliveryActionError(reason) };
 }
 
 function errorCode(error: unknown): string | undefined {

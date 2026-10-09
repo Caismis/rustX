@@ -5202,7 +5202,7 @@ pub(super) fn delivery_request(
     }
 }
 
-async fn cancel_delivery(connection: &AppServerConnection, request: i64) -> bool {
+pub(super) async fn cancel_delivery(connection: &AppServerConnection, request: i64) -> bool {
     let MethodResult::DeliveryCancel { accepted } = call(
         connection,
         9000 + request,

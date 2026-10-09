@@ -526,6 +526,92 @@ What the test does not prove:
 
 Linux test behaviour is unchanged.
 
+## Publication point, cleanup evidence and link classification repair
+
+The review of `101f4a0d` found three gaps. This section supersedes earlier
+statements here that the writer "commits immediately before the physical write",
+that cleanup is judged by the handle's link count against the publication's
+observation, and that `EEXIST` from `link` is a definite refusal.
+
+**P1, publication before transmission.** `Outgoing::next()` committed a delivery
+response as soon as it was dequeued; the adapter then awaited `write_all`/`send`.
+Counterexample: the response is dequeued and committed, then the pipe is full and
+the write stays pending; the credential is revoked; the pipe drains, and the success
+(bytes or native path) is transmitted after a revocation that completed before any
+of its bytes left. Invariant: a cancellation or revocation that completes before the
+transport accepts a response's first bytes prevents that response.
+
+Change: `Outgoing::next()` now yields the undecided `Outbound`, and each adapter
+calls `Outbound::poll_hand_off(accept)`, where `accept` is its one non-suspending
+acceptance step. `Publication::poll_hand_off` decides the record under the
+operation's lock, offers it, and settles the request only if `accept` is ready, so
+`Pending` leaves the request undecided. There is one state machine in
+`delivery_access.rs` and one writer protocol in `transport/mod.rs`; the adapters
+keep only their mechanics:
+
+- **stdio:** the first `poll_write` to the non-blocking pipe that takes bytes;
+  the rest of the record follows.
+- **WebSocket:** after `poll_flush` shows every earlier frame on the socket,
+  `start_send` hands the frame to tungstenite, then the same poll moves it out
+  of the split sink's slot. tungstenite writes it at once; if the socket buffer
+  is full right then, it holds the frame as its one buffered message. That is
+  the documented WebSocket gap, since the library exposes no writability check
+  before it takes a frame.
+
+The test-only `before_publication` pause, which modelled the old boundary, is
+gone. In-process callers keep `Publication::publish`, which decides and settles
+at once.
+
+**P2, stale link evidence in cleanup.** Cleanup counted one link for the
+destination whenever publication had been observed. Counterexample: after the
+publication check, someone moves the staged name to `M` and removes the
+destination; the unlink gets `ENOENT`; F has one link, at `M`; cleanup said
+`removed`. Invariant: cleanup concludes only from observations taken after its
+unlink, each conclusion resting on one observation that is atomic on its own:
+
+- **removed:** `fstat` count 0, or the destination's own `lstat` naming F with
+  count 1.
+- **remains:** count 2 or more, the staged name still naming F, or the
+  destination naming F with count 2 or more.
+- **unknown:** otherwise.
+
+Publication evidence is no longer an input to cleanup.
+
+**P3, `EEXIST` as definite refusal.** `link` → `EEXIST` was a refusal. On
+NFSv3, NFSv4.0 or SMB, a retransmitted link that already succeeded returns
+`EEXIST`. If the entry is then removed or replaced before the `lstat`, Save
+reported "not saved" for a file it may have created. Invariant: Save claims
+publication only on identity evidence, and refusal only on evidence that rules
+publication out under the supported semantics; otherwise the outcome is
+uncertain.
+
+Change:
+
+- An entry already at the destination is refused, as "already exists", before
+  admission and before any `link` is dispatched, so that refusal is definite.
+- `EEXIST` is removed from the definite-refusal codes, so `EEXIST` from the
+  link itself is published if the destination names F, and uncertain otherwise.
+- The remaining codes are rejections that `link(2)` makes without creating
+  anything, and that a repeated request cannot produce unless someone also
+  changed the staged name or the parent.
+- Admission (the abort check) moved into `publish`, after the existence check,
+  and stays synchronous with the `link` dispatch.
+
+| Regression | Synchronization | What it proves |
+| --- | --- | --- |
+| `delivery_publication_linearizes_at_the_transports_first_accepted_byte` (stdio) | `Valve` writer: with no budget, `poll_write` takes nothing and records the offered bytes | **queued:** response produced (probe `completed`), never offered while the writer is stuck on record 29, cancel accepted, failure for 30. **cancel / credential / detach / close:** the success for 30 offered and refused, then revocation, then the valve opens: that id's typed failure. **published:** one byte granted; the next refused offer is exactly the rest of the success; then `delivery/cancel` returns `false` and the full success arrives. **shutdown:** success offered, transport shut down, no response for 30, connection closed. Every case: one response per id, no duplicates, unrelated `server/info` answered, all read permits back. |
+| `websocket_delivery_publication_is_decided_when_tungstenite_takes_the_frame` | `Valve` under the WebSocket stream | Behind an unsent frame (29), response 30 is never handed to tungstenite and the credential removal wins. Once tungstenite took frame 30 (seen as the refused offer), the removal does not retract it: the documented WebSocket gap. |
+| "reports cleanup only on fresh evidence taken after its unlink, never on the publication's" | `SaveFiles`/handle seams, real files | 16 rows, including the review's counterexample (moved staged name, removed destination → `unknown`, the moved file intact, nothing deleted). Also: destination replaced → `removed`; staged name moved with the destination intact → `remains` (count 2); staged name replaced by a foreign file → `removed` (destination's `lstat` count 1); unlink `EACCES` → `remains`; uninspectable destination; unreadable counts; combined uncertainty plus residue. |
+| test 13, no-clobber test | real `link` with substituted acknowledgement | Retransmitted `EEXIST` after removal or replacement → uncertain; an existing entry → refused with no link dispatched; `EACCES` → refused; an error without a code → uncertain; exactly one `link` per save, never removing or rolling back the destination; two contending saves → the loser is uncertain (`EEXIST`, foreign). |
+
+Negative controls, each applied alone from a byte-checked backup and restored:
+
+| Control | Result |
+| --- | --- |
+| Decide once at dequeue (the old `next()` commit) | stdio test fails for `cancel` ("the cancel wins"); run per case, `credential`, `detach` and `close` each fail with the success escaping. `queued`, `published` and `shutdown` hold under both designs, as expected. |
+| Cleanup trusts the publication's observation (`removed` when published and count 1) | cleanup-evidence test fails at the review's counterexample ("never removed on stale evidence") |
+| `EEXIST` back in the definite-refusal codes | test 13 (retransmitted `EEXIST`) and the no-clobber test (contending saves) fail |
+
 ## Validation
 
 See the pull request for the final command list and results; the PR description

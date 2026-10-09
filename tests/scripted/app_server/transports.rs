@@ -893,104 +893,473 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
     .await;
 }
 
-/// The physical writer is the publication boundary. With a delivery response
-/// produced (native work settled) and dequeued but parked before its commit,
-/// revocation wins: the client receives the same id's typed failure, never the
-/// bytes or the native path. Unrelated responses and resource settlement are
-/// unaffected, and every request is answered exactly once.
+/// The server's write side with test-controlled acceptance, like a pipe or
+/// socket buffer the peer drains only when the test says so. With no budget,
+/// `poll_write` takes nothing, records what it was offered and returns
+/// `Pending`; a grant wakes the writer. Reads pass through.
+struct Valve<S> {
+    inner: S,
+    control: Arc<ValveControl>,
+}
+struct ValveControl {
+    /// Bytes still accepted, and the writer to wake on a grant.
+    state: std::sync::Mutex<(usize, Option<std::task::Waker>)>,
+    /// Every refused offer, in order.
+    refused: tokio::sync::watch::Sender<Vec<Vec<u8>>>,
+}
+impl ValveControl {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            state: std::sync::Mutex::new((usize::MAX, None)),
+            refused: tokio::sync::watch::channel(Vec::new()).0,
+        })
+    }
+    /// Accepts the next `bytes` bytes, then refuses again.
+    fn grant(&self, bytes: usize) {
+        let waker = {
+            let mut state = self.state.lock().unwrap();
+            state.0 = bytes;
+            state.1.take()
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+    /// Waits for a refused offer satisfying `matches`, and returns it.
+    async fn refused(&self, matches: impl Fn(&[u8]) -> bool) -> Vec<u8> {
+        let mut refused = self.refused.subscribe();
+        let offers = refused
+            .wait_for(|offers| offers.iter().any(|offer| matches(offer)))
+            .await
+            .unwrap();
+        offers.iter().find(|offer| matches(offer)).unwrap().clone()
+    }
+    fn offered(&self, matches: impl Fn(&[u8]) -> bool) -> bool {
+        self.refused.borrow().iter().any(|offer| matches(offer))
+    }
+}
+impl<S: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for Valve<S> {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_read(cx, buf)
+    }
+}
+impl<S: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for Valve<S> {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<io::Result<usize>> {
+        let this = self.get_mut();
+        let mut state = this.control.state.lock().unwrap();
+        if state.0 == 0 {
+            state.1 = Some(cx.waker().clone());
+            this.control
+                .refused
+                .send_modify(|offers| offers.push(buf.to_vec()));
+            return std::task::Poll::Pending;
+        }
+        let allowed = buf.len().min(state.0);
+        let written =
+            std::task::ready!(std::pin::Pin::new(&mut this.inner).poll_write(cx, &buf[..allowed]))?;
+        state.0 -= written;
+        std::task::Poll::Ready(Ok(written))
+    }
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+    }
+}
+
+fn server_info(id: i64) -> Request {
+    Request {
+        jsonrpc: JsonRpcVersion::V2,
+        id: RequestId::Integer(id),
+        call: Method::ServerInfo {},
+    }
+}
+/// Whether `record` is the complete JSON-RPC response for `id`, and if so
+/// whether it is a success.
+fn response(record: &[u8], id: i64) -> Option<bool> {
+    let value: serde_json::Value = serde_json::from_slice(record).ok()?;
+    (value.get("id")? == id).then(|| value.get("result").is_some())
+}
+/// The payload of one unmasked server WebSocket frame.
+fn frame_payload(frame: &[u8]) -> &[u8] {
+    let header = match frame.get(1).map(|length| length & 0x7f) {
+        Some(126) => 4,
+        Some(127) => 10,
+        _ => 2,
+    };
+    frame.get(header..).unwrap_or_default()
+}
+
+/// A driver whose every received record carrying an id is also kept, in
+/// order, so a test can count terminal responses per id.
+type Received = Arc<std::sync::Mutex<Vec<serde_json::Value>>>;
+fn recording<S>(incoming: S) -> (impl futures_util::Stream<Item = String>, Received)
+where
+    S: futures_util::Stream<Item = String>,
+{
+    use futures_util::StreamExt;
+    let received = Received::default();
+    let kept = received.clone();
+    let incoming = incoming.inspect(move |record| {
+        let value: serde_json::Value = serde_json::from_str(record).unwrap();
+        if value.get("id").is_some() {
+            kept.lock().unwrap().push(value);
+        }
+    });
+    (incoming, received)
+}
+#[track_caller]
+fn answered_once(received: &Received, id: i64, times: usize) {
+    let received = received.lock().unwrap();
+    let ids: Vec<_> = received.iter().map(|value| value["id"].clone()).collect();
+    assert_eq!(
+        ids.iter().filter(|seen| **seen == id).count(),
+        times,
+        "terminal responses for {id}"
+    );
+    let unique: std::collections::BTreeSet<_> = ids.iter().map(ToString::to_string).collect();
+    assert_eq!(unique.len(), ids.len(), "no id is answered twice: {ids:?}");
+}
+
+/// The delivery publication linearization point is the transport's acceptance
+/// of the response's first bytes, over a real stdio transport whose write
+/// readiness the test controls.
+///
+/// - queued: the response is produced while the writer is stuck on an
+///   earlier record and never offered; a cancel wins.
+/// - cancel / credential / detach / close: the produced success is dequeued
+///   and offered while the pipe takes nothing; the revocation wins, and the
+///   same id's typed failure is what the pipe finally takes.
+/// - published: the pipe takes one byte of the success, which fixes it; a
+///   later cancel is refused and the whole success arrives.
+/// - shutdown: transport shutdown while the success is offered transmits
+///   nothing for it, and the operation ends with its transport.
+///
+/// Every case: one terminal response per id (none after shutdown), unrelated
+/// requests answered, every native read permit returned.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn delivery_publication_commits_at_the_transport_writer() {
-    use super::protocol::{committed_delivery, delivery_request, failed_with};
+async fn delivery_publication_linearizes_at_the_transports_first_accepted_byte() {
+    use super::protocol::{
+        DELIVERED, cancel_delivery, committed_delivery, delivered_bytes, delivery_request,
+        failed_with,
+    };
     use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
     bounded(async {
         let f = Fixture::with_tool(Some("present")).await;
         let tool = committed_delivery(&f).await;
         let probe = f.host.file_read_probe();
+        let permits = f.host.file_reads();
         let unauthorized = ErrorData::SessionFileRead {
             reason: SessionFileReadFailure::Unauthorized,
         };
-        for (locate, revocation) in [
-            (false, "credential"),
-            (true, "credential"),
-            (false, "detach"),
-            (false, "close"),
-            (true, "close"),
-            (false, "none"),
+        let success_30 = |offer: &[u8]| response(offer, 30) == Some(true);
+        for case in [
+            "queued",
+            "cancel",
+            "credential",
+            "detach",
+            "close",
+            "published",
+            "shutdown",
         ] {
             let authority = CancellationToken::new();
             let connection = Arc::new(AppServerConnection::with_delivery_access(
                 f.host.clone(),
                 authority.clone(),
             ));
+            let valve = ValveControl::new();
+            let shutdown = CancellationToken::new();
             let (client, server) = tokio::io::duplex(1 << 20);
             let (reader, writer) = tokio::io::split(server);
             let serving = tokio::spawn(stdio::serve(
                 connection.clone(),
                 reader,
-                writer,
-                CancellationToken::new(),
+                Valve {
+                    inner: writer,
+                    control: valve.clone(),
+                },
+                shutdown.clone(),
             ));
-            let (reader, writer) = tokio::io::split(client);
-            let client = driver::jsonl(reader, writer);
+            let (reader, mut writer) = tokio::io::split(client);
+            let lines = futures_util::stream::unfold(
+                tokio::io::BufReader::new(reader).lines(),
+                |mut lines| async move { lines.next_line().await.unwrap().map(|line| (line, lines)) },
+            );
+            let (incoming, received) = recording(lines);
+            let client = driver::Driver::new(incoming, |mut outgoing| async move {
+                while let Some(record) = outgoing.recv().await {
+                    writer.write_all(format!("{record}\n").as_bytes()).await.unwrap();
+                }
+            });
             initialize(&client).await;
             let target = attach(&client, &f).await;
             probe.completed.send_replace(None);
-            probe.before_publication.arm();
-            let revoke = async {
-                probe.before_publication.wait_entered().await;
-                assert_eq!(
-                    *probe.completed.borrow(),
-                    Some(true),
-                    "the sensitive response was produced"
-                );
-                let expected = match revocation {
-                    "credential" => {
-                        authority.cancel();
-                        Some(unauthorized.clone())
+            let read = || delivery_request(30, &target, &tool, false);
+
+            if case == "shutdown" {
+                valve.grant(0);
+                {
+                    let request = client.request(read());
+                    tokio::pin!(request);
+                    tokio::select! {
+                        biased;
+                        _ = &mut request => panic!("no response after shutdown"),
+                        () = async {
+                            valve.refused(success_30).await;
+                            shutdown.cancel();
+                            serving.await.unwrap().unwrap();
+                        } => {}
                     }
-                    "detach" => {
-                        connection
-                            .handle_request(Request {
-                                jsonrpc: JsonRpcVersion::V2,
-                                id: RequestId::Integer(31),
-                                call: Method::SessionDetach {
-                                    target: target.clone(),
-                                },
-                            })
-                            .await;
-                        Some(ErrorData::StaleAttachment)
-                    }
-                    "close" => {
-                        connection.close();
-                        Some(unauthorized.clone())
-                    }
-                    _ => None,
+                }
+                answered_once(&received, 30, 0);
+                // The transport's end closed the connection; its undecided
+                // operation ended with it.
+                let Response::Failure(closed) = connection
+                    .handle_request(Request {
+                        jsonrpc: JsonRpcVersion::V2,
+                        id: RequestId::Integer(33),
+                        call: Method::DeliveryCancel {
+                            request_id: RequestId::Integer(30),
+                        },
+                    })
+                    .await
+                else {
+                    panic!("a closed connection admits nothing")
                 };
-                probe.before_publication.release();
-                expected
-            };
-            let (response, expected) = tokio::join!(
-                client.request(delivery_request(30, &target, &tool, locate)),
-                revoke
-            );
-            match expected {
-                Some(expected) => failed_with(&response, &expected),
-                None => assert!(matches!(response, Response::Success(_))),
+                assert_eq!(closed.error.data, Some(ErrorData::StaleAttachment));
+                assert_eq!(permits.available_permits(), SESSION_FILE_MAX_READS);
+                client.close().await;
+                connection.close();
+                continue;
             }
-            if revocation != "close" {
-                // The connection stays usable for unrelated requests.
+
+            let (outcome, expected) = match case {
+                "queued" => {
+                    // The writer is stuck offering an earlier record.
+                    valve.grant(0);
+                    let (earlier, outcome) = tokio::join!(client.request(server_info(29)), async {
+                        valve.refused(|offer| response(offer, 29) == Some(true)).await;
+                        let (outcome, ()) = tokio::join!(client.request(read()), async {
+                            probe.completed.subscribe().wait_for(Option::is_some).await.unwrap();
+                            assert_eq!(*probe.completed.borrow(), Some(true), "produced");
+                            assert!(
+                                !valve.offered(|offer| response(offer, 30).is_some()),
+                                "never offered to the transport"
+                            );
+                            assert!(cancel_delivery(&connection, 30).await, "the cancel wins");
+                            valve.grant(usize::MAX);
+                        });
+                        outcome
+                    });
+                    assert!(matches!(earlier, Response::Success(_)));
+                    (outcome, Some(ErrorData::DeliveryCancelled))
+                }
+                "published" => {
+                    valve.grant(0);
+                    let (outcome, ()) = tokio::join!(client.request(read()), async {
+                        let offer = valve.refused(success_30).await;
+                        // One byte: the writer offers again, decides, and the
+                        // pipe takes one byte. Its next offer is exactly the rest.
+                        valve.grant(1);
+                        valve.refused(|rest| rest == &offer[1..]).await;
+                        assert!(
+                            !cancel_delivery(&connection, 30).await,
+                            "after the first accepted byte the response stands"
+                        );
+                        valve.grant(usize::MAX);
+                    });
+                    (outcome, None)
+                }
+                revocation => {
+                    valve.grant(0);
+                    let (outcome, expected) = tokio::join!(client.request(read()), async {
+                        valve.refused(success_30).await;
+                        assert_eq!(*probe.completed.borrow(), Some(true), "produced");
+                        let expected = match revocation {
+                            "cancel" => {
+                                assert!(cancel_delivery(&connection, 30).await, "the cancel wins");
+                                ErrorData::DeliveryCancelled
+                            }
+                            "credential" => {
+                                authority.cancel();
+                                unauthorized.clone()
+                            }
+                            "detach" => {
+                                connection
+                                    .handle_request(Request {
+                                        jsonrpc: JsonRpcVersion::V2,
+                                        id: RequestId::Integer(31),
+                                        call: Method::SessionDetach {
+                                            target: target.clone(),
+                                        },
+                                    })
+                                    .await;
+                                ErrorData::StaleAttachment
+                            }
+                            _ => {
+                                connection.close();
+                                unauthorized.clone()
+                            }
+                        };
+                        valve.grant(usize::MAX);
+                        expected
+                    });
+                    (outcome, Some(expected))
+                }
+            };
+            match expected {
+                Some(expected) => failed_with(&outcome, &expected),
+                None => assert_eq!(delivered_bytes(&outcome), DELIVERED),
+            }
+            if case != "close" {
                 assert!(matches!(
-                    call(&client, 32, Method::ServerInfo {}).await,
-                    MethodResult::ServerInfo { .. }
+                    client.request(server_info(32)).await,
+                    Response::Success(_)
                 ));
             }
-            assert_eq!(
-                f.host.file_reads().available_permits(),
-                SESSION_FILE_MAX_READS
-            );
+            answered_once(&received, 30, 1);
+            assert_eq!(permits.available_permits(), SESSION_FILE_MAX_READS);
             client.close().await;
             serving.await.unwrap().unwrap();
             connection.close();
+        }
+        f.close().await;
+    })
+    .await;
+}
+
+/// Over WebSocket the publication point is tungstenite's acceptance of the
+/// frame, which `websocket::connection` reaches only once every earlier frame
+/// has gone to the socket. Behind an earlier frame the socket has not taken,
+/// a delivery response stays undecided and a credential revocation wins.
+/// Once tungstenite has taken the frame, even into its own buffer because the
+/// socket takes nothing, the frame is published and a revocation does not
+/// retract it: that is the documented WebSocket limit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn websocket_delivery_publication_is_decided_when_tungstenite_takes_the_frame() {
+    use super::protocol::{
+        DELIVERED, committed_delivery, delivered_bytes, delivery_request, failed_with,
+    };
+    use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
+    bounded(async {
+        const DELIVERY: &str = "delivery-secret-000000000000000000000000000000000000";
+        let f = Fixture::with_tool(Some("present")).await;
+        let tool = committed_delivery(&f).await;
+        let probe = f.host.file_read_probe();
+        let permits = f.host.file_reads();
+        let frame_for = |id: i64, success: bool| {
+            move |frame: &[u8]| response(frame_payload(frame), id) == Some(success)
+        };
+        for behind_unsent_frame in [true, false] {
+            f.host
+                .bind_delivery_access(Some(websocket::Credential::new(DELIVERY.into()).unwrap()));
+            let valve = ValveControl::new();
+            let (client, server) = tokio::io::duplex(1 << 20);
+            let serving = tokio::spawn(websocket::connection(
+                Valve {
+                    inner: server,
+                    control: valve.clone(),
+                },
+                f.host.clone(),
+                websocket::Credential::new(driver::TOKEN.into()).unwrap(),
+                CancellationToken::new(),
+            ));
+            let mut request = "ws://localhost/".into_client_request().unwrap();
+            request.headers_mut().insert(
+                "sec-websocket-protocol",
+                format!(
+                    "rustx.app-server.v38, rustx-token.{}, rustx-delivery-access.{DELIVERY}",
+                    driver::TOKEN
+                )
+                .parse()
+                .unwrap(),
+            );
+            let (socket, _) = tokio_tungstenite::client_async(request, client)
+                .await
+                .unwrap();
+            let (mut sink, stream) = socket.split();
+            let texts = stream.filter_map(|message| async move {
+                match message {
+                    Ok(Message::Text(text)) => Some(text.to_string()),
+                    _ => None,
+                }
+            });
+            let (incoming, received) = recording(texts);
+            let client = driver::Driver::new(incoming, |mut outgoing| async move {
+                while let Some(record) = outgoing.recv().await {
+                    sink.send(Message::Text(record.into())).await.unwrap();
+                }
+            });
+            initialize(&client).await;
+            let target = attach(&client, &f).await;
+            probe.completed.send_replace(None);
+            let read = || delivery_request(30, &target, &tool, false);
+            valve.grant(0);
+            if behind_unsent_frame {
+                let (earlier, outcome) = tokio::join!(client.request(server_info(29)), async {
+                    valve.refused(frame_for(29, true)).await;
+                    let (outcome, ()) = tokio::join!(client.request(read()), async {
+                        probe
+                            .completed
+                            .subscribe()
+                            .wait_for(Option::is_some)
+                            .await
+                            .unwrap();
+                        assert_eq!(*probe.completed.borrow(), Some(true), "produced");
+                        assert!(
+                            !valve.offered(|frame| response(frame_payload(frame), 30).is_some()),
+                            "not yet taken by tungstenite"
+                        );
+                        f.host.bind_delivery_access(None);
+                        valve.grant(usize::MAX);
+                    });
+                    outcome
+                });
+                assert!(matches!(earlier, Response::Success(_)));
+                failed_with(
+                    &outcome,
+                    &ErrorData::SessionFileRead {
+                        reason: SessionFileReadFailure::Unauthorized,
+                    },
+                );
+            } else {
+                let (outcome, ()) = tokio::join!(client.request(read()), async {
+                    valve.refused(frame_for(30, true)).await;
+                    f.host.bind_delivery_access(None);
+                    valve.grant(usize::MAX);
+                });
+                assert_eq!(
+                    delivered_bytes(&outcome),
+                    DELIVERED,
+                    "taken by tungstenite, the frame is not retracted"
+                );
+            }
+            assert!(matches!(
+                client.request(server_info(32)).await,
+                Response::Success(_)
+            ));
+            answered_once(&received, 30, 1);
+            assert_eq!(permits.available_permits(), SESSION_FILE_MAX_READS);
+            client.close().await;
+            let _ = serving.await.unwrap();
         }
         f.close().await;
     })

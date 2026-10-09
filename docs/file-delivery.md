@@ -117,7 +117,9 @@ JSON-RPC id before native admission:
 
 ```text
 register (id) -> admission -> fences -> physical settlement -> response queued
-  -> transport writer: publication commit -> physical write
+  -> transport writer, once every earlier record is written:
+     decide + the transport accepts the first bytes   (publication linearization point)
+  -> rest of the record
 delivery/cancel (same connection, same id): Running -> Cancelled, request token cancelled
 ```
 
@@ -125,12 +127,38 @@ delivery/cancel (same connection, same id): Running -> Cancelled, request token 
 token, a child of the connection's delivery authority, then fails its next native
 fence. The request still answers exactly once, with `delivery_cancelled`, after its
 native work settled. The serialized response waits in the ordinary bounded
-outbound queue with its publication owner. The writer commits it immediately before
-the physical write, where an accepted cancellation, revoked authority (credential
-removal, close, process shutdown) or a detached attachment replaces a success with
-the same id's typed failure. A response already committed is in transmission and
-stands; a late `delivery/cancel` returns `accepted: false`. Cancelling or revoking
-never closes the connection or affects unrelated responses.
+outbound queue with its publication owner.
+
+**Publication linearization point.** A delivery response is published when the
+transport accepts its first bytes, and only then. The writer reaches that point
+only after every earlier record has been written. There it decides which record to
+offer and offers it to the transport in one synchronous step under the request's
+lock, with no suspension in between, and it settles the request only if the
+transport took bytes. The record offered is the produced response, or the same id's
+typed failure when a cancellation was accepted, the connection's delivery authority
+was revoked (credential removal, close, process shutdown) or the attachment was
+detached. While the transport accepts nothing (backpressure), nothing is decided,
+so a cancellation or revocation that completes before the acceptance wins at the
+next offer. A cancellation either finds the request settled (`accepted: false`) or
+wins. A revocation that completes during the synchronous step itself is concurrent
+with it and ordered after the decision. Bytes the transport accepted are never
+retracted. If the transport ends before accepting the response, nothing of it is
+sent. Cancelling or revoking never closes the connection or affects unrelated
+responses.
+
+What "accepts" means is each transport's own write step:
+
+- **stdio** writes to a non-blocking pipe. The first write that takes any bytes
+  puts them in the kernel pipe buffer; a full pipe takes none and returns pending.
+  This is the physical boundary.
+- **WebSocket** hands the frame to tungstenite (`start_send`) only once the sink
+  has flushed every earlier frame, including any pong the reader queued, to the
+  socket. tungstenite writes the frame to the socket at once (write buffer
+  size 0). If the socket buffer is full at that instant, the frame waits in
+  tungstenite's write buffer, which is bounded at one message, and is sent when
+  the peer reads. It is not retracted. The library does not expose socket
+  writability before taking a frame, so this one message is the documented gap
+  between the WebSocket publication point and the kernel.
 
 A connection carries at most 16 requests in flight; a seventeenth ends it. The
 server answers `delivery/cancel` without awaiting native work. The TUI client
@@ -199,7 +227,7 @@ native owner seam, never a public RPC; a restarted native process uses a new sec
 Native fences run at authenticated admission, before canonical lookup/allocation,
 before open, after leaf open immediately before bytes, after byte/edge verification,
 and at publication (the Product Host socket send, or the ordinary transport writer's
-commit). They check captured host authority,
+handoff of the response's first bytes). They check captured host authority,
 attachment read authority, original mapping, exact root and recorded device/inode.
 Publication retires with its owning socket; the Host rechecks its scope, operation
 abort and root availability before returning to the browser. Allocation ownership
@@ -338,7 +366,7 @@ definitions never touch the filesystem.
     -> abort?                          publication admission: the last cancellation point
     -> link(staged name, destination)  publication commit: atomic, never replaces an entry
     -> lstat(destination) is F's device/inode?   published | refused | uncertain
-    -> unlink(staged name), once; F's link count decides residue; close F
+    -> unlink(staged name), once; fresh observations decide residue; close F
   ```
 
   This is the pattern git uses to publish loose objects (a temporary file in the
@@ -408,10 +436,12 @@ definitions never touch the filesystem.
   save created, and every byte is written through F, never by name. A name, an
   owner or a file type is never taken as evidence that an entry is this save's.
 
-  **Publication.** `link` creates the destination name atomically and fails with
-  `EEXIST` for any existing entry (file, directory, symlink, dangling symlink),
-  so an existing file, a concurrent save or an external writer is never
-  overwritten. F is complete and synced before the link, so a partial file is
+  **Publication.** Just before admission, Save looks at the destination. If an
+  entry is there (file, directory, symlink, dangling symlink), the save is
+  refused as "already exists" without dispatching any link, so that refusal is
+  definite. `link` then creates the destination name atomically and fails with
+  `EEXIST` for any existing entry, so an existing file, a concurrent save or an
+  external writer is never overwritten. F is complete and synced before the link, so a partial file is
   never visible at the destination. The link reads the staged *name*, so the
   published file is bound to F by evidence after the call, not by the call
   itself: the save is reported **published** only when the destination,
@@ -423,16 +453,26 @@ definitions never touch the filesystem.
   fallback.
 
   **Cleanup** is one `unlink` of the staged name, whatever the outcome, separate
-  from publication. Its result is read from F's own link count, never from the
-  name, and only links the evidence proves are attributed to the destination:
+  from publication. Its result rests on observations taken after that unlink,
+  never on the earlier one that proved publication, because the entries may have
+  changed since. Each conclusion rests on a single observation, which is atomic
+  on its own. Observations made at different instants are never combined into
+  one snapshot.
 
-  - **removed**: F's link count is at most the links the destination was *seen*
-    to hold. That is one after a verified publication and zero otherwise.
-  - **unknown**: the count cannot be read, or its one extra link might be an
-    uninspectable destination's. An uninspectable destination is not evidence
-    that it names F, so it never makes cleanup look complete. It only stops the
-    remaining link from being called the staged file's for certain.
-  - **remains**: any other link. The unlink failed, or someone moved the file.
+  - **removed**: F's own link count (`fstat`) is 0, so F has no name anywhere.
+    Or the destination, observed by `lstat`, names F and that same `lstat`
+    reports a link count of 1, so the destination is F's only link.
+  - **remains**: F's count is 2 or more. One name holds one link, so a link
+    besides any destination exists. Or the staged name still names F. Or the
+    destination names F with a count of 2 or more.
+  - **unknown**: none of these. Examples: F has one link but neither the staged
+    name nor the destination names it, the destination cannot be inspected, or
+    the counts cannot be read. Without an observation that attributes F's
+    remaining link, Save neither calls it removed nor guesses where it is.
+
+  So a staged name moved away after publication, with the destination since
+  removed, leaves F linked once at a name no observation finds: the result is
+  `unknown`, never `removed`.
 
   A file that remains or is unknown is reported as residue (`staged:
   "remains" | "unknown"`) under the name it was created with, and it counts as
@@ -440,10 +480,9 @@ definitions never touch the filesystem.
   staged name is not proof that the file is gone. `unlink` never removes a directory, and
   nothing ever removes the destination. Within the trust model the staged name
   only ever names F. A trusted actor who can change the parent's entries and
-  substitutes that name just before
-  the unlink has their entry removed in F's place. That is a limit of pathname
-  deletion: Save reports it as residue, because F is still linked, but cannot
-  prevent it.
+  substitutes that name just before the unlink has their entry removed in F's
+  place. That is a limit of pathname deletion, which Save cannot prevent. Save
+  reports residue whenever F is still linked other than at the destination.
 
   Cancellation at or before admission publishes nothing. The admission check and
   the dispatch of `link` run in one synchronous step; once dispatched, the link's
@@ -456,14 +495,23 @@ definitions never touch the filesystem.
      `link` answered. A network filesystem can fail a retransmitted link that it
      performed. A successful link of the staged name does not show which file
      that name held.
-  2. **Refused** if `link` failed with a definite rejection, which `link(2)`
-     reports without creating the entry: `EEXIST`, a path or permission failure
-     (`ENOENT`, `ENOTDIR`, `EACCES`, `ELOOP`, `ENAMETOOLONG`, `EXDEV`), a read-only,
-     full or over-quota filesystem (`EROFS`, `ENOSPC`, `EDQUOT`, `EMLINK`),
-     `EINVAL`, or unsupported hard links.
-  3. **Uncertain** otherwise: an ambiguous link error (such as `EIO`, or an error
-     without a code), or a successful link after which the destination does not
-     name F. An absent destination, or one naming another file, does not prove
+  2. **Refused** if an entry was already at the destination before any link was
+     dispatched ("already exists"), or if `link` failed with a definite
+     rejection. A definite rejection is an error that `link(2)` reports without
+     creating the entry, and that a repeated request cannot produce without
+     someone also changing the staged name or the parent: a path or permission
+     failure (`ENOENT`, `ENOTDIR`, `EACCES`, `ELOOP`, `ENAMETOOLONG`, `EXDEV`), a
+     read-only, full or over-quota filesystem (`EROFS`, `ENOSPC`, `EDQUOT`,
+     `EMLINK`), `EINVAL`, or unsupported hard links.
+  3. **Uncertain** otherwise:
+     - `EEXIST` from the link itself. The name was free just before, and
+       `EEXIST` is exactly what a network filesystem (NFSv3, NFSv4.0, SMB) returns
+       when it retransmits a link it already performed. So unless the
+       destination names F, it only shows that the name exists, not whose it is.
+       On a local filesystem this happens only when another writer took the name
+       in that gap; Save cannot tell the two apart, and says so.
+     - An ambiguous link error, such as `EIO` or an error without a code.
+     - A successful link after which the destination does not name F. An absent destination, or one naming another file, does not prove
      refusal: the entry may have been created and then removed or replaced by
      someone else. `DeliveryUncertainError` records whether `link` itself
      succeeded (`linked`), carries a link error as its cause, and records what

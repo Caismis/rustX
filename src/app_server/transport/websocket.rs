@@ -2,7 +2,12 @@
 use super::{MAX_MESSAGE_BYTES, WRITE_TIMEOUT, failure};
 use crate::{app_server::connection::AppServerConnection, app_server::host::AppServerHost};
 use futures_util::{SinkExt, StreamExt};
-use std::{io, sync::Arc, time::Duration};
+use std::{
+    io,
+    sync::Arc,
+    task::{Poll, ready},
+    time::Duration,
+};
 use tokio::{net::TcpListener, task::JoinSet};
 use tokio_tungstenite::{
     accept_hdr_async_with_config,
@@ -235,12 +240,35 @@ where
         endpoint.clone(),
         incoming,
         |mut receiver| async move {
-            while let Some(record) = receiver.next().await {
-                let record = record?;
-                tokio::time::timeout(WRITE_TIMEOUT, writer.send(Message::Text(record.into())))
-                    .await
-                    .map_err(|_| failure("WebSocket write deadline exceeded"))?
-                    .map_err(io::Error::other)?;
+            while let Some(mut outbound) = receiver.next().await {
+                tokio::time::timeout(WRITE_TIMEOUT, async {
+                    // Ready only when every earlier frame, and any frame the
+                    // reader queued (a pong), has gone to the socket. Then
+                    // tungstenite takes this frame and writes it to the
+                    // socket at once; if the socket buffer is full right
+                    // then, the frame waits in tungstenite's one-message
+                    // write buffer and is not retracted.
+                    std::future::poll_fn(|cx| {
+                        ready!(writer.poll_flush_unpin(cx)).map_err(io::Error::other)?;
+                        outbound.poll_hand_off(|record| {
+                            writer
+                                .start_send_unpin(Message::Text(record.into()))
+                                .map_err(io::Error::other)?;
+                            // Moves the frame from the split sink's slot into
+                            // tungstenite in this same step.
+                            match writer.poll_flush_unpin(cx) {
+                                Poll::Ready(Err(error)) => {
+                                    Poll::Ready(Err(io::Error::other(error)))
+                                }
+                                Poll::Ready(Ok(())) | Poll::Pending => Poll::Ready(Ok(())),
+                            }
+                        })
+                    })
+                    .await?;
+                    writer.flush().await.map_err(io::Error::other)
+                })
+                .await
+                .map_err(|_| failure("WebSocket write deadline exceeded"))??;
             }
             tokio::time::timeout(WRITE_TIMEOUT, writer.close())
                 .await

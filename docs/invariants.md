@@ -27,13 +27,19 @@ a demonstrably shared filesystem; a remote server path is never a client path. S
 [file delivery](file-delivery.md#delivery-access-for-app-server-clients).
 
 Each ordinary-lane delivery request has one owner on its connection, from
-registration under its exact request id to its publication commit at the transport
-writer. Cancellation (`delivery/cancel`, only for that connection's own id) or
-revocation (credential removal, close, shutdown, detach) that wins before the commit
-prevents that response from publishing bytes or a native path; the request still
-answers exactly once, with a typed failure for the same id, after its native work
-physically settled. A response committed before cancellation or revocation stands
-and is never reported as unpublished. The TUI client reserves one of a connection's
+registration under its exact request id to its publication linearization point. That
+point is the transport's acceptance of the response's first bytes, once every earlier
+record has been written. The writer decides the record and offers it in one synchronous
+step under the request's lock, and settles only if the transport took bytes. stdio's
+point is the non-blocking pipe write. WebSocket's is tungstenite taking the frame, which
+it writes to the socket at once or, when the socket buffer is full, holds as its one
+buffered message. Cancellation (`delivery/cancel`, only for that connection's own id)
+or revocation (credential removal, close, shutdown, detach) that completes before that
+point prevents that response from publishing bytes or a native path, including while
+the transport is backpressured. The request still answers exactly once, with a typed
+failure for the same id, after its native work physically settled. A response
+published before cancellation or revocation stands and is never reported as
+unpublished. The TUI client reserves one of a connection's
 16 in-flight request slots for `delivery/cancel` and sends cancellations through it
 in abort order, so ordinary requests can neither block a cancellation nor make it a
 seventeenth request. A refused cancellation ends the connection rather than
@@ -54,11 +60,15 @@ resolves as for the destination. Save reports publication only when the
 destination, observed after the link, names the device/inode of the file it
 created; it reports refusal only for a definite rejection code, and uncertainty
 otherwise, never "unpublished" because the destination is now absent or foreign.
-Nothing removes the destination. Cleanup is one `unlink` of the staged name, judged
-by the handle's link count. Only a destination seen naming the file accounts for a
-link. A link an uninspectable destination might explain, or an unreadable count,
-makes cleanup `unknown`. Any other link means the staged file `remains`. Both are
-reported as residue, and an absent name is no proof of removal. The trust boundary is the
+An entry already at the destination is refused before any link, so "already exists"
+is definite. `EEXIST` from the link itself is uncertain unless the destination names
+the file, because a network filesystem returns it for a retransmitted link it
+performed. Nothing removes the destination. Cleanup is one `unlink` of the staged
+name, judged only by single observations taken after it, never by the publication's
+earlier one. A count of 0, or a destination whose own `lstat` names the file with
+count 1, is `removed`. A count of 2 or more, or the staged name or destination still
+naming it with others, `remains`. Anything else is `unknown`. Both are reported as
+residue, and an absent name is no proof of removal. The trust boundary is the
 destination's parent. A process that may change its entries (including a macOS `delete`
 right on the file) can substitute or remove the staged name
 between steps, since neither platform links or conditionally removes by

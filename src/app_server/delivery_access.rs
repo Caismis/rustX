@@ -11,14 +11,19 @@
 //!
 //! ```text
 //! register (exact JSON-RPC id) -> native admission -> fences -> physical settlement
-//!   -> response queued -> transport writer: Publication::commit -> bytes on the wire
+//!   -> response queued -> writer: decide + transport accepts first bytes -> wire
 //! delivery/cancel (same connection, same id) -> Running => Cancelled, token cancelled
-//! revocation (credential, detach, close)     -> authority/attachment checked at commit
+//! revocation (credential, detach, close)     -> authority/attachment checked at the decision
 //! ```
 //!
-//! Cancellation or revocation that wins before the commit replaces the
-//! response with its typed failure for the same id. After the commit the
-//! response is transmitted; nothing retracts it.
+//! The publication linearization point is the transport's acceptance of the
+//! response's first bytes ([`Publication::poll_hand_off`]): the decision and
+//! that acceptance run in one synchronous step under the operation's lock,
+//! with no suspension between them, and the request is settled only if the
+//! transport took the bytes. While the transport cannot accept (backpressure),
+//! nothing is decided, so a cancellation or revocation that completes before
+//! the acceptance replaces the response with its typed failure for the same
+//! id. Accepted bytes belong to the transport and are never retracted.
 use super::{
     connection::{Route, client_error, domain, host_error, manager_error},
     host::AppServerHost,
@@ -30,6 +35,7 @@ use std::{
     io,
     path::PathBuf,
     sync::{Arc, Mutex},
+    task::{Poll, ready},
 };
 use tokio_util::sync::CancellationToken;
 
@@ -384,10 +390,10 @@ impl Operations {
 }
 
 /// The publication owner of one delivery response. It travels with the
-/// serialized response through the bounded outbound queue and is committed by
-/// the transport writer immediately before the physical write (or by the
-/// in-process caller when it returns). Dropping it uncommitted publishes
-/// nothing and unregisters the request.
+/// serialized response through the bounded outbound queue and is settled by
+/// the transport writer when the transport accepts the response's first bytes
+/// (or by the in-process caller when it returns). Dropping it unsettled
+/// publishes nothing and unregisters the request.
 pub(super) struct Publication {
     operations: Arc<Operations>,
     id: RequestId,
@@ -409,16 +415,15 @@ impl Publication {
         &self.probe
     }
 
-    /// The publication linearization point. `Ok` commits the response as
+    /// What publishing now would mean. `Ok` publishes the response as
     /// produced; `Err` is the typed terminal failure that replaces it.
     ///
     /// A cancellation accepted earlier always wins. A success (bytes or a
     /// native path) additionally requires the connection's delivery
     /// authority and the exact attachment to be current now; a failure
     /// carries nothing sensitive and keeps its own reason.
-    pub(super) fn commit(&self, success: bool) -> Result<(), RpcError> {
-        let mut state = self.operation.state.lock().expect("delivery operation");
-        let decision = match *state {
+    fn decide(&self, state: State, success: bool) -> Result<(), RpcError> {
+        match state {
             State::Cancelled => Err(domain(ErrorData::DeliveryCancelled)),
             State::Settled | State::Running if !success => Ok(()),
             State::Settled | State::Running => check_rpc(&self.authority).and_then(|()| {
@@ -428,7 +433,13 @@ impl Publication {
                     .map(|_| ())
                     .map_err(client_error)
             }),
-        };
+        }
+    }
+
+    /// Decides and settles at once, for the in-process caller.
+    fn commit(&self, success: bool) -> Result<(), RpcError> {
+        let mut state = self.operation.state.lock().expect("delivery operation");
+        let decision = self.decide(*state, success);
         *state = State::Settled;
         decision
     }
@@ -442,15 +453,32 @@ impl Publication {
         }
     }
 
-    /// Commits an already serialized response for a transport writer.
-    pub(super) fn publish_record(&self, record: String, success: bool) -> io::Result<String> {
-        match self.commit(success) {
-            Ok(()) => Ok(record),
-            Err(error) => super::transport::serialize_record(&super::connection::failure(
-                Some(self.id.clone()),
-                error,
-            )),
-        }
+    /// The publication linearization point for a transport writer.
+    ///
+    /// `accept` is the transport's non-suspending acceptance of a record's
+    /// first bytes: `Pending` means it took nothing. Under the operation's
+    /// lock, this decides which record to publish (`record` as produced, or
+    /// the same id's typed failure), offers it to `accept`, and settles the
+    /// request only when `accept` is ready. So a cancellation either finds the
+    /// request settled, or wins and is honored at the next offer, and a
+    /// revocation that completes before an offer is observed by it. Returns
+    /// the replacement record, if any, and what `accept` returned.
+    pub(super) fn poll_hand_off<T>(
+        &self,
+        record: &str,
+        success: bool,
+        accept: impl FnOnce(&str) -> Poll<io::Result<T>>,
+    ) -> Poll<io::Result<(Option<String>, T)>> {
+        let mut state = self.operation.state.lock().expect("delivery operation");
+        let replacement = match self.decide(*state, success) {
+            Ok(()) => None,
+            Err(error) => Some(super::transport::serialize_record(
+                &super::connection::failure(Some(self.id.clone()), error),
+            )?),
+        };
+        let accepted = ready!(accept(replacement.as_deref().unwrap_or(record)));
+        *state = State::Settled;
+        Poll::Ready(accepted.map(|accepted| (replacement, accepted)))
     }
 }
 

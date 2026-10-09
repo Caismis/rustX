@@ -25,9 +25,6 @@ pub(crate) struct ReadProbe {
     /// Admitted and holding a permit, before the descriptor walk opens anything.
     pub before_open: std::sync::Arc<crate::runtime::conversation_runtime::Gate>,
     pub before_bytes: std::sync::Arc<crate::runtime::conversation_runtime::Gate>,
-    /// A delivery response dequeued by the transport writer, before its
-    /// publication commit.
-    pub before_publication: Pause,
     pub completed: tokio::sync::watch::Sender<Option<bool>>,
     pub retirement_waiting: tokio::sync::watch::Sender<bool>,
     pub authority: std::sync::Mutex<Option<CancellationToken>>,
@@ -39,7 +36,6 @@ impl Default for ReadProbe {
             before_admission: Pause::default(),
             before_open: std::sync::Arc::default(),
             before_bytes: std::sync::Arc::default(),
-            before_publication: Pause::default(),
             completed: tokio::sync::watch::channel(None).0,
             retirement_waiting: tokio::sync::watch::channel(false).0,
             authority: std::sync::Mutex::default(),

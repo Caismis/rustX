@@ -1,5 +1,5 @@
 //! Bounded byte delivery only. Semantic work belongs to `AppServerConnection`.
-use std::{io, sync::Arc, time::Duration};
+use std::{io, sync::Arc, task::Poll, time::Duration};
 
 use futures_util::{Stream, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use serde::Serialize;
@@ -45,30 +45,51 @@ impl io::Write for Record {
 }
 
 /// One encoded, size-checked record and, for a delivery response, the owner
-/// of its publication commit.
+/// of its publication decision.
 pub(super) struct Outbound {
     record: String,
     publication: Option<(Publication, bool)>,
 }
 
-/// The writer's only source of records. A delivery response is committed here,
-/// after the writer is ready to transmit it and immediately before the
-/// physical write: the publication linearization point. Revocation or
-/// cancellation that wins before it replaces the record with the same id's
-/// typed failure; after it, the record is on its way and is not retracted.
-pub(super) struct Outgoing(mpsc::Receiver<Outbound>);
-impl Outgoing {
-    pub(super) async fn next(&mut self) -> Option<io::Result<String>> {
-        let Outbound {
+impl Outbound {
+    /// Hands this record to the transport. `accept` is the transport's one
+    /// non-suspending acceptance of a record's first bytes, returning
+    /// `Pending` when it took nothing; the adapter calls this again when the
+    /// transport can accept. For a delivery response this is the publication
+    /// linearization point ([`Publication::poll_hand_off`]): which record is
+    /// offered is decided in the same synchronous step, and fixed only once
+    /// the transport took its first bytes. Returns the record as handed over
+    /// and what `accept` returned.
+    pub(super) fn poll_hand_off<T>(
+        &mut self,
+        accept: impl FnOnce(&str) -> Poll<io::Result<T>>,
+    ) -> Poll<io::Result<(String, T)>> {
+        let Self {
             record,
             publication,
-        } = self.0.recv().await?;
+        } = self;
         let Some((publication, success)) = publication else {
-            return Some(Ok(record));
+            return accept(record).map_ok(|accepted| (std::mem::take(record), accepted));
         };
-        #[cfg(test)]
-        publication.probe().before_publication.enter().await;
-        Some(publication.publish_record(record, success))
+        publication
+            .poll_hand_off(record, *success, accept)
+            .map_ok(|(replacement, accepted)| {
+                (
+                    replacement.unwrap_or_else(|| std::mem::take(record)),
+                    accepted,
+                )
+            })
+    }
+}
+
+/// The writer's only source of records, in order. Each adapter hands a
+/// record to its transport with [`Outbound::poll_hand_off`] only once every
+/// earlier record has been fully written, so backpressure from an earlier
+/// record leaves later delivery responses undecided.
+pub(super) struct Outgoing(mpsc::Receiver<Outbound>);
+impl Outgoing {
+    pub(super) async fn next(&mut self) -> Option<Outbound> {
+        self.0.recv().await
     }
 }
 

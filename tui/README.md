@@ -1146,7 +1146,10 @@ a model request.
   example FAT or exFAT) are refused rather than written unsafely. If the
   filesystem reports an ambiguous error (such as an I/O error) for the final
   step and the file cannot be confirmed, the save says its outcome is unknown;
-  check the destination yourself. A filename containing terminal control
+  check the destination yourself. A destination that already exists is refused
+  before anything is linked. If the name is taken only during the final step,
+  the outcome is also unknown, because on a network filesystem that error can
+  follow a link the save did make. A filename containing terminal control
   characters is not prefilled; type the destination yourself. Closing `/files`
   (or switching Session, reconnecting or quitting) cancels a running action on
   the server too.
