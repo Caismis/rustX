@@ -14,6 +14,7 @@ export function SessionDeletion({ client, sessionId, title, close, deleted }: {
 }) {
   const tx = useTranslation();
   const transport = useClientSelector(client, transportSelection, sameValue);
+  const lifecycle = useClientSelector(client, state => state.views[sessionId]?.lifecycle, sameValue);
   const [preview, setPreview] = useState<RuntimeClientSessionDeletePreview>();
   const [busy, setBusy] = useState(false), [error, setError] = useNotice(), [uncertain, setUncertain] = useState(false);
   const guard = useRef(false);
@@ -56,7 +57,7 @@ export function SessionDeletion({ client, sessionId, title, close, deleted }: {
     {uncertain && <p role="alert">{tx('common:session-deletion.deletion-outcome-uncertain-inspect-native-recovery-before-anothe')}</p>}
     <div className="row" aria-busy={busy}>
       <Button disabled={busy} onClick={dismiss}>{tx('common:session-deletion.keep-session')}</Button>
-      <Button variant="primary" disabled={busy || uncertain || !preview || transport.connection !== 'connected'} onClick={() => void confirm()}>{tx('common:session-deletion.confirm-delete')}</Button>
+      <Button variant="primary" disabled={busy || uncertain || !preview || lifecycle?.delete === false || transport.connection !== 'connected'} onClick={() => void confirm()}>{tx('common:session-deletion.confirm-delete')}</Button>
     </div>
   </Modal>;
 }

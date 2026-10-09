@@ -88,6 +88,11 @@ it('unknown transmitted Node acquisition cannot bypass existing native residency
   expect(s.client.target('A').conversation_id).toBe('conversation-right'); expect(s.client.getSnapshot().uncertain).toHaveLength(1);
   expect(requests(s).map(row => row.method)).toEqual(['session/attach', 'session/attach', 'session/attach', 'session/switchNode', 'session/attach']);
   expect(s.claims()).toHaveLength(1);
+  await s.client.release('A'); await s.client.release('A');
+  expect(s.client.getSnapshot().views.A.attachment).toBe('detached');
+  expect(s.client.getSnapshot().uncertain).toHaveLength(1); // Historical uncertainty is not current claim ownership.
+  expect(s.claims()).toHaveLength(0);
+  expect(requests(s).filter(row => row.method === 'session/detach')).toHaveLength(1);
 });
 
 it('equivalent queued Opens share one exact Node claim', async () => {
@@ -246,12 +251,18 @@ it.each(['before-transition', 'after-unload'] as const)('switch failure preserve
     }
     throw new RpcFailure({ code: -32000, message: 'switch failed', data: { kind: 'operation_failed' } });
   });
-  await expect(s.client.switchNode('A', 'right')).rejects.toThrow('switch failed');
+  const revision = await deletionPreview(s); s.held.add('session/switchNode');
+  const switching = s.client.switchNode('A', 'right'), failed = expect(switching).rejects.toThrow('switch failed');
+  const switchRequest = await s.waitFor('session/switchNode', 1);
+  await expectSwitchExcludesDeletion(s, revision);
+  s.reply(switchRequest); await failed;
   const view = s.client.getSnapshot().views.A;
   expect(view.attachment).toBe('stale'); expect(view.attachmentObservation).toBeUndefined(); expect(view.nodeId).toBeUndefined();
   expect(view.target).toEqual(target); expect(s.claims()).toHaveLength(phase === 'after-unload' ? 0 : 1);
   await expect(s.client.send('A', 'forbidden')).rejects.toThrow('not authoritatively attached');
   expect(requests(s)).toHaveLength(2);
+  const freshRevision = await deletionPreview(s); await s.client.deleteSession('A', freshRevision);
+  expect(s.requests.filter(row => row.request.method === 'session/delete')).toHaveLength(1);
   await s.client.release('A'); expect(s.claims()).toHaveLength(0);
   await s.client.attach('A');
   expect(s.client.target('A').conversation_id).toBe(phase === 'after-unload' ? 'conversation-right' : 'conversation-left');
@@ -262,12 +273,17 @@ it.each(['before-transition', 'after-unload'] as const)('switch failure preserve
 it('a lost switch response never replays or restores old authority on reconnect', async () => {
   const s = await setup(); await s.client.attach('A', 'left'); s.held.add('session/switchNode');
   const work = s.client.switchNode('A', 'right'), unknown = expect(work).rejects.toBeInstanceOf(OutcomeUncertain);
-  s.commit(await s.waitFor('session/switchNode', 1)); s.socket.close(); await unknown;
+  const switchRequest = await s.waitFor('session/switchNode', 1);
+  await expectSwitchExcludesDeletion(s, await deletionPreview(s));
+  s.commit(switchRequest); s.socket.close(); await unknown;
   await s.connect();
   expect(requests(s).map(row => row.method)).toEqual(['session/attach', 'session/switchNode']);
   expect(s.client.getSnapshot().views.A.attachment).toBe('stale'); expect(s.client.getSnapshot().views.A.nodeId).toBeUndefined();
   expect(s.client.getSnapshot().uncertain.map(row => row.method)).toEqual(['session/switchNode']);
   expect(s.claims()).toHaveLength(0);
+  const revision = await deletionPreview(s); expect(revision).toBe('revision-right');
+  await s.client.deleteSession('A', revision);
+  expect(s.requests.filter(row => row.request.method === 'session/delete').map(row => row.request.params)).toEqual([{ session_id: 'A', expected_target_revision: revision }]);
   await s.client.attach('A');
   expect(s.client.target('A').conversation_id).toBe('conversation-right');
   expect(requests(s).map(row => row.method)).toEqual(['session/attach', 'session/switchNode', 'session/attach']);
@@ -316,4 +332,189 @@ it('disconnect between switch ACK decoding and lifecycle continuation cannot reo
   expect(s.client.getSnapshot().views.A.attachmentIntent).toBe('released');
   await s.client.attach('A'); expect(s.client.target('A').conversation_id).toBe('conversation-right');
   expect(s.claims()).toHaveLength(1);
+});
+
+async function deletionPreview(s: Server) {
+  s.handlers.set('session/deletePreview', () => ({ type: 'deletion', result: { status: 'preview', preview: {
+    session_id: 'A', target_revision: `revision-${s.summary('A').active_node}`, owned_node_count: 2, owned_conversation_count: 2, owned_child_count: 0,
+  } } }));
+  const response = await s.client.request({ method: 'session/deletePreview', params: { session_id: 'A' } }, 'deletion');
+  if (response.result.status !== 'preview') throw new Error('Expected deletion preview');
+  return response.result.preview.target_revision;
+}
+async function expectSwitchExcludesDeletion(s: Server, revision: string) {
+  const before = s.client.getSnapshot(), count = s.requests.length;
+  // A definitive fixture rejection makes the old implementation fail an
+  // assertion, rather than hang waiting for an unimplemented deletion reply.
+  s.handlers.set('session/delete', () => ({ type: 'deletion', result: { status: 'stale', session_id: 'A' } }));
+  const outcome = s.client.deleteSession('A', revision).then(() => 'admitted', error => String(error));
+  const immediatelyAfter = s.client.getSnapshot();
+  expect(await outcome).toContain('Node switch');
+  expect(immediatelyAfter).toBe(before);
+  expect(s.client.getSnapshot()).toBe(before);
+  expect(s.requests).toHaveLength(count);
+}
+
+it.each(['ack', 'release', 'closed', 'decoded'] as const)('unsettled switch excludes deletion without side effects: %s', async phase => {
+  const s = await setup(); await s.client.attach('A', 'left'); const revision = await deletionPreview(s);
+  s.held.add('session/switchNode'); const switching = s.client.switchNode('A', 'right'); void switching.catch(() => {});
+  const request = await s.waitFor('session/switchNode', 1), response = s.commit(request);
+  expect(s.summary('A').active_node).toBe('right'); expect(s.residentConversations.get('A')).toBe('conversation-right');
+  const release = phase === 'release' ? s.client.release('A') : undefined;
+  if (phase === 'closed') s.socket.deliver({ jsonrpc: '2.0', method: 'session/closed', params: { target: s.client.getSnapshot().views.A.target! } });
+  if (phase === 'decoded') {
+    // No await: the ACK is decoded but the lifecycle continuation has not run.
+    s.socket.deliver(response);
+    s.handlers.set('session/delete', () => ({ type: 'deletion', result: { status: 'stale', session_id: 'A' } }));
+    const before = s.client.getSnapshot();
+    const rejected = s.client.deleteSession('A', revision).then(() => 'admitted', error => String(error));
+    expect(s.client.getSnapshot()).toBe(before);
+    expect(await rejected).toContain('Node switch');
+  } else {
+    await expectSwitchExcludesDeletion(s, revision);
+    s.socket.deliver(response);
+  }
+  await Promise.all([switching, release]);
+  expect(s.client.getSnapshot().views.A).toMatchObject({ nodeId: 'right', nodeConversationId: 'conversation-right', attachment: 'detached', attachmentIntent: phase === 'release' ? 'released' : 'wanted' });
+  expect(s.client.getSnapshot().views.A.attachmentObservation).toBeUndefined();
+  expect(s.requests.filter(row => row.request.method === 'session/delete')).toHaveLength(0);
+  expect(requests(s).map(row => row.method)).toEqual(['session/attach', 'session/switchNode']);
+  expect(s.claims()).toHaveLength(0);
+  await s.client.attach('A');
+  expect(s.client.target('A').conversation_id).toBe('conversation-right'); expect(s.claims()).toHaveLength(1); expect(s.maxClaims).toBe(1);
+  const freshRevision = await deletionPreview(s);
+  expect(freshRevision).toBe('revision-right');
+  s.handlers.set('session/delete', request => {
+    expect(request.params).toEqual({ session_id: 'A', expected_target_revision: freshRevision });
+    return { type: 'deletion', result: { status: 'stale', session_id: 'A' } };
+  });
+  await s.client.deleteSession('A', freshRevision);
+  expect(s.requests.filter(row => row.request.method === 'session/delete')).toHaveLength(1);
+  expect(s.client.getSnapshot().views.A.nodeId).toBe('right');
+  expect(() => s.client.target('A')).toThrow('not authoritatively attached');
+});
+
+it('deletion admitted first excludes switch and cannot restore its revoked control proof', async () => {
+  const s = await setup(); await s.client.attach('A', 'left'); const revision = await deletionPreview(s);
+  s.held.add('session/delete'); s.handlers.set('session/delete', () => ({ type: 'deletion', result: { status: 'stale', session_id: 'A' } }));
+  const deleting = s.client.deleteSession('A', revision), request = await s.waitFor('session/delete', 1), before = s.client.getSnapshot();
+  expect(() => s.client.switchNode('A', 'right')).toThrow('current attachment operation');
+  expect(s.client.getSnapshot()).toBe(before);
+  expect(s.requests.filter(row => row.request.method === 'session/switchNode')).toHaveLength(0);
+  s.reply(request); await deleting;
+  expect(s.client.getSnapshot().views.A.deleting).toBe(false);
+  expect(() => s.client.target('A')).toThrow('not authoritatively attached');
+  await expect(s.client.attach('A')).rejects.toThrow('Release the retained attachment');
+  await s.client.release('A'); await s.client.attach('A');
+  expect(s.client.target('A').conversation_id).toBe('conversation-left'); expect(s.claims()).toHaveLength(1);
+});
+
+it.each(['proceed', 'release'] as const)('switch owns deletion exclusion behind RPC capacity: %s', async action => {
+  const s = await setup(); await s.client.attach('A', 'left'); const revision = await deletionPreview(s);
+  s.held.add('session/read');
+  const reads = Array.from({ length: 8 }, () => s.client.request({ method: 'session/read', params: { session_id: 'A' } }, 'session'));
+  await s.waitFor('session/read', 8);
+  const switching = s.client.switchNode('A', 'right');
+  const outcome = switching.then(() => 'switched', error => String(error));
+  const release = action === 'release' ? s.client.release('A') : undefined;
+  await expectSwitchExcludesDeletion(s, revision);
+  expect(s.requests.filter(row => row.request.method === 'session/switchNode')).toHaveLength(0);
+  s.requests.filter(row => row.request.method === 'session/read').forEach(row => s.reply(row.request));
+  await Promise.all([outcome, release, ...reads]);
+  expect(await outcome).toContain(action === 'release' ? 'before dispatch' : 'switched');
+  expect(requests(s).map(row => row.method)).toEqual(['session/attach', action === 'release' ? 'session/detach' : 'session/switchNode']);
+  expect(s.client.getSnapshot().views.A.nodeId).toBe(action === 'release' ? 'left' : 'right');
+  expect(s.claims()).toHaveLength(0);
+  const before = s.requests.filter(row => row.request.method === 'session/read').length;
+  const reused = Array.from({ length: 8 }, () => s.client.request({ method: 'session/read', params: { session_id: 'A' } }, 'session'));
+  const sent = s.requests.filter(row => row.request.method === 'session/read').slice(before); expect(sent).toHaveLength(8);
+  sent.forEach(row => s.reply(row.request)); await Promise.all(reused);
+});
+
+it.each(['proceed', 'release'] as const)('switch retains deletion exclusion through final validation: %s', async action => {
+  const s = await setup(); await s.client.attach('A', 'left'); const revision = await deletionPreview(s);
+  const request = s.client.request.bind(s.client), entered = deferred<void>(), gate = deferred<boolean>(); let signal: AbortSignal | undefined;
+  vi.spyOn(s.client, 'request').mockImplementation(((...args: Parameters<typeof request>) => {
+    if (args[0].method === 'session/switchNode') {
+      const proof = args[3], current = typeof proof === 'function' ? proof : proof?.current;
+      if (!current) throw new Error('Expected switch dispatch proof');
+      if (typeof proof !== 'object') throw new Error('Expected lifecycle port admission');
+      proof.validate = async controller => { signal = controller; entered.resolve(); return gate.promise; };
+    }
+    return request(...args);
+  }) as typeof request);
+  const switching = s.client.switchNode('A', 'right'), outcome = switching.then(() => 'switched', error => String(error));
+  await entered.promise;
+  const release = action === 'release' ? s.client.release('A') : undefined;
+  await expectSwitchExcludesDeletion(s, revision);
+  expect(s.requests.filter(row => row.request.method === 'session/switchNode')).toHaveLength(0);
+  gate.resolve(true); await Promise.all([outcome, release]);
+  expect(await outcome).toContain(action === 'release' ? 'before dispatch' : 'switched');
+  expect(signal?.aborted).toBe(action === 'release');
+  expect(requests(s).map(row => row.method)).toEqual(['session/attach', action === 'release' ? 'session/detach' : 'session/switchNode']);
+  expect(s.client.getSnapshot().views.A.nodeId).toBe(action === 'release' ? 'left' : 'right');
+  expect(s.claims()).toHaveLength(0);
+});
+
+it('switch deletion exclusion is Session scoped', async () => {
+  const s = await setup(); await s.client.attach('A', 'left'); s.held.add('session/switchNode');
+  const switching = s.client.switchNode('A', 'right'), request = await s.waitFor('session/switchNode', 1);
+  const view = s.client.getSnapshot().views.A;
+  s.handlers.set('session/delete', request => {
+    expect(request.params).toEqual({ session_id: 'B', expected_target_revision: 'B-preview' });
+    return { type: 'deletion', result: { status: 'stale', session_id: 'B' } };
+  });
+  await s.client.deleteSession('B', 'B-preview');
+  expect(s.client.getSnapshot().views.A).toStrictEqual(view);
+  expect(s.requests.filter(row => row.request.method === 'session/delete')).toHaveLength(1);
+  s.reply(request); await switching;
+  expect(s.client.getSnapshot().views.A.nodeId).toBe('right'); expect(s.claims()).toHaveLength(0);
+});
+
+it('generic request cannot bypass the actor to acquire, switch, detach or delete a Session', async () => {
+  const s = await setup(); await s.client.attach('A', 'left'); const target = s.client.target('A'), before = s.client.getSnapshot(), count = s.requests.length;
+  const operations = [
+    { method: 'session/attach', params: { session_id: 'A', node_id: 'right' } },
+    { method: 'session/switchNode', params: { target, node_id: 'right' } },
+    { method: 'session/detach', params: { target } },
+    { method: 'session/delete', params: { session_id: 'A', expected_target_revision: 'preview' } },
+    { method: 'session/recoverDeletion', params: { session_id: 'A' } },
+  ] as const;
+  for (const operation of operations) await expect(s.client.request(operation, 'session')).rejects.toThrow('actor admission');
+  expect(s.client.getSnapshot()).toBe(before); expect(s.requests).toHaveLength(count); expect(s.claims()).toEqual([target]);
+});
+
+
+it('equivalent Open joins observation resynchronization without reviving revoked control', async () => {
+  const s = await setup(); await s.client.attach('A', 'left');
+  const proof = s.client.getSnapshot().views.A.attachmentObservation, target = s.target('A');
+  s.held.add('session/snapshot');
+  s.socket.deliver({ jsonrpc: '2.0', method: 'session/resyncRequired', params: { target, after_cursor: '0', earliest_serviceable: '1' } });
+  const read = await s.waitFor('session/snapshot', 1);
+  expect(() => s.client.target('A')).toThrow();
+  const opening = s.client.attach('A', 'left');
+  s.held.delete('session/snapshot'); s.reply(read); await opening;
+  expect(s.client.isAttachmentObservationCurrent('A', proof)).toBe(true);
+  expect(requests(s).map(row => row.method)).toEqual(['session/attach']);
+  expect(s.claims()).toHaveLength(1);
+  await s.client.release('A');
+  expect(s.client.isAttachmentObservationCurrent('A', proof)).toBe(false);
+});
+
+
+it('equivalent Open after navigation replacement observes the original exact native result without a second claim', async () => {
+  const s = await setup(); s.held.add('session/attach');
+  let navigation = true;
+  const obsoleteNavigation = vi.fn(), latestNavigation = vi.fn();
+  const first = s.client.attach('A', 'left', () => navigation, obsoleteNavigation);
+  const attach = await s.waitFor('session/attach', 1);
+  navigation = false;
+  const equivalent = s.client.attach('A', 'left', () => true, latestNavigation);
+  s.reply(attach); await Promise.all([first, equivalent]);
+  const view = s.client.getSnapshot().views.A;
+  expect(obsoleteNavigation).not.toHaveBeenCalled(); expect(latestNavigation).toHaveBeenCalledOnce();
+  expect(s.client.isAttachmentObservationCurrent('A', view.attachmentObservation)).toBe(true);
+  expect(s.client.target('A').conversation_id).toBe('conversation-left');
+  expect(requests(s).map(row => row.method)).toEqual(['session/attach']);
+  expect(s.claims()).toEqual([view.target]);
 });

@@ -75,26 +75,20 @@ it('large child lists bound background meter requests without blocking the paren
 });
 
 it('an obsolete attachment cannot publish late meters or overwrite its successor', async () => {
-  const {cfg3Client,cfg3Session,cfg3Target}=await import('./cfg3-fixture');
-  const {useSubagents}=await import('../src/app/agent/subagent-context');
-  let release!: (value: import('../../protocol/app-server/v38').MethodResult)=>void;
-  let calls=0;
-  const s=cfg3Client(async op=>{
-    if(op.method!=='agent/statistics')return;
-    if(++calls===1)return new Promise(resolve=>{release=resolve;});
-    return {type:'agent_statistics',metrics:{...agentMetrics,duration:{settled_ms:'999',active:null}}};
-  });
-  const publish=(attachment:string)=>s.publish({views:{[cfg3Session]:{...s.client.getSnapshot().views[cfg3Session],target:{...cfg3Target,attachment_id:attachment},attachmentObservation:{generation:1,nodeId:'node-fixture',target:{...cfg3Target,attachment_id:attachment},intentRevision:0},snapshot:{...snapshot(),agents:[agent]}}}});
-  publish('old');
-  function Meter(){return <output>{useSubagents()?.metrics.child?.duration.settled_ms ?? 'unknown'}</output>;}
-  const ui=render(<SubagentScope client={s.client} sessionId={cfg3Session}><Meter/></SubagentScope>);
-  await waitFor(()=>expect(calls).toBe(1));
-  await act(async()=>publish('successor'));
-  await ui.findByText('999');
-  await act(async()=>release({type:'agent_statistics',metrics:agentMetrics}));
-  expect(ui.getByText('999')).toBeTruthy();expect(calls).toBe(2);
-  ui.rerender(<SubagentScope client={s.client} sessionId={cfg3Session}><Meter/></SubagentScope>);
-  expect(calls).toBe(2);
+  const { useSubagents } = await import('../src/app/agent/subagent-context');
+  const server = new Server(); servers.push(server); server.snapshots.get('A')!.agents = [agent];
+  await server.attached('A'); server.held.add('agent/statistics');
+  function Meter() { return <output>{useSubagents()?.metrics.child?.duration.settled_ms ?? 'unknown'}</output>; }
+  const ui = render(<SubagentScope client={server.client} sessionId="A"><Meter/></SubagentScope>);
+  const old = await server.waitFor('agent/statistics', 1);
+  await act(async () => { await server.client.release('A'); await server.client.attach('A'); });
+  const current = await server.waitFor('agent/statistics', 2);
+  await act(async () => server.socket.success(current, { type: 'agent_statistics', metrics: { ...agentMetrics, duration: { settled_ms: '999', active: null } } }));
+  expect(ui.getByText('999')).toBeTruthy();
+  await act(async () => server.reply(old));
+  expect(ui.getByText('999')).toBeTruthy();
+  ui.rerender(<SubagentScope client={server.client} sessionId="A"><Meter/></SubagentScope>);
+  expect(server.requests.filter(row => row.request.method === 'agent/statistics')).toHaveLength(2);
 });
 
 it('two stalled A reads do not block B; repeated scope switches retain a four-request bound and late A cannot publish', async () => {
@@ -245,7 +239,7 @@ it('failed detach retains T1 but Open and refresh cannot mint observation admiss
     await rejected; await opening;
     for (const row of reads()) server.reply(row.request);
   });
-  expect(server.client.getSnapshot().views.A).toMatchObject({ target, attachment: 'attached', attachmentIntent: 'wanted' });
+  expect(server.client.getSnapshot().views.A).toMatchObject({ target, attachment: 'error', attachmentIntent: 'wanted' });
   expect(server.client.getSnapshot().views.A.attachmentObservation).toBeUndefined();
   expect(reads()).toHaveLength(2); expect(server.claims()).toHaveLength(1);
   await act(async () => { server.held.delete('session/detach'); server.held.delete('agent/statistics'); await server.client.release('A'); await server.client.attach('A'); });

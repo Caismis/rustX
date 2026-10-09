@@ -1,3 +1,6 @@
+import { SessionLifecycles } from './session-lifecycle/system';
+import { emptyFacts, type LifecycleFacts, type SessionLifecyclePort } from './session-lifecycle/port';
+import { lifecycleAvailability, type LifecycleContext } from './session-lifecycle/machine';
 import { AgentMeters } from './agent-meters';
 import { UploadFailure, AttachmentIntakes } from './uploads';
 import { foldRuntimeEvent } from '../../../protocol/app-server/projection';
@@ -6,7 +9,7 @@ import { FirstSubmissions } from '../app/new-conversation/first-submit';
 import { SessionExportController } from "./session-export";
 import { TRACE_LIMIT, TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterests, type TraceCache } from './trace';
 import type {
-  ConfigurationApplication, RuntimeClientSessionDeletionResult, PendingInboundRef, PendingMutationOutcome, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
+  ConfigurationApplication, PendingInboundRef, PendingMutationOutcome, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot,
   SessionPersistentState, SessionSummary, ServerCapabilities, UserInputBlock, UploadReceipt, UploadedFile,
 } from '../../../protocol/app-server/v38';
@@ -54,30 +57,14 @@ export interface CompactionRequestEvidence {
   status: 'submitting' | 'uncertain' | 'succeeded' | 'failed';
   diagnostic?: string;
 }
-export interface SessionView {
+export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentIntentRevision'> {
+  /** Readonly actor projection; absent on catalog-only presentation rows. */
+  readonly attachmentIntentRevision?: number;
+  readonly lifecycle?: ReturnType<typeof lifecycleAvailability>;
   compactionRequest?: CompactionRequestEvidence;
-  deleting?: boolean;
-  deletionRecovery?: "committed_cleanup_pending" | "committed_durability_uncertain";
-  recoveringDeletion?: boolean;
-  /** Historical committed fact; unlike recovery admission, survives a lost recovery reply. */
-  deletionCommitted?: SessionView['deletionRecovery'];
   id: string;
   /** Last native catalog row, retained when the Sidebar reads a different page. */
   summary?: SessionSummary;
-  // Local future-control intent; never inferred from an RPC acknowledgement.
-  attachmentIntent: 'wanted' | 'released';
-  /** Release revokes old observation proofs even if Open restores intent in the same render batch. */
-  attachmentIntentRevision?: number;
-  /** Committed native attachment observation authority; intent or retained target cannot mint it. */
-  attachmentObservation?: { readonly generation: number; readonly target: AttachmentTarget; readonly nodeId: string; readonly intentRevision: number };
-  // Last server observation, independent of focus and local intent.
-  attachment: 'detached' | 'attaching' | 'attached' | 'resynchronizing' | 'stale' | 'error';
-  target?: AttachmentTarget;
-  /** Exact native node explicitly opened by this view; retained across reconnect. */
-  nodeId?: string;
-  /** Native tree evidence for the desired Node, separate from a retained claim. */
-  nodeConversationId?: string;
-  attachmentNodeId?: string;
   snapshot?: RuntimeClientSnapshot;
   trace?: TraceCache;
   cursor?: RuntimeClientCursor;
@@ -160,6 +147,8 @@ export type SocketFactory = (url: string, protocols: string[]) => Socket;
  * synchronously again before send. The transport never interprets Host policy.
  * `validate` must stop its reads when `signal` aborts; the transport never waits for it. */
 export interface OperationAdmission {
+  /** Transport evidence only; called exactly when native dispatch starts. */
+  sent?: () => void;
   current: () => boolean;
   validate: (signal: AbortSignal) => Promise<boolean>;
 }
@@ -292,9 +281,11 @@ export class AppServerClient {
   private dirty = new Set<string>();
   private acquiring = new Set<string>();
   private resubscribe = new Set<string>();
-  private attachmentChanges = new Map<string, { kind: 'attach' | 'detach' | 'switch'; work: Promise<void>; switching?: Promise<void> }>();
-  private attachmentChangeCount = 0;
-  private attachmentEpochs = new Map<string, number>();
+  private readonly lifecycles = new SessionLifecycles({
+    transport: () => ({ generation: this.state.generation, connected: this.initialized }),
+    port: id => this.lifecyclePort(id),
+    project: (id, current, previous) => this.projectLifecycle(id, current, previous),
+  });
   private readingIntents = new Map<string, number>();
   private readingAuthorities = new Map<string, number>();
   private outlineReads = new Map<string, OutlineRead>();
@@ -339,19 +330,101 @@ export class AppServerClient {
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   getSnapshot = () => this.state;
   isAttachmentObservationCurrent(id: string, admission: SessionView['attachmentObservation']): boolean {
-    const state = this.getSnapshot(), view = state.views[id];
-    return !!admission && view?.attachmentObservation === admission && state.generation === admission.generation
-      && view.attachmentIntent === 'wanted' && (view.attachmentIntentRevision ?? 0) === admission.intentRevision
-      && view.nodeId === admission.nodeId && view.attachmentNodeId === admission.nodeId
-      && view.attachment === 'attached' && !view.deleting && sameTarget(view.target, admission.target);
+    return this.lifecycles.current(id, admission);
   }
   private publish(patch: Partial<ClientView>) {
     this.state = { ...this.state, ...patch };
     for (const listener of this.listeners) listener();
   }
-  private setSession(id: string, patch: Partial<SessionView>) {
-    const view = this.state.views[id] ?? { id, summary: this.state.sessions.find(row => row.id === id), attachmentIntent: 'released' as const, attachment: 'detached' as const };
+  private setSession(id: string, patch: Partial<Omit<SessionView, keyof LifecycleFacts | 'lifecycle'>> & { error?: string }) {
+    const view = this.state.views[id] ?? { id, summary: this.state.sessions.find(row => row.id === id), ...emptyFacts };
     this.publish({ views: { ...this.state.views, [id]: { ...view, ...patch } } });
+  }
+  /** One-way actor projection. Ordinary presentation writes cannot assign these facts. */
+  private projectLifecycle(id: string, context: LifecycleContext, previous?: LifecycleContext) {
+    const view = this.state.views[id] ?? { id, summary: this.state.sessions.find(row => row.id === id), ...emptyFacts };
+    const facts = context.facts;
+    const changedNode = previous && facts.nodeId !== previous.facts.nodeId;
+    const opening = facts.attachment === 'attaching' && previous?.epoch !== context.epoch;
+    const retiredClaim = !!previous?.facts.target && !facts.target;
+    const attached = context.attachmentResult && context.attachmentResult !== previous?.attachmentResult && facts.attachmentObservation;
+    const result = context.attachmentResult;
+    const projection: SessionView = { ...view, ...facts, lifecycle: lifecycleAvailability(context),
+      ...(changedNode ? { snapshot: undefined, cursor: undefined, history: undefined, trace: undefined, preview: undefined, statisticsPreview: undefined, tracePreview: undefined } : {}),
+      ...(opening ? { modelIntent: undefined, preview: undefined, statisticsPreview: undefined, tracePreview: undefined } : {}),
+      ...(facts.attachmentIntent === 'released' ? { modelIntent: undefined } : {}),
+      ...(attached && result ? { snapshot: result.snapshot, cursor: result.cursor, preview: undefined, statisticsPreview: undefined, tracePreview: undefined,
+        history: replaceTranscript(result.snapshot.transcript, view.history), trace: this.supersedeTrace(id, replaceTrace(result.snapshot.trace, view.trace)), turnOutline: undefined, turnNavigation: undefined } : {}),
+    };
+    if (context.deleted) {
+      this.retireAttachmentWork(id);
+      const views = { ...this.state.views }; delete views[id];
+      this.publish({ views, sessions: this.state.sessions.filter(row => row.id !== id) });
+      this.deletionListeners.forEach(listener => listener(id));
+      return;
+    }
+    this.publish({ views: { ...this.state.views, [id]: projection } });
+    if (previous?.epoch !== context.epoch) this.summarySettled.delete(id);
+    if (retiredClaim || facts.deletionCommitted && facts.deletionCommitted !== previous?.facts.deletionCommitted) this.retireAttachmentWork(id);
+    if (facts.deletionCommitted && facts.deletionCommitted !== previous?.facts.deletionCommitted) {
+      this.publish({ sessions: this.state.sessions.filter(row => row.id !== id) });
+      this.deletionListeners.forEach(listener => listener(id));
+      this.setSession(id, { snapshot: undefined });
+    }
+  }
+  private readonly lifecycleAdmissions = new WeakSet<OperationAdmission>();
+  private lifecyclePort(id: string): SessionLifecyclePort {
+    const native = <T extends MethodResult['type']>(operation: Request1, expected: T, admission: OperationAdmission) => {
+      this.lifecycleAdmissions.add(admission);
+      return this.request(operation, expected, undefined, admission);
+    };
+    return {
+      resolveNode: async current => {
+        const result = await this.request({ method: 'session/read', params: { session_id: id } }, 'session', undefined, current);
+        if (result.session.id !== id) throw new Error('Mismatched Session identity.');
+        return { node: result.session.active_node, conversation: result.session.active_conversation_id };
+      },
+      conversation: async (node, current) => {
+        let offset: number | null | undefined = 0;
+        while (offset != null) {
+          const result: Extract<MethodResult, { type: 'tree' }> = await this.request({ method: 'session/tree', params: { session_id: id, offset, limit: 32 } }, 'tree', undefined, current);
+          const found = result.nodes.find(row => row.id === node); if (found) return found.conversation_id;
+          if (result.next_offset != null && result.next_offset <= offset) throw new Error('Invalid Session tree page.');
+          offset = result.next_offset;
+        }
+        throw new Error('Open Node is absent from the native Session tree.');
+      },
+      admit: current => this.admitAttachment(id, current),
+      attach: (node_id, admission) => native({ method: 'session/attach', params: { session_id: id, node_id } }, 'attached', admission),
+      detach: async (target, admission) => { await native({ method: 'session/detach', params: { target } }, 'detached', admission); },
+      switchNode: async (target, node_id, admission) => (await native({ method: 'session/switchNode', params: { target, node_id } }, 'session', admission)).session,
+      delete: async (expected_target_revision, admission) => (await native({ method: 'session/delete', params: { session_id: id, expected_target_revision } }, 'deletion', admission)).result,
+      recover: async admission => (await native({ method: 'session/recoverDeletion', params: { session_id: id } }, 'deletion', admission)).result,
+      inspectDeletion: async current => (await this.request({ method: 'session/deletePreview', params: { session_id: id } }, 'deletion', undefined, current)).result,
+      observeAttached: async (result, current) => {
+        if (!current()) return;
+        if (result.configuration) this.publish({ configuration: { ...this.state.configuration, [id]: result.configuration } });
+        this.reconcileInteractions(id); this.settleSubmissions(id);
+        const settings = await this.request({ method: 'session/settings', params: { session_id: id } }, 'settings');
+        if (!current()) return;
+        this.setSession(id, { settings: settings.settings });
+        void this.refreshDisplaySummary(id).catch(() => {});
+        if (this.dirty.delete(id)) {
+          if (this.resubscribe.has(id)) await this.refresh(id);
+          else {
+            try { await this.request({ method: 'session/subscribe', params: { target: result.target, after_cursor: result.cursor } }, 'subscribed'); }
+            catch (error) {
+              if (!(error instanceof RpcFailure) || error.error.data?.kind !== 'resync_required') throw error;
+              this.resubscribe.add(id); await this.refresh(id);
+            }
+          }
+        }
+      },
+      refresh: () => this.refresh(id),
+      cold: current => { void this.readHistoryPreview(id, current); void this.readColdMetadata(id, current); void this.readTracePreview(id, current); },
+      classify: error => error instanceof RequestNotDispatched ? 'unsent' : isOutcomeUncertain(error) ? 'uncertain'
+        : error instanceof RpcFailure ? error.error.data?.kind === 'stale_attachment' ? 'stale-route' : 'refused' : 'local',
+    };
   }
   // Product policy is injected by the Web owner, not interpreted by this transport.
   // Fail closed when there is no admission owner (including after its disposal).
@@ -379,7 +452,7 @@ export class AppServerClient {
     return allowed && valid() && { current: () => valid() && allowed.current(), validate: allowed.validate };
   }
   restoreViews(ids: readonly string[]) {
-    for (const id of ids.slice(0, 32)) if (!this.state.views[id]) this.setSession(id, { attachmentIntent: 'wanted' });
+    for (const id of ids.slice(0, 32)) if (!this.state.views[id]) this.lifecycles.restore(id);
   }
   private retireAuthority() {
     this.navigation.invalidate();
@@ -393,7 +466,7 @@ export class AppServerClient {
     // model/cancellation continuations only update already-reserved Session rows.
     const detached = [...(this.state.detached ?? [])];
     if (this.state.uncertain.length || sessions.length) detached.push({ authority: this.state.endpoint!, authorityId: this.state.authorityId, operations: this.state.uncertain, sessions });
-    this.attachmentEpochs.clear(); this.readingAuthorities.clear(); for (const id of this.outlineReads.keys()) this.retireOutline(id); this.readingIntents.clear(); this.summarySettled.clear(); this.summaryInvalidations.clear(); this.summaryObservedEpoch.clear(); this.summaryInFlight.clear(); this.summaryReads.clear(); this.summaryObservations.clear();
+    this.lifecycles.replaceAuthority(); this.readingAuthorities.clear(); for (const id of this.outlineReads.keys()) this.retireOutline(id); this.readingIntents.clear(); this.summarySettled.clear(); this.summaryInvalidations.clear(); this.summaryObservedEpoch.clear(); this.summaryInFlight.clear(); this.summaryReads.clear(); this.summaryObservations.clear();
     this.listEpoch++; this.listOffset = 0; this.listQuery = '';
     this.log.clear();
     this.publish({ authorityId: undefined, views: {}, sessions: [], nextOffset: undefined, uncertain: [], interactionOperations: {}, detached,
@@ -461,20 +534,11 @@ export class AppServerClient {
       }
       this.publish({ authorityId: hello.authority_id });
       this.initialized = true;
+      this.lifecycles.transport(generation, true);
       this.publish({ capabilities: hello.capabilities, connection: 'resynchronizing' });
       await this.listSessions();
-      // Sequential repair leaves room for controls below the transport's 16-work bound.
-      for (const id of Object.keys(this.state.views)) {
-        if (!this.current(generation)) return;
-        // Re-read current intent after every await; reconnect never creates intent.
-        if (this.state.views[id]?.deleting) {
-          const observed = await this.request({ method: 'session/deletePreview', params: { session_id: id } }, 'deletion');
-          if (!this.current(generation)) return;
-          this.settleDeletion(id, observed.result);
-          if (!this.state.views[id] || this.state.views[id].deletionRecovery) continue;
-        }
-        if (this.state.views[id]?.attachmentIntent === 'wanted') await this.attach(id).catch(() => {});
-      }
+      // Each actor decides inspection or renewed admission from its retained intent and native outcome.
+      await this.lifecycles.reconnect();
       if (this.current(generation)) this.publish({ connection: 'connected' });
     } catch (error) {
       if (!this.current(generation)) return;
@@ -509,6 +573,7 @@ export class AppServerClient {
     if (this.socket || this.pending.size) throw new Error('Disconnect before acknowledging current Session evidence.');
     const view = this.state.views[id];
     if (!view || !(view.deleting || view.error || view.modelMutation || view.cancellation)) return;
+    this.lifecycles.forget(id);
     const views = { ...this.state.views }; delete views[id];
     this.publish({ views });
   }
@@ -520,9 +585,6 @@ export class AppServerClient {
     this.socket = undefined;
     this.initialized = false;
     const uncertain = [...this.state.uncertain];
-    // Includes a decoded ACK whose lifecycle continuation has not settled yet.
-    // Connection replacement cannot reinterpret that unfinished transition.
-    const interruptedSwitches = new Set([...this.attachmentChanges].filter(([, change]) => change.switching).map(([id]) => id));
     for (const [id, pending] of this.pending) {
       clearTimeout(pending.timer); pending.validation?.abort(); pending.validation = undefined;
       if (pending.sent && pending.mutation) {
@@ -541,13 +603,14 @@ export class AppServerClient {
     this.pending.clear();
     for (const pending of this.modelPreparations.values()) pending.retire();
     this.modelPreparations.clear();
-    this.refreshes.clear(); this.traceReads.clear(); this.traceAuthorities.clear(); this.acquiring.clear(); this.dirty.clear(); this.resubscribe.clear(); this.attachmentChanges.clear();
+    this.refreshes.clear(); this.traceReads.clear(); this.traceAuthorities.clear(); this.acquiring.clear(); this.dirty.clear(); this.resubscribe.clear();
     const operations = { ...this.state.interactionOperations };
     for (const [key, operation] of Object.entries(operations)) if (operation.status === 'in-flight') delete operations[key];
     for (const item of uncertain) if (item.interactionKey) operations[item.interactionKey] = { sessionId: item.sessionId!, status: 'uncertain' };
+    this.lifecycles.transport(this.state.generation + 1, false);
     this.publish({ connection, generation: this.state.generation + 1, uncertain, interactionOperations: operations,
       views: Object.fromEntries(Object.entries(this.state.views).map(([id, view]) => [id, {
-        ...view, ...(interruptedSwitches.has(id) ? { attachmentIntent: 'released' as const, nodeId: undefined, nodeConversationId: undefined } : {}), attachmentObservation: undefined, modelIntent: undefined, ...(view.recoveringDeletion ? { recoveringDeletion: false, deletionRecovery: undefined } : {}), history: undefined, turnOutline: undefined, turnNavigation: undefined, target: undefined, submissions: undefined, inboundRequests: undefined, attachment: view.target || ['attaching', 'attached', 'resynchronizing'].includes(view.attachment) ? 'stale' : view.attachment,
+        ...view, modelIntent: undefined, history: undefined, turnOutline: undefined, turnNavigation: undefined, submissions: undefined, inboundRequests: undefined,
       }])),
     });
     if (oldSocket && !this.closedSockets.has(oldSocket)) {
@@ -563,8 +626,9 @@ export class AppServerClient {
   /** Correlation only. No call is ever retried. Every payload is a generated union. */
   async request<T extends MethodResult['type']>(operation: Request1, expected: T, acknowledged?: (result: Extract<MethodResult, { type: T }>) => void, dispatchCurrent?: (() => boolean) | OperationAdmission): Promise<Extract<MethodResult, { type: T }>> {
     if (!this.socket || (!this.initialized && operation.method !== 'initialize')) throw new RequestNotDispatched('Connect and initialize first.');
-    if ('target' in operation.params && 'session_id' in operation.params.target && this.state.views[operation.params.target.session_id]?.deleting && !READS.has(operation.method) && operation.method !== 'session/detach') throw new RequestNotDispatched('Session deletion has disabled controls. Verify its outcome before continuing.');
-    // AppServerClient owns control admission. Retained targets authorize only
+    if (['session/attach', 'session/detach', 'session/switchNode', 'session/delete', 'session/recoverDeletion'].includes(operation.method)
+      && (typeof dispatchCurrent !== 'object' || !this.lifecycleAdmissions.delete(dispatchCurrent))) throw new RequestNotDispatched('Session lifecycle operations require actor admission.');
+    // The Session actor owns control admission. Retained targets authorize only
     // lifecycle settlement and reads; new effects require the exact committed
     // attachment proof, captured once and checked again adjacent to socket send.
     if ('target' in operation.params && 'session_id' in operation.params.target
@@ -576,7 +640,7 @@ export class AppServerClient {
       if (!current()) throw new RequestNotDispatched('Attachment control authority was revoked.');
       const supplied = dispatchCurrent;
       dispatchCurrent = typeof supplied === 'object'
-        ? { current: () => current() && supplied.current(), validate: signal => supplied.validate(signal) }
+        ? { current: () => current() && supplied.current(), validate: signal => supplied.validate(signal), sent: supplied.sent }
         : () => current() && (!supplied || supplied());
     }
     if (operation.method.startsWith('artifact/') && [...this.pending.values()].filter(item => item.request.method.startsWith('artifact/')).length >= 2) throw new RequestNotDispatched('Artifact transfer capacity reached. Retry after current transfers finish.');
@@ -666,6 +730,7 @@ export class AppServerClient {
     this.log.observe('out', generation, raw, pending.context);
     if (requestLane(pending.request.method) === 'rpc') pending.timer = setTimeout(() => this.lose(generation), this.timeoutMs);
     try { this.socket!.send(raw); } catch { this.lose(generation); }
+    if (typeof pending.dispatchCurrent === 'object') pending.dispatchCurrent.sent?.();
   }
   private receive(data: unknown, generation: number) {
     if (typeof data !== 'string') { this.lose(generation); return; }
@@ -747,17 +812,17 @@ export class AppServerClient {
     if (view?.attachment === 'attaching' && !view?.target) { this.dirty.add(target.session_id); if (value.method === 'session/resyncRequired') this.resubscribe.add(target.session_id); return; }
     if (!sameTarget(view?.target, target)) return;
     if (value.method === 'session/closed') {
-      this.retireAttachmentWork(target.session_id);
-      this.setSession(target.session_id, { attachmentObservation: undefined, attachment: 'stale', target: undefined, error: view.deleting ? undefined : 'Session connection closed. Open the Session to inspect its current state.' });
+      this.lifecycles.event(target.session_id, { type: 'ROUTE_CLOSED', target });
     } else {
       if (value.method === 'session/resyncRequired') {
         this.readingAuthorities.set(target.session_id, (this.readingAuthorities.get(target.session_id) ?? 0) + 1);
         this.retireOutline(target.session_id);
         this.invalidateReading(target.session_id);
-        this.setSession(target.session_id, { turnOutline: undefined, attachment: 'resynchronizing' });
+        this.setSession(target.session_id, { turnOutline: undefined });
+        this.lifecycles.event(target.session_id, { type: 'OBSERVATION', target, status: 'resynchronizing' });
         this.resubscribe.add(target.session_id);
         if (this.acquiring.has(target.session_id)) {
-          this.setSession(target.session_id, { attachment: 'resynchronizing' });
+          this.lifecycles.event(target.session_id, { type: 'OBSERVATION', target, status: 'resynchronizing' });
           return;
         }
         void this.refresh(target.session_id).catch(() => {});
@@ -849,8 +914,8 @@ export class AppServerClient {
    * A legitimate null projection settles here and is never polled; the native
    * `session/summaryInvalidated` notification is what reopens it. */
   private async refreshDisplaySummary(id: string) {
-    const generation = this.state.generation, epoch = this.attachmentEpochs.get(id);
-    const current = () => this.current(generation) && this.attachmentEpochs.get(id) === epoch
+    const generation = this.state.generation, epoch = this.lifecycles.epoch(id);
+    const current = () => this.current(generation) && this.lifecycles.epoch(id) === epoch
       && this.state.views[id]?.attachmentIntent === 'wanted';
     if (!current()) return;
     const existing = this.summaryInFlight.get(id);
@@ -881,10 +946,10 @@ export class AppServerClient {
     if (existing?.generation === this.state.generation && existing.invalidations === invalidations) return existing.work;
     const generation = this.state.generation, summaryRead = ++this.summaryReadSequence;
     this.summaryObservations.add(summaryRead);
-    const epoch = this.attachmentEpochs.get(id), canonicalUser = this.hasCanonicalUser(id);
+    const epoch = this.lifecycles.epoch(id), canonicalUser = this.hasCanonicalUser(id);
     const work = (async () => {
       const { summary } = await this.request({ method: 'session/summary', params: { session_id: id } }, 'session_summary');
-      if (!this.current(generation) || this.attachmentEpochs.get(id) !== epoch) throw new Error('Obsolete Session summary read.');
+      if (!this.current(generation) || this.lifecycles.epoch(id) !== epoch) throw new Error('Obsolete Session summary read.');
       if (summary.id !== id) throw new Error('Mismatched Session summary identity.');
       if ((this.summaryReads.get(id) ?? 0) <= summaryRead) {
         this.summaryReads.set(id, summaryRead);
@@ -964,129 +1029,26 @@ export class AppServerClient {
   exportSession(id: string): Promise<void> { return this.exports.download(id); }
 
   async deleteSession(id: string, expectedRevision: string) {
-    const generation = this.state.generation;
-    if (this.state.views[id]?.deleting) throw new Error('Session deletion is already pending verification.');
-    this.setSession(id, { deleting: true, attachmentObservation: undefined,
-      attachmentIntentRevision: (this.state.views[id]?.attachmentIntentRevision ?? 0) + 1, error: undefined });
-    const result = await this.request({ method: 'session/delete', params: { session_id: id, expected_target_revision: expectedRevision } }, 'deletion').catch(error => {
-      if (this.current(generation)) this.setSession(id, { error: String(error) });
-      throw error;
-    });
-    if (!this.current(generation)) return;
-    this.settleDeletion(id, result.result);
-    await this.listSessions();
-    if (this.current(generation)) return result.result;
+    const result = await this.lifecycles.command(id, { kind: 'delete', revision: expectedRevision, current: () => true });
+    await this.listSessions(); return result;
   }
-  /** Explicit recovery requires a committed server observation, never just a lost reply. */
   async recoverSessionDeletion(id: string) {
-    const view = this.state.views[id];
-    if (!view?.deletionRecovery || view.recoveringDeletion) throw new Error('Observe committed deletion state before recovery.');
-    const generation = this.state.generation;
-    this.setSession(id, { recoveringDeletion: true, error: undefined });
-    try {
-      const response = await this.request({ method: 'session/recoverDeletion', params: { session_id: id } }, 'deletion');
-      if (!this.current(generation)) return;
-      this.settleDeletion(id, response.result);
-      await this.listSessions();
-      if (this.current(generation)) return response.result;
-    } catch (error) {
-      if (this.current(generation)) this.setSession(id, {
-        recoveringDeletion: false, error: String(error),
-        ...(isOutcomeUncertain(error) ? { deletionRecovery: undefined } : {}),
-      });
-      throw error;
-    }
+    const result = await this.lifecycles.command(id, { kind: 'recover', current: () => true });
+    await this.listSessions(); return result;
   }
   private deletionListeners = new Set<(id: string) => void>();
   subscribeSessionDeletion = (listener: (id: string) => void) => {
     this.deletionListeners.add(listener);
     return () => { this.deletionListeners.delete(listener); };
   };
-  private settleDeletion(id: string, result: RuntimeClientSessionDeletionResult): void {
-    const committed = result.status === 'committed_cleanup_pending' || result.status === 'committed_durability_uncertain';
-    if (committed || result.status === 'deleted' || result.status === 'not_found') {
-      this.publish({ sessions: this.state.sessions.filter(row => row.id !== id) });
-      this.deletionListeners.forEach(listener => listener(id));
-      this.retireAttachmentWork(id);
-      this.attachmentEpochs.set(id, (this.attachmentEpochs.get(id) ?? 0) + 1);
-      if (committed) {
-        // Retain only a recovery obligation; this is not a resumable conversation.
-        this.setSession(id, { deleting: true, deletionRecovery: result.status, deletionCommitted: result.status,
-          recoveringDeletion: false, attachmentIntent: 'released', attachment: 'detached', target: undefined, snapshot: undefined, error: undefined });
-      } else {
-        const views = { ...this.state.views }; delete views[id]; this.publish({ views });
-      }
-    } else {
-      this.setSession(id, { deleting: false, deletionRecovery: undefined, deletionCommitted: undefined, recoveringDeletion: false, error: undefined });
-    }
-  }
-  /** Wait for the already requested attachment; never start or retry one. */
+  /** Wait for admitted work without manufacturing another Open. */
   async waitForAttachment(id: string, current: () => boolean): Promise<void> {
-    const generation = this.state.generation;
-    const pending = this.attachmentChanges.get(id);
-    if (pending?.kind === 'attach') await pending.work;
-    const view = this.state.views[id];
-    if (!current() || !this.current(generation) || view?.attachmentIntent !== 'wanted'
-      || view.attachment !== 'attached' || !view.target) {
-      throw new Error(view?.error ?? 'Conversation connection changed. Your input was not sent.');
-    }
+    await this.lifecycles.waitForOpen(id);
+    if (!current() || !this.lifecycles.current(id, this.state.views[id]?.attachmentObservation)) throw new Error(this.state.views[id]?.error ?? 'Conversation connection changed. Your input was not sent.');
   }
-  /** Explicit Open / Attach gesture. Visibility itself does not acquire a claim. */
   async attach(id: string, nodeId?: string, navigationCurrent: () => boolean = () => true, attached?: (target: AttachmentTarget) => void): Promise<void> {
     if (!navigationCurrent()) return;
-    const view = this.state.views[id];
-    if (view?.deleting) throw new Error('Verify the pending Session deletion before opening it.');
-    const generation = this.state.generation, revision = view?.attachmentIntentRevision ?? 0;
-    // Resolve an omitted selector from native metadata before admitting the Open.
-    // Once queued, it always addresses this exact Node, never a mutable default.
-    let node = nodeId ?? view?.nodeId ?? (view ? undefined : this.state.sessions.find(row => row.id === id)?.active_node);
-    if (!node) {
-      const current = () => this.current(generation) && navigationCurrent() && (this.state.views[id]?.attachmentIntentRevision ?? 0) === revision
-        && this.state.views[id]?.nodeId === view?.nodeId && !this.attachmentChanges.has(id);
-      try {
-        const result = await this.request({ method: 'session/read', params: { session_id: id } }, 'session', undefined, current);
-        if (!current()) return;
-        if (result.session.id !== id) throw new Error('Mismatched Session identity.');
-        node = result.session.active_node;
-      } catch (error) {
-        if (current()) this.setSession(id, { attachmentIntent: 'wanted', attachment: 'error', error: String(error) });
-        throw error;
-      }
-    }
-    const latest = this.state.views[id];
-    if (this.attachmentChanges.get(id)?.switching) throw new Error('Wait for the current Node switch before opening.');
-    if (latest && latest.nodeId !== node
-      && (latest.attachmentIntent === 'wanted' && this.attachmentChanges.has(id)
-        || latest.target && this.attachmentChanges.get(id)?.kind !== 'detach')) throw new Error('Use branch switching to open another node.');
-    // A Release may queue a new Node behind cleanup; failed cleanup cannot make
-    // the old target satisfy it (the queued acquisition checks claim identity).
-    this.setSession(id, { attachmentIntent: 'wanted', nodeId: node,
-      ...(latest?.nodeId !== node ? { nodeConversationId: undefined, snapshot: undefined, cursor: undefined, history: undefined, trace: undefined, preview: undefined, statisticsPreview: undefined, tracePreview: undefined } : {}) });
-    return this.acquireAttachment(id, navigationCurrent, attached);
-  }
-  private acquireAttachment(id: string, navigationCurrent: () => boolean = () => true, attached?: (target: AttachmentTarget) => void): Promise<void> {
-    // Capture the Open's revision before it waits behind earlier gestures.
-    const intentRevision = this.state.views[id]?.attachmentIntentRevision ?? 0;
-    const nodeId = this.state.views[id]?.nodeId;
-    if (!nodeId) return Promise.reject(new Error('Open requires an observed native Session Node.'));
-    return this.changeAttachment(id, 'attach', async generation => {
-      const openCurrent = () => this.current(generation) && navigationCurrent()
-        && this.state.views[id]?.attachmentIntent === 'wanted'
-        && (this.state.views[id]?.attachmentIntentRevision ?? 0) === intentRevision
-        && this.state.views[id]?.nodeId === nodeId;
-      if (!openCurrent()) return;
-      const existing = this.state.views[id]?.target;
-      if (existing) {
-        if (this.state.views[id]?.attachmentNodeId !== nodeId) throw new Error('The previous Node still owns an attachment. Release it before opening another node.');
-        if (!this.isAttachmentObservationCurrent(id, this.state.views[id]?.attachmentObservation)) throw new Error('Release the retained attachment before opening again.');
-        attached?.(existing); return this.refresh(id);
-      }
-      this.setSession(id, { attachment: 'attaching', modelIntent: undefined, preview: undefined, statisticsPreview: undefined, tracePreview: undefined, error: undefined });
-      const epoch = (this.attachmentEpochs.get(id) ?? 0) + 1;
-      this.attachmentEpochs.set(id, epoch);
-      this.summarySettled.delete(id);
-      await this.performAttach(id, nodeId, generation, epoch, intentRevision, openCurrent, attached);
-    });
+    await this.lifecycles.command(id, { kind: 'open', node: nodeId, current: navigationCurrent, attached });
   }
   /** One observation scope for all cold durable reads. The Conversation is
    * native tree evidence, never inferred from whichever response arrives first. */
@@ -1094,8 +1056,8 @@ export class AppServerClient {
     const view = this.state.views[id];
     if (!view?.nodeId || !view.nodeConversationId) return;
     const node = view.nodeId, conversation = view.nodeConversationId;
-    const generation = this.state.generation, epoch = this.attachmentEpochs.get(id), revision = view.attachmentIntentRevision ?? 0;
-    const current = () => admitted() && this.current(generation) && this.attachmentEpochs.get(id) === epoch
+    const generation = this.state.generation, epoch = this.lifecycles.epoch(id), revision = view.attachmentIntentRevision ?? 0;
+    const current = () => admitted() && this.current(generation) && this.lifecycles.epoch(id) === epoch
       && this.state.views[id]?.attachment === 'attaching' && this.state.views[id]?.attachmentIntent === 'wanted'
       && (this.state.views[id]?.attachmentIntentRevision ?? 0) === revision
       && this.state.views[id]?.nodeId === node && this.state.views[id]?.nodeConversationId === conversation;
@@ -1183,128 +1145,6 @@ export class AppServerClient {
       if (current() && latest) this.setSession(id, { preview: { ...latest, history: { ...latest.history, loading: false } } });
     }
   }
-  /** Serialize explicit attachment gestures, including close during attach and
-   * reopen during release. This queue never retries and cannot cross generations. */
-  private changeAttachment(id: string, kind: 'attach' | 'detach' | 'switch', operation: (generation: number) => Promise<void>): Promise<void> {
-    const previous = this.attachmentChanges.get(id);
-    // A newer Open has its own navigation/admission fence. Queue it behind the
-    // preceding Open; if that one attached, the new gesture only refreshes it.
-    if (previous?.kind === kind && kind !== 'attach') return previous.work;
-    if (this.attachmentChangeCount >= 64) return Promise.reject(new Error('Attachment operation capacity reached. Disconnect to release external claims.'));
-    const generation = this.state.generation;
-    this.attachmentChangeCount++;
-    const work = (async () => {
-      if (previous) await previous.work.catch(() => {});
-      if (!this.current(generation)) return;
-      await operation(generation);
-    })();
-    const change = { kind, work, switching: kind === 'switch' ? work : previous?.switching };
-    if (change.switching) void change.switching.finally(() => { change.switching = undefined; }).catch(() => {});
-    this.attachmentChanges.set(id, change);
-    void work.finally(() => {
-      this.attachmentChangeCount--;
-      if (this.attachmentChanges.get(id) === change) this.attachmentChanges.delete(id);
-    }).catch(() => {});
-    return work;
-  }
-  private async performAttach(id: string, nodeId: string, generation: number, epoch: number, intentRevision: number, openCurrent: () => boolean, attached?: (target: AttachmentTarget) => void) {
-    const current = () => this.current(generation) && this.attachmentEpochs.get(id) === epoch;
-    // Dispatch authority expires with this Open; response settlement below
-    // deliberately keeps the generation/epoch fence after a request is sent.
-    const admissionCurrent = () => current() && openCurrent();
-    let target: AttachmentTarget | undefined;
-    // Result evidence, not dispatch authority: only an unrequested attach or a
-    // conclusive refusal proves that this operation acquired no native claim.
-    let nativeAbsenceProven = true;
-    try {
-      const admitted = await this.admitAttachment(id, admissionCurrent);
-      if (!admitted || !admitted.current()) return;
-      // Node -> Conversation is immutable native graph evidence. Retain it
-      // across Release, but never reuse another Node's mapping.
-      let conversationId = this.state.views[id]?.nodeConversationId;
-      let offset: number | null | undefined = 0;
-      while (offset != null && !conversationId) {
-        const tree: Extract<MethodResult, { type: 'tree' }> = await this.request({ method: 'session/tree', params: { session_id: id, offset, limit: 32 } }, 'tree', undefined, admitted.current);
-        if (!admitted.current()) return;
-        conversationId = tree.nodes.find(node => node.id === nodeId)?.conversation_id;
-        if (tree.next_offset != null && tree.next_offset <= offset) throw new Error('Invalid Session tree page.');
-        offset = tree.next_offset;
-      }
-      if (!conversationId) throw new Error('Open Node is absent from the native Session tree.');
-      this.setSession(id, { nodeConversationId: conversationId });
-      const opening = { current: admitted.current, validate: async (signal: AbortSignal) => {
-        const valid = await admitted.validate(signal);
-        // Both reads belong to the same explicitly admitted Open gesture. Start
-        // durable history at its final validation, independently of runtime load.
-        if (valid && admitted.current()) {
-          void this.readHistoryPreview(id, admitted.current);
-          void this.readColdMetadata(id, admitted.current);
-          void this.readTracePreview(id, admitted.current);
-        }
-        return valid;
-      } };
-      nativeAbsenceProven = false;
-      const result = await this.request({ method: 'session/attach', params: { session_id: id, node_id: nodeId } }, 'attached', undefined, opening);
-      if (!current()) return;
-      target = result.target;
-      if (result.configuration) this.publish({ configuration: { ...this.state.configuration, [id]: result.configuration } });
-      // Even a malformed/obsolete acknowledgement retains its native claim for Release.
-      this.setSession(id, { target, attachmentNodeId: nodeId });
-      if (result.target.session_id !== id || result.target.conversation_id !== conversationId
-        || result.snapshot.conversation_id !== conversationId) throw new Error('Mismatched attachment identity.');
-      // Commit only this operation's native admission. Release during an in-flight
-      // attach still retains its target for detach, but cannot restore observation.
-      const attachmentObservation = this.state.views[id]?.attachmentIntent === 'wanted'
-        && (this.state.views[id]?.attachmentIntentRevision ?? 0) === intentRevision
-        && this.state.views[id]?.nodeId === nodeId
-        ? { generation, target: result.target, nodeId, intentRevision } : undefined;
-      if (!attachmentObservation) {
-        // Native ownership is settled, but its Snapshot is not evidence for the
-        // newer desired Node. The queued Release alone owns claim cleanup.
-        this.setSession(id, { attachment: 'attached' });
-        return;
-      }
-      this.setSession(id, { attachmentObservation, target: result.target, snapshot: result.snapshot, preview: undefined, statisticsPreview: undefined, tracePreview: undefined, cursor: result.cursor, history: replaceTranscript(result.snapshot.transcript, this.state.views[id]?.history), turnOutline: undefined, turnNavigation: undefined, trace: this.supersedeTrace(id, replaceTrace(result.snapshot.trace, this.state.views[id]?.trace)), attachment: 'attached' });
-      attached?.(result.target);
-      this.reconcileInteractions(id); this.settleSubmissions(id);
-      const settings = await this.request({ method: 'session/settings', params: { session_id: id } }, 'settings');
-      if (!current() || !sameTarget(this.state.views[id]?.target, result.target)) return;
-      this.setSession(id, { settings: settings.settings });
-      // A restored/branched view may be outside the visible catalog page. Read
-      // its native identity even before any user message exists; never invent it.
-      void this.refreshDisplaySummary(id).catch(() => {});
-      if (!current() || !sameTarget(this.state.views[id]?.target, result.target)) return;
-      if (this.dirty.delete(id)) {
-        if (this.resubscribe.has(id)) await this.refresh(id);
-        else {
-          try { await this.request({ method: 'session/subscribe', params: { target: result.target, after_cursor: result.cursor } }, 'subscribed'); }
-          catch (error) {
-            if (!(error instanceof RpcFailure) || error.error.data?.kind !== 'resync_required') throw error;
-            this.resubscribe.add(id);
-            await this.refresh(id);
-          }
-        }
-      }
-    } catch (error) {
-      if (!target && (error instanceof RequestNotDispatched || (error instanceof RpcFailure && !isOutcomeUncertain(error)))) nativeAbsenceProven = true;
-      if (current() && (openCurrent() || !nativeAbsenceProven) && (!target || sameTarget(this.state.views[id]?.target, target))) {
-        this.setSession(id, { attachment: 'error', error: String(error) });
-      }
-      throw error;
-    } finally {
-      // The Open owns the attaching state until its serialized work finishes.
-      // Settle proven absence before a queued Release/New Open can run; retain
-      // current failures and never infer absence from a missing target alone.
-      if (nativeAbsenceProven && current() && !this.state.views[id]?.target
-        && (!openCurrent() || this.state.views[id]?.attachment === 'attaching')) {
-        // This Open's absence cannot settle an older transmitted relationship
-        // mutation, including one retained across connection recovery.
-        const unconfirmedAttachment = this.state.uncertain.some(item => item.sessionId === id
-          && ['session/attach', 'session/detach', 'session/switchNode'].includes(item.method));
-        this.setSession(id, { attachment: unconfirmedAttachment ? 'stale' : 'detached', attachmentObservation: undefined, error: undefined });
-      }
-    }
-  }
   /** Explicit reconciliation/recovery only. Native bounded replay owns overlap. */
   refresh(id: string): Promise<void> {
     this.dirty.add(id);
@@ -1327,7 +1167,7 @@ export class AppServerClient {
       while (this.dirty.has(id) && current()) {
         this.dirty.delete(id);
         const resync = this.resubscribe.delete(id);
-        if (resync) { this.retireOutline(id);this.setSession(id, { attachment: 'resynchronizing', trace: this.supersedeTrace(id, replaceTrace({ records: [], next_cursor: null }, this.state.views[id]?.trace)), history: replaceTranscript({ entries: [] }, this.state.views[id]?.history), turnOutline: undefined, turnNavigation: undefined }); }
+        if (resync) { this.retireOutline(id);this.lifecycles.event(id, { type: 'OBSERVATION', target, status: 'resynchronizing' });this.setSession(id, { trace: this.supersedeTrace(id, replaceTrace({ records: [], next_cursor: null }, this.state.views[id]?.trace)), history: replaceTranscript({ entries: [] }, this.state.views[id]?.history), turnOutline: undefined, turnNavigation: undefined }); }
         this.acquiring.add(id);
         const result = await this.request({ method: 'session/snapshot', params: { target, trace_records: traceInterests(this.state.views[id]?.trace) } }, 'snapshot');
         if (!current()) return;
@@ -1348,10 +1188,10 @@ export class AppServerClient {
             } else throw error;
           }
         }
-        if (current() && !this.dirty.has(id)) this.setSession(id, { attachment: 'attached' });
+        if (current() && !this.dirty.has(id)) this.lifecycles.event(id, { type: 'OBSERVATION', target, status: 'attached' });
       }
     } catch (error) {
-      if (current()) { this.acquiring.delete(id); this.resubscribe.add(id); this.setSession(id, { attachment: 'stale', error: String(error) }); }
+      if (current()) { this.acquiring.delete(id); this.resubscribe.add(id); this.lifecycles.event(id, { type: 'OBSERVATION', target, status: 'stale', error: String(error) }); }
       throw error;
     }
   }
@@ -1482,8 +1322,8 @@ export class AppServerClient {
   }
   private readingAuthority(id: string) {
     const target = this.target(id), generation = this.state.generation;
-    const authority = this.readingAuthorities.get(id), epoch = this.attachmentEpochs.get(id);
-    return () => this.current(generation) && this.readingAuthorities.get(id) === authority && this.attachmentEpochs.get(id) === epoch
+    const authority = this.readingAuthorities.get(id), epoch = this.lifecycles.epoch(id);
+    return () => this.current(generation) && this.readingAuthorities.get(id) === authority && this.lifecycles.epoch(id) === epoch
       && this.state.views[id]?.attachment === 'attached' && this.state.views[id]?.attachmentIntent === 'wanted'
       && sameTarget(this.state.views[id]?.target, target);
   }
@@ -1679,9 +1519,7 @@ export class AppServerClient {
     this.publish({ uncertain: this.state.uncertain.filter(item => !resolved.includes(item)), interactionOperations: operations });
   }
   target(id: string) {
-    const view = this.state.views[id];
-    if (!this.initialized || !this.isAttachmentObservationCurrent(id, view?.attachmentObservation) || !view?.target) throw new Error('Session is not authoritatively attached. Refresh or reconnect.');
-    return view.target;
+    return this.lifecycles.target(id);
   }
   /** Validate command/tree evidence against the acquired Node. Observation
    * never changes desired identity; switching belongs to its explicit lifecycle. */
@@ -1847,8 +1685,8 @@ export class AppServerClient {
     const previous = this.modelPreparations.get(id);
     if (previous) return previous.work;
     let live = true;
-    const generation = this.state.generation, epoch = this.attachmentEpochs.get(id);
-    const current = () => live && this.current(generation) && this.attachmentEpochs.get(id) === epoch
+    const generation = this.state.generation, epoch = this.lifecycles.epoch(id);
+    const current = () => live && this.current(generation) && this.lifecycles.epoch(id) === epoch
       && this.state.views[id]?.attachmentIntent === 'wanted' && !this.state.views[id]?.deleting;
     const work = (async () => {
       try {
@@ -1991,67 +1829,13 @@ export class AppServerClient {
       throw error;
     }
   }
-  /** Closing a view releases only this client relationship. */
-  release(id: string): Promise<void> {
+  /** Intent events are synchronously admitted and projected by the Session actor. */
+  async release(id: string): Promise<void> {
     this.modelPreparations.get(id)?.retire(); this.modelPreparations.delete(id);
-    this.setSession(id, { attachmentObservation: undefined, attachmentIntent: 'released', attachmentIntentRevision: (this.state.views[id]?.attachmentIntentRevision ?? 0) + 1, modelIntent: undefined });
-    return this.changeAttachment(id, 'detach', async generation => {
-      const target = this.state.views[id]?.target;
-      if (!target) return;
-      const epoch = this.attachmentEpochs.get(id);
-      try {
-        await this.request({ method: 'session/detach', params: { target } }, 'detached');
-      } catch (error) {
-        // Exact native evidence that this retained Route is already retired.
-        // Other failures and transmitted uncertainty keep the cleanup identity.
-        if (!(error instanceof RpcFailure) || error.error.data?.kind !== 'stale_attachment') throw error;
-      }
-      if (this.current(generation) && this.attachmentEpochs.get(id) === epoch) {
-        this.retireAttachmentWork(id);
-        this.setSession(id, { target: undefined, attachment: 'detached', error: undefined });
-      }
-    });
+    await this.lifecycles.command(id, { kind: 'release', current: () => true });
   }
   switchNode(id: string, nodeId: string): Promise<void> {
-    if (this.attachmentChanges.has(id)) return Promise.reject(new Error('Wait for the current attachment operation before switching nodes.'));
-    const target = this.target(id), epoch = this.attachmentEpochs.get(id);
-    const intentRevision = (this.state.views[id]?.attachmentIntentRevision ?? 0) + 1;
-    this.setSession(id, { attachmentObservation: undefined, attachmentIntentRevision: intentRevision });
-    return this.changeAttachment(id, 'switch', async generation => {
-      // Native can publish session/closed before the correlated switch reply.
-      // Serialization excludes replacement acquisition; absence of the old Route
-      // does not invalidate the outstanding transition's settlement authority.
-      const current = () => this.current(generation) && this.attachmentEpochs.get(id) === epoch
-        && !!this.state.views[id] && !this.state.views[id].deleting
-        && (!this.state.views[id].target || sameTarget(this.state.views[id].target, target));
-      const dispatchCurrent = () => current() && sameTarget(this.state.views[id]?.target, target) && this.state.views[id]?.attachmentIntent === 'wanted'
-        && (this.state.views[id]?.attachmentIntentRevision ?? 0) === intentRevision;
-      try {
-        const result = await this.request({ method: 'session/switchNode', params: { target, node_id: nodeId } }, 'session', undefined, dispatchCurrent);
-        if (!current()) return;
-        if (result.session.id !== id || result.session.active_node !== nodeId) throw new Error('Mismatched switched Node identity.');
-        // Opens cannot overtake this transition. Release changes interest, not
-        // the native committed selection or the successor's actual residency.
-        this.retireAttachmentWork(id);
-        this.setSession(id, { target: undefined, attachmentNodeId: undefined, attachment: 'detached', error: undefined,
-          nodeId, nodeConversationId: result.session.active_conversation_id, snapshot: undefined, cursor: undefined, trace: undefined });
-      } catch (error) {
-        if (current()) {
-          this.retireAttachmentWork(id);
-          if (error instanceof RequestNotDispatched) {
-            // Native never saw the switch: retain the exact claim for Release.
-            this.setSession(id, { attachment: 'stale', error: String(error) });
-          } else {
-            // A generic refusal cannot distinguish pre-transition rejection
-            // from a failed unload/selection/load. Retain only cleanup identity
-            // until Release confirms detach or exact stale-Route evidence.
-            this.setSession(id, { nodeId: undefined, nodeConversationId: undefined,
-              attachmentIntent: 'released', attachment: 'stale', error: String(error) });
-          }
-        }
-        throw error;
-      }
-    });
+    return this.lifecycles.command(id, { kind: 'switch', node: nodeId, current: () => true }, true).then(() => {});
   }
   private retireAttachmentWork(id: string) {
     this.acquiring.delete(id);
@@ -2061,7 +1845,7 @@ export class AppServerClient {
     this.summarySettled.delete(id);
     this.summaryObservedEpoch.delete(id);
     this.refreshes.delete(id); this.dirty.delete(id); this.resubscribe.delete(id);
-    this.setSession(id, { attachmentObservation: undefined, history: undefined, submissions: undefined, turnOutline: undefined, turnNavigation: undefined });
+    this.setSession(id, { history: undefined, submissions: undefined, turnOutline: undefined, turnNavigation: undefined });
   }
   clearError() { this.publish({ error: undefined }); }
   acknowledgeDiagnostic(id: string) {

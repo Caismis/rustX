@@ -98,8 +98,10 @@ describe('native App Server connection', () => {
     { method: 'session/delete', params: { session_id: 'A', expected_target_revision: 'revision' } },
   ] as const)('never replays a lost $method response', async operation => {
     const s = server(); await s.connect(); s.held.add(operation.method);
-    const pending = s.client.request(operation, operation.method === 'session/create' ? 'session_transition' : 'deletion');
+    const pending = operation.method === 'session/create' ? s.client.request(operation, 'session_transition') : s.client.deleteSession('A', 'revision');
     const rejected = expect(pending).rejects.toBeInstanceOf(OutcomeUncertain);
+    await s.waitFor(operation.method, 1);
+    s.handlers.set('session/deletePreview', () => ({ type: 'deletion', result: { status: 'not_found', session_id: 'A' } }));
     s.socket.close(); await rejected; await s.connect();
     expect(s.requests.filter(item => item.request.method === operation.method)).toHaveLength(1);
     expect(s.client.getSnapshot().uncertain[0].method).toBe(operation.method);
@@ -313,7 +315,7 @@ it.each(['not_found', 'committed_cleanup_pending', 'committed_durability_uncerta
   await s.connect();
   expect(s.requests.filter(row => row.request.method === 'session/delete')).toHaveLength(1);
   expect(s.requests.slice(before).filter(row => row.request.method === 'session/deletePreview')).toHaveLength(1);
-  expect(s.requests.slice(before).filter(row => row.request.method === 'session/attach')).toHaveLength(status === 'preview' ? 1 : 0);
+  expect(s.requests.slice(before).filter(row => row.request.method === 'session/attach')).toHaveLength(0); // Unknown deletion never creates another attachment mutation.
   if (status === 'not_found') expect(s.client.getSnapshot().views.A).toBeUndefined();
   if (status === 'committed_cleanup_pending' || status === 'committed_durability_uncertain') expect(s.client.getSnapshot().views.A.deletionRecovery).toBe(status);
   if (status === 'committed_durability_uncertain') expect(s.client.getSnapshot().views.A.deleting).toBe(true);
@@ -630,7 +632,7 @@ it('terminal Release after held Host admission settles proven absence and restor
   const opening = s.client.attach('A'); await entered.promise;
   expect(s.client.getSnapshot().views.A.attachment).toBe('attaching'); expect(attachmentRequests(s)).toEqual([]);
   const closing = s.client.release('A'); gate.resolve(); await Promise.all([opening, closing]);
-  expectReleased(s); expect(s.requests.slice(baseline)).toEqual([]);
+  expectReleased(s); expect(s.requests.slice(baseline).map(({ request }) => request.method)).toEqual(['session/read']); // Actor resolves the omitted Node from native evidence.
 });
 
 it('terminal local Release permits a later explicit Open through normal native admission', async () => {
@@ -680,7 +682,7 @@ it('terminal Release during final validation aborts the reservation and settles 
   const signal = await entered.promise; expect(signal.aborted).toBe(false);
   const closing = s.client.release('A'); gate.resolve(true); await Promise.all([refused, closing]);
   expect(signal.aborted).toBe(true); expectReleased(s); expect(states).not.toContain('error');
-  expect(s.requests.slice(baseline).map(({ request }) => request.method)).toEqual(['session/tree']);
+  expect(s.requests.slice(baseline).map(({ request }) => request.method)).toEqual(['session/read', 'session/tree']);
   const afterIdentity = s.requests.length;
   s.held.add('session/settings');
   const reads = Array.from({ length: 8 }, () => s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings'));
