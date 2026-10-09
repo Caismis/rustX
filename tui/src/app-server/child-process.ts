@@ -84,7 +84,10 @@ export function appServerArguments(launch: AppServerLaunchOptions): string[] {
   if (launch.runtimeRoot !== undefined) {
     argv.push("--runtime-root", launch.runtimeRoot);
   }
-  argv.push("--listen", "stdio");
+  // This TUI spawned the child and owns its pipes, so it is the stdio owner
+  // the native process may delegate committed-delivery access to. The grant
+  // is this composition choice; no request field or client name confers it.
+  argv.push("--listen", "stdio", "--stdio-delivery-access");
   return argv;
 }
 

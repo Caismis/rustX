@@ -1,4 +1,4 @@
-import type { SessionFileReference } from '../../protocol/app-server/v37.ts';
+import type { SessionFileReference } from '../../protocol/app-server/v38.ts';
 
 /** Stale-source comparison only. Equality never grants authority to read a file. */
 export function sameSessionFile(a: SessionFileReference | undefined, b: SessionFileReference | undefined): boolean {

@@ -8,7 +8,7 @@ import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { validateRaster, RASTER_MAX_PIXELS } from '../src/client/raster';
 import { WorkspaceHostError, type DeliveryBytes, type DeliveryRead, type ProductHostWorkspaces } from '../src/workspaces/host';
 import type { DocumentRequest, DocumentResult } from '../shared/documents';
-import type { SessionFileReference, ToolExecutionResult } from '../../protocol/app-server/v37';
+import type { SessionFileReference, ToolExecutionResult } from '../../protocol/app-server/v38';
 import { Server } from './fixture';
 const file: SessionFileReference = { scope: { conversation_id: 'original', device: '1', inode: '2' }, path: 'sub/报告 file.md', name: '报告 file.md', description: 'Explicit report', mime_type: 'text/markdown' };
 const source: PreviewSource = { kind: 'session_file', messageId: 'canonical-tool', index: 0, file };
@@ -133,7 +133,7 @@ it('typed committed cards distinguish Preview and Download; prose/JSON/failed fa
   const ui = render(<PreviewContext.Provider value={intents}><ToolDeliveries messageId="canonical-tool" result={result}/></PreviewContext.Provider>);
   expect(ui.queryAllByRole('button')).toHaveLength(0);
   ui.rerender(<PreviewContext.Provider value={intents}><ToolDeliveries messageId="canonical-tool" result={{ ...result, deliveries: [file] }}/></PreviewContext.Provider>);
-  fireEvent.click(ui.getByRole('button', { name: `Preview ${file.name}` }));
+  fireEvent.click(ui.getByRole('button', { name: `Preview ${file.name} in sidebar` }));
   expect(openPreview).toHaveBeenCalledWith(expect.objectContaining({ source, name: file.name }));
   fireEvent.click(ui.getByRole('button', { name: `Download ${file.name}` }));
   expect(download).toHaveBeenCalledWith(expect.objectContaining({ source, name: file.name })); expect(openPreview).toHaveBeenCalledOnce();

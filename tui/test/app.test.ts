@@ -25,6 +25,7 @@ import {
 import { TransportClosedError } from "../src/app-server/transport.ts";
 import { emptyPresentationState } from "../src/presentation/projection.ts";
 import { TransientFeedbackSurface } from "../src/ui/components/transient-feedback.ts";
+import { DeliverySelector } from "../src/ui/components/delivery-selector.ts";
 import type { AppServerHost } from "../src/app-server/host.ts";
 import type { AppServerSession } from "../src/app-server/session.ts";
 import type {
@@ -448,6 +449,321 @@ describe("RustxTuiApp lifecycle", () => {
     await app.quit();
     assert.equal(await running, 0);
     assert.deepEqual(log, ["close_stdin", "wait_exit"]);
+  });
+
+  it("/files dispatches only explicit, authorized client-local saves", { timeout: 10_000 }, async () => {
+    const file = {
+      scope: { conversation_id: "conv-original", device: "1", inode: "2" },
+      path: "out/报告 final.md", name: "报告 final.md", description: "Final report", mime_type: "text/markdown",
+    };
+    const record = { messageId: "tool-msg", index: 0, count: 1, file };
+    for (const access of [false, true]) {
+      const session = fakeSession() as unknown as Record<string, unknown>;
+      const page = deferred<void>();
+      const read = deferred<unknown>();
+      let pages = 0;
+      const reads: unknown[] = [];
+      Object.assign(session, {
+        deliveryAccess: access,
+        deliveryPage: async () => {
+          pages += 1;
+          page.resolve();
+          return { records: [record] };
+        },
+        // Refuse after observing the request: no client-local file is created.
+        readDelivery: async (requested: unknown) => {
+          reads.push(requested);
+          read.resolve(requested);
+          throw new AppServerRequestError("delivery/read", {
+            code: -32000, message: "Session file access is not authorized",
+            data: { kind: "session_file_read", reason: "unauthorized" },
+          });
+        },
+      });
+      const app = appOver(session as unknown as AppServerSession);
+      const running = app.run();
+      process.stdin.emit("data", "/files\r");
+      await page.promise;
+      await waitForApplicationContinuation();
+      process.stdin.emit("data", "s");
+      if (access) {
+        // The destination is explicit: replace the default name, then submit.
+        process.stdin.emit("data", "\u0015");
+        process.stdin.emit("data", "/nonexistent-rustx-dir/copy.md");
+        process.stdin.emit("data", "\r");
+        assert.deepEqual(await read.promise, record);
+      }
+      await waitForApplicationContinuation();
+      assert.equal(pages, 1, "one bounded page per /files");
+      assert.deepEqual(reads, access ? [record] : [], "an unauthorized connection reads nothing");
+      await app.quit();
+      await running;
+    }
+  });
+
+  it("/files saves byte-exactly on this client whether its App Server is a local child or remote", { timeout: 10_000 }, async () => {
+    const { mkdtempSync, readFileSync, readdirSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const file = {
+      scope: { conversation_id: "conv-original", device: "1", inode: "2" },
+      path: "out/报告 final.md", name: "报告 final.md", description: null, mime_type: "text/markdown",
+    };
+    const record = { messageId: "tool-msg", index: 0, count: 1, file };
+    const bytes = Buffer.from("# 报告\r\n\u0000\xff", "latin1");
+    const selectorPrototype = DeliverySelector.prototype as unknown as {
+      settle: (operation: number, level: "info" | "error", text: string) => void;
+    };
+    const originalSettle = selectorPrototype.settle;
+    let settled = deferred<string>();
+    selectorPrototype.settle = function(operation, level, text): void {
+      settled.resolve(`${level}: ${text}`);
+      originalSettle.call(this, operation, level, text);
+    };
+    try {
+      // Save availability depends on delivery access alone: not on the
+      // platform, and not on whether the server's files are on this machine.
+      for (const ownership of ["owned_child", "external"] as const) {
+        settled = deferred<string>();
+        const dir = mkdtempSync(join(tmpdir(), "rustx-files-save-"));
+        const destination = join(dir, "copy 报告.md");
+        const session = fakeSession() as unknown as Record<string, unknown>;
+        const page = deferred<void>();
+        let locates = 0;
+        Object.assign(session, {
+          deliveryAccess: true,
+          deliveryPage: async () => { page.resolve(); return { records: [record] }; },
+          readDelivery: async () => ({ file, data: bytes.toString("base64") }),
+          locateDelivery: async () => { locates += 1; throw new Error("Save never locates"); },
+        });
+        const app = appOver(session as unknown as AppServerSession, fakeHost({ ownership }));
+        const running = app.run();
+        try {
+          process.stdin.emit("data", "/files\r");
+          await page.promise;
+          await waitForApplicationContinuation();
+          process.stdin.emit("data", "s");
+          process.stdin.emit("data", "\u0005");
+          process.stdin.emit("data", "\u0015");
+          process.stdin.emit("data", destination);
+          process.stdin.emit("data", "\r");
+          assert.equal(await settled.promise, `info: Saved 报告 final.md to ${destination}`, ownership);
+          assert.deepEqual(readFileSync(destination), bytes, `${ownership}: the original bytes`);
+          assert.deepEqual(readdirSync(dir), ["copy 报告.md"], `${ownership}: nothing else, no staging`);
+          assert.equal(locates, 0);
+        } finally {
+          await app.quit();
+          await running;
+          rmSync(dir, { recursive: true, force: true });
+        }
+      }
+    } finally {
+      selectorPrototype.settle = originalSettle;
+    }
+  });
+
+  it("retiring /files cancels its owned Save on the server and writes nothing", { timeout: 10_000 }, async () => {
+    const { existsSync, mkdtempSync, readdirSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const file = {
+      scope: { conversation_id: "conv-original", device: "1", inode: "2" },
+      path: "out/报告 final.md", name: "报告 final.md", description: null, mime_type: "text/markdown",
+    };
+    const record = { messageId: "tool-msg", index: 0, count: 1, file };
+    const body = { file, data: Buffer.from("bytes\r\n").toString("base64") };
+    for (const retirement of ["escape", "replacement", "snapshot", "disconnect", "quit"] as const) {
+      const dir = mkdtempSync(join(tmpdir(), "rustx-files-retire-"));
+      let teardown = async () => {};
+      const served = deferred<typeof body>();
+      try {
+        const destination = join(dir, "copy.md");
+        const state = { ...emptyPresentationState(sessionModel("alpha/model-a")), attempt: attemptView() };
+        const session = fakeSession(state) as unknown as Record<string, unknown> & { publishState(state: unknown): void; publishSnapshot(): void };
+        const page = deferred<void>();
+        const reading = deferred<AbortSignal>();
+        Object.assign(session, {
+          deliveryAccess: true,
+          deliveryPage: async () => { page.resolve(); return { records: [record] }; },
+          readDelivery: async (_requested: unknown, signal: AbortSignal) => { reading.resolve(signal); return served.promise; },
+        });
+        let disconnect: ((error: TransportClosedError) => void) | undefined;
+        const app = appOver(
+          session as unknown as AppServerSession,
+          fakeHost({ onClose: (listener) => { disconnect = listener; } }),
+        );
+        const running = app.run();
+        teardown = async () => { await app.quit(); await running; };
+        process.stdin.emit("data", "/files\r");
+        await page.promise;
+        await waitForApplicationContinuation();
+        process.stdin.emit("data", "s");
+        process.stdin.emit("data", "\u0005"); // end of the prefilled name
+        process.stdin.emit("data", "\u0015"); // delete it: the destination is explicit
+        process.stdin.emit("data", destination);
+        process.stdin.emit("data", "\r");
+        const signal = await reading.promise;
+        assert.equal(signal.aborted, false);
+        let quitting: Promise<void> | undefined;
+        switch (retirement) {
+          case "escape":
+            process.stdin.emit("data", "\u001b");
+            await waitForPiEscapeDisambiguation();
+            break;
+          case "replacement":
+            session.publishState({ ...state, pendingInteractions: [approvalInteraction()] });
+            break;
+          case "snapshot":
+            session.publishSnapshot();
+            break;
+          case "disconnect":
+            disconnect!(new TransportClosedError("input_eof", "the App Server went away"));
+            break;
+          case "quit":
+            quitting = app.quit();
+            break;
+        }
+        await waitForApplicationContinuation();
+        assert.equal(signal.aborted, true, `${retirement} cancels the native read`);
+        // The server's publication won the race anyway: the bytes arrive late.
+        served.resolve(body);
+        await waitForApplicationContinuation();
+        await waitForApplicationContinuation();
+        assert.equal(existsSync(destination), false, `${retirement}: no stale local file`);
+        assert.deepEqual(readdirSync(dir), [], `${retirement}: no staging allocated`);
+        await quitting;
+      } finally {
+        served.resolve(body);
+        await teardown();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("/files reports an Open the opener already received once, after retirement, never into a successor", { timeout: 10_000 }, async () => {
+    const { lstatSync, mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "rustx-files-open-"));
+    const path = join(dir, "报告 final.md");
+    writeFileSync(path, "delivered");
+    const leaf = lstatSync(path, { bigint: true });
+    const file = {
+      scope: { conversation_id: "conv-original", device: "1", inode: "2" },
+      path: "out/报告 final.md", name: "报告 final.md", description: null, mime_type: "text/markdown",
+    };
+    const record = { messageId: "tool-msg", index: 0, count: 1, file };
+    const location = { file, path, device: leaf.dev.toString(), inode: leaf.ino.toString() };
+    const transientPrototype = TransientFeedbackSurface.prototype as unknown as {
+      replace: (feedback: { level: "info" | "error"; text: string }) => void;
+    };
+    const selectorPrototype = DeliverySelector.prototype as unknown as {
+      settle: (operation: number, level: "info" | "error", text: string) => void;
+    };
+    const originalReplace = transientPrototype.replace;
+    const originalSettle = selectorPrototype.settle;
+    const reports: string[] = [];
+    const settled: string[] = [];
+    transientPrototype.replace = function(feedback): void {
+      reports.push(`${feedback.level}: ${feedback.text}`);
+      originalReplace.call(this, feedback);
+    };
+    selectorPrototype.settle = function(operation, level, text): void {
+      settled.push(text);
+      originalSettle.call(this, operation, level, text);
+    };
+    try {
+      // `escape` with an action in flight cancels that action and keeps the
+      // surface; `snapshot` and `replacement` retire the surface.
+      for (const [when, retirement, exit] of [
+        ["before launch", "snapshot", 0],
+        ["after launch", "snapshot", 0],
+        ["after launch", "snapshot", 3],
+        ["after launch", "replacement", 0],
+        ["after launch", "replacement", 3],
+        ["after launch", "escape", 0],
+      ] as const) {
+        const label = `${when}, ${retirement}, exit ${exit}`;
+        reports.length = 0;
+        settled.length = 0;
+        const state = { ...emptyPresentationState(sessionModel("alpha/model-a")), attempt: attemptView() };
+        const session = fakeSession(state) as unknown as Record<string, unknown> & { publishState(state: unknown): void; publishSnapshot(): void };
+        const page = deferred<void>();
+        const located = deferred<typeof location>();
+        const locating = deferred<AbortSignal>();
+        Object.assign(session, {
+          deliveryAccess: true,
+          deliveryPage: async () => { page.resolve(); return { records: [record] }; },
+          locateDelivery: async (_requested: unknown, signal: AbortSignal) => { locating.resolve(signal); return located.promise; },
+        });
+        const launched = deferred<void>();
+        const exited = deferred<number>();
+        let launches = 0;
+        const app = new RustxTuiApp({
+          host: fakeHost(),
+          session: session as unknown as AppServerSession,
+          sessionSettings: SESSION_SETTINGS,
+          cwd: "/work/project",
+          opener: {
+            command: "xdg-open",
+            launch: async () => { launches += 1; launched.resolve(); return exited.promise; },
+          },
+        });
+        const running = app.run();
+        try {
+          process.stdin.emit("data", "/files\r");
+          await page.promise;
+          await waitForApplicationContinuation();
+          process.stdin.emit("data", "o");
+          const signal = await locating.promise;
+          if (when === "after launch") {
+            located.resolve(location);
+            await launched.promise;
+          }
+          if (retirement === "escape") {
+            process.stdin.emit("data", "\u001b");
+            await waitForPiEscapeDisambiguation();
+          } else if (retirement === "snapshot") {
+            session.publishSnapshot();
+          } else {
+            session.publishState({ ...state, pendingInteractions: [approvalInteraction()] });
+          }
+          await waitForApplicationContinuation();
+          assert.equal(signal.aborted, true, `${label}: the action is cancelled`);
+          located.resolve(location);
+          exited.resolve(exit);
+          await waitForApplicationContinuation();
+          await waitForApplicationContinuation();
+          const opens = reports.filter((report) => report.includes("open request") || report.includes("to open"));
+          if (retirement === "escape") {
+            // Still on screen: the one report is the selector's, and a
+            // cancellation after the launch does not turn it into "nothing".
+            assert.deepEqual(settled, [`xdg-open accepted the request to open ${path}`], label);
+            assert.deepEqual(opens, [], label);
+            continue;
+          }
+          assert.deepEqual(settled, [], `${label}: a retired selector is never written to`);
+          if (when === "before launch") {
+            assert.equal(launches, 0, `${label}: nothing launched`);
+            assert.deepEqual(opens, [], `${label}: nothing happened, nothing owed`);
+          } else {
+            assert.equal(launches, 1);
+            assert.deepEqual(opens, [exit === 0
+              ? `info: xdg-open accepted the request to open ${path}`
+              : "error: Failed: xdg-open did not accept the open request (exit 3)"], `${label}: exactly one terminal report`);
+          }
+        } finally {
+          located.resolve(location);
+          exited.resolve(exit);
+          await app.quit();
+          await running;
+        }
+      }
+    } finally {
+      transientPrototype.replace = originalReplace;
+      selectorPrototype.settle = originalSettle;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("keeps Esc precedence at the app input-routing boundary", async () => {

@@ -78,6 +78,7 @@ function foregroundTool(): CorrelatedTool {
       result: toolResult({ content: [{ type: "text", text: longBody }] }),
     },
     committed: true,
+    resultCommitted: true,
   };
 }
 

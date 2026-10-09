@@ -117,24 +117,37 @@ pub const TOKEN: &str = "test-token-000000000000000000000000000000000000000";
 pub async fn socket(
     url: &str,
 ) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
+    try_socket(url, &format!("rustx.app-server.v38, rustx-token.{TOKEN}"))
+        .await
+        .unwrap()
+}
+/// Offer exact subprotocol values; a refused handshake is an `Err`.
+pub async fn try_socket(
+    url: &str,
+    offered: &str,
+) -> Result<
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    tokio_tungstenite::tungstenite::Error,
+> {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     let mut request = url.into_client_request().unwrap();
-    request.headers_mut().insert(
-        "sec-websocket-protocol",
-        format!("rustx.app-server.v37, rustx-token.{TOKEN}")
-            .parse()
-            .unwrap(),
-    );
-    let (socket, response) = tokio_tungstenite::connect_async(request).await.unwrap();
+    request
+        .headers_mut()
+        .insert("sec-websocket-protocol", offered.parse().unwrap());
+    let (socket, response) = tokio_tungstenite::connect_async(request).await?;
     assert_eq!(
         response.headers()["sec-websocket-protocol"],
-        "rustx.app-server.v37"
+        "rustx.app-server.v38",
+        "the response selects only the public subprotocol, never a secret"
     );
-    socket
+    Ok(socket)
 }
 pub async fn websocket(url: &str) -> Driver {
+    websocket_offering(url, &format!("rustx.app-server.v38, rustx-token.{TOKEN}")).await
+}
+pub async fn websocket_offering(url: &str, offered: &str) -> Driver {
     use futures_util::SinkExt;
-    let (mut writer, reader) = socket(url).await.split();
+    let (mut writer, reader) = try_socket(url, offered).await.unwrap().split();
     let incoming = reader.filter_map(|message| async move {
         use tokio_tungstenite::tungstenite::{Error, Message, error::ProtocolError};
         match message {

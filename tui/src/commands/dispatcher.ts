@@ -102,6 +102,11 @@ export type CommandOutcome =
       notice?: string;
     }
   | {
+      /** The first bounded page of committed `present` deliveries. */
+      kind: "choose_delivery";
+      page: import("../presentation/deliveries.ts").DeliveryPage;
+    }
+  | {
       /** A client display preference. Never a runtime request. */
       kind: "preference";
       preference: PreferenceChange;
@@ -177,7 +182,7 @@ export class CommandDispatcher {
   // A retained command is one submission until its response is classified.
   // Other controls and commands (including on a replacement attachment) remain usable.
   readonly #agentMessageSubmissions = new WeakSet<AppServerSession>();
-  #inspected = new Map<string, import('../../../protocol/app-server/v37.ts').AvailableConfiguration>();
+  #inspected = new Map<string, import('../../../protocol/app-server/v38.ts').AvailableConfiguration>();
 
   constructor(context: DispatcherContext) {
     this.#context = context;
@@ -246,6 +251,9 @@ export class CommandDispatcher {
         }
         case "/help":
           return inspect("Help", renderHelp());
+        case "/files":
+          // One bounded native transcript page; older pages load on request.
+          return { kind: "choose_delivery", page: await session.deliveryPage() };
         case "/model":
           return await this.#model(session, state, argument);
         case "/new":
@@ -498,7 +506,7 @@ export class CommandDispatcher {
   async #settings(argument: string): Promise<CommandOutcome> {
     const words = argument.match(/"(?:[^"\\]|\\.)*"|\S+/g)?.map(word => word.startsWith('"') ? JSON.parse(word) as string : word) ?? [];
     const owner = words.shift() ?? "user";
-    let target: import("../../../protocol/app-server/v37.ts").SourceTarget;
+    let target: import("../../../protocol/app-server/v38.ts").SourceTarget;
     if (owner === "user") target = { kind: "user" };
     else if (owner === "workspace" && words[0]) target = { kind: "workspace", directory: words.shift()! };
     else return transient("error", 'usage: /settings [user | workspace "<canonical absolute path>"] [rescan | approval policy|full_access|inherit]');

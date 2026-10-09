@@ -1,7 +1,7 @@
 //! App Server JSONL; unrelated to the legacy Runtime Client endpoint.
 use super::{MAX_MESSAGE_BYTES, WRITE_TIMEOUT, failure};
 use crate::app_server::connection::AppServerConnection;
-use std::{io, sync::Arc};
+use std::{io, pin::Pin, sync::Arc};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio_util::sync::CancellationToken;
 
@@ -53,9 +53,22 @@ where
         connection.clone(),
         incoming,
         |mut receiver| async move {
-            while let Some(record) = receiver.recv().await {
+            while let Some(mut outbound) = receiver.next().await {
                 tokio::time::timeout(WRITE_TIMEOUT, async {
-                    writer.write_all(record.as_bytes()).await?;
+                    // The first write that takes bytes is the handoff; while
+                    // the pipe is full it takes none and nothing is decided.
+                    let (record, written) = std::future::poll_fn(|cx| {
+                        outbound.poll_hand_off(|record| {
+                            Pin::new(&mut writer)
+                                .poll_write(cx, record.as_bytes())
+                                .map(|written| match written {
+                                    Ok(0) => Err(io::ErrorKind::WriteZero.into()),
+                                    other => other,
+                                })
+                        })
+                    })
+                    .await?;
+                    writer.write_all(&record.as_bytes()[written..]).await?;
                     writer.write_all(b"\n").await?;
                     writer.flush().await
                 })

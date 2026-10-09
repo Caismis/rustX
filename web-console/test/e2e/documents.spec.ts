@@ -26,8 +26,11 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
     Object.assign(window, { Worker: ObservedWorker, documentWorkers: live, documentUrls: urls });
   });
   const panel = page.getByRole('complementary', { name: 'Previews', exact: true });
+  // Harness delivery summaries show four cards per result until expanded.
+  const expandDeliveries = async () => { for (const toggle of await page.getByRole('button', { name: /^(Show all \d+ delivered files|展开全部 \d+ 个交付文件)$/ }).all()) await toggle.click(); };
   const open = async (name: string) => {
-    await page.getByRole('button', { name: `Preview ${name}`, exact: true }).click(); await expect(panel).toBeVisible();
+    await expandDeliveries();
+    await page.getByRole('button', { name: `Preview ${name} in sidebar`, exact: true }).click(); await expect(panel).toBeVisible();
   };
   const close = async () => {
     await panel.getByRole('button', { name: /^Close preview / }).first().click();
@@ -113,8 +116,8 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
       // finish reflowing; a transient narrow sidebar width is not that baseline.
       const sidebar = width === 390 ? 56 : 280;
       await expect(page.locator('[data-harness-frame]')).toHaveCSS('grid-template-columns', `${sidebar}px ${width - sidebar}px 0px`);
-      await page.getByRole('button', { name: 'Preview sample.pdf', exact: true }).scrollIntoViewIfNeeded();
-      await page.getByRole('button', { name: 'Preview sample.pdf', exact: true }).focus();
+      await page.getByRole('button', { name: 'Preview sample.pdf in sidebar', exact: true }).scrollIntoViewIfNeeded();
+      await page.getByRole('button', { name: 'Preview sample.pdf in sidebar', exact: true }).focus();
       const scroll = await page.locator('.conversation-scroll').evaluate(el => el.scrollTop);
       await page.keyboard.press('Enter');
       await expect(panel.locator('.textLayer')).toContainText('page 1');
@@ -137,7 +140,7 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
     await page.getByRole('button', { name: '关闭设置', exact: true }).click();
-    await page.getByRole('button', { name: '预览 sample.xlsx', exact: true }).click();
+    await expandDeliveries(); await page.getByRole('button', { name: '在侧边栏预览 sample.xlsx', exact: true }).click();
     await expect(page.getByRole('columnheader', { name: '公式（未计算）' })).toBeVisible();
     await page.screenshot({ animations: 'disabled', path: info.outputPath('workbook-chinese.png') });
     await info.attach('workbook-chinese', { path: info.outputPath('workbook-chinese.png'), contentType: 'image/png' });
