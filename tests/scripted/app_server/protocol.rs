@@ -2528,21 +2528,22 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
             .as_ref()
             .unwrap()["local/a"]
             .clone();
-        model.reasoning = Some(crate::model::authoring::Reasoning {
-            default_profile: crate::model::catalog::ReasoningProfileId::new("old"),
-            profiles: ["old", "new"]
+        model.request_params = None;
+        model.default_profile = Some(crate::model::catalog::ModelProfileId::new("old"));
+        model.profiles = Some(
+            ["old", "new"]
                 .into_iter()
                 .map(|name| {
                     (
-                        crate::model::catalog::ReasoningProfileId::new(name),
+                        crate::model::catalog::ModelProfileId::new(name),
                         crate::model::authoring::Profile {
-                            enabled: false,
-                            request_params: crate::toml_authoring::RequestParamsToml::default(),
+                            reasoning_enabled: Some(false),
+                            ..Default::default()
                         },
                     )
                 })
                 .collect(),
-        });
+        );
         f.manager
             .source_settings(
                 &crate::local_runtime::configuration::settings::SourceTarget::User,
@@ -2608,10 +2609,19 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
             .unwrap()["local/a"]
             .clone();
         model.max_output_tokens = 2048;
-        model.reasoning.as_mut().unwrap().default_profile =
-            crate::model::catalog::ReasoningProfileId::new("new");
-        model.request_params = crate::toml_authoring::RequestParamsToml(
-            serde_json::from_value(serde_json::json!({"temperature": 0.8})).unwrap(),
+        // A Profile edit after admission: a new default whose complete
+        // native object carries a value the admitted Attempt never froze.
+        model.default_profile = Some(crate::model::catalog::ModelProfileId::new("new"));
+        model.profiles.as_mut().unwrap().insert(
+            crate::model::catalog::ModelProfileId::new("new"),
+            crate::model::authoring::Profile {
+                reasoning_enabled: Some(false),
+                max_output_tokens: Some(1024),
+                request_params: crate::toml_authoring::AuthoredRequestParams(
+                    serde_json::from_value(serde_json::json!({"temperature": 0.8, "stop": [null]}))
+                        .unwrap(),
+                ),
+            },
         );
         call(
             &connection,
@@ -2658,16 +2668,13 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
         assert_eq!(next.id.as_str(), "a");
         assert_eq!(next.max_output_tokens, 2048);
         assert_eq!(frozen.primary.max_output_tokens, 4096);
-        assert_eq!(
-            next.reasoning.as_ref().unwrap().default_profile.as_str(),
-            "new"
-        );
-        assert_eq!(
-            frozen.primary.reasoning_profile.as_ref().unwrap().as_str(),
-            "old"
-        );
-        assert_eq!(next.request_params["temperature"], 0.8);
-        assert!(!frozen.primary.request_params.contains_key("temperature"));
+        assert_eq!(next.default_profile.as_ref().unwrap().as_str(), "new");
+        assert_eq!(frozen.primary.profile.as_ref().unwrap().as_str(), "old");
+        let new = &next.profiles[&crate::model::catalog::ModelProfileId::new("new")];
+        assert_eq!(new.request_params["temperature"], 0.8);
+        assert_eq!(new.request_params["stop"][0], serde_json::Value::Null);
+        assert_eq!(new.max_output_tokens, Some(1024));
+        assert!(frozen.primary.request_params.is_empty());
         // Creation uses the successfully prepared source authority, after
         // native processing acknowledges availability. Existing A stays frozen.
         super::configuration::settled(&f, 0).await;

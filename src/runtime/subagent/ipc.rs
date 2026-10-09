@@ -103,7 +103,9 @@ use crate::runtime::workspace::WorkspaceSnapshot;
 /// Version 29 passes the preinstalled physical-authority lease on fd 2 before
 /// the child reads Hello. The parent installed that authority before Reserved;
 /// the child clones it before composition and restores stderr to diagnostics.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 29;
+/// Version 30 freezes the selected general Model Profile, replacing the
+/// reasoning profile, in the child model specification (#456).
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 30;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///

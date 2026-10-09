@@ -20,7 +20,7 @@
 //! invented `extra_body` nesting level.
 //!
 //! No request-level reasoning control is ever synthesized: whatever the
-//! selected reasoning profile configured is exactly what appears on the
+//! selected Model Profile configured is exactly what appears on the
 //! wire. Previous assistant reasoning is replayed through the model-declared
 //! provider-specific `reasoning` or `reasoning_content` field, or omitted by
 //! policy, rather than flattened into visible assistant text.

@@ -32,9 +32,12 @@
 //! # What the catalog does not own
 //!
 //! Provider wire parameters are opaque ([`crate::model::invocation`] owns
-//! the overlay and protected-key contract). Reasoning is expressed as
-//! model-declared named profiles whose behaviour is exactly their configured
-//! `request_params`; the runtime assigns no meaning to a profile name.
+//! the overlay and protected-key contract). A Model may declare named
+//! [`ModelProfile`]s: complete invocation presets carrying their own opaque
+//! `request_params`, an explicit semantic reasoning state, and an optional
+//! default output budget. The runtime assigns no meaning to a profile name,
+//! and a Profile never changes a Model's identity, protocol, context window,
+//! hard output maximum, or declared capabilities.
 //! Structural translation behaviour lives in the bounded [`ModelCompat`],
 //! which is deliberately *not* a strategy framework and is never inferred
 //! from a hostname. Historical Chat reasoning replay is an explicit
@@ -68,15 +71,22 @@ pub struct ProviderId(String);
 #[serde(transparent)]
 pub struct ModelId(String);
 
-/// The identity of one reasoning profile declared by a model.
+/// The identity of one Model Profile declared by a model.
 ///
-/// The runtime assigns no meaning to the name: `off`, `on`, `low`,
-/// `thinking-32k`, and `deep` are all just names whose wire behaviour is
-/// exactly the profile's configured `request_params`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+/// The runtime assigns no meaning to the name: `fast`, `precise`, `creative`,
+/// `thinking-32k`, and `deep` are all just names whose behaviour is exactly
+/// the profile's declared reasoning state, output default, and
+/// `request_params`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
 #[derive(schemars::JsonSchema)]
-pub struct ReasoningProfileId(String);
+pub struct ModelProfileId(String);
+
+impl<'de> Deserialize<'de> for ModelProfileId {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::parse(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
 
 macro_rules! catalog_identity {
     ($name:ident, $what:literal, $reject_slash:literal, $require_non_empty_segments:literal) => {
@@ -128,7 +138,7 @@ macro_rules! catalog_identity {
 
 catalog_identity!(ProviderId, "provider", true, false);
 catalog_identity!(ModelId, "model", false, true);
-catalog_identity!(ReasoningProfileId, "reasoning profile", true, false);
+catalog_identity!(ModelProfileId, "model profile", true, false);
 
 /// An authored Model identity. Its spelling has no provider or wire semantics.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, schemars::JsonSchema)]
@@ -660,30 +670,47 @@ pub enum ChatStreamUsage {
     Unsupported,
 }
 
-/// One declared reasoning profile of a model.
+/// One validated Model Profile: a complete, independent invocation preset.
+///
+/// A Profile never inherits request parameters from its Model or from
+/// another Profile: its `request_params` are the complete native object of
+/// an invocation that selects it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
-pub struct ReasoningProfile {
-    /// Whether this profile semantically enables reasoning.
-    pub enabled: bool,
-    /// The exact provider-owned request parameters of this profile.
+pub struct ModelProfile {
+    /// Whether this profile semantically enables reasoning. Explicit rustX
+    /// semantics, never inferred from the profile name or a native key.
+    pub reasoning_enabled: bool,
+    /// The default output budget of an invocation selecting this profile;
+    /// the Model's hard maximum when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+    /// The complete provider-native request parameters of this profile.
     ///
-    /// The profile owns every top-level key it declares: a session override
-    /// may not also declare one of them.
+    /// The profile owns every top-level key it declares: an explicit
+    /// selection override may not also declare one of them.
     #[serde(default)]
     pub request_params: RequestParams,
 }
 
-/// The reasoning configuration of one model.
+/// One declared Model Profile of the programmatic catalog document.
+///
+/// Presence is tracked: a reasoning-capable Model must declare
+/// `reasoningEnabled` for every profile.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
-pub struct ReasoningConfig {
-    /// The profile selected when the session does not choose one.
-    pub default_profile: ReasoningProfileId,
-    /// The declared profiles.
-    pub profiles: BTreeMap<ReasoningProfileId, ReasoningProfile>,
+pub struct ModelProfileDocument {
+    /// The declared semantic reasoning state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_enabled: Option<bool>,
+    /// The declared default output budget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+    /// The complete provider-native request parameters.
+    #[serde(default)]
+    pub request_params: RequestParams,
 }
 
 /// One validated catalog model definition.
@@ -701,30 +728,23 @@ pub struct ModelDefinition {
     pub max_output_tokens: u32,
     /// The capabilities the catalog claims for this model.
     pub capabilities: ModelCapabilities,
-    /// The model-level default provider request parameters.
+    /// The model-level native request parameters of a Model without
+    /// profiles. Always empty when the Model declares profiles.
     pub request_params: RequestParams,
-    /// The declared reasoning profiles, when the model exposes any.
-    pub reasoning: Option<ReasoningConfig>,
+    /// The profile selected when an invocation does not choose one; present
+    /// exactly when `profiles` is nonempty.
+    pub default_profile: Option<ModelProfileId>,
+    /// The declared profiles; empty when the Model declares none.
+    pub profiles: BTreeMap<ModelProfileId, ModelProfile>,
     /// The bounded structural translation metadata.
     pub compat: ModelCompat,
 }
 
 impl ModelDefinition {
-    /// The reasoning profile the session selects by default, when the model
-    /// declares reasoning profiles.
-    #[must_use]
-    pub fn default_reasoning_profile(&self) -> Option<&ReasoningProfileId> {
-        self.reasoning
-            .as_ref()
-            .map(|config| &config.default_profile)
-    }
-
     /// Resolves one declared profile by identity.
     #[must_use]
-    pub fn reasoning_profile(&self, id: &ReasoningProfileId) -> Option<&ReasoningProfile> {
-        self.reasoning
-            .as_ref()
-            .and_then(|config| config.profiles.get(id))
+    pub fn profile(&self, id: &ModelProfileId) -> Option<&ModelProfile> {
+        self.profiles.get(id)
     }
 }
 
@@ -743,8 +763,8 @@ pub struct ProviderDefinition {
 ///
 /// Validation is complete at this point: every provider has an explicit
 /// endpoint and credential source, every model has a known protocol, sane
-/// limits, coherent capabilities, a valid reasoning configuration, and
-/// request parameters that collide with no runtime-protected wire key.
+/// limits, coherent capabilities, valid profiles, and request parameters that collide with no
+/// runtime-protected wire key.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModelCatalog {
     providers: BTreeMap<ProviderId, ProviderDefinition>,
@@ -769,21 +789,16 @@ impl ModelCatalog {
                     &model.capabilities,
                     model.protocol,
                 ),
-                reasoning_profiles: model
-                    .reasoning
-                    .as_ref()
-                    .map(|reasoning| {
-                        reasoning
-                            .profiles
-                            .iter()
-                            .map(|(id, profile)| ReasoningProfileView {
-                                id: id.clone(),
-                                enabled: profile.enabled,
-                            })
-                            .collect()
+                profiles: model
+                    .profiles
+                    .iter()
+                    .map(|(id, profile)| ModelProfileView {
+                        id: id.clone(),
+                        reasoning_enabled: profile.reasoning_enabled,
+                        max_output_tokens: profile.max_output_tokens,
                     })
-                    .unwrap_or_default(),
-                default_reasoning_profile: model.default_reasoning_profile().cloned(),
+                    .collect(),
+                default_profile: model.default_profile.clone(),
                 credential_source: provider.api_key.view(),
             });
         }
@@ -1144,12 +1159,17 @@ pub struct ModelDocument {
     pub max_output_tokens: u32,
     /// The claimed capabilities.
     pub capabilities: ModelCapabilities,
-    /// The model-level default provider request parameters.
-    #[serde(default)]
-    pub request_params: RequestParams,
-    /// The declared reasoning profiles.
-    #[serde(default)]
-    pub reasoning: Option<ReasoningConfig>,
+    /// The model-level native request parameters. Presence is tracked: a
+    /// Model with profiles must not declare them, not even as `{}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_params: Option<RequestParams>,
+    /// The profile selected when an invocation does not choose one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_profile: Option<ModelProfileId>,
+    /// The declared profiles. Presence is tracked: a declared collection
+    /// must be nonempty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profiles: Option<BTreeMap<ModelProfileId, ModelProfileDocument>>,
     /// The bounded structural translation metadata.
     #[serde(default)]
     pub compat: ModelCompat,
@@ -1229,7 +1249,7 @@ fn validate_model(
     reference: &ModelRef,
     document: ModelDocument,
 ) -> Result<ModelDefinition, ModelCatalogError> {
-    let id = ModelId::parse(document.id)?;
+    let id = ModelId::parse(document.id.clone())?;
     let reference = reference.clone();
 
     if document.context_window == 0 || document.max_output_tokens == 0 {
@@ -1266,25 +1286,18 @@ fn validate_model(
 
     validate_compat(&reference, document.protocol, document.compat)?;
 
+    let (default_profile, profiles) = validate_profiles(&reference, &document)?;
+    let request_params = document.request_params.unwrap_or_default();
     validate_request_params_layer(
-        &document.request_params,
+        &request_params,
         document.protocol,
-        RequestParamsLayer::ModelDefaults,
+        RequestParamsLayer::ModelParams,
     )
     .map_err(|collision| ModelCatalogError::ProtectedKey {
         model: reference.clone(),
         key: collision.key,
         layer: collision.layer,
     })?;
-
-    if let Some(reasoning) = &document.reasoning {
-        validate_reasoning(
-            &reference,
-            document.protocol,
-            &document.capabilities,
-            reasoning,
-        )?;
-    }
 
     Ok(ModelDefinition {
         provider: ProviderId::parse(document.provider)?,
@@ -1293,10 +1306,111 @@ fn validate_model(
         context_window: document.context_window,
         max_output_tokens: document.max_output_tokens,
         capabilities: document.capabilities,
-        request_params: document.request_params,
-        reasoning: document.reasoning,
+        request_params,
+        default_profile,
+        profiles,
         compat: document.compat,
     })
+}
+
+type ValidatedProfiles = (
+    Option<ModelProfileId>,
+    BTreeMap<ModelProfileId, ModelProfile>,
+);
+
+/// Validates the Profile contract of one Model.
+///
+/// With profiles: a nonempty collection, a declared `default_profile`, no
+/// model-level `request_params` (not even `{}`), an explicit
+/// `reasoning_enabled` on every profile of a reasoning-capable Model, and
+/// positive profile budgets within the Model hard maximum. Without profiles:
+/// no `default_profile`.
+fn validate_profiles(
+    reference: &ModelRef,
+    document: &ModelDocument,
+) -> Result<ValidatedProfiles, ModelCatalogError> {
+    let invalid = |detail: String| ModelCatalogError::InvalidProfiles {
+        model: reference.clone(),
+        detail,
+    };
+    let Some(declared) = &document.profiles else {
+        return match &document.default_profile {
+            Some(default) => Err(invalid(format!(
+                "default_profile {:?} is declared but the model declares no profiles",
+                default.as_str()
+            ))),
+            None => Ok((None, BTreeMap::new())),
+        };
+    };
+    if declared.is_empty() {
+        return Err(invalid(
+            "a declared profiles collection must declare at least one profile".to_owned(),
+        ));
+    }
+    if document.request_params.is_some() {
+        return Err(invalid(
+            "a model with profiles must not declare model-level request_params; \
+             each profile declares its complete request_params"
+                .to_owned(),
+        ));
+    }
+    let default = document
+        .default_profile
+        .clone()
+        .ok_or_else(|| invalid("a model with profiles must declare default_profile".to_owned()))?;
+    if !declared.contains_key(&default) {
+        return Err(invalid(format!(
+            "default_profile {:?} is not declared in profiles",
+            default.as_str()
+        )));
+    }
+    let mut profiles = BTreeMap::new();
+    for (id, profile) in declared {
+        let reasoning_enabled = match (document.capabilities.reasoning, profile.reasoning_enabled) {
+            (true, Some(enabled)) => enabled,
+            (true, None) => {
+                return Err(invalid(format!(
+                    "profile {:?} must declare reasoning_enabled because capabilities.reasoning is true",
+                    id.as_str()
+                )));
+            }
+            (false, Some(true)) => {
+                return Err(invalid(format!(
+                    "profile {:?} declares reasoning_enabled = true but capabilities.reasoning is false",
+                    id.as_str()
+                )));
+            }
+            (false, Some(false) | None) => false,
+        };
+        if let Some(budget) = profile.max_output_tokens
+            && (budget == 0 || budget > document.max_output_tokens)
+        {
+            return Err(invalid(format!(
+                "profile {:?} max_output_tokens {budget} must be positive and at most the model max_output_tokens {}",
+                id.as_str(),
+                document.max_output_tokens
+            )));
+        }
+        validate_request_params_layer(
+            &profile.request_params,
+            document.protocol,
+            RequestParamsLayer::ModelProfile,
+        )
+        .map_err(|collision| ModelCatalogError::ProtectedKey {
+            model: reference.clone(),
+            key: collision.key,
+            layer: collision.layer,
+        })?;
+        profiles.insert(
+            id.clone(),
+            ModelProfile {
+                reasoning_enabled,
+                max_output_tokens: profile.max_output_tokens,
+                request_params: profile.request_params.clone(),
+            },
+        );
+    }
+    Ok((Some(default), profiles))
 }
 
 fn validate_compat(
@@ -1346,51 +1460,6 @@ fn validate_compat(
     Ok(())
 }
 
-fn validate_reasoning(
-    reference: &ModelRef,
-    protocol: ModelProtocol,
-    capabilities: &ModelCapabilities,
-    reasoning: &ReasoningConfig,
-) -> Result<(), ModelCatalogError> {
-    if reasoning.profiles.is_empty() {
-        return Err(ModelCatalogError::InvalidReasoning {
-            model: reference.clone(),
-            detail: "a declared reasoning block must declare at least one profile".to_owned(),
-        });
-    }
-    if !reasoning.profiles.contains_key(&reasoning.default_profile) {
-        return Err(ModelCatalogError::InvalidReasoning {
-            model: reference.clone(),
-            detail: format!(
-                "default_profile {:?} is not declared in profiles",
-                reasoning.default_profile.as_str()
-            ),
-        });
-    }
-    for (id, profile) in &reasoning.profiles {
-        if profile.enabled && !capabilities.reasoning {
-            return Err(ModelCatalogError::InvalidReasoning {
-                model: reference.clone(),
-                detail: format!(
-                    "profile {:?} enables reasoning but capabilities.reasoning is false",
-                    id.as_str()
-                ),
-            });
-        }
-        validate_request_params_layer(
-            &profile.request_params,
-            protocol,
-            RequestParamsLayer::ReasoningProfile,
-        )
-        .map_err(|collision| ModelCatalogError::ProtectedKey {
-            model: reference.clone(),
-            key: collision.key,
-            layer: collision.layer,
-        })?;
-    }
-    Ok(())
-}
-
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
@@ -1415,7 +1484,7 @@ pub enum ModelCatalogError {
     },
     /// The catalog declares no provider.
     EmptyCatalog,
-    /// A provider or reasoning-profile identity is empty, contains whitespace,
+    /// A provider or model-profile identity is empty, contains whitespace,
     /// or contains `/`. Model identities may contain `/` because the first
     /// slash in a model reference is the provider separator, but their
     /// slash-separated segments must be non-empty.
@@ -1468,8 +1537,8 @@ pub enum ModelCatalogError {
         /// The failure detail.
         detail: String,
     },
-    /// A model declares an invalid reasoning configuration.
-    InvalidReasoning {
+    /// A model declares an invalid Model Profile configuration.
+    InvalidProfiles {
         /// The model.
         model: ModelRef,
         /// The failure detail.
@@ -1546,8 +1615,8 @@ impl fmt::Display for ModelCatalogError {
             Self::InvalidCapabilities { model, detail } => {
                 write!(f, "model {model} declares invalid capabilities: {detail}")
             }
-            Self::InvalidReasoning { model, detail } => {
-                write!(f, "model {model} declares invalid reasoning: {detail}")
+            Self::InvalidProfiles { model, detail } => {
+                write!(f, "model {model} declares invalid profiles: {detail}")
             }
             Self::InvalidCompat { model, detail } => {
                 write!(f, "model {model} declares invalid compat: {detail}")
@@ -1572,7 +1641,7 @@ impl std::error::Error for ModelCatalogError {}
 
 /// The safe public catalog view served to Runtime Clients.
 ///
-/// A client selects a model and a reasoning profile from this view; it never
+/// A client selects a model and a Model Profile from this view; it never
 /// reads `rustx.toml` itself and never sees a credential, an adapter, or a
 /// provider HTTP client.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1602,29 +1671,32 @@ pub struct CatalogModelView {
     pub declared_capabilities: ModelCapabilities,
     /// The capabilities the runtime can actually deliver today.
     pub effective_capabilities: ModelCapabilities,
-    /// The declared reasoning profiles in deterministic order.
+    /// The declared Model Profiles in deterministic order.
     #[serde(default)]
-    pub reasoning_profiles: Vec<ReasoningProfileView>,
-    /// The profile selected when a session does not choose one.
+    pub profiles: Vec<ModelProfileView>,
+    /// The profile selected when an invocation does not choose one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_reasoning_profile: Option<ReasoningProfileId>,
+    pub default_profile: Option<ModelProfileId>,
     /// The redacted credential source of the model's provider.
     pub credential_source: CredentialSourceView,
 }
 
-/// One selectable reasoning profile of the public catalog view.
+/// One selectable Model Profile of the public catalog view.
 ///
-/// Only the identity and the semantic enabled state are exposed: the
-/// profile's provider request parameters are provider-owned wire config that
-/// a client never needs to select a profile.
+/// The profile's provider request parameters are provider-owned wire
+/// configuration a client never needs to select a profile; the runtime
+/// semantics it carries are exposed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
-pub struct ReasoningProfileView {
+pub struct ModelProfileView {
     /// The profile identity.
-    pub id: ReasoningProfileId,
+    pub id: ModelProfileId,
     /// Whether the profile semantically enables reasoning.
-    pub enabled: bool,
+    pub reasoning_enabled: bool,
+    /// The profile's default output budget, when it declares one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
 }
 
 #[cfg(test)]
@@ -1917,34 +1989,178 @@ mod tests {
             );
         }
     }
-    #[test]
-    fn invalid_reasoning_default_and_capability_contradiction_fail() {
-        for reasoning in [
-            json!({"defaultProfile":"missing","profiles":{"off":{"enabled":false}}}),
-            json!({"defaultProfile":"on","profiles":{"on":{"enabled":true}}}),
-        ] {
-            let mut value = document();
-            value["models"]["chosen"]["reasoning"] = reasoning;
-            assert!(matches!(
-                catalog(value),
-                Err(ModelCatalogError::InvalidReasoning { .. })
-            ));
+    fn profiled(reasoning: bool) -> Value {
+        let mut value = document();
+        let model = &mut value["models"]["chosen"];
+        model["capabilities"]["reasoning"] = reasoning.into();
+        model["defaultProfile"] = "balanced".into();
+        model["profiles"] = if reasoning {
+            json!({
+                "fast": {"reasoningEnabled": true, "maxOutputTokens": 20, "requestParams": {"reasoning_effort": "low"}},
+                "balanced": {"reasoningEnabled": true, "requestParams": {"reasoning_effort": "medium", "opaque": [null]}},
+                "off": {"reasoningEnabled": false, "requestParams": {"thinking": {"type": "disabled"}}}
+            })
+        } else {
+            json!({
+                "precise": {"maxOutputTokens": 40, "requestParams": {"temperature": 0.1, "top_p": 0.5}},
+                "balanced": {"reasoningEnabled": false, "requestParams": {"temperature": 0.7}},
+                "creative": {"requestParams": {"temperature": 1.2, "stop": ["\n\n", null]}}
+            })
+        };
+        value
+    }
+    fn invalid_profiles(value: Value) -> String {
+        match catalog(value) {
+            Err(ModelCatalogError::InvalidProfiles { detail, .. }) => detail,
+            other => panic!("expected InvalidProfiles, got {other:?}"),
         }
     }
     #[test]
-    fn request_defaults_and_reasoning_profiles_cannot_replace_protected_structure() {
+    fn profiles_are_validated_complete_presets() {
+        for reasoning in [true, false] {
+            let catalog = catalog(profiled(reasoning)).unwrap();
+            let model = catalog.model(&selected()).unwrap();
+            assert_eq!(model.default_profile.as_ref().unwrap().as_str(), "balanced");
+            assert_eq!(model.profiles.len(), 3);
+            assert!(model.request_params.is_empty());
+            let view = &catalog.view().models[0];
+            assert_eq!(view.default_profile, model.default_profile);
+            assert_eq!(
+                view.profiles
+                    .iter()
+                    .map(|p| p.id.as_str())
+                    .collect::<Vec<_>>(),
+                if reasoning {
+                    ["balanced", "fast", "off"]
+                } else {
+                    ["balanced", "creative", "precise"]
+                }
+            );
+        }
+        let catalog = catalog(profiled(false)).unwrap();
+        let model = catalog.model(&selected()).unwrap();
+        // Non-reasoning omission means false; no profile reads another's params.
+        assert!(
+            !model
+                .profile(&ModelProfileId::new("creative"))
+                .unwrap()
+                .reasoning_enabled
+        );
+        assert_eq!(
+            Value::Object(
+                model
+                    .profile(&ModelProfileId::new("creative"))
+                    .unwrap()
+                    .request_params
+                    .clone()
+            ),
+            json!({"temperature": 1.2, "stop": ["\n\n", null]})
+        );
+        assert_eq!(
+            model
+                .profile(&ModelProfileId::new("precise"))
+                .unwrap()
+                .max_output_tokens,
+            Some(40)
+        );
+    }
+    #[test]
+    fn profile_structure_violations_fail_deterministically() {
+        type Mutation = fn(&mut Value);
+        let cases: [(&str, Mutation); 9] = [
+            ("default_profile \"missing\" is not declared", |m| {
+                m["defaultProfile"] = "missing".into();
+            }),
+            ("must declare default_profile", |m| {
+                m.as_object_mut().unwrap().remove("defaultProfile");
+            }),
+            ("at least one profile", |m| m["profiles"] = json!({})),
+            ("must not declare model-level request_params", |m| {
+                m["requestParams"] = json!({"temperature": 0.2});
+            }),
+            ("must not declare model-level request_params", |m| {
+                m["requestParams"] = json!({});
+            }),
+            ("must declare reasoning_enabled", |m| {
+                m["profiles"]["fast"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("reasoningEnabled");
+            }),
+            ("max_output_tokens 0 must be positive", |m| {
+                m["profiles"]["fast"]["maxOutputTokens"] = 0.into();
+            }),
+            (
+                "max_output_tokens 101 must be positive and at most the model max_output_tokens 100",
+                |m| {
+                    m["profiles"]["fast"]["maxOutputTokens"] = 101.into();
+                },
+            ),
+            ("declares no profiles", |m| {
+                m.as_object_mut().unwrap().remove("profiles");
+            }),
+        ];
+        for (expected, mutate) in cases {
+            let mut value = profiled(true);
+            mutate(&mut value["models"]["chosen"]);
+            let detail = invalid_profiles(value);
+            assert!(detail.contains(expected), "{expected}: {detail}");
+        }
+        let mut value = profiled(false);
+        value["models"]["chosen"]["profiles"]["precise"]["reasoningEnabled"] = true.into();
+        assert!(
+            invalid_profiles(value)
+                .contains("reasoning_enabled = true but capabilities.reasoning is false")
+        );
+        // Profile identities are validated opaque names.
+        for name in ["", "a b", "a/b"] {
+            let mut value = profiled(false);
+            value["models"]["chosen"]["profiles"][name] = json!({});
+            assert!(
+                matches!(catalog(value), Err(ModelCatalogError::Syntax { .. })),
+                "{name:?}"
+            );
+        }
+        // The obsolete reasoning block is an unknown field.
+        let mut value = document();
+        value["models"]["chosen"]["reasoning"] =
+            json!({"defaultProfile":"off","profiles":{"off":{"enabled":false}}});
+        assert!(matches!(
+            catalog(value),
+            Err(ModelCatalogError::Syntax { .. })
+        ));
+    }
+    #[test]
+    fn model_params_and_profile_params_cannot_replace_protected_structure() {
         let mut value = document();
         value["models"]["chosen"]["requestParams"] = json!({"messages":[]});
         assert!(matches!(
             catalog(value),
-            Err(ModelCatalogError::ProtectedKey { .. })
+            Err(ModelCatalogError::ProtectedKey {
+                layer: RequestParamsLayer::ModelParams,
+                ..
+            })
         ));
-        let mut value = document();
-        value["models"]["chosen"]["reasoning"] = json!({"defaultProfile":"off","profiles":{"off":{"enabled":false,"requestParams":{"messages":[]}}}});
-        assert!(matches!(
-            catalog(value),
-            Err(ModelCatalogError::ProtectedKey { .. })
-        ));
+        for key in [
+            "messages",
+            "max_tokens",
+            "max_completion_tokens",
+            "stream",
+            "model",
+        ] {
+            let mut value = profiled(true);
+            value["models"]["chosen"]["profiles"]["off"]["requestParams"] = json!({key: 1});
+            assert!(
+                matches!(
+                    catalog(value),
+                    Err(ModelCatalogError::ProtectedKey {
+                        layer: RequestParamsLayer::ModelProfile,
+                        ..
+                    })
+                ),
+                "{key}"
+            );
+        }
     }
     #[test]
     fn always_on_reasoning_and_opaque_parameters_remain_adapter_owned() {
@@ -1957,8 +2173,9 @@ mod tests {
             .resolve(&crate::model::invocation::ModelSelection::of(selected()))
             .unwrap();
         assert!(invocation.reasoning_enabled());
-        assert_eq!(invocation.reasoning_profile(), None);
+        assert_eq!(invocation.profile(), None);
         assert_eq!(invocation.request_params()["opaque"][2]["future"], 42);
+        assert_eq!(invocation.request_params()["opaque"][0], Value::Null);
         assert_eq!(
             invocation.request_params()["provider_reasoning"]["mode"],
             "default"

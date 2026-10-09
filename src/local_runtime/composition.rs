@@ -2747,7 +2747,7 @@ chat_reasoning_replay = "omit"
         // enables the extension and configures it differently.
         std::fs::write(
             dir.path().join("workspace/rustx.toml"),
-            r#"schema_version = 9
+            r#"schema_version = 10
 agent_id = "agent-host"
 
 [context]
@@ -2909,7 +2909,7 @@ enabled = true
         let dir = lab();
         std::fs::write(
             dir.path().join("workspace/rustx.toml"),
-            r#"schema_version = 9
+            r#"schema_version = 10
 agent_id = "agent-host"
 
 [context]
@@ -4058,7 +4058,7 @@ compat = { chat_reasoning_replay = "omit" }
 
         let echo_call_count_file = root.path().join("echo-call-count");
         let executable = std::env::current_exe().expect("test executable");
-        let mut config_document = serde_json::json!({"schema_version": 9, "agent_id": "agent-parent", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "mcp_servers": {
+        let mut config_document = serde_json::json!({"schema_version": 10, "agent_id": "agent-parent", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "mcp_servers": {
                 SERVER_NAME: {
                     "command": executable,
                     "args": fixture_spawn_args(test_name),

@@ -123,17 +123,18 @@
             }
           ]
         },
-        "reasoning_profile": {
+        "profile": {
           "anyOf": [
             {
-              "$ref": "#/$defs/ReasoningSelection"
+              "$ref": "#/$defs/ModelProfileId"
             }
-          ]
+          ],
+          "description": "The selected Model Profile; the Model's `default_profile` when omitted."
         },
         "request_params": {
           "anyOf": [
             {
-              "$ref": "#/$defs/RequestParamsToml"
+              "$ref": "#/$defs/RequestParamsJson"
             }
           ]
         },
@@ -183,6 +184,10 @@
         }
       ]
     },
+    "ModelProfileId": {
+      "description": "The identity of one Model Profile declared by a model.\n\nThe runtime assigns no meaning to the name: `fast`, `precise`, `creative`,\n`thinking-32k`, and `deep` are all just names whose behaviour is exactly\nthe profile's declared reasoning state, output default, and\n`request_params`.",
+      "type": "string"
+    },
     "ModelRef": {
       "description": "An authored Model identity. Its spelling has no provider or wire semantics.",
       "type": "string"
@@ -221,77 +226,9 @@
       },
       "type": "object"
     },
-    "ReasoningProfileId": {
-      "description": "The identity of one reasoning profile declared by a model.\n\nThe runtime assigns no meaning to the name: `off`, `on`, `low`,\n`thinking-32k`, and `deep` are all just names whose wire behaviour is\nexactly the profile's configured `request_params`.",
+    "RequestParamsJson": {
+      "description": "A JSON-encoded object of opaque provider-native request parameters, for example '{\"temperature\":0.7}'. Nested objects, arrays and null are preserved; duplicate keys are rejected. Runtime-protected wire keys are checked during model validation.",
       "type": "string"
-    },
-    "ReasoningSelection": {
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "properties": {
-            "mode": {
-              "const": "catalog_default",
-              "type": "string"
-            }
-          },
-          "required": [
-            "mode"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "mode": {
-              "const": "profile",
-              "type": "string"
-            },
-            "name": {
-              "$ref": "#/$defs/ReasoningProfileId"
-            }
-          },
-          "required": [
-            "mode",
-            "name"
-          ],
-          "type": "object"
-        }
-      ]
-    },
-    "RequestParamsToml": {
-      "$defs": {
-        "value": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "number"
-            },
-            {
-              "type": "boolean"
-            },
-            {
-              "items": {
-                "$ref": "#/$defs/RequestParamsToml/$defs/value"
-              },
-              "type": "array"
-            },
-            {
-              "additionalProperties": {
-                "$ref": "#/$defs/RequestParamsToml/$defs/value"
-              },
-              "type": "object"
-            }
-          ]
-        }
-      },
-      "additionalProperties": {
-        "$ref": "#/$defs/RequestParamsToml/$defs/value"
-      },
-      "description": "Opaque provider-native structured TOML. Strings, integers, finite floats, booleans, arrays and tables only; no dates, times, datetimes, non-finite floats or explicit null. Protected wire keys are checked during model resolution.",
-      "type": "object"
     },
     "SourceToolSelection": {
       "anyOf": [
@@ -343,16 +280,16 @@
             "model": {
               "$ref": "#/$defs/ModelRef"
             },
-            "reasoning_profile": {
+            "profile": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/ReasoningSelection"
+                  "$ref": "#/$defs/ModelProfileId"
                 }
               ]
             },
             "request_params": {
-              "$ref": "#/$defs/RequestParamsToml",
-              "default": {}
+              "$ref": "#/$defs/RequestParamsJson",
+              "default": "{}"
             }
           },
           "required": [

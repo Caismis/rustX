@@ -440,7 +440,7 @@ values. Provider SDK and wire types terminate inside the adapter modules. The
 loop never branches on a provider protocol.
 
 Adapters own provider-native generation controls where an API exposes them —
-a model's declared reasoning profiles carry the exact `requestParams` an
+a model's declared Model Profiles carry the exact `requestParams` an
 adapter maps to its own reasoning API, and the resolved `max_output_tokens`
 becomes whichever max-token field the protocol spells. They do **not** own
 generation budgets, degeneration detection, or any recovery decision: those

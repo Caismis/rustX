@@ -177,7 +177,7 @@ fn models_json(emulator: &ProviderEmulator) -> String {
     models_json_for_base_url(&emulator.openai_base_url())
 }
 
-const CONFIG: &str = r#"schema_version = 9
+const CONFIG: &str = r#"schema_version = 10
 agent_id = "agent-issue83"
 
 [context]
@@ -701,7 +701,7 @@ impl Driver {
         config["agent"]["model"]
             .as_table_mut()
             .unwrap()
-            .remove("reasoning_profile");
+            .remove("profile");
         std::fs::write(
             root.path().join("rustx.toml"),
             toml::to_string_pretty(&config).unwrap(),

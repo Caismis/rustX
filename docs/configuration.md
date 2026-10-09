@@ -72,7 +72,7 @@ The authoritative structural reference is
 [`rustx.schema.json`](../schemas/rustx.schema.json), generated from
 `local_runtime::authoring::RuntimeLayer`. Unknown fields are rejected. TOML
 tables and arrays preserve authored omission versus explicit empty values.
-The current document version is `schema_version = 9`.
+The current document version is `schema_version = 10`.
 
 | Top-level field | Owner and meaning |
 | --- | --- |
@@ -93,21 +93,34 @@ The current document version is `schema_version = 9`.
 
 ### Providers and Models
 
-Provider names and Model names are lookup identities. They do not infer protocol,
-credentials, limits, endpoint, reasoning support or compatibility. A Model can
-be replaced without replacing its Provider.
+Provider names, Model names and Profile names are lookup identities. They do not
+infer protocol, credentials, limits, endpoint, reasoning support, compatibility
+or any provider-native parameter. A Model can be replaced without replacing its
+Provider.
+
+Ownership is layered, and each layer owns only its own facts:
+
+| Owner | Owns |
+| --- | --- |
+| Provider | `base_url` and the credential source |
+| Model | provider binding, provider-native `id`, `protocol`, `context_window`, the hard maximum `max_output_tokens`, declared `capabilities`, `compat`, and either native `request_params` or named `profiles` |
+| Model Profile | one complete, independent invocation preset: `reasoning_enabled`, an optional default `max_output_tokens`, and its own native `request_params` |
+| Model selection | the chosen `model`, optional `profile`, explicit `request_params` overrides and an optional output limit |
+| Provider adapter | protocol structure, the output-token field spelling, and final protected-key validation |
 
 ```toml
 [providers.service]
 base_url = "https://api.example.invalid/v1"
 api_key = "$SERVICE_API_KEY"
 
+# A Model without profiles: its request_params are the native default object.
 [models.fast]
 provider = "service"
 id = "provider-wire-model-id"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
+request_params = '{"temperature":0.2,"vendor":{"nested_option":true,"unset":null}}'
 
 [models.fast.capabilities]
 input_modalities = ["text"]
@@ -118,12 +131,44 @@ reasoning = false
 [models.fast.compat]
 chat_reasoning_replay = "omit"
 
-[models.fast.request_params]
-temperature = 0.2
-vendor = { nested_option = true }
+# A Model with profiles: each profile is a complete preset; the Model itself
+# declares no request_params.
+[models.thinker]
+provider = "service"
+id = "provider-reasoning-model"
+protocol = "openai_chat_completions"
+context_window = 128000
+max_output_tokens = 8192
+default_profile = "balanced"
+
+[models.thinker.capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = true
+
+[models.thinker.compat]
+chat_reasoning_replay = "omit"
+
+[models.thinker.profiles.fast]
+reasoning_enabled = true
+max_output_tokens = 2048
+request_params = '{"reasoning_effort":"low"}'
+
+[models.thinker.profiles.balanced]
+reasoning_enabled = true
+request_params = '''
+{"reasoning_effort": "medium", "metadata": {"tier": null}}
+'''
+
+[models.thinker.profiles.precise]
+reasoning_enabled = false
+request_params = '{"temperature":0.1,"top_p":0.5,"stop":["\n\n"]}'
 
 [agent.model]
-model = "fast"
+model = "thinker"
+profile = "fast"
+request_params = '{"seed":7}'
 ```
 
 Each Provider requires `base_url` and `api_key`. Credentials are literal values
@@ -135,23 +180,67 @@ credential source; no member is recovered from the shadowed User Provider.
 Each Model requires `provider`, provider-native `id`, explicit `protocol`,
 `context_window`, `max_output_tokens`, and the complete `capabilities` object.
 Supported protocols and modality values are enumerated by the generated schema.
-Optional `request_params` is an opaque, recursively structured native request
-object. Optional `reasoning` declares `default_profile` and independently named
-`profiles`, each containing `enabled` and optional native `request_params`.
 Optional `compat` declares the adapter behavior: `chat_max_tokens_field`,
 `chat_stream_usage`, `chat_reasoning_replay`, `chat_tool_protocol`, and
 `responses_storage`. Protocol validation determines which members are applicable
-and required. This boundary preserves provider-native parameters without allowing
-them to replace runtime-owned request structure.
+and required.
 
-The Root `agent.model` object contains `model` and optional `request_params`,
-`reasoning_profile`, `max_output_tokens`, and `summary_model`. A reasoning choice
-is `{ mode = "catalog_default" }` or `{ mode = "profile", name = "..." }`.
-An output limit is `{ mode = "catalog_default" }` or
-`{ mode = "limit", tokens = 2048 }`. Summary selection is
-`{ mode = "session" }` or `{ mode = "explicit", model = "...", ... }` with its
-own reasoning, output and request settings. The whole selection is replaced
-together. Domain defaults are evaluated inside that winning object.
+#### Provider-native request parameters
+
+Every `request_params` field in source TOML is a **JSON-encoded string** whose
+JSON value must be one object. Nested objects, arrays, strings, numbers, booleans
+and explicit `null` are preserved exactly; there is no provider-key catalogue.
+Malformed JSON, a non-object root and a repeated key at any depth are rejected,
+and a TOML table is never accepted. Diagnostics name the field (for example
+`models.thinker.profiles.fast.request_params`) and the JSON location, never the
+authored value. The string is parsed once at the source boundary; App Server and
+client JSON carry the parsed structured object. Native writes re-encode it
+as compact JSON; formatting and key order are never semantics.
+
+#### Model Profiles
+
+- A Model with `profiles` declares a nonempty collection and a `default_profile`
+  naming one of them, and must not declare model-level `request_params` — not
+  even `'{}'`.
+- A Model without profiles must not declare `default_profile`; selecting any
+  profile for it fails. A reasoning-capable Model without profiles keeps
+  provider-default reasoning without a synthetic wire field.
+- On a reasoning-capable Model every profile declares `reasoning_enabled`. On a
+  non-reasoning Model omission means `false` and `true` is invalid. Reasoning
+  state is never inferred from a profile name or a native key.
+- A profile `max_output_tokens` is a positive default no greater than the
+  Model's hard maximum.
+- Profiles never inherit: neither from the Model nor from another profile.
+
+#### Resolution
+
+The effective native object has exactly one base and one shallow overlay:
+
+```text
+Model without profiles:  model request_params    + selection overrides
+Model with profiles:     selected profile params + selection overrides
+```
+
+The overlay is top-level only: nested values are replaced atomically and a JSON
+`null` is a real value, not a deletion. An override may add unrelated keys but
+may not repeat a top-level key the selected profile declares. Protocol-owned
+fields — model identity, messages/input/instructions, tools, streaming, provider
+continuation state and every output-token field — are protected in every layer
+and again at final wire construction. The output budget is the explicit
+selection limit, else the selected profile default, else the Model hard maximum;
+no limit may exceed the hard maximum, and the Context Engine summary cap still
+applies independently. An omitted `profile` selects `default_profile`; an
+unknown or inapplicable explicit profile fails without fallback.
+
+The Root `agent.model` object contains `model` and optional `profile`,
+`request_params`, `max_output_tokens`, and `summary_model`. An output limit is
+`{ mode = "catalog_default" }` or `{ mode = "limit", tokens = 2048 }`. Summary
+selection is `{ mode = "session" }` or `{ mode = "explicit", model = "...", ... }`
+with its own `profile`, output and request settings. The whole selection is
+replaced together. Domain defaults are evaluated inside that winning object.
+An admitted Attempt freezes the complete resolved invocation — Model, Profile,
+reasoning state, output budget and parameters — so later configuration changes
+affect only later admissions.
 
 ### Root Agent
 

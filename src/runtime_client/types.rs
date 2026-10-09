@@ -259,7 +259,10 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// eligibility to the snapshot and its change event; ordinary streaming never
 /// publishes it. Version 57 clients are rejected without a compatibility path.
 /// Version 59 refreshes retained Trace records with their resolved native location.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 59;
+/// Version 60 replaces reasoning profiles with general Model Profiles in model
+/// selection, invocation and catalog views (#456). Version 59 clients are
+/// rejected without a compatibility projection.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 60;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1069,7 +1072,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 59);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 60);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {
@@ -1278,7 +1281,7 @@ mod tests {
                 context_window: 128_000,
                 model_max_output_tokens: 4096,
                 max_output_tokens: 4096,
-                reasoning_profile: None,
+                profile: None,
                 reasoning_enabled: false,
                 request_params: RequestParams::new(),
                 capabilities: capabilities.clone(),

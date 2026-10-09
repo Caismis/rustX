@@ -515,6 +515,7 @@
     },
     "Model": {
       "additionalProperties": false,
+      "description": "One authored Model. A Model declares either model-level `request_params`\nor a nonempty `profiles` collection with a `default_profile`, never both.",
       "properties": {
         "capabilities": {
           "$ref": "#/$defs/Capabilities"
@@ -528,13 +529,29 @@
           "minimum": 0,
           "type": "integer"
         },
+        "default_profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelProfileId"
+            }
+          ]
+        },
         "id": {
           "type": "string"
         },
         "max_output_tokens": {
+          "description": "The hard maximum output budget of every invocation of this Model.",
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
+        },
+        "profiles": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Profile"
+          },
+          "type": [
+            "object"
+          ]
         },
         "protocol": {
           "$ref": "#/$defs/ModelProtocol"
@@ -542,16 +559,13 @@
         "provider": {
           "type": "string"
         },
-        "reasoning": {
+        "request_params": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Reasoning"
+              "$ref": "#/$defs/RequestParamsJson"
             }
-          ]
-        },
-        "request_params": {
-          "$ref": "#/$defs/RequestParamsToml",
-          "default": {}
+          ],
+          "description": "Native request parameters of a Model without profiles. Presence is\nretained: a Model with profiles must not declare it, even as `{}`."
         }
       },
       "required": [
@@ -581,17 +595,18 @@
             }
           ]
         },
-        "reasoning_profile": {
+        "profile": {
           "anyOf": [
             {
-              "$ref": "#/$defs/ReasoningSelection"
+              "$ref": "#/$defs/ModelProfileId"
             }
-          ]
+          ],
+          "description": "The selected Model Profile; the Model's `default_profile` when omitted."
         },
         "request_params": {
           "anyOf": [
             {
-              "$ref": "#/$defs/RequestParamsToml"
+              "$ref": "#/$defs/RequestParamsJson"
             }
           ]
         },
@@ -640,6 +655,10 @@
           "type": "object"
         }
       ]
+    },
+    "ModelProfileId": {
+      "description": "The identity of one Model Profile declared by a model.\n\nThe runtime assigns no meaning to the name: `fast`, `precise`, `creative`,\n`thinking-32k`, and `deep` are all just names whose behaviour is exactly\nthe profile's declared reasoning state, output default, and\n`request_params`.",
+      "type": "string"
     },
     "ModelProtocol": {
       "description": "The model interaction protocol an adapter must speak.",
@@ -761,18 +780,27 @@
     },
     "Profile": {
       "additionalProperties": false,
+      "description": "One authored Model Profile: a complete, independent invocation preset.",
       "properties": {
-        "enabled": {
-          "type": "boolean"
+        "max_output_tokens": {
+          "description": "Default output budget; at most the Model's `max_output_tokens`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer"
+          ]
+        },
+        "reasoning_enabled": {
+          "description": "Required for every profile of a reasoning-capable Model; omission\nmeans `false` for a non-reasoning Model.",
+          "type": [
+            "boolean"
+          ]
         },
         "request_params": {
-          "$ref": "#/$defs/RequestParamsToml",
-          "default": {}
+          "$ref": "#/$defs/RequestParamsJson",
+          "default": "{}"
         }
       },
-      "required": [
-        "enabled"
-      ],
       "type": "object"
     },
     "Provider": {
@@ -792,96 +820,9 @@
       ],
       "type": "object"
     },
-    "Reasoning": {
-      "additionalProperties": false,
-      "properties": {
-        "default_profile": {
-          "$ref": "#/$defs/ReasoningProfileId"
-        },
-        "profiles": {
-          "additionalProperties": {
-            "$ref": "#/$defs/Profile"
-          },
-          "type": "object"
-        }
-      },
-      "required": [
-        "default_profile",
-        "profiles"
-      ],
-      "type": "object"
-    },
-    "ReasoningProfileId": {
-      "description": "The identity of one reasoning profile declared by a model.\n\nThe runtime assigns no meaning to the name: `off`, `on`, `low`,\n`thinking-32k`, and `deep` are all just names whose wire behaviour is\nexactly the profile's configured `request_params`.",
+    "RequestParamsJson": {
+      "description": "A JSON-encoded object of opaque provider-native request parameters, for example '{\"temperature\":0.7}'. Nested objects, arrays and null are preserved; duplicate keys are rejected. Runtime-protected wire keys are checked during model validation.",
       "type": "string"
-    },
-    "ReasoningSelection": {
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "properties": {
-            "mode": {
-              "const": "catalog_default",
-              "type": "string"
-            }
-          },
-          "required": [
-            "mode"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "mode": {
-              "const": "profile",
-              "type": "string"
-            },
-            "name": {
-              "$ref": "#/$defs/ReasoningProfileId"
-            }
-          },
-          "required": [
-            "mode",
-            "name"
-          ],
-          "type": "object"
-        }
-      ]
-    },
-    "RequestParamsToml": {
-      "$defs": {
-        "value": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "number"
-            },
-            {
-              "type": "boolean"
-            },
-            {
-              "items": {
-                "$ref": "#/$defs/RequestParamsToml/$defs/value"
-              },
-              "type": "array"
-            },
-            {
-              "additionalProperties": {
-                "$ref": "#/$defs/RequestParamsToml/$defs/value"
-              },
-              "type": "object"
-            }
-          ]
-        }
-      },
-      "additionalProperties": {
-        "$ref": "#/$defs/RequestParamsToml/$defs/value"
-      },
-      "description": "Opaque provider-native structured TOML. Strings, integers, finite floats, booleans, arrays and tables only; no dates, times, datetimes, non-finite floats or explicit null. Protected wire keys are checked during model resolution.",
-      "type": "object"
     },
     "ResponsesStorageMode": {
       "description": "How the `OpenAI` Responses protocol operates with provider storage.\n\nThis is continuation *structure*, not a wire value: Stored continues by\n`previous_response_id`, Stateless continues by preserved output items and\nrequires the encrypted-reasoning `include` value.",
@@ -961,16 +902,16 @@
             "model": {
               "$ref": "#/$defs/ModelRef"
             },
-            "reasoning_profile": {
+            "profile": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/ReasoningSelection"
+                  "$ref": "#/$defs/ModelProfileId"
                 }
               ]
             },
             "request_params": {
-              "$ref": "#/$defs/RequestParamsToml",
-              "default": {}
+              "$ref": "#/$defs/RequestParamsJson",
+              "default": "{}"
             }
           },
           "required": [

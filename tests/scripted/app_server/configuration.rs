@@ -4606,3 +4606,205 @@ async fn issue422_creation_previsibility_failure_removes_provisional_binding() {
     assert_eq!(log.next_after(frontier), None);
     f.close().await;
 }
+
+/// Issue #456: App Server JSON mutations carry structured `request_params`;
+/// the native CAS writer persists every one of them — Model, Profiles, Root
+/// selection overrides, explicit Summary overrides and a named Agent's
+/// selection — as JSON-encoded strings, and the reread is the same document.
+/// Reformatting a JSON string (whitespace and key order) is semantically
+/// inert: it publishes no adoption candidate and changes no runtime state.
+#[allow(clippy::too_many_lines)] // one complete authoring round trip
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue456_json_string_sources_round_trip_and_formatting_is_semantically_inert() {
+    use crate::local_runtime::authoring::{
+        ModelLayer, ModelOutput, RuntimeLayer, SummaryAuthoring,
+    };
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    use crate::model::catalog::{ModelProfileId, ModelRef};
+    use crate::toml_authoring::AuthoredRequestParams;
+    let params =
+        |value: serde_json::Value| AuthoredRequestParams(serde_json::from_value(value).unwrap());
+    Box::pin(bounded(async {
+        let fixture = Fixture::new().await;
+        let id = &fixture.sessions[0].id;
+        fixture.manager.load(id, None).await.unwrap();
+        let models = fixture
+            .manager
+            .source_settings(&SourceTarget::User, None)
+            .await
+            .unwrap()
+            .user
+            .authored
+            .unwrap()
+            .models
+            .unwrap();
+        // A Model without profiles keeps its own native object, null included.
+        let mut a = models["local/a"].clone();
+        a.request_params = Some(params(serde_json::json!({"top_p": 0.5, "unset": null})));
+        write(&fixture, 0, ConfigMutation::Model { id: "local/a".into(), authored: Some(a) }).await;
+        // A Model with independent, complete profiles.
+        let mut b = models["local/b"].clone();
+        b.request_params = None;
+        b.default_profile = Some(ModelProfileId::new("precise"));
+        b.profiles = Some(
+            [
+                ("precise", Some(256), serde_json::json!({"temperature": 0.1, "stop": [null], "nested": {"a": [1, {"b": null}]}})),
+                ("creative", None, serde_json::json!({"temperature": 1.3})),
+            ]
+            .into_iter()
+            .map(|(name, budget, value)| {
+                (
+                    ModelProfileId::new(name),
+                    crate::model::authoring::Profile {
+                        reasoning_enabled: None,
+                        max_output_tokens: budget,
+                        request_params: params(value),
+                    },
+                )
+            })
+            .collect(),
+        );
+        write(&fixture, 0, ConfigMutation::Model { id: "local/b".into(), authored: Some(b) }).await;
+        // Root selection overrides and explicit Summary overrides.
+        let root = ModelLayer {
+            model: Some(ModelRef::parse("local/b").unwrap()),
+            profile: Some(ModelProfileId::new("creative")),
+            request_params: Some(params(serde_json::json!({"seed": null}))),
+            max_output_tokens: None,
+            summary_model: Some(SummaryAuthoring::Explicit {
+                model: ModelRef::parse("local/a").unwrap(),
+                profile: None,
+                request_params: params(serde_json::json!({"summary_tag": [null]})),
+                max_output_tokens: Some(ModelOutput::Limit { tokens: 128 }),
+            }),
+        };
+        write(&fixture, 0, ConfigMutation::RootModel { authored: Some(root) }).await;
+        // A named Agent's own selection.
+        let source = fixture.manager.source_settings(&SourceTarget::User, None).await.unwrap();
+        let mut agent_model = crate::model::session::SessionModelConfig::of(ModelRef::parse("local/b").unwrap());
+        agent_model.profile = Some(ModelProfileId::new("precise"));
+        agent_model.request_params = params(serde_json::json!({"metadata": {"k": null}})).0;
+        let agent = crate::local_runtime::config::AgentProfileDocument {
+            description: "Profiles".into(),
+            model: Some(agent_model.clone()),
+            ..Default::default()
+        };
+        fixture
+            .manager
+            .source_settings(
+                &SourceTarget::User,
+                Some((
+                    source.absent_resource_revision.clone(),
+                    SourceMutation::Agent {
+                        name: crate::runtime::subagent::SubagentName::parse("profiled").unwrap(),
+                        authored: Some(agent.clone()),
+                    },
+                )),
+            )
+            .await
+            .unwrap();
+
+        // Native source TOML: every request_params is a JSON-encoded string.
+        let source = fixture.manager.source_settings(&SourceTarget::User, None).await.unwrap();
+        let text = std::fs::read_to_string(&source.user.path).unwrap();
+        let table = text.parse::<toml::Table>().unwrap();
+        let json = |value: &toml::Value| -> serde_json::Value {
+            serde_json::from_str(value.as_str().expect("a JSON-encoded string")).unwrap()
+        };
+        assert_eq!(json(&table["models"]["local/a"]["request_params"]), serde_json::json!({"top_p": 0.5, "unset": null}));
+        assert!(table["models"]["local/b"].get("request_params").is_none());
+        assert_eq!(
+            json(&table["models"]["local/b"]["profiles"]["precise"]["request_params"]),
+            serde_json::json!({"temperature": 0.1, "stop": [null], "nested": {"a": [1, {"b": null}]}})
+        );
+        assert_eq!(json(&table["agent"]["model"]["request_params"]), serde_json::json!({"seed": null}));
+        assert_eq!(
+            json(&table["agent"]["model"]["summary_model"]["request_params"]),
+            serde_json::json!({"summary_tag": [null]})
+        );
+        let agent_view = source.agents.iter().find(|view| view.name.as_str() == "profiled").unwrap();
+        let agent_text = std::fs::read_to_string(&agent_view.source.path).unwrap();
+        let agent_table = agent_text.parse::<toml::Table>().unwrap();
+        assert_eq!(json(&agent_table["model"]["request_params"]), serde_json::json!({"metadata": {"k": null}}));
+        assert_eq!(agent_view.source.authored.as_ref().unwrap(), &agent);
+        // The reread source is exactly the authored document; the App Server
+        // projection of it is structured JSON.
+        let reread: RuntimeLayer = crate::toml_authoring::parse(text.as_bytes()).unwrap();
+        let projected = source.user.authored.as_ref().unwrap();
+        assert_eq!(reread.models, projected.models);
+        assert_eq!(reread.agent, projected.agent);
+        let wire = serde_json::to_value(&source).unwrap();
+        assert_eq!(
+            wire["user"]["authored"]["models"]["local/b"]["profiles"]["precise"]["request_params"],
+            serde_json::json!({"temperature": 0.1, "stop": [null], "nested": {"a": [1, {"b": null}]}})
+        );
+        assert_eq!(wire["user"]["authored"]["agent"]["model"]["profile"], "creative");
+
+        // Reach a settled baseline for the existing Session.
+        let application = settled(&fixture, 0).await;
+        if let Some(candidate) = application.candidate {
+            fixture.manager.adopt_configuration(id, &candidate.identity, candidate.expected_binding).unwrap();
+        }
+        let application = settled(&fixture, 0).await;
+        assert!(application.candidate.is_none(), "{application:?}");
+        let runtime = fixture.manager.configuration_runtime(id).unwrap();
+        let resources = runtime.runtime_resources();
+        let model = runtime.model_view();
+        let resolved = source.resolved.clone();
+
+        // Reformat every JSON string: whitespace and key order only.
+        let mut reformatted = text.clone();
+        for (compact, pretty) in [
+            (r#"{"top_p":0.5,"unset":null}"#, "{ \"unset\" : null,\n  \"top_p\": 0.5 }"),
+            (
+                r#"{"temperature":0.1,"stop":[null],"nested":{"a":[1,{"b":null}]}}"#,
+                "{\n  \"temperature\": 0.1,\n  \"stop\": [ null ],\n  \"nested\": { \"a\": [ 1, { \"b\": null } ] }\n}",
+            ),
+            (r#"{"seed":null}"#, "{ \"seed\": null }"),
+            (r#"{"summary_tag":[null]}"#, "{\n\"summary_tag\" : [null]\n}"),
+        ] {
+            let quoted = format!("'{compact}'");
+            assert!(reformatted.contains(&quoted), "{compact}: {reformatted}");
+            reformatted = reformatted.replace(&quoted, &format!("'''{pretty}'''"));
+        }
+        assert_ne!(reformatted, text);
+        std::fs::write(&source.user.path, &reformatted).unwrap();
+        fixture
+            .manager
+            .reconcile_configuration(&SourceTarget::Workspace { directory: fixture.workspaces[0].clone() })
+            .await
+            .unwrap();
+        let application = settled(&fixture, 0).await;
+        assert!(application.candidate.is_none(), "{application:?}");
+        assert!(Arc::ptr_eq(&resources, &runtime.runtime_resources()));
+        assert_eq!(runtime.model_view(), model);
+        let after = fixture.manager.source_settings(&SourceTarget::User, None).await.unwrap();
+        assert_ne!(after.user.revision, source.user.revision);
+        assert_eq!(after.resolved, resolved);
+        assert_eq!(after.user.authored.unwrap().models, projected.models);
+
+        // A new Session resolves the authored selection end to end.
+        let created = fixture
+            .manager
+            .create_session(SessionPersistentState { cwd: fixture.workspaces[0].clone(), model: None })
+            .await
+            .unwrap();
+        fixture.manager.load(&created.session.id, None).await.unwrap();
+        let view = fixture.manager.configuration_runtime(&created.session.id).unwrap().model_view();
+        assert_eq!(view.effective.profile, Some(ModelProfileId::new("creative")));
+        assert_eq!(
+            serde_json::Value::Object(view.effective.request_params.clone()),
+            serde_json::json!({"temperature": 1.3, "seed": null})
+        );
+        let crate::model::session::SummaryModelView::Explicit(summary) = view.summary else {
+            panic!("explicit summary");
+        };
+        assert_eq!(summary.max_output_tokens, 128);
+        assert_eq!(
+            serde_json::Value::Object(summary.request_params.clone()),
+            serde_json::json!({"top_p": 0.5, "unset": null, "summary_tag": [null]})
+        );
+        fixture.close().await;
+    }))
+    .await;
+}

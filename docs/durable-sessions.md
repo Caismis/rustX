@@ -83,7 +83,7 @@ See the [host acceptance and dogfooding flows](app-server-acceptance.md).
 | Persisted field | Reason |
 | --- | --- |
 | `cwd` | Absolute execution and project-resolution context; never ambient process cwd or an OS sandbox. |
-| `model: Option<SessionModelConfig>` | Intentional whole-model selection: model reference, reasoning profile, request parameters, output cap and summary policy. `None` uses current source defaults. |
+| `model: Option<SessionModelConfig>` | Intentional whole-model selection: model reference, Model Profile, request parameters, output cap and summary policy. `None` uses current source defaults. |
 
 The bound User `rustx.toml`, HOME, fixed User resource root and runtime root
 are process bindings. Provider credentials belong to their complete winning

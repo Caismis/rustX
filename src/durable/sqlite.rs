@@ -309,7 +309,10 @@ fn count_conversation_store_open() {
 /// of terminal publication. Older development stores lack the required proof.
 /// Version 48 retains native turn-reading provenance and the semantic read-mutation epoch.
 /// Version 49 separates immutable inherited outcomes from live execution state.
-pub const SQLITE_SCHEMA_VERSION: i64 = 49;
+/// Version 50 stores the selected general Model Profile in request snapshots
+/// and Session model configuration (#456); stores carrying reasoning profiles
+/// are refused at open.
+pub const SQLITE_SCHEMA_VERSION: i64 = 50;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -14792,7 +14795,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 49);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 50);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -14861,7 +14864,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 49);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 50);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current

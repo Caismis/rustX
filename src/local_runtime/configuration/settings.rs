@@ -493,7 +493,7 @@ fn mcp_candidate(
     } else {
         document.mcp_servers.remove(&id);
     }
-    toml::to_string_pretty(&document)
+    crate::toml_authoring::write(&document)
         .map(String::into_bytes)
         .map_err(|_| SettingsError::Invalid)
 }
@@ -681,7 +681,7 @@ fn encode(document: RuntimeLayer) -> Result<Vec<u8>, SettingsError> {
         },
         |environment| environment,
     );
-    toml::to_string_pretty(&document)
+    crate::toml_authoring::write(&document)
         .map(String::into_bytes)
         .map_err(|_| SettingsError::Invalid)
 }
@@ -1126,7 +1126,7 @@ impl UserConfigManager {
                             path.clone(),
                         )
                         .map_err(|_| SettingsError::Invalid)?;
-                        toml::to_string_pretty(&profile)
+                        crate::toml_authoring::write(&profile)
                             .map(String::into_bytes)
                             .map_err(|_| SettingsError::Invalid)
                     })

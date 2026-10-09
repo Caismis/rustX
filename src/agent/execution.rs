@@ -2742,7 +2742,7 @@ impl<'a> AgentExecution<'a> {
             self.context_runtime.resource_revision,
             request.invocation.clone(),
             primary.context_window(),
-            primary.reasoning_profile().cloned(),
+            primary.profile().cloned(),
             primary.reasoning_enabled(),
             request.tools.clone(),
             self.capability.snapshot().revision(),

@@ -534,13 +534,14 @@ export type TranscriptCursor = string;
  */
 export type AttemptId = string;
 /**
- * The identity of one reasoning profile declared by a model.
+ * The identity of one Model Profile declared by a model.
  *
- * The runtime assigns no meaning to the name: `off`, `on`, `low`,
- * `thinking-32k`, and `deep` are all just names whose wire behaviour is
- * exactly the profile's configured `request_params`.
+ * The runtime assigns no meaning to the name: `fast`, `precise`, `creative`,
+ * `thinking-32k`, and `deep` are all just names whose behaviour is exactly
+ * the profile's declared reasoning state, output default, and
+ * `request_params`.
  */
-export type ReasoningProfileId = string;
+export type ModelProfileId = string;
 /**
  * Manual compaction correlation: 1..64 ASCII letters, digits, underscores or hyphens; not an idempotency key.
  */
@@ -885,18 +886,6 @@ export type ModelProtocol = 'openai_chat_completions' | 'openai_responses' | 'an
  */
 export type Modality = 'text' | 'image' | 'file';
 /**
- * This interface was referenced by `RequestParamsToml`'s JSON-Schema
- * via the `definition` "value".
- */
-export type Value =
-  | string
-  | number
-  | boolean
-  | Value[]
-  | {
-      [k: string]: Value;
-    };
-/**
  * Which max-token field spelling a Chat Completions service accepts.
  *
  * This is a real structural translation difference between
@@ -941,14 +930,6 @@ export type ResponsesStorageMode = 'stored' | 'stateless';
  * An authored Model identity. Its spelling has no provider or wire semantics.
  */
 export type ModelRef = string;
-export type ReasoningSelection =
-  | {
-      mode: 'catalog_default';
-    }
-  | {
-      name: ReasoningProfileId;
-      mode: 'profile';
-    };
 export type ModelOutput =
   | {
       mode: 'catalog_default';
@@ -963,8 +944,8 @@ export type SummaryAuthoring =
     }
   | {
       model: ModelRef;
-      reasoning_profile?: ReasoningSelection | null;
-      request_params?: RequestParamsToml;
+      profile?: ModelProfileId | null;
+      request_params?: RequestParams;
       max_output_tokens?: ModelOutput | null;
       mode: 'explicit';
     };
@@ -3800,10 +3781,10 @@ export interface SessionModelConfig {
    */
   model: string;
   /**
-   * The selected reasoning profile; the model default is used when
-   * absent.
+   * The selected Model Profile; the model's `default_profile` is used
+   * when absent.
    */
-  reasoningProfile?: ReasoningProfileId | null;
+  profile?: ModelProfileId | null;
   /**
    * The session request-parameter overrides.
    */
@@ -3811,8 +3792,8 @@ export interface SessionModelConfig {
     [k: string]: unknown;
   };
   /**
-   * The session output-budget override; the model's configured maximum is
-   * used when absent.
+   * The session output-budget override; the selected profile's default,
+   * else the model's hard maximum, is used when absent.
    */
   maxOutputTokens?: number | null;
   /**
@@ -3828,10 +3809,10 @@ export interface SessionModelConfig {
          */
         model: string;
         /**
-         * The selected reasoning profile; the model default is used when
-         * absent.
+         * The selected Model Profile; the model's `default_profile` is used
+         * when absent.
          */
-        reasoning_profile?: ReasoningProfileId | null;
+        profile?: ModelProfileId | null;
         /**
          * The explicit summary request-parameter overrides.
          */
@@ -4119,15 +4100,29 @@ export interface ProviderWrite {
   base_url: string;
   credential: CredentialEdit;
 }
+/**
+ * One authored Model. A Model declares either model-level `request_params`
+ * or a nonempty `profiles` collection with a `default_profile`, never both.
+ */
 export interface Model {
   provider: string;
   id: string;
   protocol: ModelProtocol;
   context_window: string;
+  /**
+   * The hard maximum output budget of every invocation of this Model.
+   */
   max_output_tokens: number;
   capabilities: Capabilities;
-  request_params?: RequestParamsToml;
-  reasoning?: Reasoning | null;
+  /**
+   * Native request parameters of a Model without profiles. Presence is
+   * retained: a Model with profiles must not declare it, even as `{}`.
+   */
+  request_params?: RequestParams | null;
+  default_profile?: ModelProfileId | null;
+  profiles?: {
+    [k: string]: Profile;
+  } | null;
   compat?: Compat;
 }
 export interface Capabilities {
@@ -4137,20 +4132,25 @@ export interface Capabilities {
   reasoning: boolean;
 }
 /**
- * Opaque provider-native structured TOML. Strings, integers, finite floats, booleans, arrays and tables only; no dates, times, datetimes, non-finite floats or explicit null. Protected wire keys are checked during model resolution.
+ * Opaque provider-native request parameters as a structured JSON object. Nested objects, arrays and null are preserved. Runtime-protected wire keys are checked during model validation.
  */
-export interface RequestParamsToml {
-  [k: string]: Value;
+export interface RequestParams {
+  [k: string]: unknown;
 }
-export interface Reasoning {
-  default_profile: ReasoningProfileId;
-  profiles: {
-    [k: string]: Profile;
-  };
-}
+/**
+ * One authored Model Profile: a complete, independent invocation preset.
+ */
 export interface Profile {
-  enabled: boolean;
-  request_params?: RequestParamsToml;
+  /**
+   * Required for every profile of a reasoning-capable Model; omission
+   * means `false` for a non-reasoning Model.
+   */
+  reasoning_enabled?: boolean | null;
+  /**
+   * Default output budget; at most the Model's `max_output_tokens`.
+   */
+  max_output_tokens?: number | null;
+  request_params?: RequestParams;
 }
 export interface Compat {
   chat_max_tokens_field?: ChatMaxTokensField | null;
@@ -4161,8 +4161,11 @@ export interface Compat {
 }
 export interface ModelLayer {
   model?: ModelRef | null;
-  reasoning_profile?: ReasoningSelection | null;
-  request_params?: RequestParamsToml | null;
+  /**
+   * The selected Model Profile; the Model's `default_profile` when omitted.
+   */
+  profile?: ModelProfileId | null;
+  request_params?: RequestParams | null;
   max_output_tokens?: ModelOutput | null;
   summary_model?: SummaryAuthoring | null;
 }
@@ -4629,9 +4632,9 @@ export interface SessionModelView {
          */
         maxOutputTokens: number;
         /**
-         * The selected reasoning profile, when the model declares any.
+         * The selected Model Profile, when the model declares any.
          */
-        reasoningProfile?: ReasoningProfileId | null;
+        profile?: ModelProfileId | null;
         /**
          * Whether reasoning is semantically enabled.
          */
@@ -4661,10 +4664,10 @@ export interface SessionModelConfig1 {
    */
   model: string;
   /**
-   * The selected reasoning profile; the model default is used when
-   * absent.
+   * The selected Model Profile; the model's `default_profile` is used
+   * when absent.
    */
-  reasoningProfile?: ReasoningProfileId | null;
+  profile?: ModelProfileId | null;
   /**
    * The session request-parameter overrides.
    */
@@ -4672,8 +4675,8 @@ export interface SessionModelConfig1 {
     [k: string]: unknown;
   };
   /**
-   * The session output-budget override; the model's configured maximum is
-   * used when absent.
+   * The session output-budget override; the selected profile's default,
+   * else the model's hard maximum, is used when absent.
    */
   maxOutputTokens?: number | null;
   /**
@@ -4689,10 +4692,10 @@ export interface SessionModelConfig1 {
          */
         model: string;
         /**
-         * The selected reasoning profile; the model default is used when
-         * absent.
+         * The selected Model Profile; the model's `default_profile` is used
+         * when absent.
          */
-        reasoning_profile?: ReasoningProfileId | null;
+        profile?: ModelProfileId | null;
         /**
          * The explicit summary request-parameter overrides.
          */
@@ -4731,9 +4734,9 @@ export interface ModelInvocationView {
    */
   maxOutputTokens: number;
   /**
-   * The selected reasoning profile, when the model declares any.
+   * The selected Model Profile, when the model declares any.
    */
-  reasoningProfile?: ReasoningProfileId | null;
+  profile?: ModelProfileId | null;
   /**
    * Whether reasoning is semantically enabled.
    */
@@ -4836,7 +4839,7 @@ export interface ModelCapabilities3 {
 /**
  * The safe public catalog view served to Runtime Clients.
  *
- * A client selects a model and a reasoning profile from this view; it never
+ * A client selects a model and a Model Profile from this view; it never
  * reads `rustx.toml` itself and never sees a credential, an adapter, or a
  * provider HTTP client.
  */
@@ -4869,13 +4872,13 @@ export interface CatalogModelView {
   declaredCapabilities: ModelCapabilities4;
   effectiveCapabilities: ModelCapabilities5;
   /**
-   * The declared reasoning profiles in deterministic order.
+   * The declared Model Profiles in deterministic order.
    */
-  reasoningProfiles?: ReasoningProfileView[];
+  profiles?: ModelProfileView[];
   /**
-   * The profile selected when a session does not choose one.
+   * The profile selected when an invocation does not choose one.
    */
-  defaultReasoningProfile?: ReasoningProfileId | null;
+  defaultProfile?: ModelProfileId | null;
   /**
    * The redacted credential source of the model's provider.
    */
@@ -4934,25 +4937,30 @@ export interface ModelCapabilities5 {
   reasoning: boolean;
 }
 /**
- * One selectable reasoning profile of the public catalog view.
+ * One selectable Model Profile of the public catalog view.
  *
- * Only the identity and the semantic enabled state are exposed: the
- * profile's provider request parameters are provider-owned wire config that
- * a client never needs to select a profile.
+ * The profile's provider request parameters are provider-owned wire
+ * configuration a client never needs to select a profile; the runtime
+ * semantics it carries are exposed.
  */
-export interface ReasoningProfileView {
+export interface ModelProfileView {
   /**
-   * The identity of one reasoning profile declared by a model.
+   * The identity of one Model Profile declared by a model.
    *
-   * The runtime assigns no meaning to the name: `off`, `on`, `low`,
-   * `thinking-32k`, and `deep` are all just names whose wire behaviour is
-   * exactly the profile's configured `request_params`.
+   * The runtime assigns no meaning to the name: `fast`, `precise`, `creative`,
+   * `thinking-32k`, and `deep` are all just names whose behaviour is exactly
+   * the profile's declared reasoning state, output default, and
+   * `request_params`.
    */
   id: string;
   /**
    * Whether the profile semantically enables reasoning.
    */
-  enabled: boolean;
+  reasoningEnabled: boolean;
+  /**
+   * The profile's default output budget, when it declares one.
+   */
+  maxOutputTokens?: number | null;
 }
 /**
  * The deterministic capability projection.
@@ -5643,7 +5651,7 @@ export interface TraceRequestDetail {
   max_output_tokens: number;
   context_window_tokens: string;
   reasoning_enabled: boolean;
-  reasoning_profile?: string | null;
+  profile?: string | null;
   /**
    * Allowlisted provider-neutral sampling options; see the options
    * allowlist for exactly which keys may appear.
@@ -7583,7 +7591,7 @@ export interface SubagentActivityCounters {
  *
  * Derived from the frozen model authority exactly once by
  * [`SubagentExecutionProfile::from_frozen`]: it carries only the effective
- * model identity and reasoning selection. Credentials, endpoints, provider
+ * model identity, Model Profile, and reasoning state. Credentials, endpoints, provider
  * bindings, and every other binding internal are never projected.
  */
 export interface SubagentExecutionProfile {
@@ -7592,11 +7600,11 @@ export interface SubagentExecutionProfile {
    */
   model: string;
   /**
-   * The selected reasoning profile, when the model declares any.
+   * The selected Model Profile, when the model declares any.
    */
-  reasoning_profile?: ReasoningProfileId | null;
+  profile?: ModelProfileId | null;
   /**
-   * Whether the selected profile semantically enables reasoning.
+   * Whether the invocation semantically enables reasoning.
    */
   reasoning_enabled: boolean;
 }
@@ -8775,9 +8783,9 @@ export interface AttemptModelView {
          */
         maxOutputTokens: number;
         /**
-         * The selected reasoning profile, when the model declares any.
+         * The selected Model Profile, when the model declares any.
          */
-        reasoningProfile?: ReasoningProfileId | null;
+        profile?: ModelProfileId | null;
         /**
          * Whether reasoning is semantically enabled.
          */
@@ -8818,9 +8826,9 @@ export interface ModelInvocationView1 {
    */
   maxOutputTokens: number;
   /**
-   * The selected reasoning profile, when the model declares any.
+   * The selected Model Profile, when the model declares any.
    */
-  reasoningProfile?: ReasoningProfileId | null;
+  profile?: ModelProfileId | null;
   /**
    * Whether reasoning is semantically enabled.
    */
@@ -10775,9 +10783,9 @@ export interface SessionModelView1 {
          */
         maxOutputTokens: number;
         /**
-         * The selected reasoning profile, when the model declares any.
+         * The selected Model Profile, when the model declares any.
          */
-        reasoningProfile?: ReasoningProfileId | null;
+        profile?: ModelProfileId | null;
         /**
          * Whether reasoning is semantically enabled.
          */

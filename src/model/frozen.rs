@@ -21,7 +21,7 @@
 //! the catalog can change between the moment the parent admitted the
 //! invoking attempt and the moment the child composes, and the child would
 //! then silently observe a different provider endpoint, protocol, context
-//! window, output budget, reasoning profile, request parameters,
+//! window, output budget, Model Profile, request parameters,
 //! compatibility metadata, effective capabilities — or fail to resolve a
 //! model that was valid when the parent froze the child.
 //!
@@ -49,8 +49,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::catalog::{
     CatalogModelView, CredentialEnvironment, CredentialSource, ModelCapabilities, ModelCatalogView,
-    ModelCompat, ModelRef, ProviderId, ReasoningProfileId, ReasoningProfileView,
-    ResolvedCredential,
+    ModelCompat, ModelProfileId, ModelProfileView, ModelRef, ProviderId, ResolvedCredential,
 };
 use crate::model::invocation::{
     ModelBindingRegistry, ModelInvocationError, RequestParams, ResolvedModelInvocation,
@@ -126,10 +125,10 @@ pub struct FrozenModelInvocation {
     pub model_max_output_tokens: u32,
     /// The effective output budget of this invocation.
     pub max_output_tokens: u32,
-    /// The selected reasoning profile, when the model declares any.
+    /// The selected Model Profile, when the model declares any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reasoning_profile: Option<ReasoningProfileId>,
-    /// Whether the selected profile semantically enables reasoning.
+    pub profile: Option<ModelProfileId>,
+    /// Whether this invocation semantically enables reasoning.
     pub reasoning_enabled: bool,
     /// The effective opaque provider request parameters, already overlaid.
     #[serde(default)]
@@ -180,17 +179,20 @@ impl FrozenModelInvocation {
             // A frozen authority carries only the profile that was
             // selected; the rest of the model's declared profiles are
             // catalog state the child deliberately does not hold.
-            reasoning_profiles: self
-                .reasoning_profile
+            // The profile's own output default is catalog state the child
+            // does not hold; its effect is already in `max_output_tokens`.
+            profiles: self
+                .profile
                 .as_ref()
                 .map(|id| {
-                    vec![ReasoningProfileView {
+                    vec![ModelProfileView {
                         id: id.clone(),
-                        enabled: self.reasoning_enabled,
+                        reasoning_enabled: self.reasoning_enabled,
+                        max_output_tokens: None,
                     }]
                 })
                 .unwrap_or_default(),
-            default_reasoning_profile: self.reasoning_profile.clone(),
+            default_profile: self.profile.clone(),
             credential_source: self.binding.credential.view(),
         }
     }
@@ -352,7 +354,7 @@ pub(crate) fn test_frozen_model_spec(model: ModelRef) -> FrozenModelSpec {
             context_window: 128_000,
             model_max_output_tokens: 512,
             max_output_tokens: 512,
-            reasoning_profile: None,
+            profile: None,
             reasoning_enabled: false,
             request_params: RequestParams::new(),
             capabilities: ModelCapabilities::text_only(true, false),
@@ -406,7 +408,7 @@ id = "m"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
-request_params = { temperature = 0.25 }
+request_params = '{"temperature":0.25}'
 
 [models."local/m".capabilities]
 input_modalities = ["text"]
@@ -526,5 +528,69 @@ chat_reasoning_replay = "omit"
             ModelProtocol::OpenAiChatCompletions
         );
         assert_eq!(view.models[0].context_window, 128_000);
+    }
+
+    /// Issue #456: a delegated child receives the complete invocation the
+    /// parent resolved — the selected Model Profile, its reasoning state,
+    /// output default and parameters — and an edit of the catalog after the
+    /// freeze cannot reach the child.
+    #[test]
+    fn a_frozen_profile_is_complete_and_immune_to_later_catalog_edits() {
+        const PROFILED: &str = r#"[providers.local]
+base_url = "http://127.0.0.1:9/v1"
+api_key = "$RUSTX_FROZEN_KEY"
+
+[models."local/m"]
+provider = "local"
+id = "m"
+protocol = "openai_chat_completions"
+context_window = 128000
+max_output_tokens = 4096
+default_profile = "fast"
+
+[models."local/m".capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = true
+
+[models."local/m".compat]
+chat_reasoning_replay = "omit"
+
+[models."local/m".profiles.fast]
+reasoning_enabled = false
+max_output_tokens = 512
+request_params = '{"reasoning_effort":"none","stop":[null]}'
+
+[models."local/m".profiles.deep]
+reasoning_enabled = true
+request_params = '{"reasoning_effort":"high"}'
+"#;
+        let mut configured = config();
+        configured.profile = Some(crate::model::catalog::ModelProfileId::new("fast"));
+        let frozen = FrozenModelSpec::freeze(&registry(PROFILED), &configured).expect("freeze");
+        let decoded: FrozenModelSpec =
+            serde_json::from_slice(&serde_json::to_vec(&frozen).expect("encode")).expect("decode");
+        // The parent edits the profile after the freeze; the child never
+        // reopens the catalog, so it cannot observe the edit.
+        let edited = PROFILED.replace(
+            r#"{"reasoning_effort":"none","stop":[null]}"#,
+            r#"{"reasoning_effort":"low"}"#,
+        );
+        let reresolved = registry(&edited)
+            .resolve(&configured.selection())
+            .expect("edited");
+        assert_eq!(reresolved.request_params()["reasoning_effort"], "low");
+        let (primary, _) = decoded.materialize(&environment()).expect("materialize");
+        assert_eq!(primary.profile().expect("profile").as_str(), "fast");
+        assert!(!primary.reasoning_enabled());
+        assert_eq!(primary.max_output_tokens(), 512);
+        assert_eq!(
+            serde_json::Value::Object(primary.request_params().clone()),
+            serde_json::json!({"reasoning_effort": "none", "stop": [null]})
+        );
+        let view = decoded.catalog_view();
+        assert_eq!(view.models[0].default_profile, configured.profile);
+        assert_eq!(view.models[0].profiles.len(), 1);
     }
 }

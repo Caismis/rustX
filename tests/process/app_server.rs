@@ -170,7 +170,7 @@ async fn detach_then_shutdown(child: &mut Child) {
     terminate(child);
 }
 
-const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":38,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
+const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":39,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
 
 #[tokio::test]
 async fn app_server_stdio_real_process_shared_conformance() {
@@ -232,9 +232,9 @@ async fn app_server_websocket_authentication_framing_and_protocol_errors() {
         let old_offer = format!("rustx.app-server.v9, rustx-token.{}", driver::TOKEN);
         for offer in [
             None,
-            Some("rustx.app-server.v38"),
+            Some("rustx.app-server.v39"),
             Some(old_offer.as_str()),
-            Some("rustx.app-server.v38, rustx-token.wrong"),
+            Some("rustx.app-server.v39, rustx-token.wrong"),
         ] {
             let mut request = url.as_str().into_client_request().unwrap();
             if let Some(offer) = offer {
@@ -1317,7 +1317,7 @@ async fn app_server_archive_stdio_download_works_without_web_or_runtime_attachme
         assert_eq!(
             manifest["schemas"],
             serde_json::json!({
-                "journal": 2, "messages": 1, "surface": 1, "requests": 2,
+                "journal": 2, "messages": 1, "surface": 1, "requests": 3,
                 "generations": 1, "publication_audits": 1, "inherited_responses": 1, "inherited_turns": 1,
             })
         );
@@ -1369,7 +1369,7 @@ id = "process-model"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
-request_params = {{ temperature = 0.11 }}
+request_params = '{{"temperature":0.11}}'
 
 [models."fixture/process-model".capabilities]
 input_modalities = ["text"]
@@ -1638,7 +1638,7 @@ async fn app_server_delivery_access_is_explicit_transport_composition() {
         let trusted = driver::websocket_offering(
             &url,
             &format!(
-                "rustx.app-server.v38, rustx-token.{}, rustx-delivery-access.{secret}",
+                "rustx.app-server.v39, rustx-token.{}, rustx-delivery-access.{secret}",
                 driver::TOKEN
             ),
         )
@@ -1648,7 +1648,7 @@ async fn app_server_delivery_access_is_explicit_transport_composition() {
         assert!(
             driver::try_socket(
                 &url,
-                &format!("rustx.app-server.v38, rustx-delivery-access.{secret}")
+                &format!("rustx.app-server.v39, rustx-delivery-access.{secret}")
             )
             .await
             .is_err(),

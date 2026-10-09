@@ -137,7 +137,7 @@ pub struct RuntimeClientFixtureBuilder {
     /// The startup activation policy applied to the available tool set.
     agent_activation: rustx::capabilities::AgentActivation,
     /// An explicit session model authority, when the test needs a specific
-    /// catalog (several models, reasoning profiles, or an explicit summary
+    /// catalog (several models, Model Profiles, or an explicit summary
     /// model). Defaults to the one scripted model.
     session_model: Option<SessionModelState>,
     /// The static session context policy.

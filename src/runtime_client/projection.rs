@@ -6487,7 +6487,7 @@ mod tests {
             subagent.execution_profile,
             Some(SubagentExecutionProfile {
                 model: "local/model".to_owned(),
-                reasoning_profile: None,
+                profile: None,
                 reasoning_enabled: false,
             })
         );
@@ -6678,7 +6678,7 @@ mod tests {
             observation,
             profile: Some(SubagentExecutionProfile {
                 model: "local/model".to_owned(),
-                reasoning_profile: None,
+                profile: None,
                 reasoning_enabled: false,
             }),
             settlement: crate::runtime::subagent::SubagentSettlement::default(),

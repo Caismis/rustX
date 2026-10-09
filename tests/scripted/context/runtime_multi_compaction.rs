@@ -393,7 +393,7 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
         SessionModelConfig {
             summary_model: SummaryModelPolicy::Explicit {
                 model: ModelRef::parse("fixture/summary-model").expect("valid reference"),
-                reasoning_profile: None,
+                profile: None,
                 request_params: RequestParams::new(),
                 max_output_tokens: None,
             },
@@ -620,7 +620,7 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
         SessionModelConfig {
             summary_model: SummaryModelPolicy::Explicit {
                 model: ModelRef::parse("fixture/summary-model").expect("valid reference"),
-                reasoning_profile: None,
+                profile: None,
                 request_params: RequestParams::new(),
                 max_output_tokens: None,
             },

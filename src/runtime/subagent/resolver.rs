@@ -237,7 +237,7 @@ pub struct ResolvedSubagentSpec {
     pub instructions: String,
     /// The frozen child model **authority**: the completely resolved
     /// invocation (provider binding, protocol, context window, output
-    /// budget, reasoning profile, effective request parameters, effective
+    /// budget, Model Profile, effective request parameters, effective
     /// capabilities, compat) of the definition's explicit selection, or of
     /// the invoking attempt's frozen effective configuration.
     ///
@@ -1529,7 +1529,7 @@ fn frame_frozen_model_invocation(
         context_window,
         model_max_output_tokens,
         max_output_tokens,
-        reasoning_profile,
+        profile,
         reasoning_enabled,
         request_params,
         capabilities,
@@ -1550,11 +1550,11 @@ fn frame_frozen_model_invocation(
         &key("effective_max_output_tokens"),
         &max_output_tokens.to_string(),
     );
-    match reasoning_profile {
+    match profile {
         // An absent profile and a profile named "absent" are different
         // decisions, so absence is framed with a spelling no id can carry.
-        None => field(hasher, &key("reasoning_profile"), "\u{0}absent"),
-        Some(profile) => field(hasher, &key("reasoning_profile"), profile.as_str()),
+        None => field(hasher, &key("profile"), "\u{0}absent"),
+        Some(profile) => field(hasher, &key("profile"), profile.as_str()),
     }
     field(
         hasher,
@@ -2270,7 +2270,7 @@ mod tests {
             context_window: 128_000,
             model_max_output_tokens: 4096,
             max_output_tokens: 512,
-            reasoning_profile: None,
+            profile: None,
             reasoning_enabled: false,
             request_params: crate::model::invocation::RequestParams::new(),
             capabilities: crate::model::catalog::ModelCapabilities::text_only(true, false),
@@ -2441,12 +2441,10 @@ mod tests {
             explicit(&|invocation| invocation.model_max_output_tokens = 8192),
             explicit(&|invocation| invocation.max_output_tokens = 256),
             explicit(&|invocation| {
-                invocation.reasoning_profile =
-                    Some(crate::model::catalog::ReasoningProfileId::new("low"));
+                invocation.profile = Some(crate::model::catalog::ModelProfileId::new("low"));
             }),
             explicit(&|invocation| {
-                invocation.reasoning_profile =
-                    Some(crate::model::catalog::ReasoningProfileId::new("high"));
+                invocation.profile = Some(crate::model::catalog::ModelProfileId::new("high"));
             }),
             explicit(&|invocation| invocation.reasoning_enabled = true),
             explicit(&|invocation| {

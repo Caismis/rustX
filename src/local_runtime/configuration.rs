@@ -1610,7 +1610,8 @@ fn rebase_paths(
 }
 
 pub(super) fn authoring_schema() -> Value {
-    serde_json::to_value(schemars::schema_for!(RuntimeLayer)).expect("schema serializes")
+    serde_json::to_value(crate::toml_authoring::source_schema::<RuntimeLayer>())
+        .expect("schema serializes")
 }
 
 pub(super) fn present_on_disk(path: &Path) -> Result<bool, String> {

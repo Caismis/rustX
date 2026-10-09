@@ -1,6 +1,50 @@
-//! Typed TOML parsing and structured authoring diagnostics.
+//! Typed TOML source parsing, source writing, and structured authoring
+//! diagnostics.
+//!
+//! Source TOML and client-facing JSON share the authoring document types. They
+//! differ in exactly one representation: provider-native `request_params`.
+//!
+//! ```text
+//! source TOML      request_params = '{"temperature":0.7}'   (JSON-encoded string)
+//! client JSON      "request_params": {"temperature":0.7}    (structured object)
+//! ```
+//!
+//! The source representation exists only inside the source context entered by
+//! [`parse_detailed`], [`write`], and [`source_schema`]. Every other
+//! (de)serialization of an authoring type — App Server projections, mutations,
+//! and generated protocol schemas — uses the structured object. The JSON string
+//! is parsed here, once, into the structured
+//! [`RequestParams`](crate::model::invocation::RequestParams) map; it never
+//! reaches validation, runtime resolution, frozen snapshots, or adapters.
 
-use serde::de::DeserializeOwned;
+use std::cell::{Cell, RefCell};
+
+use serde::de::{DeserializeOwned, DeserializeSeed, MapAccess, SeqAccess, Visitor};
+use serde::{Deserialize, Serialize};
+
+use crate::model::invocation::RequestParams;
+
+thread_local! {
+    static SOURCE: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The source context of one parse, write, or schema generation. Restores the
+/// previous state on drop, so nested use is well defined.
+struct SourceContext(bool);
+impl SourceContext {
+    fn enter() -> Self {
+        Self(SOURCE.replace(true))
+    }
+}
+impl Drop for SourceContext {
+    fn drop(&mut self) {
+        SOURCE.set(self.0);
+    }
+}
+fn in_source() -> bool {
+    SOURCE.get()
+}
+
 /// Parse TOML directly into a typed authoring document.
 ///
 /// # Errors
@@ -9,12 +53,33 @@ pub fn parse<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, String> {
     parse_detailed(bytes).map_err(|error| error.detail)
 }
 
+/// Serialize an authoring document as canonical source TOML.
+///
+/// This is the only native source writer: `request_params` fields are emitted
+/// as JSON-encoded strings, so every written document parses again through
+/// [`parse`] with identical semantics.
+///
+/// # Errors
+/// Returns the TOML serializer failure.
+pub fn write<T: Serialize + ?Sized>(document: &T) -> Result<String, toml::ser::Error> {
+    let _source = SourceContext::enter();
+    toml::to_string_pretty(document)
+}
+
+/// The JSON Schema of an authoring document's source TOML representation.
+#[must_use]
+pub fn source_schema<T: schemars::JsonSchema>() -> schemars::Schema {
+    let _source = SourceContext::enter();
+    schemars::schema_for!(T)
+}
+
 /// Parser-owned location. Debug deliberately excludes authored values.
 pub struct ParseFailure {
     pub line: Option<usize>,
     pub column: Option<usize>,
     pub syntax: bool,
-    /// Exact path for unsupported request-parameter values; never authored values.
+    /// The exact authoring path of an invalid `request_params` field; never
+    /// authored values.
     pub path: Option<String>,
     detail: String,
 }
@@ -46,11 +111,12 @@ pub fn parse_detailed<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, ParseFailu
         path: None,
         detail: format!("not valid UTF-8: {error}"),
     })?;
+    let _source = SourceContext::enter();
     serde_path_to_error::deserialize(toml::Deserializer::new(text)).map_err(|failure| {
         let path = failure.path().to_string();
         let error = failure.into_inner();
         let mut parameter_path = None;
-        let message = if let Some(relative) = error.message().strip_prefix(PARAM_ERROR) {
+        let message = if let Some(reason) = error.message().strip_prefix(PARAM_ERROR) {
             let path = path.trim_end_matches('.');
             let owner = if path.ends_with("request_params") {
                 path.to_owned()
@@ -61,276 +127,465 @@ pub fn parse_detailed<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, ParseFailu
                 // serde_path_to_error then ends at the summary model itself.
                 format!("{path}.request_params")
             };
-            parameter_path = relative
-                .rsplit_once(": ")
-                .map(|(suffix, _)| format!("{owner}{suffix}"));
-            format!("{PARAM_ERROR}{owner}{relative}")
+            let message = format!("{owner} {reason}");
+            parameter_path = Some(owner);
+            message
         } else {
             error.message().to_owned()
         };
         let prefix = error.span().and_then(|span| text.get(..span.start));
+        let line = prefix.map(|s| s.bytes().filter(|b| *b == b'\n').count() + 1);
+        let column = prefix.map(|s| s.rsplit('\n').next().unwrap_or_default().chars().count() + 1);
         ParseFailure {
-            line: prefix.map(|s| s.bytes().filter(|b| *b == b'\n').count() + 1),
-            column: prefix.map(|s| s.rsplit('\n').next().unwrap_or_default().chars().count() + 1),
+            line,
+            column,
             syntax: text.parse::<toml_edit::DocumentMut>().is_err(),
             path: parameter_path,
             // Do not include TOML's source excerpt: it may contain credentials
             // or opaque provider parameters beside the malformed token.
             detail: format!(
-                "TOML error at line {}, column {}: {}",
-                prefix.map_or(1, |s| s.bytes().filter(|b| *b == b'\n').count() + 1),
-                prefix.map_or(1, |s| s
-                    .rsplit('\n')
-                    .next()
-                    .unwrap_or_default()
-                    .chars()
-                    .count()
-                    + 1),
-                message
+                "TOML error at line {}, column {}: {message}",
+                line.unwrap_or(1),
+                column.unwrap_or(1),
             ),
         }
     })
 }
 
-/// The only provider-parameter TOML boundary. The stored result is already JSON;
-/// transient TOML values never enter model resolution or provider adapters.
+/// Marks a `request_params` failure; the parser joins the authoring path.
+/// Reasons name structure and locations only, never authored values.
+const PARAM_ERROR: &str = "\u{0}request_params: ";
+
+/// Provider-native request parameters of one authoring document field.
+///
+/// Source TOML authors a JSON-encoded string; every client-facing JSON
+/// projection carries the structured object. Both representations hold the
+/// same structured [`RequestParams`] value.
 #[derive(Clone, Default, PartialEq)]
-pub struct RequestParamsToml(pub crate::model::invocation::RequestParams);
-impl std::fmt::Debug for RequestParamsToml {
+pub struct AuthoredRequestParams(pub RequestParams);
+impl std::fmt::Debug for AuthoredRequestParams {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("RequestParamsToml(<opaque>)")
+        f.write_str("AuthoredRequestParams(<opaque>)")
     }
 }
-impl<'de> serde::Deserialize<'de> for RequestParamsToml {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value = toml::Value::deserialize(deserializer)?;
-        if !value.is_table() {
-            return Err(serde::de::Error::custom(format!(
-                "{PARAM_ERROR}: request_params must be a TOML table"
-            )));
+impl Serialize for AuthoredRequestParams {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if in_source() {
+            let text = serde_json::to_string(&self.0).map_err(serde::ser::Error::custom)?;
+            serializer.serialize_str(&text)
+        } else {
+            self.0.serialize(serializer)
         }
-        match normalize(value, "").map_err(serde::de::Error::custom)? {
-            serde_json::Value::Object(map) => Ok(Self(map)),
-            _ => unreachable!("root checked above"),
+    }
+}
+impl<'de> Deserialize<'de> for AuthoredRequestParams {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        if in_source() {
+            let text = deserializer.deserialize_any(JsonText)?;
+            parse_request_params_json(&text)
+                .map(Self)
+                .map_err(|error| serde::de::Error::custom(format!("{PARAM_ERROR}{error}")))
+        } else {
+            RequestParams::deserialize(deserializer).map(Self)
+        }
+    }
+}
+impl schemars::JsonSchema for AuthoredRequestParams {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        if in_source() {
+            "RequestParamsJson".into()
+        } else {
+            "RequestParams".into()
+        }
+    }
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        if in_source() {
+            schemars::json_schema!({
+                "type": "string",
+                "description": "A JSON-encoded object of opaque provider-native request parameters, for example '{\"temperature\":0.7}'. Nested objects, arrays and null are preserved; duplicate keys are rejected. Runtime-protected wire keys are checked during model validation."
+            })
+        } else {
+            schemars::json_schema!({
+                "type": "object",
+                "description": "Opaque provider-native request parameters as a structured JSON object. Nested objects, arrays and null are preserved. Runtime-protected wire keys are checked during model validation.",
+                "additionalProperties": true
+            })
         }
     }
 }
 
-// Paths contain keys and indices only, never values or TOML source excerpts.
-// The parser joins this relative path to the enclosing typed authoring path.
-const PARAM_ERROR: &str = "unsupported request parameter at ";
-fn normalize(value: toml::Value, path: &str) -> Result<serde_json::Value, String> {
-    use serde_json::Value as Json;
-    Ok(match value {
-        toml::Value::String(v) => Json::String(v),
-        toml::Value::Integer(v) => Json::Number(v.into()),
-        toml::Value::Float(v) => {
-            Json::Number(serde_json::Number::from_f64(v).ok_or_else(|| {
-                format!("{PARAM_ERROR}{path}: non-finite floats are not JSON-compatible")
-            })?)
+/// Accepts only a string; every other source shape is rejected without
+/// echoing its value.
+struct JsonText;
+macro_rules! reject_non_string {
+    ($($method:ident($($arg:ty)?)),* $(,)?) => {$(
+        fn $method<E: serde::de::Error>(self $(, _: $arg)?) -> Result<String, E> {
+            Err(E::custom(format!("{PARAM_ERROR}must be a JSON-encoded string")))
         }
-        toml::Value::Boolean(v) => Json::Bool(v),
-        toml::Value::Datetime(_) => {
-            return Err(format!(
-                "{PARAM_ERROR}{path}: TOML dates, times and datetimes are not JSON-compatible"
-            ));
-        }
-        toml::Value::Array(values) => Json::Array(
-            values
-                .into_iter()
-                .enumerate()
-                .map(|(i, v)| normalize(v, &format!("{path}[{i}]")))
-                .collect::<Result<_, _>>()?,
-        ),
-        toml::Value::Table(values) => Json::Object(
-            values
-                .into_iter()
-                .map(|(key, v)| {
-                    let segment = if key
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-                        && !key.is_empty()
-                    {
-                        format!(".{key}")
-                    } else {
-                        format!("[{}]", serde_json::to_string(&key).expect("string"))
-                    };
-                    normalize(v, &format!("{path}{segment}")).map(|v| (key, v))
-                })
-                .collect::<Result<_, _>>()?,
-        ),
-    })
+    )*};
 }
-impl serde::Serialize for RequestParamsToml {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.0.serialize(serializer)
+impl<'de> Visitor<'de> for JsonText {
+    type Value = String;
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a JSON-encoded string")
+    }
+    fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<String, E> {
+        Ok(value.to_owned())
+    }
+    fn visit_string<E: serde::de::Error>(self, value: String) -> Result<String, E> {
+        Ok(value)
+    }
+    reject_non_string!(
+        visit_bool(bool),
+        visit_i64(i64),
+        visit_u64(u64),
+        visit_i128(i128),
+        visit_u128(u128),
+        visit_f64(f64),
+        visit_bytes(&[u8]),
+        visit_unit(),
+        visit_none(),
+    );
+    fn visit_seq<A: SeqAccess<'de>>(self, _: A) -> Result<String, A::Error> {
+        Err(serde::de::Error::custom(format!(
+            "{PARAM_ERROR}must be a JSON-encoded string"
+        )))
+    }
+    fn visit_map<A: MapAccess<'de>>(self, _: A) -> Result<String, A::Error> {
+        Err(serde::de::Error::custom(format!(
+            "{PARAM_ERROR}must be a JSON-encoded string"
+        )))
     }
 }
-impl schemars::JsonSchema for RequestParamsToml {
-    fn schema_name() -> std::borrow::Cow<'static, str> {
-        "RequestParamsToml".into()
+
+/// Why an authored JSON request-parameter string was rejected. Locations name
+/// structure only; no variant carries authored text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RequestParamsJsonError {
+    /// The text is not one JSON value.
+    Syntax { line: usize, column: usize },
+    /// The JSON value is not an object.
+    NotObject,
+    /// An object, at any depth, repeats a key. The path names keys and indices.
+    DuplicateKey { path: String },
+}
+impl std::fmt::Display for RequestParamsJsonError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Syntax { line, column } => write!(
+                f,
+                "is not valid JSON (syntax error at line {line}, column {column} of the JSON text)"
+            ),
+            Self::NotObject => f.write_str("must encode a JSON object"),
+            Self::DuplicateKey { path } => {
+                write!(f, "repeats a JSON object key at {path}")
+            }
+        }
     }
-    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        serde_json::json!({
-            "type": "object",
-            "description": "Opaque provider-native structured TOML. Strings, integers, finite floats, booleans, arrays and tables only; no dates, times, datetimes, non-finite floats or explicit null. Protected wire keys are checked during model resolution.",
-            "additionalProperties": {"$ref": "#/$defs/RequestParamsToml/$defs/value"},
-            "$defs": {"value": {"anyOf": [
-                {"type": "string"}, {"type": "number"}, {"type": "boolean"},
-                {"type": "array", "items": {"$ref": "#/$defs/RequestParamsToml/$defs/value"}},
-                {"type": "object", "additionalProperties": {"$ref": "#/$defs/RequestParamsToml/$defs/value"}}
-            ]}}
-        }).try_into().expect("schema object")
+}
+impl std::error::Error for RequestParamsJsonError {}
+
+/// Strictly parse one authored JSON request-parameter object.
+///
+/// Unlike ordinary JSON map deserialization, a repeated key at any depth is an
+/// error rather than a silent last-value-wins.
+///
+/// # Errors
+/// Returns the syntax location, a non-object root, or the first duplicate key.
+pub fn parse_request_params_json(text: &str) -> Result<RequestParams, RequestParamsJsonError> {
+    let duplicate = RefCell::new(None);
+    let mut deserializer = serde_json::Deserializer::from_str(text);
+    let value = StrictValue {
+        path: "$".into(),
+        duplicate: &duplicate,
+    }
+    .deserialize(&mut deserializer)
+    .and_then(|value| deserializer.end().map(|()| value))
+    .map_err(|error| {
+        duplicate.take().map_or(
+            RequestParamsJsonError::Syntax {
+                line: error.line(),
+                column: error.column(),
+            },
+            |path| RequestParamsJsonError::DuplicateKey { path },
+        )
+    })?;
+    match value {
+        serde_json::Value::Object(map) => Ok(map),
+        _ => Err(RequestParamsJsonError::NotObject),
+    }
+}
+
+/// One JSON value whose objects reject repeated keys. `serde_json` bounds the
+/// recursion depth.
+struct StrictValue<'a> {
+    path: String,
+    duplicate: &'a RefCell<Option<String>>,
+}
+impl<'de> DeserializeSeed<'de> for StrictValue<'_> {
+    type Value = serde_json::Value;
+    fn deserialize<D: serde::Deserializer<'de>>(
+        self,
+        deserializer: D,
+    ) -> Result<Self::Value, D::Error> {
+        deserializer.deserialize_any(self)
+    }
+}
+impl<'de> Visitor<'de> for StrictValue<'_> {
+    type Value = serde_json::Value;
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a JSON value")
+    }
+    fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
+        Ok(value.into())
+    }
+    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
+        Ok(value.into())
+    }
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+        Ok(value.into())
+    }
+    fn visit_f64<E: serde::de::Error>(self, value: f64) -> Result<Self::Value, E> {
+        serde_json::Number::from_f64(value)
+            .map(serde_json::Value::Number)
+            .ok_or_else(|| E::custom("non-finite number"))
+    }
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+        Ok(value.into())
+    }
+    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+        Ok(value.into())
+    }
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(serde_json::Value::Null)
+    }
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+        let mut values = Vec::new();
+        while let Some(value) = seq.next_element_seed(StrictValue {
+            path: format!("{}[{}]", self.path, values.len()),
+            duplicate: self.duplicate,
+        })? {
+            values.push(value);
+        }
+        Ok(serde_json::Value::Array(values))
+    }
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+        let mut object = serde_json::Map::new();
+        while let Some(key) = map.next_key::<String>()? {
+            let path = format!("{}{}", self.path, key_segment(&key));
+            if object.contains_key(&key) {
+                *self.duplicate.borrow_mut() = Some(path);
+                return Err(serde::de::Error::custom("duplicate key"));
+            }
+            let value = map.next_value_seed(StrictValue {
+                path,
+                duplicate: self.duplicate,
+            })?;
+            object.insert(key, value);
+        }
+        Ok(serde_json::Value::Object(object))
+    }
+}
+fn key_segment(key: &str) -> String {
+    if !key.is_empty()
+        && key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        format!(".{key}")
+    } else {
+        format!("[{}]", serde_json::to_string(key).expect("string"))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[derive(serde::Deserialize, Debug)]
+    use serde_json::json;
+
+    #[derive(Deserialize, Serialize, Debug, PartialEq, schemars::JsonSchema)]
     #[serde(deny_unknown_fields)]
     struct Document {
         model: Params,
     }
-    #[derive(serde::Deserialize, Debug)]
+    #[derive(Deserialize, Serialize, Debug, PartialEq, schemars::JsonSchema)]
     #[serde(deny_unknown_fields)]
     struct Params {
-        request_params: RequestParamsToml,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_params: Option<AuthoredRequestParams>,
+    }
+    fn params(value: serde_json::Value) -> RequestParams {
+        serde_json::from_value(value).unwrap()
     }
 
     #[test]
-    fn unsupported_values_reject_with_exact_paths_without_values() {
-        for value in [
-            "1979-05-27",
-            "07:32:00",
-            "1979-05-27T07:32:00Z",
-            "nan",
-            "+inf",
-            "-inf",
+    fn json_strings_parse_to_structured_objects_independent_of_formatting() {
+        let expected = params(json!({
+            "temperature": 0.7, "flag": false, "text": "exact", "integer": -42,
+            "explicit": null,
+            "provider": {"order": ["a", "b"], "fallback": null},
+            "documents": [{"title": "A", "media": [1, true, "x", null]}, []]
+        }));
+        for form in [
+            r#"request_params = '{"temperature":0.7,"flag":false,"text":"exact","integer":-42,"explicit":null,"provider":{"order":["a","b"],"fallback":null},"documents":[{"title":"A","media":[1,true,"x",null]},[]]}'"#,
+            "request_params = '''\n{\n  \"documents\": [{\"media\": [1, true, \"x\", null], \"title\": \"A\"}, []],\n  \"provider\": {\"fallback\": null, \"order\": [\"a\", \"b\"]},\n  \"explicit\": null, \"integer\": -42, \"text\": \"exact\",\n  \"flag\": false, \"temperature\": 0.7\n}\n'''",
+            r#"request_params = "{\"integer\":-42,\"text\":\"exact\",\"explicit\":null,\"flag\":false,\"temperature\":0.7,\"provider\":{\"order\":[\"a\",\"b\"],\"fallback\":null},\"documents\":[{\"title\":\"A\",\"media\":[1,true,\"x\",null]},[]]}""#,
         ] {
-            for (body, path) in [
-                (
-                    format!("provider.started_at = {value}"),
-                    "model.request_params.provider.started_at",
-                ),
-                (
-                    format!("items = [{{when = true}}, {{when = {value}}}]"),
-                    "model.request_params.items[1].when",
-                ),
-                (
-                    format!("temperature = {value}"),
-                    "model.request_params.temperature",
-                ),
-            ] {
-                let text =
-                    format!("[model.request_params]\nsecret = 'SECRET_PROVIDER_VALUE'\n{body}");
-                let error = parse::<Document>(text.as_bytes()).unwrap_err();
-                assert!(error.contains(path), "{error}");
-                assert!(!error.contains("SECRET_PROVIDER_VALUE"), "{error}");
+            let document: Document = parse(format!("[model]\n{form}").as_bytes()).unwrap();
+            assert_eq!(document.model.request_params.unwrap().0, expected, "{form}");
+        }
+    }
+
+    #[test]
+    fn source_writes_json_strings_including_null_and_reread_exactly() {
+        let document = Document {
+            model: Params {
+                request_params: Some(AuthoredRequestParams(params(json!({
+                    "explicit": null, "nested": {"a": [null, {"b": null}]}, "quote": "it's"
+                })))),
+            },
+        };
+        let text = write(&document).unwrap();
+        assert!(!text.contains("[model.request_params"), "{text}");
+        let table = text.parse::<toml::Table>().unwrap();
+        assert!(table["model"]["request_params"].is_str(), "{text}");
+        assert_eq!(parse::<Document>(text.as_bytes()).unwrap(), document);
+        // An explicitly authored empty object stays present.
+        let empty = Document {
+            model: Params {
+                request_params: Some(AuthoredRequestParams::default()),
+            },
+        };
+        let text = write(&empty).unwrap();
+        assert!(text.contains("request_params = \"{}\""), "{text}");
+        assert_eq!(parse::<Document>(text.as_bytes()).unwrap(), empty);
+    }
+
+    #[test]
+    fn client_json_stays_structured_outside_the_source_context() {
+        let document = Document {
+            model: Params {
+                request_params: Some(AuthoredRequestParams(params(
+                    json!({"value": null, "nested": {"k": [1]}}),
+                ))),
+            },
+        };
+        let value = serde_json::to_value(&document).unwrap();
+        assert_eq!(
+            value,
+            json!({"model": {"request_params": {"value": null, "nested": {"k": [1]}}}})
+        );
+        assert_eq!(serde_json::from_value::<Document>(value).unwrap(), document);
+        // A JSON string is not the client representation.
+        assert!(
+            serde_json::from_value::<Document>(json!({"model": {"request_params": "{}"}})).is_err()
+        );
+        // Leaving a source context restores the client representation.
+        let _ = write(&document).unwrap();
+        assert!(serde_json::to_value(&document).unwrap()["model"]["request_params"].is_object());
+    }
+
+    #[test]
+    fn invalid_json_strings_fail_with_safe_located_diagnostics() {
+        #[derive(Deserialize, Debug)]
+        #[allow(dead_code)]
+        struct WithSecret {
+            secret: String,
+            model: Params,
+        }
+        for (json, reason) in [
+            ("{broken", "is not valid JSON"),
+            ("{\"SECRET_PROVIDER_VALUE\": }", "is not valid JSON"),
+            ("{} {}", "is not valid JSON"),
+            ("", "is not valid JSON"),
+            ("null", "must encode a JSON object"),
+            ("[]", "must encode a JSON object"),
+            ("42", "must encode a JSON object"),
+            ("\"SECRET_PROVIDER_VALUE\"", "must encode a JSON object"),
+            ("{\"a\":1,\"a\":2}", "repeats a JSON object key at $.a"),
+            (
+                "{\"outer\":{\"SECRET_PROVIDER_VALUE\":[{\"k\":1,\"k\":1}]}}",
+                "repeats a JSON object key at $.outer.SECRET_PROVIDER_VALUE[0].k",
+            ),
+            (
+                "{\"x y\":{},\"x y\":{}}",
+                "repeats a JSON object key at $[\"x y\"]",
+            ),
+        ] {
+            let text = format!("secret = 'SECRET_NEIGHBOR'\n[model]\nrequest_params = '{json}'\n");
+            let failure = parse_detailed::<toml::Table>(text.as_bytes());
+            assert!(
+                failure.is_ok(),
+                "an untyped table carries no request_params"
+            );
+            let failure = parse_detailed::<WithSecret>(text.as_bytes()).unwrap_err();
+            assert_eq!(failure.path.as_deref(), Some("model.request_params"));
+            assert_eq!(
+                (failure.line, failure.column),
+                (Some(3), Some(18)),
+                "{json}"
+            );
+            assert!(!failure.syntax);
+            let detail = failure.into_detail();
+            assert!(
+                detail.contains(&format!("model.request_params {reason}")),
+                "{detail}"
+            );
+            assert!(!detail.contains("SECRET_NEIGHBOR"), "{detail}");
+            if !reason.contains("SECRET_PROVIDER_VALUE") {
+                assert!(!detail.contains("SECRET_PROVIDER_VALUE"), "{detail}");
             }
         }
     }
+
     #[test]
-    fn native_structures_normalize_exactly() {
-        let text = r#"[model.request_params]
-text = "exact"
-integer = -42
-temperature = 0.7
-flag = false
-chat_template_kwargs.enable_thinking = true
-structured_outputs.choice = ["positive", "negative"]
-documents = [{title = "A", options = {media = [1, true, "x"]}}, {title = "B"}]
-[model.request_params.provider]
-order = ["a", "b"]
-allow_fallbacks = true
-"#;
-        let doc = parse::<Document>(text.as_bytes()).unwrap();
-        assert_eq!(
-            serde_json::Value::Object(doc.model.request_params.0),
-            serde_json::json!({
-                "text":"exact", "integer":-42, "temperature":0.7, "flag":false,
-                "chat_template_kwargs":{"enable_thinking":true},
-                "structured_outputs":{"choice":["positive","negative"]},
-                "documents":[{"title":"A","options":{"media":[1,true,"x"]}}, {"title":"B"}],
-                "provider":{"order":["a","b"],"allow_fallbacks":true}
-            })
-        );
-        let forms = [
-            "[model.request_params.provider]\norder = ['a']",
-            "[model.request_params]\nprovider.order = ['a']",
-            "[model]\nrequest_params = {provider = {order = ['a']}}",
-        ];
-        for form in forms {
-            assert_eq!(
-                parse::<Document>(form.as_bytes())
-                    .unwrap()
-                    .model
-                    .request_params
-                    .0,
-                serde_json::from_value::<crate::model::invocation::RequestParams>(
-                    serde_json::json!({"provider":{"order":["a"]}})
-                )
-                .unwrap()
+    fn toml_tables_and_non_string_values_are_rejected_without_echo() {
+        for value in [
+            "{ temperature = 0.7 }",
+            "{}",
+            "[]",
+            "42",
+            "true",
+            "1979-05-27T07:32:00Z",
+            "nan",
+        ] {
+            let text = format!("[model]\nrequest_params = {value}\nsecret = 'SECRET_NEIGHBOR'\n");
+            let failure = parse_detailed::<Document>(text.as_bytes()).unwrap_err();
+            assert_eq!(failure.path.as_deref(), Some("model.request_params"));
+            let detail = failure.into_detail();
+            assert!(
+                detail.contains("model.request_params must be a JSON-encoded string"),
+                "{detail}"
             );
+            assert!(!detail.contains("SECRET_NEIGHBOR"), "{detail}");
         }
+        let error = parse::<Document>(b"[model.request_params]\ntemperature = 0.7\n").unwrap_err();
+        assert!(error.contains("must be a JSON-encoded string"), "{error}");
+        let error = parse::<Document>(b"[model]\nrequest_params_json = '{}'").unwrap_err();
+        assert!(
+            error.contains("unknown field `request_params_json`"),
+            "{error}"
+        );
     }
+
     #[test]
     fn malformed_toml_does_not_echo_opaque_values_or_neighboring_credentials() {
         for text in [
-            "[model]\nrequest_params = {secret = 'SECRET_PROVIDER_VALUE', broken = }",
-            "[model]\nrequest_params = {} secret = 'SECRET_PROVIDER_VALUE'",
+            "[model]\nrequest_params = '{\"secret\": \"SECRET_PROVIDER_VALUE\"}' broken",
+            "[model]\nrequest_params = '{}' secret = 'SECRET_PROVIDER_VALUE'",
         ] {
             let error = parse::<Document>(text.as_bytes()).unwrap_err();
             assert!(!error.contains("SECRET_PROVIDER_VALUE"), "{error}");
         }
     }
+
     #[test]
-    fn serialization_preserves_native_tables_and_runtime_null_is_not_a_toml_sentinel() {
-        #[derive(serde::Serialize, serde::Deserialize)]
-        struct Authored {
-            request_params: RequestParamsToml,
-        }
-        let params = serde_json::from_value(
-            serde_json::json!({"temperature":0.7,"chat_template_kwargs":{"enable_thinking":true}}),
-        )
-        .unwrap();
-        let document = Authored {
-            request_params: RequestParamsToml(params),
-        };
-        let text = toml::to_string_pretty(&document).unwrap();
-        assert!(text.contains("[request_params.chat_template_kwargs]"));
-        let again: Authored = parse(text.as_bytes()).unwrap();
-        assert_eq!(document.request_params, again.request_params);
-        let runtime =
-            RequestParamsToml(serde_json::from_value(serde_json::json!({"value":null})).unwrap());
-        assert_eq!(
-            serde_json::to_value(&runtime).unwrap(),
-            serde_json::json!({"value":null})
-        );
-        assert!(
-            toml::to_string(&Authored {
-                request_params: runtime
-            })
-            .is_err()
-        );
-    }
-    #[test]
-    fn obsolete_field_and_non_object_roots_reject() {
-        let error = parse::<Document>(b"[model]\nrequest_params_json = '{}'").unwrap_err();
-        assert!(error.contains("unknown field `request_params_json`"));
-        for value in [
-            "[]",
-            "42",
-            "true",
-            "'SECRET_PROVIDER_VALUE'",
-            "1979-05-27",
-            "nan",
-        ] {
-            let error = parse::<Document>(format!("[model]\nrequest_params = {value}").as_bytes())
-                .unwrap_err();
-            assert!(error.contains("request_params must be a TOML table"));
-            assert!(error.contains("model.request_params:"), "{error}");
-            assert!(!error.contains("SECRET_PROVIDER_VALUE"));
-        }
+    fn source_and_client_schemas_describe_their_own_representation() {
+        let source = serde_json::to_value(source_schema::<Document>()).unwrap();
+        let client = serde_json::to_value(schemars::schema_for!(Document)).unwrap();
+        assert_eq!(source["$defs"]["RequestParamsJson"]["type"], "string");
+        assert_eq!(client["$defs"]["RequestParams"]["type"], "object");
+        assert!(source["$defs"].get("RequestParams").is_none());
+        assert!(client["$defs"].get("RequestParamsJson").is_none());
     }
 }

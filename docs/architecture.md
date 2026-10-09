@@ -1494,7 +1494,7 @@ model/types.rs             ModelRequest, ModelUsage, ModelProtocol, and the
 model/catalog.rs           the validated rustx.toml catalog: explicit
                            provider endpoints and credential sources,
                            redacted credentials, model definitions,
-                           capabilities, reasoning profiles, bounded compat
+                           capabilities, Model Profiles, bounded compat
 model/invocation.rs        opaque requestParams and their shallow-overlay
                            contract, per-protocol protected wire keys,
                            effective-capability intersection,
@@ -1580,12 +1580,13 @@ The soft input limit is still
 impossible configurations rejected), but an attempt on a 32k model never
 plans compaction with a previously selected 128k window.
 
-Issue #42 also retired the universal `ReasoningEffort` enum. Reasoning is a
-model-declared *named profile* whose wire behaviour is exactly its configured
-`requestParams`; the runtime assigns no meaning to a profile name and
-synthesizes no reasoning field. `ModelManifest` therefore carries a catalog
-`ModelRef`, the selected `ReasoningProfileId`, and the semantic
-reasoning-enabled state.
+Issue #42 also retired the universal `ReasoningEffort` enum, and Issue #456
+generalized its replacement: a Model may declare named *Model Profiles*,
+complete invocation presets whose wire behaviour is exactly their configured
+`requestParams`, with an explicit reasoning state and an optional output
+default. The runtime assigns no meaning to a profile name and synthesizes no
+reasoning field. `ModelManifest` therefore carries a catalog `ModelRef`, the
+selected `ModelProfileId`, and the semantic reasoning-enabled state.
 
 ### 2.2 Attempt settlement invariant
 
@@ -2035,7 +2036,7 @@ Key contracts:
   in `session` mode that is the attempt's own primary invocation, in
   `explicit` mode a separately resolved catalog model. The context plane's
   summary output safety cap is applied through the runtime-owned protected
-  max-output field and never by mutating a reasoning profile or a
+  max-output field and never by mutating a Model Profile or a
   request-parameter object.
 - Primary model requests retain the attempt-pinned Runtime Resource Snapshot,
   CapabilitySnapshot, Effective System Prompt, active Surface, Tools, and
@@ -3487,7 +3488,7 @@ the current Messages API. The Anthropic adapter therefore talks to
   canonical continuation model;
 - current request semantics (`redacted_thinking.data` preserved losslessly
   as opaque provider state; `thinking` and `output_config` are provider-owned
-  fields the *selected reasoning profile* declares — the adapter synthesizes
+  fields the *selected Model Profile* declares — the adapter synthesizes
   neither);
 - current refusal semantics (`stop_reason = refusal` with top-level
   `stop_details`; a human-readable `explanation` streams as `RefusalDelta`

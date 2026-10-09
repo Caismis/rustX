@@ -24,7 +24,7 @@ use std::sync::Arc;
 use rustx::context::SessionContextPolicy;
 use rustx::message::content::TextBlock;
 use rustx::message::types::{ContentBlockIndex, UserContentBlock};
-use rustx::model::catalog::{MapCredentialEnvironment, ModelRef, ProviderId, ReasoningProfileId};
+use rustx::model::catalog::{MapCredentialEnvironment, ModelProfileId, ModelRef, ProviderId};
 use rustx::model::invocation::ModelBindingRegistry;
 use rustx::model::session::{SessionModelConfig, SessionModelState, SummaryModelPolicy};
 use rustx::model::{ModelAdapter, ModelEvent, ModelFinishReason, ModelProtocol};
@@ -56,6 +56,7 @@ struct Provider {
     context_window: u64,
     max_output_tokens: u32,
     request_params: serde_json::Value,
+    profiles: Option<(&'static str, serde_json::Value)>,
     always_on_reasoning: bool,
 }
 
@@ -68,8 +69,16 @@ impl Provider {
             context_window: 1_000_000,
             max_output_tokens: 4096,
             request_params: serde_json::json!({}),
+            profiles: None,
             always_on_reasoning: false,
         }
+    }
+
+    /// Declares complete Model Profiles; the Model then declares no
+    /// model-level parameters.
+    fn profiles(mut self, default: &'static str, profiles: serde_json::Value) -> Self {
+        self.profiles = Some((default, profiles));
+        self
     }
 
     const fn window(mut self, tokens: u64) -> Self {
@@ -102,10 +111,13 @@ impl Provider {
             ModelProtocol::OpenAiChatCompletions,
         )
         .with_context_window(self.context_window)
-        .with_max_output_tokens(self.max_output_tokens)
-        .with_request_params(self.request_params.clone());
+        .with_max_output_tokens(self.max_output_tokens);
+        let model = match &self.profiles {
+            Some((default, profiles)) => model.with_profiles(default, profiles.clone()),
+            None => model.with_request_params(self.request_params.clone()),
+        };
         if self.always_on_reasoning {
-            model.always_on_reasoning()
+            model.claiming_reasoning()
         } else {
             model
         }
@@ -667,7 +679,7 @@ async fn explicit_summary_mode_is_resolved_once_and_frozen_at_admission() {
     let initial = SessionModelConfig {
         summary_model: SummaryModelPolicy::Explicit {
             model: summary.reference(),
-            reasoning_profile: None,
+            profile: None,
             request_params: rustx::model::RequestParams::new(),
             max_output_tokens: None,
         },
@@ -693,7 +705,7 @@ async fn explicit_summary_mode_is_resolved_once_and_frozen_at_admission() {
         config: Box::new(SessionModelConfig {
             summary_model: SummaryModelPolicy::Explicit {
                 model: decoy.reference(),
-                reasoning_profile: None,
+                profile: None,
                 request_params: rustx::model::RequestParams::new(),
                 max_output_tokens: None,
             },
@@ -735,137 +747,377 @@ async fn explicit_summary_mode_is_resolved_once_and_frozen_at_admission() {
     }
 }
 
-/// A reasoning profile selection resolves through the catalog and reaches the
-/// wire as exactly its configured parameters; the runtime assigns no meaning
-/// to the profile name.
-#[test]
-fn reasoning_profiles_resolve_to_their_exact_configured_parameters() {
-    let model = FixtureModel::text("p/reasoner", ModelProtocol::AnthropicMessages).with_reasoning(
+/// Issue #456: a selected Model Profile — primary and explicit Summary — is
+/// part of the invocation frozen at admission. A profile change requested
+/// after admission is refused for the running Attempt, whose tool
+/// continuation, context-overflow compaction and retry all keep the admitted
+/// profile's complete parameters and output default; the next Attempt adopts
+/// the new profiles.
+#[allow(clippy::too_many_lines)] // one complete freeze interleaving
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn profiles_freeze_at_admission_through_continuation_compaction_and_retry() {
+    let (release, receiver) = support::fake::model_release();
+    let overflow = vec![
+        FakeStep::Emit(ModelEvent::Started),
+        FakeStep::Emit(ModelEvent::Failed {
+            error: rustx::model::ModelError {
+                kind: rustx::model::ModelErrorKind::ContextWindowExceeded,
+                message: "too long".to_owned(),
+                retry_disposition: rustx::model::error::ModelRetryDisposition::Never,
+                retry_after_ms: None,
+                provider_code: None,
+                context_overflow: None,
+                malformed_tool_proposal: None,
+                timeout_phase: None,
+                generation: None,
+            },
+        }),
+    ];
+    let alpha = Provider::new(
+        ALPHA,
+        "model-a",
+        vec![
+            parked_tool_turn(&ALPHA_CALL, receiver),
+            overflow,
+            one_turn_stop(),
+            one_turn_stop(),
+        ],
+    )
+    .output(4096)
+    .profiles(
+        "precise",
         serde_json::json!({
-            "defaultProfile": "on",
-            "profiles": {
+            "precise": {"maxOutputTokens": 300, "requestParams": {"temperature": 0.1, "stop": [null]}},
+            "creative": {"requestParams": {"temperature": 1.3, "metadata": {"tier": null}}}
+        }),
+    );
+    let summary_text = |text: &str| {
+        vec![
+            FakeStep::Emit(ModelEvent::Started),
+            FakeStep::Emit(ModelEvent::TextDelta {
+                block_index: ContentBlockIndex::new(0),
+                text: text.to_owned(),
+            }),
+            FakeStep::Emit(ModelEvent::Completed {
+                finish_reason: ModelFinishReason::Stop,
+                usage: None,
+            }),
+        ]
+    };
+    let summary = Provider::new(
+        SUMMARY,
+        "summary-model",
+        vec![summary_text("frozen summary")],
+    )
+    .output(1024)
+    .profiles(
+        "brief",
+        serde_json::json!({
+            "brief": {"maxOutputTokens": 256, "requestParams": {"summary_tag": "brief"}},
+            "long": {"requestParams": {"summary_tag": "long"}}
+        }),
+    );
+    let selected = |primary: &str, summary_profile: &str| SessionModelConfig {
+        profile: Some(ModelProfileId::new(primary)),
+        request_params: common::request_params(serde_json::json!({"seed": null})),
+        summary_model: SummaryModelPolicy::Explicit {
+            model: summary.reference(),
+            profile: Some(ModelProfileId::new(summary_profile)),
+            request_params: common::request_params(serde_json::json!({"summary_seed": [null]})),
+            max_output_tokens: None,
+        },
+        ..SessionModelConfig::of(alpha.reference())
+    };
+    let host = runtime(
+        session_model(&[&alpha, &summary], selected("precise", "brief")),
+        SessionContextPolicy {
+            reserve_tokens: 0,
+            keep_recent_tokens: 20,
+            summary_output_cap: None,
+        },
+    )
+    .await;
+    let (attachment, subscription) = attach(&host);
+
+    submit(&attachment, 1, "start");
+    await_parked(&alpha.handle).await;
+    // A profile change after admission is refused for the running Attempt.
+    let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
+        id: RequestId::new(2),
+        config: Box::new(selected("creative", "long")),
+    });
+    assert!(response.error.is_some(), "{response:?}");
+    let (snapshot, _) = host.snapshot().expect("snapshot");
+    let frozen = snapshot.attempt.as_ref().unwrap().model.as_ref().unwrap();
+    assert_eq!(frozen.primary.profile, Some(ModelProfileId::new("precise")));
+    assert_eq!(frozen.primary.max_output_tokens, 300);
+
+    release.send_replace(true);
+    receive_until(&subscription, |event| {
+        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+    })
+    .await;
+
+    // First turn, tool continuation (overflowing) and the post-compaction
+    // retry: every primary request carries the admitted profile exactly.
+    let primary = alpha.handle.requests();
+    assert_eq!(primary.len(), 3, "turn, continuation, retry");
+    for request in &primary {
+        assert_eq!(request.max_output_tokens(), 300);
+        assert_eq!(
+            serde_json::Value::Object(request.request_params().clone()),
+            serde_json::json!({"temperature": 0.1, "stop": [null], "seed": null})
+        );
+    }
+    // The compaction summary used the admitted Summary profile.
+    let summaries = summary.handle.requests();
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].max_output_tokens(), 256);
+    assert_eq!(
+        serde_json::Value::Object(summaries[0].request_params().clone()),
+        serde_json::json!({"summary_tag": "brief", "summary_seed": [null]})
+    );
+
+    // Idle adoption succeeds, and only the next Attempt observes it.
+    let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
+        id: RequestId::new(3),
+        config: Box::new(selected("creative", "long")),
+    });
+    assert!(response.error.is_none(), "{response:?}");
+    submit(&attachment, 4, "next");
+    receive_until(&subscription, |event| {
+        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+    })
+    .await;
+    let primary = alpha.handle.requests();
+    assert_eq!(primary.len(), 4);
+    assert_eq!(
+        primary[3].max_output_tokens(),
+        4096,
+        "no profile default: the hard maximum"
+    );
+    assert_eq!(
+        serde_json::Value::Object(primary[3].request_params().clone()),
+        serde_json::json!({"temperature": 1.3, "metadata": {"tier": null}, "seed": null})
+    );
+    for request in &primary[..3] {
+        assert_eq!(
+            request.request_params()["temperature"],
+            serde_json::json!(0.1)
+        );
+    }
+}
+
+/// A Model Profile selection resolves through the catalog and reaches the
+/// wire as exactly its own complete preset; the runtime assigns no meaning to
+/// the profile name, and nothing is inherited from the Model or another
+/// profile.
+#[test]
+fn model_profiles_resolve_to_their_exact_complete_presets() {
+    let reasoner = FixtureModel::text("p/reasoner", ModelProtocol::AnthropicMessages)
+        .with_max_output_tokens(64_000)
+        .claiming_reasoning()
+        .with_profiles(
+            "on",
+            serde_json::json!({
                 "off": {
-                    "enabled": false,
+                    "reasoningEnabled": false,
+                    "maxOutputTokens": 4_096,
                     "requestParams": {"thinking": {"type": "disabled"}, "temperature": 0.7}
                 },
                 "on": {
-                    "enabled": true,
+                    "reasoningEnabled": true,
                     "requestParams": {
                         "thinking": {"type": "enabled", "budget_tokens": 32000},
                         "temperature": 1.0
                     }
                 },
                 "thinking-32k": {
-                    "enabled": true,
+                    "reasoningEnabled": true,
+                    "maxOutputTokens": 48_000,
                     "requestParams": {"thinking": {"type": "enabled", "budget_tokens": 32000}}
                 }
-            }
+            }),
+        );
+    // Non-reasoning sampling presets: omitted reasoning state means false.
+    let sampler = FixtureModel::text("p/sampler", ModelProtocol::OpenAiResponses).with_profiles(
+        "precise",
+        serde_json::json!({
+            "precise": {"requestParams": {"temperature": 0.1, "top_p": 0.5}},
+            "creative": {"maxOutputTokens": 1_000,
+                         "requestParams": {"temperature": 1.3, "stop": ["\n\n", null], "metadata": null}}
         }),
     );
+    let plain = FixtureModel::text("p/plain", ModelProtocol::OpenAiResponses)
+        .with_request_params(serde_json::json!({"temperature": 0.4}));
     let handle: Arc<dyn ModelAdapter> = Arc::new(support::model::NullAdapter);
     let factory = support::model::ScriptedAdapterFactory::new(handle);
-    let registry = support::model::fixture_registry(&[model], &factory);
-    let reference = ModelRef::parse("p/reasoner").expect("reference");
+    let registry = support::model::fixture_registry(&[reasoner, sampler, plain], &factory);
+    let selection = |model: &str, profile: Option<&str>| rustx::model::ModelSelection {
+        profile: profile.map(ModelProfileId::new),
+        ..rustx::model::ModelSelection::of(ModelRef::parse(model).expect("reference"))
+    };
+    let params = |invocation: &rustx::model::ResolvedModelInvocation| {
+        serde_json::Value::Object(invocation.request_params().clone())
+    };
 
-    // The declared default is selected when the session chooses nothing.
+    // The declared default is selected when the selection names none; without
+    // a profile budget the Model hard maximum is the default.
     let default = registry
-        .resolve(&rustx::model::ModelSelection::of(reference.clone()))
+        .resolve(&selection("p/reasoner", None))
         .expect("default profile resolves");
-    assert_eq!(
-        default.reasoning_profile(),
-        Some(&ReasoningProfileId::new("on"))
-    );
+    assert_eq!(default.profile(), Some(&ModelProfileId::new("on")));
     assert!(default.reasoning_enabled());
+    assert_eq!(default.max_output_tokens(), 64_000);
     assert_eq!(
-        serde_json::Value::Object(default.request_params().clone()),
+        params(&default),
         serde_json::json!({
             "thinking": {"type": "enabled", "budget_tokens": 32000},
             "temperature": 1.0
         }),
-        "the effective parameters are exactly the profile overlay"
+        "the effective parameters are exactly the profile preset"
     );
 
-    // Selecting `off` yields exactly the off overlay — a completely different
-    // provider shape, not a remapped enum value.
+    // Selecting `off` yields exactly the off preset — a completely different
+    // provider shape, not a remapped enum value — and its budget default.
     let off = registry
-        .resolve(&rustx::model::ModelSelection {
-            reasoning_profile: Some(ReasoningProfileId::new("off")),
-            ..rustx::model::ModelSelection::of(reference.clone())
-        })
+        .resolve(&selection("p/reasoner", Some("off")))
         .expect("off profile resolves");
     assert!(!off.reasoning_enabled());
+    assert_eq!(off.max_output_tokens(), 4_096);
     assert_eq!(
-        serde_json::Value::Object(off.request_params().clone()),
+        params(&off),
         serde_json::json!({"thinking": {"type": "disabled"}, "temperature": 0.7})
     );
 
-    // A model-specific profile name carries no runtime meaning.
+    // A model-specific profile name carries no runtime meaning, and a profile
+    // never inherits a key another profile declares.
     let named = registry
-        .resolve(&rustx::model::ModelSelection {
-            reasoning_profile: Some(ReasoningProfileId::new("thinking-32k")),
-            ..rustx::model::ModelSelection::of(reference.clone())
-        })
+        .resolve(&selection("p/reasoner", Some("thinking-32k")))
         .expect("named profile resolves");
     assert!(named.reasoning_enabled());
+    assert_eq!(named.max_output_tokens(), 48_000);
     assert!(!named.request_params().contains_key("temperature"));
 
-    // An undeclared profile fails; no profile is ever synthesized.
-    assert!(
+    // An explicit budget replaces the profile default but never the hard cap.
+    let mut explicit = selection("p/reasoner", Some("off"));
+    explicit.max_output_tokens = Some(60_000);
+    assert_eq!(
         registry
-            .resolve(&rustx::model::ModelSelection {
-                reasoning_profile: Some(ReasoningProfileId::new("medium")),
-                ..rustx::model::ModelSelection::of(reference.clone())
-            })
-            .is_err(),
+            .resolve(&explicit)
+            .expect("budget")
+            .max_output_tokens(),
+        60_000
+    );
+    for invalid in [0, 64_001] {
+        explicit.max_output_tokens = Some(invalid);
+        assert!(matches!(
+            registry.resolve(&explicit),
+            Err(rustx::model::ModelInvocationError::InvalidOutputBudget { .. })
+        ));
+    }
+
+    // Non-reasoning presets carry their own sampling shape, null included.
+    let precise = registry
+        .resolve(&selection("p/sampler", None))
+        .expect("precise");
+    assert!(!precise.reasoning_enabled());
+    assert_eq!(
+        params(&precise),
+        serde_json::json!({"temperature": 0.1, "top_p": 0.5})
+    );
+    let creative = registry
+        .resolve(&selection("p/sampler", Some("creative")))
+        .expect("creative");
+    assert_eq!(creative.max_output_tokens(), 1_000);
+    assert_eq!(
+        params(&creative),
+        serde_json::json!({"temperature": 1.3, "stop": ["\n\n", null], "metadata": null})
+    );
+
+    // A Model without profiles supplies its own native object.
+    let plain = registry
+        .resolve(&selection("p/plain", None))
+        .expect("plain");
+    assert_eq!(plain.profile(), None);
+    assert_eq!(params(&plain), serde_json::json!({"temperature": 0.4}));
+
+    // Explicit unknown or inapplicable selections fail; nothing falls back
+    // and no profile is ever synthesized.
+    assert!(
+        matches!(
+            registry.resolve(&selection("p/reasoner", Some("medium"))),
+            Err(rustx::model::ModelInvocationError::UnknownProfile { .. })
+        ),
         "off/low/medium/high are never synthesized"
     );
+    assert!(matches!(
+        registry.resolve(&selection("p/plain", Some("precise"))),
+        Err(rustx::model::ModelInvocationError::ModelDeclaresNoProfiles { .. })
+    ));
 }
 
-/// The selected reasoning profile owns every top-level key it declares: a
-/// session override that also declares one fails deterministically instead of
-/// being resolved by merge order.
+/// The selected profile owns every top-level key it declares: an override
+/// that also declares one fails deterministically instead of being resolved
+/// by merge order. Overrides are one shallow overlay.
 #[test]
 fn a_session_override_may_not_claim_a_profile_owned_key() {
-    let model = FixtureModel::text("p/reasoner", ModelProtocol::AnthropicMessages).with_reasoning(
-        serde_json::json!({
-            "defaultProfile": "on",
-            "profiles": {
+    let model = FixtureModel::text("p/reasoner", ModelProtocol::AnthropicMessages)
+        .claiming_reasoning()
+        .with_profiles(
+            "on",
+            serde_json::json!({
                 "on": {
-                    "enabled": true,
+                    "reasoningEnabled": true,
                     "requestParams": {"thinking": {"type": "enabled"}, "temperature": 1.0}
                 }
-            }
-        }),
-    );
+            }),
+        );
     let handle: Arc<dyn ModelAdapter> = Arc::new(support::model::NullAdapter);
     let factory = support::model::ScriptedAdapterFactory::new(handle);
     let registry = support::model::fixture_registry(&[model], &factory);
     let reference = ModelRef::parse("p/reasoner").expect("reference");
 
-    let error = registry
-        .resolve(&rustx::model::ModelSelection {
-            request_params: common::request_params(serde_json::json!({"temperature": 0.2})),
-            ..rustx::model::ModelSelection::of(reference.clone())
-        })
-        .expect_err("a contested key must fail");
-    assert!(
-        matches!(
-            error,
-            rustx::model::ModelInvocationError::ReasoningProfileKeyOwnership { .. }
-        ),
-        "{error:?}"
-    );
-    assert!(error.to_string().contains("temperature"));
+    for contested in [
+        serde_json::json!({"temperature": 0.2}),
+        serde_json::json!({"top_k": 40, "thinking": null}),
+    ] {
+        let error = registry
+            .resolve(&rustx::model::ModelSelection {
+                request_params: common::request_params(contested),
+                ..rustx::model::ModelSelection::of(reference.clone())
+            })
+            .expect_err("a contested key must fail");
+        assert!(
+            matches!(
+                error,
+                rustx::model::ModelInvocationError::ProfileKeyOwnership { .. }
+            ),
+            "{error:?}"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("profile \"on\" owns request key")
+        );
+    }
 
-    // A key the profile does not declare is accepted and overlays normally.
+    // Unrelated keys are accepted; nested values and null overlay atomically.
     let ok = registry
         .resolve(&rustx::model::ModelSelection {
-            request_params: common::request_params(serde_json::json!({"top_k": 40})),
+            request_params: common::request_params(
+                serde_json::json!({"top_k": 40, "metadata": {"a": [1, null]}, "seed": null}),
+            ),
             ..rustx::model::ModelSelection::of(reference)
         })
         .expect("an uncontested key resolves");
-    assert_eq!(ok.request_params()["top_k"], serde_json::json!(40));
-    assert_eq!(ok.request_params()["temperature"], serde_json::json!(1.0));
+    assert_eq!(
+        serde_json::Value::Object(ok.request_params().clone()),
+        serde_json::json!({
+            "thinking": {"type": "enabled"}, "temperature": 1.0,
+            "top_k": 40, "metadata": {"a": [1, null]}, "seed": null
+        })
+    );
 }
 
 /// A failed `model_set` is transactional: the session keeps its previous
@@ -908,7 +1160,7 @@ async fn a_rejected_model_update_changes_nothing() {
         SessionModelConfig {
             summary_model: SummaryModelPolicy::Explicit {
                 model: ModelRef::parse("alpha/missing").expect("reference"),
-                reasoning_profile: None,
+                profile: None,
                 request_params: rustx::model::RequestParams::new(),
                 max_output_tokens: None,
             },
@@ -918,7 +1170,7 @@ async fn a_rejected_model_update_changes_nothing() {
         SessionModelConfig {
             summary_model: SummaryModelPolicy::Explicit {
                 model: alpha.reference(),
-                reasoning_profile: None,
+                profile: None,
                 request_params: common::request_params(serde_json::json!({"stream": false})),
                 max_output_tokens: None,
             },
@@ -964,7 +1216,7 @@ async fn a_rejected_model_update_changes_nothing() {
     assert_eq!(model.configured, SessionModelConfig::of(alpha.reference()));
 }
 
-/// A reasoning-capable model without a reasoning profile is semantically
+/// A reasoning-capable model without profiles is semantically
 /// always on, while its session selection has no profile to choose.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn always_on_reasoning_is_preserved_by_session_resolution() {
@@ -972,9 +1224,9 @@ async fn always_on_reasoning_is_preserved_by_session_resolution() {
     let state = session_model(&[&always_on], SessionModelConfig::of(always_on.reference()));
 
     let view = state.view();
-    assert_eq!(view.effective.reasoning_profile, None);
+    assert_eq!(view.effective.profile, None);
     assert!(view.effective.reasoning_enabled);
     let snapshot = state.snapshot();
-    assert_eq!(snapshot.primary().reasoning_profile(), None);
+    assert_eq!(snapshot.primary().profile(), None);
     assert!(snapshot.primary().reasoning_enabled());
 }

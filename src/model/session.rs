@@ -32,23 +32,20 @@
 //! # Summary policy
 //!
 //! Production supports exactly two modes, and both resolve through the same
-//! catalog, credential binding, compat handling, reasoning-profile
-//! validation, protected-key validation, and shallow overlay as a primary
-//! model:
+//! catalog, credential binding, compat handling, Model Profile selection,
+//! protected-key validation, and shallow overlay as a primary model:
 //!
 //! - `session` — the summary uses the attempt's frozen primary invocation,
 //!   subject only to the context plane's summary output safety cap, which is
 //!   applied through the runtime-owned protected max-output field and never
-//!   by mutating a reasoning profile or a request-parameter object;
+//!   by mutating a Model Profile or a request-parameter object;
 //! - `explicit` — a separately resolved catalog model, frozen at admission
 //!   so a later mutation of live session state cannot change the summary
 //!   model of an already-admitted attempt.
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::catalog::{
-    CredentialEnvironment, ModelCatalogView, ModelRef, ReasoningProfileId,
-};
+use crate::model::catalog::{CredentialEnvironment, ModelCatalogView, ModelProfileId, ModelRef};
 use crate::model::frozen::FrozenModelSpec;
 use crate::model::invocation::{
     ModelBindingRegistry, ModelInvocationError, ModelInvocationView, ModelSelection, RequestParams,
@@ -67,10 +64,10 @@ pub enum SummaryModelPolicy {
     Explicit {
         /// The catalog model reference.
         model: ModelRef,
-        /// The selected reasoning profile; the model default is used when
-        /// absent.
+        /// The selected Model Profile; the model's `default_profile` is used
+        /// when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        reasoning_profile: Option<ReasoningProfileId>,
+        profile: Option<ModelProfileId>,
         /// The explicit summary request-parameter overrides.
         #[serde(default)]
         request_params: RequestParams,
@@ -92,15 +89,15 @@ pub enum SummaryModelPolicy {
 pub struct SessionModelConfig {
     /// The selected catalog model.
     pub model: ModelRef,
-    /// The selected reasoning profile; the model default is used when
-    /// absent.
+    /// The selected Model Profile; the model's `default_profile` is used
+    /// when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reasoning_profile: Option<ReasoningProfileId>,
+    pub profile: Option<ModelProfileId>,
     /// The session request-parameter overrides.
     #[serde(default)]
     pub request_params: RequestParams,
-    /// The session output-budget override; the model's configured maximum is
-    /// used when absent.
+    /// The session output-budget override; the selected profile's default,
+    /// else the model's hard maximum, is used when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
     /// The compaction summary model policy.
@@ -114,7 +111,7 @@ impl SessionModelConfig {
     pub fn of(model: ModelRef) -> Self {
         Self {
             model,
-            reasoning_profile: None,
+            profile: None,
             request_params: RequestParams::new(),
             max_output_tokens: None,
             summary_model: SummaryModelPolicy::Session,
@@ -126,7 +123,7 @@ impl SessionModelConfig {
     pub fn selection(&self) -> ModelSelection {
         ModelSelection {
             model: self.model.clone(),
-            reasoning_profile: self.reasoning_profile.clone(),
+            profile: self.profile.clone(),
             request_params: self.request_params.clone(),
             max_output_tokens: self.max_output_tokens,
         }
@@ -139,12 +136,12 @@ impl SessionModelConfig {
             SummaryModelPolicy::Session => None,
             SummaryModelPolicy::Explicit {
                 model,
-                reasoning_profile,
+                profile,
                 request_params,
                 max_output_tokens,
             } => Some(ModelSelection {
                 model: model.clone(),
-                reasoning_profile: reasoning_profile.clone(),
+                profile: profile.clone(),
                 request_params: request_params.clone(),
                 max_output_tokens: *max_output_tokens,
             }),
@@ -215,7 +212,7 @@ impl AttemptModelSnapshot {
     /// The invocation compaction summaries of this attempt must use.
     ///
     /// In `session` mode this is the primary invocation itself — the same
-    /// provider binding, model, protocol, reasoning profile, and effective
+    /// provider binding, model, protocol, Model Profile, and effective
     /// request parameters.
     #[must_use]
     pub const fn summary_invocation(&self) -> &ResolvedModelInvocation {
@@ -483,7 +480,7 @@ mod tests {
         config.max_output_tokens = Some(2048);
         config.summary_model = SummaryModelPolicy::Explicit {
             model: config.model.clone(),
-            reasoning_profile: None,
+            profile: None,
             request_params: RequestParams::new(),
             max_output_tokens: Some(1024),
         };
@@ -537,7 +534,7 @@ mod tests {
         ] {
             config.summary_model = SummaryModelPolicy::Explicit {
                 model: ModelRef::parse(model).unwrap(),
-                reasoning_profile: profile.map(|p| ReasoningProfileId::parse(p).unwrap()),
+                profile: profile.map(|p| ModelProfileId::parse(p).unwrap()),
                 request_params: RequestParams::new(),
                 max_output_tokens: budget,
             };
