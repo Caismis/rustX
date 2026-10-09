@@ -6729,8 +6729,10 @@ contracts and provider protocols. These invariants are frozen by M2:
   duplicate keys rejected at any depth; every later layer and every client
   projection carries the structured object. Its numbers are exactly those whose
   value survives a binary64 round trip (RFC 7493 §2.2), enforced on source
-  parse, on client JSON decode, on native write and in catalog and selection
-  validation, so no hop — browser, native writer or provider — rounds one.
+  parse, on the raw App Server request text before decoding (a decoder only
+  ever sees the already-rounded value), on native write and in catalog and
+  selection validation, so no hop — browser, native writer or provider —
+  rounds one.
   Its diagnostics locate failures by field path and JSON line/column, never by
   authored key or value. Effective parameters have exactly
   one base — the Model's own object, or the selected Profile's complete object
@@ -6745,7 +6747,9 @@ contracts and provider protocols. These invariants are frozen by M2:
   `requestParams` (presence is tracked, so not even `{}`); no profile inherits
   from the Model or from another profile. A selected profile owns every
   top-level key it declares: an override that also declares one of those keys
-  is a deterministic configuration failure, never resolved by merge order.
+  is a deterministic configuration failure, never resolved by merge order. The
+  failure keeps the contested key only as an opaque typed value; no Display,
+  Debug or protocol payload renders it.
 
 - **Model references are deterministic.** `provider/model-id` splits at the
   first slash only. Provider IDs and Model Profile IDs reject `/`; model

@@ -694,7 +694,11 @@ async fn cancelled_attach_releases_reservation_but_not_manager_owned_load() {
     .await;
 }
 
-async fn attach(connection: &AppServerConnection, f: &Fixture, index: usize) -> AttachmentTarget {
+pub(super) async fn attach(
+    connection: &AppServerConnection,
+    f: &Fixture,
+    index: usize,
+) -> AttachmentTarget {
     let MethodResult::Attached { target, .. } = call(
         connection,
         10 + i64::try_from(index).unwrap(),

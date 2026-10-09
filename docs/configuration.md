@@ -205,6 +205,11 @@ binary64 reading prints back. `9007199254740993`, `2^60` and a decimal with more
 significant digits than binary64 carries are rejected with a located diagnostic
 instead of being silently rounded by a later hop, whether authored in TOML or
 sent as a structured App Server value; the native writer can never emit one.
+App Server requests are judged on their raw text: a JSON decoder rounds a
+literal before any decoded value exists, so the server reads each literal
+inside a declared `request_params`/`requestParams` member of the request schema
+before decoding, and refuses a lossy one as Invalid params naming neither key
+nor value.
 `9007199254740992`, `0.1`, `1e300` and every other binary64-exact value
 round-trip unchanged. A value that needs more precision belongs in a JSON
 string if the provider accepts one.
@@ -235,7 +240,10 @@ Model with profiles:     selected profile params + selection overrides
 
 The overlay is top-level only: nested values are replaced atomically and a JSON
 `null` is a real value, not a deletion. An override may add unrelated keys but
-may not repeat a top-level key the selected profile declares. Protocol-owned
+may not repeat a top-level key the selected profile declares, whatever its
+value. That failure names the Model, the Profile and the override layer, never
+the key: a provider-native key is authored content as opaque as a value.
+Protocol-owned
 fields — model identity, messages/input/instructions, tools, streaming, provider
 continuation state and every output-token field — are protected in every layer
 and again at final wire construction. The output budget is the explicit

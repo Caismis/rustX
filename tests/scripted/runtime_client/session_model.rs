@@ -1059,9 +1059,13 @@ fn model_profiles_resolve_to_their_exact_complete_presets() {
 
 /// The selected profile owns every top-level key it declares: an override
 /// that also declares one fails deterministically instead of being resolved
-/// by merge order. Overrides are one shallow overlay.
+/// by merge order, whatever the override's value type. The contested key is
+/// authored content as opaque as a value: it stays typed for comparisons and
+/// is never rendered. Overrides are one shallow overlay.
 #[test]
 fn a_session_override_may_not_claim_a_profile_owned_key() {
+    use rustx::model::invocation::RequestParamsLayer;
+    const MARKER: &str = "sk-SECRET_MARKER";
     let model = FixtureModel::text("p/reasoner", ModelProtocol::AnthropicMessages)
         .claiming_reasoning()
         .with_profiles(
@@ -1069,7 +1073,7 @@ fn a_session_override_may_not_claim_a_profile_owned_key() {
             serde_json::json!({
                 "on": {
                     "reasoningEnabled": true,
-                    "requestParams": {"thinking": {"type": "enabled"}, "temperature": 1.0}
+                    "requestParams": {"thinking": {"type": "enabled"}, "temperature": 1.0, MARKER: 1}
                 }
             }),
         );
@@ -1078,28 +1082,64 @@ fn a_session_override_may_not_claim_a_profile_owned_key() {
     let registry = support::model::fixture_registry(&[model], &factory);
     let reference = ModelRef::parse("p/reasoner").expect("reference");
 
-    for contested in [
-        serde_json::json!({"temperature": 0.2}),
-        serde_json::json!({"top_k": 40, "thinking": null}),
+    for (contested, expected) in [
+        (serde_json::json!({"temperature": 0.2}), "temperature"),
+        (
+            serde_json::json!({"top_k": 40, "thinking": null}),
+            "thinking",
+        ),
+        (serde_json::json!({MARKER: null}), MARKER),
+        (
+            serde_json::json!({MARKER: [MARKER], "temperature": MARKER}),
+            MARKER,
+        ),
+        (
+            serde_json::json!({"top_k": 1, "temperature": {}, MARKER: false}),
+            "temperature",
+        ),
     ] {
-        let error = registry
-            .resolve(&rustx::model::ModelSelection {
-                request_params: common::request_params(contested),
+        for layer in [
+            RequestParamsLayer::SessionOverrides,
+            RequestParamsLayer::SummaryOverrides,
+        ] {
+            let selection = rustx::model::ModelSelection {
+                request_params: common::request_params(contested.clone()),
                 ..rustx::model::ModelSelection::of(reference.clone())
-            })
-            .expect_err("a contested key must fail");
-        assert!(
-            matches!(
-                error,
-                rustx::model::ModelInvocationError::ProfileKeyOwnership { .. }
-            ),
-            "{error:?}"
-        );
-        assert!(
-            error
-                .to_string()
-                .contains("profile \"on\" owns request key")
-        );
+            };
+            let error = registry
+                .resolve_with_layer(&selection, layer)
+                .expect_err("a contested key must fail");
+            let rustx::model::ModelInvocationError::ProfileKeyOwnership {
+                profile,
+                layer: reported,
+                key,
+                ..
+            } = &error
+            else {
+                panic!("{error:?}")
+            };
+            // The first contested key in authored order, every time.
+            assert_eq!(key.as_str(), expected);
+            assert_eq!((profile.as_str(), *reported), ("on", layer));
+            assert_eq!(
+                registry.resolve_with_layer(&selection, layer).unwrap_err(),
+                error
+            );
+            let (display, debug) = (error.to_string(), format!("{error:?}"));
+            assert_eq!(
+                display,
+                format!(
+                    "model p/reasoner: Model Profile parameter ownership collision: the \
+                     {layer} declare a top-level key profile \"on\" already owns"
+                )
+            );
+            for rendered in [&display, &debug] {
+                assert!(
+                    !rendered.contains("SECRET") && !rendered.contains(expected),
+                    "{rendered}"
+                );
+            }
+        }
     }
 
     // Unrelated keys are accepted; nested values and null overlay atomically.
@@ -1114,7 +1154,7 @@ fn a_session_override_may_not_claim_a_profile_owned_key() {
     assert_eq!(
         serde_json::Value::Object(ok.request_params().clone()),
         serde_json::json!({
-            "thinking": {"type": "enabled"}, "temperature": 1.0,
+            "thinking": {"type": "enabled"}, "temperature": 1.0, MARKER: 1,
             "top_k": 40, "metadata": {"a": [1, null]}, "seed": null
         })
     );

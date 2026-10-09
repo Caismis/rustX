@@ -801,6 +801,26 @@ impl ModelSelection {
     }
 }
 
+/// One authored top-level provider-native request key.
+///
+/// A key is authored JSON content as opaque as a value, and may itself be a
+/// credential, so no rendering — [`fmt::Display`] or [`fmt::Debug`] — prints
+/// it; only typed comparisons read it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct RequestKey(String);
+impl RequestKey {
+    /// The key text, for typed comparisons only.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+impl fmt::Debug for RequestKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("RequestKey(<opaque>)")
+    }
+}
+
 /// A model-invocation resolution failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModelInvocationError {
@@ -827,8 +847,10 @@ pub enum ModelInvocationError {
         model: ModelRef,
         /// The selected profile.
         profile: ModelProfileId,
-        /// The contested key.
-        key: String,
+        /// The override layer that declares the key.
+        layer: RequestParamsLayer,
+        /// The first contested key, in the override's authored order.
+        key: RequestKey,
     },
     /// A configured request-parameter layer collides with a protected wire
     /// key.
@@ -882,11 +904,12 @@ impl fmt::Display for ModelInvocationError {
             Self::ProfileKeyOwnership {
                 model,
                 profile,
-                key,
+                layer,
+                key: _,
             } => write!(
                 f,
-                "model {model}: profile {:?} owns request key {key:?}; \
-                 an explicit override may not also declare it",
+                "model {model}: Model Profile parameter ownership collision: the \
+                 {layer} declare a top-level key profile {:?} already owns",
                 profile.as_str()
             ),
             Self::ProtectedKey(collision) => write!(f, "{collision}"),
@@ -1246,7 +1269,8 @@ pub fn analyze_selection(
                 return Err(ModelInvocationError::ProfileKeyOwnership {
                     model: selection.model.clone(),
                     profile: profile_id.clone(),
-                    key: key.clone(),
+                    layer,
+                    key: RequestKey(key.clone()),
                 });
             }
         }

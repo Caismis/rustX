@@ -394,6 +394,14 @@ impl AppServerConnection {
             )));
         }
         let id = id?;
+        // Decoding rounds a number literal before any DTO can see it, so the
+        // provider-native parameter domain is decided on the original text.
+        if !super::wire::request_params_numbers_are_exact(json) {
+            return Some(Reply::plain(failure(
+                Some(id),
+                rpc_error(-32602, "Invalid params", None),
+            )));
+        }
         // Decode the original bytes, not the Value above: materializing a Value
         // first would erase duplicate fields before typed validation.
         if let Ok(request) = serde_json::from_str::<Request>(json) {

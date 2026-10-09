@@ -5314,3 +5314,457 @@ async fn issue456_inexact_numbers_are_refused_before_any_write_and_exact_ones_ro
     }))
     .await;
 }
+
+/// The raw App Server request text of one typed call, with `"LITERAL"` spelled
+/// as `literal`. The number exists only as text, as a client sends it: no
+/// `Value` ever holds it rounded.
+fn raw_request(call: crate::app_server::protocol::Method, literal: &str) -> String {
+    use crate::app_server::protocol::{JsonRpcVersion, Request, RequestId};
+    let text = serde_json::to_string(&Request {
+        jsonrpc: JsonRpcVersion::V2,
+        id: RequestId::Integer(456),
+        call,
+    })
+    .unwrap();
+    assert!(text.contains("\"LITERAL\""));
+    text.replace("\"LITERAL\"", literal)
+}
+
+/// Issue #456: a provider-native parameter number is judged on the raw App
+/// Server request text, before `serde_json` rounds it to binary64. Every
+/// parameter entry point — Model and Profile authoring, the root and an
+/// explicit Summary `ModelLayer`, a named Agent, and a Session selection and
+/// its explicit Summary — refuses a literal some hop would round with a
+/// key-free Invalid params, before any write, publication, Session change or
+/// provider request; exact literals mean exactly what they spell from the raw
+/// request through the native source, the reread projection and the provider
+/// wire.
+#[allow(clippy::too_many_lines)] // one complete raw-literal boundary
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
+    use crate::app_server::{connection::AppServerConnection, protocol::*};
+    use crate::local_runtime::authoring::{ModelLayer, SummaryAuthoring};
+    use crate::local_runtime::config::AgentProfileDocument;
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    use crate::model::authoring::Profile;
+    use crate::model::catalog::{ModelProfileId, ModelRef};
+    use crate::model::session::{SessionModelConfig, SummaryModelPolicy};
+    use crate::toml_authoring::AuthoredRequestParams;
+    use serde_json::json;
+    // Every entry point carries the literal at top level and nested in an
+    // array of objects, beside a key that must never be echoed.
+    let holes = || -> crate::model::invocation::RequestParams {
+        serde_json::from_value(json!({
+            "sk-SECRET_KEY": "LITERAL",
+            "nested": [1, {"deep": ["LITERAL"]}]
+        }))
+        .unwrap()
+    };
+    Box::pin(bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        super::protocol::initialize(&connection).await;
+        let target = super::protocol::attach(&connection, &f, 0).await;
+        let id = f.sessions[0].id.clone();
+        let runtime = f.manager.configuration_runtime(&id).unwrap();
+        let user = SourceTarget::User;
+        let source = f.manager.source_settings(&user, None).await.unwrap();
+        let path = source.user.path.clone();
+        let original = std::fs::read(&path).unwrap();
+        let authored = source.user.authored.clone().unwrap().models.unwrap()["local/a"].clone();
+        let local = ModelRef::parse("local/a").unwrap();
+        let profiled = |params: AuthoredRequestParams| {
+            let mut model = authored.clone();
+            model.request_params = None;
+            model.default_profile = Some(ModelProfileId::new("p"));
+            model.profiles = Some(
+                [(
+                    ModelProfileId::new("p"),
+                    Profile { reasoning_enabled: None, max_output_tokens: None, request_params: params },
+                )]
+                .into(),
+            );
+            model
+        };
+        let write = |mutation: ConfigMutation| Method::SourcesWrite {
+            target: user.clone(),
+            expected_revision: source.user.revision.clone(),
+            mutation: SourceMutation::Config { mutation },
+        };
+        let layer = |request_params, summary_model| ModelLayer {
+            model: Some(local.clone()),
+            profile: None,
+            request_params,
+            max_output_tokens: None,
+            summary_model,
+        };
+        let selection = SessionModelConfig { request_params: holes(), ..SessionModelConfig::of(local.clone()) };
+        let entry_points = [
+            write(ConfigMutation::Model {
+                id: "local/a".into(),
+                authored: Some(crate::model::authoring::Model {
+                    request_params: Some(AuthoredRequestParams(holes())),
+                    ..authored.clone()
+                }),
+            }),
+            write(ConfigMutation::Model { id: "local/a".into(), authored: Some(profiled(AuthoredRequestParams(holes()))) }),
+            write(ConfigMutation::RootModel { authored: Some(layer(Some(AuthoredRequestParams(holes())), None)) }),
+            write(ConfigMutation::RootModel {
+                authored: Some(layer(
+                    None,
+                    Some(SummaryAuthoring::Explicit {
+                        model: local.clone(),
+                        profile: None,
+                        request_params: AuthoredRequestParams(holes()),
+                        max_output_tokens: None,
+                    }),
+                )),
+            }),
+            Method::SourcesWrite {
+                target: user.clone(),
+                expected_revision: source.user.revision.clone(),
+                mutation: SourceMutation::Agent {
+                    name: crate::runtime::subagent::SubagentName::parse("reviewer").unwrap(),
+                    authored: Some(AgentProfileDocument {
+                        description: "Reviews".into(),
+                        instructions: "Review.".into(),
+                        model: Some(selection.clone()),
+                        ..AgentProfileDocument::default()
+                    }),
+                },
+            },
+            Method::ModelSet { target: target.clone(), config: Box::new(selection.clone()) },
+            Method::ModelSet {
+                target: target.clone(),
+                config: Box::new(SessionModelConfig {
+                    summary_model: SummaryModelPolicy::Explicit {
+                        model: local.clone(),
+                        profile: None,
+                        request_params: holes(),
+                        max_output_tokens: None,
+                    },
+                    ..SessionModelConfig::of(local.clone())
+                }),
+            },
+        ];
+        let application = f.manager.configuration_application(&id);
+        let model = runtime.model_view();
+        for call in &entry_points {
+            // The shape is a valid request: only the literal is refused.
+            serde_json::from_str::<Request>(&raw_request(call.clone(), "0.5")).unwrap();
+            for literal in [
+                "0.12345678901234567890",
+                "-1.234567890123456789",
+                "9007199254740993",
+                "-9007199254740993",
+                "1152921504606846976",
+            ] {
+                let response = connection.handle_json(&raw_request(call.clone(), literal)).await.unwrap();
+                let text = serde_json::to_string(&response).unwrap();
+                let Response::Failure(Failure { id, error, .. }) = response else { panic!("{text}") };
+                assert_eq!((id, error.code, error.message.as_str(), error.data), (Some(RequestId::Integer(456)), -32602, "Invalid params", None));
+                assert!(!text.contains("SECRET") && !text.contains(literal.trim_start_matches('-')), "{text}");
+            }
+            // A literal beyond binary64 is no number `serde_json` can hold at
+            // all: the frame is refused before any decoding.
+            let response = connection.handle_json(&raw_request(call.clone(), "1e400")).await.unwrap();
+            let Response::Failure(Failure { id: None, error, .. }) = response else { panic!("1e400 decoded") };
+            assert_eq!(error.code, -32700);
+        }
+        // Nothing was written, published, adopted or sent.
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(f.manager.source_settings(&user, None).await.unwrap().user.revision, source.user.revision);
+        assert!(!path.parent().unwrap().join("agents/reviewer.toml").exists());
+        assert_eq!(f.manager.configuration_application(&id), application);
+        assert_eq!(runtime.model_view(), model);
+        assert!(f.provider.request_bodies().is_empty());
+
+        // Exact literals, in any spelling, mean exactly what they spell at
+        // every hop. A numeric-looking string stays a string.
+        let exact = r#"{"a":0.1,"b":1.5,"c":1.50,"d":15e-1,"e":9007199254740992,"f":-9007199254740991,"g":1e20,"h":1e300,"n":{"list":[0.1,{"x":1e300}]},"s":"0.12345678901234567890"}"#;
+        let expected: serde_json::Value = serde_json::from_str(exact).unwrap();
+        assert_eq!(expected["c"], json!(1.5));
+        assert_eq!(expected["d"], json!(1.5));
+        assert_eq!(expected["s"], json!("0.12345678901234567890"));
+        let placeholder = AuthoredRequestParams(serde_json::from_value(json!({"exact": "LITERAL"})).unwrap());
+        let response = connection
+            .handle_json(&raw_request(write(ConfigMutation::Model { id: "local/a".into(), authored: Some(profiled(placeholder)) }), exact))
+            .await
+            .unwrap();
+        let Response::Success(_) = response else { panic!("{response:?}") };
+        let expected = json!({"exact": expected});
+        let toml = std::fs::read_to_string(&path).unwrap().parse::<toml::Table>().unwrap();
+        let native = toml["models"]["local/a"]["profiles"]["p"]["request_params"].as_str().unwrap();
+        assert_eq!(serde_json::Value::Object(crate::toml_authoring::parse_request_params_json(native).unwrap()), expected);
+        let MethodResult::SourceSettings { projection: settings } = super::protocol::call(&connection, 457, Method::SourcesRead { target: user.clone() }).await else {
+            panic!("sources")
+        };
+        let projected = &settings.user.authored.as_ref().unwrap().models.as_ref().unwrap()["local/a"];
+        assert_eq!(serde_json::Value::Object(projected.profiles.as_ref().unwrap()[&ModelProfileId::new("p")].request_params.0.clone()), expected);
+        let candidate = settled(&f, 0).await.candidate.expect("the selected Model changed");
+        f.manager.adopt_configuration(&id, &candidate.identity, candidate.expected_binding).unwrap();
+
+        // A Session override from raw text reaches the provider wire exactly.
+        let override_text = r#"{"o1":1.50,"o2":-9007199254740991,"o3":15e-1,"o4":[1e20,{"o5":0.1}]}"#;
+        let call = Method::ModelSet {
+            target: target.clone(),
+            config: Box::new(SessionModelConfig {
+                profile: Some(ModelProfileId::new("p")),
+                request_params: serde_json::from_value(json!({"override": "LITERAL"})).unwrap(),
+                ..SessionModelConfig::of(local.clone())
+            }),
+        };
+        let Response::Success(_) = connection.handle_json(&raw_request(call, override_text)).await.unwrap() else {
+            panic!("exact override refused")
+        };
+        let mut effective = expected.as_object().unwrap().clone();
+        effective.insert("override".into(), serde_json::from_str(override_text).unwrap());
+        assert_eq!(runtime.model_view().effective.request_params, effective);
+        let settlement = runtime.settlement_signal();
+        runtime.submit_inbound(input("exact literals")).unwrap();
+        f.gates[0].wait_entered().await;
+        f.gates[0].release();
+        settlement.notified().await;
+        let body: serde_json::Value = serde_json::from_str(&f.provider.request_body(0)).unwrap();
+        for (key, value) in &effective {
+            assert_eq!(&body[key], value, "{key}");
+        }
+        f.close().await;
+    }))
+    .await;
+}
+
+/// Issue #456: a Model Profile owns every top-level key it declares, and an
+/// override declaring one is refused at every selection — a Session selection
+/// and its explicit Summary, the root Agent and its explicit Summary, and a
+/// named Agent — whatever the value's type, without the key ever reaching an
+/// App Server payload: a provider-native key is as opaque as a value. Nothing
+/// invalid is published or adopted and no provider request starts.
+#[allow(clippy::too_many_lines)] // every selection surface of one invariant
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
+    use crate::app_server::{connection::AppServerConnection, protocol::*};
+    use crate::local_runtime::authoring::{ModelLayer, SummaryAuthoring};
+    use crate::local_runtime::config::AgentProfileDocument;
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    use crate::model::authoring::Profile;
+    use crate::model::catalog::{ModelProfileId, ModelRef};
+    use crate::model::session::{SessionModelConfig, SummaryModelPolicy};
+    use crate::toml_authoring::AuthoredRequestParams;
+    use serde_json::json;
+    const MARKER: &str = "SECRET_MARKER";
+    const KEY: &str = "sk-SECRET_MARKER";
+    // The authoring projection returns each document's own authored data,
+    // key included; no diagnostic it publishes about it repeats the key.
+    async fn sources_quiet(connection: &AppServerConnection) {
+        let MethodResult::SourceSettings { projection } = super::protocol::call(
+            connection,
+            3,
+            Method::SourcesRead {
+                target: SourceTarget::User,
+            },
+        )
+        .await
+        else {
+            panic!("sources")
+        };
+        assert!(
+            !serde_json::to_string(&projection.application)
+                .unwrap()
+                .contains(MARKER)
+        );
+        assert!(
+            !projection
+                .prospective_diagnostic
+                .unwrap_or_default()
+                .contains(MARKER)
+        );
+        assert!(
+            !projection
+                .user
+                .diagnostic
+                .unwrap_or_default()
+                .contains(MARKER)
+        );
+    }
+    let object = |value: serde_json::Value| -> crate::model::invocation::RequestParams {
+        serde_json::from_value(value).unwrap()
+    };
+    Box::pin(bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        super::protocol::initialize(&connection).await;
+        let target = super::protocol::attach(&connection, &f, 0).await;
+        let id = f.sessions[0].id.clone();
+        let runtime = f.manager.configuration_runtime(&id).unwrap();
+        let local = ModelRef::parse("local/a").unwrap();
+        let p = ModelProfileId::new("p");
+        let user = SourceTarget::User;
+        let mut model = f.manager.source_settings(&user, None).await.unwrap().user.authored.unwrap().models.unwrap()
+            ["local/a"]
+            .clone();
+        model.request_params = None;
+        model.default_profile = Some(p.clone());
+        model.profiles = Some(
+            [(
+                p.clone(),
+                Profile {
+                    reasoning_enabled: None,
+                    max_output_tokens: None,
+                    request_params: AuthoredRequestParams(object(json!({KEY: null, "temperature": 0.5}))),
+                },
+            )]
+            .into(),
+        );
+        write(&f, 0, ConfigMutation::Model { id: "local/a".into(), authored: Some(model) }).await;
+        let candidate = settled(&f, 0).await.candidate.expect("the selected Model changed");
+        f.manager.adopt_configuration(&id, &candidate.identity, candidate.expected_binding).unwrap();
+        let resources = runtime.runtime_resources();
+        let view = runtime.model_view();
+        assert_eq!(view.effective.request_params, object(json!({KEY: null, "temperature": 0.5})));
+        let quiet = |text: &str| assert!(!text.contains(MARKER), "{text}");
+
+        // Session selections: the key collides whatever its value's type; an
+        // explicit Summary is its own override layer. The refusal names the
+        // layer and the Profile, never the key.
+        let selection = |params: serde_json::Value| SessionModelConfig {
+            request_params: object(params),
+            ..SessionModelConfig::of(local.clone())
+        };
+        for (config, layer) in [
+            (selection(json!({"top_k": 40, KEY: 1})), "session request-parameter overrides"),
+            (selection(json!({KEY: null})), "session request-parameter overrides"),
+            (selection(json!({KEY: {"nested": [KEY]}})), "session request-parameter overrides"),
+            (selection(json!({"temperature": false})), "session request-parameter overrides"),
+            (
+                SessionModelConfig {
+                    summary_model: SummaryModelPolicy::Explicit {
+                        model: local.clone(),
+                        profile: Some(p.clone()),
+                        request_params: object(json!({KEY: "x"})),
+                        max_output_tokens: None,
+                    },
+                    ..SessionModelConfig::of(local.clone())
+                },
+                "explicit summary request-parameter overrides",
+            ),
+        ] {
+            let response = connection
+                .handle_request(Request {
+                    jsonrpc: JsonRpcVersion::V2,
+                    id: RequestId::Integer(1),
+                    call: Method::ModelSet { target: target.clone(), config: Box::new(config) },
+                })
+                .await;
+            let text = serde_json::to_string(&response).unwrap();
+            quiet(&text);
+            let Response::Failure(Failure {
+                error: RpcError { data: Some(ErrorData::ConfigurationAdoption { rejection: AdoptionError::Failed { diagnostic } }), .. },
+                ..
+            }) = response
+            else {
+                panic!("{text}")
+            };
+            assert!(
+                diagnostic.contains(&format!(
+                    "Model Profile parameter ownership collision: the {layer} declare a top-level key profile \"p\" already owns"
+                )),
+                "{diagnostic}"
+            );
+            assert_eq!(runtime.model_view(), view);
+        }
+        // An unrelated override key is no collision.
+        let MethodResult::Model { model } = super::protocol::call(
+            &connection,
+            2,
+            Method::ModelSet { target: target.clone(), config: Box::new(selection(json!({"top_k": 40}))) },
+        )
+        .await
+        else {
+            panic!("model")
+        };
+        assert_eq!(model.effective.request_params, object(json!({KEY: null, "temperature": 0.5, "top_k": 40})));
+        let view = runtime.model_view();
+        let resources_after_selection = runtime.runtime_resources();
+        assert_eq!(resources_after_selection.revision(), resources.revision());
+
+        // Authored selections: the root Agent, its explicit Summary and a
+        // named Agent the root admits. The source is a well-formed document;
+        // its effective configuration is refused, so nothing is published.
+        let root = |request_params: serde_json::Value, summary: Option<serde_json::Value>| ModelLayer {
+            model: Some(local.clone()),
+            profile: Some(p.clone()),
+            request_params: Some(AuthoredRequestParams(object(request_params))),
+            max_output_tokens: None,
+            summary_model: summary.map(|params| SummaryAuthoring::Explicit {
+                model: local.clone(),
+                profile: Some(p.clone()),
+                request_params: AuthoredRequestParams(object(params)),
+                max_output_tokens: None,
+            }),
+        };
+        for (layer, expected) in [
+            (root(json!({KEY: 0}), None), "session request-parameter overrides"),
+            (root(json!({}), Some(json!({"temperature": [KEY]}))), "explicit summary request-parameter overrides"),
+        ] {
+            write(&f, 0, ConfigMutation::RootModel { authored: Some(layer) }).await;
+            let application = settled(&f, 0).await;
+            let text = serde_json::to_string(&application).unwrap();
+            quiet(&text);
+            assert!(application.candidate.is_none(), "{text}");
+            assert!(text.contains("Model Profile parameter ownership collision"), "{text}");
+            assert!(text.contains(expected), "{text}");
+            sources_quiet(&connection).await;
+            assert!(Arc::ptr_eq(&resources_after_selection, &runtime.runtime_resources()));
+            assert_eq!(runtime.model_view(), view);
+        }
+        write(&f, 0, ConfigMutation::RootModel { authored: Some(root(json!({}), None)) }).await;
+        settled(&f, 0).await;
+
+        let reviewer = crate::runtime::subagent::SubagentName::parse("reviewer").unwrap();
+        let source = f.manager.source_settings(&user, None).await.unwrap();
+        f.manager
+            .source_settings(
+                &user,
+                Some((
+                    source.absent_resource_revision.clone(),
+                    SourceMutation::Agent {
+                        name: reviewer.clone(),
+                        authored: Some(AgentProfileDocument {
+                            description: "Reviews".into(),
+                            instructions: "Review.".into(),
+                            model: Some(SessionModelConfig {
+                                profile: Some(p.clone()),
+                                request_params: object(json!({"top_k": 1, KEY: true})),
+                                ..SessionModelConfig::of(local.clone())
+                            }),
+                            ..AgentProfileDocument::default()
+                        }),
+                    },
+                )),
+            )
+            .await
+            .unwrap();
+        write(&f, 0, ConfigMutation::Agents { authored: Some(vec![reviewer.clone()]) }).await;
+        let application = settled(&f, 0).await;
+        let text = serde_json::to_string(&application).unwrap();
+        quiet(&text);
+        assert!(application.candidate.is_none(), "{text}");
+        let UnitApplication::Failed { diagnostic } = &application.units[&ApplyUnit::Capabilities] else {
+            panic!("{text}")
+        };
+        assert!(
+            diagnostic.ends_with(
+                "model local/a: Model Profile parameter ownership collision: the session \
+                 request-parameter overrides declare a top-level key profile \"p\" already owns"
+            ),
+            "{diagnostic}"
+        );
+        sources_quiet(&connection).await;
+        assert!(Arc::ptr_eq(&resources_after_selection, &runtime.runtime_resources()));
+        assert_eq!(runtime.model_view(), view);
+        assert!(f.provider.request_bodies().is_empty());
+        f.close().await;
+    }))
+    .await;
+}
