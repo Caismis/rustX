@@ -1,9 +1,9 @@
 import { message, displayText, type DisplayText } from '../../../locale/translation';
 import { useTranslation, useNotice } from '../../../locale/react';
-import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useContext, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Button } from '../../../presentation/primitives/Button';
 import { Choice, Toggle } from '../primitives/aria';
-import type { TypedUnitForm } from './bridge';
+import { UnitReset, type TypedUnitForm } from './bridge';
 import { formatRequestParams, parseRequestParams, sameJson, type RequestParams } from './request-params';
 import css from '../../../presentation/settings/SettingsContent.module.css';
 
@@ -226,12 +226,20 @@ export function RequestParamsEditor({ label, value, change, optional = true }: {
   const [error, setError] = useNotice();
   const input = useRef<HTMLTextAreaElement>(null);
   const reflected = useRef(value);
+  // Unparsed text is editor-local and never a draft, so the transaction owner
+  // cannot reset it through the value alone: a discard or reviewed revision
+  // may present the very value this editor already reflects. The owner's
+  // reset generation resynchronizes it; any other render keeps the text.
+  const resets = useContext(UnitReset);
+  const seen = useRef(resets);
   useLayoutEffect(() => {
-    if (sameJson(value, reflected.current)) return;
+    const reset = seen.current !== resets;
+    seen.current = resets;
+    if (!reset && sameJson(value, reflected.current)) return;
     reflected.current = value;
     setText(display(value));
     setError('');
-  }, [value]);
+  }, [value, resets]);
   useLayoutEffect(() => { input.current?.setCustomValidity(error); }, [error]);
   const accept = (next: RequestParams | undefined) => {
     setError('');
@@ -248,9 +256,11 @@ export function RequestParamsEditor({ label, value, change, optional = true }: {
         if (next.trim() === '') { accept(optional ? undefined : {}); return; }
         const parsed = parseRequestParams(next);
         if (parsed.ok) { accept(parsed.value); return; }
-        setError(parsed.error.kind === 'syntax' ? message('settings:fields.request-params-invalid-json')
-          : parsed.error.kind === 'not_object' ? message('settings:fields.request-params-not-object')
-            : message('settings:fields.request-params-duplicate-key', { p0: parsed.error.path }));
+        const failure = parsed.error;
+        setError(failure.kind === 'syntax' ? message('settings:fields.request-params-invalid-json')
+          : failure.kind === 'not_object' ? message('settings:fields.request-params-not-object')
+            : message(failure.kind === 'duplicate_key' ? 'settings:fields.request-params-duplicate-key' : 'settings:fields.request-params-inexact-number',
+              { p0: failure.line, p1: failure.column }));
       }} /></label>
     {error && <span role="alert" className={css.error}>{error}</span>}
     <p className={css.hint}>{tx('settings:fields.request-params-hint')}</p>

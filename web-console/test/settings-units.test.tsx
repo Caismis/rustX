@@ -7,7 +7,8 @@ import { ToolsPage } from '../src/app/settings/tools/ToolsPage';
 import { ExtensionDetail } from '../src/app/settings/extensions/ExtensionDetail';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
 import type { ModelLayer, RuntimeLayer, SourceScope, SourceSettings } from '../../protocol/app-server/v39';
-import { chooseOption, confirmAction, renderEditor } from './settings-harness';
+import { chooseOption, confirmAction, renderEditor, sameRevision } from './settings-harness';
+import type { WriteOutcome } from '../src/app/settings/machines/port';
 import { act } from '@testing-library/react';
 import { localeController } from '../src/locale/controller';
 import { translator } from '../src/locale/translation';
@@ -336,17 +337,177 @@ it('an actor-owned reset replaces a mounted JSON buffer, its error and its valid
   expect(write.mock.calls[0][0]).toEqual({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...main, request_params: { temperature: 1, top_p: 0.25 } } } });
 });
 
+/** One deferred value, resolved explicitly by the test. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(settle => { resolve = settle; });
+  return { promise, resolve };
+}
+const canonical = '{\n  "temperature": 1,\n  "top_p": 0.5\n}';
+/** The same Model detail as `requestParameters`, with the native write and the
+ * reads after the first under the test's control, so source observations and
+ * post-commit rereads arrive exactly when the test says. */
+async function ownedRequestParameters() {
+  const main = { ...cfg3Effective().document.models!.main, request_params: { temperature: 1, top_p: 0.5 } };
+  const source = catalogSource('user', { models: { main } });
+  const reads: Array<ReturnType<typeof deferred<SourceSettings>>> = [];
+  const writes: Array<ReturnType<typeof deferred<WriteOutcome>>> = [];
+  const editor = await renderEditor(modelDetail(source, 'user', 'r1', 'main'), {
+    source, context: source,
+    write: () => { const next = deferred<WriteOutcome>(); writes.push(next); return next.promise; },
+    reread: () => { const next = deferred<SourceSettings>(); reads.push(next); return next.promise; },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Request defaults and protocol compatibility' }));
+  const input = screen.getByLabelText('Model request parameters') as HTMLTextAreaElement;
+  /** A native source revision carrying `models`, as the authoritative read
+   * and the Settings page that renders it both see it. */
+  const revision = (name: string, models: Record<string, unknown>) => {
+    const next = sameRevision(catalogSource('user', { models }), name);
+    return next;
+  };
+  /** Deliver one authoritative observation to the actor and the page. */
+  const observe = async (next: SourceSettings) => {
+    await act(async () => { editor.actor.send({ type: 'REFRESH' }); });
+    await waitFor(() => expect(reads.length).toBeGreaterThan(0));
+    await act(async () => { reads.shift()!.resolve(structuredClone(next)); });
+    await waitFor(() => expect(editor.context().observation?.user.revision).toBe(next.user.revision));
+    editor.rerender(modelDetail(next, 'user', next.user.revision, 'main'));
+  };
+  return { ...editor, main, input, revision, observe, reads, nativeWrites: writes };
+}
+/** The editor shows exactly the owner's value again: canonical text, no
+ * diagnostic, valid, and the same mounted element. */
+function restored(input: HTMLTextAreaElement, text = canonical) {
+  expect(screen.getByLabelText('Model request parameters')).toBe(input);
+  expect(input.value).toBe(text);
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(input.getAttribute('aria-invalid')).toBeNull();
+  expect(input.validity.valid).toBe(true);
+  expect(input.validationMessage).toBe('');
+}
+/** Unparsed text held by the editor alone, diagnosed and invalid. */
+function unparsed(input: HTMLTextAreaElement, text = '{"temperature": 2') {
+  fireEvent.change(input, { target: { value: text } });
+  expect(input.value).toBe(text);
+  expect(screen.getByText(invalidJson)).toBeTruthy();
+  expect(input.getAttribute('aria-invalid')).toBe('true');
+  expect(input.validity.valid).toBe(false);
+}
+const contextWindow = () => screen.getByLabelText('Context window') as HTMLInputElement;
+const discardButton = () => screen.queryByRole('button', { name: 'Discard draft' });
+
+it('Discard resets unparsed JSON even when the discarded draft never changed request_params', async () => {
+  const { writes: write, main, input } = await requestParameters();
+  // The draft is an unrelated field; the JSON text never became part of it.
+  fireEvent.change(contextWindow(), { target: { value: '64000' } });
+  unparsed(input);
+  fireEvent.click(discardButton()!);
+  await waitFor(() => expect(discardButton()).toBeNull());
+  restored(input);
+  expect(contextWindow().value).toBe(String(main.context_window));
+  expect(save().disabled).toBe(true);
+  // A later valid edit starts from the owner's value and is the only write.
+  fireEvent.change(input, { target: { value: '{"temperature": 0.3}' } });
+  fireEvent.click(save());
+  await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+  expect(write.mock.calls[0][0]).toEqual({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...main, request_params: { temperature: 0.3 } } } });
+});
+
+it('an unrelated source observation keeps unparsed JSON, and the explicit reviewed revision resets it', async () => {
+  const { main, input, revision, observe, nativeWrites } = await ownedRequestParameters();
+  // No draft yet: only unparsed text. A new source revision that leaves this
+  // Model's request_params untouched is not an owner reset of the text.
+  unparsed(input);
+  await observe(revision('r2', { main: { ...main, max_output_tokens: main.max_output_tokens - 1 } }));
+  expect(input.value).toBe('{"temperature": 2');
+  expect(screen.getByText(invalidJson)).toBeTruthy();
+  expect(input.validity.valid).toBe(false);
+  // A draft of another field, then a conflicting external revision: the
+  // unparsed text still survives the observation itself…
+  fireEvent.change(contextWindow(), { target: { value: '64000' } });
+  unparsed(input, '{"top_p": ');
+  await observe(revision('r3', { main: { ...main, max_output_tokens: main.max_output_tokens - 2 } }));
+  expect(await screen.findByRole('button', { name: 'Use reviewed revision' })).toBeTruthy();
+  expect(input.value).toBe('{"top_p": ');
+  // …and the explicit review gesture is the owner reset: the editor shows the
+  // draft's own request_params, which the draft keeps, fenced on r3.
+  fireEvent.click(screen.getByRole('button', { name: 'Use reviewed revision' }));
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Use reviewed revision' })).toBeNull());
+  restored(input);
+  expect(contextWindow().value).toBe('64000');
+  expect(discardButton()).toBeTruthy();
+  expect(nativeWrites).toHaveLength(0);
+  fireEvent.change(input, { target: { value: '{"temperature": 0.3}' } });
+  fireEvent.click(save());
+  await waitFor(() => expect(nativeWrites).toHaveLength(1));
+});
+
+it('the authoritative observation that settles a commit resets unparsed JSON even when request_params never changed', async () => {
+  const { writes: write, main, input, revision, nativeWrites, reads, rerender } = await ownedRequestParameters();
+  // The committed draft is an unrelated field, so request_params presents the
+  // same value before the commit, after it, and in the reread.
+  fireEvent.change(contextWindow(), { target: { value: '64000' } });
+  fireEvent.click(save());
+  await waitFor(() => expect(nativeWrites).toHaveLength(1));
+  const committed = revision('r2', { main: { ...main, context_window: '64000' } });
+  await act(async () => { nativeWrites[0]!.resolve({ acknowledgement: committed }); });
+  // Until the commit is observed the unit accepts no edit; text typed now is
+  // the editor's alone.
+  unparsed(input, '{"temperature": 3');
+  await waitFor(() => expect(reads.length).toBeGreaterThan(0));
+  await act(async () => { reads.shift()!.resolve(structuredClone(committed)); });
+  rerender(modelDetail(committed, 'user', 'r2', 'main'));
+  await waitFor(() => expect(input.value).toBe(canonical));
+  restored(input);
+  expect(contextWindow().value).toBe('64000');
+  expect(discardButton()).toBeNull();
+  expect(write).toHaveBeenCalledTimes(1);
+  // Editing resumes from the committed value, fenced on its revision.
+  fireEvent.change(input, { target: { value: '{"temperature": 4}' } });
+  fireEvent.click(save());
+  await waitFor(() => expect(nativeWrites).toHaveLength(2));
+  expect(write.mock.calls[1]).toEqual([{ kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...main, context_window: '64000', request_params: { temperature: 4 } } } }, 'r2']);
+});
+
+it('an unrelated Model edit resubmits binary64-exact request parameters exactly as native emitted them', async () => {
+  // The projection exactly as the App Server client decodes response text.
+  const emitted = '{"seed":9007199254740992,"floor":-9007199254740991,"big":10000000000000000000,"tiny":5.357830195732913e-76,"huge":1e300,"nested":{"list":[0.1,{"n":-2.5e-7}]}}';
+  const main = { ...cfg3Effective().document.models!.main, request_params: JSON.parse(emitted) as Record<string, unknown> };
+  const source = catalogSource('user', JSON.parse(JSON.stringify({ models: { main } })) as Record<string, unknown>);
+  const { writes: write } = await renderEditor(modelDetail(source, 'user', 'r1', 'main'), { source, context: source });
+  fireEvent.change(screen.getByLabelText('Context window'), { target: { value: '64000' } });
+  fireEvent.click(save());
+  await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+  // The mutation text the client sends carries every number unchanged, so
+  // native reads back the very values it emitted.
+  const sent = JSON.stringify(write.mock.calls[0][0]);
+  const params = (JSON.parse(sent) as { mutation: { authored: { request_params: unknown } } }).mutation.authored.request_params;
+  expect(JSON.stringify(params)).toBe(JSON.stringify(JSON.parse(emitted)));
+  for (const literal of ['9007199254740992', '-9007199254740991', '10000000000000000000', '5.357830195732913e-76', '1e+300', '0.1', '-2.5e-7'])
+    expect(sent).toContain(literal);
+});
+
+const duplicate = (line: number, column: number) => `The JSON text repeats an object key at line ${line}, column ${column}.`;
+const inexact = (line: number, column: number) => `The number at line ${line}, column ${column} cannot be kept exactly: rustX, the browser and providers read JSON numbers as IEEE 754 binary64 values, and this one would be rounded. Nothing is saved until it is changed.`;
+
 it.each([
   ['{"budget":', invalidJson],
   ['[1, 2]', 'Request parameters must be a JSON object.'],
   ['null', 'Request parameters must be a JSON object.'],
-  ['{"a": 1, "a": 2}', 'The JSON object repeats a key at $.a.'],
-  ['{"outer": {"list": [{"k": 1, "k": 1}]}}', 'The JSON object repeats a key at $.outer.list[0].k.'],
+  ['{"a": 1, "a": 2}', duplicate(1, 10)],
+  ['{"outer": {"list": [{"k": 1, "k": 1}]}}', duplicate(1, 30)],
+  // A key is located, never quoted: it may itself hold a secret.
+  ['{"sk-SECRET [x] \\"q\\"": 1, "sk-SECRET [x] \\"q\\"": 2}', duplicate(1, 28)],
+  // A number JSON.parse would round is refused on its text, before parsing.
+  ['{"seed": 9007199254740993}', inexact(1, 10)],
+  ['{\n  "a": [1.5, {"b": -9007199254740993}]\n}', inexact(2, 20)],
+  ['{"t": 0.12345678901234567890}', inexact(1, 7)],
 ])('invalid text %s stays visible and diagnosed locally and never reaches the draft', async (text, diagnostic) => {
   const { writes: write, main, input } = await requestParameters();
   fireEvent.change(input, { target: { value: text } });
   expect(input.value).toBe(text);
   expect(screen.getByText(diagnostic)).toBeTruthy();
+  expect(input.validationMessage).toBe(diagnostic);
   expect(input.validity.valid).toBe(false);
   // No draft exists: the invalid text was never offered to the actor.
   expect(save().disabled).toBe(true);
