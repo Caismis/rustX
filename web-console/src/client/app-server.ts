@@ -1145,6 +1145,9 @@ export class AppServerClient {
     // deliberately keeps the generation/epoch fence after a request is sent.
     const admissionCurrent = () => current() && openCurrent();
     let target: AttachmentTarget | undefined;
+    // Result evidence, not dispatch authority: only an unrequested attach or a
+    // conclusive refusal proves that this operation acquired no native claim.
+    let nativeAbsenceProven = true;
     try {
       const admitted = await this.admitAttachment(id, admissionCurrent);
       if (!admitted || !admitted.current()) return;
@@ -1159,6 +1162,7 @@ export class AppServerClient {
         }
         return valid;
       } };
+      nativeAbsenceProven = false;
       const result = await this.request({ method: 'session/attach', params: { session_id: id, node_id: this.state.views[id]?.nodeId } }, 'attached', undefined, opening);
       if (!current()) return;
       target = result.target;
@@ -1191,8 +1195,23 @@ export class AppServerClient {
         }
       }
     } catch (error) {
-      if (current() && (!target || sameTarget(this.state.views[id]?.target, target))) this.setSession(id, { attachment: 'error', error: String(error) });
+      if (!target && (error instanceof RequestNotDispatched || (error instanceof RpcFailure && !isOutcomeUncertain(error)))) nativeAbsenceProven = true;
+      if (current() && (openCurrent() || !nativeAbsenceProven) && (!target || sameTarget(this.state.views[id]?.target, target))) {
+        this.setSession(id, { attachment: 'error', error: String(error) });
+      }
       throw error;
+    } finally {
+      // The Open owns the attaching state until its serialized work finishes.
+      // Settle proven absence before a queued Release/New Open can run; retain
+      // current failures and never infer absence from a missing target alone.
+      if (nativeAbsenceProven && current() && !this.state.views[id]?.target
+        && (!openCurrent() || this.state.views[id]?.attachment === 'attaching')) {
+        // This Open's absence cannot settle an older transmitted relationship
+        // mutation, including one retained across connection recovery.
+        const unconfirmedAttachment = this.state.uncertain.some(item => item.sessionId === id
+          && ['session/attach', 'session/detach', 'session/switchNode'].includes(item.method));
+        this.setSession(id, { attachment: unconfirmedAttachment ? 'stale' : 'detached', attachmentObservation: undefined, error: undefined });
+      }
     }
   }
   /** Explicit reconciliation/recovery only. Native bounded replay owns overlap. */
