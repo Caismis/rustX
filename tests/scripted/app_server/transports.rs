@@ -893,10 +893,11 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
     .await;
 }
 
-/// The server's write side with test-controlled acceptance, like a pipe or
-/// socket buffer the peer drains only when the test says so. With no budget,
-/// `poll_write` takes nothing, records what it was offered and returns
-/// `Pending`; a grant wakes the writer. Reads pass through.
+/// The server's side of a stream with test-controlled acceptance, like a pipe
+/// or socket buffer the peer drains only when the test says so. With no
+/// budget, `poll_write` takes nothing, records what it was offered and
+/// returns `Pending`; a grant wakes the writer. Reads pass through. Either
+/// direction can also be held (see [`Hold`]).
 struct Valve<S> {
     inner: S,
     control: Arc<ValveControl>,
@@ -906,12 +907,19 @@ struct ValveControl {
     state: std::sync::Mutex<(usize, Option<std::task::Waker>)>,
     /// Every refused offer, in order.
     refused: tokio::sync::watch::Sender<Vec<Vec<u8>>>,
+    /// Bytes the inner stream has taken.
+    written: std::sync::atomic::AtomicUsize,
+    reads: Hold,
+    writes: Hold,
 }
 impl ValveControl {
     fn new() -> Arc<Self> {
         Arc::new(Self {
             state: std::sync::Mutex::new((usize::MAX, None)),
             refused: tokio::sync::watch::channel(Vec::new()).0,
+            written: std::sync::atomic::AtomicUsize::new(0),
+            reads: Hold::new(),
+            writes: Hold::new(),
         })
     }
     /// Accepts the next `bytes` bytes, then refuses again.
@@ -937,6 +945,68 @@ impl ValveControl {
     fn offered(&self, matches: impl Fn(&[u8]) -> bool) -> bool {
         self.refused.borrow().iter().any(|offer| matches(offer))
     }
+    fn written(&self) -> usize {
+        self.written.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    /// Releases both holds when dropped, so a failing assertion unwinds
+    /// instead of leaving a transport poll blocked.
+    fn released_on_drop(self: &Arc<Self>) -> impl Drop {
+        struct Released(Arc<ValveControl>);
+        impl Drop for Released {
+            fn drop(&mut self) {
+                self.0.reads.release();
+                self.0.writes.release();
+            }
+        }
+        Released(self.clone())
+    }
+}
+
+/// A test-controlled point inside one transport poll. Once armed, the next
+/// poll to reach it blocks its thread right there, still holding whatever
+/// that poll holds (the delivery decision, the shared stream), until the
+/// test releases it. `entered` reports what that poll was offering.
+struct Hold {
+    armed: std::sync::Mutex<bool>,
+    released: std::sync::Condvar,
+    entered: tokio::sync::watch::Sender<Option<Vec<u8>>>,
+}
+impl Hold {
+    fn new() -> Self {
+        Self {
+            armed: std::sync::Mutex::new(false),
+            released: std::sync::Condvar::new(),
+            entered: tokio::sync::watch::channel(None).0,
+        }
+    }
+    fn arm(&self) {
+        self.entered.send_replace(None);
+        *self.armed.lock().unwrap() = true;
+    }
+    fn release(&self) {
+        *self.armed.lock().unwrap() = false;
+        self.released.notify_all();
+    }
+    fn enter(&self, offered: &[u8]) {
+        let mut armed = self.armed.lock().unwrap();
+        if !*armed {
+            return;
+        }
+        self.entered.send_replace(Some(offered.to_vec()));
+        while *armed {
+            armed = self.released.wait(armed).unwrap();
+        }
+    }
+    /// Waits until a poll is held here, and returns what it was offering.
+    async fn entered(&self) -> Vec<u8> {
+        self.entered
+            .subscribe()
+            .wait_for(Option::is_some)
+            .await
+            .unwrap()
+            .clone()
+            .unwrap()
+    }
 }
 impl<S: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for Valve<S> {
     fn poll_read(
@@ -944,7 +1014,9 @@ impl<S: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for Valve<S> {
         cx: &mut std::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<io::Result<()>> {
-        std::pin::Pin::new(&mut self.get_mut().inner).poll_read(cx, buf)
+        let this = self.get_mut();
+        this.control.reads.enter(&[]);
+        std::pin::Pin::new(&mut this.inner).poll_read(cx, buf)
     }
 }
 impl<S: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for Valve<S> {
@@ -954,6 +1026,7 @@ impl<S: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for Valve<S> {
         buf: &[u8],
     ) -> std::task::Poll<io::Result<usize>> {
         let this = self.get_mut();
+        this.control.writes.enter(buf);
         let mut state = this.control.state.lock().unwrap();
         if state.0 == 0 {
             state.1 = Some(cx.waker().clone());
@@ -966,6 +1039,9 @@ impl<S: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for Valve<S> {
         let written =
             std::task::ready!(std::pin::Pin::new(&mut this.inner).poll_write(cx, &buf[..allowed]))?;
         state.0 -= written;
+        this.control
+            .written
+            .fetch_add(written, std::sync::atomic::Ordering::SeqCst);
         std::task::Poll::Ready(Ok(written))
     }
     fn poll_flush(
@@ -1046,7 +1122,8 @@ fn answered_once(received: &Received, id: i64, times: usize) {
 ///   and offered while the pipe takes nothing; the revocation wins, and the
 ///   same id's typed failure is what the pipe finally takes.
 /// - published: the pipe takes one byte of the success, which fixes it; a
-///   later cancel is refused and the whole success arrives.
+///   later cancel is refused, a later revocation retracts nothing, and the
+///   whole success arrives.
 /// - shutdown: transport shutdown while the success is offered transmits
 ///   nothing for it, and the operation ends with its transport.
 ///
@@ -1078,10 +1155,9 @@ async fn delivery_publication_linearizes_at_the_transports_first_accepted_byte()
             "published",
             "shutdown",
         ] {
-            let authority = CancellationToken::new();
             let connection = Arc::new(AppServerConnection::with_delivery_access(
                 f.host.clone(),
-                authority.clone(),
+                CancellationToken::new(),
             ));
             let valve = ValveControl::new();
             let shutdown = CancellationToken::new();
@@ -1182,6 +1258,7 @@ async fn delivery_publication_linearizes_at_the_transports_first_accepted_byte()
                             !cancel_delivery(&connection, 30).await,
                             "after the first accepted byte the response stands"
                         );
+                        connection.revoke_delivery_access();
                         valve.grant(usize::MAX);
                     });
                     (outcome, None)
@@ -1197,7 +1274,7 @@ async fn delivery_publication_linearizes_at_the_transports_first_accepted_byte()
                                 ErrorData::DeliveryCancelled
                             }
                             "credential" => {
-                                authority.cancel();
+                                connection.revoke_delivery_access();
                                 unauthorized.clone()
                             }
                             "detach" => {
@@ -1239,6 +1316,275 @@ async fn delivery_publication_linearizes_at_the_transports_first_accepted_byte()
             serving.await.unwrap().unwrap();
             connection.close();
         }
+        f.close().await;
+    })
+    .await;
+}
+
+/// A cancel or revocation that overlaps a delivery response's hand-off, after
+/// its decision and before the transport's acceptance, waits for that
+/// acceptance and is ordered after it: the success stands, and the
+/// revocation governs every later publication. Real stdio transport; the
+/// pipe's acceptance is held inside `poll_write`, with the decided success in
+/// hand, while the revocation runs on another thread.
+///
+/// - credential: the connection's delivery authority is revoked;
+/// - detach: the exact attachment is detached;
+/// - close: the connection closes while its publication is in progress;
+/// - cancel: `delivery/cancel` for the same id is refused, and a sibling
+///   delivery request is unaffected.
+///
+/// Each case establishes the interleaving rather than timing it: the pipe was
+/// offered the success (so the decision was made) and is held; the
+/// revocation then reports that it found that hand-off in progress and is
+/// waiting, and has not completed; only the release completes both.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn delivery_revocation_overlapping_a_hand_off_is_ordered_after_its_acceptance() {
+    use super::protocol::{
+        DELIVERED, cancel_delivery, committed_delivery, delivered_bytes, delivery_request,
+        failed_with,
+    };
+    use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    bounded(async {
+        let f = Fixture::with_tool(Some("present")).await;
+        let tool = committed_delivery(&f).await;
+        let probe = f.host.file_read_probe();
+        let permits = f.host.file_reads();
+        let revocations = f.host.revocations().clone();
+        let success_30 = |offer: &[u8]| response(offer, 30) == Some(true);
+        for case in ["credential", "detach", "close", "cancel"] {
+            let connection = Arc::new(AppServerConnection::with_delivery_access(
+                f.host.clone(),
+                CancellationToken::new(),
+            ));
+            let valve = ValveControl::new();
+            let _released = valve.released_on_drop();
+            let (client, server) = tokio::io::duplex(1 << 20);
+            let (reader, writer) = tokio::io::split(server);
+            let serving = tokio::spawn(stdio::serve(
+                connection.clone(),
+                reader,
+                Valve {
+                    inner: writer,
+                    control: valve.clone(),
+                },
+                CancellationToken::new(),
+            ));
+            let (reader, mut writer) = tokio::io::split(client);
+            let lines = futures_util::stream::unfold(
+                tokio::io::BufReader::new(reader).lines(),
+                |mut lines| async move { lines.next_line().await.unwrap().map(|line| (line, lines)) },
+            );
+            let (incoming, received) = recording(lines);
+            let client = driver::Driver::new(incoming, |mut outgoing| async move {
+                while let Some(record) = outgoing.recv().await {
+                    writer.write_all(format!("{record}\n").as_bytes()).await.unwrap();
+                }
+            });
+            initialize(&client).await;
+            let target = attach(&client, &f).await;
+            revocations.waited.send_replace(false);
+            probe.cancel_waited.send_replace(false);
+            valve.grant(0);
+            let (outcome, ()) = tokio::join!(
+                client.request(delivery_request(30, &target, &tool, false)),
+                async {
+                    // Undecided while the pipe takes nothing.
+                    valve.refused(success_30).await;
+                    // The next offer decides the success, and its acceptance
+                    // is held inside the pipe.
+                    valve.writes.arm();
+                    valve.grant(usize::MAX);
+                    assert!(success_30(&valve.writes.entered().await), "decided as produced");
+                    let handle = tokio::runtime::Handle::current();
+                    let revoking = tokio::task::spawn_blocking({
+                        let (connection, target) = (connection.clone(), target.clone());
+                        move || match case {
+                            "credential" => {
+                                connection.revoke_delivery_access();
+                                None
+                            }
+                            "detach" => {
+                                handle.block_on(connection.handle_request(Request {
+                                    jsonrpc: JsonRpcVersion::V2,
+                                    id: RequestId::Integer(31),
+                                    call: Method::SessionDetach { target },
+                                }));
+                                None
+                            }
+                            "close" => {
+                                connection.close();
+                                None
+                            }
+                            _ => Some(handle.block_on(cancel_delivery(&connection, 30))),
+                        }
+                    });
+                    tokio::pin!(revoking);
+                    let mut waited = if case == "cancel" {
+                        probe.cancel_waited.subscribe()
+                    } else {
+                        revocations.waited.subscribe()
+                    };
+                    tokio::select! {
+                        biased;
+                        _ = waited.wait_for(|waited| *waited) => {}
+                        _ = &mut revoking => panic!(
+                            "{case} completed between the decision and the transport's acceptance"
+                        ),
+                    }
+                    valve.writes.release();
+                    assert_eq!(
+                        revoking.await.unwrap(),
+                        (case == "cancel").then_some(false),
+                        "a cancel ordered after the acceptance is refused"
+                    );
+                }
+            );
+            assert_eq!(
+                delivered_bytes(&outcome),
+                DELIVERED,
+                "accepted before the {case}: the success stands"
+            );
+            // The revocation governs every later publication.
+            let later = || client.request(delivery_request(34, &target, &tool, false));
+            match case {
+                "credential" => failed_with(
+                    &later().await,
+                    &ErrorData::SessionFileRead {
+                        reason: SessionFileReadFailure::Unauthorized,
+                    },
+                ),
+                "detach" => failed_with(&later().await, &ErrorData::StaleAttachment),
+                "cancel" => assert_eq!(
+                    delivered_bytes(&later().await),
+                    DELIVERED,
+                    "a sibling request is not cancelled"
+                ),
+                _ => {}
+            }
+            if case != "close" {
+                assert!(matches!(
+                    client.request(server_info(32)).await,
+                    Response::Success(_)
+                ));
+                answered_once(&received, 34, 1);
+            }
+            answered_once(&received, 30, 1);
+            assert_eq!(permits.available_permits(), SESSION_FILE_MAX_READS);
+            client.close().await;
+            serving.await.unwrap().unwrap();
+            connection.close();
+        }
+        f.close().await;
+    })
+    .await;
+}
+
+/// The WebSocket writer stages nothing outside tungstenite. While the shared
+/// stream is held by the reader (blocked inside a socket read), the writer's
+/// hand-off of a produced, queued success waits for the stream without
+/// deciding; a revocation completes meanwhile; once the reader releases the
+/// stream the writer decides, and what tungstenite takes and the peer
+/// receives is the same id's typed failure, never the stale success.
+/// `SplitSink` instead parked the success in its own slot as if accepted and
+/// forwarded it to tungstenite after the revocation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn websocket_writer_stages_nothing_while_the_reader_holds_the_stream() {
+    use super::protocol::{committed_delivery, delivery_request, failed_with};
+    use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
+    use futures_util::StreamExt;
+    use tokio_tungstenite::{
+        WebSocketStream,
+        tungstenite::{Message, protocol::Role},
+    };
+    bounded(async {
+        let f = Fixture::with_tool(Some("present")).await;
+        let tool = committed_delivery(&f).await;
+        let permits = f.host.file_reads();
+        let connection = Arc::new(AppServerConnection::with_delivery_access(
+            f.host.clone(),
+            CancellationToken::new(),
+        ));
+        let direct = app_server_conformance::DirectDriver(&connection);
+        initialize(&direct).await;
+        let target = attach(&direct, &f).await;
+        // 1. A delivery success, produced and queued for the writer.
+        let reply = connection
+            .reply(delivery_request(30, &target, &tool, false))
+            .await;
+        assert!(matches!(reply.produced(), Response::Success(_)), "produced");
+        let mut outbound = transport::Outbound::reply(reply).unwrap();
+        let valve = ValveControl::new();
+        let _released = valve.released_on_drop();
+        let (peer, server) = tokio::io::duplex(1 << 20);
+        let socket = Arc::new(websocket::Socket::new(
+            WebSocketStream::from_raw_socket(
+                Valve {
+                    inner: server,
+                    control: valve.clone(),
+                },
+                Role::Server,
+                None,
+            )
+            .await,
+        ));
+        let mut peer = WebSocketStream::from_raw_socket(peer, Role::Client, None).await;
+        let handle = tokio::runtime::Handle::current();
+        // The reader holds the shared stream inside a socket read.
+        valve.reads.arm();
+        let reader = tokio::task::spawn_blocking({
+            let (socket, handle) = (socket.clone(), handle.clone());
+            move || {
+                handle.block_on(std::future::poll_fn(|cx| {
+                    let _ = socket.poll_next(cx);
+                    std::task::Poll::Ready(())
+                }));
+            }
+        });
+        valve.reads.entered().await;
+        // 2-3. The writer offers the success and waits for the stream.
+        let writer = tokio::task::spawn_blocking({
+            let socket = socket.clone();
+            move || {
+                handle.block_on(std::future::poll_fn(|cx| {
+                    socket.poll_hand_off(cx, &mut outbound)
+                }))
+            }
+        });
+        tokio::pin!(writer);
+        let mut waited = socket.waited.subscribe();
+        tokio::select! {
+            biased;
+            _ = waited.wait_for(|waited| *waited) => {}
+            _ = &mut writer => panic!("a hand-off finished while the reader held the stream"),
+        }
+        assert_eq!(valve.written(), 0, "tungstenite has taken nothing");
+        // 4. A revocation completes.
+        connection.revoke_delivery_access();
+        // 5-6. The reader releases the stream; the writer resumes.
+        valve.reads.release();
+        reader.await.unwrap();
+        let handed = writer.await.unwrap().unwrap();
+        assert_eq!(
+            response(handed.as_bytes(), 30),
+            Some(false),
+            "decided only after the revocation"
+        );
+        socket.flush().await.unwrap();
+        // 7. The peer receives the same id's typed failure, never the success.
+        let Some(Ok(Message::Text(text))) = peer.next().await else {
+            panic!("one frame")
+        };
+        failed_with(
+            &serde_json::from_str(&text).unwrap(),
+            &ErrorData::SessionFileRead {
+                reason: SessionFileReadFailure::Unauthorized,
+            },
+        );
+        assert_eq!(response(text.as_bytes(), 30), Some(false), "the same id");
+        assert_eq!(permits.available_permits(), SESSION_FILE_MAX_READS);
+        connection.close();
         f.close().await;
     })
     .await;

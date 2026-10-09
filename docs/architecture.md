@@ -24,9 +24,13 @@ Product Host lane (`product_host`, which also supplies registered roots) and an
 only routes to its own attachments and registers each request as a
 `delivery_access::Operation` keyed by its exact request id, which
 `delivery/cancel` on the same connection can cancel. The response travels with its
-`Publication` through the bounded outbound queue, and the transport writer
-(`transport::Outgoing`) commits it immediately before the physical write,
-rechecking cancellation, delivery authority and the attachment. Clients consume the same typed committed
+`Publication` through the bounded outbound queue. The transport writer decides it
+in the same synchronous step in which the transport accepts it (the stdio pipe's
+first bytes, or tungstenite's `start_send` under the WebSocket stream lock that
+`transport::websocket::Socket` shares with the reader), rechecking cancellation,
+delivery authority and the attachment. Every revocation of delivery authority runs
+in the exclusive side of the host's `delivery_access::Revocations`, which
+publication holds shared, so revocations are ordered against publication. Clients consume the same typed committed
 facts. The Web binds them to Harness-derived presentation over its PreviewWorkspace
 owners. The TUI's pure `tool-present` renderer and `/files` selector dispatch
 intents to its own client-local action owner (`delivery-files.ts`). Each

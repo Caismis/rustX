@@ -157,9 +157,10 @@ export type DestinationObservation =
   | { kind: "uninspectable"; error: unknown };
 
 /**
- * A Save whose dispatched link has no proven outcome: link(2) failed
- * ambiguously, or it succeeded and the destination then did not name the file
- * this Save wrote. Nothing retries the link or touches the destination.
+ * A Save whose dispatched link has no proven outcome: link(2) failed, which
+ * never shows that it created nothing, or it succeeded, and either way the
+ * destination then did not name the file this Save wrote. Nothing retries
+ * the link or touches the destination.
  */
 export class DeliveryUncertainError extends DeliveryActionError {
   readonly path: string;
@@ -181,7 +182,7 @@ export class DeliveryUncertainError extends DeliveryActionError {
     super(
       (link === undefined
         ? `Save outcome unknown: linking ${path} succeeded, but ${now}, so this save cannot show it holds the saved bytes`
-        : `Save outcome unknown: linking ${path} failed (${errorCode(link.error) ?? "error"}) and ${now}; this save may have created it`) +
+        : `Save outcome unknown: linking ${path} failed (${linkFailure(link.error)}) and ${now}; this save may have created it`) +
         (residue === undefined ? "" : `; ${residueText(residue.path, residue.staged)}`),
     );
     this.name = "DeliveryUncertainError";
@@ -192,6 +193,12 @@ export class DeliveryUncertainError extends DeliveryActionError {
     this.staged = residue?.staged;
     if (link !== undefined) this.cause = link.error;
   }
+}
+
+function linkFailure(error: unknown): string {
+  const code = errorCode(error);
+  if (code === undefined) return "error";
+  return UNSUPPORTED_LINK.has(code) ? `${code}; this filesystem may not support the hard link Save publishes with` : code;
 }
 
 /** Bytes per write; cancellation is observed between chunks. */
@@ -206,22 +213,12 @@ export interface SaveFiles {
 }
 export const SAVE_FILES: SaveFiles = { open, link, lstat, unlink };
 
-/** Link errors meaning this filesystem cannot create the name by a hard link. */
-const UNSUPPORTED_LINK = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"]);
 /**
- * Link errors that are rejections of the request itself (a path or
- * permission check failed, the filesystem or quota refused, hard links are
- * unsupported): `link(2)` reports them without creating the entry, and a
- * repeated request (a network filesystem retransmitting a link it already
- * performed) cannot produce them unless someone also changed the staged name
- * or the parent in between. EEXIST is not among them: it is exactly what such
- * a repeat returns, so it shows only that the name exists, not whose it is.
- * Any other error, such as EIO, or no code at all, leaves the outcome open.
+ * Link errors that usually mean this filesystem cannot create a name by a hard
+ * link. Once a link is dispatched they still prove nothing (see
+ * {@link publish}); they only explain an uncertain outcome.
  */
-const DEFINITE_REFUSAL = new Set([
-  "ENOENT", "ENOTDIR", "EACCES", "EROFS", "EXDEV", "ELOOP", "ENAMETOOLONG",
-  "EMLINK", "ENOSPC", "EDQUOT", "EINVAL", ...UNSUPPORTED_LINK,
-]);
+const UNSUPPORTED_LINK = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"]);
 
 type Publication =
   | { kind: "published" }
@@ -238,10 +235,10 @@ const { O_WRONLY, O_CREAT, O_EXCL } = constants;
  * read (cancellable on the server) -> abort?
  *   -> open <parent>/.rustx-save-<random>  O_CREAT|O_EXCL      held: F
  *   -> chunked writes through F, abort? between chunks -> fsync F
- *   -> lstat(destination) finds an entry?  refused (already exists), no link
+ *   -> lstat(destination) not absent?  refused (exists / uninspectable), no link
  *   -> abort?   <- publication admission: the last cancellation point
  *   -> link(staged name, destination)   <- publication commit (atomic, no clobber)
- *   -> lstat(destination) names F's (dev, ino)?  published : refused | uncertain
+ *   -> lstat(destination) names F's (dev, ino)?  published : uncertain
  *   -> unlink(staged name), once; fresh observations decide whether F is residue
  * ```
  *
@@ -265,8 +262,9 @@ const { O_WRONLY, O_CREAT, O_EXCL } = constants;
  * The destination is a pathname resolved at the commit: `link` creates a new
  * name there and fails with EEXIST for any existing entry, including a
  * symlink or a directory, so nothing is ever overwritten. A filesystem that
- * cannot link refuses explicitly; there is no copying or rename fallback.
- * Nothing ever removes the destination.
+ * cannot link fails the link, an uncertain outcome like any dispatched link
+ * that publication cannot be shown for; there is no copying or rename
+ * fallback, and no retry. Nothing ever removes the destination.
  *
  * Cancellation observed at or before admission prevents publication. The
  * admission check and the call that dispatches `link` run in one synchronous
@@ -338,15 +336,21 @@ async function writeStaged(file: FileHandle, bytes: Uint8Array, signal?: AbortSi
 /**
  * The publication commit and what it proves.
  *
- * An entry already at the destination is refused before anything is linked,
- * so "already exists" is definite: this save dispatched no link. After that,
- * only the destination naming the staged file, observed after the commit,
- * proves publication, whatever link(2) answered: a network filesystem can
- * fail a retransmitted link it performed (with EEXIST), and a successful link
- * of the staged name says nothing about which file that name held. Otherwise
- * only a definite rejection proves refusal: an absent or foreign destination
- * does not show that this link created nothing, because someone may have
- * removed or replaced the entry in between. Anything else is uncertain.
+ * Before anything is linked, the destination must be absent: an existing
+ * entry is refused as "already exists", and a destination that cannot be
+ * inspected is refused too, since publication could never be shown there.
+ * Both are definite: this save dispatched no link.
+ *
+ * Once the link is dispatched, only the destination naming the staged file,
+ * observed after the commit, proves publication, whatever link(2) answered.
+ * Nothing proves refusal. A network filesystem may perform a link and then
+ * answer a retransmission of it, and that answer describes the repeat, not
+ * the original: EEXIST because the original created the name, ENOENT
+ * because someone then moved the staged name, EACCES because the parent's
+ * permissions then changed. An absent or foreign destination does not show
+ * that the link created nothing either, since whoever may change the parent
+ * can remove or replace the entry in between. So every other outcome is
+ * uncertain, with the error and the observation kept.
  */
 async function publish(
   files: SaveFiles,
@@ -356,15 +360,16 @@ async function publish(
   effect: LocalEffect,
   signal: AbortSignal | undefined,
 ): Promise<Publication> {
-  let existing = false;
   try {
     await files.lstat(destination, { bigint: true });
-    existing = true;
-  } catch {
-    // Absent, or not inspectable: the link itself decides.
-  }
-  if (existing) {
     return { kind: "refused", error: new DeliveryActionError(`Not saved: ${destination} already exists`) };
+  } catch (error) {
+    if (errorCode(error) !== "ENOENT") {
+      return {
+        kind: "refused",
+        error: withCause(new DeliveryActionError(`Not saved: ${destination} cannot be inspected (${errorCode(error) ?? "error"})`), error),
+      };
+    }
   }
   let failure: { error: unknown } | undefined;
   try {
@@ -385,22 +390,7 @@ async function publish(
   } catch (inspection) {
     observed = errorCode(inspection) === "ENOENT" ? { kind: "absent" } : { kind: "uninspectable", error: inspection };
   }
-  const code = errorCode(failure?.error);
-  if (failure !== undefined && code !== undefined && DEFINITE_REFUSAL.has(code)) {
-    return { kind: "refused", error: refusal(failure.error, destination) };
-  }
   return { kind: "uncertain", link: failure, observed };
-}
-
-function refusal(error: unknown, destination: string): unknown {
-  const code = errorCode(error);
-  if (code !== undefined && UNSUPPORTED_LINK.has(code)) {
-    return withCause(
-      new DeliveryActionError(`Not saved: this filesystem cannot publish ${destination} atomically without overwriting (${code})`),
-      error,
-    );
-  }
-  return error;
 }
 
 /** What one lstat of `path` shows about the staged file F, at its instant. */

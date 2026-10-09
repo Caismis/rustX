@@ -1142,14 +1142,15 @@ a model request.
   the destination holds its own file, otherwise "not saved" or "unknown", and a
   hidden file left behind, or one the save cannot show it removed, is reported
   with the path it was created at. Programs that can write that directory are trusted not to
-  tamper with the save while it runs. Filesystems without hard links (for
-  example FAT or exFAT) are refused rather than written unsafely. If the
-  filesystem reports an ambiguous error (such as an I/O error) for the final
-  step and the file cannot be confirmed, the save says its outcome is unknown;
-  check the destination yourself. A destination that already exists is refused
-  before anything is linked. If the name is taken only during the final step,
-  the outcome is also unknown, because on a network filesystem that error can
-  follow a link the save did make. A filename containing terminal control
+  tamper with the save while it runs. A destination that already exists, or
+  that cannot be checked, is refused before anything is linked: "not saved"
+  then means nothing was attempted there. Once the final step has been sent,
+  any error it reports leaves the outcome unknown unless the destination is
+  confirmed to hold the saved file, because on a network filesystem an error
+  can answer a repeat of a step that already succeeded; check the destination
+  yourself. That includes filesystems without hard links (for example FAT or
+  exFAT), whose error the message names; nothing is ever written there by
+  another, unsafe route. A filename containing terminal control
   characters is not prefilled; type the destination yourself. Closing `/files`
   (or switching Session, reconnecting or quitting) cancels a running action on
   the server too.

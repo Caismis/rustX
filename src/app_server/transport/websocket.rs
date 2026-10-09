@@ -1,16 +1,20 @@
 //! WebSocket admission and framing. Each admitted socket gets its own endpoint.
-use super::{MAX_MESSAGE_BYTES, WRITE_TIMEOUT, failure};
+use super::{MAX_MESSAGE_BYTES, Outbound, WRITE_TIMEOUT, failure};
 use crate::{app_server::connection::AppServerConnection, app_server::host::AppServerHost};
 use futures_util::{SinkExt, StreamExt};
 use std::{
     io,
-    sync::Arc,
-    task::{Poll, ready},
+    sync::{Arc, Mutex, MutexGuard},
+    task::{Context, Poll, ready},
     time::Duration,
 };
-use tokio::{net::TcpListener, task::JoinSet};
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    net::TcpListener,
+    task::JoinSet,
+};
 use tokio_tungstenite::{
-    accept_hdr_async_with_config,
+    WebSocketStream, accept_hdr_async_with_config,
     tungstenite::{
         Message,
         handshake::server::{Request, Response},
@@ -59,6 +63,100 @@ impl Credential {
             ));
         }
         Ok(Self(value))
+    }
+}
+
+/// One WebSocket stream, shared by a connection's reader and its writer in
+/// place of `SplitStream`/`SplitSink`.
+///
+/// `SplitSink::start_send` only parks a frame in the sink's own slot, which a
+/// later flush forwards to tungstenite once it obtains the shared lock; a
+/// frame in that slot is neither undecided nor accepted. Here the writer has
+/// no slot. Each side holds the stream for one non-suspending poll, and the
+/// writer hands a record to tungstenite inside its own locked poll
+/// ([`Self::poll_hand_off`]): the record is either still the writer's
+/// undecided [`Outbound`], or tungstenite has taken its frame.
+pub(crate) struct Socket<S> {
+    stream: Mutex<WebSocketStream<S>>,
+    /// Set when one side found the stream held by the other and waited.
+    #[cfg(test)]
+    pub(crate) waited: tokio::sync::watch::Sender<bool>,
+}
+
+impl<S: AsyncRead + AsyncWrite + Unpin> Socket<S> {
+    pub(crate) fn new(stream: WebSocketStream<S>) -> Self {
+        Self {
+            stream: Mutex::new(stream),
+            #[cfg(test)]
+            waited: tokio::sync::watch::channel(false).0,
+        }
+    }
+
+    fn lock(&self) -> MutexGuard<'_, WebSocketStream<S>> {
+        #[cfg(test)]
+        if self.stream.try_lock().is_err() {
+            self.waited.send_replace(true);
+        }
+        self.stream.lock().expect("WebSocket stream")
+    }
+
+    pub(crate) fn poll_next(
+        &self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Message, tokio_tungstenite::tungstenite::Error>>> {
+        self.lock().poll_next_unpin(cx)
+    }
+
+    pub(crate) async fn next(
+        &self,
+    ) -> Option<Result<Message, tokio_tungstenite::tungstenite::Error>> {
+        std::future::poll_fn(|cx| self.poll_next(cx)).await
+    }
+
+    /// Hands `outbound` to tungstenite, returning the record as handed over.
+    ///
+    /// Only once every earlier frame, and any pong the reader queued, has
+    /// gone to the socket and tungstenite is ready is the record decided and
+    /// handed over, by tungstenite's synchronous `start_send` under the same
+    /// lock. That acceptance is the WebSocket publication point. tungstenite
+    /// writes the frame to the socket at once (its write buffer size is 0);
+    /// what the socket does not take stays in tungstenite's buffer, owned by
+    /// the transport, and is never retracted.
+    pub(crate) fn poll_hand_off(
+        &self,
+        cx: &mut Context<'_>,
+        outbound: &mut Outbound,
+    ) -> Poll<io::Result<String>> {
+        let mut stream = self.lock();
+        ready!(stream.poll_flush_unpin(cx)).map_err(io::Error::other)?;
+        ready!(stream.poll_ready_unpin(cx)).map_err(io::Error::other)?;
+        outbound
+            .poll_hand_off(|record| {
+                Poll::Ready(
+                    stream
+                        .start_send_unpin(Message::Text(record.into()))
+                        .map_err(io::Error::other),
+                )
+            })
+            .map_ok(|(record, ())| record)
+    }
+
+    pub(crate) async fn flush(&self) -> io::Result<()> {
+        std::future::poll_fn(|cx| self.lock().poll_flush_unpin(cx))
+            .await
+            .map_err(io::Error::other)
+    }
+
+    /// Hands one record over and flushes it.
+    pub(crate) async fn send(&self, mut outbound: Outbound) -> io::Result<()> {
+        std::future::poll_fn(|cx| self.poll_hand_off(cx, &mut outbound)).await?;
+        self.flush().await
+    }
+
+    pub(crate) async fn close(&self) -> io::Result<()> {
+        std::future::poll_fn(|cx| self.lock().poll_close_unpin(cx))
+            .await
+            .map_err(io::Error::other)
     }
 }
 
@@ -221,8 +319,9 @@ where
         Some(Admission::Ordinary(delivery)) => delivery,
         None => return Err(failure("WebSocket admission missing")),
     };
-    let (mut writer, reader) = socket.split();
-    let incoming = reader
+    let socket = Socket::new(socket);
+    let socket = &socket;
+    let incoming = futures_util::stream::poll_fn(|cx| socket.poll_next(cx))
         .take_while(|message| std::future::ready(!matches!(message, Ok(Message::Close(_)))))
         .filter_map(|message| async move {
             match message {
@@ -240,40 +339,14 @@ where
         endpoint.clone(),
         incoming,
         |mut receiver| async move {
-            while let Some(mut outbound) = receiver.next().await {
-                tokio::time::timeout(WRITE_TIMEOUT, async {
-                    // Ready only when every earlier frame, and any frame the
-                    // reader queued (a pong), has gone to the socket. Then
-                    // tungstenite takes this frame and writes it to the
-                    // socket at once; if the socket buffer is full right
-                    // then, the frame waits in tungstenite's one-message
-                    // write buffer and is not retracted.
-                    std::future::poll_fn(|cx| {
-                        ready!(writer.poll_flush_unpin(cx)).map_err(io::Error::other)?;
-                        outbound.poll_hand_off(|record| {
-                            writer
-                                .start_send_unpin(Message::Text(record.into()))
-                                .map_err(io::Error::other)?;
-                            // Moves the frame from the split sink's slot into
-                            // tungstenite in this same step.
-                            match writer.poll_flush_unpin(cx) {
-                                Poll::Ready(Err(error)) => {
-                                    Poll::Ready(Err(io::Error::other(error)))
-                                }
-                                Poll::Ready(Ok(())) | Poll::Pending => Poll::Ready(Ok(())),
-                            }
-                        })
-                    })
-                    .await?;
-                    writer.flush().await.map_err(io::Error::other)
-                })
-                .await
-                .map_err(|_| failure("WebSocket write deadline exceeded"))??;
+            while let Some(outbound) = receiver.next().await {
+                tokio::time::timeout(WRITE_TIMEOUT, socket.send(outbound))
+                    .await
+                    .map_err(|_| failure("WebSocket write deadline exceeded"))??;
             }
-            tokio::time::timeout(WRITE_TIMEOUT, writer.close())
+            tokio::time::timeout(WRITE_TIMEOUT, socket.close())
                 .await
                 .map_err(|_| failure("WebSocket close deadline exceeded"))?
-                .map_err(io::Error::other)
         },
         shutdown,
     )

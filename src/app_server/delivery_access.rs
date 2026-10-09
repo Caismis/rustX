@@ -6,24 +6,26 @@
 //! Neither JSON fields, client names, coordinates nor paths create authority:
 //! the caller passes a cancellation token minted by transport authentication.
 //!
-//! On the ordinary lane each request is one [`Operation`] owned by its
-//! connection, from registration to the publication commit:
+//! Each request is one [`Operation`] with one [`Publication`], from
+//! registration to its single terminal decision:
 //!
 //! ```text
 //! register (exact JSON-RPC id) -> native admission -> fences -> physical settlement
-//!   -> response queued -> writer: decide + transport accepts first bytes -> wire
+//!   -> response queued -> writer: [shared] decide + transport accepts -> wire
 //! delivery/cancel (same connection, same id) -> Running => Cancelled, token cancelled
-//! revocation (credential, detach, close)     -> authority/attachment checked at the decision
+//! revocation (credential, connection, close, detach, drain) -> [exclusive] authority revoked
 //! ```
 //!
 //! The publication linearization point is the transport's acceptance of the
-//! response's first bytes ([`Publication::poll_hand_off`]): the decision and
-//! that acceptance run in one synchronous step under the operation's lock,
-//! with no suspension between them, and the request is settled only if the
-//! transport took the bytes. While the transport cannot accept (backpressure),
-//! nothing is decided, so a cancellation or revocation that completes before
-//! the acceptance replaces the response with its typed failure for the same
-//! id. Accepted bytes belong to the transport and are never retracted.
+//! response ([`Publication::poll_hand_off`]): the stdio pipe taking its first
+//! bytes, or tungstenite taking its frame. The decision and that acceptance
+//! run in one synchronous step that holds the operation's lock and the shared
+//! side of the host's [`Revocations`], with no suspension between them, and
+//! the request is settled only if the transport accepted. Every revocation of
+//! delivery authority runs in the exclusive side. So a cancellation or
+//! revocation that completes before the acceptance replaces the response with
+//! its typed failure for the same id, one that overlaps it waits for it and is
+//! ordered after it, and accepted bytes are never retracted.
 use super::{
     connection::{Route, client_error, domain, host_error, manager_error},
     host::AppServerHost,
@@ -34,7 +36,7 @@ use base64::Engine;
 use std::{
     io,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
     task::{Poll, ready},
 };
 use tokio_util::sync::CancellationToken;
@@ -269,6 +271,54 @@ enum Resolved {
     Location(crate::tools::session_files::SessionFileLocation),
 }
 
+/// Orders every revocation of delivery authority against every publication.
+///
+/// A delivery success may be published only while its authority is current:
+/// the connection's (or Product Host socket's) authority token is not
+/// cancelled and its exact attachment is attached. Every change of either to
+/// revoked runs in [`Self::revoke`], the exclusive side: credential
+/// replacement or removal, connection revocation, drain and close, attachment
+/// detach, and Product Host disconnect or replacement. A publication holds
+/// the shared side from its decision through the transport's acceptance
+/// ([`Publication::poll_hand_off`]). Hence each revocation is linearized at
+/// its exclusive section and each publication at its acceptance, and no
+/// revocation can complete between a publication's check and its acceptance.
+///
+/// Neither side suspends or waits for I/O: the shared side covers one
+/// non-suspending transport poll, the exclusive side a token cancellation or
+/// an attachment detach. Publications share the lock, so they never wait for
+/// one another, only for a revocation in progress.
+#[derive(Default)]
+pub(crate) struct Revocations {
+    order: RwLock<()>,
+    /// Set when a revocation found a publication in progress and waited.
+    #[cfg(test)]
+    pub(crate) waited: tokio::sync::watch::Sender<bool>,
+}
+impl std::fmt::Debug for Revocations {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("DeliveryRevocations")
+    }
+}
+impl Revocations {
+    /// Revokes delivery authority: `revoke` runs once no publication is
+    /// between its decision and its acceptance, and before any later one
+    /// decides.
+    pub(crate) fn revoke<T>(&self, revoke: impl FnOnce() -> T) -> T {
+        #[cfg(test)]
+        if self.order.try_write().is_err() {
+            self.waited.send_replace(true);
+        }
+        let _exclusive = self.order.write().expect("delivery revocations");
+        revoke()
+    }
+
+    fn publish<T>(&self, publish: impl FnOnce() -> T) -> T {
+        let _shared = self.order.read().expect("delivery revocations");
+        publish()
+    }
+}
+
 /// WebSocket clients offer this beside the ordinary transport credential.
 pub(crate) const CREDENTIAL_PREFIX: &str = "rustx-delivery-access.";
 
@@ -302,23 +352,25 @@ impl Drop for Grant {
     }
 }
 
-/// Where one ordinary-lane delivery request stands relative to its commit.
+/// Where one delivery request stands relative to its publication.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum State {
     Running,
     /// `delivery/cancel` won: the terminal response is `delivery_cancelled`.
     Cancelled,
-    /// The publication decision was made; cancellation no longer applies.
+    /// The transport accepted the decided response; nothing applies any more.
     Settled,
 }
 
-/// One in-flight delivery request of one connection.
+/// One in-flight delivery request.
 pub(super) struct Operation {
     state: Mutex<State>,
-    /// A child of the connection's delivery authority. Cancelling it (by
-    /// `delivery/cancel`, credential revocation or close) fails every native
-    /// fence the request has not passed yet.
+    /// A child of the delivery authority. Cancelling it (by `delivery/cancel`,
+    /// credential revocation or close) fails every native fence the request
+    /// has not passed yet.
     token: CancellationToken,
+    #[cfg(test)]
+    probe: Arc<super::product_host::ReadProbe>,
 }
 
 /// One connection's delivery requests, keyed by their exact JSON-RPC ids.
@@ -340,11 +392,14 @@ impl Operations {
         id: &RequestId,
         authority: &CancellationToken,
         route: Arc<Route>,
+        revocations: Arc<Revocations>,
         #[cfg(test)] probe: Arc<super::product_host::ReadProbe>,
     ) -> Option<Publication> {
         let operation = Arc::new(Operation {
             state: Mutex::new(State::Running),
             token: authority.child_token(),
+            #[cfg(test)]
+            probe,
         });
         let mut table = self.0.lock().expect("delivery operations");
         if table.contains_key(&key(id)) {
@@ -357,15 +412,16 @@ impl Operations {
             operation,
             authority: authority.clone(),
             route,
-            #[cfg(test)]
-            probe,
+            revocations,
         })
     }
 
     /// Cancels this connection's exact running request. `true` means the
     /// cancellation won: that request's only response is `delivery_cancelled`.
     /// `false` means no such request is running here (unknown, never
-    /// registered, or its publication was already decided).
+    /// registered, or its publication was already accepted). A cancel that
+    /// arrives during a publication's hand-off waits for it, so it is
+    /// refused exactly when the transport accepted.
     pub(super) fn cancel(&self, id: &RequestId) -> bool {
         let Some(operation) = self
             .0
@@ -376,6 +432,10 @@ impl Operations {
         else {
             return false;
         };
+        #[cfg(test)]
+        if operation.state.try_lock().is_err() {
+            operation.probe.cancel_waited.send_replace(true);
+        }
         let mut state = operation.state.lock().expect("delivery operation");
         match *state {
             State::Running => {
@@ -390,18 +450,17 @@ impl Operations {
 }
 
 /// The publication owner of one delivery response. It travels with the
-/// serialized response through the bounded outbound queue and is settled by
-/// the transport writer when the transport accepts the response's first bytes
-/// (or by the in-process caller when it returns). Dropping it unsettled
-/// publishes nothing and unregisters the request.
+/// serialized response to the transport writer, which settles it when the
+/// transport accepts the response (the in-process caller settles it when it
+/// returns). Dropping it unsettled publishes nothing and unregisters the
+/// request.
 pub(super) struct Publication {
     operations: Arc<Operations>,
     id: RequestId,
     operation: Arc<Operation>,
     authority: CancellationToken,
     route: Arc<Route>,
-    #[cfg(test)]
-    probe: Arc<super::product_host::ReadProbe>,
+    revocations: Arc<Revocations>,
 }
 
 impl Publication {
@@ -412,16 +471,18 @@ impl Publication {
 
     #[cfg(test)]
     pub(super) fn probe(&self) -> &super::product_host::ReadProbe {
-        &self.probe
+        &self.operation.probe
     }
 
     /// What publishing now would mean. `Ok` publishes the response as
     /// produced; `Err` is the typed terminal failure that replaces it.
     ///
     /// A cancellation accepted earlier always wins. A success (bytes or a
-    /// native path) additionally requires the connection's delivery
-    /// authority and the exact attachment to be current now; a failure
-    /// carries nothing sensitive and keeps its own reason.
+    /// native path) additionally requires its authority to be current: the
+    /// authority token and the exact attachment. A failure carries nothing
+    /// sensitive and keeps its own reason. Called only with the operation's
+    /// lock and the shared side of [`Revocations`] held, so neither can
+    /// change before the caller's acceptance.
     fn decide(&self, state: State, success: bool) -> Result<(), RpcError> {
         match state {
             State::Cancelled => Err(domain(ErrorData::DeliveryCancelled)),
@@ -436,18 +497,17 @@ impl Publication {
         }
     }
 
-    /// Decides and settles at once, for the in-process caller.
-    fn commit(&self, success: bool) -> Result<(), RpcError> {
-        let mut state = self.operation.state.lock().expect("delivery operation");
-        let decision = self.decide(*state, success);
-        *state = State::Settled;
-        decision
-    }
-
-    /// Commits a typed response for the in-process caller.
+    /// Commits a typed response for the in-process caller, whose return is
+    /// its acceptance.
     pub(super) fn publish(&self, response: Response) -> Response {
         let success = matches!(response, Response::Success(_));
-        match self.commit(success) {
+        let decision = self.revocations.publish(|| {
+            let mut state = self.operation.state.lock().expect("delivery operation");
+            let decision = self.decide(*state, success);
+            *state = State::Settled;
+            decision
+        });
+        match decision {
             Ok(()) => response,
             Err(error) => super::connection::failure(Some(self.id.clone()), error),
         }
@@ -455,13 +515,13 @@ impl Publication {
 
     /// The publication linearization point for a transport writer.
     ///
-    /// `accept` is the transport's non-suspending acceptance of a record's
-    /// first bytes: `Pending` means it took nothing. Under the operation's
-    /// lock, this decides which record to publish (`record` as produced, or
-    /// the same id's typed failure), offers it to `accept`, and settles the
-    /// request only when `accept` is ready. So a cancellation either finds the
-    /// request settled, or wins and is honored at the next offer, and a
-    /// revocation that completes before an offer is observed by it. Returns
+    /// `accept` is the transport's non-suspending acceptance of a record:
+    /// `Pending` means it took nothing. Holding the operation's lock and the
+    /// shared side of [`Revocations`], this decides which record to publish
+    /// (`record` as produced, or the same id's typed failure), offers it to
+    /// `accept`, and settles the request only when `accept` is ready. A
+    /// cancellation or revocation either completed before, and is observed
+    /// by the decision, or waits until the transport has accepted. Returns
     /// the replacement record, if any, and what `accept` returned.
     pub(super) fn poll_hand_off<T>(
         &self,
@@ -469,16 +529,18 @@ impl Publication {
         success: bool,
         accept: impl FnOnce(&str) -> Poll<io::Result<T>>,
     ) -> Poll<io::Result<(Option<String>, T)>> {
-        let mut state = self.operation.state.lock().expect("delivery operation");
-        let replacement = match self.decide(*state, success) {
-            Ok(()) => None,
-            Err(error) => Some(super::transport::serialize_record(
-                &super::connection::failure(Some(self.id.clone()), error),
-            )?),
-        };
-        let accepted = ready!(accept(replacement.as_deref().unwrap_or(record)));
-        *state = State::Settled;
-        Poll::Ready(accepted.map(|accepted| (replacement, accepted)))
+        self.revocations.publish(|| {
+            let mut state = self.operation.state.lock().expect("delivery operation");
+            let replacement = match self.decide(*state, success) {
+                Ok(()) => None,
+                Err(error) => Some(super::transport::serialize_record(
+                    &super::connection::failure(Some(self.id.clone()), error),
+                )?),
+            };
+            let accepted = ready!(accept(replacement.as_deref().unwrap_or(record)));
+            *state = State::Settled;
+            Poll::Ready(accepted.map(|accepted| (replacement, accepted)))
+        })
     }
 }
 

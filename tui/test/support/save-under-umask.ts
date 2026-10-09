@@ -9,7 +9,7 @@
 import { existsSync, lstatSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { DeliveryResidueError, SAVE_FILES, saveDelivery, type SaveFiles } from "../../src/app-server/delivery-files.ts";
+import { DeliveryUncertainError, SAVE_FILES, saveDelivery, type SaveFiles } from "../../src/app-server/delivery-files.ts";
 
 const [mask, dir] = process.argv.slice(2);
 if (mask === undefined || dir === undefined) throw new Error("usage: save-under-umask.ts <umask> <directory>");
@@ -69,9 +69,9 @@ const residue: Record<string, number> = {};
 const kept = await saveDelivery(async () => BODY, join(dir, "residue"), undefined, observed(residue, {
   link: async () => { throw Object.assign(new Error("EACCES: injected"), { code: "EACCES" }); },
   unlink: async () => { throw Object.assign(new Error("EIO: injected"), { code: "EIO" }); },
-})).then(() => { throw new Error("a refused save published"); }, (error: unknown) => {
-  if (!(error instanceof DeliveryResidueError)) throw error;
-  return error;
+})).then(() => { throw new Error("a failed link published"); }, (error: unknown) => {
+  if (!(error instanceof DeliveryUncertainError) || error.residue === undefined) throw error;
+  return { residue: error.residue };
 });
 result.residue = { ...residue, kept: mode(kept.residue), destinationExists: existsSync(join(dir, "residue")) };
 

@@ -27,6 +27,8 @@ pub(crate) struct ReadProbe {
     pub before_bytes: std::sync::Arc<crate::runtime::conversation_runtime::Gate>,
     pub completed: tokio::sync::watch::Sender<Option<bool>>,
     pub retirement_waiting: tokio::sync::watch::Sender<bool>,
+    /// A `delivery/cancel` found its request's publication in progress and waited.
+    pub cancel_waited: tokio::sync::watch::Sender<bool>,
     pub authority: std::sync::Mutex<Option<CancellationToken>>,
 }
 #[cfg(test)]
@@ -38,6 +40,7 @@ impl Default for ReadProbe {
             before_bytes: std::sync::Arc::default(),
             completed: tokio::sync::watch::channel(None).0,
             retirement_waiting: tokio::sync::watch::channel(false).0,
+            cancel_waited: tokio::sync::watch::channel(false).0,
             authority: std::sync::Mutex::default(),
         }
     }
@@ -117,6 +120,10 @@ impl Drop for Authority {
 /// One authenticated host-only socket owns one read. Disconnect, authority
 /// replacement and process shutdown synchronously cancel its publication fence.
 /// A close acknowledgement is emitted only after its admitted read retires.
+///
+/// The response is published like an ordinary-lane delivery response: its
+/// [`delivery_access::Publication`] decides at tungstenite's acceptance of the
+/// frame, against the same revocation order.
 pub(crate) async fn serve<S>(
     socket: tokio_tungstenite::WebSocketStream<S>,
     host: AppServerHost,
@@ -126,14 +133,13 @@ pub(crate) async fn serve<S>(
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
 {
-    use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
     let _retire = authorization.clone().drop_guard();
-    let (mut writer, mut reader) = socket.split();
+    let socket = super::transport::websocket::Socket::new(socket);
     let request = tokio::select! {
         () = shutdown.cancelled() => return Ok(()),
         () = authorization.cancelled() => return Ok(()),
-        request = tokio::time::timeout(super::transport::websocket::HANDSHAKE_TIMEOUT, reader.next()) => request.map_err(io::Error::other)?,
+        request = tokio::time::timeout(super::transport::websocket::HANDSHAKE_TIMEOUT, socket.next()) => request.map_err(io::Error::other)?,
     };
     let Some(Ok(Message::Text(text))) = request else {
         return Err(io::Error::other("expected Product Host read"));
@@ -146,11 +152,11 @@ where
         biased;
         () = shutdown.cancelled() => None,
         () = authorization.cancelled() => None,
-        _ = reader.next() => None, // close, EOF, error or a second payload revokes this single operation
+        _ = socket.next() => None, // close, EOF, error or a second payload revokes this single operation
         result = &mut read => Some(result),
     };
-    let Some(result) = result else {
-        authorization.cancel();
+    let Some((result, publication)) = result else {
+        host.revocations().revoke(|| authorization.cancel());
         // Admission owns a detached native operation and possibly a blocking
         // descriptor read. Dropping its receiver cannot release that permit.
         // Do not poll the socket (and flush an automatic close reply) until the
@@ -164,10 +170,9 @@ where
             result
         })
         .await;
-        return tokio::time::timeout(super::transport::WRITE_TIMEOUT, writer.close())
+        return tokio::time::timeout(super::transport::WRITE_TIMEOUT, socket.close())
             .await
-            .map_err(io::Error::other)?
-            .map_err(io::Error::other);
+            .map_err(io::Error::other)?;
     };
     let response = match result {
         Ok(result) => Response::Success(Box::new(Success {
@@ -181,21 +186,23 @@ where
             error,
         }),
     };
-    let record = super::transport::serialize_record(&response)?;
+    let outbound = super::transport::Outbound::reply(super::connection::Reply {
+        response,
+        publication,
+    })?;
     tokio::select! {
         biased;
         () = shutdown.cancelled() => (),
         () = authorization.cancelled() => (),
-        result = tokio::time::timeout(super::transport::WRITE_TIMEOUT, writer.send(Message::Text(record.into()))) => {
-            result.map_err(io::Error::other)?.map_err(io::Error::other)?;
+        result = tokio::time::timeout(super::transport::WRITE_TIMEOUT, socket.send(outbound)) => {
+            result.map_err(io::Error::other)??;
         },
     }
     // A read already retired before cancellation can acknowledge the same clean
     // close, without turning a known settlement into a transport-loss outcome.
-    tokio::time::timeout(super::transport::WRITE_TIMEOUT, writer.close())
+    tokio::time::timeout(super::transport::WRITE_TIMEOUT, socket.close())
         .await
         .map_err(io::Error::other)?
-        .map_err(io::Error::other)
 }
 
 /// Internal one-operation payload, accepted only after host-only authentication.
@@ -218,34 +225,62 @@ pub(crate) enum ReadSource {
         artifact_id: crate::runtime::ArtifactId,
     },
 }
-pub(crate) async fn read(
+/// The read and, once its route is found, the publication that decides its
+/// response.
+async fn read(
     host: AppServerHost,
     request: FileRead,
     authorization: CancellationToken,
-) -> Result<MethodResult, RpcError> {
-    delivery_access::check_rpc(&authorization)?;
-    let route = host
-        .file_route(&request.target)
-        .ok_or_else(|| domain(ErrorData::StaleAttachment))?;
+) -> (
+    Result<MethodResult, RpcError>,
+    Option<delivery_access::Publication>,
+) {
+    if let Err(error) = delivery_access::check_rpc(&authorization) {
+        return (Err(error), None);
+    }
+    let Some(route) = host.file_route(&request.target) else {
+        return (Err(domain(ErrorData::StaleAttachment)), None);
+    };
+    // A socket's one operation: its own table, under the fixed id 0.
+    let publication = std::sync::Arc::new(delivery_access::Operations::default())
+        .register(
+            &RequestId::Integer(0),
+            &authorization,
+            route.clone(),
+            host.revocations().clone(),
+            #[cfg(test)]
+            host.file_read_probe(),
+        )
+        .expect("a fresh table has no operation");
+    let token = publication.token();
     let FileRead { source, roots, .. } = request;
-    let artifact_id = match source {
+    let result = match source {
         ReadSource::SessionFile {
             message_id,
             delivery_index,
         } => {
-            return delivery_access::request(
+            delivery_access::request(
                 host,
                 route,
                 message_id,
                 delivery_index,
                 delivery_access::Roots::Registered(roots),
                 delivery_access::Access::Bytes,
-                authorization,
+                token,
             )
-            .await;
+            .await
         }
-        ReadSource::Artifact { artifact_id } => artifact_id,
+        ReadSource::Artifact { artifact_id } => artifact(host, route, artifact_id, token).await,
     };
+    (result, Some(publication))
+}
+
+async fn artifact(
+    host: AppServerHost,
+    route: std::sync::Arc<super::connection::Route>,
+    artifact_id: crate::runtime::ArtifactId,
+    authorization: CancellationToken,
+) -> Result<MethodResult, RpcError> {
     let client = route.client.clone();
     let owner = host.clone();
     let receiver = host

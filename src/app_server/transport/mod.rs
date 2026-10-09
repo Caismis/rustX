@@ -46,20 +46,31 @@ impl io::Write for Record {
 
 /// One encoded, size-checked record and, for a delivery response, the owner
 /// of its publication decision.
-pub(super) struct Outbound {
+pub(crate) struct Outbound {
     record: String,
     publication: Option<(Publication, bool)>,
 }
 
 impl Outbound {
+    /// The response is encoded (and size-checked) now; its publication is
+    /// decided only when a transport accepts it.
+    pub(crate) fn reply(reply: Reply) -> io::Result<Self> {
+        let success = matches!(reply.response, super::protocol::Response::Success(_));
+        Ok(Self {
+            record: serialize_record(&reply.response)?,
+            publication: reply.publication.map(|publication| (publication, success)),
+        })
+    }
+
     /// Hands this record to the transport. `accept` is the transport's one
-    /// non-suspending acceptance of a record's first bytes, returning
-    /// `Pending` when it took nothing; the adapter calls this again when the
-    /// transport can accept. For a delivery response this is the publication
-    /// linearization point ([`Publication::poll_hand_off`]): which record is
-    /// offered is decided in the same synchronous step, and fixed only once
-    /// the transport took its first bytes. Returns the record as handed over
-    /// and what `accept` returned.
+    /// non-suspending acceptance of a record (the stdio pipe taking its first
+    /// bytes, tungstenite taking its frame), returning `Pending` when it took
+    /// nothing; the adapter calls this again when the transport can accept.
+    /// For a delivery response this is the publication linearization point
+    /// ([`Publication::poll_hand_off`]): which record is offered is decided
+    /// in the same synchronous step, and fixed only once the transport
+    /// accepted it. Returns the record as handed over and what `accept`
+    /// returned.
     pub(super) fn poll_hand_off<T>(
         &mut self,
         accept: impl FnOnce(&str) -> Poll<io::Result<T>>,
@@ -84,8 +95,9 @@ impl Outbound {
 
 /// The writer's only source of records, in order. Each adapter hands a
 /// record to its transport with [`Outbound::poll_hand_off`] only once every
-/// earlier record has been fully written, so backpressure from an earlier
-/// record leaves later delivery responses undecided.
+/// earlier record has been fully written (stdio) or flushed to the socket
+/// (WebSocket), so backpressure from an earlier record leaves later delivery
+/// responses undecided.
 pub(super) struct Outgoing(mpsc::Receiver<Outbound>);
 impl Outgoing {
     pub(super) async fn next(&mut self) -> Option<Outbound> {
@@ -103,17 +115,8 @@ fn enqueue(sender: &mpsc::Sender<Outbound>, value: &impl Serialize) -> io::Resul
     )
 }
 
-/// The response is encoded (and size-checked) now; its publication is
-/// decided only by the writer.
 fn enqueue_reply(sender: &mpsc::Sender<Outbound>, reply: Reply) -> io::Result<()> {
-    let success = matches!(reply.response, super::protocol::Response::Success(_));
-    send(
-        sender,
-        Outbound {
-            record: serialize_record(&reply.response)?,
-            publication: reply.publication.map(|publication| (publication, success)),
-        },
-    )
+    send(sender, Outbound::reply(reply)?)
 }
 
 fn send(sender: &mpsc::Sender<Outbound>, outbound: Outbound) -> io::Result<()> {

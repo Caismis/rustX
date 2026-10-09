@@ -26,20 +26,26 @@ only on physical settlement. A client interprets a native location locally only 
 a demonstrably shared filesystem; a remote server path is never a client path. See
 [file delivery](file-delivery.md#delivery-access-for-app-server-clients).
 
-Each ordinary-lane delivery request has one owner on its connection, from
-registration under its exact request id to its publication linearization point. That
-point is the transport's acceptance of the response's first bytes, once every earlier
-record has been written. The writer decides the record and offers it in one synchronous
-step under the request's lock, and settles only if the transport took bytes. stdio's
-point is the non-blocking pipe write. WebSocket's is tungstenite taking the frame, which
-it writes to the socket at once or, when the socket buffer is full, holds as its one
-buffered message. Cancellation (`delivery/cancel`, only for that connection's own id)
-or revocation (credential removal, close, shutdown, detach) that completes before that
-point prevents that response from publishing bytes or a native path, including while
-the transport is backpressured. The request still answers exactly once, with a typed
-failure for the same id, after its native work physically settled. A response
+Each delivery request has one owner, from registration under its exact request id to
+its publication linearization point: the transport's acceptance of the response, once
+every earlier record has been written. The writer decides the record and offers it in
+one synchronous step, and settles only if the transport accepted. stdio's point is the
+first non-blocking pipe write that takes bytes. WebSocket's is tungstenite's
+synchronous `start_send`, under the stream lock the reader shares; no adapter slot
+holds a frame before it (`SplitSink` is not used). tungstenite writes the frame to the
+socket at once or, when the socket buffer is full, holds it as its one buffered
+message. The step holds the request's state lock and the shared side of the host's
+revocation order. `delivery/cancel` (only for that connection's own id) takes the
+state lock. Every revocation of delivery authority (credential replacement or
+removal, connection revocation and drain, close, attachment detach, Product Host
+disconnect or replacement) runs in the order's exclusive side. So a cancellation or
+revocation that completes before the acceptance prevents that response from
+publishing bytes or a native path, including while the transport is backpressured.
+One that overlaps the step waits for the acceptance and is ordered after it. Neither
+lock spans a suspension or an I/O wait. The request still answers exactly once, with a
+typed failure for the same id, after its native work physically settled. A response
 published before cancellation or revocation stands and is never reported as
-unpublished. The TUI client reserves one of a connection's
+unpublished. The Product Host lane publishes through the same owner and order. The TUI client reserves one of a connection's
 16 in-flight request slots for `delivery/cancel` and sends cancellations through it
 in abort order, so ordinary requests can neither block a cancellation nor make it a
 seventeenth request. A refused cancellation ends the connection rather than
@@ -58,12 +64,13 @@ Cancellation counts only up to that link's dispatch. The staged file is created
 through the destination's own spelling of its parent, so `..` after a symlink
 resolves as for the destination. Save reports publication only when the
 destination, observed after the link, names the device/inode of the file it
-created; it reports refusal only for a definite rejection code, and uncertainty
-otherwise, never "unpublished" because the destination is now absent or foreign.
-An entry already at the destination is refused before any link, so "already exists"
-is definite. `EEXIST` from the link itself is uncertain unless the destination names
-the file, because a network filesystem returns it for a retransmitted link it
-performed. Nothing removes the destination. Cleanup is one `unlink` of the staged
+created. It reports refusal only when no link was dispatched: an entry already at
+the destination, or a destination that cannot be inspected, is refused before any
+link, so those refusals are definite. Every other dispatched link is uncertain, never
+"unpublished", whatever its error and whether the destination is now absent or
+foreign, because a network filesystem may answer a retransmission of a link it
+performed (`EEXIST`, `ENOENT`, `EACCES`) and the parent's entries may change between
+steps. Nothing removes the destination. Cleanup is one `unlink` of the staged
 name, judged only by single observations taken after it, never by the publication's
 earlier one. A count of 0, or a destination whose own `lstat` names the file with
 count 1, is `removed`. A count of 2 or more, or the staged name or destination still

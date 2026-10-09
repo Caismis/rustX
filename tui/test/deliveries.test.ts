@@ -415,17 +415,23 @@ describe("atomic Save publication", () => {
     });
   });
 
-  it("fails explicitly, without a fallback, where the filesystem cannot link", async () => {
+  it("reports a filesystem that cannot link as uncertain, without a fallback or retry", async () => {
     await inDir("rustx-save-nolink-", async (dir) => {
       for (const code of ["EPERM", "ENOTSUP", "EOPNOTSUPP"]) {
         const destination = join(dir, `out ${code}`);
-        await assert.rejects(
-          saveDelivery(answer, destination, undefined, saveFiles({ link: async () => { throw failure(code); } })),
-          new RegExp(`cannot publish .* atomically without overwriting \\(${code}\\)`),
-        );
+        let links = 0;
+        const outcome = await saveDelivery(answer, destination, undefined, saveFiles({
+          link: async () => { links += 1; throw failure(code); },
+        })).catch((error: unknown) => error);
+        // The usual meaning is an unsupported link, but a retransmitted link
+        // can answer EPERM too, so it is explained, never taken as proof.
+        assert.ok(outcome instanceof DeliveryUncertainError, String(outcome));
+        assert.equal((outcome.cause as NodeJS.ErrnoException).code, code);
+        assert.match(outcome.message, new RegExp(`failed \\(${code}; this filesystem may not support the hard link Save publishes with\\)`));
+        assert.equal(links, 1, "no retry");
         assert.equal(existsSync(destination), false);
       }
-      assert.deepEqual(listing(dir), []);
+      assert.deepEqual(listing(dir), [], "no copy or rename fallback, and no staging");
     });
   });
 
@@ -523,7 +529,7 @@ describe("atomic Save publication", () => {
         ["write", saveFiles({}, { write: async (call, write) => { if (call === 2) throw failure("EIO"); return write(); } }), /EIO/],
         ["short", saveFiles({}, { write: async () => ({ bytesWritten: 0 }) }), /stopped accepting bytes/],
         ["sync", saveFiles({}, { sync: async () => { throw failure("EIO"); } }), /EIO/],
-        ["link", saveFiles({ link: async () => { throw failure("EACCES"); } }), /EACCES/],
+        ["link", saveFiles({ link: async () => { throw failure("EACCES"); } }), /outcome unknown: linking .* failed \(EACCES\)/],
       ];
       for (const [name, files, expected] of cases) {
         await assert.rejects(saveDelivery(answer, join(dir, name), undefined, files), expected, name);
@@ -541,13 +547,14 @@ describe("atomic Save publication", () => {
     });
   });
 
-  it("13. claims publication or refusal only on evidence; otherwise the outcome is uncertain", async () => {
+  it("13. claims publication only on identity and refusal only before dispatch; otherwise uncertain", async () => {
     await inDir("rustx-save-evidence-", async (dir) => {
-      /** A real link whose acknowledgement is replaced by `code`, after `meanwhile`. */
-      const linkedThen = (code: string | undefined, meanwhile: (path: string) => void = () => {}) => saveFiles({
+      /** A real link whose acknowledgement is replaced by `code`, after
+       * `meanwhile`: a retransmission answering for a link performed first. */
+      const linkedThen = (code: string | undefined, meanwhile: (path: string, staged: string) => void = () => {}) => saveFiles({
         link: async (existing, path) => {
           await SAVE_FILES.link(existing, path);
-          meanwhile(path);
+          meanwhile(path, existing);
           if (code !== undefined) throw failure(code);
         },
       });
@@ -609,14 +616,16 @@ describe("atomic Save publication", () => {
       assert.match(unshown.message, /linking .*overtaken succeeded, but it now names another file, so this save cannot show it holds the saved bytes$/);
       assert.equal(readFileSync(overtaken, "utf8"), "theirs");
 
-      // F. An ambiguous error and an uninspectable destination: both kept.
+      // F. An ambiguous error and a destination that cannot be inspected
+      // after the link (the preflight found it absent): both kept.
       const unknown = join(dir, "unknown");
       const linkError = failure("EIO");
       const inspection = failure("EACCES");
+      let dispatchedUnknown = false;
       const blind = await outcome(unknown, saveFiles({
-        link: async () => { throw linkError; },
+        link: async () => { dispatchedUnknown = true; throw linkError; },
         lstat: async (path, options) => {
-          if (path === unknown) throw inspection;
+          if (path === unknown && dispatchedUnknown) throw inspection;
           return SAVE_FILES.lstat(path, options);
         },
       }));
@@ -637,7 +646,7 @@ describe("atomic Save publication", () => {
       // H. EEXIST as a retransmitted link returns it: the link committed, then
       // someone removed or replaced the entry, then EEXIST. That proves only
       // that the name existed, not whose it was: uncertain, never refused.
-      for (const [name, meanwhile] of [["retransmitted removed", rmSync], ["retransmitted replaced", replace]] as const) {
+      for (const [name, meanwhile] of [["retransmitted removed", (path: string) => rmSync(path)], ["retransmitted replaced", replace]] as const) {
         const destination = join(dir, name);
         const retransmitted = await outcome(destination, linkedThen("EEXIST", meanwhile));
         assert.ok(retransmitted instanceof DeliveryUncertainError, String(retransmitted));
@@ -656,18 +665,91 @@ describe("atomic Save publication", () => {
       assert.equal(dispatched.get(join(dir, "occupied")), undefined, "no link dispatched");
       assert.equal(readFileSync(join(dir, "occupied"), "utf8"), "kept");
 
-      // A definite rejection of the link itself (it creates nothing, and no
-      // repeat of a performed link returns it): refused.
-      const denied = await outcome(join(dir, "denied"), saveFiles({
-        link: async () => { throw failure("EACCES"); },
+      // B'. A destination that cannot be inspected is refused before any
+      // link too: publication could never be shown there. A real name too
+      // long for the filesystem, and an injected EACCES.
+      const tooLong = join(dir, "x".repeat(300));
+      const unnamed = await outcome(tooLong, saveFiles());
+      assert.ok(unnamed instanceof DeliveryActionError && !(unnamed instanceof DeliveryUncertainError), String(unnamed));
+      assert.match(unnamed.message, /^Not saved: .* cannot be inspected \(ENAMETOOLONG\)$/);
+      assert.equal((unnamed.cause as NodeJS.ErrnoException).code, "ENAMETOOLONG");
+      const hidden = join(dir, "hidden");
+      const unseen = await outcome(hidden, saveFiles({
+        lstat: async (path, options) => {
+          if (path === hidden) throw failure("EACCES");
+          return SAVE_FILES.lstat(path, options);
+        },
       }));
-      assert.ok(!(denied instanceof DeliveryUncertainError), String(denied));
-      assert.equal((denied as NodeJS.ErrnoException).code, "EACCES");
+      assert.match(String(unseen), /Not saved: .*hidden cannot be inspected \(EACCES\)/);
+      for (const path of [tooLong, hidden]) assert.equal(dispatched.get(path), undefined, "no link dispatched");
+
+      // 4. The original link was performed; someone then moved the staged
+      // name away and removed the entry; the retransmission answers ENOENT.
+      // Absent now, published then: never reported as not saved.
+      const resent = await outcome(join(dir, "resent removed"), linkedThen("ENOENT", (path, staged) => {
+        renameSync(staged, join(dir, "resent moved"));
+        rmSync(path);
+        rmSync(join(dir, "resent moved"));
+      }));
+      assert.ok(resent instanceof DeliveryUncertainError, String(resent));
+      assert.equal(resent.linked, false);
+      assert.deepEqual(resent.observed, { kind: "absent" });
+      assert.equal((resent.cause as NodeJS.ErrnoException).code, "ENOENT");
+      assert.equal(resent.residue, undefined, "the file has no links left: removed");
+      // The same ENOENT with the entry still naming the file: published.
+      const kept = join(dir, "resent kept");
+      assert.deepEqual(await outcome(kept, linkedThen("ENOENT", (_path, staged) => rmSync(staged))), { path: kept });
+      assert.deepEqual(readFileSync(kept), BODY_BYTES);
+
+      // 5. The original link was performed and the entry then replaced: the
+      // retransmission's ENOENT proves nothing, and the replacement is theirs.
+      const resentReplaced = join(dir, "resent replaced");
+      const foreignNow = await outcome(resentReplaced, linkedThen("ENOENT", (path, staged) => {
+        rmSync(staged);
+        replace(path);
+      }));
+      assert.ok(foreignNow instanceof DeliveryUncertainError, String(foreignNow));
+      assert.deepEqual(foreignNow.observed, { kind: "foreign" });
+      assert.equal(readFileSync(resentReplaced, "utf8"), "theirs");
+
+      // 6. The parent's permissions changed after the original link, so the
+      // retransmission answers EACCES: published while the entry is shown to
+      // be the file, uncertain once the change also hides it.
+      const permitted = join(dir, "permission changed");
+      assert.deepEqual(await outcome(permitted, linkedThen("EACCES")), { path: permitted });
+      const hides = join(dir, "permission hides");
+      let changed = false;
+      const obscured = await outcome(hides, saveFiles({
+        link: async (existing, path) => {
+          await SAVE_FILES.link(existing, path);
+          changed = true;
+          throw failure("EACCES");
+        },
+        lstat: async (path, options) => {
+          if (path === hides && changed) throw failure("EACCES");
+          return SAVE_FILES.lstat(path, options);
+        },
+      }));
+      assert.ok(obscured instanceof DeliveryUncertainError, String(obscured));
+      assert.equal(obscured.observed.kind, "uninspectable");
+      assert.deepEqual(readFileSync(hides), BODY_BYTES, "the published file is never touched");
+
+      // 7. A genuine refusal: the link creates nothing. Once dispatched,
+      // that cannot be told from a retransmission's answer: uncertain, with
+      // the destination absent and the original error kept.
+      const denial = failure("EACCES");
+      const denied = await outcome(join(dir, "denied"), saveFiles({ link: async () => { throw denial; } }));
+      assert.ok(denied instanceof DeliveryUncertainError, String(denied));
+      assert.equal(denied.cause, denial);
+      assert.deepEqual(denied.observed, { kind: "absent" });
       assert.equal(existsSync(join(dir, "denied")), false);
 
       for (const [path, count] of dispatched) assert.equal(count, 1, `one link to ${path}`);
       assert.deepEqual(staging(dir), [], "every staged file was removed");
-      assert.deepEqual(listing(dir), ["created EEXIST", "created EIO", "occupied", "overtaken", "replaced", "retransmitted replaced"]);
+      assert.deepEqual(listing(dir), [
+        "created EEXIST", "created EIO", "occupied", "overtaken", "permission changed", "permission hides",
+        "replaced", "resent kept", "resent replaced", "retransmitted replaced",
+      ]);
     });
   });
 
@@ -832,13 +914,15 @@ describe("atomic Save publication", () => {
         },
       });
       const outcome = await saveDelivery(answer, destination, undefined, files).catch((error: unknown) => error);
-      assert.ok(outcome instanceof DeliveryResidueError, String(outcome));
+      // The link was dispatched and failed: its ENOENT does not prove it
+      // created nothing, so the outcome is uncertain, not "nothing saved".
+      assert.ok(outcome instanceof DeliveryUncertainError, String(outcome));
       assert.equal((outcome.cause as NodeJS.ErrnoException).code, "ENOENT", "the staged name no longer resolves");
+      assert.deepEqual(outcome.observed, { kind: "absent" });
       // F keeps one link, but no observation after the unlink can say whose:
       // neither the staged name nor the destination names it.
       assert.equal(outcome.staged, "unknown");
-      assert.match(String((outcome.cleanup as Error).message), /neither at its staged name nor at the destination/);
-      assert.match(outcome.message, /^Nothing was saved, but whether this save's staged file \(created at .*\) was removed could not be established$/);
+      assert.match(outcome.message, /; whether its staged file \(created at .*\) was removed could not be established$/);
       assert.equal(outcome.residue, files.staged());
       assert.equal(existsSync(destination), false);
       assert.equal(identity(away), ours);
@@ -936,7 +1020,7 @@ describe("atomic Save publication", () => {
     });
   });
 
-  it("9. a destination parent renamed between staging and publication publishes nothing and reports the staged file", async () => {
+  it("9. a destination parent renamed between staging and publication publishes nothing, is uncertain, and reports the staged file", async () => {
     await inDir("rustx-save-parent-", async (dir) => {
       mkdirSync(join(dir, "parent"));
       const destination = join(dir, "parent", "out.md");
@@ -948,7 +1032,10 @@ describe("atomic Save publication", () => {
           sync: async (sync) => { await sync(); moved(join(dir, "parent"), join(dir, `parent ${boundary}`)); after(); },
         });
         const outcome = await saveDelivery(answer, destination, undefined, files).catch((error: unknown) => error);
-        assert.ok(outcome instanceof DeliveryResidueError, `${boundary}: ${String(outcome)}`);
+        // Nothing was published, but the dispatched link's ENOENT cannot
+        // prove that: a retransmitted link answers the same after a parent
+        // is renamed.
+        assert.ok(outcome instanceof DeliveryUncertainError, `${boundary}: ${String(outcome)}`);
         assert.equal((outcome.cause as NodeJS.ErrnoException).code, "ENOENT", "the staged name no longer resolves");
         assert.equal(outcome.residue, files.staged());
         const [stage] = staging(join(dir, `parent ${boundary}`));
@@ -1029,7 +1116,7 @@ describe("atomic Save publication", () => {
         link: async () => { throw failure("EACCES"); },
         unlink: async () => { throw failure("EIO"); },
       })).catch((error: unknown) => error);
-      assert.ok(kept instanceof DeliveryResidueError, String(kept));
+      assert.ok(kept instanceof DeliveryUncertainError && kept.residue !== undefined, String(kept));
       assert.equal(privateMode(kept.residue), 0o600);
     });
   });
@@ -1110,15 +1197,19 @@ describe("atomic Save publication", () => {
     await inDir("rustx-save-cleanup-evidence-", async (dir) => {
       /** An unlink that fails without removing anything. */
       const unlinkFails = { unlink: async () => { throw failure("EIO"); } };
-      /** A link that fails ambiguously without creating anything. */
+      /** A link that fails without creating anything. */
       const ambiguous = { link: async () => { throw failure("EIO"); } };
-      /** Destination inspection refused for `path` only. */
-      const uninspectable = (path: string) => ({
-        lstat: async (target: string, options: { bigint: true }) => {
-          if (target === path) throw failure("EACCES");
-          return SAVE_FILES.lstat(target, options);
-        },
-      });
+      /** Inspection of `path` refused once the link is dispatched; the
+       * preflight before it finds `path` absent. */
+      const uninspectable = (path: string) => {
+        let inspections = 0;
+        return {
+          lstat: async (target: string, options: { bigint: true }) => {
+            if (target === path && (inspections += 1) > 1) throw failure("EACCES");
+            return SAVE_FILES.lstat(target, options);
+          },
+        };
+      };
       /** Someone who may change the parent acts after publication was
        * observed and before cleanup, then the real unlink runs. */
       const beforeCleanup = (act: (staged: string) => void) => ({
@@ -1193,7 +1284,7 @@ describe("atomic Save publication", () => {
       }
 
       // The combined failure: link EIO without publishing, destination lstat
-      // EACCES, unlink EIO without removing. F, nlink 1, is still on disk,
+      // EACCES after the link, unlink EIO without removing. F, nlink 1, is still on disk,
       // and its staged name, observed after the unlink, proves it remains.
       const seven = await outcome("seven", { ...ambiguous, ...uninspectable(join(dir, "seven")), ...unlinkFails });
       assert.ok(seven.result instanceof DeliveryUncertainError, String(seven.result));

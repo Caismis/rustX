@@ -47,6 +47,7 @@ struct HostInner {
     file_read_probe: Arc<super::product_host::ReadProbe>,
     product_host: Mutex<Option<super::product_host::Authority>>,
     delivery_access: Mutex<Option<super::delivery_access::Grant>>,
+    revocations: Arc<super::delivery_access::Revocations>,
     authority_id: String,
     manager: SessionRuntimeManager,
     state: Mutex<HostState>,
@@ -104,8 +105,11 @@ impl AppServerHost {
         &self,
         credential: Option<super::transport::websocket::Credential>,
     ) {
-        *self.0.product_host.lock().expect("Product Host authority") =
-            credential.map(super::product_host::Authority::new);
+        let previous = std::mem::replace(
+            &mut *self.0.product_host.lock().expect("Product Host authority"),
+            credential.map(super::product_host::Authority::new),
+        );
+        self.revocations().revoke(|| drop(previous));
     }
     pub(super) fn authenticate_product_host(
         &self,
@@ -124,8 +128,15 @@ impl AppServerHost {
         &self,
         credential: Option<super::transport::websocket::Credential>,
     ) {
-        *self.0.delivery_access.lock().expect("delivery access") =
-            credential.map(super::delivery_access::Grant::new);
+        let previous = std::mem::replace(
+            &mut *self.0.delivery_access.lock().expect("delivery access"),
+            credential.map(super::delivery_access::Grant::new),
+        );
+        self.revocations().revoke(|| drop(previous));
+    }
+    /// Orders every revocation of delivery authority against publication.
+    pub(crate) fn revocations(&self) -> &Arc<super::delivery_access::Revocations> {
+        &self.0.revocations
     }
     /// `Ok(None)`: no delivery credential was offered. An offered credential
     /// that does not authenticate fails the whole handshake closed.
@@ -192,6 +203,7 @@ impl AppServerHost {
             file_read_probe: Arc::default(),
             product_host: Mutex::default(),
             delivery_access: Mutex::default(),
+            revocations: Arc::default(),
             authority_id: uuid::Uuid::new_v4().to_string(),
             manager,
             state: Mutex::default(),

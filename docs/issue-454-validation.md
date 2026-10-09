@@ -612,6 +612,94 @@ Negative controls, each applied alone from a byte-checked backup and restored:
 | Cleanup trusts the publication's observation (`removed` when published and count 1) | cleanup-evidence test fails at the review's counterexample ("never removed on stale evidence") |
 | `EEXIST` back in the definite-refusal codes | test 13 (retransmitted `EEXIST`) and the no-clobber test (contending saves) fail |
 
+## WebSocket hand-off, revocation order and dispatched-link classification repair
+
+The review of `74b7a2ad` found three remaining gaps. This section supersedes the
+previous section where they differ: its WebSocket bullet (`start_send` into the split
+sink's slot, then a flush in the same poll) and its statement that some link error
+codes are definite refusals. It also supersedes the description of a revocation
+concurrent with the decision step as "ordered after the decision" without a
+synchronization relation.
+
+**P1a, `SplitSink` slot taken as acceptance.** `SplitSink::start_send` (futures-util
+0.3.33) only stores the frame in the sink's own slot. `poll_flush` must first obtain
+the `BiLock` shared with `SplitStream`, and only then forwards the slot to
+tungstenite. The writer treated that `poll_flush` returning `Pending` as acceptance
+and settled the request. Counterexample: the reader holds the `BiLock`; the writer
+stores the success in the slot and gets `Pending`; the request is settled; the
+credential is revoked; the reader releases the lock; a later flush forwards the
+stale success. In the current composition both halves are polled by one task, so
+the lock was never contended there. Correctness therefore rested on an unstated
+composition property, and on tokio-tungstenite's private `ready` flag, not on the
+code. Invariant: a delivery success is never settled while it is held only in an
+adapter staging slot.
+
+Change: `websocket::Socket` owns the one `WebSocketStream` in a mutex shared by the
+reader and the writer, each holding it for one non-suspending poll. Under that lock
+`Socket::poll_hand_off` flushes earlier frames and pongs, waits for tungstenite's
+`poll_ready`, and then decides and hands the frame over with tungstenite's
+synchronous `start_send`. The record is either the writer's undecided `Outbound`,
+or tungstenite's. Stages: queued record → (no adapter slot) → tungstenite accepted
+(the publication point) → kernel socket buffer → peer. The one-message gap between
+tungstenite and the kernel is unchanged and documented. The Product Host lane
+uses the same `Socket`, `Outbound` and `Publication`, so it no longer has its own
+send path or its own `SplitSink`.
+
+**P1b, revocation not ordered against publication.** The decision ran under the
+request's state lock, which ordered it against `delivery/cancel`, but credential
+revocation (a token), close, detach and drain do not take that lock. A thread
+could check the authority, another could complete a revocation, and the first
+could then publish. Invariant: a cancellation or revocation that completes before
+the acceptance prevents the success; one that overlaps the hand-off is ordered by
+an explicit lock.
+
+Change: one host-wide `delivery_access::Revocations` (a reader-writer lock).
+`Publication::poll_hand_off` and the in-process `publish` hold its shared side from
+the decision through the acceptance. Every revocation of delivery authority runs in
+`Revocations::revoke`, the exclusive side: `bind_delivery_access` and
+`bind_product_host` (old credential dropped inside it),
+`revoke_delivery_access` (drain), `close` (authority and every attachment in one
+revocation), `release_route` (detach), and Product Host disconnect.
+`delivery/cancel` keeps the request's state lock, which the hand-off also holds.
+Lock order: WebSocket stream, then revocations, then request state. Revocations take
+the route table before the revocation order and never take the others. Neither
+side suspends or waits for I/O. Residency ending is not a revocation: a route pins
+residency until after its detach.
+
+**P2, dispatched-link error codes as definite refusals.** The remaining
+definite-refusal set (`ENOENT`, `EACCES`, `EROFS`, …) was still applied to a
+dispatched link. Counterexample: the original link creates the destination;
+someone moves the staged name and removes the destination; the retransmission
+answers `ENOENT`; Save reported "not saved". Invariant: definite non-publication
+only on evidence that rules a previous publication out.
+
+Change: the definite-refusal set is gone. Refusal is definite only before dispatch:
+the preflight `lstat(destination)` must answer `ENOENT`. An existing entry is
+refused as "already exists"; any other answer (`ENAMETOOLONG`, `ENOTDIR`, `EACCES`, …)
+as "cannot be inspected", with the cause kept. After dispatch: published if the
+destination names F, otherwise `DeliveryUncertainError`, whatever the error. The
+unsupported-link codes only add an explanation to the uncertain message. Cleanup is
+unchanged.
+
+| Regression | Synchronization | What it proves |
+| --- | --- | --- |
+| `websocket_writer_stages_nothing_while_the_reader_holds_the_stream` | real `WebSocketStream` over a `Valve`; a read `Hold` blocks the reader thread inside `poll_read` holding the stream; `Socket::waited` reports a contended lock | (1) success produced via `connection.reply` and wrapped as `Outbound`; (2–3) the writer, on another thread, waits for the stream, and tungstenite has taken 0 bytes; (4) `revoke_delivery_access` completes; (5) the reader releases; (6) the writer resumes; (7) the handed-over record and the frame the peer receives are id 30's `unauthorized` failure, never the success; permits back. |
+| `delivery_revocation_overlapping_a_hand_off_is_ordered_after_its_acceptance` (stdio) | a write `Hold` blocks `poll_write` with the decided success in hand; `Revocations::waited` / probe `cancel_waited` report a waiting revocation or cancel | **credential / detach / close:** the revocation, on another thread, reports that it waits and has not completed. The release lets the pipe accept, the success for 30 stands, and the revocation completes after. A later delivery 34 is `unauthorized` / `stale_attachment`. **cancel:** the cancel waits and then returns `false`, and sibling delivery 34 succeeds. Every case: one response per id, `server/info` answered (except after close), permits back, no deadlock between retirement and publication. |
+| `delivery_publication_linearizes_at_the_transports_first_accepted_byte` (stdio, kept) | `Valve` refusals | Revocation or cancel completed before the acceptance → typed failure for the same id. The credential case now uses the production `revoke_delivery_access`. `published` additionally revokes after the first accepted byte, and the full success still arrives. |
+| `websocket_delivery_publication_is_decided_when_tungstenite_takes_the_frame` (kept) | `Valve` | Behind an unsent frame, revocation wins; a frame tungstenite took stands. |
+| test 13 | real `link` with substituted acknowledgement; counted dispatches | Existing destination, a real `ENAMETOOLONG` name and an injected `EACCES` → refused with no link. Ordinary save → published. Retransmitted `EEXIST` → published or uncertain by identity. Original link, staged name moved and destination removed, `ENOENT` → uncertain (and with the destination still naming F → published). Destination replaced, `ENOENT` → uncertain, and the replacement is untouched. Permission change: `EACCES` with the destination naming F → published, and with it hidden → uncertain. A genuine refusal (`EACCES`, nothing created) → uncertain with the original cause. One `link` per save, never a rollback. |
+| tests 3, 9, 11, 12, 14 and the cleanup rows | as before | A staged name moved, or a parent renamed, before the link → uncertain plus residue (was "not saved"). Cancellation before dispatch → nothing linked. After dispatch the link decides. An ambiguous error combined with residue reports both. |
+
+Negative controls, each applied alone from a byte-checked backup and restored (sha256 verified):
+
+| Control | Result |
+| --- | --- |
+| A. The WebSocket writer decides and stages the record before it holds the stream, as `SplitSink`'s slot did | `websocket_writer_stages_nothing…` fails: the handed-over record is the success (`Some(true)`). |
+| B. Publication does not take the revocation order | the overlap test fails for `credential`, and, run per case, for `detach` and `close`: "… completed between the decision and the transport's acceptance". `cancel` passes, as designed, because it is ordered by the request lock. |
+| C. The request lock is released before the acceptance | the overlap test's `cancel` case fails the same way. |
+| D. A dispatched link's `ENOENT` is a definite refusal again | test 13 (case 4), test 3 and test 9 fail. |
+| E. The preflight lets the link decide for an uninspectable destination | test 13 (`ENAMETOOLONG`, no link dispatched) fails. |
+
 ## Validation
 
 See the pull request for the final command list and results; the PR description

@@ -1580,14 +1580,19 @@ contract, and the TUI ends the connection rather than lose it silently.
 
 **Publication commit.** A delivery response is serialized (and size-checked)
 into the ordinary bounded outbound queue together with its publication owner.
-The transport writer commits it immediately before the physical write. At that
-point an accepted cancellation yields `delivery_cancelled`, and a success
-(bytes or a native path) additionally requires the connection's delivery
-authority and the exact attachment to be current: credential revocation,
-connection close or process shutdown yields `session_file_read` /
-`unauthorized`, detachment yields `stale_attachment`, always for the same id.
-Failures carry nothing sensitive and keep their own reason. Once committed, a
-response is being transmitted and later revocation does not retract it.
+It is decided when the transport accepts it (the stdio pipe takes its first
+bytes; tungstenite takes its WebSocket frame), in the same synchronous step,
+and not before. At that point an accepted cancellation yields
+`delivery_cancelled`, and a success (bytes or a native path) additionally
+requires the connection's delivery authority and the exact attachment to be
+current: credential revocation, connection close or process shutdown yields
+`session_file_read` / `unauthorized`, detachment yields `stale_attachment`,
+always for the same id. Failures carry nothing sensitive and keep their own
+reason. A cancellation or revocation that completes before the acceptance
+prevents the success; one that overlaps it waits for it and is ordered after
+it. An accepted response is never retracted. See
+[file delivery](file-delivery.md#delivery-access-for-app-server-clients) for
+the synchronization.
 
 The internal Runtime Client vocabulary is v59. Only App Server v38 clients
 are generated; earlier versions are rejected, with no aliases or compatibility

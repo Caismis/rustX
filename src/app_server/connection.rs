@@ -111,7 +111,7 @@ fn release_route(host: &AppServerHost, table: &Mutex<RouteTable>, route: &Arc<Ro
         .is_some_and(|current| Arc::ptr_eq(current, route))
     {
         routes.active.remove(&route.target.session_id);
-        route.attachment.detach();
+        host.revocations().revoke(|| route.attachment.detach());
         host.uploads().revoke_route(route);
         route.external.release();
         route.capacity.release();
@@ -292,6 +292,7 @@ impl AppServerConnection {
             id,
             &authority,
             route.clone(),
+            self.host.revocations().clone(),
             #[cfg(test)]
             self.host.file_read_probe(),
         ) else {
@@ -317,7 +318,7 @@ impl AppServerConnection {
     /// uncommitted delivery response is published.
     pub(crate) fn revoke_delivery_access(&self) {
         if let Some(access) = &self.delivery_access {
-            access.cancel();
+            self.host.revocations().revoke(|| access.cancel());
         }
     }
 
@@ -328,11 +329,19 @@ impl AppServerConnection {
     /// # Panics
     /// Panics if the routing mutex is poisoned.
     pub fn close(&self) {
-        self.revoke_delivery_access();
         let mut routes = self.routes.lock().expect("routes mutex");
         routes.closed = true;
-        for (_, route) in std::mem::take(&mut routes.active) {
-            route.attachment.detach();
+        let active = std::mem::take(&mut routes.active);
+        // One revocation: the delivery authority and every attachment.
+        self.host.revocations().revoke(|| {
+            if let Some(access) = &self.delivery_access {
+                access.cancel();
+            }
+            for route in active.values() {
+                route.attachment.detach();
+            }
+        });
+        for (_, route) in active {
             self.host.uploads().revoke_route(&route);
             route.external.release();
             route.capacity.release();
