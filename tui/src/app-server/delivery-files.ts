@@ -250,6 +250,8 @@ const { O_WRONLY, O_CREAT, O_EXCL } = constants;
  * name, and cleanup unlinks it. Whoever may modify the destination's parent
  * can therefore substitute the staged name between steps; that is the trust
  * boundary, and such an actor could create or remove those entries directly.
+ * The parent's access policy, ACLs included, is the user's choice and is
+ * trusted with the bytes: Save requests mode 0600 and grants nothing else.
  * A substitution cannot make Save claim more than it did: publication is
  * claimed only when the destination, observed after the commit, names F, and
  * cleanup is judged by F's link count, so a staged file moved elsewhere is
@@ -279,9 +281,10 @@ export async function saveDelivery(
   signal?.throwIfAborted();
   // Beside the destination, so the link stays on one filesystem. The random
   // name only avoids collisions; O_EXCL is what makes the file this Save's.
-  // 0600 at creation: no umask can widen it, so the staged bytes are never
-  // readable or writable by group or others, and the published file, the same
-  // inode, keeps that mode.
+  // 0600 at creation: no umask can set a group or other bit, and the
+  // published file, the same inode, keeps that mode. Effective access is the
+  // filesystem's: an ACL the parent's new files inherit (macOS) is the chosen
+  // directory's trusted policy, which Save neither strips nor rewrites.
   const staged = childPath(dirname(destination), `.rustx-save-${randomBytes(16).toString("hex")}`);
   const file = await files.open(staged, O_WRONLY | O_CREAT | O_EXCL, 0o600);
   let publication: Publication;

@@ -42,7 +42,9 @@ Save/Open: retiring it (Escape, overlay close or replacement, Session focus chan
 snapshot replacement, disconnect, shutdown) cancels the native request and every
 uncommitted local effect. A Save, the same on Linux and macOS, creates one staged
 file beside the destination with `O_CREAT|O_EXCL` and mode `0600`, so no umask
-makes the staged or saved bytes group- or world-accessible; the handle that create returns
+sets a group or other mode bit on the staged or saved file. Mode bits are not effective
+access: the user-chosen destination directory, including an ACL its new files inherit
+(macOS), is trusted policy that Save neither strips nor rewrites. The handle that create returns
 is its only ownership evidence, never a name, owner or file type. It writes and
 syncs every byte through that handle and commits by one `link` of the staged name
 to the exact typed destination, which never replaces an existing entry.
@@ -57,7 +59,8 @@ by the handle's link count. Only a destination seen naming the file accounts for
 link. A link an uninspectable destination might explain, or an unreadable count,
 makes cleanup `unknown`. Any other link means the staged file `remains`. Both are
 reported as residue, and an absent name is no proof of removal. The trust boundary is the
-destination's parent. A process that may modify it can substitute the staged name
+destination's parent. A process that may change its entries (including a macOS `delete`
+right on the file) can substitute or remove the staged name
 between steps, since neither platform links or conditionally removes by
 descriptor. Save cannot prevent that, but never claims more than its handle
 shows. "Saved" is a fact

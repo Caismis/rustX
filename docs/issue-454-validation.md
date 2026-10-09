@@ -443,6 +443,89 @@ Negative controls, each applied alone and restored byte-identical:
 | Old accounting: an uninspectable destination counts as a proven link | cleanup-evidence test (the combined failure) |
 | An unreadable link count taken as removal | cleanup-evidence test |
 
+## macOS inherited-ACL trust boundary
+
+The review of `4a9256f2` accepted the Save design and its `0600` creation, and
+found that the documentation equated mode bits with effective access. Phrases
+such as "private to you whatever the filesystem" and "processes that cannot
+modify the parent cannot access the staged bytes" do not hold when the
+destination directory carries an inheritable ACL.
+
+Issue #454 requires authorized byte reads and a client-local Save of the
+original bytes. It does not require confidentiality against principals that the
+user-chosen destination directory authorizes. The contract is therefore
+corrected, not the mechanism:
+
+- **Mode bits.** Save requests `0600` at creation; no umask can set a group or
+  other bit.
+- **Effective access.** Access is the filesystem's whole authorization model.
+  The chosen directory's policy, ACLs included, is trusted, and Save neither
+  strips nor rewrites it.
+
+The previous section's "no umask grants group or others access" now reads as
+a statement about mode bits only.
+
+**Platform semantics, from the sources:**
+
+- **ACLs are checked before the mode bits.** In XNU (`bsd/vfs/vfs_subr.c`,
+  `vnode_authorize_simple`), a deny entry returns `EACCES`, an allow entry for
+  every requested right grants access, and only rights the ACL left undecided
+  fall back to the mode bits. So an inherited allow entry can grant read or
+  write on a `0600` file.
+- **Inheritance happens at creation.** `vn_attribute_prepare` applies the
+  parent's inheritable entries (`kauth_acl_inherit`) before the file exists,
+  whenever the mount has extended security (APFS and HFS+ by default). An
+  `open(O_CREAT|O_EXCL, 0600)` therefore inherits them, with no window.
+- **Write access to content does not grant delete.** Delete is authorized by
+  the file's own `delete` right or by the parent's `delete_child` right (or
+  its POSIX write bit) under the sticky-bit rule. A `delete` entry the file
+  inherits does let its holder remove the file's name, but `delete` cannot add
+  a name. chmod(1) documents the same rule.
+- **`link` adds no authorization.** Its `KAUTH_VNODE_LINKTARGET` check is
+  reduced to an immutability check.
+- **Linux** POSIX default ACLs are masked by the creation mode, so `0600`
+  yields `mask::---` and no effective rights for named users or groups.
+  Measured on tmpfs: a default ACL granting `user:nobody:rw-` gave the
+  Save-mode file `user:nobody:rw-  #effective:---`, while a `0666` control
+  file kept `rw-`.
+- **No enforcement without overriding the user's policy.** Node exposes no
+  call to create a file with an explicit ACL or without inheritance (macOS
+  `openx_np` with a `filesec`; there is no `O_TMPFILE` there). Enforcing more
+  than `0600` would mean rewriting the ACL after creation (a window, and
+  overriding the user's sharing policy) or a native helper. The review rules
+  out both, and the issue does not need them.
+
+**Regression, run on the real macOS filesystem.** The test is "requests 0600
+under an inherited macOS ACL, which Save neither strips nor rewrites", in
+`test/deliveries.test.ts`. It runs in the existing macOS CI step "TUI
+client-local Save" and is skipped on other platforms. Steps:
+
+1. Use `/bin/chmod +a`, without privilege, to give a temporary directory two
+   `file_inherit,only_inherit` entries: `user:nobody allow read,write` and
+   `user:<runner> allow execute`.
+2. Save through the real implementation, with its second write parked.
+3. While the write is parked, check that the staged file has the requested
+   `0600` mode and exactly the two entries, marked `inherited`.
+4. After publication, check that the saved file is byte-exact, `0600`, the
+   only directory entry, and carries exactly those entries. Check that the
+   directory's own ACL is unchanged.
+5. Check that `access(X_OK)` succeeds on the saved `0600` file: the kernel
+   grants the inherited execute right, which the mode lacks. A `0600` control
+   file outside the policy gets `EACCES`.
+6. Remove the ACLs with `chmod -N` before deleting the files.
+
+What the test does not prove:
+
+- That `nobody` can actually read the file. Exercising another principal needs
+  privilege, so that entry is shown inherited and its effect is the documented
+  evaluation order.
+- Behaviour on other volume types. The test covers the runner's APFS volume
+  only.
+- That the test catches a Save that strips or rewrites the ACL. Its negative
+  controls could not run locally, because the test needs macOS.
+
+Linux test behaviour is unchanged.
+
 ## Validation
 
 See the pull request for the final command list and results; the PR description

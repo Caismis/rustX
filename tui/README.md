@@ -1131,9 +1131,12 @@ a model request.
   directories and symlinks are never overwritten, and a cancelled or failed save
   leaves no partial file at the destination. "Saved" means the save created the
   destination and checked that it holds the very file it wrote. The hidden
-  file, and so the saved file, is private to you (mode `0600`) whatever your
-  umask; `chmod` it to share it. Anyone who can
-  write that directory may rename or replace it later. If that directory changes
+  file, and so the saved file, is created with restrictive Unix permissions
+  (mode `0600`) whatever your umask; `chmod` it to share it. Access may also be
+  governed by the directory's ACL or sharing policy (for example a macOS
+  folder whose ACL its new files inherit); Save leaves that policy as it is.
+  Anyone who can change that directory's entries may rename or replace the
+  file later. If that directory changes
   under the save (for example the hidden file is moved, or the directory is
   renamed), the save never reports more than it can show: it is "saved" only if
   the destination holds its own file, otherwise "not saved" or "unknown", and a

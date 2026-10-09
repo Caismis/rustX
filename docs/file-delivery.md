@@ -346,32 +346,62 @@ definitions never touch the filesystem.
   strongest no-clobber publication that Linux and macOS both provide through
   Node's filesystem API.
 
-  **Trust model.** Save protects the user's data against accidents and against
-  every process that cannot modify the destination's parent directory: the
-  kernel's permission checks keep such processes away from the staged name, the
-  destination and, by the staged file's `0600` mode, the staged bytes (in a sticky directory such as `/tmp`, other users cannot
-  rename or remove this user's entries). Save does not resist a process that
-  *can* modify that parent: this user's own processes, or other users when the
-  parent is group- or world-writable without the sticky bit. Nor does it
-  resist privileged processes, which bypass permissions. Such a process
-  could create, replace or delete the destination directly, so no pathname
-  protocol keeps it out. Two of Save's steps take names, because neither
-  platform offers a portable call that links a file by descriptor
-  (`linkat(AT_EMPTY_PATH)` and `O_TMPFILE` are Linux-only, and Node exposes
-  neither) or that removes a name only while it names a given file. Against
-  that excluded actor Save guarantees honesty, not prevention: it never claims
-  more than its own handle shows. A matching UID is never treated as proof that
-  an object belongs to this save.
+  **Trust model.** The destination's parent directory, including its effective
+  access policy (mode bits, ACLs, sharing configuration), is chosen by the
+  user and trusted. Save controls only the permissions it requests, and grants
+  nothing further:
 
-  **Permissions.** F is created with mode `0600`. A umask can only remove bits
-  from a creation mode, never add them, so under any umask (`0000`, `0002`,
-  `0022`, …) the staged bytes are never readable or writable by group or
-  others. The mode is set by the creating `open` itself, so there is no
-  window before a later `chmod`. The published destination is the same inode,
-  so the saved file is private to this user too. That is the intended default
-  for delivered content; `chmod` it to share it. Nothing changes a mode after
-  publication. The superuser and this user's other processes keep their
-  access, as with any of this user's files.
+  - A process with no effective access to the parent or to the staged file is
+    kept out by the kernel: it cannot reach the staged name, the destination
+    or the staged bytes.
+  - A principal that the parent's inherited ACL grants read or write on new
+    files (see Permissions) can read, or change, the staged and saved bytes.
+    Save neither prevents this nor detects changed content. Write access to a
+    file's content does not let anyone rename or remove its directory entry.
+  - A process that can change directory entries in the parent can create,
+    replace, rename or delete entries there. That includes this user's own
+    processes; other users when the parent is group- or world-writable without
+    the sticky bit (in a sticky directory such as `/tmp`, other users cannot
+    rename or remove this user's entries); and, on macOS, anyone holding the
+    parent's `delete_child` ACL right or an inherited `delete` right on the
+    file itself (`delete` removes a name but cannot add one).
+  - Privileged processes bypass permissions.
+
+  The last three groups are trusted not to interfere. Against those that can
+  change directory entries Save guarantees honesty, not prevention. Two of
+  Save's steps take names, because neither platform offers a portable call
+  that links a file by descriptor (`linkat(AT_EMPTY_PATH)` and `O_TMPFILE` are
+  Linux-only, and Node exposes neither) or that removes a name only while it
+  names a given file. Save never claims more than its own handle shows, and a
+  matching UID is never treated as proof that an object belongs to this save.
+
+  **Permissions.** Mode bits and effective access are separate guarantees.
+
+  - *Mode bits.* F is created with mode `0600`, set by the creating `open`
+    itself, so there is no window before a later `chmod`. A umask can only
+    remove bits from a creation mode, never add them, so under any umask
+    (`0000`, `0002`, `0022`, …) F's group and other bits stay clear. The
+    published destination is the same inode, so it has the same mode. Nothing
+    changes a mode after publication.
+  - *Effective access* is decided by the filesystem's whole authorization
+    model, not by those bits alone. On macOS (APFS, HFS+) a new file inherits
+    its directory's `file_inherit` ACL entries at creation. The kernel checks
+    an ACL before the mode bits and falls back to the bits only for rights the
+    ACL left undecided. So an inherited allow entry can give another principal
+    read or write on a `0600` file, and an inherited deny entry can withhold a
+    right the bits grant. On Linux a directory's POSIX default ACL is masked
+    by the creation mode, so `0600` leaves its named users and groups no
+    effective rights (`mask::---`). ACLs on other models, such as NFSv4 on a
+    network share, follow the server's rules. Privileged processes keep their
+    access everywhere.
+
+  Save does not strip, rewrite or add ACL entries. A directory's inherited
+  policy is how a user shares a folder, and the user chose this destination.
+  Node also has no call that creates a file with an explicit ACL, or without
+  inheritance, so overriding the policy would mean rewriting it after
+  creation, with a window between the two. For other users the default is
+  private: `chmod` the file to share it. Authorization for delivery bytes on
+  the App Server does not depend on the local file's permissions.
 
   **Ownership** is the handle F returned by the exclusive create. `O_EXCL` fails
   on any existing entry, a symlink or a directory included, so F is a file this
@@ -409,7 +439,8 @@ definitions never touch the filesystem.
   a local effect still owed to the user after `/files` retires. An absent
   staged name is not proof that the file is gone. `unlink` never removes a directory, and
   nothing ever removes the destination. Within the trust model the staged name
-  only ever names F. An excluded actor who substitutes that name just before
+  only ever names F. A trusted actor who can change the parent's entries and
+  substitutes that name just before
   the unlink has their entry removed in F's place. That is a limit of pathname
   deletion: Save reports it as residue, because F is still linked, but cannot
   prevent it.
