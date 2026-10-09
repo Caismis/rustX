@@ -24,8 +24,8 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
  const coldError = connecting && coldSource?.session_models?.kind === 'unavailable' ? coldSource.session_models.diagnostic : undefined;
  const queued = view?.modelIntent;
  const admission = view?.attachmentObservation;
- const attached = !!view && client.isAttachmentObservationCurrent(view.id, admission);
- const current = (at: number) => epoch.current === at && client.getSnapshot().generation === generation && sameTarget(client.getSnapshot().views[view!.id]?.target, target) && client.isAttachmentObservationCurrent(view!.id, admission);
+ const attached = !!view && client.isAttachmentControlCurrent(view.id, admission);
+ const current = (at: number) => epoch.current === at && client.getSnapshot().generation === generation && sameTarget(client.getSnapshot().views[view!.id]?.target, target) && client.isAttachmentControlCurrent(view!.id, admission);
  const read = async (at: number) => {
    if (!target || !current(at)) return;
      const result = await client.request({ method: 'session/models', params: { target } }, 'models');

@@ -3,7 +3,7 @@ import { ChatViewport } from '../../presentation/layout/ChatViewport';
 import { StateDot } from '../../presentation/primitives/StateDot';
 import { displayText, message as uiMessage, type DisplayText } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { AgentStatistics, RuntimeClientAgent, RuntimeClientJob, RuntimeClientTranscriptPage, MethodResult, WorkflowRunView, WorkflowRunId } from '../../../../protocol/app-server/v38';
 import { AppServerClient, RpcFailure, sameTarget } from '../../client/app-server';
 import { json } from '../../bindings/projection';
@@ -20,6 +20,7 @@ const detail = (value: string) => value.length > 1024 ? `${value.slice(0, 1024)}
 export const workflowKey = (id: WorkflowRunId) => JSON.stringify([id.conversation_id, id.attempt_id, id.invocation]);
 type AgentWait = Extract<MethodResult, { type: 'agent_wait' }>;
 type Controls = { client?: AppServerClient; sessionId?: string };
+const noSubscription = () => () => {};
 
 /** Typed domain failures are presentation copy; opaque native diagnostics stay raw. */
 function activityFailure(cause: unknown): DisplayText {
@@ -39,7 +40,7 @@ function useActivityRequest({ client, sessionId }: Controls) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<DisplayText>();
   const view = sessionId ? client?.getSnapshot().views[sessionId] : undefined;
-  const enabled = !!client && !!sessionId && client.isAttachmentObservationCurrent(sessionId, view?.attachmentObservation);
+  const enabled = !!client && !!sessionId && client.isAttachmentControlCurrent(sessionId, view?.attachmentObservation);
   async function run(operation: (client: AppServerClient, target: ReturnType<AppServerClient['target']>, current: () => boolean) => Promise<void>) {
     if (!enabled || pending || !client || !sessionId) return;
     const target = client.target(sessionId), generation = client.getSnapshot().generation;
@@ -66,18 +67,19 @@ export function AgentCard({ agent, metrics, metricsError, ...controls }: { agent
   const [transcriptLoading, setTranscriptLoading] = useState(false);
   const [transcriptError, setTranscriptError] = useState<string>();
   const { client, sessionId } = controls;
+  const admission = useSyncExternalStore(client?.subscribe ?? noSubscription, () => sessionId ? client?.getSnapshot().views[sessionId]?.attachmentObservation : undefined);
+  useEffect(() => { if (admission) setTranscript(undefined); }, [admission]);
   // A selected child view refreshes canonical content when native activation
   // facts change. It never turns a transcript read into a lifecycle decision.
   useEffect(() => {
-    if (!client || !sessionId) return;
-    const view = client.getSnapshot().views[sessionId];
-    if (view?.attachment !== 'attached' || !view.target) return;
-    const target = view.target, generation = client.getSnapshot().generation;
+    if (!client || !sessionId || !admission || !client.isAttachmentObservationCurrent(sessionId, admission)) { setTranscriptLoading(false); return; }
+    const target = admission.target;
     let observing = true;
-    const current = () => observing && client.getSnapshot().generation === generation && sameTarget(client.getSnapshot().views[sessionId]?.target, target);
+    const current = () => observing && client.isAttachmentObservationCurrent(sessionId, admission);
     setTranscriptLoading(true); setTranscriptError(undefined);
-    void client.request({ method: 'agent/transcript', params: { target, agent_id: agent.agent_id, limit: 64 } }, 'transcript')
+    void client.request({ method: 'agent/transcript', params: { target, agent_id: agent.agent_id, limit: 64 } }, 'transcript', undefined, current)
       .then(result => { if (current()) setTranscript(previous => {
+        if (!current()) return previous;
         if (!previous || (previous.entries?.length ?? 0) <= 64) return result.page;
         const latest = new Set(result.page.entries?.map(entry => entry.cursor));
         return { ...result.page, next_cursor: previous.next_cursor, entries: [...(previous.entries ?? []).filter(entry => !latest.has(entry.cursor)), ...(result.page.entries ?? [])] };
@@ -85,12 +87,13 @@ export function AgentCard({ agent, metrics, metricsError, ...controls }: { agent
       .catch(cause => { if (current()) setTranscriptError(cause instanceof Error ? cause.message : String(cause)); })
       .finally(() => { if (current()) setTranscriptLoading(false); });
     return () => { observing = false; };
-  }, [client, sessionId, agent.agent_id, agent.activation_id, agent.state, agent.observation.revision, transcriptRefresh]);
+  }, [client, sessionId, admission, agent.agent_id, agent.activation_id, agent.state, agent.observation.revision, transcriptRefresh]);
   const unavailable = agent.state === 'unavailable';
   const acceptsMessage = agent.state === 'active' || agent.state === 'inactive';
-  const readTranscript = (before?: string) => request.run(async (client, target, current) => {
-    const result = await client.request({ method: 'agent/transcript', params: { target, agent_id: agent.agent_id, before, limit: 64 } }, 'transcript');
-    if (current()) { setTranscript(previous => before && previous ? { ...result.page, entries: [...(result.page.entries ?? []), ...(previous.entries ?? [])] } : result.page); }
+  const readTranscript = (before?: string) => request.run(async (client, target, owned) => {
+    const current = () => owned() && !!sessionId && client.isAttachmentObservationCurrent(sessionId, admission);
+    const result = await client.request({ method: 'agent/transcript', params: { target, agent_id: agent.agent_id, before, limit: 64 } }, 'transcript', undefined, current);
+    if (current()) { setTranscript(previous => !current() ? previous : before && previous ? { ...result.page, entries: [...(result.page.entries ?? []), ...(previous.entries ?? [])] } : result.page); }
   });
   return <section className={css.agentConversation} data-agent-id={agent.agent_id} data-agent-state={agent.state} data-activation-id={agent.current_activation ?? undefined} aria-label={tx('common:activity.agent-label', { name: agent.agent })}>
     <div className={css.agentToolbar}>

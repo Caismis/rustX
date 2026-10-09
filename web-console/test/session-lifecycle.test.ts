@@ -271,3 +271,25 @@ it('disconnected Delete is refused before projection or native work', async () =
   expect(h.projections).toHaveLength(count); expect(h.calls).toEqual([]);
   expect(h.system.diagnostics()).toEqual({ actors: 0, retired: 0, operations: 0 });
 });
+
+it('observation status carries exact actor proof; retained cleanup identity cannot restore it', async () => {
+  const h = new Harness(), proof = await h.attached();
+  h.system.event('S', { type: 'OBSERVATION', proof, status: 'resynchronizing' });
+  expect(h.system.observes('S', proof)).toBe(true); expect(h.system.controls('S', proof)).toBe(false);
+  expect(h.system.observe('S')?.proof).toBe(proof);
+  h.system.event('S', { type: 'OBSERVATION', proof: { ...proof }, status: 'attached' });
+  expect(h.facts.attachment).toBe('resynchronizing');
+  h.system.event('S', { type: 'OBSERVATION', proof, status: 'attached' });
+  expect(h.system.controls('S', proof)).toBe(true);
+  const release = h.command('release'), detach = await h.next('detach');
+  const facts = h.facts;
+  h.system.event('S', { type: 'OBSERVATION', proof, status: 'attached' });
+  expect(h.facts).toBe(facts); expect(h.facts.target).toBe(proof.target);
+  expect(h.system.observe('S')).toBeUndefined(); expect(h.system.controls('S', proof)).toBe(false);
+  h.ack(detach); await release; expect(h.claims.size).toBe(0);
+  const opening = h.command('open', 'A'); h.ack(await h.next('attach', 2)); await opening;
+  const fresh = h.facts.attachmentObservation!; expect(fresh).not.toBe(proof);
+  h.system.event('S', { type: 'OBSERVATION', proof, status: 'stale' });
+  expect(h.system.observe('S')?.proof).toBe(fresh); expect(h.system.controls('S', fresh)).toBe(true);
+  expect(h.calls.map(call => call.kind)).toEqual(['attach', 'detach', 'attach']);
+});

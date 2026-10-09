@@ -1,5 +1,5 @@
 import { SessionLifecycles } from './session-lifecycle/system';
-import { emptyFacts, type LifecycleFacts, type SessionLifecyclePort } from './session-lifecycle/port';
+import { emptyFacts, type Observation, type LifecycleFacts, type SessionLifecyclePort } from './session-lifecycle/port';
 import { lifecycleAvailability, type LifecycleContext } from './session-lifecycle/machine';
 import { AgentMeters } from './agent-meters';
 import { UploadFailure, AttachmentIntakes } from './uploads';
@@ -330,7 +330,10 @@ export class AppServerClient {
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   getSnapshot = () => this.state;
   isAttachmentObservationCurrent(id: string, admission: SessionView['attachmentObservation']): boolean {
-    return this.lifecycles.current(id, admission);
+    return this.lifecycles.observes(id, admission);
+  }
+  isAttachmentControlCurrent(id: string, admission: SessionView['attachmentObservation']): boolean {
+    return this.lifecycles.controls(id, admission);
   }
   private publish(patch: Partial<ClientView>) {
     this.state = { ...this.state, ...patch };
@@ -346,10 +349,18 @@ export class AppServerClient {
     const facts = context.facts;
     const changedNode = previous && facts.nodeId !== previous.facts.nodeId;
     const opening = facts.attachment === 'attaching' && previous?.epoch !== context.epoch;
+    const revoked = !!previous?.facts.attachmentObservation && facts.attachmentObservation !== previous.facts.attachmentObservation;
+    if (revoked) this.retireObservationWork(id);
     const retiredClaim = !!previous?.facts.target && !facts.target;
     const attached = context.attachmentResult && context.attachmentResult !== previous?.attachmentResult && facts.attachmentObservation;
     const result = context.attachmentResult;
     const projection: SessionView = { ...view, ...facts, lifecycle: lifecycleAvailability(context),
+      ...(revoked ? {
+        history: view.history && { ...view.history, loading: false },
+        trace: view.trace && { ...view.trace, loading: false, details: Object.fromEntries(Object.entries(view.trace.details).filter(([, detail]) => !detail.loading)) },
+        turnOutline: view.turnOutline && { ...view.turnOutline, loading: false },
+        turnNavigation: view.turnNavigation && { intent: view.turnNavigation.intent },
+      } : {}),
       ...(changedNode ? { snapshot: undefined, cursor: undefined, history: undefined, trace: undefined, preview: undefined, statisticsPreview: undefined, tracePreview: undefined } : {}),
       ...(opening ? { modelIntent: undefined, preview: undefined, statisticsPreview: undefined, tracePreview: undefined } : {}),
       ...(facts.attachmentIntent === 'released' ? { modelIntent: undefined } : {}),
@@ -405,15 +416,16 @@ export class AppServerClient {
         if (!current()) return;
         if (result.configuration) this.publish({ configuration: { ...this.state.configuration, [id]: result.configuration } });
         this.reconcileInteractions(id); this.settleSubmissions(id);
-        const settings = await this.request({ method: 'session/settings', params: { session_id: id } }, 'settings');
+        const settings = await this.request({ method: 'session/settings', params: { session_id: id } }, 'settings', undefined, current);
         if (!current()) return;
         this.setSession(id, { settings: settings.settings });
         void this.refreshDisplaySummary(id).catch(() => {});
         if (this.dirty.delete(id)) {
           if (this.resubscribe.has(id)) await this.refresh(id);
           else {
-            try { await this.request({ method: 'session/subscribe', params: { target: result.target, after_cursor: result.cursor } }, 'subscribed'); }
+            try { await this.request({ method: 'session/subscribe', params: { target: result.target, after_cursor: result.cursor } }, 'subscribed', undefined, current); }
             catch (error) {
+              if (!current()) return;
               if (!(error instanceof RpcFailure) || error.error.data?.kind !== 'resync_required') throw error;
               this.resubscribe.add(id); await this.refresh(id);
             }
@@ -629,14 +641,14 @@ export class AppServerClient {
     if (['session/attach', 'session/detach', 'session/switchNode', 'session/delete', 'session/recoverDeletion'].includes(operation.method)
       && (typeof dispatchCurrent !== 'object' || !this.lifecycleAdmissions.delete(dispatchCurrent))) throw new RequestNotDispatched('Session lifecycle operations require actor admission.');
     // The Session actor owns control admission. Retained targets authorize only
-    // lifecycle settlement and reads; new effects require the exact committed
+    // lifecycle settlement; live reads and new effects require the exact committed
     // attachment proof, captured once and checked again adjacent to socket send.
     if ('target' in operation.params && 'session_id' in operation.params.target
       && !READS.has(operation.method) && !(operation.method === 'goal/control' && operation.params.control.action === 'show')
       && operation.method !== 'session/detach' && operation.method !== 'session/switchNode' && operation.method !== 'session/subscribe') {
       const target = operation.params.target, id = target.session_id;
       const admission = this.state.views[id]?.attachmentObservation;
-      const current = () => this.isAttachmentObservationCurrent(id, admission) && sameTarget(admission?.target, target);
+      const current = () => this.isAttachmentControlCurrent(id, admission) && sameTarget(admission?.target, target);
       if (!current()) throw new RequestNotDispatched('Attachment control authority was revoked.');
       const supplied = dispatchCurrent;
       dispatchCurrent = typeof supplied === 'object'
@@ -814,17 +826,20 @@ export class AppServerClient {
     if (value.method === 'session/closed') {
       this.lifecycles.event(target.session_id, { type: 'ROUTE_CLOSED', target });
     } else {
+      const observation = this.lifecycles.observe(target.session_id);
+      if (!observation || !sameTarget(observation.target, target)) return;
+      const { proof } = observation;
       if (value.method === 'session/resyncRequired') {
+        this.lifecycles.event(target.session_id, { type: 'OBSERVATION', proof, status: 'resynchronizing' });
+        if (!observation.current()) return;
         this.readingAuthorities.set(target.session_id, (this.readingAuthorities.get(target.session_id) ?? 0) + 1);
         this.retireOutline(target.session_id);
         this.invalidateReading(target.session_id);
+        if (!observation.current()) return;
         this.setSession(target.session_id, { turnOutline: undefined });
-        this.lifecycles.event(target.session_id, { type: 'OBSERVATION', target, status: 'resynchronizing' });
+        if (!observation.current()) return;
         this.resubscribe.add(target.session_id);
-        if (this.acquiring.has(target.session_id)) {
-          this.lifecycles.event(target.session_id, { type: 'OBSERVATION', target, status: 'resynchronizing' });
-          return;
-        }
+        if (this.acquiring.has(target.session_id)) return;
         void this.refresh(target.session_id).catch(() => {});
         return;
       }
@@ -849,6 +864,7 @@ export class AppServerClient {
         this.setSession(target.session_id, { turnOutline: { paging: view.turnOutline?.paging ?? { type: 'latest' }, error },
           ...(view.history?.window ? { history: { ...replaceTranscript(view.snapshot.transcript, view.history), error } } : {}) });
       }
+      if (!observation.current()) return;
       const snapshot = foldRuntimeEvent(view.snapshot, value.params.event);
       this.setSession(target.session_id, { snapshot, cursor: value.params.cursor,
         history: snapshot.transcript === view.snapshot.transcript ? this.state.views[target.session_id].history : refreshTranscript(this.state.views[target.session_id].history, snapshot.transcript) });
@@ -1044,7 +1060,7 @@ export class AppServerClient {
   /** Wait for admitted work without manufacturing another Open. */
   async waitForAttachment(id: string, current: () => boolean): Promise<void> {
     await this.lifecycles.waitForOpen(id);
-    if (!current() || !this.lifecycles.current(id, this.state.views[id]?.attachmentObservation)) throw new Error(this.state.views[id]?.error ?? 'Conversation connection changed. Your input was not sent.');
+    if (!current() || !this.lifecycles.controls(id, this.state.views[id]?.attachmentObservation)) throw new Error(this.state.views[id]?.error ?? 'Conversation connection changed. Your input was not sent.');
   }
   async attach(id: string, nodeId?: string, navigationCurrent: () => boolean = () => true, attached?: (target: AttachmentTarget) => void): Promise<void> {
     if (!navigationCurrent()) return;
@@ -1147,29 +1163,35 @@ export class AppServerClient {
   }
   /** Explicit reconciliation/recovery only. Native bounded replay owns overlap. */
   refresh(id: string): Promise<void> {
+    const observation = this.lifecycles.observe(id);
+    if (!observation) return Promise.resolve();
     this.dirty.add(id);
     const existing = this.refreshes.get(id);
     if (existing) return existing;
-    const target = this.state.views[id]?.target;
-    if (!target) return Promise.resolve();
-    if (this.state.views[id]?.nodeId !== this.state.views[id]?.attachmentNodeId) return Promise.reject(new Error('The retained attachment belongs to another Node.'));
-    const generation = this.state.generation;
-    const work = this.performRefresh(id, target, generation);
+    const work = this.performRefresh(id, observation.proof);
     this.refreshes.set(id, work);
     void work.finally(() => { if (this.refreshes.get(id) === work) this.refreshes.delete(id); }).catch(() => {});
     return work;
   }
-  private async performRefresh(id: string, target: AttachmentTarget, generation: number) {
+  private async performRefresh(id: string, proof: Observation) {
     let replayRepairs = 0;
-    const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target)
-      && this.state.views[id]?.nodeId === this.state.views[id]?.attachmentNodeId;
+    const target = proof.target, current = () => this.lifecycles.observes(id, proof);
     try {
       while (this.dirty.has(id) && current()) {
         this.dirty.delete(id);
         const resync = this.resubscribe.delete(id);
-        if (resync) { this.retireOutline(id);this.lifecycles.event(id, { type: 'OBSERVATION', target, status: 'resynchronizing' });this.setSession(id, { trace: this.supersedeTrace(id, replaceTrace({ records: [], next_cursor: null }, this.state.views[id]?.trace)), history: replaceTranscript({ entries: [] }, this.state.views[id]?.history), turnOutline: undefined, turnNavigation: undefined }); }
+        if (resync) {
+          this.retireOutline(id);
+          this.lifecycles.event(id, { type: 'OBSERVATION', proof, status: 'resynchronizing' });
+          if (!current()) return;
+          this.setSession(id, {
+            trace: this.supersedeTrace(id, replaceTrace({ records: [], next_cursor: null }, this.state.views[id]?.trace)),
+            history: replaceTranscript({ entries: [] }, this.state.views[id]?.history), turnOutline: undefined, turnNavigation: undefined,
+          });
+        }
+        if (!current()) return;
         this.acquiring.add(id);
-        const result = await this.request({ method: 'session/snapshot', params: { target, trace_records: traceInterests(this.state.views[id]?.trace) } }, 'snapshot');
+        const result = await this.request({ method: 'session/snapshot', params: { target, trace_records: traceInterests(this.state.views[id]?.trace) } }, 'snapshot', undefined, current);
         if (!current()) return;
         if (result.snapshot.conversation_id !== target.conversation_id) throw new Error('Mismatched snapshot conversation.');
         if (BigInt(result.cursor) >= BigInt(this.state.views[id].cursor ?? '0')) {
@@ -1181,17 +1203,17 @@ export class AppServerClient {
         this.acquiring.delete(id);
         const replay = this.resubscribe.delete(id);
         if (resync || replay) {
-          try { await this.request({ method: 'session/subscribe', params: { target, after_cursor: result.cursor } }, 'subscribed'); }
+          try { await this.request({ method: 'session/subscribe', params: { target, after_cursor: result.cursor } }, 'subscribed', undefined, current); }
           catch (error) {
             if (current() && error instanceof RpcFailure && error.error.data?.kind === 'resync_required' && ++replayRepairs < 3) {
               this.resubscribe.add(id); this.dirty.add(id);
             } else throw error;
           }
         }
-        if (current() && !this.dirty.has(id)) this.lifecycles.event(id, { type: 'OBSERVATION', target, status: 'attached' });
+        if (current() && !this.dirty.has(id)) this.lifecycles.event(id, { type: 'OBSERVATION', proof, status: 'attached' });
       }
     } catch (error) {
-      if (current()) { this.acquiring.delete(id); this.resubscribe.add(id); this.lifecycles.event(id, { type: 'OBSERVATION', target, status: 'stale', error: String(error) }); }
+      if (current()) { this.acquiring.delete(id); this.resubscribe.add(id); this.lifecycles.event(id, { type: 'OBSERVATION', proof, status: 'stale', error: String(error) }); }
       throw error;
     }
   }
@@ -1210,9 +1232,9 @@ export class AppServerClient {
   private refreshTraceDomain(id: string): Promise<void> {
     const existing = this.traceReads.get(id);
     if (existing) { existing.dirty = true; return existing.work; }
-    const target = this.state.views[id]?.target, generation = this.state.generation;
-    if (!target) return Promise.resolve();
-    const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
+    const observation = this.lifecycles.observe(id);
+    if (!observation) return Promise.resolve();
+    const { target, current } = observation;
     const read = { dirty: true, work: Promise.resolve() };
     read.work = (async () => {
       try {
@@ -1223,7 +1245,7 @@ export class AppServerClient {
           const authority = this.traceAuthorities.get(id);
           let result;
           try {
-            result = await this.request({ method: 'session/trace', params: { target, before: null, limit: TRACE_PAGE_SIZE, records: traceInterests(this.state.views[id]?.trace) } }, 'trace');
+            result = await this.request({ method: 'session/trace', params: { target, before: null, limit: TRACE_PAGE_SIZE, records: traceInterests(this.state.views[id]?.trace) } }, 'trace', undefined, current);
           } catch (error) {
             // Failure cannot create work or erase work already owed. Callers
             // share the final owed read's outcome, not an earlier failure.
@@ -1247,19 +1269,20 @@ export class AppServerClient {
   loadEarlier(id: string) { return this.pageOlder(id); }
   async loadEarlierTrace(id: string) {
     if (this.state.views[id]?.attachment === 'attaching') return this.readTracePreview(id, () => true, true);
-    const target = this.target(id);
-    const generation = this.state.generation;
+    const observation = this.lifecycles.observe(id);
+    if (!observation) return;
+    const { target } = observation;
     const cache = this.state.views[id].trace;
     const authority = this.traceAuthorities.get(id);
     if (!cache || cache.loading || cache.page.next_cursor == null) return;
     const limit = Math.min(TRACE_PAGE_SIZE, TRACE_LIMIT - cache.page.records.length);
     if (limit < 1) throw new Error('Trace window is full. Return to latest first.');
-    const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target)
+    const current = () => observation.current()
       && this.traceAuthorities.get(id) === authority
       && this.state.views[id]?.trace?.epoch === cache.epoch;
     this.setSession(id, { trace: { ...cache, loading: true, error: undefined } });
     try {
-      const result = await this.request({ method: 'session/trace', params: { target, before: cache.page.next_cursor, limit } }, 'trace');
+      const result = await this.request({ method: 'session/trace', params: { target, before: cache.page.next_cursor, limit } }, 'trace', undefined, current);
       if (current()) {
         this.setSession(id, { trace: prependTrace(this.state.views[id].trace!, result.page) });
         // Include newly loaded identities in a repair even if their terminal
@@ -1287,8 +1310,9 @@ export class AppServerClient {
    */
   async loadTraceDetail(id: string, record: string) {
     if (this.state.views[id]?.attachment === 'attaching') return this.readTracePreviewDetail(id, record);
-    const target = this.target(id);
-    const generation = this.state.generation;
+    const observation = this.lifecycles.observe(id);
+    if (!observation) return;
+    const { target } = observation;
     const cache = this.state.views[id]?.trace;
     if (!cache) return;
     const epoch = cache.epoch;
@@ -1296,14 +1320,13 @@ export class AppServerClient {
     const existing = cache.details[record];
     if (existing && (existing.loading || existing.detail)) return;
     const pending = beginTraceDetail(cache, record);
-    const current = () => this.current(generation)
-      && sameTarget(this.state.views[id]?.target, target)
+    const current = () => observation.current()
       && this.traceAuthorities.get(id) === authority
       && this.state.views[id]?.trace?.epoch === epoch
       && this.state.views[id]?.trace?.details[record] === pending.details[record];
     this.setSession(id, { trace: pending });
     try {
-      const result = await this.request({ method: 'session/traceDetail', params: { target, record_id: record } }, 'trace_detail');
+      const result = await this.request({ method: 'session/traceDetail', params: { target, record_id: record } }, 'trace_detail', undefined, current);
       if (!current()) return;
       this.setSession(id, { trace: completeTraceDetail(this.state.views[id].trace!, record, epoch, result.detail ?? undefined) });
     } catch (error) {
@@ -1321,11 +1344,9 @@ export class AppServerClient {
     return intent;
   }
   private readingAuthority(id: string) {
-    const target = this.target(id), generation = this.state.generation;
+    const observation = this.lifecycles.observe(id);
     const authority = this.readingAuthorities.get(id), epoch = this.lifecycles.epoch(id);
-    return () => this.current(generation) && this.readingAuthorities.get(id) === authority && this.lifecycles.epoch(id) === epoch
-      && this.state.views[id]?.attachment === 'attached' && this.state.views[id]?.attachmentIntent === 'wanted'
-      && sameTarget(this.state.views[id]?.target, target);
+    return () => !!observation?.current() && this.readingAuthorities.get(id) === authority && this.lifecycles.epoch(id) === epoch;
   }
   private retireOutline(id: string) {
     const read = this.outlineReads.get(id);
@@ -1346,7 +1367,7 @@ export class AppServerClient {
   }
   private demandOutline(id: string, offset: number | undefined, paging: OutlinePagingIntent, userCurrent: () => boolean, automatic = false): Promise<ConversationTurnPage | undefined> {
     const view = this.state.views[id];
-    if (!view?.target || view.attachment !== 'attached' || view.attachmentIntent !== 'wanted' || !userCurrent()) return Promise.resolve(undefined);
+    if (!view || !this.lifecycles.observe(id) || !userCurrent()) return Promise.resolve(undefined);
     let read = this.outlineReads.get(id);
     if (read && !read.authority()) { this.retireOutline(id); read = undefined; }
     if (read) {
@@ -1377,7 +1398,7 @@ export class AppServerClient {
     let page: ConversationTurnPage | undefined;
     try {
       if (!current()) return;
-      const target = this.target(id);
+      const target = this.lifecycles.observe(id)!.target;
       const result = await this.request({ method: 'session/turns', params: { target, offset: demand.offset ?? null, limit: HISTORY_PAGE_SIZE } }, 'conversation_turns', undefined, owned);
       if (current()) {
         if (result.page.cut.conversation_id !== target.conversation_id || result.page.turns.length > HISTORY_PAGE_SIZE) throw new Error('Invalid native turn outline.');
@@ -1409,7 +1430,7 @@ export class AppServerClient {
   /** Native resolves the exact Turn at its outline cut in one bounded read. */
   async navigateTurn(id: string, selection: ConversationTurn | number, userCurrent: () => boolean = () => true) {
     const view = this.state.views[id];
-    if (!view?.history || view.attachment !== 'attached' || view.attachmentIntent !== 'wanted' || !userCurrent()) return false;
+    if (!view?.history || !this.lifecycles.observe(id) || !userCurrent()) return false;
     const authority = this.readingAuthority(id), intent = this.invalidateReading(id);
     const current = () => authority() && this.readingIntents.get(id) === intent && userCurrent();
     let turn: ConversationTurn, cut = view.turnOutline?.page?.cut;
@@ -1448,6 +1469,7 @@ export class AppServerClient {
     }
   }
   returnToLatest(id: string) {
+    if (!this.lifecycles.observe(id)) return;
     this.invalidateReading(id);
     const view = this.state.views[id];
     if (view?.snapshot) this.setSession(id, { history: replaceTranscript(view.snapshot.transcript, view.history) });
@@ -1465,8 +1487,9 @@ export class AppServerClient {
   /** One gesture, one read. Navigation intent fences both page and anchor reads. */
   private async readHistoryPage(id: string, at: import('../../../protocol/app-server/v38').ConversationWindowAt) {
     const history = this.state.views[id]?.history;
-    if (!history || this.state.views[id]?.attachment !== 'attached') return;
-    const target = this.target(id), authority = this.readingAuthority(id), intent = this.invalidateReading(id);
+    const observation = this.lifecycles.observe(id);
+    if (!history || !observation) return;
+    const target = observation.target, authority = this.readingAuthority(id), intent = this.invalidateReading(id);
     const current = () => authority() && this.readingIntents.get(id) === intent && this.state.views[id]?.history?.epoch === history.epoch;
     this.setSession(id, { history: { ...history, loading: true, error: undefined } });
     try {
@@ -1482,6 +1505,7 @@ export class AppServerClient {
     }
   }
   private reconcileInteractions(id: string) {
+    if (!this.lifecycles.observe(id)) return;
     const snapshot = this.state.views[id].snapshot!;
     const request = this.state.views[id].compactionRequest;
     const target = this.state.views[id].target;
@@ -1543,7 +1567,7 @@ export class AppServerClient {
     if (!policy) throw new UploadFailure('failed', 'Upload policy unavailable');
     if (!files.length || files.length > policy.max_files_per_transfer || files.some(file => file.size > policy.max_file_bytes) || files.reduce((sum, file) => sum + file.size, 0) > policy.max_transfer_bytes) throw new UploadFailure('failed', 'Selection exceeds native upload policy');
     const admission = this.state.views[id]?.attachmentObservation;
-    const current = () => this.isAttachmentObservationCurrent(id, admission) && sameTarget(admission?.target, target) && (!evidence || evidence.current());
+    const current = () => this.isAttachmentControlCurrent(id, admission) && sameTarget(admission?.target, target) && (!evidence || evidence.current());
     if (!current()) throw new UploadFailure('failed', 'Upload authority changed');
     const read = async () => {
       const outcome = await this.uploadStatus(id, operationId).catch(error => { throw new UploadFailure('uncertain', error); });
@@ -1607,6 +1631,7 @@ export class AppServerClient {
    * exact MessageId: pending in the mailbox (the native row replaces it) or adopted
    * into canonical messages. No text, order or queue-length matching. */
   private settleSubmissions(id: string) {
+    if (!this.lifecycles.observe(id)) return;
     const view = this.state.views[id];
     if (!view?.submissions?.length || !view.snapshot) return;
     const observed = new Set([
@@ -1640,8 +1665,10 @@ export class AppServerClient {
   /** `refresh` re-marks the view dirty, so even a coalesced in-flight refresh
    * completes a snapshot request issued after this call before resolving. */
   private async reread(id: string, current: () => boolean) {
+    const observation = this.lifecycles.observe(id);
+    if (!observation || !current()) return false;
     try { await this.refresh(id); } catch { return false; }
-    return current() && this.state.views[id]?.attachment === 'attached';
+    return current() && observation.current() && this.state.views[id]?.attachment === 'attached';
   }
   async editInbound(id: string, expected: PendingInboundRef, text: string): Promise<InboundControlOutcome> {
     return this.controlInbound(id, target => ({ method: 'inbound/edit', params: { target, expected, text } }));
@@ -1669,7 +1696,8 @@ export class AppServerClient {
    * the final coalesced read, so an older in-flight response cannot restore a
    * removed row through the normal append-only transcript merge. */
   private async rereadPending(id: string, current: () => boolean) {
-    const observed = await this.reread(id, current);
+    const observation = this.lifecycles.observe(id);
+    const observed = await this.reread(id, current) && !!observation?.current();
     const view = this.state.views[id];
     if (observed && view?.snapshot) this.setSession(id, { history: replaceTranscript(view.snapshot.transcript, view.history) });
     return observed;
@@ -1760,9 +1788,10 @@ export class AppServerClient {
   }
 
   async repairAgentModel(id: string) {
-    const target = this.target(id), generation = this.state.generation;
+    const observation = this.lifecycles.observe(id);
+    if (!observation) return;
     await this.refresh(id);
-    if (this.current(generation) && sameTarget(this.state.views[id]?.target, target) && this.state.views[id].modelMutation?.status !== 'in-flight') {
+    if (observation.current() && this.state.views[id].modelMutation?.status !== 'in-flight') {
       const view = this.state.views[id], intent = view.modelIntent, observed = view.snapshot?.model?.configured;
       const confirmed = intent?.phase === 'failed' && observed?.model === intent.config.model
         && (observed.reasoningProfile ?? undefined) === (intent.config.reasoningProfile ?? undefined);
@@ -1771,7 +1800,7 @@ export class AppServerClient {
   }
   cancellationTarget(id: string): CancellationTarget | undefined {
     const view = this.state.views[id], attempt = view?.snapshot?.attempt;
-    if (!this.isAttachmentObservationCurrent(id, view?.attachmentObservation) || !this.initialized || this.state.connection !== 'connected' || view?.attachmentIntent !== 'wanted' || view.attachment !== 'attached'
+    if (!this.isAttachmentControlCurrent(id, view?.attachmentObservation) || !this.initialized || this.state.connection !== 'connected' || view?.attachmentIntent !== 'wanted' || view.attachment !== 'attached'
       || !view.target || view.deleting || view.cancellation || !attempt || attempt.phase.type === 'settled'
       || view.snapshot?.shutting_down || view.snapshot?.durability_failure || view.snapshot?.pending_interactions?.length) return;
     return { generation: this.state.generation, target: view.target, attemptId: attempt.attempt_id };
@@ -1837,14 +1866,17 @@ export class AppServerClient {
   switchNode(id: string, nodeId: string): Promise<void> {
     return this.lifecycles.command(id, { kind: 'switch', node: nodeId, current: () => true }, true).then(() => {});
   }
-  private retireAttachmentWork(id: string) {
+  private retireObservationWork(id: string) {
     this.acquiring.delete(id);
     this.readingIntents.delete(id); this.retireOutline(id); this.readingAuthorities.delete(id);
     this.traceReads.delete(id);
     this.traceAuthorities.delete(id);
+    this.refreshes.delete(id); this.dirty.delete(id); this.resubscribe.delete(id);
+  }
+  private retireAttachmentWork(id: string) {
+    this.retireObservationWork(id);
     this.summarySettled.delete(id);
     this.summaryObservedEpoch.delete(id);
-    this.refreshes.delete(id); this.dirty.delete(id); this.resubscribe.delete(id);
     this.setSession(id, { history: undefined, submissions: undefined, turnOutline: undefined, turnNavigation: undefined });
   }
   clearError() { this.publish({ error: undefined }); }

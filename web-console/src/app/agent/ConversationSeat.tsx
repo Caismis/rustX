@@ -48,7 +48,7 @@ export function ConversationSeat({ client, host, authority, associations, sessio
   const [sending, setSending] = useState<string>();
   const [failure, setFailure] = useState<{ owner: string; message: string }>();
   const error = failure?.owner === owner ? failure.message : undefined;
-  const attached = state.connection === 'connected' && !!view && client.isAttachmentObservationCurrent(view.id, view.attachmentObservation);
+  const attached = state.connection === 'connected' && !!view && client.isAttachmentControlCurrent(view.id, view.attachmentObservation);
   const disabled = !attached || !!view?.modelMutation || !!view?.snapshot?.shutting_down || !!view?.snapshot?.durability_failure;
   return <div ref={seat} className={css.composerSeat} data-composer-seat="">
     <div hidden={!!view?.snapshot?.pending_interactions?.length}>

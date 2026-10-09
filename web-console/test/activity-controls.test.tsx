@@ -270,3 +270,49 @@ it('a wait response from an obsolete attachment cannot publish an activation res
   expect(server.requests.filter(row => row.request.method === 'agent/wait')).toHaveLength(1);
   expect(server.requests.filter(row => row.request.method === 'agent/interrupt')).toHaveLength(0);
 });
+
+it('child transcript cannot publish from a retained cleanup claim and fresh proof starts a fresh read', async () => {
+  const server = new Server(); servers.push(server); await server.attached('A');
+  server.held.add('agent/transcript'); server.held.add('session/detach');
+  const ui = render(<AgentCard agent={agentFixture()} client={server.client} sessionId="A"/>);
+  const old = await server.waitFor('agent/transcript', 1);
+  let release!: Promise<void>;
+  await act(async () => { release = server.client.release('A'); void release.catch(() => {}); await server.waitFor('session/detach', 1); });
+  const page = (text: string) => ({ entries: [{ cursor: '1', item: { type: 'message' as const, message: { id: text, role: 'assistant' as const, content: [{ type: 'text' as const, text }] } } }] });
+  await act(async () => { server.socket.success(old, { type: 'transcript', page: page('obsolete child result') }); });
+  expect(ui.queryByText('obsolete child result')).toBeNull(); expect(ui.queryByText('Reading child conversation…')).toBeNull();
+  expect(server.claims()).toHaveLength(1);
+  await act(async () => { server.reply(await server.waitFor('session/detach', 1)); await release; await server.client.attach('A'); });
+  const fresh = await server.waitFor('agent/transcript', 2);
+  await act(async () => { server.socket.success(fresh, { type: 'transcript', page: page('current child result') }); });
+  expect(ui.getByText('current child result')).toBeTruthy(); expect(ui.queryByText('obsolete child result')).toBeNull();
+  expect(server.requests.filter(row => row.request.method === 'agent/transcript')).toHaveLength(2);
+  expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(2);
+  expect(server.requests.filter(row => row.request.method === 'session/detach')).toHaveLength(1); expect(server.claims()).toHaveLength(1);
+});
+
+it('older child transcript retains its original observation proof through native response', async () => {
+  const server = new Server(); servers.push(server); await server.attached('A');
+  const page = (text: string, cursor: string) => ({ entries: [{ cursor, item: { type: 'message' as const, message: { id: text, role: 'assistant' as const, content: [{ type: 'text' as const, text }] } } }], next_cursor: cursor });
+  server.handlers.set('agent/transcript', () => ({ type: 'transcript', page: page('current child page', '10') }));
+  const ui = render(<AgentCard agent={agentFixture()} client={server.client} sessionId="A"/>);
+  await act(async () => { await server.waitFor('agent/transcript', 1); });
+  expect(ui.getByText('current child page')).toBeTruthy();
+  server.held.add('agent/transcript'); server.held.add('session/detach');
+  await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Older messages' })); await server.waitFor('agent/transcript', 2); });
+  const older = await server.waitFor('agent/transcript', 2); let release!: Promise<void>;
+  await act(async () => { release = server.client.release('A'); void release.catch(() => {}); await server.waitFor('session/detach', 1); });
+  await act(async () => { server.socket.success(older, { type: 'transcript', page: page('obsolete older page', '1') }); });
+  expect(ui.queryByText('obsolete older page')).toBeNull(); expect(ui.getByText('current child page')).toBeTruthy();
+  expect(server.requests.filter(row => row.request.method === 'agent/transcript')).toHaveLength(2);
+  expect(server.requests.filter(row => row.request.method === 'session/snapshot')).toHaveLength(0);
+  await act(async () => { server.reply(await server.waitFor('session/detach', 1)); await release; }); expect(server.claims()).toHaveLength(0);
+  await act(async () => { await server.client.attach('A'); });
+  expect(ui.queryByText('current child page')).toBeNull();
+  const fresh = await server.waitFor('agent/transcript', 3);
+  await act(async () => { server.socket.success(fresh, { type: 'transcript', page: page('fresh child page', '20') }); });
+  expect(ui.getByText('fresh child page')).toBeTruthy(); expect(ui.queryByText('current child page')).toBeNull();
+  expect(server.requests.filter(row => row.request.method === 'agent/transcript')).toHaveLength(3);
+  expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(2);
+  expect(server.requests.filter(row => row.request.method === 'session/detach')).toHaveLength(1); expect(server.claims()).toHaveLength(1);
+});

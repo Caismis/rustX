@@ -41,7 +41,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, onHistoric
     return { id: view.id, target: view.target, messages: snapshot.messages, attempt: snapshot.attempt,
       transcript: snapshot.transcript, statuses: snapshot.statuses, conversation_id: snapshot.conversation_id,
       readingPreview: !!preview, history: preview?.history ?? view.history, trace: mode === 'trajectory' ? view.trace : undefined,
-      safe: lineageSwitchSafe(view), disabled: disabled || !client.isAttachmentObservationCurrent(view.id, view.attachmentObservation)
+      safe: lineageSwitchSafe(view), disabled: disabled || !client.isAttachmentControlCurrent(view.id, view.attachmentObservation)
         || !!view.modelMutation || !!view.snapshot?.shutting_down || !!view.snapshot?.durability_failure };
   }, shallowEqual);
   if (sessionId && tracePreview) return <Trajectory key={sessionId} cache={tracePreview.cache} onSelect={id => client.selectTrace(sessionId, id)} onLoadDetail={id => { void client.loadTraceDetail(sessionId, id); }} loadEarlier={() => void client.loadEarlierTrace(sessionId).catch(() => {})}/>;

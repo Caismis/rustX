@@ -45,9 +45,9 @@ export type LifecycleEvent = Intent | Settled
   | { type: 'AUTHORITY_REPLACED' }
   | { type: 'RESTORE_INTENT' }
   | { type: 'ROUTE_CLOSED'; target: AttachmentTarget }
-  | { type: 'OBSERVATION'; target: AttachmentTarget; status: 'resynchronizing' | 'attached' | 'stale'; error?: string };
+  | { type: 'OBSERVATION'; proof: Observation; status: 'resynchronizing' | 'attached' | 'stale'; error?: string };
 
-function observationCurrent(context: LifecycleContext, proof?: Observation): boolean {
+export function observationCurrent(context: LifecycleContext, proof?: Observation): boolean {
   const f = context.facts;
   return !!proof && context.connected && f.attachmentObservation === proof && context.generation === proof.generation
     && f.attachmentIntent === 'wanted' && f.attachmentIntentRevision === proof.intentRevision
@@ -133,7 +133,7 @@ async function execute(self: { getSnapshot(): { context: LifecycleContext }; sen
               const observation = context().facts.attachmentObservation;
               if (controlCurrent(context(), observation)) {
                 if (op.command.current()) op.command.attached?.(result.target);
-                await port.observeAttached(result, () => controlCurrent(context(), observation));
+                await port.observeAttached(result, () => observationCurrent(context(), observation));
               }
             }
           }
@@ -259,7 +259,7 @@ export const sessionLifecycleMachine = setup({
     }),
     routeClosed: assign(({ context: c, event }) => event.type === 'ROUTE_CLOSED' && sameClaim(c.facts.target, event.target)
       ? { facts: { ...revoke(c.facts), target: undefined, attachment: 'stale', error: c.facts.deleting ? undefined : 'Session connection closed. Open the Session to inspect its current state.' } } : {}),
-    observation: assign(({ context: c, event }) => event.type === 'OBSERVATION' && sameClaim(c.facts.target, event.target)
+    observation: assign(({ context: c, event }) => event.type === 'OBSERVATION' && observationCurrent(c, event.proof)
       ? { facts: { ...c.facts, attachment: event.status, error: event.error } } : {}),
     releaseWithoutCapacity: assign(({ context }) => context.deleted ? {} : { facts: { ...revoke(context.facts), attachmentIntent: 'released' as const, attachment: context.facts.target ? 'stale' as const : context.facts.attachment } }),
     restore: assign(({ context }) => ({ facts: { ...context.facts, attachmentIntent: 'wanted' as const } })),

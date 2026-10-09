@@ -1,5 +1,5 @@
 import { createActor } from 'xstate';
-import { controlCurrent, sessionLifecycleMachine, type Command, type LifecycleActor, type LifecycleContext, type LifecycleEvent } from './machine';
+import { observationCurrent, controlCurrent, sessionLifecycleMachine, type Command, type LifecycleActor, type LifecycleContext, type LifecycleEvent } from './machine';
 import type { AttachmentTarget, RuntimeClientSessionDeletionResult } from '../../../../protocol/app-server/v38';
 import { emptyFacts, type Observation, type SessionLifecyclePort } from './port';
 
@@ -48,7 +48,14 @@ export class SessionLifecycles {
   }
   get(id: string) { return this.actors.get(id)?.getSnapshot().context; }
   epoch(id: string) { return this.get(id)?.epoch; }
-  current(id: string, proof?: Observation) { const c = this.get(id); return !!c && controlCurrent(c, proof); }
+  controls(id: string, proof?: Observation) { const c = this.get(id); return !!c && controlCurrent(c, proof); }
+  observes(id: string, proof?: Observation) { const c = this.get(id); return !!c && observationCurrent(c, proof); }
+  /** Capture once. Neither retained targets nor later intent can recreate this proof. */
+  observe(id: string) {
+    const proof = this.get(id)?.facts.attachmentObservation;
+    if (!proof || !this.observes(id, proof)) return;
+    return { proof, target: proof.target, current: () => this.observes(id, proof) };
+  }
   target(id: string): AttachmentTarget {
     const c = this.get(id);
     if (!c || !controlCurrent(c, c.facts.attachmentObservation) || !c.facts.target) throw new Error('Session is not authoritatively attached. Refresh or reconnect.');

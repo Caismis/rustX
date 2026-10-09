@@ -170,3 +170,47 @@ An omitted Open selector is resolved through `session/read`, rather than stale
 catalog metadata. A rejected Open on a retained failed-detach claim reports its
 failure without calling that claim authoritatively attached. These changed
 assertions remove accidental behavior; they do not relax native request counts.
+
+## Live observation admission
+
+The actor issues one immutable `Observation` object for a committed Attachment.
+Capturing that exact object admits live reads; publication and pre-send validation
+must ask the actor whether the same object still owns the same generation, Node,
+Conversation and native claim. Retained cleanup targets never satisfy this proof.
+Control additionally requires the `attached` phase. Observation remains valid
+through `resynchronizing` (and explicit repair of an unrevoked failed read), while
+controls stay disabled. Runtime event folding still requires a contiguous cursor
+and either attached observation or the current subscription replay window.
+
+Release, Switch, Delete, Route closure and authority retirement revoke the proof.
+Revocation also retires local read workers and their loading markers, preserving
+already observed content until the existing lifecycle projection replaces it.
+Late read completions cannot publish data or errors, restore attached status,
+reconcile interactions/submissions, or clear a newer worker's reservation.
+`OBSERVATION` status events carry the proof, not merely a matching target.
+`ROUTE_CLOSED` remains a separate exact-claim settlement event even after revocation.
+
+Snapshot/subscribe, Trace latest/page/detail, Turn outline/navigation and History
+pages share actor observation admission; their cursor, read-cut, cache epoch and
+request identity checks remain additional fences. Session catalog/configuration
+reads retain their independent native scope. Cold reads retain the existing
+Session/Node/Conversation/intent/generation scope before Attachment commitment.
+Correlated mutation acknowledgements continue settling their own transactions;
+only reconciliation against current Runtime observations requires this proof.
+
+Observation regression evidence is in `test/observation-authority.test.ts`:
+held detach/switch ACKs plus revoked Runtime events; held Snapshot and all three
+Trace read forms; held Turn outline, historical page and navigation across
+Release/Switch/Delete; Snapshot dispatch behind eight real RPC slots and an async
+validation barrier; resync Snapshot → contiguous replay → subscribe ACK; failed
+cleanup; and old-generation/old-proof completion after fresh Attachment admission.
+Assertions cover exact requests and targets, unchanged content/cursors, retired
+loading markers, and native claim counts. Six stale-publication regressions fail
+at their intended assertions on `71ba45c5` and pass with actor observation admission.
+Machine tests additionally reject forged/copied and revoked `OBSERVATION` proofs.
+
+Child Agent transcript refresh and pagination capture the same actor proof; a new
+Attachment starts a fresh child page scope. Held-response component regressions
+verify revoked publication, retained historical display during cleanup, and fresh
+read admission after explicit reopening. Both child regressions also fail on
+`71ba45c5` for actual obsolete publication, bringing the negative controls to eight.

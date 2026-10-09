@@ -23,7 +23,7 @@ export class CommandSession {
   current = () => {
     const state = this.client.getSnapshot(), view = state.views[this.sessionId];
     return this.navigationCurrent() && state.connection === 'connected' && state.generation === this.generation
-      && this.client.isAttachmentObservationCurrent(this.sessionId, this.admission) && sameTarget(view?.target, this.target);
+      && this.client.isAttachmentControlCurrent(this.sessionId, this.admission) && sameTarget(view?.target, this.target);
   };
   private requireCurrent() { if (!this.current()) throw new Error('Obsolete command view. Inspect current authoritative state.'); }
   async models() {
