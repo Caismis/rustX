@@ -4132,7 +4132,7 @@ export interface Capabilities {
   reasoning: boolean;
 }
 /**
- * Opaque provider-native request parameters as a structured JSON object. Nested objects, arrays and null are preserved. Runtime-protected wire keys are checked during model validation.
+ * Opaque provider-native request parameters as a structured JSON object. Nested objects, arrays and null are preserved. Every number is exactly an IEEE 754 binary64 value (I-JSON); another, such as 9007199254740993, is refused. Runtime-protected wire keys are checked during model validation.
  */
 export interface RequestParams {
   [k: string]: unknown;

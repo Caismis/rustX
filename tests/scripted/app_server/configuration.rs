@@ -4808,3 +4808,509 @@ async fn issue456_json_string_sources_round_trip_and_formatting_is_semantically_
     }))
     .await;
 }
+
+/// Issue #456: whether an existing Session prepares and adopts a configuration
+/// is decided by the effective invocation an Attempt would freeze, not by how
+/// the selection is authored or by catalog entries it does not resolve
+/// through. Catalog publication is separate: an edited unselected Profile is
+/// what a later selection and a new Session resolve. Admitted Attempts keep
+/// the invocation they froze, observed on the provider wire.
+#[allow(clippy::too_many_lines)] // one ordered sequence of source edits
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue456_effective_invocation_decides_preparation_and_adoption() {
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    use crate::model::authoring::Profile;
+    use crate::model::catalog::{ModelProfileId, ModelRef};
+    use crate::model::session::{SessionModelConfig, SummaryModelPolicy};
+    use crate::toml_authoring::AuthoredRequestParams;
+    use serde_json::json;
+    let params =
+        |value: serde_json::Value| AuthoredRequestParams(serde_json::from_value(value).unwrap());
+    let object = |value: serde_json::Value| -> crate::model::invocation::RequestParams {
+        serde_json::from_value(value).unwrap()
+    };
+    Box::pin(bounded(async {
+        let fixture = Fixture::new().await;
+        let id = fixture.sessions[0].id.clone();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        let authored = fixture
+            .manager
+            .source_settings(&SourceTarget::User, None)
+            .await
+            .unwrap()
+            .user
+            .authored
+            .unwrap()
+            .models
+            .unwrap()["local/a"]
+            .clone();
+        let model = |default: &str, profiles: [(&str, Option<u32>, serde_json::Value); 3]| {
+            let mut model = authored.clone();
+            model.request_params = None;
+            model.default_profile = Some(ModelProfileId::new(default));
+            model.profiles = Some(
+                profiles
+                    .into_iter()
+                    .map(|(name, budget, value)| {
+                        (
+                            ModelProfileId::new(name),
+                            Profile {
+                                reasoning_enabled: None,
+                                max_output_tokens: budget,
+                                request_params: params(value),
+                            },
+                        )
+                    })
+                    .collect(),
+            );
+            ConfigMutation::Model {
+                id: "local/a".into(),
+                authored: Some(model),
+            }
+        };
+        let balanced = ("balanced", None, json!({"temperature": 0.5}));
+        let fast = ("fast", Some(64), json!({"temperature": 1.0}));
+        let creative = ("creative", None, json!({"temperature": 1.2}));
+        // The Session follows the Model's default Profile.
+        write(
+            &fixture,
+            0,
+            model(
+                "balanced",
+                [balanced.clone(), fast.clone(), creative.clone()],
+            ),
+        )
+        .await;
+        let candidate = settled(&fixture, 0)
+            .await
+            .candidate
+            .expect("selected Model changed");
+        fixture
+            .manager
+            .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
+            .unwrap();
+        assert!(settled(&fixture, 0).await.candidate.is_none());
+        let view = runtime.model_view();
+        assert_eq!(view.configured.profile, None);
+        assert_eq!(
+            view.effective.profile,
+            Some(ModelProfileId::new("balanced"))
+        );
+        assert_eq!(
+            view.effective.request_params,
+            object(json!({"temperature": 0.5}))
+        );
+        let unchanged = |resources: &Arc<_>, previous: &ConfigurationApplication| {
+            let application = fixture.manager.configuration_application(&id).unwrap();
+            assert_ne!(
+                application.desired, previous.desired,
+                "a new source generation was applied"
+            );
+            assert!(application.candidate.is_none(), "{application:?}");
+            assert!(
+                application
+                    .units
+                    .values()
+                    .all(|unit| *unit == UnitApplication::Applied),
+                "{application:?}"
+            );
+            assert!(
+                Arc::ptr_eq(resources, &runtime.runtime_resources()),
+                "no preparation was adopted"
+            );
+        };
+
+        // An unselected Profile edit publishes the catalog but neither
+        // prepares nor adopts anything for the unchanged invocation.
+        let resources = runtime.runtime_resources();
+        let previous = fixture.manager.configuration_application(&id).unwrap();
+        let fast_edited = ("fast", Some(32), json!({"temperature": 1.5, "top_p": 0.9}));
+        write(
+            &fixture,
+            0,
+            model(
+                "balanced",
+                [balanced.clone(), fast_edited.clone(), creative.clone()],
+            ),
+        )
+        .await;
+        settled(&fixture, 0).await;
+        unchanged(&resources, &previous);
+        assert_eq!(runtime.model_view(), view);
+
+        // An omitted and an explicit default Profile are one invocation: the
+        // Session records the authored selection without rebuilding resources.
+        let explicit = SessionModelConfig {
+            profile: Some(ModelProfileId::new("balanced")),
+            ..SessionModelConfig::of(ModelRef::parse("local/a").unwrap())
+        };
+        let revision = runtime.runtime_resources().revision();
+        let adopted = fixture
+            .manager
+            .set_model(&id, explicit.clone())
+            .await
+            .unwrap();
+        assert_eq!(adopted.configured, explicit);
+        assert_eq!(adopted.effective, view.effective);
+        assert_eq!(runtime.runtime_resources().revision(), revision);
+        // Moving the default no longer reaches this Session's explicit
+        // selection; a new Session follows the moved default.
+        let resources = runtime.runtime_resources();
+        let previous = fixture.manager.configuration_application(&id).unwrap();
+        write(
+            &fixture,
+            0,
+            model(
+                "fast",
+                [balanced.clone(), fast_edited.clone(), creative.clone()],
+            ),
+        )
+        .await;
+        settled(&fixture, 0).await;
+        unchanged(&resources, &previous);
+        assert_eq!(runtime.model_view().effective, view.effective);
+        let created = fixture
+            .manager
+            .create_session(SessionPersistentState {
+                cwd: fixture.workspaces[0].clone(),
+                model: None,
+            })
+            .await
+            .unwrap();
+        fixture
+            .manager
+            .load(&created.session.id, None)
+            .await
+            .unwrap();
+        let new = fixture
+            .manager
+            .configuration_runtime(&created.session.id)
+            .unwrap()
+            .model_view();
+        assert_eq!(new.effective.profile, Some(ModelProfileId::new("fast")));
+        assert_eq!(
+            new.effective.request_params,
+            object(json!({"temperature": 1.5, "top_p": 0.9}))
+        );
+        assert_eq!(new.effective.max_output_tokens, 32);
+
+        // An explicit Summary is compared on its own: editing the Profile only
+        // the Summary resolves through needs preparation and adoption.
+        let summarized = SessionModelConfig {
+            summary_model: SummaryModelPolicy::Explicit {
+                model: ModelRef::parse("local/a").unwrap(),
+                profile: Some(ModelProfileId::new("creative")),
+                request_params: serde_json::Map::new(),
+                max_output_tokens: None,
+            },
+            ..explicit.clone()
+        };
+        fixture.manager.set_model(&id, summarized).await.unwrap();
+        let resources = runtime.runtime_resources();
+        let creative_edited = ("creative", None, json!({"temperature": 1.4}));
+        write(
+            &fixture,
+            0,
+            model(
+                "fast",
+                [
+                    balanced.clone(),
+                    fast_edited.clone(),
+                    creative_edited.clone(),
+                ],
+            ),
+        )
+        .await;
+        let candidate = settled(&fixture, 0)
+            .await
+            .candidate
+            .expect("the Summary invocation changed");
+        assert!(
+            Arc::ptr_eq(&resources, &runtime.runtime_resources()),
+            "adoption waits for its owner"
+        );
+        fixture
+            .manager
+            .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
+            .unwrap();
+        let crate::model::session::SummaryModelView::Explicit(summary) =
+            runtime.model_view().summary
+        else {
+            panic!("explicit summary");
+        };
+        assert_eq!(summary.request_params, object(json!({"temperature": 1.4})));
+        assert_eq!(runtime.model_view().effective, view.effective);
+
+        // The selected Profile's parameters change while an Attempt is
+        // admitted: the Attempt keeps its frozen invocation on the wire, and
+        // the change is adopted for the next Attempt.
+        let settlement = runtime.settlement_signal();
+        runtime.submit_inbound(input("request-A frozen")).unwrap();
+        fixture.gates[0].wait_entered().await;
+        let balanced_edited = ("balanced", None, json!({"temperature": 0.25, "seed": 7}));
+        write(
+            &fixture,
+            0,
+            model(
+                "fast",
+                [
+                    balanced_edited.clone(),
+                    fast_edited.clone(),
+                    creative_edited.clone(),
+                ],
+            ),
+        )
+        .await;
+        let candidate = settled(&fixture, 0)
+            .await
+            .candidate
+            .expect("the selected Profile changed");
+        assert_eq!(
+            fixture.manager.adopt_configuration(
+                &id,
+                &candidate.identity,
+                candidate.expected_binding
+            ),
+            Err(AdoptionError::Busy)
+        );
+        fixture.gates[0].release();
+        settlement.notified().await;
+        let frozen: serde_json::Value =
+            serde_json::from_str(&fixture.provider.request_body(0)).unwrap();
+        assert_eq!(frozen["temperature"], json!(0.5));
+        assert!(frozen.get("seed").is_none());
+        fixture
+            .manager
+            .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
+            .unwrap();
+        let settlement = runtime.settlement_signal();
+        runtime.submit_inbound(input("request-A adopted")).unwrap();
+        fixture.gates[0].wait_entered().await;
+        fixture.gates[0].release();
+        settlement.notified().await;
+        let next: serde_json::Value =
+            serde_json::from_str(&fixture.provider.request_body(1)).unwrap();
+        assert_eq!(
+            (&next["temperature"], &next["seed"]),
+            (&json!(0.25), &json!(7))
+        );
+
+        // The selected Profile's output default alone is an effective change.
+        write(
+            &fixture,
+            0,
+            model(
+                "fast",
+                [
+                    ("balanced", Some(128), balanced_edited.2.clone()),
+                    fast_edited.clone(),
+                    creative_edited.clone(),
+                ],
+            ),
+        )
+        .await;
+        let candidate = settled(&fixture, 0)
+            .await
+            .candidate
+            .expect("the output default changed");
+        fixture
+            .manager
+            .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
+            .unwrap();
+        assert_eq!(runtime.model_view().effective.max_output_tokens, 128);
+
+        // A provider binding change is never ignored, even with every
+        // Profile untouched.
+        let source = fixture
+            .manager
+            .source_settings(&SourceTarget::User, None)
+            .await
+            .unwrap();
+        let provider = crate::local_runtime::configuration::settings::ProviderWrite {
+            base_url: fixture.provider.url("/v2"),
+            credential: crate::local_runtime::configuration::settings::CredentialEdit::Retain,
+        };
+        let resources = runtime.runtime_resources();
+        fixture
+            .manager
+            .source_settings(
+                &SourceTarget::User,
+                Some((
+                    source.user.revision,
+                    SourceMutation::Config {
+                        mutation: ConfigMutation::Provider {
+                            id: "local".into(),
+                            authored: Some(provider),
+                        },
+                    },
+                )),
+            )
+            .await
+            .unwrap();
+        let application = settled(&fixture, 0).await;
+        assert_eq!(
+            application
+                .candidate
+                .expect("the provider endpoint changed")
+                .impact,
+            crate::model::request_shape::CacheImpact::CacheNamespaceChanged
+        );
+        assert!(Arc::ptr_eq(&resources, &runtime.runtime_resources()));
+        fixture.close().await;
+    }))
+    .await;
+}
+
+/// Issue #456: request-parameter numbers are held to the binary64 domain every
+/// hop shares. An App Server mutation carrying a number some hop would round
+/// is refused before any native write; numbers inside the domain survive the
+/// JSON mutation, the native JSON-string write, the reread and the client
+/// projection exactly; and a hand-authored source outside the domain is
+/// refused as a located diagnostic, so no editor can load and rewrite it.
+#[allow(clippy::too_many_lines)] // one complete fidelity boundary
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue456_inexact_numbers_are_refused_before_any_write_and_exact_ones_round_trip() {
+    use crate::local_runtime::authoring::ModelLayer;
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    use crate::model::authoring::Profile;
+    use crate::model::catalog::{ModelProfileId, ModelRef};
+    use crate::toml_authoring::AuthoredRequestParams;
+    use serde_json::json;
+    let params =
+        |value: serde_json::Value| AuthoredRequestParams(serde_json::from_value(value).unwrap());
+    Box::pin(bounded(async {
+        let f = Fixture::with_session_count(None, 0).await;
+        let target = SourceTarget::User;
+        let initial = f.manager.source_settings(&target, None).await.unwrap();
+        let path = initial.user.path.clone();
+        let original = std::fs::read(&path).unwrap();
+        let authored = initial.user.authored.clone().unwrap().models.unwrap()["local/a"].clone();
+        let profiled = |value: serde_json::Value| {
+            let mut model = authored.clone();
+            model.request_params = None;
+            model.default_profile = Some(ModelProfileId::new("p"));
+            model.profiles = Some(
+                [(
+                    ModelProfileId::new("p"),
+                    Profile {
+                        reasoning_enabled: None,
+                        max_output_tokens: None,
+                        request_params: params(value),
+                    },
+                )]
+                .into(),
+            );
+            ConfigMutation::Model { id: "local/a".into(), authored: Some(model) }
+        };
+        let mutate = |mutation: ConfigMutation| {
+            let revision = initial.user.revision.clone();
+            let manager = f.manager.clone();
+            async move {
+                manager
+                    .source_settings(&SourceTarget::User, Some((revision, SourceMutation::Config { mutation })))
+                    .await
+            }
+        };
+        // A structured mutation exactly as JSON client text carries it is
+        // refused by the App Server wire decode, naming no value.
+        let mut placeholder = authored.clone();
+        placeholder.request_params = Some(params(json!({"seed": "PLACEHOLDER"})));
+        let encoded = serde_json::to_string(&ConfigMutation::Model {
+            id: "local/a".into(),
+            authored: Some(placeholder),
+        })
+        .unwrap();
+        for literal in ["9007199254740993", "-9007199254740993", "1152921504606846976"] {
+            let error = serde_json::from_str::<ConfigMutation>(&encoded.replace("\"PLACEHOLDER\"", literal))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("request_params has a JSON number that is not exactly representable"), "{error}");
+            assert!(!error.contains(literal.trim_start_matches('-')), "{error}");
+        }
+        // A structured value that bypassed the wire is refused by the native
+        // writer, before any byte is written.
+        for mutation in [
+            ConfigMutation::Model {
+                id: "local/a".into(),
+                authored: Some(crate::model::authoring::Model {
+                    request_params: Some(params(json!({"seed": 9_007_199_254_740_993_u64}))),
+                    ..authored.clone()
+                }),
+            },
+            profiled(json!({"nested": [{"seed": -9_007_199_254_740_993_i64}]})),
+            profiled(json!({"seed": 1_152_921_504_606_846_976_u64})),
+            ConfigMutation::RootModel {
+                authored: Some(ModelLayer {
+                    model: Some(ModelRef::parse("local/a").unwrap()),
+                    profile: None,
+                    request_params: Some(params(json!({"seed": 9_007_199_254_740_993_u64}))),
+                    max_output_tokens: None,
+                    summary_model: None,
+                }),
+            },
+        ] {
+            assert!(matches!(
+                mutate(mutation).await,
+                Err(crate::local_runtime::session_runtime_manager::SourceSettingsError::Source(
+                    crate::local_runtime::configuration::settings::SettingsError::Invalid
+                ))
+            ));
+            assert_eq!(std::fs::read(&path).unwrap(), original, "nothing was written");
+        }
+
+        // Exact numbers: the largest safe integers, ordinary and extreme
+        // binary64 decimals, nested in objects and arrays.
+        let exact = r#"{"seed":9007199254740992,"floor":-9007199254740991,"t":0.1,"huge":1e300,
+            "tiny":5.357830195732913e-76,"nested":{"list":[1.5,{"n":-2.5e-7}]},"big":10000000000000000000}"#;
+        let value: serde_json::Value = serde_json::from_str(exact).unwrap();
+        let written = mutate(profiled(value.clone())).await.unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let table = text.parse::<toml::Table>().unwrap();
+        let native = table["models"]["local/a"]["profiles"]["p"]["request_params"].as_str().unwrap();
+        assert_eq!(crate::toml_authoring::parse_request_params_json(native).unwrap(), *value.as_object().unwrap());
+        let reread = f.manager.source_settings(&target, None).await.unwrap();
+        assert_eq!(reread.user.revision, written.user.revision);
+        let projected = &reread.user.authored.as_ref().unwrap().models.as_ref().unwrap()["local/a"];
+        assert_eq!(projected.profiles.as_ref().unwrap()[&ModelProfileId::new("p")].request_params.0, *value.as_object().unwrap());
+        // The App Server response text, decoded the way a JSON client decodes it.
+        let response = serde_json::to_string(&reread).unwrap();
+        let client: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(client["user"]["authored"]["models"]["local/a"]["profiles"]["p"]["request_params"], value);
+        assert!(response.contains("9007199254740992") && response.contains("5.357830195732913e-76"));
+
+        // A hand-authored source outside the domain is a located diagnostic
+        // that names the field, never the value or the neighboring credential;
+        // an unrelated Model edit cannot load and rewrite it.
+        let unsafe_text = text.replacen(
+            native,
+            "{\"seed\":9007199254740993}",
+            1,
+        ) + "\n[providers.extra]\nbase_url = \"https://example.invalid/v1\"\napi_key = \"sk-SECRET_NEIGHBOR\"\n";
+        std::fs::write(&path, &unsafe_text).unwrap();
+        let broken = f.manager.source_settings(&target, None).await.unwrap();
+        assert!(broken.user.authored.is_none());
+        let diagnostic = broken.user.diagnostic.clone().unwrap();
+        assert!(diagnostic.contains("models.local/a.profiles.p.request_params has a JSON number that is not exactly representable"), "{diagnostic}");
+        assert!(diagnostic.contains("(at line 1, column 9 of the JSON text)"), "{diagnostic}");
+        assert!(!diagnostic.contains("9007199254740993") && !diagnostic.contains("SECRET"), "{diagnostic}");
+        let mut unrelated = authored.clone();
+        unrelated.context_window += 1;
+        let refused = f
+            .manager
+            .source_settings(
+                &target,
+                Some((
+                    broken.user.revision.clone(),
+                    SourceMutation::Config {
+                        mutation: ConfigMutation::Model { id: "local/a".into(), authored: Some(unrelated) },
+                    },
+                )),
+            )
+            .await;
+        assert!(refused.is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), unsafe_text);
+        assert!(f.provider.request_bodies().is_empty());
+    }))
+    .await;
+}

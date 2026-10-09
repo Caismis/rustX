@@ -509,29 +509,51 @@ impl ProspectiveSessionConfig {
             && self.root_agent_project_files == other.root_agent_project_files
     }
 
+    /// Whether every invocation an Attempt of this Session would freeze is
+    /// effectively unchanged: the primary and explicit Summary selection, and
+    /// those of every admitted named Agent. Compared as resolved invocations
+    /// ([`ModelCatalog::same_invocation`]), so authored spelling and
+    /// unselected catalog entries never force a preparation, while any
+    /// provider binding, wire model, limit, Profile, reasoning or parameter
+    /// change does. Catalog edits still reach future selections: Session model
+    /// changes recapture the current sources, and new Sessions start from the
+    /// published available catalog.
     pub(crate) fn same_provider(&self, other: &Self) -> bool {
-        let selection = self.session_model();
-        selection == other.session_model()
-            && self.models.same_binding(&other.models, &selection.model)
-            && selection
-                .summary_selection()
-                .is_none_or(|summary| self.models.same_binding(&other.models, &summary.model))
-            && self.admitted_agent_dependencies() == other.admitted_agent_dependencies()
-            && self.admitted_agent_dependencies().iter().all(|name| {
+        let same_model =
+            |left: &crate::model::session::SessionModelConfig,
+             right: &crate::model::session::SessionModelConfig| {
+                use crate::model::invocation::RequestParamsLayer;
+                self.models.same_invocation(
+                    &left.selection(),
+                    &other.models,
+                    &right.selection(),
+                    RequestParamsLayer::SessionOverrides,
+                ) && match (left.summary_selection(), right.summary_selection()) {
+                    (None, None) => true,
+                    (Some(left), Some(right)) => self.models.same_invocation(
+                        &left,
+                        &other.models,
+                        &right,
+                        RequestParamsLayer::SummaryOverrides,
+                    ),
+                    _ => false,
+                }
+            };
+        let agents = self.admitted_agent_dependencies();
+        same_model(self.session_model(), other.session_model())
+            && agents == other.admitted_agent_dependencies()
+            && agents.iter().all(|name| {
                 let model = |source: &Self| {
                     source
                         .subagents
                         .get(name)
                         .and_then(|definition| definition.profile().model.clone())
                 };
-                let selected = model(self);
-                selected == model(other)
-                    && selected.as_ref().is_none_or(|model| {
-                        self.models.same_binding(&other.models, &model.model)
-                            && model.summary_selection().is_none_or(|summary| {
-                                self.models.same_binding(&other.models, &summary.model)
-                            })
-                    })
+                match (model(self), model(other)) {
+                    (None, None) => true,
+                    (Some(left), Some(right)) => same_model(&left, &right),
+                    _ => false,
+                }
             })
     }
 

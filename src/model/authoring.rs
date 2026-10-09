@@ -312,7 +312,7 @@ request_params = '{"thinking":{"type":"disabled"}}'
             (
                 fast,
                 r#"request_params = '{"reasoning_effort":"low","reasoning_effort":"high"}'"#,
-                "models.p/m.profiles.fast.request_params repeats a JSON object key at $.reasoning_effort",
+                "models.p/m.profiles.fast.request_params repeats a JSON object key (at line 1, column 44 of the JSON text)",
             ),
             (
                 fast,

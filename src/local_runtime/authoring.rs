@@ -1009,14 +1009,17 @@ tokens = 256
                 ("{broken SECRET_VALUE", "is not valid JSON"),
                 ("[\"SECRET_VALUE\"]", "must encode a JSON object"),
                 ("null", "must encode a JSON object"),
+                (
+                    "{\"SECRET_VALUE\":9007199254740993}",
+                    "has a JSON number that is not exactly representable",
+                ),
             ] {
                 let text = format!("{prefix}\nrequest_params = '{json}'\n");
                 let error =
                     crate::toml_authoring::parse::<RuntimeLayer>(text.as_bytes()).unwrap_err();
                 assert!(error.contains(&format!("{path} {reason}")), "{error}");
-                if reason != "repeats a JSON object key" {
-                    assert!(!error.contains("SECRET_VALUE"), "{error}");
-                }
+                assert!(!error.contains("SECRET_VALUE"), "{error}");
+                assert!(!error.contains("9007199254740993"), "{error}");
                 // Named Agent authoring consumes the same ModelLayer adapter.
                 let named = text.replace("agent.model", "model");
                 let error = crate::toml_authoring::parse::<

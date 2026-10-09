@@ -52,7 +52,10 @@ use serde::de::{MapAccess, Visitor};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::model::invocation::{RequestParams, RequestParamsLayer, validate_request_params_layer};
+use crate::model::invocation::{
+    ModelSelection, RequestParams, RequestParamsLayer, analyze_selection,
+    validate_request_params_layer, validate_request_params_numbers,
+};
 use crate::model::types::ModelProtocol;
 
 /// The only model-catalog schema version this runtime accepts.
@@ -878,13 +881,39 @@ impl ModelCatalog {
             })
     }
 
-    pub(crate) fn same_binding(&self, other: &Self, model: &ModelRef) -> bool {
-        match (self.models.get(model), other.models.get(model)) {
-            (Some(a), Some(b)) => {
-                a == b && self.providers.get(&a.provider) == other.providers.get(&b.provider)
-            }
-            _ => false,
-        }
+    /// Whether `selection` resolved against this catalog is exactly the
+    /// invocation `other_selection` resolves to against `other`.
+    ///
+    /// This is the effective request semantics an Attempt would freeze — the
+    /// resolved Profile, reasoning state, output budget, opaque parameters and
+    /// capabilities ([`analyze_selection`]) — together with the binding they
+    /// travel over: provider endpoint and credential source, wire model
+    /// identity, protocol, limits and compat. How a selection is authored
+    /// (an omitted versus an explicit default Profile) and catalog entries it
+    /// does not resolve through (other Models, unselected Profiles) are not
+    /// part of it. A selection that fails to resolve on either side is never
+    /// the same.
+    pub(crate) fn same_invocation(
+        &self,
+        selection: &ModelSelection,
+        other: &Self,
+        other_selection: &ModelSelection,
+        layer: RequestParamsLayer,
+    ) -> bool {
+        let effective = |catalog: &Self, selection: &ModelSelection| {
+            let model = catalog.models.get(&selection.model)?;
+            let view = analyze_selection(model, selection, layer).ok()?;
+            Some((
+                view,
+                model.id.clone(),
+                model.compat,
+                catalog.providers.get(&model.provider)?.clone(),
+            ))
+        };
+        matches!(
+            (effective(self, selection), effective(other, other_selection)),
+            (Some(left), Some(right)) if left == right
+        )
     }
 
     /// Every model reference in deterministic presentation order.
@@ -1298,6 +1327,12 @@ fn validate_model(
         key: collision.key,
         layer: collision.layer,
     })?;
+    validate_request_params_numbers(&request_params, RequestParamsLayer::ModelParams).map_err(
+        |inexact| ModelCatalogError::InexactNumber {
+            model: reference.clone(),
+            layer: inexact.layer,
+        },
+    )?;
 
     Ok(ModelDefinition {
         provider: ProviderId::parse(document.provider)?,
@@ -1401,6 +1436,11 @@ fn validate_profiles(
             key: collision.key,
             layer: collision.layer,
         })?;
+        validate_request_params_numbers(&profile.request_params, RequestParamsLayer::ModelProfile)
+            .map_err(|inexact| ModelCatalogError::InexactNumber {
+                model: reference.clone(),
+                layer: inexact.layer,
+            })?;
         profiles.insert(
             id.clone(),
             ModelProfile {
@@ -1561,6 +1601,14 @@ pub enum ModelCatalogError {
         /// Which configuration layer declared it.
         layer: RequestParamsLayer,
     },
+    /// A configured request-parameter layer carries a number that would not
+    /// survive a binary64 round trip.
+    InexactNumber {
+        /// The model.
+        model: ModelRef,
+        /// Which configuration layer declared it.
+        layer: RequestParamsLayer,
+    },
     /// A referenced provider does not exist.
     UnknownProvider {
         /// The referenced provider.
@@ -1624,6 +1672,11 @@ impl fmt::Display for ModelCatalogError {
             Self::ProtectedKey { model, key, layer } => write!(
                 f,
                 "model {model} {layer} (request_params) declares runtime-owned protected wire key {key:?}"
+            ),
+            Self::InexactNumber { model, layer } => write!(
+                f,
+                "model {model} {layer} (request_params) carry a JSON number that is not exactly \
+                 representable as an IEEE 754 binary64 value"
             ),
             Self::UnknownProvider { provider } => {
                 write!(f, "unknown catalog provider {provider}")
@@ -2180,5 +2233,143 @@ mod tests {
             invocation.request_params()["provider_reasoning"]["mode"],
             "default"
         );
+    }
+    #[test]
+    fn model_and_profile_numbers_are_held_to_the_binary64_domain() {
+        let mut value = document();
+        value["models"]["chosen"]["requestParams"] = json!({"seed": 9_007_199_254_740_993_u64});
+        assert!(matches!(
+            catalog(value),
+            Err(ModelCatalogError::InexactNumber {
+                layer: RequestParamsLayer::ModelParams,
+                ..
+            })
+        ));
+        let mut value = profiled(false);
+        value["models"]["chosen"]["profiles"]["creative"]["requestParams"] =
+            json!({"nested": [{"seed": -9_007_199_254_740_993_i64}]});
+        let error = catalog(value).unwrap_err();
+        assert!(matches!(
+            error,
+            ModelCatalogError::InexactNumber {
+                layer: RequestParamsLayer::ModelProfile,
+                ..
+            }
+        ));
+        assert!(!error.to_string().contains("9007199254740993"), "{error}");
+        let mut value = profiled(false);
+        value["models"]["chosen"]["profiles"]["creative"]["requestParams"] =
+            json!({"seed": 9_007_199_254_740_992_u64, "t": 0.1, "big": 1e300});
+        catalog(value).unwrap();
+    }
+    #[test]
+    fn same_invocation_compares_effective_semantics_not_authoring() {
+        use crate::model::invocation::ModelSelection;
+        type Mutation = fn(&mut Value);
+        let layer = RequestParamsLayer::SessionOverrides;
+        let implicit = ModelSelection::of(selected());
+        let explicit = |profile: &str| ModelSelection {
+            profile: Some(ModelProfileId::new(profile)),
+            ..ModelSelection::of(selected())
+        };
+        let same = |a: &Value, sa: &ModelSelection, b: &Value, sb: &ModelSelection| {
+            catalog(a.clone())
+                .unwrap()
+                .same_invocation(sa, &catalog(b.clone()).unwrap(), sb, layer)
+        };
+        for reasoning in [true, false] {
+            let base = profiled(reasoning);
+            // An omitted Profile and an explicit default Profile are one invocation.
+            assert!(same(&base, &implicit, &base, &explicit("balanced")));
+            assert!(same(&base, &explicit("balanced"), &base, &implicit));
+            let other = if reasoning { "fast" } else { "creative" };
+            assert!(!same(&base, &implicit, &base, &explicit(other)));
+            // Editing an unselected Profile, or adding one, is no change.
+            let mut edited = base.clone();
+            edited["models"]["chosen"]["profiles"][other]["requestParams"] =
+                json!({"edited": true});
+            edited["models"]["chosen"]["profiles"]["added"] =
+                json!({"reasoningEnabled": false, "requestParams": {}});
+            assert!(same(&base, &implicit, &edited, &implicit));
+            assert!(same(
+                &base,
+                &explicit("balanced"),
+                &edited,
+                &explicit("balanced")
+            ));
+            assert!(!same(&base, &explicit(other), &edited, &explicit(other)));
+            // Moving the default changes the implicit selection only.
+            let mut moved = base.clone();
+            moved["models"]["chosen"]["defaultProfile"] = other.into();
+            assert!(!same(&base, &implicit, &moved, &implicit));
+            assert!(same(
+                &base,
+                &explicit("balanced"),
+                &moved,
+                &explicit("balanced")
+            ));
+            assert!(same(&base, &implicit, &moved, &explicit("balanced")));
+        }
+        // Every effective property of the selected Profile counts.
+        let base = profiled(true);
+        let profile_edits: [Mutation; 4] = [
+            |v| {
+                v["models"]["chosen"]["profiles"]["balanced"]["requestParams"]["opaque"] =
+                    json!([false]);
+            },
+            |v| v["models"]["chosen"]["profiles"]["balanced"]["reasoningEnabled"] = false.into(),
+            |v| v["models"]["chosen"]["profiles"]["balanced"]["maxOutputTokens"] = 50.into(),
+            |v| {
+                v["models"]["chosen"]["profiles"]["balanced"]["requestParams"]["extra"] =
+                    json!(null);
+            },
+        ];
+        // And so does every property of the binding it travels over.
+        let bindings: [Mutation; 8] = [
+            |v| v["providers"]["p"]["baseUrl"] = "https://other.example/v1".into(),
+            |v| v["providers"]["p"]["apiKey"] = "$OTHER_KEY".into(),
+            |v| v["models"]["chosen"]["id"] = "wire/other".into(),
+            |v| v["models"]["chosen"]["contextWindow"] = 2000.into(),
+            |v| v["models"]["chosen"]["maxOutputTokens"] = 200.into(),
+            |v| v["models"]["chosen"]["capabilities"]["toolCalls"] = false.into(),
+            |v| v["models"]["chosen"]["compat"]["chatReasoningReplay"] = "reasoning_content".into(),
+            |v| v["models"]["chosen"]["protocol"] = "openai_responses".into(),
+        ];
+        for (index, change) in profile_edits.iter().chain(&bindings).enumerate() {
+            let mut changed = base.clone();
+            change(&mut changed);
+            if index == 11 {
+                changed["models"]["chosen"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("compat");
+            }
+            assert!(
+                !same(&base, &implicit, &changed, &implicit),
+                "change {index}"
+            );
+        }
+        // A selection that no longer resolves is never the same.
+        let mut removed = base.clone();
+        removed["models"]["chosen"]["profiles"]
+            .as_object_mut()
+            .unwrap()
+            .remove("fast");
+        assert!(!same(&base, &explicit("fast"), &removed, &explicit("fast")));
+        // Explicit overrides are compared after resolution.
+        let overriding = ModelSelection {
+            request_params: json!({"seed": 1}).as_object().unwrap().clone(),
+            ..explicit("balanced")
+        };
+        assert!(!same(&base, &implicit, &base, &overriding));
+        assert!(same(
+            &base,
+            &overriding,
+            &base,
+            &ModelSelection {
+                profile: None,
+                ..overriding.clone()
+            }
+        ));
     }
 }

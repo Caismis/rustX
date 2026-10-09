@@ -6727,7 +6727,12 @@ contracts and provider protocols. These invariants are frozen by M2:
 - **`requestParams` is opaque and never normalized.** Source TOML authors it
   as a JSON-encoded object string, parsed once at the source boundary with
   duplicate keys rejected at any depth; every later layer and every client
-  projection carries the structured object. Effective parameters have exactly
+  projection carries the structured object. Its numbers are exactly those whose
+  value survives a binary64 round trip (RFC 7493 §2.2), enforced on source
+  parse, on client JSON decode, on native write and in catalog and selection
+  validation, so no hop — browser, native writer or provider — rounds one.
+  Its diagnostics locate failures by field path and JSON line/column, never by
+  authored key or value. Effective parameters have exactly
   one base — the Model's own object, or the selected Profile's complete object
   — and one **top-level shallow overlay** of explicit selection overrides:
   nested objects and arrays are replaced atomically, never deep-merged, and a

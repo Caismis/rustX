@@ -377,16 +377,29 @@ fn source_resolution_diagnostic(document: &RuntimeLayer) -> Option<String> {
     validate().err()
 }
 fn view(path: PathBuf, bytes: Option<&[u8]>) -> SourceView<SourceDocumentView> {
-    let parsed = parse(bytes);
-    let diagnostic = parsed
-        .as_ref()
-        .err()
-        .map(|_| "invalid rustx.toml; source was not loaded".into());
+    let (authored, diagnostic) =
+        match crate::toml_authoring::parse_detailed::<RuntimeLayer>(bytes.unwrap_or(b"")) {
+            Ok(document) => (Some(redact(document)), None),
+            // A request_params failure names only its field path, category
+            // and locations, so it can say why the source cannot be edited.
+            // Other parser messages may quote authored text.
+            Err(failure) if failure.path.is_some() => (
+                None,
+                Some(format!(
+                    "invalid rustx.toml; source was not loaded: {}",
+                    failure.into_detail()
+                )),
+            ),
+            Err(_) => (
+                None,
+                Some("invalid rustx.toml; source was not loaded".into()),
+            ),
+        };
     SourceView {
         path,
         revision: revision(bytes),
         diagnostic,
-        authored: parsed.ok().map(redact),
+        authored,
     }
 }
 fn mcp_view(

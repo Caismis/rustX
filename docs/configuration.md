@@ -192,10 +192,22 @@ JSON value must be one object. Nested objects, arrays, strings, numbers, boolean
 and explicit `null` are preserved exactly; there is no provider-key catalogue.
 Malformed JSON, a non-object root and a repeated key at any depth are rejected,
 and a TOML table is never accepted. Diagnostics name the field (for example
-`models.thinker.profiles.fast.request_params`) and the JSON location, never the
-authored value. The string is parsed once at the source boundary; App Server and
-client JSON carry the parsed structured object. Native writes re-encode it
-as compact JSON; formatting and key order are never semantics.
+`models.thinker.profiles.fast.request_params`), the error category and the line
+and column of the JSON text — never an authored value or key, since a key may
+itself hold a secret. The string is parsed once at the source boundary; App
+Server and client JSON carry the parsed structured object. Native writes
+re-encode it as compact JSON; formatting and key order are never semantics.
+
+Numbers are held to the domain every hop reads alike — rustX, binary64 JSON
+clients such as the browser, and the provider (the I-JSON rule of RFC 7493
+§2.2): a number is accepted only when its value is exactly what its IEEE 754
+binary64 reading prints back. `9007199254740993`, `2^60` and a decimal with more
+significant digits than binary64 carries are rejected with a located diagnostic
+instead of being silently rounded by a later hop, whether authored in TOML or
+sent as a structured App Server value; the native writer can never emit one.
+`9007199254740992`, `0.1`, `1e300` and every other binary64-exact value
+round-trip unchanged. A value that needs more precision belongs in a JSON
+string if the provider accepts one.
 
 #### Model Profiles
 
@@ -455,6 +467,20 @@ provider request shape. Adapter-built system contributions, ordered Tool schemas
 provider/model namespace and request parameters determine impact. Natural history
 growth is excluded. Preserved means configuration preserves the relevant prefix;
 it does not promise a provider cache hit. Unproven changes require adoption.
+
+Whether a model or catalog edit reaches an existing Session at all is decided by
+the effective invocations an Attempt of that Session would freeze — its primary
+and explicit Summary selection and those of its admitted named Agents — resolved
+exactly as admission resolves them: provider endpoint and credential source,
+wire model, protocol, limits, compat, effective capabilities, the resolved
+Profile, reasoning state, output budget and request parameters. An omitted
+`profile` and an explicit `profile` naming the default resolve to the same
+invocation, and an edited, added or removed Profile that no such selection
+resolves through changes nothing for the Session: it prepares and adopts
+nothing, exactly as for an unselected Model. The catalog edit is still
+published — new Sessions start from it, and a later `session/setModel` resolves
+against the current sources — while a Session's own catalog view stays its
+adopted generation until it next adopts.
 
 `session/adoptConfiguration` addresses a concrete ready candidate and expected
 Session binding revision. It returns typed Busy, NotReady or Conflict, or commits

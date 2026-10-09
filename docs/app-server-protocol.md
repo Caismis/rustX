@@ -10,7 +10,11 @@ Trace request details and Subagent execution profiles carry the selected
 (each with optional `reasoning_enabled`, `max_output_tokens` and
 `request_params`) in place of `reasoning`. Every `request_params` member on this
 protocol is a structured JSON object, including nested objects, arrays and
-`null`; the JSON-encoded string spelling exists only in source TOML. The
+`null`; the JSON-encoded string spelling exists only in source TOML. Its
+numbers are binary64-exact (I-JSON, RFC 7493 §2.2): the server never emits
+another, and a request carrying one — such as `9007199254740993` — is refused
+at decode, so a binary64 JSON client such as the browser holds and echoes back
+exactly the value native holds. The
 `ReasoningSelection` `catalog_default`/`profile` union is removed: an omitted
 `profile` selects the Model's `default_profile`. See
 [configuration](configuration.md#model-profiles) for the resolution contract.

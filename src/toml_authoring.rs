@@ -17,12 +17,12 @@
 //! [`RequestParams`](crate::model::invocation::RequestParams) map; it never
 //! reaches validation, runtime resolution, frozen snapshots, or adapters.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 
 use serde::de::{DeserializeOwned, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
 
-use crate::model::invocation::RequestParams;
+use crate::model::invocation::{RequestParams, exact_json_number, numbers_are_exact};
 
 thread_local! {
     static SOURCE: Cell<bool> = const { Cell::new(false) };
@@ -168,8 +168,20 @@ impl std::fmt::Debug for AuthoredRequestParams {
         f.write_str("AuthoredRequestParams(<opaque>)")
     }
 }
+/// Why structured parameters are refused at either representation boundary.
+/// Names the domain, never the value or its key.
+const INEXACT: &str =
+    "has a JSON number that is not exactly representable as an IEEE 754 binary64 value";
+
 impl Serialize for AuthoredRequestParams {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // Every representation carries only numbers every hop reads alike, so
+        // a native write can never emit a source its parser would refuse.
+        if !numbers_are_exact(&self.0) {
+            return Err(serde::ser::Error::custom(format!(
+                "request_params {INEXACT}"
+            )));
+        }
         if in_source() {
             let text = serde_json::to_string(&self.0).map_err(serde::ser::Error::custom)?;
             serializer.serialize_str(&text)
@@ -186,7 +198,16 @@ impl<'de> Deserialize<'de> for AuthoredRequestParams {
                 .map(Self)
                 .map_err(|error| serde::de::Error::custom(format!("{PARAM_ERROR}{error}")))
         } else {
-            RequestParams::deserialize(deserializer).map(Self)
+            // Client JSON is decoded by `serde_json`, exactly for integers; a
+            // number outside the domain is refused here, before any write.
+            let params = RequestParams::deserialize(deserializer)?;
+            if numbers_are_exact(&params) {
+                Ok(Self(params))
+            } else {
+                Err(serde::de::Error::custom(format!(
+                    "request_params {INEXACT}"
+                )))
+            }
         }
     }
 }
@@ -202,12 +223,12 @@ impl schemars::JsonSchema for AuthoredRequestParams {
         if in_source() {
             schemars::json_schema!({
                 "type": "string",
-                "description": "A JSON-encoded object of opaque provider-native request parameters, for example '{\"temperature\":0.7}'. Nested objects, arrays and null are preserved; duplicate keys are rejected. Runtime-protected wire keys are checked during model validation."
+                "description": "A JSON-encoded object of opaque provider-native request parameters, for example '{\"temperature\":0.7}'. Nested objects, arrays and null are preserved; duplicate keys are rejected, and so is a number that is not exactly an IEEE 754 binary64 value (such as 9007199254740993). Runtime-protected wire keys are checked during model validation."
             })
         } else {
             schemars::json_schema!({
                 "type": "object",
-                "description": "Opaque provider-native request parameters as a structured JSON object. Nested objects, arrays and null are preserved. Runtime-protected wire keys are checked during model validation.",
+                "description": "Opaque provider-native request parameters as a structured JSON object. Nested objects, arrays and null are preserved. Every number is exactly an IEEE 754 binary64 value (I-JSON); another, such as 9007199254740993, is refused. Runtime-protected wire keys are checked during model validation.",
                 "additionalProperties": true
             })
         }
@@ -258,27 +279,42 @@ impl<'de> Visitor<'de> for JsonText {
     }
 }
 
-/// Why an authored JSON request-parameter string was rejected. Locations name
-/// structure only; no variant carries authored text.
+/// Why an authored JSON request-parameter string was rejected.
+///
+/// Every variant locates the failure by line and column of the JSON text. No
+/// variant carries authored text: object keys are as opaque as values, and a
+/// key may itself hold a credential.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RequestParamsJsonError {
     /// The text is not one JSON value.
     Syntax { line: usize, column: usize },
     /// The JSON value is not an object.
     NotObject,
-    /// An object, at any depth, repeats a key. The path names keys and indices.
-    DuplicateKey { path: String },
+    /// An object, at any depth, repeats a key; located just after the repeat.
+    DuplicateKey { line: usize, column: usize },
+    /// A number does not survive a binary64 round trip; located at its start.
+    /// Columns count bytes, as `serde_json` locates the other variants.
+    /// See [`exact_json_number`].
+    InexactNumber { line: usize, column: usize },
 }
 impl std::fmt::Display for RequestParamsJsonError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Syntax { line, column } => write!(
-                f,
-                "is not valid JSON (syntax error at line {line}, column {column} of the JSON text)"
-            ),
+        let at = |f: &mut std::fmt::Formatter<'_>, line, column| {
+            write!(f, " (at line {line}, column {column} of the JSON text)")
+        };
+        match *self {
+            Self::Syntax { line, column } => {
+                f.write_str("is not valid JSON")?;
+                at(f, line, column)
+            }
             Self::NotObject => f.write_str("must encode a JSON object"),
-            Self::DuplicateKey { path } => {
-                write!(f, "repeats a JSON object key at {path}")
+            Self::DuplicateKey { line, column } => {
+                f.write_str("repeats a JSON object key")?;
+                at(f, line, column)
+            }
+            Self::InexactNumber { line, column } => {
+                f.write_str(INEXACT)?;
+                at(f, line, column)
             }
         }
     }
@@ -288,39 +324,78 @@ impl std::error::Error for RequestParamsJsonError {}
 /// Strictly parse one authored JSON request-parameter object.
 ///
 /// Unlike ordinary JSON map deserialization, a repeated key at any depth is an
-/// error rather than a silent last-value-wins.
+/// error rather than a silent last-value-wins, and a number some hop would
+/// round is an error rather than a silent precision loss.
 ///
 /// # Errors
-/// Returns the syntax location, a non-object root, or the first duplicate key.
+/// Returns the syntax location, a non-object root, the first duplicate key, or
+/// the first inexact number.
 pub fn parse_request_params_json(text: &str) -> Result<RequestParams, RequestParamsJsonError> {
-    let duplicate = RefCell::new(None);
+    let duplicate = Cell::new(false);
     let mut deserializer = serde_json::Deserializer::from_str(text);
     let value = StrictValue {
-        path: "$".into(),
         duplicate: &duplicate,
     }
     .deserialize(&mut deserializer)
     .and_then(|value| deserializer.end().map(|()| value))
     .map_err(|error| {
-        duplicate.take().map_or(
-            RequestParamsJsonError::Syntax {
-                line: error.line(),
-                column: error.column(),
-            },
-            |path| RequestParamsJsonError::DuplicateKey { path },
-        )
+        let (line, column) = (error.line(), error.column());
+        if duplicate.get() {
+            RequestParamsJsonError::DuplicateKey { line, column }
+        } else {
+            RequestParamsJsonError::Syntax { line, column }
+        }
     })?;
-    match value {
-        serde_json::Value::Object(map) => Ok(map),
-        _ => Err(RequestParamsJsonError::NotObject),
+    let serde_json::Value::Object(map) = value else {
+        return Err(RequestParamsJsonError::NotObject);
+    };
+    if let Some(start) = number_literals(text)
+        .find(|&(start, end)| !exact_json_number(&text[start..end]))
+        .map(|(start, _)| start)
+    {
+        let before = &text[..start];
+        return Err(RequestParamsJsonError::InexactNumber {
+            line: before.matches('\n').count() + 1,
+            column: before.len() - before.rfind('\n').map_or(0, |newline| newline + 1) + 1,
+        });
     }
+    Ok(map)
+}
+
+/// The byte ranges of every number literal of already valid JSON text.
+fn number_literals(text: &str) -> impl Iterator<Item = (usize, usize)> + '_ {
+    let bytes = text.as_bytes();
+    let mut at = 0;
+    std::iter::from_fn(move || {
+        while at < bytes.len() {
+            match bytes[at] {
+                b'"' => {
+                    at += 1;
+                    while bytes[at] != b'"' {
+                        at += if bytes[at] == b'\\' { 2 } else { 1 };
+                    }
+                    at += 1;
+                }
+                b'-' | b'0'..=b'9' => {
+                    let start = at;
+                    while at < bytes.len()
+                        && matches!(bytes[at], b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E')
+                    {
+                        at += 1;
+                    }
+                    return Some((start, at));
+                }
+                _ => at += 1,
+            }
+        }
+        None
+    })
 }
 
 /// One JSON value whose objects reject repeated keys. `serde_json` bounds the
 /// recursion depth.
 struct StrictValue<'a> {
-    path: String,
-    duplicate: &'a RefCell<Option<String>>,
+    duplicate: &'a Cell<bool>,
 }
 impl<'de> DeserializeSeed<'de> for StrictValue<'_> {
     type Value = serde_json::Value;
@@ -362,7 +437,6 @@ impl<'de> Visitor<'de> for StrictValue<'_> {
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
         let mut values = Vec::new();
         while let Some(value) = seq.next_element_seed(StrictValue {
-            path: format!("{}[{}]", self.path, values.len()),
             duplicate: self.duplicate,
         })? {
             values.push(value);
@@ -372,29 +446,16 @@ impl<'de> Visitor<'de> for StrictValue<'_> {
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
         let mut object = serde_json::Map::new();
         while let Some(key) = map.next_key::<String>()? {
-            let path = format!("{}{}", self.path, key_segment(&key));
             if object.contains_key(&key) {
-                *self.duplicate.borrow_mut() = Some(path);
+                self.duplicate.set(true);
                 return Err(serde::de::Error::custom("duplicate key"));
             }
             let value = map.next_value_seed(StrictValue {
-                path,
                 duplicate: self.duplicate,
             })?;
             object.insert(key, value);
         }
         Ok(serde_json::Value::Object(object))
-    }
-}
-fn key_segment(key: &str) -> String {
-    if !key.is_empty()
-        && key
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-    {
-        format!(".{key}")
-    } else {
-        format!("[{}]", serde_json::to_string(key).expect("string"))
     }
 }
 
@@ -493,23 +554,53 @@ mod tests {
             secret: String,
             model: Params,
         }
+        let dup = "repeats a JSON object key";
         for (json, reason) in [
-            ("{broken", "is not valid JSON"),
-            ("{\"SECRET_PROVIDER_VALUE\": }", "is not valid JSON"),
-            ("{} {}", "is not valid JSON"),
-            ("", "is not valid JSON"),
+            (
+                "{broken",
+                "is not valid JSON (at line 1, column 2 of the JSON text)",
+            ),
+            (
+                "{\"SECRET_PROVIDER_VALUE\": }",
+                "is not valid JSON (at line 1, column 27 of the JSON text)",
+            ),
+            (
+                "{} {}",
+                "is not valid JSON (at line 1, column 4 of the JSON text)",
+            ),
+            (
+                "",
+                "is not valid JSON (at line 1, column 0 of the JSON text)",
+            ),
             ("null", "must encode a JSON object"),
             ("[]", "must encode a JSON object"),
             ("42", "must encode a JSON object"),
             ("\"SECRET_PROVIDER_VALUE\"", "must encode a JSON object"),
-            ("{\"a\":1,\"a\":2}", "repeats a JSON object key at $.a"),
+            // Duplicate keys at every depth are located by position, never by
+            // key text: a key is as opaque as a value and may hold a secret.
             (
-                "{\"outer\":{\"SECRET_PROVIDER_VALUE\":[{\"k\":1,\"k\":1}]}}",
-                "repeats a JSON object key at $.outer.SECRET_PROVIDER_VALUE[0].k",
+                "{\"a\":1,\"a\":2}",
+                &format!("{dup} (at line 1, column 10 of the JSON text)"),
             ),
             (
-                "{\"x y\":{},\"x y\":{}}",
-                "repeats a JSON object key at $[\"x y\"]",
+                "{\"outer\":{\"SECRET_PROVIDER_VALUE\":[{\"k\":1,\"k\":1}]}}",
+                &format!("{dup} (at line 1, column 45 of the JSON text)"),
+            ),
+            (
+                "{\"list\":[{\"k\":1},{\"k\":1,\"k\":2}]}",
+                &format!("{dup} (at line 1, column 27 of the JSON text)"),
+            ),
+            (
+                "{\"sk-SECRET_KEY_MARKER\":1,\"sk-SECRET_KEY_MARKER\":2}",
+                &format!("{dup} (at line 1, column 48 of the JSON text)"),
+            ),
+            (
+                "{\"SECRET \\\"quoted\\\" [x] y\":{},\"SECRET \\\"quoted\\\" [x] y\":{}}",
+                &format!("{dup} (at line 1, column 55 of the JSON text)"),
+            ),
+            (
+                "{\"SECRET_键🔑\\u00e9\":1,\"SECRET_键🔑é\":2}",
+                &format!("{dup} (at line 1, column 44 of the JSON text)"),
             ),
         ] {
             let text = format!("secret = 'SECRET_NEIGHBOR'\n[model]\nrequest_params = '{json}'\n");
@@ -531,10 +622,91 @@ mod tests {
                 detail.contains(&format!("model.request_params {reason}")),
                 "{detail}"
             );
-            assert!(!detail.contains("SECRET_NEIGHBOR"), "{detail}");
-            if !reason.contains("SECRET_PROVIDER_VALUE") {
-                assert!(!detail.contains("SECRET_PROVIDER_VALUE"), "{detail}");
-            }
+            assert!(!detail.contains("SECRET"), "{detail}");
+        }
+    }
+
+    #[test]
+    fn duplicate_keys_are_strict_at_every_depth_and_never_echo_key_text() {
+        for (json, line, column) in [
+            ("{\"a\":1,\"a\":2}", 1, 10),
+            ("{\"a\":{\"b\":1,\"b\":2}}", 1, 15),
+            ("{\"list\":[{\"k\":1},{\"k\":1,\"k\":2}]}", 1, 27),
+            ("{\"\\u0061\":1,\"a\":2}", 1, 15),
+            (
+                "{\n  \"x\": [[{\"SECRET z\": 1,\n  \"SECRET z\": 1}]]\n}",
+                3,
+                12,
+            ),
+            (
+                "{\"api_key=sk-live-SECRET\":0,\"api_key=sk-live-SECRET\":0}",
+                1,
+                52,
+            ),
+        ] {
+            let error = parse_request_params_json(json).unwrap_err();
+            assert_eq!(
+                error,
+                RequestParamsJsonError::DuplicateKey { line, column },
+                "{json}"
+            );
+            let shown = format!("{error} {error:?}");
+            assert!(!shown.contains("SECRET") && !shown.contains('"'), "{shown}");
+        }
+        // The same key in sibling objects or as a string value is not a repeat.
+        parse_request_params_json(r#"{"a":{"k":1},"b":{"k":1},"c":["a","a"],"d":"a"}"#).unwrap();
+        parse_request_params_json(r#"{"s":"{\"a\":1,\"a\":2}"}"#).unwrap();
+    }
+
+    #[test]
+    fn numbers_some_hop_would_round_are_refused_before_any_rounding() {
+        use crate::model::invocation::{
+            InexactNumber, RequestParamsLayer, validate_request_params_numbers,
+        };
+        for (json, column) in [
+            (r#"{"seed":9007199254740993}"#, 9),
+            (r#"{"seed":-9007199254740993}"#, 9),
+            // Exactly a binary64, but printed back as 1152921504606847000.
+            (r#"{"seed":1152921504606846976}"#, 9),
+            (r#"{"seed":18446744073709551616}"#, 9),
+            (r#"{"t":0.12345678901234567890}"#, 6),
+            (r#"{"a":{"b":[1,{"c":[2.5,9007199254740993]}]}}"#, 24),
+        ] {
+            assert_eq!(
+                parse_request_params_json(json),
+                Err(RequestParamsJsonError::InexactNumber { line: 1, column }),
+                "{json}"
+            );
+        }
+        let exact = r#"{"a":9007199254740992,"b":-9007199254740991,"c":0.1,"d":1.50,
+            "e":15e-1,"f":1e20,"g":1E+300,"h":5e-324,"i":-0,"j":0.0,"k":10000000000000000000,
+            "l":3.141592653589793,"m":[{"n":-2.5e-7}],"s":"9007199254740993",
+            "o":5.357830195732913e-76,"p":1.603964615428183e143}"#;
+        let params = parse_request_params_json(exact).unwrap();
+        assert_eq!(params["a"], json!(9_007_199_254_740_992_u64));
+        assert_eq!(params["k"], json!(10_000_000_000_000_000_000_u64));
+        assert_eq!(params["s"], json!("9007199254740993"));
+        // Correctly rounded parsing: the binary64 a client prints is the one read.
+        assert_eq!(params["o"].as_f64(), Some(5.357_830_195_732_913e-76));
+        assert_eq!(params["p"].as_f64(), Some(1.603_964_615_428_183e143));
+        // A written and reread source carries exactly the same values.
+        let written = serde_json::to_string(&params).unwrap();
+        assert_eq!(parse_request_params_json(&written).unwrap(), params);
+        // Structured client JSON is held to the same domain.
+        let layer = RequestParamsLayer::ModelProfile;
+        assert_eq!(validate_request_params_numbers(&params, layer), Ok(()));
+        for value in [
+            json!({"seed": 9_007_199_254_740_993_u64}),
+            json!({"x": [{"seed": -9_007_199_254_740_993_i64}]}),
+            json!({"seed": 1_152_921_504_606_846_976_u64}),
+        ] {
+            let serde_json::Value::Object(map) = value else {
+                unreachable!()
+            };
+            assert_eq!(
+                validate_request_params_numbers(&map, layer),
+                Err(InexactNumber { layer })
+            );
         }
     }
 
