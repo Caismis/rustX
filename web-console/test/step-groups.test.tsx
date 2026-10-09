@@ -39,8 +39,8 @@ it('a settled Attempt groups reasoning, calls and bodied records between replies
   expect(pieces.get('audit')).toEqual([]);
   expect(pieces.get('asking')).toEqual([]);
   expect(pieces.get('final')).toEqual([{ kind: 'reply', blocks: [1] }]);
-  // A live Attempt keeps every row in place.
-  expect(stepGroups(turn(owner('running')), () => true).size).toBe(0);
+  // All modes share the same grouping for live and settled Attempts.
+  expect(stepGroups(turn(owner('running')), () => true).size).toBe(pieces.size);
 });
 
 it('an independent message closes the open group', () => {

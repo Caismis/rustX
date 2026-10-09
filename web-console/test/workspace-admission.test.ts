@@ -54,6 +54,8 @@ it.each([true, false])('same adapter, callback and native authority reject delay
 
 it.each(['host', 'callback'] as const)('queued attach rechecks %s authority at the actual socket dispatch boundary', async replacement => {
   const server = new Server(); await server.connect();
+  // Resolve immutable Node evidence before occupying all eight dispatch slots.
+  await server.client.attach('A'); await server.client.release('A'); server.requests.length = 0;
   let hostId = 'old-host', lists = 0;
   const verifying = deferred<void>(), verification = deferred<void>();
   vi.stubGlobal('fetch', vi.fn(async (url: string) => {

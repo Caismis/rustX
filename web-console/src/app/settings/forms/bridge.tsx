@@ -99,6 +99,8 @@ export interface UnitEditing<T> {
   readonly displayed: T;
   /** Reflect a new authored value into the transaction actor. */
   readonly edit: (value: T) => void;
+  /** One explicit quick-setting gesture, refused while another draft needs review. */
+  readonly apply: (value: T) => void;
   readonly submit: (remove?: boolean) => void;
   readonly discard: () => void;
   readonly review: () => void;
@@ -241,6 +243,11 @@ export function useUnitEditing<T>({ authored, authoredPresent = authored !== und
     // value goes to the transaction actor, never to component or form state
     // that a remount could lose.
     edit: (value: T) => { if (writable) begin(value); },
+    apply: (value: T) => {
+      if (!writable || !admitted || busy || draft || (snapshot && requiresReview(snapshot))) return;
+      begin(value);
+      actor.send({ type: 'UNIT.SUBMIT', identity, selector, revision, mutation: mutation(value) });
+    },
     override: definition === 'inherited' ? () => { if (!awaitingObservation) begin(overrideSeed); } : undefined,
     submit: (remove = false) => {
       if (!remove && !draft) return;
@@ -292,14 +299,8 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
     onSubmit={event => { event.preventDefault(); unit.submit(); }}>
     <fieldset disabled={unit.busy}><legend>{title}</legend>
       {unit.configUnit && unit.facts.authored.state !== 'unavailable' && <>
-        <p className={css.hint} data-authored={unit.facts.authored.state} data-effective={unit.facts.effective.state}>
-          {authoredStateLabel(tx, unit.facts.authored, unit.scope)} · {effectiveStateLabel(tx, unit.facts.effective)} · {provenanceLabel(tx, unit.facts.origin)}
-        </p>
         {unit.facts.authored.state === 'invalid' && <p role="alert" className={css.error}>{tx('settings:bridge.authored-source-is-invalid')}{' '}{unit.facts.authored.diagnostic}</p>}
         {unit.facts.effective.state === 'invalid' && <p role="alert" className={css.error}>{tx('settings:bridge.native-effective-resolution-failed')}{' '}{unit.facts.effective.diagnostic}</p>}
-        {unit.inheritance && <Advanced title={tx('settings:bridge.native-resolved-value-not-session-adoption')}>
-          <pre>{unit.facts.effective.state === 'available' ? JSON.stringify(unit.facts.effective.value, null, 2) : effectiveStateLabel(tx, unit.facts.effective)}</pre>
-        </Advanced>}
       </>}
       {redacted && <p className={css.hint}>{tx('settings:bridge.the-authored-value-is-never-projected-to-the-browser-saving-repl')}</p>}
       {unit.definition && <DefinitionNotice unit={unit} owner={owner} />}
@@ -308,6 +309,12 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
           override transition. */}
       <fieldset className={css.fields} disabled={!unit.writable}>{children}</fieldset>
       <Advanced title={tx('settings:bridge.source-revision-replacement')}>
+        <p className={css.hint} data-authored={unit.facts.authored.state} data-effective={unit.facts.effective.state}>
+          {authoredStateLabel(tx, unit.facts.authored, unit.scope)} · {effectiveStateLabel(tx, unit.facts.effective)} · {provenanceLabel(tx, unit.facts.origin)}
+        </p>
+        {unit.inheritance && <Advanced title={tx('settings:bridge.native-resolved-value-not-session-adoption')}>
+          <pre>{unit.facts.effective.state === 'available' ? JSON.stringify(unit.facts.effective.value, null, 2) : effectiveStateLabel(tx, unit.facts.effective)}</pre>
+        </Advanced>}
         <p className={css.hint}>{tx('settings:bridge.draft-base-revision')}{' '}{unit.base}<br />{tx('settings:bridge.current-revision')}{' '}{unit.observed}</p>
         <p>{tx('settings:bridge.save-replaces-this-native-semantic-unit-remove-omits-it-from-thi')}</p>
       </Advanced>
@@ -384,7 +391,7 @@ function DefinitionNotice<T>({ unit, owner }: { unit: UnitEditing<T>; owner: str
 /** One native semantic unit's own outcome, named so it can never be read as a
  * neighbouring unit's. A definition that committed and a permission that
  * conflicted are reported separately, because they are two native mutations. */
-function UnitOutcomeNotice({ title, outcome }: { title: string; outcome: MutationOutcome }) {
+export function UnitOutcomeNotice({ title, outcome }: { title: string; outcome: MutationOutcome }) {
   const tx = useTranslation();
   switch (outcome.kind) {
     // A commit whose authoritative reread is still owed is announced by the

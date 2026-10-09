@@ -216,6 +216,23 @@ impl SubagentRegistry {
         Some((agent, activation))
     }
 
+    /// Fresh driver-owned execution evidence for this exact activation. Recovery
+    /// records have no driver lease; neither Stopping nor a missing terminal is
+    /// sufficient to invent live work. Read after durable folding, not before a
+    /// potentially blocked store read.
+    pub(crate) fn execution_started_at(
+        &self,
+        id: &SubagentId,
+    ) -> Option<chrono::DateTime<chrono::Utc>> {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let record = &state.records[*state.index.get(id)?];
+        record
+            .execution
+            .as_ref()?
+            .running()
+            .then_some(record.started_at)
+    }
+
     /// Newest admitted durable identities first, with an honest bounded count.
     ///
     /// # Panics

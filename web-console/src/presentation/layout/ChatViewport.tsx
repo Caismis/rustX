@@ -1,4 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Rewritten from ui-chat/ChatView.tsx; see PROVENANCE.md. */
+import { createPortal } from 'react-dom';
 import { Component, createRef, type ReactNode } from 'react';
 import { IconChevronDownOutline14 } from '../primitives/icons/index.tsx';
 
@@ -17,8 +18,9 @@ interface ViewportProps {
 }
 /** One frame owns every automatic Chat correction. Native user scrolling
  * changes intent synchronously, including while a layout frame is pending. */
-export class ChatViewport extends Component<ViewportProps, { detached: boolean }> {
-  state = { detached: false };
+export class ChatViewport extends Component<ViewportProps, { detached: boolean; chromeHost?: HTMLElement }> {
+  state: { detached: boolean; chromeHost?: HTMLElement } = { detached: false };
+  private scroller = () => this.viewport.current?.closest<HTMLElement>('[data-conversation-scroll]') ?? this.viewport.current;
   private viewport = createRef<HTMLDivElement>();
   private content = createRef<HTMLDivElement>();
   private observer?: ResizeObserver;
@@ -31,14 +33,15 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean }
   private retireGesture?: () => void;
   private retireNavigation = () => {
     const retire = this.retireGesture; this.retireGesture = undefined;
-    this.intent++; this.navigation = undefined; retire?.();
+    this.intent++; this.navigation = undefined; this.landed = undefined; retire?.();
   };
   private navigation?: { intent: number; anchor: string; current: () => boolean };
+  private landed?: { anchor: string; current: () => boolean };
   private active?: string | null;
   private explicitLatest = false;
   private rows() { return [...(this.content.current?.querySelectorAll<HTMLElement>('[data-chat-anchor-key]') ?? [])].filter(row => !row.closest('[hidden]')); }
   private position(): ReadingPosition | undefined {
-    const el = this.viewport.current;
+    const el = this.scroller();
     if (!el) return;
     const top = el.getBoundingClientRect().top, rows = this.rows();
     const index = Math.max(0, rows.findIndex(row => row.getBoundingClientRect().bottom > top));
@@ -52,7 +55,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean }
   };
   private commitLayout = () => {
     this.frame = undefined;
-    const el = this.viewport.current;
+    const el = this.scroller();
     if (!this.mounted || !el) return;
     // Native scrolling can precede its scroll event. Adopt reader movement
     // before a queued layout correction gets a chance to overwrite it.
@@ -64,7 +67,10 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean }
     if (navigation && navigation.intent === this.intent && navigation.current()) {
       this.retireGesture = undefined;
       const row = this.rows().find(row => row.dataset.chatAnchorKey === navigation.anchor);
-      if (row) desired = el.scrollTop + row.getBoundingClientRect().top - el.getBoundingClientRect().top;
+      if (row) {
+        desired = el.scrollTop + row.getBoundingClientRect().top - el.getBoundingClientRect().top;
+        this.landed = navigation;
+      }
     } else if (this.following) desired = floor;
     else if (this.reading) {
       const rows = this.rows();
@@ -81,7 +87,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean }
     this.publishActive();
   };
   private publishActive = () => {
-    const el = this.viewport.current;
+    const el = this.scroller();
     if (!el) return;
     const regions = [...(this.content.current?.querySelectorAll<HTMLElement>('[data-chat-turn-owner]') ?? [])].filter(row => !row.closest('[hidden]'));
     // Match Harness: read inside the content, below the scrollport padding.
@@ -96,12 +102,19 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean }
     const region = this.following ? regions.at(-1)
       : regions.reverse().find(row => row.getBoundingClientRect().top <= line) ?? first;
     const owner = region?.dataset.chatTurnOwner;
-    const key = this.following && this.props.latestTurn ? this.props.latestTurn
-      : owner ?? (this.following ? undefined : null);
+    // A successful explicit jump owns selection until the reader moves.
+    // The final prompt may be clamped by the scroll limit, or its owned
+    // response may begin below the reading line. Neither selects its predecessor.
+    const landed = this.landed;
+    const located = landed?.current() && regions.some(row => row.dataset.chatTurnOwner === landed.anchor)
+      ? landed.anchor : undefined;
+    if (!located) this.landed = undefined;
+    const key = located ?? (this.following && this.props.latestTurn ? this.props.latestTurn
+      : owner ?? (this.following ? undefined : null));
     if (key !== this.active) { this.active = key; this.props.onActiveTurn?.(key); }
   };
   private onScroll = () => {
-    const el = this.viewport.current!;
+    const el = this.scroller()!;
     const floor = Math.max(0, el.scrollHeight - el.clientHeight);
     const previous = Math.min(this.writtenTop, floor);
     if (el.scrollTop < previous || Math.abs(el.scrollTop - previous) > 0.5) {
@@ -118,7 +131,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean }
   /** Explicit action changes intent; positioning still belongs to the frame. */
   returnToBottom = () => {
     this.props.onLatest?.();
-    this.writtenTop = this.viewport.current?.scrollTop ?? this.writtenTop;
+    this.writtenTop = this.scroller()?.scrollTop ?? this.writtenTop;
     this.retireNavigation();
     this.explicitLatest = true;
     this.following = true; this.reading = undefined;
@@ -127,7 +140,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean }
   beginNavigation = (retired?: () => void) => {
     this.retireNavigation();
     this.retireGesture = retired;
-    this.writtenTop = this.viewport.current?.scrollTop ?? this.writtenTop;
+    this.writtenTop = this.scroller()?.scrollTop ?? this.writtenTop;
     const intent = this.intent;
     this.navigation = undefined; this.following = false; this.reading = this.position();
     this.setState({ detached: true });
@@ -140,11 +153,19 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean }
   };
   componentDidMount() {
     this.mounted = true;
+    const scroller = this.scroller()!;
+    // A resident session scroller can retain the previous view's position.
+    // Its initial offset is layout state, not a new reader gesture.
+    this.writtenTop = scroller.scrollTop;
+    scroller.addEventListener('scroll', this.onScroll);
+    if (scroller !== this.viewport.current) this.setState({ chromeHost: scroller.parentElement! });
     this.markLayoutDirty();
     if (typeof ResizeObserver !== 'undefined') {
       this.observer = new ResizeObserver(this.markLayoutDirty);
       this.observer.observe(this.content.current!);
-      this.observer.observe(this.viewport.current!);
+      this.observer.observe(scroller);
+      const composer = scroller.querySelector('[data-composer-seat]');
+      if (composer) this.observer.observe(composer);
     }
   }
   getSnapshotBeforeUpdate() {
@@ -163,6 +184,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean }
     this.markLayoutDirty();
   }
   componentWillUnmount() {
+    this.scroller()?.removeEventListener('scroll', this.onScroll);
     this.mounted = false;
     this.retireNavigation();
     this.observer?.disconnect();
@@ -170,8 +192,12 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean }
     this.frame = undefined;
   }
   render() {
-    return <div className="chat-reading-surface" style={{ position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>{this.props.overlay}<div ref={this.viewport} className="conversation-scroll" style={{ overflowAnchor: 'none' }} onScroll={this.onScroll}>
-      <div ref={this.content}>{this.props.children}</div>
-    </div>{this.props.latestLabel && (this.state.detached || this.props.historical) && <button type="button" data-chat-latest className="chat-return-latest" aria-label={this.props.latestLabel} title={this.props.latestLabel} onClick={this.returnToBottom}><IconChevronDownOutline14 size={16}/></button>}</div>;
+    const chrome = <>{this.props.overlay}{this.props.latestLabel && (this.state.detached || this.props.historical) && <button type="button" data-chat-latest className="chat-return-latest" aria-label={this.props.latestLabel} title={this.props.latestLabel} onClick={this.returnToBottom}><IconChevronDownOutline14 size={16}/></button>}</>;
+    return <div className="chat-reading-surface">
+      <div ref={this.viewport} className="conversation-scroll" style={{ overflowAnchor: 'none' }}>
+        <div ref={this.content}>{this.props.children}</div>
+      </div>
+      {this.state.chromeHost ? createPortal(chrome, this.state.chromeHost) : chrome}
+    </div>;
   }
 }

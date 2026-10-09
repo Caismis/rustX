@@ -1,15 +1,31 @@
 # App Server protocol v38
 
+App Server v38 / Runtime Client v60 add `agent/statistics { target, agent_id }`.
+The result is `agent_statistics { metrics }`: child-owned `ConversationStatistics`,
+request-owned context occupancy, and cumulative working intervals (`settled_ms`
+plus an optional active interval). Usage, cache hit, request coverage, turns,
+steps, model/tool time, TTFT and decode speed share the main conversation's
+native definitions. Historical inherited execution is excluded from child usage.
+The read uses only the parent's owned child store, never starts or resumes a
+child, and is independent of transcript pagination. Repeated reads fold only
+new facts; recovery replays durable evidence. Active clocks carry native
+`started_at`, `observed_at` and `running`; non-running clocks freeze at the last
+observed fact. `running` is current driver execution evidence, not `AgentState ==
+Active`: Stopping may still own work. A durable Attempt terminal ends its interval
+before physical cleanup; missing terminal evidence alone never permits a clock
+to advance. No wire shape or protocol version changes are required by this
+semantic correction. Clients must upgrade together; previous versions are rejected.
+
 App Server v38 adds transport-granted committed-delivery access (#454):
 `delivery/read`, `delivery/locate`, the `session_file_location` result and the
 per-connection `ServerCapabilities.delivery_access` report. Only transport
 authentication grants the access. See
 [Committed delivery access](#committed-delivery-access-v38).
 
-App Server v38 / Runtime Client v59 refresh retained Trace input ownership at the
+App Server v38 retains the v37 / Runtime Client v59 Trace input ownership contract at the
 current read cut. See [Trace retained-input ownership](#trace-retained-input-ownership-v38).
 
-App Server v38 / Runtime Client v59 separate Session configuration-adoption
+App Server v38 / Runtime Client v60 separate Session configuration-adoption
 eligibility from configuration application state. `ConfigurationApplication` no
 longer carries `eligibility`; the live runtime publishes it on its Runtime Client
 snapshot (`configuration_adoption_eligibility`) and changes it only through
@@ -82,12 +98,12 @@ open across reconstruction and paging. `CompletedResponseView` retains finalized
 answer/TurnTail provenance and actions. Lineage remains selective: finalized
 completed-response provenance may cross into children; unsuccessful source
 execution outcomes do not. See [the ownership contract](issue-406/terminal-process-ownership.md).
-Only App Server v38 / Runtime Client v59 are supported. Earlier peers are rejected without compatibility paths.
+Only App Server v38 / Runtime Client v60 are supported. Earlier peers are rejected without compatibility paths.
 
 The earlier v22/v48 revision introduced native whole-conversation Turn/Step
 totals, measured request timing, the latest exact Attempt clock, and authored
 `SessionModelsView::Available.default_model` from the same creation capture as
-its catalog. v38/v59 retain these capabilities. A browser product preference can
+its catalog. v38/v60 retain these capabilities. A browser product preference can
 seed new Session intent; it does not alter authored configuration or existing
 Sessions.
 
@@ -420,6 +436,7 @@ explicitly rejected as an invalid request before any action occurs.
 | `session/effectiveConfiguration`, `configuration/reconcile`, `session/adoptConfiguration` | Authoritative application state, native rescan/retry, and fenced explicit Session adoption |
 | `context/compact`, `goal/control` | Existing maintenance and Goal owners |
 | `job/list`, `job/status`, `job/wait`, `job/cancel` | ConversationBackgroundRegistry: bounded finite Jobs, immediate snapshot, exact terminal wait and cancellation through physical settlement or typed publication abandonment |
+| `agent/statistics` | Parent `AttachmentTarget` → exact parent registry Agent ownership → existing child store → incremental native usage, timing and occupancy; read-only, no child activation |
 | `agent/transcript` | Parent `AttachmentTarget` → current parent Runtime Client authority → exact parent `SubagentRegistry` ownership resolution of caller-supplied `AgentId` (never arbitrary child `ConversationId`) → exact owned child Conversation, which remains history authority → bounded read-only durable transcript projection; grants no execution, control, or HITL authority |
 | `agent/list`, `agent/status`, `agent/sendMessage`, `agent/wait`, `agent/interrupt` | Durable Agent owner: atomic message/resume arbitration, captured activation wait and activation-only interruption |
 | `subagent/disposeWorkspace` | Activation-specific retained resource owner; no caller-supplied filesystem cleanup paths |
@@ -901,7 +918,7 @@ Complete = terminal
 The obsolete `GoalView.armed` member and every activation-only observation are
 removed, so no snapshot and no `goal_changed` event can represent
 `Active + disarmed`. Native Runtime Client version 43 introduced this vocabulary;
-current version 59 retains it and rejects older peers by strict negotiation. This remains mandatory
+current version 60 retains it and rejects older peers by strict negotiation. This remains mandatory
 App Server protocol v38, with no compatibility field and no activation mode.
 
 Clients derive presentation from the phase alone: `Active` offers Pause,
@@ -972,7 +989,7 @@ other pre-1.0 schema changes, older stores are refused explicitly; no migration
 or compatibility representation is introduced.
 
 Native Runtime Client version 37 introduced the mandatory pending revision and
-`pending_inbound_changed` event. Current version 59 retains both with no
+`pending_inbound_changed` event. Current version 60 retains both with no
 compatibility decoder.
 
 Snapshot/attachment reads also reconcile Pending Inbound directly from durable
@@ -1088,6 +1105,15 @@ literal values. `SourceSettings.user`, `SourceSettings.workspace`,
 redacted document view, so no source projection can carry a literal Tool
 environment value, and an override is authored by supplying a new value rather
 than by reading a lower owner's value back.
+MCP writes accept environment references and exact-source retained literal key
+identities. New literal `env` or `headers` values are rejected by native authoring,
+even for direct generic RPC callers. A retained key cannot also be replaced;
+omitting it removes it. Native source provisioning remains outside this Web
+contract, and general protocol diagnostics omit authoring payloads.
+There are no `mcp/connect`, `mcp/status` or `mcp/disconnect` settings methods.
+Configuration reads/refresh never acquire external MCP resources; runtime
+connections belong exclusively to the native capability generation owner.
+
 Protocol v38 uses one `SourceTarget`: `{kind:"user"}` or
 `{kind:"workspace",directory:"/canonical/native/context"}`. Source read, write and
 reconcile have no Session parameter; mutations carry no second scope authority.
@@ -1289,7 +1315,7 @@ recovery uses existing idempotent cleanup/finalization and idempotent fence rele
 A client-side unknown outcome requires authoritative observation, not cleanup
 recovery or mutation replay. Only server-confirmed committed outcomes grant the
 explicit recovery action. These recovery semantics remain in App Server v38;
-native Runtime Client is v59.
+native Runtime Client is v60.
 
 ## Rich historical Trace inspection (#364)
 
@@ -1594,7 +1620,7 @@ it. An accepted response is never retracted. See
 [file delivery](file-delivery.md#delivery-access-for-app-server-clients) for
 the synchronization.
 
-The internal Runtime Client vocabulary is v59. Only App Server v38 clients
+The internal Runtime Client vocabulary is v60. Only App Server v38 clients
 are generated; earlier versions are rejected, with no aliases or compatibility
 decoder. Event envelope 1, SQLite 49, Session catalog 13 and subagent IPC v29
 remain unchanged. Present is root-only until a real child delivery owner exists.
@@ -1629,7 +1655,7 @@ unallocated operation is Absent; consumed work survives control disconnect.
 
 ### Trace retained-input ownership (v38)
 
-App Server v38 / Runtime Client v59 require `TraceLifecycle.location` in each
+App Server v38 / Runtime Client v60 require `TraceLifecycle.location` in each
 retained-record refresh. An idle `InboundTurnAdopted` initially has no Attempt;
 its answering Attempt is resolved natively at the read cut after that Attempt
 starts. Summary pages and retained-record refreshes use the same resolution.
@@ -1649,6 +1675,27 @@ control. Unknown/deleting identities and invalid nodes fail through the existing
 Session errors. Connection preparation may run concurrently. Clients display this
 as read-only history until attachment, and ignore late reads after attachment or
 navigation replacement. Only a submitted local prompt displays connecting feedback.
+
+`session/traceHistory { session_id, node_id?, before?, limit }` and
+`session/traceHistoryDetail { session_id, node_id?, record_id }` provide the same
+cold-read path for trajectory pages and inspection details. They return
+`session_trace_history { conversation_id, page }` and
+`session_trace_history_detail { conversation_id, detail }`. Pages are bounded to
+1..=32 records; detail identities to 256 bytes. Both retain allocation access and
+reuse the native durable TraceProjection without loading configuration or tools.
+The WebUI fences preview reads by navigation, connection and attachment epoch,
+and replaces them with the live snapshot when initialization completes. Prompts
+submitted during initialization stay locally owned until attachment, display
+connecting feedback immediately, and are admitted once; connection failure keeps
+the unsent draft recoverable.
+
+`session/statistics { session_id, node_id? }` independently reads durable
+whole-conversation statistics and the last measured context occupancy. Its
+`session_statistics` result includes `conversation_id`, `statistics` and
+`occupancy`, folded at the same native journal frontier as the live projection.
+It does not initialize a runtime, resolve tools or probe a provider. The WebUI
+loads it alongside history, displays persisted model settings before attachment,
+and retires late metadata replies when attachment or navigation changes.
 
 ### Bounded history windows and Host execution retirement (v38)
 

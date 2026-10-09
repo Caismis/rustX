@@ -1057,6 +1057,8 @@ impl StagedChild {
         // handle and resolved any cancellation intent that committed during
         // the ownership-to-driver handoff.
         let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+        let execution = ExecutionObservation::default();
+        let lease = ExecutionLease(execution.clone());
         let task = tokio::spawn(async move {
             let Ok(cancelled_before_start) = start_rx.await else {
                 // The observation channel is disposable: dropping the
@@ -1086,10 +1088,12 @@ impl StagedChild {
                 activity,
                 interactions,
                 provider_available,
+                lease,
             )
             .await
         });
         ChildDriver {
+            execution,
             commands: command_tx,
             start: start_tx,
             task,
@@ -1483,9 +1487,35 @@ async fn answer_anchor_offer(
 /// control stream stay inside the driver task, the sole process owner.
 #[derive(Debug)]
 pub(crate) struct ChildDriver {
+    execution: ExecutionObservation,
     commands: tokio::sync::mpsc::UnboundedSender<DriverCommand>,
     start: tokio::sync::oneshot::Sender<Option<CancellationReason>>,
     task: tokio::task::JoinHandle<PhysicalSettlement>,
+}
+
+/// Read-only evidence from the sole child driver, not a lifecycle label. A
+/// dropped driver or an unconfirmed control outcome revokes interpolation even
+/// while native containment/terminal publication are still settling.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ExecutionObservation(std::sync::Arc<std::sync::atomic::AtomicBool>);
+impl ExecutionObservation {
+    pub(crate) fn running(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::Acquire)
+    }
+}
+struct ExecutionLease(ExecutionObservation);
+impl ExecutionLease {
+    fn start(&self) {
+        self.0.0.store(true, std::sync::atomic::Ordering::Release);
+    }
+    fn stop(&self) {
+        self.0.0.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+impl Drop for ExecutionLease {
+    fn drop(&mut self) {
+        self.stop();
+    }
 }
 
 /// The driver command channel payload.
@@ -1555,6 +1585,9 @@ pub(crate) enum ChildBoundRoute {
 }
 
 impl ChildDriver {
+    pub(crate) fn execution(&self) -> ExecutionObservation {
+        self.execution.clone()
+    }
     /// Splits the handle into the narrow command channel and the driver
     /// task: the registry keeps the former, the settlement task awaits the
     /// latter.
@@ -1620,6 +1653,7 @@ async fn drive_child(
     activity: Option<super::registry::SubagentActivitySink>,
     interactions: Option<SubagentInteractionSink>,
     provider_available: Option<tokio::sync::watch::Receiver<bool>>,
+    execution: ExecutionLease,
 ) -> PhysicalSettlement {
     let observation_task = if let Some(sink) = activity {
         Some(tokio::spawn(run_observation_receiver(observation, sink)))
@@ -1641,6 +1675,7 @@ async fn drive_child(
         cancelled_before_start,
         interactions,
         provider_available,
+        execution,
     )
     .await;
     if let Some(task) = observation_task {
@@ -1690,6 +1725,7 @@ async fn drive_child_control(
     cancelled_before_start: Option<CancellationReason>,
     interactions: Option<SubagentInteractionSink>,
     mut provider_available: Option<tokio::sync::watch::Receiver<bool>>,
+    execution: ExecutionLease,
 ) -> PhysicalSettlement {
     let mut cancel_deadline = None;
     let mut cancellation_delivered = false;
@@ -1715,6 +1751,7 @@ async fn drive_child_control(
         )
         .await
         {
+            execution.stop();
             return settle_after_driver_loss(
                 child,
                 control,
@@ -1737,6 +1774,7 @@ async fn drive_child_control(
         }
         if let Err(error) = write_parent_frame(&mut control, &ParentFrame::Delegate(delegate)).await
         {
+            execution.stop();
             return settle_after_driver_loss(
                 child,
                 control,
@@ -1881,6 +1919,7 @@ async fn drive_child_control(
             frame = read_child_frame(&mut control) => {
                 match frame {
                     Ok(Some(ChildFrame::DelegateAccepted)) => {
+                        if cancelled_before_start.is_none() { execution.start(); }
                         if let Some(owner) = &interactions { owner.accept_delegate(); }
                     }
                     Ok(Some(ChildFrame::SealOpen)) => {
@@ -2039,6 +2078,7 @@ async fn drive_child_control(
             }
         }
     }
+    execution.stop();
     for (_, (interaction, sender)) in response_waiters {
         let _ = sender.send(Err(RoutedInteractionError::NotPending { interaction }));
     }

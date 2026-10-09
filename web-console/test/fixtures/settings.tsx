@@ -91,6 +91,25 @@ server.workspaceHost.configureWorkspace = async (_id, _endpoint, operation) => {
   if (operation.kind === 'write') return { kind: 'write', commit: { acknowledgement: projection, reread: { status: 'observed', projection } } };
   return { kind: operation.kind, projection };
 };
+// MCP catalog browser QA: deterministic save/delete acknowledgements with native-style redaction.
+if (variant.get('scenario') === 'mcp') {
+  let revision = 0;
+  server.handlers.set('configuration/sourceWrite', request => {
+    if (request.method !== 'configuration/sourceWrite' || request.params.mutation.kind !== 'mcp') throw new Error('Expected MCP definition write');
+    const {id,authored} = request.params.mutation;
+    if (authored) {
+      const {env,headers,...definition} = authored.definition;
+      source.user_mcp.authored![id] = {definition,retained_env:Object.keys(env ?? {}),retained_headers:Object.keys(headers ?? {})};
+    } else delete source.user_mcp.authored![id];
+    source.user_mcp.revision = `mcp-${++revision}`;
+    return {type:'source_settings',projection:structuredClone(source)};
+  });
+}
+if (variant.get('scenario') === 'mcp-scope') {
+  source.user_mcp.authored={exa:{definition:{type:'http',url:'https://mcp.exa.ai/mcp'},retained_env:[],retained_headers:[]}};
+  source.prospective_resources={...effective.resources,definitions:[{family:'mcp',name:'exa',valid:true,location:{scope:'user',path:source.user_mcp.path}}]};
+}
+
 // A held write stays in flight — the User request unanswered, the Workspace
 // host call unresolved — until the test releases it. Only then does native
 // commit it: the removal is applied, the revision advances and the projection

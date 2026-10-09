@@ -103,7 +103,7 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
     await panel.getByRole('button', { name: 'Retry preview' }).click();
     await expect(panel.getByRole('heading', { name: 'Delivered report' })).toBeVisible(); await close();
     // The existing measured conversation and turn navigator remain the scroll owners.
-    const viewport = page.locator('.conversation-scroll');
+    const viewport = page.locator('[data-conversation-scroll]').first();
     for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: 1000 });
       await card('source.rs').scrollIntoViewIfNeeded();

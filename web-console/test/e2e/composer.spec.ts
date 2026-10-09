@@ -50,12 +50,12 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     await expect(goal).toHaveCount(0); await expect(queue).toHaveCount(0);
     await expect(page.locator('[data-composer-context-stack] > *')).toHaveCount(1);
     await expect(page.locator('[data-composer-context-stack] > [data-context-seat]')).toHaveCount(0);
-    const stackGeometry = async () => {
-      const stack = (await page.locator('[data-composer-context-stack]').boundingBox())!;
-      const seats = page.locator('[data-composer-context-stack] > *');
-      const first = (await seats.first().boundingBox())!, last = (await seats.last().boundingBox())!;
+    const stackGeometry = () => page.locator('[data-composer-context-stack]').evaluate(element => {
+      const stack = element.getBoundingClientRect();
+      const first = element.firstElementChild!.getBoundingClientRect();
+      const last = element.lastElementChild!.getBoundingClientRect();
       return { lead: Math.round(first.y - stack.y), trail: Math.round(stack.y + stack.height - last.y - last.height) };
-    };
+    });
     // The stack contains only the Composer seat (an idle Context seat renders
     // nothing), with its 6px
     // leading rhythm; no empty Todo wrapper or trailing height remains.

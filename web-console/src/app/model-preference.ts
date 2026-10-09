@@ -47,6 +47,12 @@ export function useModelPreference(authority: string) {
  * the authority, not navigation. Rejections and lost acknowledgements never seed. */
 export async function selectSessionModel(client: AppServerClient, id: string, selection: SessionModelConfig) {
   const { generation, endpoint } = client.getSnapshot();
+  if (client.getSnapshot().views[id]?.attachment === 'attaching') {
+    const applied = await client.prepareAgentModel(id, selection);
+    const state = client.getSnapshot();
+    if (state.generation === generation && state.endpoint === endpoint) modelPreferences().select(endpoint ?? '', applied);
+    return;
+  }
   const target = client.target(id);
   await client.setAgentModel(id, selection);
   const current = client.getSnapshot();

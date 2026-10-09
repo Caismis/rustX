@@ -1,5 +1,13 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Derived from pinned Harness; see PROVENANCE.md. */
 .root {
+  /* The menu anchor is an inline span. A block's inherited line box adds a
+     baseline gap (29px around the 28px button), putting centered label text on
+     a half-pixel local origin. Sticky scrolling can then retain glyphs painted
+     in the other raster phase. Size this control from its button, not a text
+     baseline, so both the toolbar alignment and repaint origin stay exact. */
+  display: flex;
+  flex-direction: column; /* Keep a native mutation error below its control. */
+  align-items: flex-start; /* Preserve the menu anchor's intrinsic width. */
   position: relative;
   min-width: 0;
 }

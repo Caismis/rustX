@@ -743,6 +743,62 @@ impl AppServerConnection {
                     window,
                 })
             }
+            Method::SessionTraceHistory {
+                session_id,
+                node_id,
+                before,
+                limit,
+            } => {
+                if limit == 0 || limit > crate::runtime_client::trace::TRACE_PAGE_LIMIT {
+                    return Err(domain(ErrorData::InvalidParams));
+                }
+                let (conversation_id, page) = self
+                    .sessions
+                    .read_trace(&session_id, node_id.as_ref(), move |projection| {
+                        projection.page(before.as_ref(), limit)
+                    })
+                    .await
+                    .map_err(session_error)?;
+                Ok(MethodResult::SessionTraceHistory {
+                    conversation_id,
+                    page,
+                })
+            }
+            Method::SessionTraceHistoryDetail {
+                session_id,
+                node_id,
+                record_id,
+            } => {
+                if record_id.len() > 256 {
+                    return Err(domain(ErrorData::InvalidParams));
+                }
+                let (conversation_id, detail) = self
+                    .sessions
+                    .read_trace(&session_id, node_id.as_ref(), move |projection| {
+                        projection.detail(&record_id)
+                    })
+                    .await
+                    .map_err(session_error)?;
+                Ok(MethodResult::SessionTraceHistoryDetail {
+                    conversation_id,
+                    detail: detail.map(Box::new),
+                })
+            }
+            Method::SessionStatistics {
+                session_id,
+                node_id,
+            } => {
+                let (conversation_id, statistics, occupancy) = self
+                    .sessions
+                    .read_statistics(&session_id, node_id.as_ref())
+                    .await
+                    .map_err(session_error)?;
+                Ok(MethodResult::SessionStatistics {
+                    conversation_id,
+                    statistics,
+                    occupancy,
+                })
+            }
             Method::SessionRead { session_id } => Ok(MethodResult::Session {
                 session: self
                     .sessions
@@ -1167,6 +1223,7 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
         | Method::JobCancel { target, .. }
         | Method::AgentStatus { target, .. }
         | Method::AgentList { target, .. }
+        | Method::AgentStatistics { target, .. }
         | Method::AgentSendMessage { target, .. }
         | Method::AgentWait { target, .. }
         | Method::AgentInterrupt { target, .. }
@@ -1289,6 +1346,9 @@ async fn dispatch_runtime(
         }
         Method::AgentInterrupt { agent_id, .. } => {
             native_result(authority.agent_wait(&agent_id, true).await)
+        }
+        Method::AgentStatistics { agent_id, .. } => {
+            native_result(authority.agent_statistics(&agent_id).await)
         }
         Method::AgentTranscript {
             agent_id,
@@ -1445,6 +1505,9 @@ fn native_result(
         RuntimeClientResult::Agent { agent } => MethodResult::Agent {
             agent: Box::new(agent),
         },
+        RuntimeClientResult::AgentStatistics { metrics } => {
+            MethodResult::AgentStatistics { metrics }
+        }
         RuntimeClientResult::Agents {
             agents,
             returned,

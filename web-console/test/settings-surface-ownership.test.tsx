@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { openMcpContractEditor } from './settings-harness';
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { settingsTransactionOwners } from '../src/app/settings/Settings';
@@ -270,11 +271,11 @@ it('S1-06 a successful read clears only the relevant read error, never a distinc
   // A failed read reports its own error.
   failReads = true;
   fireEvent.click(screen.getByRole('button', { name: 'Reload configuration' }));
-  await screen.findByText(/Source read failed/);
+  await screen.findByText(/Could not load settings/);
   // A successful read clears the read error only; the write failure remains.
   failReads = false;
   fireEvent.click(screen.getByRole('button', { name: 'Reload configuration' }));
-  await waitFor(() => expect(screen.queryByText(/Source read failed/)).toBeNull());
+  await waitFor(() => expect(screen.queryByText(/Could not load settings/)).toBeNull());
   expect(screen.getByText(/native write rejected/)).toBeTruthy();
   expect(queryOnAdvanced(/Revision: workspace-1/)).toBeTruthy();
 });
@@ -288,9 +289,9 @@ it('S1-07 a committed save followed by a failed reread is saved plus uncertain, 
   fireEvent.click(screen.getByLabelText('read'));
   failReads = true;
   fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
-  await screen.findByText(/saved\. Native coordination owns application/);
-  expect(screen.getByText(/Source read failed/)).toBeTruthy();
-  expect(screen.getByText(/Last observation retained; current status uncertain/)).toBeTruthy();
+  await screen.findByText(/saved\./);
+  expect(screen.getByText(/Could not load settings/)).toBeTruthy();
+  expect(document.querySelector('[data-lifecycle=stale]')).toBeTruthy();
   // Exactly one write: the committed mutation is never replayed or presented as unsaved.
   expect(writes(s)).toHaveLength(1);
 });
@@ -437,7 +438,7 @@ it('S1-14 a confirmed Provider literal-secret save drops the submitted payload e
   fireEvent.click(screen.getByRole('button', { name: 'Save Provider secret' }));
   // The write commits and native acknowledges it; the post-write authoritative
   // reread fails, so the transaction cannot settle yet.
-  await screen.findByText(/saved\. Native coordination owns application/);
+  await screen.findByText(/saved\./);
   await screen.findByText(/Saved, but the authoritative reread failed/);
   expect(writes(s)).toHaveLength(1);
   // Navigating away unmounts the editor; the store survives, and it must no
@@ -461,7 +462,7 @@ it('S1-14 a confirmed Provider literal-secret save drops the submitted payload e
   expect(screen.queryByRole('button', { name: 'Use reviewed revision' })).toBeNull();
 });
 
-it('S1-14 a confirmed MCP literal-environment save drops the submitted payload on the same terms', async () => {
+it('S1-14 a confirmed MCP environment-reference save drops the submitted payload on the same terms', async () => {
   let failReads = false;
   const s = cfg3Client(async (op, source) => {
     if (op.method === 'configuration/sourcesRead' && failReads) throw new Error('authoritative read unavailable');
@@ -470,22 +471,23 @@ it('S1-14 a confirmed MCP literal-environment save drops the submitted payload o
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={cfg3Host(s)} />);
   await findOnAdvanced(/Revision: workspace-1/);
   fireEvent.click(screen.getByRole('tab', { name: 'Extensions' }));
-  fireEvent.click(screen.getByRole('tab', { name: 'MCP' }));
-  fireEvent.change(screen.getByLabelText('New MCP identity'), { target: { value: 'search' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Add MCP' }));
+  fireEvent.click(screen.getByRole('tab', { name: 'MCP servers' }));
+  fireEvent.click(screen.getAllByRole('button', { name: /^(＋ )?New$/ })[0]);
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'search' } });
+  openMcpContractEditor();
   fireEvent.change(screen.getByLabelText('MCP command'), { target: { value: 'search-server' } });
-  const literals = within(screen.getByRole('group', { name: 'Literal environment' }));
-  fireEvent.change(literals.getByLabelText('Literal environment name'), { target: { value: 'TOKEN' } });
-  fireEvent.click(literals.getByRole('button', { name: 'Add Literal environment' }));
-  fireEvent.change(literals.getByLabelText('TOKEN'), { target: { value: SECRET_SENTINEL } });
-  expect(retained(s)).toContain(SECRET_SENTINEL);
+  const literals = within(screen.getByRole('group', { name: 'Environment references ($VARIABLE)' }));
+  fireEvent.change(literals.getByLabelText('Environment references ($VARIABLE) name'), { target: { value: 'TOKEN' } });
+  fireEvent.click(literals.getByRole('button', { name: 'Add Environment references ($VARIABLE)' }));
+  fireEvent.change(literals.getByLabelText('TOKEN'), { target: { value: '$TOKEN' } });
+  expect(retained(s)).toContain('$TOKEN');
   failReads = true;
   fireEvent.click(screen.getByRole('button', { name: 'Save MCP search' }));
   await screen.findByText(/Saved, but the authoritative reread failed/);
   fireEvent.click(screen.getByRole('tab', { name: 'Tools & Permissions' }));
   // The MCP selector settles against the MCP source revision, not the config
   // one, and it carries no literal environment value to do so.
-  expect(retained(s)).not.toContain(SECRET_SENTINEL);
+  expect(retained(s)).not.toContain('$TOKEN');
   expect(retained(s)).toContain('"committed":"mcp-committed"');
   failReads = false;
   fireEvent.click(screen.getByRole('button', { name: 'Reload configuration' }));
@@ -587,23 +589,17 @@ it('S1-15 an inherited MCP definition and named Agent are discoverable from the 
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={cfg3Host(s)} />);
   await settingsReady();
   await openSettingsPage('Extensions');
-  fireEvent.click(screen.getByRole('tab', { name: 'MCP' }));
-  const mcp = within(screen.getByRole('grid', { name: 'MCP extensions' }));
-  // A whole-file resource is owned as one identity; native names the winning
-  // scope, so the inherited one is reachable without merging two catalogs.
-  expect(within(mcp.getByRole('row', { name: 'local' })).getByText('Workspace definition')).toBeTruthy();
-  expect(within(mcp.getByRole('row', { name: 'search' })).getByText('Inherited from User · no override in this Workspace')).toBeTruthy();
-  fireEvent.change(screen.getByLabelText('New MCP identity'), { target: { value: 'search' } });
-  expect((screen.getByRole('button', { name: 'Add MCP' }) as HTMLButtonElement).disabled).toBe(true);
-  // Opening the inherited definition authors nothing in this Workspace: it is
-  // inspected, and only an explicit override would begin a Workspace draft.
-  await openResourceRow('search');
+  fireEvent.click(screen.getByRole('tab', { name: 'MCP servers' }));
+  expect(within(screen.getByRole('group', { name: 'Installed' })).getByRole('listitem', { name: 'local' })).toBeTruthy();
+  expect(screen.queryByRole('listitem', { name: 'search' })).toBeNull();
+  // The scope-local management list excludes inherited definitions. Native
+  // detail/override contracts remain inspectable through exact navigation.
+  openMcpContractEditor('search');
   expect(screen.getByRole('form', { name: 'MCP search' }).getAttribute('data-definition')).toBe('inherited');
   expect(screen.getByRole('button', { name: 'Override MCP search in this Workspace' })).toBeTruthy();
   expect((screen.getByRole('button', { name: 'Save MCP search' }) as HTMLButtonElement).disabled).toBe(true);
-  expect(screen.queryByRole('button', { name: /Use global default MCP search/ })).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: '← Extensions' }));
-  fireEvent.click(screen.getByRole('tab', { name: 'Agents' }));
+  await openSettingsPage('Extensions');
+  fireEvent.click(screen.getByRole('tab', { name: 'Subagents' }));
   await openResourceRow('reviewer');
   // The inherited profile is reported as inherited, from the native inventory
   // alone: even without its User document projected it is not "new", so the
@@ -746,7 +742,7 @@ it('S1-35 while one unit owns the target mutation barrier every other unit stays
   expect(submitted).toHaveBeenCalledTimes(1);
   // The commit is acknowledged; its post-commit read is still outstanding.
   await act(async () => { write.resolve({ acknowledgement: committed }); });
-  await screen.findByText('Saved. Native application proceeds automatically.');
+  await screen.findByText('Saved.');
   expect(saveStatus().disabled).toBe(true);
   expect(statusInput.disabled).toBe(false);
   // The authoritative post-commit observation releases the barrier in place:

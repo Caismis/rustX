@@ -266,6 +266,7 @@ enum DelegateDelivery {
 }
 
 struct SubagentRecord {
+    execution: Option<super::process::ExecutionObservation>,
     /// Proven process, nested-work and required resource settlement, independent of logical terminal.
     physical_settlement_proven: bool,
     delegate_delivery: DelegateDelivery,
@@ -410,6 +411,7 @@ impl SubagentRecord {
         ))
         .map_err(|error| ConversationStoreError::InvalidReference(error.to_string()))?;
         Ok(Self {
+            execution: None,
             physical_settlement_proven: false,
             delegate_delivery: DelegateDelivery::Started,
             parent_agent_id,
@@ -2886,6 +2888,7 @@ impl SubagentRegistry {
                                 .then_some(CancellationReason::ParentCancelled)
                         });
                         let record = SubagentRecord {
+                            execution: None,
                             physical_settlement_proven: false,
                             delegate_delivery: DelegateDelivery::NotSent,
                             parent_agent_id: config.agent_id.clone(),
@@ -3030,6 +3033,7 @@ impl SubagentRegistry {
                     Some(interactions),
                     Some(provider_available),
                 );
+                let execution = driver.execution();
                 let (commands, start_gate, task) = driver.split();
                 // The task is created only after the durable ownership event
                 // and Starting record exist. It calls the same synchronous
@@ -3107,6 +3111,7 @@ impl SubagentRegistry {
                         .get(&subagent_id)
                         .expect("accepted ownership has a registry record");
                     let record = &mut state.records[index];
+                    record.execution = Some(execution);
                     record.control = Some(commands);
                     if matches!(record.lifecycle, SubagentLifecycle::Starting) {
                         record.lifecycle = SubagentLifecycle::Running;
@@ -5556,6 +5561,7 @@ impl SteerAcknowledgementHook {
 #[cfg(test)]
 mod tests {
     include!("registry/agent_recovery_tests.rs");
+    include!("registry/agent_duration_tests.rs");
     include!("registry/agent_bootstrap_tests.rs");
     include!("registry/review_tests.rs");
     include!("registry/physical_proof_tests.rs");
@@ -10889,6 +10895,7 @@ mod tests {
         let mut state = registry.state.lock().expect("registry state");
         let index = state.records.len();
         state.records.push(SubagentRecord {
+            execution: None,
             physical_settlement_proven: lifecycle.is_terminal(),
             delegate_delivery: DelegateDelivery::NotSent,
             parent_agent_id: AgentId::new("agent-parent"),

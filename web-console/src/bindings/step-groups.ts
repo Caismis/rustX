@@ -29,13 +29,12 @@ export function stepActivity(name: string): StepActivity {
   return 'tools';
 }
 
-/** Only a settled Attempt's history groups its steps (Harness `detailed` mode);
- * a live or page-cut Attempt keeps every row in place. */
+/** Page-cut Attempts stay ungrouped until their ownership is complete. */
 const SETTLED: ReadonlySet<TurnProcessOutcome> = new Set(['completed', 'cancelled', 'failed', 'timed_out', 'limit_exceeded']);
 
 /**
  * Harness process-group segmentation over native transcript order: reasoning,
- * Tool calls and other bodied records of one settled Attempt collect into a group
+ * Tool calls and other bodied records of one Attempt collect into a group
  * until a reply (visible Assistant text, refusal or media) or an independent
  * message closes it. Groups never cross an Attempt and never reorder entries.
  * @param entries - the loaded transcript page in canonical order.
@@ -70,7 +69,7 @@ export function stepGroups(entries: readonly RuntimeClientTranscriptEntry[], bod
     // Interaction audits carry their Attempt but no process membership; they stay
     // inside the settled Attempt whose rows surround them.
     const audit = !process && (item.type === 'interaction_requested' || item.type === 'interaction_settled') && item.attempt_id === ownerAttempt;
-    const key = audit ? owner : process && SETTLED.has(process.outcome) ? JSON.stringify([process.conversation_id, process.attempt_id]) : undefined;
+    const key = audit ? owner : process && (SETTLED.has(process.outcome) || process.outcome === 'running') ? JSON.stringify([process.conversation_id, process.attempt_id]) : undefined;
     if (key !== owner) { flush(); owner = key; ownerAttempt = key ? process?.attempt_id : undefined; }
     if (!key) continue;
     // Frozen partial prose stays in transcript order like an Assistant reply,

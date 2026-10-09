@@ -2,6 +2,8 @@ import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v38';
+import { AgentComposer } from '../src/app/agent/AgentComposer';
+import { localeController } from '../src/locale/controller';
 import { AgentControls } from '../src/app/agent/AgentControls';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { Interactions } from '../src/app/agent/Interactions';
@@ -12,7 +14,7 @@ import { cfg3Effective } from './cfg3-data';
 import { Server, snapshot, interaction } from './fixture';
 let server: Server;
 beforeEach(() => { server = new Server(); });
-afterEach(() => { cleanup(); server.client.disconnect(); });
+afterEach(() => { cleanup(); server.client.disconnect(); act(() => localeController.setLocale('en')); });
 const count = (method: string) => server.requests.filter(row => row.request.method === method).length;
 function Control() {
  const state = useSyncExternalStore(server.client.subscribe, server.client.getSnapshot);
@@ -44,7 +46,7 @@ async function openModels() {
 }
 it('model/profile menu advertises only exact native values and acknowledgement alone never changes selection', async () => {
  modelFixture(); await server.attached('A'); render(<Control/>); await openModels();
- expect(count('session/models')).toBe(1); expect(count('session/model')).toBe(1);
+ expect(count('session/models')).toBe(1); expect(count('session/model')).toBe(0); expect(count('session/snapshot')).toBe(0);
  fireEvent.click(screen.getByRole('menuitem', { name: 'Reasoning profile' }));
  expect(screen.getByRole('menuitem', { name: 'brief' })).toBeTruthy();
  expect(screen.queryByText('high')).toBeNull(); expect(screen.queryByText('off')).toBeNull();
@@ -58,7 +60,7 @@ it('model/profile menu advertises only exact native values and acknowledgement a
  expect(server.client.getSnapshot().views.A.modelMutation?.status).toBe('acknowledged');
  await expect(server.client.send('A', 'dependent turn')).rejects.toThrow('Reread native model state');
  expect(count('turn/start')).toBe(0);
- const read = await server.waitFor('session/snapshot', 2);
+ const read = await server.waitFor('session/snapshot', 1);
  await act(async () => server.reply(read));
  expect(screen.getByRole('button', { name: 'Model and reasoning' }).textContent).toContain('brief');
  expect(server.client.getSnapshot().views.A.modelMutation).toBeUndefined();
@@ -222,4 +224,80 @@ it('image reads have a dedicated renderer and retain managed image references af
  expect(ui.container.querySelector('[data-tool-renderer="image"]')).toBeTruthy();
  fireEvent.click(screen.getByText('read_image'));
  expect(ui.container.textContent).toContain('artifact_1');
+});
+
+
+it('preloads the model catalog and reopens the menu without another read or loading state', async () => {
+  modelFixture(); server.held.add('session/models'); await server.attached('A'); render(<Control/>);
+  const preload = await server.waitFor('session/models', 1);
+  await act(async () => server.reply(preload));
+  expect(count('session/models')).toBe(1);
+  expect(count('session/model')).toBe(0); expect(count('session/snapshot')).toBe(0);
+  await openModels();
+  fireEvent.click(screen.getByRole('button', { name: 'Model and reasoning' }));
+  server.held.add('session/models');
+  for (let i = 0; i < 3; i++) {
+    fireEvent.click(screen.getByRole('button', { name: 'Model and reasoning' }));
+    expect(screen.queryByText('Reading native models…')).toBeNull();
+    expect(screen.getByRole('menuitem', { name: 'Model' }).getAttribute('aria-disabled')).not.toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: 'Model and reasoning' }));
+  }
+  expect(count('session/models')).toBe(1);
+});
+
+function SlashControl() {
+ const state = useSyncExternalStore(server.client.subscribe, server.client.getSnapshot);
+ return <AgentControls client={server.client} view={state.views.A}>{(toolbar, picker) => <AgentComposer model={toolbar} modelPicker={picker}
+   disabled={false} busy={false} active={false} commandAvailable={id => id === 'model'} onCommand={() => {}}
+   onSend={async () => false} onUpload={async () => []} onCancel={() => {}}/>}</AgentControls>;
+}
+async function slashFixture() {
+ modelFixture(); await server.attached('A'); server.held.add('session/models'); render(<SlashControl/>);
+ const catalog = await server.waitFor('session/models', 1);
+ await act(async () => { server.reply(catalog); }); server.held.delete('session/models');
+ const input = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
+ fireEvent.change(input, { target: { value: '/model' } }); return input;
+}
+it('slash model/profile choices retain native order and membership across locales, with no RPC on dismissal or equivalent selection', async () => {
+ const input = await slashFixture(); const baseline = server.requests.length;
+ const expected = ['exact/model', 'exact/model / deliberate', 'exact/model / brief', 'other'];
+ for (const locale of ['zh', 'en'] as const) {
+   act(() => localeController.setLocale(locale));
+   expect(screen.getAllByRole('option').map(row => row.getAttribute('aria-label'))).toEqual(expected);
+ }
+ fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Escape' });
+ expect(input.value).toBe('/model'); expect(document.activeElement).toBe(input);
+ expect(server.requests).toHaveLength(baseline);
+ fireEvent.change(input, { target: { value: '/' } }); fireEvent.change(input, { target: { value: '/model' } });
+ await act(async () => fireEvent.click(screen.getByRole('option', { name: 'exact/model / deliberate' })));
+ expect(count('session/setModel')).toBe(0); expect(input.value).toBe(''); expect(document.activeElement).toBe(input);
+ expect(server.client.getSnapshot().views.A.snapshot?.model?.effective.reasoningProfile).toBe('deliberate');
+});
+it('slash keyboard profile selection on the current model waits for acknowledgement and authoritative reread', async () => {
+ const input = await slashFixture(); server.held.add('session/setModel'); server.held.add('session/snapshot');
+ fireEvent.change(screen.getByRole('combobox'), { target: { value: 'bRiEf' } });
+ expect(screen.getByRole('option', { name: 'exact/model / brief' })).toBeTruthy();
+ await act(async () => fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' }));
+ const mutation = await server.waitFor('session/setModel', 1);
+ expect(mutation.params).toEqual({ target: server.target('A'), config: { model: 'exact/model', reasoningProfile: 'brief' } });
+ await expect(server.client.send('A', 'too early')).rejects.toThrow('Reread');
+ expect(input.value).toBe('/model');
+ await act(async () => server.reply(mutation)); const reread = await server.waitFor('session/snapshot', 1);
+ expect(server.client.getSnapshot().views.A.snapshot?.model?.effective.reasoningProfile).toBe('deliberate');
+ await expect(server.client.send('A', 'still too early')).rejects.toThrow('Reread');
+ await act(async () => server.reply(reread));
+ expect(server.client.getSnapshot().views.A.snapshot?.model?.effective.reasoningProfile).toBe('brief');
+ expect(input.value).toBe(''); expect(document.activeElement).toBe(input);
+ await server.client.send('A', 'after confirmation'); expect(count('turn/start')).toBe(1); expect(count('session/setModel')).toBe(1);
+});
+it.each(['refused', 'unknown'] as const)('slash profile mutation %s preserves the invocation and never replays', async outcome => {
+ const input = await slashFixture(); server.held.add('session/setModel');
+ if (outcome === 'refused') server.handlers.set('session/setModel', () => { throw new RpcFailure({ code: -32602, message: 'Profile refused by native' }); });
+ await act(async () => fireEvent.click(screen.getByRole('option', { name: 'exact/model / brief' })));
+ const mutation = await server.waitFor('session/setModel', 1);
+ await act(async () => { if (outcome === 'unknown') { server.commit(mutation); server.socket.close(); } else server.reply(mutation); });
+ expect(input.value).toBe('/model');
+ expect(screen.getAllByRole('alert').some(row => row.textContent?.includes(outcome === 'unknown' ? 'uncertain' : 'Profile refused'))).toBe(true);
+ expect(count('session/setModel')).toBe(1);
+ if (outcome === 'unknown') { await act(async () => server.connect()); expect(count('session/setModel')).toBe(1); }
 });

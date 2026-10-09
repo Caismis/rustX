@@ -503,3 +503,68 @@ for (const when of ['before reply', 'before layout'] as const) it(`real viewport
   ui.unmount();
  } finally {v.server.client.disconnect();}
 });
+
+it('uses the shared session scroller including its composer and keeps floating controls outside it', () => {
+  let frame: FrameRequestCallback | undefined;
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frame = callback; return 1; });
+  vi.stubGlobal('cancelAnimationFrame', () => { frame = undefined; });
+  const observed: Element[] = [];
+  vi.stubGlobal('ResizeObserver', class { constructor(callback: () => void) { resize = callback; } observe(element: Element) { observed.push(element); } disconnect() {} });
+  const ui = render(<section><div data-conversation-scroll>
+    <ChatViewport latestLabel="Latest"><div data-chat-anchor-key="a">Message</div></ChatViewport>
+    <div data-composer-seat>Composer</div>
+  </div></section>);
+  const outer = ui.container.querySelector<HTMLElement>('[data-conversation-scroll]')!;
+  const inner = ui.container.querySelector<HTMLElement>('.conversation-scroll')!;
+  let total = 900;
+  Object.defineProperties(outer, {scrollHeight:{get:()=>total},clientHeight:{get:()=>400}});
+  const flush = () => act(() => { const callback = frame; frame = undefined; callback?.(0); });
+  resize(); flush();
+  expect(outer.scrollTop).toBe(500);
+  expect(inner.scrollTop).toBe(0);
+  expect(observed).toContain(ui.container.querySelector('[data-composer-seat]'));
+  outer.scrollTop = 200; fireEvent.scroll(outer); flush();
+  const latest = ui.getByRole('button',{name:'Latest'});
+  expect(latest.parentElement).toBe(outer.parentElement);
+  fireEvent.click(latest); flush();
+  expect(outer.scrollTop).toBe(500);
+  total += 100; resize(); flush();
+  expect(outer.scrollTop).toBe(600);
+  outer.scrollTop = 200;
+  ui.rerender(<section><div data-conversation-scroll>
+    <ChatViewport key="next-session" latestLabel="Latest"><div data-chat-anchor-key="b">Next session</div></ChatViewport>
+    <div data-composer-seat>Composer</div>
+  </div></section>);
+  flush(); expect(outer.scrollTop).toBe(600);
+});
+
+it('an explicit final-turn jump keeps its mark selected when the short tail clamps above its owner', () => {
+  const v = coordinatedViewport();
+  v.positions['turn:first'] = 20;
+  v.positions['turn:last'] = 900;
+  v.replace(['turn:first', 'turn:last']); v.flush();
+  v.scroll(400);
+  const intent = v.owner().beginNavigation();
+  intent.commit('turn:last'); v.flush();
+  expect(v.top()).toBe(800);
+  expect(v.active).toHaveBeenLastCalledWith('turn:last');
+  v.grow(0); v.flush();
+  expect(v.active).toHaveBeenLastCalledWith('turn:last');
+  v.scroll(799);
+  expect(v.active).toHaveBeenLastCalledWith('turn:first');
+});
+
+it('locating a prompt selects its turn while the owned response is still below the reading line', () => {
+  const v = coordinatedViewport(), owner = v.owner();
+  Object.assign(v.positions, { 'turn:first': 20, 'turn:last': 500, response: 620 });
+  v.ui.rerender(<ChatViewport onActiveTurn={v.active}>
+    <div data-chat-anchor-key="turn:first" data-chat-turn-owner="turn:first"/>
+    <div data-chat-anchor-key="turn:last">User prompt</div>
+    <div data-chat-anchor-key="response" data-chat-turn-owner="turn:last">Response</div>
+  </ChatViewport>);
+  v.flush(); v.scroll(200);
+  owner.beginNavigation().commit('turn:last'); v.flush();
+  expect(v.top()).toBe(500);
+  expect(v.active).toHaveBeenLastCalledWith('turn:last');
+  v.scroll(499); expect(v.active).toHaveBeenLastCalledWith('turn:first');
+});

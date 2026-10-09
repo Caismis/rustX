@@ -49,3 +49,13 @@ it('identifies a Session in a native create response even before an attachment e
   log.observe('in', 1, JSON.stringify({ jsonrpc: '2.0', id: 'create', result: { type: 'session_transition', session: { id: 'new-session' } } }), { method: 'session/create' });
   expect(filterLog(log.getSnapshot(), 'session/create', 'new-session', 'response')).toHaveLength(1);
 });
+
+it('records ordered bounded evidence immediately but coalesces subscriber notification after the dispatch stack', async () => {
+  const log = new ProtocolLog(2); const notifications: number[] = [];
+  let notified!: () => void; const publication = new Promise<void>(resolve => { notified = resolve; });
+  log.subscribe(() => { notifications.push(log.getSnapshot().entries.length); notified(); });
+  for (let id = 1; id <= 3; id++) log.observe('out', 7, frame(id));
+  expect(notifications).toEqual([]);
+  expect(log.getSnapshot().entries.map(entry => entry.sequence)).toEqual([2, 3]); expect(log.getSnapshot().dropped).toBe(1);
+  await publication; expect(notifications).toEqual([2]);
+});

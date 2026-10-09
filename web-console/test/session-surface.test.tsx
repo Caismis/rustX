@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { OutcomeUncertain } from '../src/client/app-server';
 import { App } from '../src/app/App';
+import { SessionDeletion } from '../src/app/SessionDeletion';
 import { sessionDisplayTitle } from '../src/bindings/session-title';
 import { sessionDeletionNotice } from '../src/bindings/session-deletion';
 import { deriveSessionProductState } from '../src/bindings/session-product';
@@ -786,4 +787,27 @@ it('A4 repair is bounded, isolated, and never applied after supersession or repl
   expect(reads()).toBe(beforeStale);
   expect(previews().B).toBeNull();
   expect(methods().filter(method => ['session/attach', 'session/unload', 'turn/start'].includes(method))).toEqual([]);
+});
+
+
+it('deletion presentation follows actor admission while Switch and queued Release own settlement', async () => {
+  server.nodeSnapshots.set('next', { ...snapshot(), conversation_id: 'conversation-next' });
+  server.handlers.set('session/deletePreview', () => ({ type: 'deletion', result: { status: 'preview', preview: { session_id: 'A', target_revision: '1', owned_node_count: 2, owned_conversation_count: 2, owned_child_count: 0 } } }));
+  await server.attached('A');
+  await act(async () => { render(<SessionDeletion client={server.client} sessionId="A" title="A" close={() => {}} deleted={() => {}} />); });
+  const confirm = screen.getByRole('button', { name: 'Confirm delete' });
+  expect(confirm.hasAttribute('disabled')).toBe(false);
+  server.held.add('session/switchNode');
+  let switching!: Promise<void>, release!: Promise<void>;
+  await act(async () => { switching = server.client.switchNode('A', 'next'); await server.waitFor('session/switchNode', 1); });
+  expect(confirm.hasAttribute('disabled')).toBe(true);
+  await act(async () => { release = server.client.release('A'); });
+  expect(confirm.hasAttribute('disabled')).toBe(true);
+  expect(methods().filter(method => method === 'session/delete')).toHaveLength(0);
+  await act(async () => { server.reply(await server.waitFor('session/switchNode', 1)); await Promise.all([switching, release]); });
+  expect(confirm.hasAttribute('disabled')).toBe(false);
+  expect(server.client.getSnapshot().views.A.nodeId).toBe('next');
+  expect(server.client.getSnapshot().views.A.attachmentIntent).toBe('released');
+  expect(server.claims()).toHaveLength(0);
+  expect(methods().filter(method => ['session/attach', 'session/switchNode', 'session/detach', 'session/delete'].includes(method))).toEqual(['session/attach', 'session/switchNode']);
 });

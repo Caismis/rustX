@@ -1,3 +1,35 @@
+## Shared model selection surfaces
+
+Behavioral reference: Harness `5badb15009ae1756c3afe0ae0cef1faafc290ccc`,
+`packages/client/ui-model-selection/src/client/index.ts`: the composer selector
+and `/model` popup share one loaded model directory. The rustX attachment owns
+its catalog and invalidates it on attachment, transport or resource revision
+changes. `/model` now uses the existing composer popup styling, with provider
+sections, search and keyboard selection; the obsolete model dialog is removed.
+Native model mutation and authoritative rereads remain unchanged.
+
+## Running Turn indicator
+
+The running status, whale-tail APNG and static SVG come from
+`packages/client/ui-chat/src/client/chat/{RunningStatus.tsx,RunningWhaleTail.tsx,running-whale@2x.png,ChatView.module.css}`
+at Harness `5badb15009ae1756c3afe0ae0cef1faafc290ccc`. The matching light/dark
+Deep-diving color tokens come from that revision's `ui-theme/src/styles/design-platform.css`.
+The existing TextShimmer renders the text sweep. The native active Attempt mounts
+one indicator at the transcript tail; its own start timestamp drives an isolated
+one-second clock. Historical windows and settled Attempts show no live indicator.
+Reduced-motion and forced-color modes use the original static whale artwork.
+
+## Information-flow spacing
+
+Reference: local `../deepseek-harness` at
+`5badb15009ae1756c3afe0ae0cef1faafc290ccc`,
+`packages/client/ui-chat/src/client/chat/{ChatView,ChatGroupSeat,TurnProcessNodeView,MessageItem}.module.css`
+and `packages/client/ui-chat/src/client/locale.ts`.
+The native transcript seats use the same 6px process, 12px response and 16px
+Turn spacing, 14px Turn heading, 20px user bubble radius, and Chinese Think /
+completed-duration wording. Hidden native seats no longer leave sibling gaps.
+Native ownership, grouping, tool status and disclosure state remain rustX-owned.
+
 ## Interrupted Assistant presentation
 
 Behavioral reference: local `../deepseek-harness` at
@@ -1655,6 +1687,117 @@ icons are reused; missing fork/tools icons use Lucide 0.468.0 `git-fork.svg` and
 `wrench.svg` (https://github.com/lucide-icons/lucide/tree/0.468.0/icons).
 The upstream ISC/Feather MIT notice is shipped in `public/LICENSE-Lucide.txt`
 and reproduced in `THIRD-PARTY-NOTICES.txt`. No runtime dependency was added.
+
+## Dedicated MCP settings
+
+Behavioral and layout reference: local ZCode
+`packages/ui/src/settings/{McpSettingsSection,McpServerForm,McpServerList,SettingsResourceHeaderActions,mcpSettingsShared}.tsx`
+(the shared configuration helper is `.ts`). rustX retains its native source
+transactions and supports its own MCP fields rather than inventing unsupported
+ZCode protocol options. No bundled ZCode servers are included.
+
+The MCP glyph reuses the exact Lucide `Cable` path data from `lucide-react@1.17.0`,
+the version pinned by ZCode's lockfile:
+https://unpkg.com/lucide-react@1.17.0/dist/esm/icons/cable.mjs
+The ISC license is shipped in `public/LICENSE-Lucide-1.17.txt` and the generated
+third-party notices. Only the React SVG wrapper is local.
+
+
+Child statistics now use App Server v38's native `agent/statistics` reading.
+The Harness SubagentHeaderLineage token/duration columns accompany the existing
+state rows; the child reader reuses the main conversation's statistics dock,
+context meter and completed-response presentation. Native event folds retain
+request usage coverage, generation evidence and activation timing. Browser code
+only formats those readings and interpolates explicitly running intervals.
+
+MCP settings presentation now follows Harness `ui-settings-models`'s
+`ModelsSection.module.css` at `5badb15009ae1756c3afe0ae0cef1faafc290ccc`:
+compact headings, outlined setting cards, module-filled editor and disclosure
+separators. Geometry and controls use rustX's existing Harness-derived settings
+vocabulary, including panel container queries and shared capsule buttons.
+ZCode remains the reference for scope-local management behavior and MCP glyph;
+no runtime/configuration behavior is changed by this presentation adaptation.
+
+MCP scope switching follows ZCode `PluginScopeMenu.tsx`: a user option followed
+by a separator, workspace group label, folder icons and a selected check.
+The existing Menu primitive provides keyboard/portal behavior. MCP's selected
+configuration owner is local to the page; the settings shell retains its
+original target and navigation capabilities. All reads and edits continue through
+the exact-target native settings actor.
+
+PR #457 repair retains the scope-local list and Harness settings primitives, but
+routes both definition entry points through the existing `McpDefinition` and
+Settings transaction actor. JSON import only accepts environment references;
+Header/Env literals are retained by key or removed, never introduced by Web
+configuration writes. Settings inspection and refresh are read-only. The native
+capability lifecycle owns all MCP connections; no settings connection/probe is
+created. Meter scheduling remains separate from native durable folding authority.
+The client owns two current observations and a total budget of four unconfirmed
+reads across scope changes. Current inventory plus a fair cursor replaces the
+lossy 32-entry pending queue; selected demand gets alternating priority. Exact
+activation/revision fences guard admission and publication. Unknown transport
+settlement keeps its charged slot across reconnects, with an explicit unavailable
+state if the bounded retirement allowance is exhausted. No native cancellation
+or durable statistics authority is implemented in the browser.
+The client commits attachment observation authority only at native attach
+acknowledgement. Release clears it synchronously; queued Open and a retained old
+target cannot recreate it, including after detach failure. Both dispatch and
+publication consume the same client-owned admission proof. A
+never-dispatched capacity refusal remains deferred inventory demand. Only the
+request pipeline's newer capacity cut resumes admission; native errors remain
+terminal and unknown transmitted outcomes remain charged. These are local
+observation rules, with no native protocol or statistics-folding changes.
+
+Repair browser acceptance follows the new Settings page order, the shared slash
+model picker, and the actual `data-conversation-scroll` owner. Agent, Shell,
+Settings and localized General screenshot references are refreshed for the PR's intentional
+reserved scroll gutter, lineage header, running-status seat and new conversation
+preferences. The strict comparator is unchanged; reference-local raster evidence is described below. A hidden
+StepGroup title now stays hidden in detailed mode, and stream-to-canonical
+message seats retain their disclosure identity instead of remounting.
+
+Settings preference and resource-catalog secondary text uses the existing
+readable label tokens after browser contrast checks; invalid definitions keep
+a readable label with an error-colored underline. Skill visibility retains its
+selection-versus-filesystem explanation. The four updated Shell references
+with registered corner-arc noise retain every historical evidence pixel within
+its recorded alternatives; their regions and budgets are unchanged.
+
+Composer screenshot fixtures explicitly establish the latest-reading position
+before capture: an earlier control click can otherwise leave a half-pixel
+scroll offset. Dimensions remain exact. Four narrow light-theme references
+have new measured raster evidence: repeated pinned-browser captures retain
+byte-identical DOM geometry and computed paint styles, while shadows differ by
+1–3 channel levels and eight attachment-corner pixels differ by up to 7.
+The manifest contains raw pixels, capture hashes and exact row spans; tests
+reject changes at every adjacent unmeasured pixel. Other references remain
+strict, and neither a product CSS workaround nor a global tolerance was added.
+
+Automatic model catalog preloading now uses the attached native snapshot for
+the current selection. Only an outstanding model mutation or failed intent
+requires model/snapshot reconciliation; merely mounting the control performs
+no snapshot repair. Existing write acknowledgement and reread fencing remain.
+
+Hosted final-head browser evidence exposed a second scroll offset on the active
+Session shell: `overflow: hidden` allowed its scrollTop to become 11, then
+fullscreen restoration reset it to zero and displaced the reading anchor. The
+shell now uses `overflow: clip`; ChatViewport remains the only reading scroll
+owner. A controlled overflowing descendant proves the shell rejects scrollTop
+11 (the prior style fails with 11), followed by the unchanged exact reading
+anchor assertion through fullscreen restoration and stream settlement.
+
+PR #457 attachment-admission repair also measures the dark 390px Composer
+attachment reference. Two CI captures and two local stable captures share the
+same eight changed corner pixels; two further local captures equal the reference.
+All four local captures have identical descendant/ancestor geometry and computed
+paint styles. The reference-specific manifest admits exactly those eight pixels
+with individual measured channel bounds. Adjacent pixels, larger deltas, layout
+and dimension changes still fail. The reference image and comparator are unchanged.
+The same isolated dark Composer probe also exposed a stable Context gradient
+variant and model-label raster baseline variant at identical measured geometry
+and styles. Their exact row spans are separately recorded. The browser test binds
+this reference to the exact model/profile text, relative rectangles, font metrics,
+colours and transform; real text or layout changes cannot use that allowance.
 
 ## #454 Present call row and delivered-file cards
 

@@ -98,6 +98,7 @@
 //! re-implements semantics, and transport loss detaches without cancelling or
 //! settling anything.
 
+pub mod agent_statistics;
 pub mod attachment;
 pub mod endpoint;
 pub mod event;

@@ -214,6 +214,11 @@ pub enum Method {
     },
     #[serde(rename = "agent/list")]
     AgentList { target: AttachmentTarget },
+    #[serde(rename = "agent/statistics")]
+    AgentStatistics {
+        target: AttachmentTarget,
+        agent_id: crate::runtime::identity::AgentId,
+    },
     #[serde(rename = "agent/sendMessage")]
     AgentSendMessage {
         target: AttachmentTarget,
@@ -269,6 +274,25 @@ pub enum Method {
         node_id: Option<SessionNodeId>,
         at: crate::durable::reading::ConversationWindowAt,
         limit: usize,
+    },
+    /// Inspect durable trace without composing a runtime or acquiring control.
+    #[serde(rename = "session/traceHistory")]
+    SessionTraceHistory {
+        session_id: SessionId,
+        node_id: Option<SessionNodeId>,
+        before: Option<crate::runtime_client::trace::TraceCursor>,
+        limit: usize,
+    },
+    #[serde(rename = "session/traceHistoryDetail")]
+    SessionTraceHistoryDetail {
+        session_id: SessionId,
+        node_id: Option<SessionNodeId>,
+        record_id: String,
+    },
+    #[serde(rename = "session/statistics")]
+    SessionStatistics {
+        session_id: SessionId,
+        node_id: Option<SessionNodeId>,
     },
     #[serde(rename = "session/summary")]
     SessionSummary { session_id: SessionId },
@@ -578,6 +602,19 @@ pub enum MethodResult {
         conversation_id: ConversationId,
         window: crate::runtime_client::snapshot::ConversationWindow,
     },
+    SessionStatistics {
+        conversation_id: ConversationId,
+        statistics: crate::runtime_client::response::ConversationStatistics,
+        occupancy: Option<crate::context::occupancy::ContextOccupancy>,
+    },
+    SessionTraceHistory {
+        conversation_id: ConversationId,
+        page: crate::runtime_client::trace::TracePage,
+    },
+    SessionTraceHistoryDetail {
+        conversation_id: ConversationId,
+        detail: Option<Box<crate::runtime_client::trace::TraceDetail>>,
+    },
     TranscriptWindow {
         window: crate::runtime_client::snapshot::ConversationWindow,
     },
@@ -599,6 +636,9 @@ pub enum MethodResult {
     },
     Agent {
         agent: Box<crate::runtime_client::snapshot::RuntimeClientAgent>,
+    },
+    AgentStatistics {
+        metrics: crate::runtime_client::agent_statistics::AgentStatistics,
     },
     Agents {
         agents: Vec<crate::runtime_client::snapshot::RuntimeClientAgent>,
