@@ -2222,10 +2222,6 @@
       "description": "Identifies one attempt to execute an agent manifest.",
       "type": "string"
     },
-    "MessageId": {
-      "description": "Identifies a committed canonical message block.",
-      "type": "string"
-    },
     "SessionModelConfig": {
       "description": "The authoritative mutable model configuration of one conversation\nsession.\n\nThis one type is the session's state, the `model_get` result, and the\n`model_set` parameter: an update is a whole-state replacement, never an\nambiguous JSON patch.",
       "type": "object",
