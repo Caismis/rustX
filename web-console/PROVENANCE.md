@@ -1837,3 +1837,10 @@ local buffer that blocks submission, and formatting-only edits begin no draft.
 Native Rust remains the configuration authority. No upstream source is added.
 Inventory hashes and dependency closures describe this final source, including
 the v39 import renames.
+
+The #456 selection review separates configured from effective Profiles in the
+Harness-derived `ModelSelect`: its Profile submenu gains a "Model default
+profile" row, rows emit a typed selection intent instead of `(model, profile?)`,
+and the current marker follows the configured Profile while the trigger shows
+the effective one. The shared `Menu` now marks and announces the selected row of
+a submenu (`aria-current`, trailing check) exactly as it does a top-level row.

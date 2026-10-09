@@ -273,3 +273,52 @@ it.each(['ready', 'navigation', 'disconnect', 'rejection', 'branch'] as const)('
     if (sent.method === 'turn/start') expect(sent.params.target.conversation_id).toBe('chosen-conversation');
   }
 });
+it('a draft Session pins or follows the native default Profile exactly as chosen, keeping the draft\'s other model settings', async () => {
+  const source = workspaceSource({ kind: 'available', default_model: { model: 'fixture/native', requestParams: { top_k: 1 } }, catalog: { models: [nativeModel('fixture/native', ['low', 'high'], 'high'), nativeModel('fixture/second')] } });
+  await mount({ source });
+  const profileRow = async (name: string, current: string) => {
+    fireEvent.click(screen.getByRole('button', { name: 'Model and profile' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Profile' }));
+    expect(screen.getByRole('menuitem', { name: current }).getAttribute('aria-current')).toBe('true');
+    await act(async () => fireEvent.click(screen.getByRole('menuitem', { name })));
+  };
+  // Following the default, then pinning that very Profile, then following
+  // again: no Profile ID is synthesized while following.
+  await profileRow('high', 'Model default profile (high)');
+  await profileRow('Model default profile (high)', 'high');
+  await profileRow('low', 'Model default profile (high)');
+  await profileRow('Model default profile (high)', 'low');
+  expect(screen.getByRole('button', { name: 'Model and profile' }).textContent).toBe('fixture/nativehigh');
+  server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } }));
+  server.held.add('session/attach');
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
+  expect((await server.waitFor('session/create', 1)).params).toEqual({ settings: { cwd: '/workspace', model: { model: 'fixture/native', requestParams: { top_k: 1 } } } });
+  expect(methods()).not.toContain('session/setModel');
+});
+it('an explicitly pinned default Profile reaches Session creation as pinned', async () => {
+  await mount();
+  fireEvent.click(screen.getByRole('button', { name: 'Model and profile' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Profile' }));
+  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'high' })));
+  server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } }));
+  server.held.add('session/attach');
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
+  expect((await server.waitFor('session/create', 1)).params).toEqual({ settings: { cwd: '/workspace', model: { model: 'fixture/native', profile: 'high' } } });
+});
+it('the persisted new-Session preference keeps a pinned Profile and an absent one distinct across reloads', () => {
+  const stored = new Map<string, string>();
+  const storage = { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => { stored.set(key, value); } };
+  const preference = new NewSessionModelPreference(storage);
+  preference.select('authority-a', { model: 'fixture/native', profile: 'high' });
+  preference.select('authority-b', { model: 'fixture/native', profile: null });
+  preference.select('authority-c', { model: 'fixture/native' });
+  const reloaded = new NewSessionModelPreference(storage);
+  expect(reloaded.read('authority-a')).toEqual({ model: 'fixture/native', profile: 'high' });
+  for (const authority of ['authority-b', 'authority-c']) {
+    expect(reloaded.read(authority)).toEqual({ model: 'fixture/native' });
+    expect(Object.hasOwn(reloaded.read(authority)!, 'profile')).toBe(false);
+  }
+  // Returning a pinned preference to the Model default persists as absent.
+  reloaded.select('authority-a', { model: 'fixture/native' });
+  expect(new NewSessionModelPreference(storage).read('authority-a')).toEqual({ model: 'fixture/native' });
+});

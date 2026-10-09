@@ -260,16 +260,16 @@ async function slashFixture() {
 }
 it('slash model/profile choices retain native order and membership across locales, with no RPC on dismissal or equivalent selection', async () => {
  const input = await slashFixture(); const baseline = server.requests.length;
- const expected = ['exact/model', 'exact/model / deliberate', 'exact/model / brief', 'other'];
- for (const locale of ['zh', 'en'] as const) {
+ // The Session follows its Model's default: the default-Profile row is its own.
+ for (const [locale, followDefault] of [['zh', '模型默认预设（deliberate）'], ['en', 'Model default profile (deliberate)']] as const) {
    act(() => localeController.setLocale(locale));
-   expect(screen.getAllByRole('option').map(row => row.getAttribute('aria-label'))).toEqual(expected);
+   expect(screen.getAllByRole('option').map(row => row.getAttribute('aria-label'))).toEqual(['exact/model', `exact/model / ${followDefault}`, 'exact/model / deliberate', 'exact/model / brief', 'other']);
  }
  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Escape' });
  expect(input.value).toBe('/model'); expect(document.activeElement).toBe(input);
  expect(server.requests).toHaveLength(baseline);
  fireEvent.change(input, { target: { value: '/' } }); fireEvent.change(input, { target: { value: '/model' } });
- await act(async () => fireEvent.click(screen.getByRole('option', { name: 'exact/model / deliberate' })));
+ await act(async () => fireEvent.click(screen.getByRole('option', { name: 'exact/model / Model default profile (deliberate)' })));
  expect(count('session/setModel')).toBe(0); expect(input.value).toBe(''); expect(document.activeElement).toBe(input);
  expect(server.client.getSnapshot().views.A.snapshot?.model?.effective.profile).toBe('deliberate');
 });
@@ -300,4 +300,134 @@ it.each(['refused', 'unknown'] as const)('slash profile mutation %s preserves th
  expect(screen.getAllByRole('alert').some(row => row.textContent?.includes(outcome === 'unknown' ? 'uncertain' : 'Profile refused'))).toBe(true);
  expect(count('session/setModel')).toBe(1);
  if (outcome === 'unknown') { await act(async () => server.connect()); expect(count('session/setModel')).toBe(1); }
+});
+
+/** One Model, `example/chat`, whose Profiles resolve like native: a pinned
+ * Profile is itself, an absent one follows the catalog's current default. */
+function profileFixture(configured: import('../../protocol/app-server/v39').SessionModelConfig, models = ['example/chat']) {
+  const state = { defaultProfile: 'balanced' };
+  const base = cfg3Effective().effective_model;
+  const resolve = (config: typeof configured) => ({ ...base, configured: config, effective: { ...base.effective, model: config.model, profile: config.profile ?? state.defaultProfile } });
+  const catalog = () => models.map(id => ({ model: id, protocol: 'openai_responses' as const, contextWindow: 128000, maxOutputTokens: 8192, declaredCapabilities: base.effective.declaredCapabilities, effectiveCapabilities: base.effective.capabilities, credentialSource: { type: 'literal' as const }, profiles: [{ id: 'balanced', reasoningEnabled: false }, { id: 'fast', reasoningEnabled: false }], defaultProfile: state.defaultProfile }));
+  server.snapshots.set('A', { ...snapshot(), model: resolve(configured) });
+  server.handlers.set('session/models', () => ({ type: 'models', catalog: { models: catalog() } }));
+  server.handlers.set('session/model', () => ({ type: 'model', model: server.snapshots.get('A')!.model! }));
+  server.handlers.set('session/setModel', request => {
+    if (request.method !== 'session/setModel') throw new Error('wrong request');
+    server.snapshots.set('A', { ...server.snapshots.get('A')!, model: resolve(request.params.config) });
+    return { type: 'model', model: server.snapshots.get('A')!.model! };
+  });
+  return {
+    state,
+    /** Native moves the catalog default; a following Session resolves anew. */
+    async moveDefault(profile: string) {
+      state.defaultProfile = profile;
+      server.snapshots.set('A', { ...server.snapshots.get('A')!, model: resolve(server.snapshots.get('A')!.model!.configured) });
+      await server.client.refresh('A');
+    },
+  };
+}
+const sent = () => server.requests.filter(row => row.request.method === 'session/setModel').map(row => (row.request as Extract<typeof row.request, { method: 'session/setModel' }>).params.config);
+const configuredProfile = () => server.client.getSnapshot().views.A.snapshot?.model?.configured.profile ?? undefined;
+async function profileMenu() {
+  await openModels();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Profile' }));
+  const current = (name: string) => screen.getByRole('menuitem', { name }).getAttribute('aria-current') === 'true';
+  return { current, trigger: () => screen.getByRole('button', { name: 'Model and profile' }).textContent };
+}
+async function chooseRow(name: string) {
+  const before = server.requests.length;
+  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name })));
+  // A mutation settles with its authoritative reread before the next gesture.
+  if (sent().length && server.requests.length > before) await waitFor(() => expect(server.client.getSnapshot().views.A.modelMutation).toBeUndefined());
+  await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+}
+
+it('the Session menu distinguishes following the Model default from pinning a Profile, through a single-Model catalog', async () => {
+  const independent = { model: 'example/chat', requestParams: { top_k: 40, nested: [null] }, maxOutputTokens: 512, summaryModel: { mode: 'explicit' as const, model: 'example/chat', profile: 'fast', request_params: { temperature: 0.1 } } };
+  profileFixture(independent); await server.attached('A'); render(<Control/>);
+  let menu = await profileMenu();
+  // Following the default: the default row is the configured choice; the
+  // trigger shows what the invocation resolves to.
+  expect(menu.current('Model default profile (balanced)')).toBe(true);
+  expect(menu.current('balanced')).toBe(false);
+  expect(menu.trigger()).toContain('balanced');
+  await act(async () => fireEvent.keyDown(document.activeElement!, { key: 'Escape' }));
+  await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+  // default → fast → default → balanced (explicit) → default, each with the
+  // exact whole configuration and no redundant mutation for repeats.
+  const steps: [string, typeof independent & { profile?: string }][] = [
+    ['fast', { ...independent, profile: 'fast' }],
+    ['Model default profile (balanced)', independent],
+    ['balanced', { ...independent, profile: 'balanced' }],
+    ['balanced', { ...independent, profile: 'balanced' }],
+    ['Model default profile (balanced)', independent],
+    ['Model default profile (balanced)', independent],
+  ];
+  const expected: unknown[] = [];
+  for (const [row, config] of steps) {
+    if (JSON.stringify(expected.at(-1) ?? independent) !== JSON.stringify(config)) expected.push(config);
+    menu = await profileMenu();
+    await chooseRow(row);
+    expect(sent()).toEqual(expected);
+    expect(server.client.getSnapshot().views.A.snapshot?.model?.configured).toEqual(config);
+  }
+  expect(sent()).toHaveLength(4);
+  // Pinning the current default: same effective Profile, different intent.
+  menu = await profileMenu();
+  await chooseRow('balanced');
+  expect(configuredProfile()).toBe('balanced');
+  expect(server.client.getSnapshot().views.A.snapshot?.model?.effective.profile).toBe('balanced');
+  menu = await profileMenu();
+  expect(menu.current('balanced')).toBe(true);
+  expect(menu.current('Model default profile (balanced)')).toBe(false);
+  await act(async () => fireEvent.keyDown(document.activeElement!, { key: 'Escape' }));
+  await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+});
+
+it('choosing the selected Model keeps a pinned Profile; the default action clears it and the effective Profile follows native', async () => {
+  profileFixture({ model: 'example/chat', profile: 'fast', maxOutputTokens: 256 }, ['example/chat', 'example/other']);
+  await server.attached('A'); render(<Control/>);
+  let menu = await profileMenu();
+  expect(menu.current('fast')).toBe(true);
+  expect(menu.trigger()).toContain('fast');
+  await act(async () => fireEvent.keyDown(document.activeElement!, { key: 'Escape' }));
+  await openModels();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
+  await chooseRow('example/chat');
+  expect(sent()).toEqual([]);
+  expect(configuredProfile()).toBe('fast');
+  menu = await profileMenu();
+  await chooseRow('Model default profile (balanced)');
+  expect(sent()).toEqual([{ model: 'example/chat', maxOutputTokens: 256 }]);
+  expect(configuredProfile()).toBeUndefined();
+  expect(server.client.getSnapshot().views.A.snapshot?.model?.effective.profile).toBe('balanced');
+  menu = await profileMenu();
+  expect(menu.current('Model default profile (balanced)')).toBe(true);
+  expect(menu.trigger()).toContain('balanced');
+  await act(async () => fireEvent.keyDown(document.activeElement!, { key: 'Escape' }));
+  // A different Model starts from its own native defaults.
+  await openModels();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
+  await chooseRow('example/other');
+  expect(sent().at(-1)).toEqual({ model: 'example/other' });
+});
+
+it('a catalog default change moves a following Session and leaves a pinned one, as native resolves them', async () => {
+  const fixture = profileFixture({ model: 'example/chat' }); await server.attached('A'); render(<Control/>);
+  await fixture.moveDefault('fast');
+  cleanup(); render(<Control/>);
+  let menu = await profileMenu();
+  expect(menu.current('Model default profile (fast)')).toBe(true);
+  expect(menu.trigger()).toContain('fast');
+  await chooseRow('balanced');
+  expect(sent()).toEqual([{ model: 'example/chat', profile: 'balanced' }]);
+  await fixture.moveDefault('balanced');
+  await fixture.moveDefault('fast');
+  cleanup(); render(<Control/>);
+  menu = await profileMenu();
+  expect(menu.current('balanced')).toBe(true);
+  expect(menu.current('Model default profile (fast)')).toBe(false);
+  expect(menu.trigger()).toContain('balanced');
+  expect(sent()).toHaveLength(1);
 });

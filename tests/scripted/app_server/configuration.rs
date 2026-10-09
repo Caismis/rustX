@@ -5768,3 +5768,137 @@ async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
     }))
     .await;
 }
+
+/// Issue #456: following the Model default and pinning the Profile that is
+/// currently the default are distinct configured intents with one effective
+/// invocation. Pinning rebuilds nothing; when the catalog default moves, the
+/// following Session is offered the new invocation and the pinned one is not.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue456_following_and_pinned_default_profiles_diverge_only_when_the_default_moves() {
+    use crate::model::authoring::Profile;
+    use crate::model::catalog::{ModelProfileId, ModelRef};
+    use crate::model::session::SessionModelConfig;
+    use crate::toml_authoring::AuthoredRequestParams;
+    use serde_json::json;
+    Box::pin(bounded(async {
+        let f = Fixture::new().await;
+        let (following, pinned) = (f.sessions[0].id.clone(), f.sessions[1].id.clone());
+        for id in [&following, &pinned] {
+            f.manager.load(id, None).await.unwrap();
+        }
+        let authored = f
+            .manager
+            .source_settings(
+                &crate::local_runtime::configuration::settings::SourceTarget::User,
+                None,
+            )
+            .await
+            .unwrap()
+            .user
+            .authored
+            .unwrap()
+            .models
+            .unwrap()["local/a"]
+            .clone();
+        let model = |default: &str| {
+            let mut model = authored.clone();
+            model.request_params = None;
+            model.default_profile = Some(ModelProfileId::new(default));
+            model.profiles = Some(
+                [("balanced", 0.5), ("fast", 1.0)]
+                    .into_iter()
+                    .map(|(name, temperature)| {
+                        (
+                            ModelProfileId::new(name),
+                            Profile {
+                                reasoning_enabled: None,
+                                max_output_tokens: None,
+                                request_params: AuthoredRequestParams(
+                                    serde_json::from_value(json!({"temperature": temperature}))
+                                        .unwrap(),
+                                ),
+                            },
+                        )
+                    })
+                    .collect(),
+            );
+            ConfigMutation::Model {
+                id: "local/a".into(),
+                authored: Some(model),
+            }
+        };
+        write(&f, 0, model("balanced")).await;
+        for (index, id) in [(0, &following), (1, &pinned)] {
+            let candidate = settled(&f, index)
+                .await
+                .candidate
+                .expect("the selected Model changed");
+            f.manager
+                .adopt_configuration(id, &candidate.identity, candidate.expected_binding)
+                .unwrap();
+        }
+        let runtime = |id| f.manager.configuration_runtime(id).unwrap();
+        // Pinning the current default records the intent and rebuilds nothing.
+        let pinned_resources = runtime(&pinned).runtime_resources();
+        let explicit = SessionModelConfig {
+            profile: Some(ModelProfileId::new("balanced")),
+            ..SessionModelConfig::of(ModelRef::parse("local/a").unwrap())
+        };
+        let adopted = f
+            .manager
+            .set_model(&pinned, explicit.clone())
+            .await
+            .unwrap();
+        assert_eq!(adopted.configured, explicit);
+        assert_eq!(
+            adopted.effective,
+            runtime(&following).model_view().effective
+        );
+        assert_eq!(runtime(&following).model_view().configured.profile, None);
+        assert_eq!(
+            pinned_resources.revision(),
+            runtime(&pinned).runtime_resources().revision()
+        );
+        let pinned_resources = runtime(&pinned).runtime_resources();
+
+        // The default moves: only the following Session's invocation changes.
+        let following_resources = runtime(&following).runtime_resources();
+        write(&f, 0, model("fast")).await;
+        let candidate = settled(&f, 0)
+            .await
+            .candidate
+            .expect("the followed default moved");
+        assert!(
+            settled(&f, 1).await.candidate.is_none(),
+            "the pinned Profile did not move"
+        );
+        assert!(Arc::ptr_eq(
+            &pinned_resources,
+            &runtime(&pinned).runtime_resources()
+        ));
+        assert!(Arc::ptr_eq(
+            &following_resources,
+            &runtime(&following).runtime_resources()
+        ));
+        f.manager
+            .adopt_configuration(&following, &candidate.identity, candidate.expected_binding)
+            .unwrap();
+        let (follows, pins) = (
+            runtime(&following).model_view(),
+            runtime(&pinned).model_view(),
+        );
+        assert_eq!(
+            (follows.configured.profile, follows.effective.profile),
+            (None, Some(ModelProfileId::new("fast")))
+        );
+        assert_eq!(pins.configured, explicit);
+        assert_eq!(
+            pins.effective.profile,
+            Some(ModelProfileId::new("balanced"))
+        );
+        assert_eq!(follows.effective.request_params["temperature"], json!(1.0));
+        assert_eq!(pins.effective.request_params["temperature"], json!(0.5));
+        f.close().await;
+    }))
+    .await;
+}
