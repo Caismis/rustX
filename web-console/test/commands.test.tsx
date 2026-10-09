@@ -14,7 +14,7 @@ import { CommandSession } from '../src/app/commands/native';
 import { CommandPanel } from '../src/app/commands/CommandPanel';
 import { App } from '../src/app/App';
 import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
-import type { MethodResult, Request, SessionNode, SessionUserMessageBoundary, UserInputBlock } from '../../protocol/app-server/v38';
+import type { MethodResult, Request, SessionNode, SessionUserMessageBoundary, UserInputBlock } from '../../protocol/app-server/v39';
 import { Server, snapshot } from './fixture';
 
 let server: Server;
@@ -606,7 +606,7 @@ it('model/profile selector membership and native selection are invariant across 
   for (const locale of ['en', 'zh'] as const) {
     server = new Server(); nativeFixture();
     server.handlers.set('session/models', () => ({ type: 'models', catalog: { models: [
-      { model: 'fixture/first' }, { model: 'native/模型.Model', reasoningProfiles: [{ id: 'profile-原样', enabled: true }] },
+      { model: 'fixture/first' }, { model: 'native/模型.Model', profiles: [{ id: 'profile-原样', reasoningEnabled: true }] },
     ] } } as Extract<MethodResult, { type: 'models' }>));
     await server.attached('A');
     act(() => localeController.setLocale(locale));
@@ -616,7 +616,7 @@ it('model/profile selector membership and native selection are invariant across 
     const rowIds = () => screen.queryAllByRole('option').map(row => row.getAttribute('data-choice-id'));
     const reads = [...server.requests];
     for (const [query, expected] of [
-      ['reasoning', ['native/模型.Model:profile-原样']], ['推理配置', ['native/模型.Model:profile-原样']],
+      ['model profile', ['native/模型.Model:profile-原样']], ['模型预设', ['native/模型.Model:profile-原样']],
       ['native/模型.Model', ['native/模型.Model', 'native/模型.Model:profile-原样']], ['profile-原样', ['native/模型.Model:profile-原样']],
     ] as const) {
       fireEvent.change(screen.getByRole('textbox'), { target: { value: query } });
@@ -635,7 +635,7 @@ it('model/profile selector membership and native selection are invariant across 
     cleanup(); server.client.disconnect();
   }
   expect(sequences[0].map(request => request.method)).toEqual(['session/setModel', 'session/snapshot', 'session/model', 'session/models']);
-  expect(sequences[0][0]).toMatchObject({ method: 'session/setModel', params: { config: { model: 'native/模型.Model', reasoningProfile: 'profile-原样' } } });
+  expect(sequences[0][0]).toMatchObject({ method: 'session/setModel', params: { config: { model: 'native/模型.Model', profile: 'profile-原样' } } });
   expect(sequences[1]).toEqual(sequences[0]);
 });
 

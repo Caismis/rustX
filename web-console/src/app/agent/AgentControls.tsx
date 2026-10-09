@@ -1,7 +1,7 @@
 import { message } from '../../locale/translation';
 import { useTranslation, useNotice } from '../../locale/react';
 import { useEffect, useRef, useState } from 'react';
-import type { ModelCatalogView, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v38';
+import type { ModelCatalogView, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v39';
 import { AppServerClient, isOutcomeUncertain, sameTarget, type SessionView } from '../../client/app-server';
 import { ModelSelect } from '../../presentation/agent/ModelSelect';
 import { Button } from '../../presentation/primitives/Button';
@@ -50,9 +50,9 @@ export function AgentControls({ client, view, draft, blocked: pending = false }:
  // Reading choices locks selection through loading, not the menu trigger.
  const disabled = pending || !attached;
  return <div className="agent-control"><ModelSelect binding={JSON.stringify([generation, target?.attachment_id, draft?.source?.target])} choices={catalogChoices(choices)}
-   current={draft ? draft.intent?.model : model?.configured.model} profile={(draft ? draft.intent?.reasoningProfile : model?.effective.reasoningProfile) ?? undefined} disabled={draft ? draft.disabled || !choices : disabled} loading={draft ? !draft.source : blocked} error={draft ? draftError : error} load={draft ? () => {} : load}
+   current={draft ? draft.intent?.model : model?.configured.model} profile={(draft ? draft.intent?.profile : model?.effective.profile) ?? undefined} disabled={draft ? draft.disabled || !choices : disabled} loading={draft ? !draft.source : blocked} error={draft ? draftError : error} load={draft ? () => {} : load}
    choose={(selected, profile) => { if (!catalogAdmits(choices, selected, profile)) return;
-     const selection = { model: selected, ...(profile === undefined ? {} : { reasoningProfile: profile }) };
+     const selection = { model: selected, ...(profile === undefined ? {} : { profile }) };
      if (draft) { draft.choose(selection); return; }
      void mutate(async () => {
        await selectSessionModel(client, view!.id, selection);

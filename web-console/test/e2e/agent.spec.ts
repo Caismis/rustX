@@ -21,9 +21,9 @@ for (const mode of ['settled', 'streaming', 'tools', 'error', 'approval', 'quest
    }
    if (mode === 'selectors') {
      await expect(page.getByRole('button', { name: 'Approval mode' })).toHaveCount(0);
-     await page.getByRole('button', { name: 'Model and reasoning' }).click();
+     await page.getByRole('button', { name: 'Model and profile' }).click();
      await expect(page.getByText('Reading native models…')).toHaveCount(0);
-     await page.getByRole('menuitem', { name: 'Reasoning profile' }).click();
+     await page.getByRole('menuitem', { name: 'Profile', exact: true }).click();
      await expect(page.getByRole('menuitem', { name: 'deliberate' })).toBeVisible();
    }
    await expectStableScreenshot(page, `agent-${mode}-light.png`);
@@ -143,9 +143,9 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
     await shot('context');
     await page.evaluate(() => window.composerFixture.docks(false));
     await expect(input).toHaveValue('Review these notes.');
-    for (const name of ['Add', 'Model and reasoning']) await expect(page.getByRole('button', { name, exact: true })).toBeVisible();
+    for (const name of ['Add', 'Model and profile']) await expect(page.getByRole('button', { name, exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Approval mode', exact: true })).toHaveCount(0);
-    await page.getByRole('button', { name: 'Model and reasoning' }).click();
+    await page.getByRole('button', { name: 'Model and profile' }).click();
     await expect(page.getByText('Reading native models…')).toHaveCount(0); await page.keyboard.press('Escape');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
@@ -173,8 +173,8 @@ test('ModelSelect submenus stay usable inside a narrow viewport', async ({ page 
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`${fixtureOrigin}/test/fixtures/agent.html?mode=selectors`);
-  const trigger = page.getByRole('button', { name: 'Model and reasoning' });
-  const profile = page.getByRole('menuitem', { name: 'Reasoning profile' });
+  const trigger = page.getByRole('button', { name: 'Model and profile' });
+  const profile = page.getByRole('menuitem', { name: 'Profile', exact: true });
   const submenu = page.getByRole('menu').filter({ has: page.getByRole('menuitem', { name: 'deliberate' }) });
   /** Whether a surface lies wholly inside the viewport's 12px margin, and the page still has no horizontal scroll. */
   const contained = (locator: typeof submenu) => locator.evaluate(el => {

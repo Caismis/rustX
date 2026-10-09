@@ -11,7 +11,7 @@ import { modelPreferences, NewSessionModelPreference, selectSessionModel } from 
 import { inputTrigger } from '../src/app/composer/input-trigger';
 import { cfg3Source, cfg3Effective } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
-import type { CatalogModelView, RuntimeClientEvent, RuntimeClientSnapshot, SessionModelConfig, SourceSettings } from '../../protocol/app-server/v38';
+import type { CatalogModelView, RuntimeClientEvent, RuntimeClientSnapshot, SessionModelConfig, SourceSettings } from '../../protocol/app-server/v39';
 
 // These spies execute the actual functions, including their hooks. Calls count
 // render invocations, not merely DOM mutation or wrapper/parent renders.
@@ -68,7 +68,7 @@ it('streaming publications update the transcript but do not render AppFrame or c
   expect(screen.queryByText('Working…')).toBeNull();
 });
 
-const model = (id: string): CatalogModelView => ({ model: id, protocol: 'openai_responses', contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'environment', variable: 'KEY' }, declaredCapabilities: { inputModalities: ['text'], outputModalities: ['text'], reasoning: false, toolCalls: true }, effectiveCapabilities: { inputModalities: ['text'], outputModalities: ['text'], reasoning: false, toolCalls: true }, reasoningProfiles: [] });
+const model = (id: string): CatalogModelView => ({ model: id, protocol: 'openai_responses', contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'environment', variable: 'KEY' }, declaredCapabilities: { inputModalities: ['text'], outputModalities: ['text'], reasoning: false, toolCalls: true }, effectiveCapabilities: { inputModalities: ['text'], outputModalities: ['text'], reasoning: false, toolCalls: true }, profiles: [] });
 function host() {
   const source: SourceSettings = { ...cfg3Source(), target: { kind: 'workspace', directory: '/workspace/A' }, prospective_approval_mode: 'policy', session_models: { kind: 'available', default_model: { model: 'fixture/root' }, catalog: { models: [model('fixture/root'), model('fixture/chosen')] } } };
   return { ...server.workspaceHost, configureWorkspace: async () => ({ kind: 'read' as const, projection: source }), resolveWorkspace: async () => ({ cwd: '/workspace/A' }), classifyLocations: async (paths: string[]) => paths.map(() => ({ authorized: true as const, workspaceId: 'workspace-a' })) };
@@ -83,7 +83,7 @@ function nativeModel() {
   server.handlers.set('session/setModel', request => {
     if (request.method !== 'session/setModel') throw Error('wrong request');
     const selection = request.params.config;
-    const value = { configured: selection, effective: { model: selection.model, reasoningProfile: selection.reasoningProfile } } as NonNullable<RuntimeClientSnapshot['model']>;
+    const value = { configured: selection, effective: { model: selection.model, profile: selection.profile } } as NonNullable<RuntimeClientSnapshot['model']>;
     server.snapshots.set('A', { ...snapshot(), model: value });
     return { type: 'model', model: value };
   });
@@ -138,10 +138,10 @@ it.each([false, true])('one launcher grammar preserves unrelated draft and caret
 
 it('the durable preference is authority-scoped data, never an existing Session model or authored configuration', () => {
   const preference = new NewSessionModelPreference(localStorage);
-  const existing: SessionModelConfig = { model: 'session-owned', reasoningProfile: 'high' };
-  preference.select(endpoint, { model: 'last-used', reasoningProfile: 'low' });
-  expect(new NewSessionModelPreference(localStorage).read(endpoint)).toEqual({ model: 'last-used', reasoningProfile: 'low' });
-  expect(preference.read('ws://other/')).toBeUndefined(); expect(existing).toEqual({ model: 'session-owned', reasoningProfile: 'high' });
+  const existing: SessionModelConfig = { model: 'session-owned', profile: 'high' };
+  preference.select(endpoint, { model: 'last-used', profile: 'low' });
+  expect(new NewSessionModelPreference(localStorage).read(endpoint)).toEqual({ model: 'last-used', profile: 'low' });
+  expect(preference.read('ws://other/')).toBeUndefined(); expect(existing).toEqual({ model: 'session-owned', profile: 'high' });
   expect(localStorage.getItem('rustx-console-view-v2')).toBeNull();
 });
 
@@ -171,7 +171,7 @@ it.each([false, true])('a confirmed native model selection seeds the next Sessio
   await server.attached('A', 'B');
   localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A', 'B'] }));
   await act(async () => { render(<App client={server.client} workspaceHost={host()}/>); });
-  fireEvent.click(screen.getByRole('button', { name: 'Model and reasoning' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Model and profile' }));
   await waitFor(() => expect(screen.queryByText('Reading native models…')).toBeNull());
   fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
   if (navigate) server.held.add('session/setModel');
@@ -184,20 +184,20 @@ it.each([false, true])('a confirmed native model selection seeds the next Sessio
   expect(modelPreferences().read(endpoint)).toEqual({ model: 'fixture/chosen' });
   expect(server.client.getSnapshot().views.B.snapshot!.model!.configured).toEqual({ model: 'fixture/root' });
   if (!navigate) await act(async () => fireEvent.click(screen.getAllByRole('button', { name: 'New Conversation' })[0]));
-  await waitFor(() => expect(screen.getByRole('button', { name: 'Model and reasoning' }).textContent).toContain('fixture/chosen'));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Model and profile' }).textContent).toContain('fixture/chosen'));
   expect(server.requests.filter(row => row.request.method === 'session/setModel')).toHaveLength(1);
   expect(server.requests.some(row => row.request.method === 'configuration/sourceWrite')).toBe(false);
 });
 
 it('an unavailable saved selection remains visibly invalid and cannot submit a silently substituted default', async () => {
-  modelPreferences().select(endpoint, { model: 'removed/provider-model', reasoningProfile: 'removed-profile' });
+  modelPreferences().select(endpoint, { model: 'removed/provider-model', profile: 'removed-profile' });
   await server.connect();
   await act(async () => { render(<App client={server.client} workspaceHost={host()}/>); });
   fireEvent.click(screen.getByRole('button', { name: 'Choose Workspace' }));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Workspace A' })));
   fireEvent.change(input(), { target: { value: 'must not substitute' } });
-  expect(screen.getByRole('button', { name: 'Model and reasoning' }).textContent).toContain('removed/provider-model');
-  fireEvent.click(screen.getByRole('button', { name: 'Model and reasoning' }));
+  expect(screen.getByRole('button', { name: 'Model and profile' }).textContent).toContain('removed/provider-model');
+  fireEvent.click(screen.getByRole('button', { name: 'Model and profile' }));
   expect(screen.getByText(/removed\/provider-model is unavailable/)).toBeTruthy();
   expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', true);
   fireEvent.keyDown(input(), { key: 'Enter' });

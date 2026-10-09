@@ -1,13 +1,14 @@
 import type { Translate } from '../../../locale/translation';
 import { useTranslation } from '../../../locale/react';
 import { useState } from 'react';
-import type { ResourceFamily, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v38';
+import type { ResourceFamily, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v39';
 import { Badge } from '../../../presentation/settings/SettingsContent';
 import { Button } from '../../../presentation/primitives/Button';
 import { NativeFacts } from '../../components/NativeFacts';
 import { admitsAuthoring } from '../capability';
 import { Advanced, FilterTabs, ResourceList, Search, type ResourceRow } from '../primitives/aria';
 import { documentAuthoring, extensionFamilyLabel, type ExtensionFamily } from '../projection';
+import type { ModelProfiles } from '../models/ModelsPage';
 import type { PageFocus } from '../machines/navigation';
 import { TextField } from '../forms/controls';
 import {
@@ -35,8 +36,8 @@ type Filter = 'all' | ExtensionFamily;
  * a prepared one, a prepared one is not one the root Agent may use, and one
  * the root Agent may use is not a connected one. Nothing here probes a
  * resource: opening the page issues no preparation and no connection. */
-export function ExtensionsPage({ source, scope, revision, models, focus, onFocus }: {
-  source: SourceSettings; scope: SourceScope; revision?: string; models: string[];
+export function ExtensionsPage({ source, scope, revision, models, profiles, focus, onFocus }: {
+  source: SourceSettings; scope: SourceScope; revision?: string; models: string[]; profiles: ModelProfiles;
   focus?: PageFocus['extensions']; onFocus: (focus?: PageFocus['extensions']) => void;
 }) {
   const tx = useTranslation();
@@ -47,7 +48,7 @@ export function ExtensionsPage({ source, scope, revision, models, focus, onFocus
   const [filter, setFilter] = useState<Filter>('all');
   const [query, setQuery] = useState('');
   if (focus) {
-    return <ExtensionDetail source={source} scope={scope} revision={revision} models={models}
+    return <ExtensionDetail source={source} scope={scope} revision={revision} models={models} profiles={profiles}
       family={focus.family} name={focus.name} onFocus={onFocus} />;
   }
   const entries = filter === 'all' ? allExtensionEntries(source, scope)

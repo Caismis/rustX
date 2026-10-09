@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import type { SessionModelConfig } from '../../../protocol/app-server/v38';
+import type { SessionModelConfig } from '../../../protocol/app-server/v39';
 import { type AppServerClient, sameTarget } from '../client/app-server';
 
 const KEY = 'rustx-new-session-model-v1';
@@ -14,8 +14,8 @@ export class NewSessionModelPreference {
       const value: unknown = JSON.parse(storage?.getItem(KEY) ?? '{}');
       if (value && typeof value === 'object') for (const [authority, selection] of Object.entries(value)) {
         if (selection && typeof selection === 'object' && typeof selection.model === 'string'
-          && (selection.reasoningProfile === undefined || typeof selection.reasoningProfile === 'string')) {
-          this.values[authority] = { model: selection.model, ...(selection.reasoningProfile === undefined ? {} : { reasoningProfile: selection.reasoningProfile }) };
+          && (selection.profile === undefined || typeof selection.profile === 'string')) {
+          this.values[authority] = { model: selection.model, ...(selection.profile === undefined ? {} : { profile: selection.profile }) };
         }
       }
     } catch { /* Unavailable browser storage means this preference is memory-only. */ }
@@ -23,7 +23,7 @@ export class NewSessionModelPreference {
   read = (authority: string) => this.values[authority];
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   select(authority: string, selection: SessionModelConfig) {
-    this.values = { ...this.values, [authority]: { model: selection.model, ...(selection.reasoningProfile == null ? {} : { reasoningProfile: selection.reasoningProfile }) } };
+    this.values = { ...this.values, [authority]: { model: selection.model, ...(selection.profile == null ? {} : { profile: selection.profile }) } };
     try { this.storage?.setItem(KEY, JSON.stringify(this.values)); } catch { /* Still usable for this product lifetime. */ }
     for (const listener of this.listeners) listener();
   }

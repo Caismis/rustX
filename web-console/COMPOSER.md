@@ -419,7 +419,7 @@ The native attempt phase alone supplies terminal presentation; disconnect is ine
 
 `AgentControls` reads exact `session/models` and `session/model` data. Both the
 composer menu and `/model` popup advertise only returned model references and
-reasoning profile IDs. The native default is represented by omitting the profile.
+Model Profile IDs. The native default is represented by omitting the profile.
 `session/setModel` is the dedicated operation for later intentional Session model changes.
 Initial explicit intent belongs to `session/create.settings.model`; a projected
 native default is omitted. See [startup ownership](../docs/issue-419/ownership.md).

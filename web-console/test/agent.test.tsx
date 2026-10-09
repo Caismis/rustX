@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v38';
+import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v39';
 import { AgentControls } from '../src/app/agent/AgentControls';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { Interactions } from '../src/app/agent/Interactions';
@@ -22,8 +22,8 @@ const running = (): RuntimeClientSnapshot => ({ ...snapshot(), attempt: { attemp
 function modelFixture() {
  const model = cfg3Effective().effective_model;
  model.configured.model = model.effective.model = 'exact/model';
- model.effective.reasoningProfile = 'deliberate';
- const catalog: CatalogModelView[] = ['exact/model', 'other'].map(id => ({ model: id, protocol: 'openai_responses', contextWindow: 128000, maxOutputTokens: 8192, declaredCapabilities: model.effective.declaredCapabilities, effectiveCapabilities: model.effective.capabilities, credentialSource: { type: 'literal' }, reasoningProfiles: id === 'other' ? [] : [{ id: 'deliberate', enabled: true }, { id: 'brief', enabled: true }], defaultReasoningProfile: id === 'other' ? null : 'deliberate' }));
+ model.effective.profile = 'deliberate';
+ const catalog: CatalogModelView[] = ['exact/model', 'other'].map(id => ({ model: id, protocol: 'openai_responses', contextWindow: 128000, maxOutputTokens: 8192, declaredCapabilities: model.effective.declaredCapabilities, effectiveCapabilities: model.effective.capabilities, credentialSource: { type: 'literal' }, profiles: id === 'other' ? [] : [{ id: 'deliberate', reasoningEnabled: true }, { id: 'brief', reasoningEnabled: true }], defaultProfile: id === 'other' ? null : 'deliberate' }));
  server.snapshots.set('A', { ...snapshot(), model });
  server.handlers.set('session/models', () => ({ type: 'models', catalog: { models: catalog } }));
  server.handlers.set('session/model', () => ({ type: 'model', model: server.snapshots.get('A')!.model! }));
@@ -32,35 +32,35 @@ function modelFixture() {
    const next = structuredClone(server.snapshots.get('A')!);
    next.model!.configured = request.params.config;
    next.model!.effective.model = request.params.config.model;
-   next.model!.effective.reasoningProfile = request.params.config.reasoningProfile;
+   next.model!.effective.profile = request.params.config.profile;
    server.snapshots.set('A', next);
    return { type: 'model', model: next.model! };
  });
  return catalog;
 }
 async function openModels() {
- await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Model and reasoning' })));
+ await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Model and profile' })));
  await waitFor(() => expect(screen.queryByText('Reading native models…')).toBeNull());
 }
 it('model/profile menu advertises only exact native values and acknowledgement alone never changes selection', async () => {
  modelFixture(); await server.attached('A'); render(<Control/>); await openModels();
  expect(count('session/models')).toBe(1); expect(count('session/model')).toBe(1);
- fireEvent.click(screen.getByRole('menuitem', { name: 'Reasoning profile' }));
+ fireEvent.click(screen.getByRole('menuitem', { name: 'Profile' }));
  expect(screen.getByRole('menuitem', { name: 'brief' })).toBeTruthy();
  expect(screen.queryByText('high')).toBeNull(); expect(screen.queryByText('off')).toBeNull();
  server.held.add('session/setModel'); server.held.add('session/snapshot');
  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'brief' })));
  const request = await server.waitFor('session/setModel', 1);
- expect(request.params).toEqual({ target: server.target('A'), config: { model: 'exact/model', reasoningProfile: 'brief' } });
+ expect(request.params).toEqual({ target: server.target('A'), config: { model: 'exact/model', profile: 'brief' } });
  await act(async () => server.reply(request));
- expect(screen.getByRole('button', { name: 'Model and reasoning' }).textContent).toContain('deliberate');
+ expect(screen.getByRole('button', { name: 'Model and profile' }).textContent).toContain('deliberate');
  expect(count('session/setModel')).toBe(1);
  expect(server.client.getSnapshot().views.A.modelMutation?.status).toBe('acknowledged');
  await expect(server.client.send('A', 'dependent turn')).rejects.toThrow('Reread native model state');
  expect(count('turn/start')).toBe(0);
  const read = await server.waitFor('session/snapshot', 2);
  await act(async () => server.reply(read));
- expect(screen.getByRole('button', { name: 'Model and reasoning' }).textContent).toContain('brief');
+ expect(screen.getByRole('button', { name: 'Model and profile' }).textContent).toContain('brief');
  expect(server.client.getSnapshot().views.A.modelMutation).toBeUndefined();
 });
 it('lost model mutation is visible uncertainty; reconnect invalidates catalog and never replays', async () => {

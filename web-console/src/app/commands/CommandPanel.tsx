@@ -2,7 +2,7 @@ import { message, displayText, searchVocabulary, type DisplayText } from '../../
 import { useTranslation, useNotice } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Rewritten from ui-commands/PopupSelectView.tsx; see PROVENANCE.md. */
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { UserInputBlock, SessionSnapshot } from '../../../../protocol/app-server/v38';
+import type { UserInputBlock, SessionSnapshot } from '../../../../protocol/app-server/v39';
 import type { AppServerClient } from '../../client/app-server';
 import { lineageSwitchSafe } from '../../bindings/projection';
 import { Modal } from '../../presentation/primitives/Modal';
@@ -60,8 +60,8 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
           const result = await scope.models(); if (!valid()) return;
           setDetail(message('commands:copy.current-value-choosing-a-model-uses-its-native-defaults', { p0: result.current.configured.model }));
           setRows((result.catalog.models ?? []).flatMap(model => [
-            { id: model.model, label: model.model, detail: message('commands:copy.native-defaultvalue', { p0: model.defaultReasoningProfile ? ` · ${model.defaultReasoningProfile}` : '' }), choice: { kind: 'model' as const, model: model.model } },
-            ...(model.reasoningProfiles ?? []).map(profile => ({ id: `${model.model}:${profile.id}`, label: message('commands:command-panel.value-value', { p0: model.model, p1: profile.id }), detail: message('commands:copy.reasoning-profile'), choice: { kind: 'model' as const, model: model.model, profile: profile.id } })),
+            { id: model.model, label: model.model, detail: message('commands:copy.native-defaultvalue', { p0: model.defaultProfile ? ` · ${model.defaultProfile}` : '' }), choice: { kind: 'model' as const, model: model.model } },
+            ...(model.profiles ?? []).map(profile => ({ id: `${model.model}:${profile.id}`, label: message('commands:command-panel.value-value', { p0: model.model, p1: profile.id }), detail: message('commands:copy.model-profile'), choice: { kind: 'model' as const, model: model.model, profile: profile.id } })),
           ])); break;
         }
         case 'fork': case 'branch':

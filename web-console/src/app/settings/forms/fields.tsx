@@ -4,6 +4,7 @@ import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { Button } from '../../../presentation/primitives/Button';
 import { Choice, Toggle } from '../primitives/aria';
 import type { TypedUnitForm } from './bridge';
+import { formatRequestParams, parseRequestParams, sameJson, type RequestParams } from './request-params';
 import css from '../../../presentation/settings/SettingsContent.module.css';
 
 /** The typed field layer over one unit's TanStack Form instance.
@@ -13,7 +14,7 @@ import css from '../../../presentation/settings/SettingsContent.module.css';
  * needs to present itself, and syntactic validation.
  *
  * Validation here is deliberately narrow — a required identity, a parseable
- * URL, a positive number, a well-formed JSON scalar. Native Rust remains the
+ * URL, a positive number, a well-formed JSON object. Native Rust remains the
  * authority on configuration semantics, source validity, Provider/Model
  * legality, capability legality, policy legality and exact mutation
  * acceptance. There is no browser mirror of the native configuration schema,
@@ -24,7 +25,7 @@ interface BoundField { state: { value: unknown; meta: { errors: unknown[]; isTou
 /** A path into one authored document.
  *
  * TanStack's own `DeepKeys<T>` cannot be used for these documents: several of
- * them embed `RequestParamsToml`, whose values are arbitrarily nested JSON, so
+ * them embed `RequestParams`, whose values are arbitrarily nested JSON, so
  * the deep key expansion never terminates. This checks the top-level field
  * name — the part a rename actually breaks — and leaves the nested suffix
  * free, which is exactly as much as the type system can say here. */
@@ -188,69 +189,70 @@ export function EntryRows({ label, value, change, secret = false }: {
   </fieldset>;
 }
 
-/** Explicit request parameters: an open map whose values are JSON scalars,
- * arrays or objects. Native Rust validates protected keys and protocol
- * support; the browser only requires each entry to be complete JSON. */
-export function RequestParameters<T>({ form, name }: { form: TypedUnitForm<T>; name: FieldPath<T> }) {
-  return <Bound<T, Record<string, unknown> | null | undefined> form={form} name={name}>{(raw, change) =>
-    <RequestParameterRows value={raw ?? {}} change={change} />}</Bound>;
+/** Provider-native request parameters bound to one form path. */
+export function RequestParameters<T>({ form, name, label, optional = true }: {
+  form: TypedUnitForm<T>; name: FieldPath<T>; label: string; optional?: boolean;
+}) {
+  return <Bound<T, RequestParams | null | undefined> form={form} name={name}>{(raw, change) =>
+    <RequestParamsEditor label={label} value={raw ?? undefined} optional={optional} change={change} />}</Bound>;
 }
-export function RequestParameterRows({ value, change }: { value: Record<string, unknown>; change: (value: Record<string, unknown>) => void }) {
+
+/** One provider-native request-parameter object, edited as a whole JSON
+ * object: paste or type nested objects, arrays and `null` as the provider
+ * expects them.
+ *
+ * The parsed object belongs to the unit's transaction actor, through the
+ * form. The text is a transient buffer for exactly what the actor cannot
+ * hold: text that is not one JSON object without repeated keys. Such text
+ * stays visible with its diagnostic, the field's custom validity blocks the
+ * form's submission, and nothing is emitted, so an invalid draft can never
+ * become configuration. A whitespace or key-order edit of the same object is
+ * not a change and begins no draft.
+ *
+ * The buffer follows its owner: when `value` becomes structurally different
+ * from what this editor last reflected, the owner changed it — a discarded
+ * draft, a reviewed revision, a commit — and the text, its diagnostic and the
+ * custom validity are replaced by the owner's value. Following never emits.
+ *
+ * `optional` distinguishes an absent object (blank text) from an authored
+ * `{}`. Native Rust remains the authority on protected keys, profile
+ * ownership and every other semantic. */
+export function RequestParamsEditor({ label, value, change, optional = true }: {
+  label: string; value: RequestParams | undefined; change: (value: RequestParams | undefined) => void; optional?: boolean;
+}) {
   const tx = useTranslation();
-  const [key, setKey] = useState('');
-  const duplicate = key !== '' && key in value;
-  return <fieldset><legend>{tx('settings:fields.explicit-request-parameters')}</legend>
-    {Object.entries(value).map(([parameter, current]) => <div key={parameter}>
-      <label>{parameter}<JsonValue value={current} change={next => change({ ...value, [parameter]: next })} /></label>
-      <Button onClick={() => { const next = { ...value }; delete next[parameter]; change(next); }}>{tx('settings:controls.remove')}{' '}{parameter}</Button>
-    </div>)}
-    <label>{tx('settings:fields.parameter-name')}<input value={key} aria-invalid={duplicate || undefined} onChange={event => setKey(event.target.value)} /></label>
-    {duplicate && <span role="alert" className={css.error}>{key} {tx('settings:fields.is-already-a-request-parameter')}</span>}
-    <Button disabled={!key || duplicate} onClick={() => { change({ ...value, [key]: '' }); setKey(''); }}>{tx('settings:fields.add-parameter')}</Button>
-    <p className={css.hint}>{tx('settings:fields.each-value-is-a-json-scalar-array-or-object-native-rust-validate')}</p>
-  </fieldset>;
-}
-/** One request parameter's JSON value.
- *
- * The parsed value belongs to the unit's transaction actor, through the form.
- * The text is a transient buffer for exactly one thing the actor cannot hold:
- * input that is not yet a complete JSON value, such as `{"budget":`. Only a
- * complete value is ever emitted, so incomplete text stays local and never
- * reaches the draft.
- *
- * The buffer follows its owner. When `value` changes to anything other than
- * what this input itself last emitted, the owner changed it — a discarded
- * draft, a reviewed revision, a commit dropping the confirmed draft — and the
- * text, its parse error and the input's custom validity are replaced by the
- * owner's value. Following the owner never emits, so a stale buffer can never
- * be written back over a newer value. */
-function JsonValue({ value, change }: { value: unknown; change: (value: unknown) => void }) {
-  const serialized = JSON.stringify(value) ?? '';
-  const [text, setText] = useState(serialized);
+  const display = (current: RequestParams | undefined) => current === undefined ? '' : formatRequestParams(current);
+  const [text, setText] = useState(() => display(value));
   const [error, setError] = useNotice();
-  const input = useRef<HTMLInputElement>(null);
-  // The serialized value this buffer currently reflects: the owner's, or the
-  // one this input last emitted into it.
-  const reflected = useRef(serialized);
+  const input = useRef<HTMLTextAreaElement>(null);
+  const reflected = useRef(value);
   useLayoutEffect(() => {
-    if (serialized === reflected.current) return;
-    reflected.current = serialized;
-    setText(serialized);
+    if (sameJson(value, reflected.current)) return;
+    reflected.current = value;
+    setText(display(value));
     setError('');
-  }, [serialized]);
-  // Custom validity is a projection of the local parse error, so it is cleared
-  // by exactly the transitions that clear the error.
+  }, [value]);
   useLayoutEffect(() => { input.current?.setCustomValidity(error); }, [error]);
-  return <>
-    <input ref={input} value={text} aria-invalid={!!error || undefined} onChange={event => {
-      const next = event.target.value;
-      setText(next);
-      let parsed: unknown;
-      try { parsed = JSON.parse(next); } catch { setError(message('settings:copy.enter-a-complete-json-value-before-saving')); return; }
-      setError('');
-      reflected.current = JSON.stringify(parsed);
-      change(parsed);
-    }} />
-    {error && <span role="alert">{error}</span>}
-  </>;
+  const accept = (next: RequestParams | undefined) => {
+    setError('');
+    if (sameJson(next, reflected.current)) return;
+    reflected.current = next;
+    change(next);
+  };
+  return <div>
+    <label>{label}<textarea ref={input} value={text} data-request-params="" style={{ fontFamily: 'var(--ds-font-family-code), monospace' }} rows={Math.min(12, Math.max(3, text.split('\n').length))} spellCheck={false}
+      placeholder={tx(optional ? 'settings:fields.request-params-placeholder-optional' : 'settings:fields.request-params-placeholder-required')}
+      aria-invalid={!!error || undefined} onChange={event => {
+        const next = event.target.value;
+        setText(next);
+        if (next.trim() === '') { accept(optional ? undefined : {}); return; }
+        const parsed = parseRequestParams(next);
+        if (parsed.ok) { accept(parsed.value); return; }
+        setError(parsed.error.kind === 'syntax' ? message('settings:fields.request-params-invalid-json')
+          : parsed.error.kind === 'not_object' ? message('settings:fields.request-params-not-object')
+            : message('settings:fields.request-params-duplicate-key', { p0: parsed.error.path }));
+      }} /></label>
+    {error && <span role="alert" className={css.error}>{error}</span>}
+    <p className={css.hint}>{tx('settings:fields.request-params-hint')}</p>
+  </div>;
 }

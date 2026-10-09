@@ -8,7 +8,7 @@ import { NavigationEpoch } from '../src/client/navigation';
 import { RpcFailure } from '../src/client/app-server';
 import { sameEndpoint } from '../src/workspaces/endpoint';
 import { WorkspaceHostError, type WorkspaceCatalog, type ProductHostWorkspaces } from '../src/workspaces/host';
-import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v38';
+import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v39';
 import { cfg3Source } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
 import { modelPreferences, NewSessionModelPreference } from '../src/app/model-preference';
@@ -18,9 +18,9 @@ let server: Server;
 beforeEach(() => { vi.spyOn(modelPreferences(), 'read').mockImplementation(new NewSessionModelPreference().read); });
 afterEach(() => { cleanup(); server?.client.disconnect(); vi.restoreAllMocks(); });
 const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], toolCalls: true, reasoning: true };
-function nativeModel(model: string, profiles: string[] = [], defaultReasoningProfile?: string): CatalogModelView {
+function nativeModel(model: string, profiles: string[] = [], defaultProfile?: string): CatalogModelView {
   return { model, protocol: 'openai_responses', contextWindow: 128000, maxOutputTokens: 8192, declaredCapabilities: capabilities, effectiveCapabilities: capabilities,
-    reasoningProfiles: profiles.map(id => ({ id, enabled: true })), ...(defaultReasoningProfile ? { defaultReasoningProfile } : {}), credentialSource: { type: 'environment', variable: 'KEY' } };
+    profiles: profiles.map(id => ({ id, reasoningEnabled: true })), ...(defaultProfile ? { defaultProfile } : {}), credentialSource: { type: 'environment', variable: 'KEY' } };
 }
 const authored = { provider: 'transport', id: 'wire', protocol: 'openai_responses' as const, context_window: '128000', max_output_tokens: 8192, capabilities: { input_modalities: ['text' as const], output_modalities: ['text' as const], tool_calls: true, reasoning: false } };
 /** A Workspace source read whose configuration documents name a model the
@@ -47,7 +47,7 @@ async function mount({ current = () => true, source = workspaceSource(), configu
 const methods = () => server.requests.map(r => r.request.method);
 const modelChoices = () => screen.queryAllByRole('menuitem').filter(item => !(item as HTMLButtonElement).disabled).map(item => item.textContent ?? '').filter(label => label.startsWith('fixture/'));
 async function openModelMenu() {
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Model and reasoning' })));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Model and profile' })));
   fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
 }
 function gate<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
@@ -149,10 +149,10 @@ it('offers exactly the native Session catalog, in native order, never a configur
   expect(modelChoices()).toEqual(['fixture/native', 'fixture/second']);
   expect(screen.queryByRole('menuitem', { name: 'fixture/configuration-only' })).toBeNull();
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'fixture/native' })));
-  // The native default reasoning profile is shown as published, not invented.
-  expect(screen.getByRole('button', { name: 'Model and reasoning' }).textContent).toBe('fixture/nativehigh');
-  fireEvent.click(screen.getByRole('button', { name: 'Model and reasoning' }));
-  fireEvent.click(screen.getByRole('menuitem', { name: 'Reasoning profile' }));
+  // The native default profile is shown as published, not invented.
+  expect(screen.getByRole('button', { name: 'Model and profile' }).textContent).toBe('fixture/nativehigh');
+  fireEvent.click(screen.getByRole('button', { name: 'Model and profile' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Profile' }));
   expect(['low', 'high'].map(name => !!screen.queryByRole('menuitem', { name }))).toEqual([true, true]);
   expect(screen.queryByRole('menuitem', { name: 'fixture/configuration-only' })).toBeNull();
 });
@@ -160,8 +160,8 @@ it('a model choice is draft Session intent: nothing is written, created or start
   const { host } = await mount();
   await openModelMenu();
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'fixture/native' })));
-  fireEvent.click(screen.getByRole('button', { name: 'Model and reasoning' }));
-  fireEvent.click(screen.getByRole('menuitem', { name: 'Reasoning profile' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Model and profile' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Profile' }));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'low' })));
   expect(host.configureWorkspace.mock.calls.every(([, , operation]) => operation.kind === 'read')).toBe(true);
   expect(methods().filter(method => ['session/create', 'session/setModel', 'configuration/sourceWrite', 'turn/start'].includes(method))).toEqual([]);
@@ -169,7 +169,7 @@ it('a model choice is draft Session intent: nothing is written, created or start
   server.held.add('session/attach');
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
   const request = await server.waitFor('session/create', 1);
-  expect(request.params).toEqual({ settings: { cwd: '/workspace', model: { model: 'fixture/native', reasoningProfile: 'low' } } });
+  expect(request.params).toEqual({ settings: { cwd: '/workspace', model: { model: 'fixture/native', profile: 'low' } } });
   await server.waitFor('session/attach', 1);
   expect(methods()).not.toContain('session/setModel');
   expect(methods()).not.toContain('turn/start');
@@ -181,7 +181,7 @@ it.each([
 ] as const)('catalog %s offers no fabricated choice and creates no Session', async (_, configureWorkspace, message) => {
   await mount({ configureWorkspace, ready: false });
   await waitFor(() => expect(screen.getAllByRole('alert').some(alert => alert.textContent?.includes(message))).toBe(true));
-  expect((screen.getByRole('button', { name: 'Model and reasoning' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole('button', { name: 'Model and profile' }) as HTMLButtonElement).disabled).toBe(true);
   expect(modelChoices()).toEqual([]);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
   expect(methods()).not.toContain('session/create');
