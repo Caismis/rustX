@@ -1,8 +1,8 @@
 # TUI and App Server configuration
 
-The TUI is a projection/control client of App Server protocol v42. It does not parse
+The TUI is a projection/control client of App Server protocol v43. It does not parse
 TOML, resolve overlays or discover resources. Generated contracts live in
-[`protocol/app-server/v42.ts`](../protocol/app-server/v42.ts).
+[`protocol/app-server/v43.ts`](../protocol/app-server/v43.ts).
 
 `/settings` reads User configuration even with zero Sessions. `/settings workspace
 "/canonical/path"` selects a native Workspace source; `rescan` and `approval

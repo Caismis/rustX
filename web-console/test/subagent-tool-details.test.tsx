@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { ForegroundToolExecution } from '../../protocol/app-server/v42';
+import type { ForegroundToolExecution } from '../../protocol/app-server/v43';
 import { subagentToolDetails } from '../src/app/agent/subagent-tool-details';
 import { DomainActivity } from '../src/app/agent/DomainActivity';
 afterEach(cleanup);

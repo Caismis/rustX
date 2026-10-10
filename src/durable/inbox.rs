@@ -619,6 +619,8 @@ pub struct CompactionCommitInput {
     pub tokens_before: TokenMeasurement,
     /// The deterministic estimate after rebuilding the request context.
     pub estimated_tokens_after: u64,
+    /// Native estimated occupancy at the atomic compaction commit.
+    pub occupancy: Option<crate::context::occupancy::ContextOccupancy>,
     /// The owning attempt, when the transition is executing in an attempt.
     pub attempt_id: Option<crate::runtime::identity::AttemptId>,
     /// The owning turn, when the transition is executing in a turn.
@@ -1784,6 +1786,15 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         message_id: &MessageId,
     ) -> Result<Option<SurfaceRevision>, ConversationStoreError>;
+
+    /// Immutable replacement revision and retired span of a canonical checkpoint.
+    /// Unlike append revision, this resolves Replace operations, including copied lineage.
+    /// # Errors
+    /// Backend failures remain errors; an unrelated message has no replacement span.
+    fn compaction_span(
+        &self,
+        summary_message_id: &MessageId,
+    ) -> Result<Option<(SurfaceRevision, SurfaceSpan)>, ConversationStoreError>;
 
     /// Reconstructs one exact historical Surface revision from immutable
     /// Surface operations.

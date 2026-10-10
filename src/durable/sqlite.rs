@@ -2196,6 +2196,29 @@ impl ConversationStore for SqliteConversationStore {
             .transpose()
     }
 
+    fn compaction_span(
+        &self,
+        summary_message_id: &MessageId,
+    ) -> Result<Option<(SurfaceRevision, SurfaceSpan)>, ConversationStoreError> {
+        let row: Option<(i64, String)> = self.lock()?.query_row(
+            "SELECT revision,op_json FROM surface_ops WHERE json_extract(op_json, '$.op') = 'replace' AND json_extract(op_json, '$.replacement') = ?1 ORDER BY revision LIMIT 1",
+            [summary_message_id.as_str()], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional().map_err(|error| storage(format!("compaction span: {error}")))?;
+        row.map(|(revision, json)| {
+            let op: SurfaceOp = decode(&json, "compaction span")?;
+            let SurfaceOp::Replace { start, end, .. } = op else {
+                return Err(storage(
+                    "compaction span references a non-replacement operation",
+                ));
+            };
+            Ok((
+                SurfaceRevision::new(nonnegative(revision, "compaction revision")?),
+                SurfaceSpan::new(start, end),
+            ))
+        })
+        .transpose()
+    }
+
     fn load_surface_history(
         &self,
         through: SurfaceRevision,
@@ -2412,6 +2435,7 @@ impl ConversationStore for SqliteConversationStore {
                 surface_revision: revision,
                 tokens_before: input.tokens_before,
                 estimated_tokens_after: input.estimated_tokens_after,
+                occupancy: input.occupancy,
             },
         };
         #[cfg(test)]
@@ -10770,6 +10794,7 @@ mod tests {
             attempt_id: None,
             turn_id: None,
             timestamp: Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap(),
+            occupancy: None,
         };
         store.arm_fail_compaction_times(1);
         assert!(store.commit_compaction(first_compaction(s1)).is_err());
@@ -10820,6 +10845,7 @@ mod tests {
                     attempt_id: None,
                     turn_id: None,
                     timestamp: Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap(),
+                    occupancy: None,
                 })
                 .is_err()
         );
@@ -10837,6 +10863,7 @@ mod tests {
                 attempt_id: None,
                 turn_id: None,
                 timestamp: Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap(),
+                occupancy: None,
             })
             .unwrap();
         assert_eq!(
@@ -10933,6 +10960,7 @@ mod tests {
                 attempt_id: None,
                 turn_id: None,
                 timestamp: Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap(),
+                occupancy: None,
             };
             store.arm_compaction_fault_script([fault]);
             assert!(store.commit_compaction(input()).is_err());
@@ -11706,6 +11734,7 @@ mod tests {
                 attempt_id: None,
                 turn_id: None,
                 timestamp: Utc.with_ymd_and_hms(2026, 8, 27, 6, 2, 0).unwrap(),
+                occupancy: None,
             })
             .expect("compaction commits");
 
@@ -12688,6 +12717,7 @@ mod tests {
                 attempt_id: None,
                 turn_id: None,
                 timestamp: Utc::now(),
+                occupancy: None,
             })
             .unwrap();
         assert!(
@@ -14547,6 +14577,7 @@ mod tests {
                 attempt_id: None,
                 turn_id: None,
                 timestamp: Utc::now(),
+                occupancy: None,
             })
             .unwrap();
         let head = store.load_head().unwrap();

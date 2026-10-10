@@ -990,7 +990,7 @@ independently of the still-pending RPC. A new explicit invocation receives a new
 old transport callbacks cannot change it. A confirmed successful
 RPC remains successful if the following read repair fails.
 
-`last_request_occupancy` (shown by the TUI status line and the Web composer's
+`occupancy` (shown by the TUI status line and the Web composer's
 context ring) carries input tokens, capacity, provider-facing model and an
 estimated breakdown, all frozen in the same native RequestSnapshot. The breakdown
 prices the Effective System Prompt and Tool definitions with the default
@@ -998,6 +998,11 @@ prices the Effective System Prompt and Tool definitions with the default
 zero. Desired model
 selection cannot change its denominator. The most recent provider measurement remains available while newer requests stream
 or finish without usage. A new measurement replaces it using its own frozen snapshot.
-Compaction invalidates occupancy until a later request measurement. Zero is a real
+Pending or failed compaction preserves that reading. A successful compaction atomically
+records the rebuilt primary context estimate, capacity and model; `estimated` marks
+its provenance. This reading replaces the preceding request measurement and survives
+attachment/restart, without contributing to cumulative provider usage. Transcript checkpoint metadata derives the exact replaced canonical-message count
+and native history-only estimate from the immutable replacement span, including
+retired checkpoints and copied lineage. Summary prose contributes no facts. Zero is a real
 measurement; absence or invalid capacity is unavailable, never zero. Paging does
 not change measurement authority and navigation does not generate requests.

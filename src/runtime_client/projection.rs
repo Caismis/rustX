@@ -307,7 +307,7 @@ impl SnapshotCandidate {
                     message: e.to_string(),
                 })?;
         self.snapshot.transcript = page;
-        self.snapshot.context.last_request_occupancy = occupancy;
+        self.snapshot.context.occupancy = occupancy;
         Ok(self)
     }
 }
@@ -1674,7 +1674,6 @@ impl RuntimeClientProjection {
     ) -> Vec<RuntimeClientEvent> {
         match event {
             RuntimeEvent::CompactionStarted => {
-                self.snapshot.context.last_request_occupancy = None;
                 self.snapshot.context.compaction_error = None;
                 self.snapshot.context.compaction_in_progress = true;
                 vec![RuntimeClientEvent::ContextCompactionStarted {
@@ -1697,8 +1696,10 @@ impl RuntimeClientProjection {
                 surface_revision,
                 tokens_before,
                 estimated_tokens_after,
+                occupancy,
             } => {
                 self.snapshot.context.compaction_in_progress = false;
+                self.snapshot.context.occupancy.clone_from(occupancy);
                 let compaction = RuntimeClientCompactionView {
                     generation: *generation,
                     summary_message_id: summary_message_id.clone(),
@@ -2135,14 +2136,9 @@ impl RuntimeClientProjection {
             self.wake_subscribers();
         }
         self.read_domains_dirty = false;
-        if self.snapshot.transcript != transcript
-            || self.snapshot.context.last_request_occupancy != occupancy
-        {
+        if self.snapshot.transcript != transcript || self.snapshot.context.occupancy != occupancy {
             self.snapshot.transcript = transcript.clone();
-            self.snapshot
-                .context
-                .last_request_occupancy
-                .clone_from(&occupancy);
+            self.snapshot.context.occupancy.clone_from(&occupancy);
             if publish {
                 self.publish(RuntimeClientEvent::ReadDomainsUpdated {
                     transcript,
@@ -4515,6 +4511,7 @@ mod tests {
                     source: TokenMeasurementSource::ProviderReported,
                 },
                 estimated_tokens_after: 1700,
+                occupancy: None,
             },
         );
         apply_event(
@@ -4530,6 +4527,7 @@ mod tests {
                     source: TokenMeasurementSource::Estimated,
                 },
                 estimated_tokens_after: 1800,
+                occupancy: None,
             },
         );
 
@@ -4985,6 +4983,7 @@ mod tests {
                     source: TokenMeasurementSource::Estimated,
                 },
                 estimated_tokens_after: 1,
+                occupancy: None,
             },
             RuntimeEvent::CompactionFailed {
                 error: "boom".to_owned(),
@@ -5049,6 +5048,7 @@ mod tests {
                     source: TokenMeasurementSource::Estimated,
                 },
                 estimated_tokens_after: 1_900,
+                occupancy: None,
             },
         });
 

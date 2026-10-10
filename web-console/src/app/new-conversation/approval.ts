@@ -1,5 +1,5 @@
 import type { TranslationKey } from '../../locale/translation';
-import type { ApprovalMode } from '../../../../protocol/app-server/v42';
+import type { ApprovalMode } from '../../../../protocol/app-server/v43';
 import { admitsSourceMutation, unitOutcome } from '../settings/machines/settings-target';
 import type { SettingsTargetActor } from '../settings/machines/system';
 import { awaitingCommitObservation, requiresReview } from '../settings/machines/unit-transaction';

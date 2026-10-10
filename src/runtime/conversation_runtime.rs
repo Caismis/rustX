@@ -2632,6 +2632,7 @@ impl RuntimeInner {
                     surface_revision,
                     tokens_before,
                     estimated_tokens_after,
+                    ..
                 } = &completed.persisted_event.event
                 else {
                     return ManualCompactionTaskResult {
@@ -17022,6 +17023,7 @@ mod tests {
                     attempt_id: None,
                     turn_id: None,
                     timestamp: fixed_time(),
+                    occupancy: None,
                 })
                 .expect("atomic compaction summary");
         }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import type { RuntimeClientAgent, RuntimeClientSnapshot } from '../../../../protocol/app-server/v42';
+import type { RuntimeClientAgent, RuntimeClientSnapshot } from '../../../../protocol/app-server/v43';
 import type { AppServerClient } from '../../client/app-server';
 import type { Observation } from '../../client/session-lifecycle/port';
 import { AgentReading, type AgentReadingState } from '../../client/agent-reading';

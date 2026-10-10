@@ -468,7 +468,7 @@ fn interrupted_output_and_incomplete_usage_never_claim_completion_or_zero() {
 }
 
 #[test]
-fn context_measurement_is_native_and_is_invalidated_by_compaction() {
+fn context_measurement_survives_pending_and_failed_compaction() {
     let store = SqliteConversationStore::in_memory(ConversationId::new(
         "conv_b05f9cb7-dcec-7fa1-8fa9-2047ae76d95f",
     ))
@@ -524,14 +524,30 @@ fn context_measurement_is_native_and_is_invalidated_by_compaction() {
     );
     let totals = page(&store, None, 64).statistics;
     append(&store, "a", RuntimeEvent::CompactionStarted);
+    let pending = crate::context::occupancy::read(&store, store.presentation_frontier().unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        pending.input_tokens, 0,
+        "maintenance preserves even a measured zero"
+    );
+    assert!(!pending.estimated);
+    append(
+        &store,
+        "a",
+        RuntimeEvent::CompactionFailed {
+            error: "summary failed".into(),
+        },
+    );
     assert_eq!(
         crate::context::occupancy::read(&store, store.presentation_frontier().unwrap()).unwrap(),
-        None
+        Some(pending)
     );
     assert_eq!(page(&store, None, 64).statistics, totals);
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn real_compaction_preserves_response_identity_cut_and_cumulative_usage() {
     let store = SqliteConversationStore::in_memory(ConversationId::new(
         "conv_b05f9cb7-dcec-7fa1-8fa9-2047ae76d95f",
@@ -577,17 +593,44 @@ fn real_compaction_preserves_response_identity_cut_and_cumulative_usage() {
             attempt_id: None,
             turn_id: None,
             timestamp: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+            occupancy: Some(crate::context::occupancy::estimate(
+                20,
+                4096,
+                "compaction-primary",
+                "system",
+                &[],
+            )),
         })
         .unwrap();
     let outline_after = store.conversation_turns(0, 64).unwrap();
     assert_eq!(outline_before.turns, outline_after.turns);
     assert_ne!(outline_before.cut, outline_after.cut);
     let after = page(&store, None, 64);
+    let marker = after
+        .entries
+        .iter()
+        .find_map(|entry| entry.compaction.as_ref())
+        .unwrap();
+    assert_eq!(marker.retired_messages, 2);
+    assert!(marker.retired_tokens > 0);
+    assert_eq!(marker.manual, Some(true));
+    let historical = page(&store, None, 1);
+    assert_eq!(
+        historical.entries[0].compaction.as_ref(),
+        Some(marker),
+        "a bounded page resolves its own replacement facts"
+    );
     assert_eq!(tails(&after)[0], &tail);
     assert_eq!(after.statistics, before.statistics);
     assert_eq!(
         crate::context::occupancy::read(&store, store.presentation_frontier().unwrap()).unwrap(),
-        None
+        Some(crate::context::occupancy::estimate(
+            20,
+            4096,
+            "compaction-primary",
+            "system",
+            &[]
+        ))
     );
     assert!(is_completed_response(&store, &tail.closing_message_id).unwrap());
     assert_eq!(
@@ -617,6 +660,17 @@ fn real_compaction_preserves_response_identity_cut_and_cumulative_usage() {
     let child = SqliteConversationStore::in_memory(child_id).unwrap();
     child.initialize_lineage(&seed).unwrap();
     let inherited = page(&child, None, 64);
+    let copied_marker = inherited
+        .entries
+        .iter()
+        .find_map(|entry| entry.compaction.as_ref())
+        .unwrap();
+    assert_eq!(copied_marker.retired_messages, 2);
+    assert!(copied_marker.retired_tokens > 0);
+    assert_eq!(
+        copied_marker.manual, None,
+        "copied history does not fabricate local command attribution"
+    );
     assert_eq!(tails(&inherited).len(), 1);
     let inherited_tail = tails(&inherited)[0];
     assert_eq!(inherited_tail.origin, tail.origin);

@@ -5,7 +5,7 @@
 // under the composer. Every figure is a native rustX reading; the browser
 // tokenizes and times nothing. Harness's Compact mode, plugin dock slots and
 // cache-write bucket have no rustX counterpart and are excluded.
-import type { ContextOccupancy, ConversationStatistics, ModelUsage } from '../../../../protocol/app-server/v42';
+import type { ContextOccupancy, ConversationStatistics, ModelUsage } from '../../../../protocol/app-server/v43';
 import type { Translate } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
 import { IconDatabaseOutline16, IconGaugeOutline16 } from '../../presentation/primitives/icons';
@@ -109,7 +109,7 @@ const ROWS = [
   { key: 'message_tokens', label: 'agent:usage.context-messages', color: css.colorMessages },
 ] as const;
 
-/** The last measured request's context occupancy, with its estimated composition. */
+/** Latest native request reading or committed compacted-context estimate. */
 function ContextMeter({ occupancy }: { occupancy: ContextOccupancy }) {
   const tx = useTranslation();
   if (!(occupancy.context_window_tokens > 0)) return null;
@@ -118,7 +118,7 @@ function ContextMeter({ occupancy }: { occupancy: ContextOccupancy }) {
   const [before = '', after = ''] = tx('agent:usage.context-aria', { percent: READING_SLOT }).split(READING_SLOT).map(part => part.trim());
   const breakdown = occupancy.breakdown;
   const parts = breakdown.system_tokens + breakdown.tool_tokens + breakdown.message_tokens;
-  // The bar's length stays the measured percent; the estimate only proportions its parts.
+  // Native reading owns the percent; heuristic composition proportions its parts.
   const segments = (parts === 0 ? [{ key: 'total', color: undefined, width: percent }]
     : ROWS.map(row => ({ key: row.key, color: row.color, width: percent * breakdown[row.key] / parts }))).filter(part => part.width > 0);
   return <StatDialog triggerClassName={css.meter} label={tx('agent:usage.context-aria', { percent: reading })} title={tx('agent:usage.context-used')} panelClassName={css.contextPanel}
@@ -130,8 +130,8 @@ function ContextMeter({ occupancy }: { occupancy: ContextOccupancy }) {
       <span className={css.headline}>{before}</span>
       <span className={css.percent}>{reading}</span>
       <span className={css.headline}>{after}</span>
-      {/* The provider measured the numerator exactly; only the parts below are estimates. */}
-      <span className={css.figures}>{`${formatTokens(occupancy.input_tokens, tx)} / ${formatTokens(occupancy.context_window_tokens, tx)}`}</span>
+      {/* Native provenance marks a rebuilt-context estimate; provider readings remain exact. */}
+      <span className={css.figures}>{`${occupancy.estimated ? '~' : ''}${formatTokens(occupancy.input_tokens, tx)} / ${formatTokens(occupancy.context_window_tokens, tx)}`}</span>
     </div>
     <div className={css.bar}>{segments.map(segment => <div key={segment.key} className={segment.color ? `${css.segment} ${segment.color}` : css.segment} style={{ width: `${segment.width}%` }}/>)}</div>
     <dl className={css.rows}>
@@ -143,7 +143,7 @@ function ContextMeter({ occupancy }: { occupancy: ContextOccupancy }) {
   </StatDialog>;
 }
 
-/** The composer dock: native whole-conversation totals and the last request's occupancy. */
+/** The composer dock: native whole-conversation totals and current context reading. */
 export function ConversationStats({ statistics, occupancy }: { statistics?: ConversationStatistics | null; occupancy?: ContextOccupancy | null }) {
   const tx = useTranslation();
   if (!statistics && !occupancy) return null;

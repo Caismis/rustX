@@ -1,6 +1,6 @@
 /** Pure Runtime Client read-model fold. Routing/cursor continuity belongs to
  * the attachment owner. No I/O, providers, React, or execution authority. */
-import type { RuntimeClientSnapshot as Snapshot, RuntimeClientEvent as Event, InFlightBlock, ForegroundToolExecution } from './v42.ts';
+import type { RuntimeClientSnapshot as Snapshot, RuntimeClientEvent as Event, InFlightBlock, ForegroundToolExecution } from './v43.ts';
 
 const upsert = <T>(rows: readonly T[] | undefined, value: T, key: (row: T) => string): T[] => {
   const index = (rows ?? []).findIndex(row => key(row) === key(value));
@@ -17,7 +17,7 @@ export function foldRuntimeEvent(state: Snapshot, event: Event): Snapshot {
   const withTool = (call: string, update: (tool: ForegroundToolExecution) => ForegroundToolExecution) => withAttempt({ foreground: (attempt?.foreground ?? []).map(tool => tool.call_id === call ? update(tool) : tool) });
   switch (event.type) {
     case 'trace_changed': return state; // Separate read domain; cursor still advances.
-    case 'read_domains_updated': return { ...state, transcript: event.transcript, todos: event.todos, context: { ...state.context!, last_request_occupancy: event.occupancy ?? undefined } };
+    case 'read_domains_updated': return { ...state, transcript: event.transcript, todos: event.todos, context: { ...state.context!, occupancy: event.occupancy ?? undefined } };
     case 'goal_changed': return { ...state, goal: event.view };
     case 'workflows_updated': return { ...state, workflows: event.workflows };
     case 'attempt_started': return { ...state, attempt: { attempt_id: event.attempt_id, phase: { type: 'running' }, turn: 0, model: event.model, execution_settings: event.execution_settings, last_usage: undefined, in_flight: undefined, foreground: [] } };

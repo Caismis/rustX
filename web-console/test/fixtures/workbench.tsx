@@ -37,7 +37,7 @@ if (new URL(location.href).searchParams.has('composer-layout')) {
   saved.model.configured = { model, reasoningProfile: 'on' };
   saved.model.effective = { ...saved.model.effective, model, reasoningProfile: 'on' };
   saved.transcript.statistics = agentMetrics.statistics;
-  saved.context = { compaction_count: 0, compaction_in_progress: false, last_request_occupancy: agentMetrics.occupancy };
+  saved.context = { compaction_count: 0, compaction_in_progress: false, occupancy: agentMetrics.occupancy };
   saved.transcript.entries = Array.from({ length: 20 }, (_, index) => ({ cursor: String(index + 1), item: { type: 'message' as const, message: { id: `saved-${index}`, role: index % 2 ? 'assistant' as const : 'user' as const, source: 'human' as const, content: [{ type: 'text' as const, text: `Saved message ${index}: ` + 'Previously saved conversation content. '.repeat(12) }] } } }));
   const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], toolCalls: true, reasoning: false };
   const models = [model, 'Short'].map(model => ({ model, protocol: 'openai_responses' as const, contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'literal' as const }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, reasoningProfiles: [{ id: 'on', enabled: true }], defaultReasoningProfile: 'on' }));

@@ -8,7 +8,7 @@ const act = async (fn: () => void | Promise<void>) => { await fn(); flushSync(()
 import { Profiler } from 'react';
 import { Server, snapshot } from '../fixture';
 import { ConversationLive } from '../../src/app/agent/ConversationLive';
-import type { RuntimeClientEvent, RuntimeClientSnapshot } from '../../../protocol/app-server/v42';
+import type { RuntimeClientEvent, RuntimeClientSnapshot } from '../../../protocol/app-server/v43';
 
 (window as any).run420 = async () => {
   const browserFrame = window.requestAnimationFrame.bind(window);

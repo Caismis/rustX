@@ -434,7 +434,7 @@ impl ClientInner {
                 candidate.read_cut,
                 Ok((
                     candidate.snapshot.transcript.clone(),
-                    candidate.snapshot.context.last_request_occupancy.clone(),
+                    candidate.snapshot.context.occupancy.clone(),
                 )),
                 true,
             );
@@ -6281,7 +6281,7 @@ mod tests {
                 old_cut,
                 Ok((
                     candidate.snapshot.transcript.clone(),
-                    candidate.snapshot.context.last_request_occupancy.clone()
+                    candidate.snapshot.context.occupancy.clone()
                 )),
                 true
             ),
@@ -6306,6 +6306,7 @@ mod tests {
             replayed.messages.push(message.clone());
             replayed.transcript.entries.push(
                 super::super::snapshot::RuntimeClientTranscriptEntry {
+                    compaction: None,
                     cursor,
                     item: super::super::snapshot::RuntimeClientTranscriptItem::Message { message },
                     tool_calls: Vec::new(),

@@ -457,9 +457,9 @@ async fn attachment_request_correlation_and_version_negotiation() {
             requested: 44,
         })
     ));
-    // v42 spelled Trace as a single-level entry with blanket-redacted request
+    // v43 spelled Trace as a single-level entry with blanket-redacted request
     // and Tool input. Issue #364 replaced that vocabulary with the bounded
-    // summary/detail split, so a v42 client is refused rather than served a
+    // summary/detail split, so a v43 client is refused rather than served a
     // shape it cannot decode.
     assert!(matches!(
         host.attach(40),

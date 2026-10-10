@@ -8436,8 +8436,8 @@
             "null"
           ]
         },
-        "last_request_occupancy": {
-          "description": "Last prepared request occupancy from the Context owner; absent after compaction until measured again.",
+        "occupancy": {
+          "description": "Latest native measured request or committed compacted-context estimate.",
           "anyOf": [
             {
               "$ref": "#/$defs/ContextOccupancy"
@@ -8509,18 +8509,23 @@
       ]
     },
     "ContextOccupancy": {
-      "description": "The last provider-measured request context for this Conversation.\nIt is explicitly a request reading, not an estimate of unsent composer text.",
+      "description": "Latest native context reading for this Conversation, with explicit provenance.\nUnsent composer text is never included.",
       "type": "object",
       "properties": {
+        "estimated": {
+          "description": "True for the native rebuilt-context estimate after compaction.",
+          "type": "boolean",
+          "default": false
+        },
         "input_tokens": {
-          "description": "Exact normalized effective request input, including cache reads.",
+          "description": "Normalized request input, or the committed rebuilt-context estimate.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0,
           "maximum": 9007199254740991
         },
         "context_window_tokens": {
-          "description": "Capacity frozen in the same request's native model snapshot.",
+          "description": "Capacity frozen in the request or compaction's native model snapshot.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0,
@@ -8544,7 +8549,7 @@
       ]
     },
     "ContextBreakdown": {
-      "description": "Where one request's measured input went, priced by the provider-neutral\n`ceil(bytes / 4)` estimate. Only the System prompt and Tool definitions are\nestimated; messages are the measured remainder, so the parts sum to the\nprovider's reading unless the estimates alone exceed it.",
+      "description": "Where one request's measured input went, priced by the provider-neutral\n`ceil(bytes / 4)` estimate. System prompt and Tool definitions are priced\nheuristically; messages are the remainder of the measured or estimated total.\nThe parts sum to that total unless the component estimates alone exceed it.",
       "type": "object",
       "properties": {
         "system_tokens": {
@@ -12129,6 +12134,17 @@
       "description": "One derived transcript item and its stable durable cursor.",
       "type": "object",
       "properties": {
+        "compaction": {
+          "description": "Native facts of a canonical compaction checkpoint, including copied lineage.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CompactionMarker"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "turn_process": {
           "description": "Exact native Attempt process membership, derived by native owners.\nAbsence is not permission for a client to infer a process boundary.",
           "anyOf": [
@@ -12176,6 +12192,34 @@
       "required": [
         "cursor",
         "item"
+      ]
+    },
+    "CompactionMarker": {
+      "description": "Facts of one checkpoint, not cumulative totals over the compaction lineage.",
+      "type": "object",
+      "properties": {
+        "retired_messages": {
+          "description": "Exact number of canonical history messages replaced by this checkpoint.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "retired_tokens": {
+          "description": "Native history-only estimate, excluding system prompt and tool schemas.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "manual": {
+          "description": "Local Journal attribution; copied lineage has no local command owner.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "retired_messages",
+        "retired_tokens"
       ]
     },
     "TurnProcessView": {

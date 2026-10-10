@@ -7339,6 +7339,7 @@ model = "provider/model"
                 attempt_id: None,
                 turn_id: None,
                 timestamp: Utc.with_ymd_and_hms(2026, 8, 21, 12, 0, 0).unwrap(),
+                occupancy: None,
             })
             .expect("real compaction commit");
         let retained = lineage_at(&source_store, &source_conversation, retained_revision);
@@ -7538,6 +7539,7 @@ model = "provider/model"
                 attempt_id: None,
                 turn_id: None,
                 timestamp: Utc.with_ymd_and_hms(2026, 8, 26, 12, 0, 0).unwrap(),
+                occupancy: None,
             })
             .expect("real compaction commit");
         let compacted = source_store.load_head().expect("compacted head");
@@ -7638,6 +7640,7 @@ model = "provider/model"
                 attempt_id: None,
                 turn_id: None,
                 timestamp: Utc.with_ymd_and_hms(2026, 8, 26, 12, 0, 0).unwrap(),
+                occupancy: None,
             })
             .expect("real compaction commit");
 
@@ -7696,6 +7699,7 @@ model = "provider/model"
                 attempt_id: None,
                 turn_id: None,
                 timestamp: Utc.with_ymd_and_hms(2026, 8, 26, 12, 0, 0).unwrap(),
+                occupancy: None,
             })
             .expect("real compaction commit");
         store.load_head().expect("compacted head").revision

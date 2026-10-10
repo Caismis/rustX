@@ -1,4 +1,4 @@
-import type { ConversationTurn, ConversationTurnId, ConversationTurnPage, RuntimeClientSnapshot } from '../../../../protocol/app-server/v42';
+import type { ConversationTurn, ConversationTurnId, ConversationTurnPage, RuntimeClientSnapshot } from '../../../../protocol/app-server/v43';
 import { turnKey } from '../../client/transcript';
 
 /** One rail mark. A loaded mark carries its native turn; an unloaded one is

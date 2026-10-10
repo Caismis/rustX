@@ -4,7 +4,7 @@ import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { ConversationStats } from '../src/app/agent/UsageStats';
 import { localeController } from '../src/locale/controller';
 import { prependTranscript, refreshTranscript, replaceTranscript } from '../src/client/transcript';
-import type { CompletedResponseView, RuntimeClientSnapshot } from '../../protocol/app-server/v42';
+import type { CompletedResponseView, RuntimeClientSnapshot } from '../../protocol/app-server/v43';
 import { snapshot } from './fixture';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); act(() => localeController.setLocale('en')); });
@@ -68,7 +68,7 @@ it('composer pills read native totals and the last measured request, never the l
   const state=conversation(); state.transcript.entries=[];
   const statistics={...state.transcript.statistics!,timing:{model_ms:20500,tool_ms:9652000,mean_ttft_ms:3100,output_tokens_per_second:49.2},
     reported_usage:{input_tokens:22297,output_tokens:543,total_tokens:22840,details:{cached_input_tokens:13568}}};
-  const occupancy={input_tokens:7700,context_window_tokens:262144,model:'historical-model',breakdown:{system_tokens:1900,tool_tokens:6000,message_tokens:0}};
+  const occupancy={estimated: false, input_tokens:7700,context_window_tokens:262144,model:'historical-model',breakdown:{system_tokens:1900,tool_tokens:6000,message_tokens:0}};
   act(()=>localeController.setLocale('zh'));
   const ui=render(<ConversationStats statistics={statistics} occupancy={occupancy}/>);
   fireEvent.click(ui.getByRole('button',{name:'12 轮 34 步 · 49 词元/秒'}));

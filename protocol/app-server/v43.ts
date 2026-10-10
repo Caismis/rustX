@@ -5279,9 +5279,9 @@ export interface RuntimeClientContextView {
    */
   compaction_error?: string | null;
   /**
-   * Last prepared request occupancy from the Context owner; absent after compaction until measured again.
+   * Latest native measured request or committed compacted-context estimate.
    */
-  last_request_occupancy?: ContextOccupancy | null;
+  occupancy?: ContextOccupancy | null;
   /**
    * Whether the runtime currently owns a context-compaction operation.
    * This is live operation state, not inferred from token usage.
@@ -5316,16 +5316,20 @@ export interface RuntimeClientManualCompaction {
   error?: string | null;
 }
 /**
- * The last provider-measured request context for this Conversation.
- * It is explicitly a request reading, not an estimate of unsent composer text.
+ * Latest native context reading for this Conversation, with explicit provenance.
+ * Unsent composer text is never included.
  */
 export interface ContextOccupancy {
   /**
-   * Exact normalized effective request input, including cache reads.
+   * True for the native rebuilt-context estimate after compaction.
+   */
+  estimated?: boolean;
+  /**
+   * Normalized request input, or the committed rebuilt-context estimate.
    */
   input_tokens: number;
   /**
-   * Capacity frozen in the same request's native model snapshot.
+   * Capacity frozen in the request or compaction's native model snapshot.
    */
   context_window_tokens: number;
   /**
@@ -6486,6 +6490,10 @@ export interface ConversationTiming {
  */
 export interface RuntimeClientTranscriptEntry {
   /**
+   * Native facts of a canonical compaction checkpoint, including copied lineage.
+   */
+  compaction?: CompactionMarker | null;
+  /**
    * Exact native Attempt process membership, derived by native owners.
    * Absence is not permission for a client to infer a process boundary.
    */
@@ -6670,6 +6678,23 @@ export interface RuntimeClientTranscriptEntry {
             };
         type: 'interaction_settled';
       };
+}
+/**
+ * Facts of one checkpoint, not cumulative totals over the compaction lineage.
+ */
+export interface CompactionMarker {
+  /**
+   * Exact number of canonical history messages replaced by this checkpoint.
+   */
+  retired_messages: string;
+  /**
+   * Native history-only estimate, excluding system prompt and tool schemas.
+   */
+  retired_tokens: string;
+  /**
+   * Local Journal attribution; copied lineage has no local command owner.
+   */
+  manual?: boolean | null;
 }
 /**
  * One native process owner shared by live, successful and unsuccessful Turns.
@@ -8934,9 +8959,9 @@ export interface RuntimeClientContextView1 {
    */
   compaction_error?: string | null;
   /**
-   * Last prepared request occupancy from the Context owner; absent after compaction until measured again.
+   * Latest native measured request or committed compacted-context estimate.
    */
-  last_request_occupancy?: ContextOccupancy | null;
+  occupancy?: ContextOccupancy | null;
   /**
    * Whether the runtime currently owns a context-compaction operation.
    * This is live operation state, not inferred from token usage.
@@ -10260,9 +10285,9 @@ export interface RuntimeClientContextView2 {
    */
   compaction_error?: string | null;
   /**
-   * Last prepared request occupancy from the Context owner; absent after compaction until measured again.
+   * Latest native measured request or committed compacted-context estimate.
    */
-  last_request_occupancy?: ContextOccupancy | null;
+  occupancy?: ContextOccupancy | null;
   /**
    * Whether the runtime currently owns a context-compaction operation.
    * This is live operation state, not inferred from token usage.
@@ -10293,9 +10318,9 @@ export interface RuntimeClientContextView3 {
    */
   compaction_error?: string | null;
   /**
-   * Last prepared request occupancy from the Context owner; absent after compaction until measured again.
+   * Latest native measured request or committed compacted-context estimate.
    */
-  last_request_occupancy?: ContextOccupancy | null;
+  occupancy?: ContextOccupancy | null;
   /**
    * Whether the runtime currently owns a context-compaction operation.
    * This is live operation state, not inferred from token usage.
@@ -10326,9 +10351,9 @@ export interface RuntimeClientContextView4 {
    */
   compaction_error?: string | null;
   /**
-   * Last prepared request occupancy from the Context owner; absent after compaction until measured again.
+   * Latest native measured request or committed compacted-context estimate.
    */
-  last_request_occupancy?: ContextOccupancy | null;
+  occupancy?: ContextOccupancy | null;
   /**
    * Whether the runtime currently owns a context-compaction operation.
    * This is live operation state, not inferred from token usage.

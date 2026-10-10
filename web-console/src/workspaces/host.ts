@@ -1,5 +1,5 @@
-import type { McpProbeResult, SourceMutation, SourceSettings } from '../../../protocol/app-server/v42.ts';
-import type { AttachmentTarget, SessionFileReference } from '../../../protocol/app-server/v42.ts';
+import type { McpProbeResult, SourceMutation, SourceSettings } from '../../../protocol/app-server/v43.ts';
+import type { AttachmentTarget, SessionFileReference } from '../../../protocol/app-server/v43.ts';
 import type { DocumentRequest, DocumentResult } from '../../shared/documents.ts';
 export interface DeliveryRead { agent_id?: string; target: AttachmentTarget; message_id: string; delivery_index: number }
 export interface DeliveryBytes { file: SessionFileReference; data: string }

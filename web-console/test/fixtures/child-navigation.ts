@@ -1,4 +1,4 @@
-import type { ConversationTurn, RuntimeClientTranscriptEntry } from '../../../protocol/app-server/v42';
+import type { ConversationTurn, RuntimeClientTranscriptEntry } from '../../../protocol/app-server/v43';
 import { childConversation, type Server } from '../fixture';
 
 /** Large child history proves navigation uses native directory/window reads,

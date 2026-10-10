@@ -4,7 +4,7 @@ import { TurnNavigator } from '../src/app/agent/TurnNavigator';
 import { ConversationLive } from '../src/app/agent/ConversationLive';
 import { Server, snapshot } from './fixture';
 import { turnAnchor } from '../src/client/transcript';
-import type { RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v42';
+import type { RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v43';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ChatViewport } from '../src/presentation/layout/ChatViewport';

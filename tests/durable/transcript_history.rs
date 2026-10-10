@@ -465,6 +465,7 @@ fn requirement_02_compacted_history_remains_pageable_after_surface_replacement()
             attempt_id: None,
             turn_id: None,
             timestamp: fixed_time(),
+            occupancy: None,
         })
         .expect("compaction");
 

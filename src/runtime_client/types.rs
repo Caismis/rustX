@@ -262,7 +262,9 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// Version 61 adds child-owned Trace reads and exact current Attempt activity.
 /// Version 62 distinguishes native non-human and mixed Trace input.
 /// Version 64 adds child turn directories and cut-bound transcript windows.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 64;
+/// Version 65 carries native transcript checkpoint counts and replaces the last
+/// request-only context seat with a measured-or-compacted `occupancy` reading.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 65;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1126,7 +1128,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 64);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 65);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

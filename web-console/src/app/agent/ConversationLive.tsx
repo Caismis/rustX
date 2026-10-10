@@ -12,7 +12,7 @@ import { todoDock, goalDock, queueRows } from '../../bindings/composer-context';
 import { ChatViewport } from '../../presentation/layout/ChatViewport';
 import { Trajectory } from '../trajectory/Trajectory';
 import type { ResponseAction } from '../commands/native';
-import type { CompletedResponseView } from '../../../../protocol/app-server/v42';
+import type { CompletedResponseView } from '../../../../protocol/app-server/v43';
 import { useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { UserMessage, AssistantMessage } from '../../presentation/agent/Message';
 import pendingCss from './PendingMessage.module.css';
@@ -97,7 +97,7 @@ export function ConversationTotals({ client, sessionId }: { client: AppServerCli
     const view = state.views[sessionId];
     // A detached or disconnected view's last reading is not current occupancy.
     const current = state.connection === 'connected' && view?.attachment === 'attached';
-    return { statistics: view?.attachment === 'attaching' ? view.statisticsPreview?.statistics ?? view.snapshot?.transcript.statistics : view?.snapshot?.transcript.statistics, occupancy: current ? view?.snapshot?.context?.last_request_occupancy : view?.attachment === 'attaching' ? view.statisticsPreview?.occupancy ?? view.snapshot?.context?.last_request_occupancy : undefined };
+    return { statistics: view?.attachment === 'attaching' ? view.statisticsPreview?.statistics ?? view.snapshot?.transcript.statistics : view?.snapshot?.transcript.statistics, occupancy: current ? view?.snapshot?.context?.occupancy : view?.attachment === 'attaching' ? view.statisticsPreview?.occupancy ?? view.snapshot?.context?.occupancy : undefined };
   }, shallowEqual);
   return <ConversationStats statistics={facts.statistics} occupancy={facts.occupancy}/>;
 }

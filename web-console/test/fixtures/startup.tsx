@@ -6,7 +6,7 @@ import { Server, snapshot, childConversation } from '../fixture';
 import { cfg3Source, cfg3Effective } from '../cfg3-data';
 import { traceRecord, traceTool, requestDetail, toolDetail } from '../trace-fixture';
 import { RpcFailure } from '../../src/client/app-server';
-import type { Request } from '../../../protocol/app-server/v42';
+import type { Request } from '../../../protocol/app-server/v43';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -116,7 +116,7 @@ const handled = new Set<Request>(server.requests.filter(row => row.request.metho
   requests: () => server.requests.map(({ request }) => request),
   async contextReading(input: number | null, running = false) {
     const next = { ...server.snapshots.get('A')! };
-    next.context = { compaction_count: 0, compaction_in_progress: false, last_request_occupancy: input === null ? null : {
+    next.context = { compaction_count: 0, compaction_in_progress: false, occupancy: input === null ? null : { estimated: false,
       input_tokens: input, context_window_tokens: 100000, model: 'measured/model',
       breakdown: { system_tokens: 1000, tool_tokens: 2000, message_tokens: input - 3000 },
     } };

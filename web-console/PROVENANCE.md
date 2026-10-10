@@ -1983,8 +1983,8 @@ file/artifact access resolves the owned child conversation and workspace.
 
 WebUI reuses AgentComposer and AttachmentIntake, scopes both conversation and
 trajectory preview resources to the Agent, and retires native observation reads
-when navigation changes. No child model settings are introduced. App Server v42,
-Runtime Client v64, child IPC v30 and Product Host file-read v3 are synchronized.
+when navigation changes. No child model settings are introduced. App Server v43,
+Runtime Client v65, child IPC v30 and Product Host file-read v3 are synchronized.
 The Browser plugin is unavailable; the repository's pinned Playwright browser
 validates real native child processes and deterministic provider streams.
 
@@ -2045,3 +2045,19 @@ Activity and usage labels can shrink with ellipses while the context meter
 retains its ring and full percentage. Accessible names and click-open panels
 preserve complete native readings at narrow pane widths. No statistics,
 occupancy or streaming authority changes.
+
+## Compaction checkpoints and occupancy
+
+Compared with Harness `5badb15009ae1756c3afe0ae0cef1faafc290ccc`:
+`ui-chat/src/client/chat/CompactionItem.tsx`, `CompactionCommandCard.tsx` and
+`MessageItem.module.css`, plus `ui-conversation/src/client/skeleton/ContextMeter.tsx`
+and `llm/token-meter/src/usage-projection.ts`. Manual checkpoints show `compact`
+and localized replaced-history counts with an approximate token price. The whole
+row uses the tertiary tone and transitions to secondary on hover, retaining the existing
+summary disclosure, sticky heading and uncapped Markdown body. Native transcript
+metadata resolves the canonical replacement span even in historical pages and
+copied lineage; the browser never recounts visible rows or parses summary prose.
+Pending/failed compaction preserves occupancy; success replaces it with the
+committed primary context estimate. The panel marks that estimate with `~` while
+reported cumulative billing remains unchanged. Native runtime ownership replaces
+Harness projection/plugin wiring; obsolete protocol imports are removed.

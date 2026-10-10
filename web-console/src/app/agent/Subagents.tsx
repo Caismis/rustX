@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Header layout adapted from ui-subagent/SubagentHeaderLineage; see PROVENANCE.md. */
 import { useLayoutEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
-import type { RuntimeClientAgent, AgentStatistics } from '../../../../protocol/app-server/v42';
+import type { RuntimeClientAgent, AgentStatistics } from '../../../../protocol/app-server/v43';
 import type { AppServerClient } from '../../client/app-server';
 import { useClientSelector } from '../../client/selectors';
 import { useTranslation } from '../../locale/react';

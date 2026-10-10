@@ -334,8 +334,8 @@ no-overwrite rules, mutable file semantics, fork copies and deletion recovery.
 
 ## WEB-02 review corrections
 
-The mandatory App Server vocabulary is v42 (`rustx.app-server.v42` and generated
-`protocol/app-server/v42.ts` / `v42.schema.json`). v12 and earlier initialization and
+The mandatory App Server vocabulary is v43 (`rustx.app-server.v43` and generated
+`protocol/app-server/v43.ts` / `v43.schema.json`). v12 and earlier initialization and
 WebSocket offers are rejected; there is no compatibility mode. Runtime Client
 retains its independently versioned contract.
 
@@ -408,9 +408,10 @@ shows three pills, each opening a trigger-anchored stat dialog (Base UI
 Popover): Turn/Step counts with whole-session decode speed (LLM time, Tool time,
 mean TTFT, TPS from native `statistics.timing`), reported tokens with cache hit
 (uncached and cached input, output, and an explicit usage-report coverage row
-when some requests did not report), and the last measured request's context
-ring. The ring reads `last_request_occupancy` only while the view is connected
-and attached; its numerator is the provider measurement, and its System prompt /
+when some requests did not report), and the latest native context
+ring. The ring reads `occupancy` only while the view is connected
+and attached; its numerator is the provider measurement or the committed compaction
+estimate (marked `~` in the panel), and its System prompt /
 Tool definitions / Messages parts are the native `ceil(bytes / 4)` breakdown, the
 messages part being the measured remainder. No Web tokenization or browser-clock
 timing is used.
@@ -431,7 +432,7 @@ exact aggregate generation. Failed requests with evidence remain included.
 Immutable bootstrap provenance preserves response timing and usage through
 Branch/Fork/reopen/deeper lineage without copying source execution records.
 Destination execution totals remain destination-local. Mandatory versions are
-App Server v42, Runtime Client v64, SQLite v44, and Session catalog v13, with no
+App Server v43, Runtime Client v65, SQLite v44, and Session catalog v13, with no
 old protocol artifacts or compatibility readers.
 
 Projection cost is currently O(J + R): indexed 128-event batches over the captured
@@ -492,7 +493,7 @@ the existing transaction coordinator. A confirmation gates elevation. The source
 controls future admission; an already-admitted Attempt remains frozen. Composer
 model intent is different: it never authors the Workspace default model.
 
-App Server v42 / Runtime Client v64 project one `turn_process` owner on exact
+App Server v43 / Runtime Client v65 project one `turn_process` owner on exact
 canonical Assistant and Tool members. Native Journal identities, whole-process
 counts and an immutable control cursor survive unsuccessful settlement and
 bounded paging. Failed/stopped processes stay open; successful final-answer,

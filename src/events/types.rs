@@ -537,6 +537,9 @@ pub enum RuntimeEvent {
         tokens_before: TokenMeasurement,
         /// The deterministic estimate of the rebuilt request context.
         estimated_tokens_after: u64,
+        /// Native estimated occupancy at the atomic compaction commit.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        occupancy: Option<crate::context::occupancy::ContextOccupancy>,
     },
     /// Context compaction failed.
     CompactionFailed {
@@ -1351,6 +1354,7 @@ mod tests {
                     source: TokenMeasurementSource::Estimated,
                 },
                 estimated_tokens_after: 50,
+                occupancy: None,
             },
         ];
         for event in non_terminal {
