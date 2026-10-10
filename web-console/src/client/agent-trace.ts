@@ -24,20 +24,23 @@ export class AgentTraceReader {
     this.dirty = true;
     if (this.busy || !this.current()) return;
     this.busy = true;
-    let activeNavigation = this.navigation;
     try {
       while (this.dirty && this.current()) {
         this.dirty = false;
-        const navigation = activeNavigation = this.navigation;
-        const result = await this.client.request({ method: 'agent/trace', params: { target: this.proof.target, agent_id: this.agentId, limit: TRACE_PAGE_SIZE, records: traceInterests(this.cache) } }, 'trace', undefined, this.current);
-        if (this.current() && this.navigation === navigation) {
-          const next = refreshTrace(this.cache, result.page, result.page.updates);
-          if (next.epoch !== this.cache.epoch) this.paging = undefined;
-          this.publish({ ...next, error: undefined, loading: !!this.paging });
+        const navigation = this.navigation;
+        try {
+          const result = await this.client.request({ method: 'agent/trace', params: { target: this.proof.target, agent_id: this.agentId, limit: TRACE_PAGE_SIZE, records: traceInterests(this.cache) } }, 'trace', undefined, this.current);
+          if (this.current() && this.navigation === navigation) {
+            const next = refreshTrace(this.cache, result.page, result.page.updates);
+            if (next.epoch !== this.cache.epoch) this.paging = undefined;
+            this.publish({ ...next, error: undefined, loading: !!this.paging });
+          }
+        } catch (cause) {
+          if (this.current() && this.navigation === navigation) this.publish({ ...this.cache, error: String(cause), loading: !!this.paging });
         }
+        // A newer navigation/activity request still owns its queued refresh,
+        // even when the superseded read failed.
       }
-    } catch (cause) {
-      if (this.current() && this.navigation === activeNavigation) this.publish({ ...this.cache, error: String(cause), loading: !!this.paging });
     } finally { this.busy = false; }
   };
   locate = async (locator: TraceToolLocator): Promise<boolean> => {

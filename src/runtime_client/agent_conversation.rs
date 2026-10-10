@@ -39,6 +39,9 @@ fn failed(error: impl std::fmt::Display) -> RuntimeClientError {
 }
 struct Peer {
     stream: BufReader<UnixStream>,
+    // A watch timeout may cancel record() after consuming part of a frame.
+    // Keep those bytes with the connection for the next snapshot request.
+    pending_record: Vec<u8>,
     id: u64,
 }
 impl Peer {
@@ -50,6 +53,7 @@ impl Peer {
     ) -> Result<(RuntimeClientSnapshot, RuntimeClientCursor), RuntimeClientError> {
         let mut peer = Peer {
             stream: BufReader::new(UnixStream::connect(path).await.map_err(failed)?),
+            pending_record: Vec::new(),
             id: 0,
         };
         let request_id = peer.next_id();
@@ -94,7 +98,6 @@ impl Peer {
         Ok::<_, RuntimeClientError>((snapshot, cursor))
     }
     async fn record(&mut self) -> Result<serde_json::Value, RuntimeClientError> {
-        let mut record = Vec::new();
         loop {
             let bytes = self.stream.fill_buf().await.map_err(failed)?;
             if bytes.is_empty() {
@@ -102,13 +105,17 @@ impl Peer {
             }
             let end = bytes.iter().position(|b| *b == b'\n');
             let count = end.map_or(bytes.len(), |p| p + 1);
-            if record.len() + count > super::transport::stdio::STDIO_JSONL_MAX_RECORD_BYTES + 1 {
+            if self.pending_record.len() + count
+                > super::transport::stdio::STDIO_JSONL_MAX_RECORD_BYTES + 1
+            {
                 return Err(failed("observation record exceeds native bound"));
             }
-            record.extend_from_slice(&bytes[..count]);
+            self.pending_record.extend_from_slice(&bytes[..count]);
             self.stream.consume(count);
             if end.is_some() {
-                return serde_json::from_slice(&record).map_err(failed);
+                let result = serde_json::from_slice(&self.pending_record).map_err(failed);
+                self.pending_record.clear();
+                return result;
             }
         }
     }
@@ -290,6 +297,7 @@ mod tests {
         let (client, mut server) = UnixStream::pair().unwrap();
         let mut peer = Peer {
             stream: BufReader::new(client),
+            pending_record: Vec::new(),
             id: 0,
         };
         server.write_all(b"{\"cut\":1}\n{\"cut\":2}").await.unwrap();
@@ -299,6 +307,25 @@ mod tests {
             peer.record().await.is_err(),
             "unterminated EOF is never a cut"
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn peer_preserves_partial_record_when_watch_wait_expires() {
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let mut peer = Peer {
+            stream: BufReader::new(client),
+            pending_record: Vec::new(),
+            id: 0,
+        };
+        server.write_all(b"{\"cut\":").await.unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(10), peer.record())
+                .await
+                .is_err()
+        );
+        server.write_all(b"1}\n{\"cut\":2}\n").await.unwrap();
+        assert_eq!(peer.record().await.unwrap(), serde_json::json!({"cut": 1}));
+        assert_eq!(peer.record().await.unwrap(), serde_json::json!({"cut": 2}));
     }
 
     #[tokio::test]
@@ -311,6 +338,7 @@ mod tests {
         });
         let mut peer = Peer {
             stream: BufReader::new(client),
+            pending_record: Vec::new(),
             id: 0,
         };
         assert!(

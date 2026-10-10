@@ -81,3 +81,18 @@ it('a live rebase retires old paging without stranding or clearing the new page 
   expect(reader.snapshot().page.records.map(record => record.id)).toEqual(['trace:20']);
   reader.retire(); server.reply(newRequest); await newOlder;
 });
+it('returning to latest still refreshes when the superseded request fails', async () => {
+  const proof = await setup();
+  server.handlers.set('agent/trace', () => ({ type: 'trace', page: { records: [traceRecord(10)], next_cursor: null } }));
+  const reader = new AgentTraceReader(server.client, 'A', proof, 'child');
+  await reader.refresh();
+  server.held.add('agent/trace');
+  const refreshing = reader.refresh();
+  const oldRequest = await server.waitFor('agent/trace', 2);
+  await reader.latest();
+  server.held.delete('agent/trace');
+  server.socket.deliver({ jsonrpc: '2.0', id: oldRequest.id, error: { code: -32000, message: 'Read failed', data: { kind: 'operation_failed' } } });
+  await refreshing;
+  expect(reader.snapshot().page.records.map(record => record.id)).toEqual(['trace:10']);
+  expect(reader.snapshot().error).toBeUndefined();
+});
