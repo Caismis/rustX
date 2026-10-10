@@ -7380,6 +7380,146 @@ async fn issue459_removed_model_with_instructions_change_recovers_before_adoptio
     .await;
 }
 
+/// Issue #459: the mixed contract on a cold Session. The generation that
+/// removes the selected `local/a` and changes the instructions arrives while
+/// the Session is not resident: nothing is composed for it and its retained
+/// binding is untouched. Natural residency publishes the catalog on its own,
+/// the Instructions change waits for adoption, and recovery and adoption then
+/// proceed exactly as for a resident Session.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue459_cold_session_receives_mixed_publication_on_residency() {
+    use crate::model::catalog::ModelRef;
+    use crate::model::session::SessionModelConfig;
+    use crate::runtime::conversation_runtime::InboundAdmissionError;
+    Box::pin(bounded(async {
+        let fixture = Fixture::new().await;
+        let id = fixture.sessions[0].id.clone();
+        let conversation = fixture.sessions[0].active_conversation_id.clone();
+        fixture.manager.load(&id, None).await.unwrap();
+        let model = |id: &str| SessionModelConfig::of(ModelRef::parse(id).unwrap());
+        issue459_adopt_instructions(&fixture, "issue459 adopted instructions").await;
+        fixture
+            .manager
+            .set_model(&id, model("local/a"))
+            .await
+            .unwrap();
+        settled(&fixture, 0).await;
+        let retained = || {
+            fixture
+                .manager
+                .sessions
+                .configuration_bindings
+                .lock()
+                .unwrap()[&id]
+                .clone()
+        };
+        let before = retained();
+        fixture.manager.unload(&conversation).await.unwrap();
+        assert!(fixture.manager.configuration_runtime(&id).is_none());
+
+        let mut changed = fixture.manager.configuration_changes();
+        issue459_edit(&fixture, |document| {
+            issue459_replace_a_with_c(document);
+            issue459_set_instructions(document, "issue459 new instructions");
+        })
+        .await;
+        while !fixture.manager.applications.is_deferred(id.as_str()) {
+            changed.changed().await.unwrap();
+        }
+        // Cold: nothing composed, the retained binding is exactly as it was.
+        assert!(fixture.manager.configuration_runtime(&id).is_none());
+        let cold = retained();
+        assert_eq!(cold.binding_revision, before.binding_revision);
+        assert_eq!(cold.source_revisions, before.source_revisions);
+        assert_eq!(
+            cold.config().agent.instructions,
+            "issue459 adopted instructions"
+        );
+        assert!(
+            fixture
+                .manager
+                .configuration_application(&id)
+                .unwrap()
+                .candidate
+                .is_none()
+        );
+
+        // Residency publishes the catalog apart from the Instructions unit.
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        let application = session_settled(&fixture, &id).await;
+        assert_eq!(
+            application.units[&ApplyUnit::Provider],
+            UnitApplication::Applied,
+            "{application:?}"
+        );
+        assert!(
+            matches!(
+                application.units[&ApplyUnit::Instructions],
+                UnitApplication::Ready { .. }
+            ),
+            "{application:?}"
+        );
+        let stale = application.candidate.expect("instructions wait");
+        assert_eq!(issue459_model_refs(&runtime), ["local/b", "local/c"]);
+        let view = runtime.model_view();
+        assert_eq!(view.configured, model("local/a"));
+        assert!(view.unavailable.as_deref().unwrap().contains("local/a"));
+        let published = retained();
+        assert_eq!(published.binding_revision, before.binding_revision + 1);
+        assert_eq!(published.source_revisions, before.source_revisions);
+        assert_eq!(
+            runtime
+                .configuration_view()
+                .unwrap()
+                .root_agent
+                .instructions,
+            "issue459 adopted instructions"
+        );
+        assert!(matches!(
+            runtime.submit_inbound(issue459_text("refused")),
+            Err(InboundAdmissionError::ModelUnavailable { .. })
+        ));
+
+        // Explicit recovery, then the recaptured Instructions change adopts.
+        let view = fixture
+            .manager
+            .set_model(&id, model("local/c"))
+            .await
+            .unwrap();
+        assert!(view.unavailable.is_none());
+        assert!(matches!(
+            fixture
+                .manager
+                .adopt_configuration(&id, &stale.identity, stale.expected_binding),
+            Err(AdoptionError::Conflict)
+        ));
+        let candidate = session_settled(&fixture, &id)
+            .await
+            .candidate
+            .expect("recaptured instructions");
+        fixture
+            .manager
+            .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
+            .unwrap();
+        assert_eq!(runtime.model_view(), view);
+        assert_eq!(retained().session_model(), &model("local/c"));
+        assert_eq!(
+            runtime
+                .runtime_resources()
+                .configuration()
+                .unwrap()
+                .config
+                .agent
+                .instructions,
+            "issue459 new instructions"
+        );
+        assert!(fixture.provider.request_bodies().is_empty());
+        fixture.close().await;
+    }))
+    .await;
+}
+
 fn issue459_remove_builtin_tool(document: &mut toml::Value, tool: &str) {
     document["agent"]["tools"]["builtin"]
         .as_array_mut()
