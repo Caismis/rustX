@@ -809,14 +809,14 @@ async fn subagent_process_stack(alias_root: bool) {
         .call(Method::AgentTranscript {
             target: reopened.target(),
             agent_id: agent_id.clone(),
-            before: None,
+            at: rustx::durable::reading::ConversationWindowAt::Latest,
             limit: 32,
         })
         .await;
-    let Ok(MethodResult::Transcript { page }) = transcript else {
+    let Ok(MethodResult::TranscriptWindow { window }) = transcript else {
         panic!("durable child history must be readable: {transcript:?}");
     };
-    let page = serde_json::to_string(&page).unwrap();
+    let page = serde_json::to_string(&window.page).unwrap();
     let trace = reopened
         .call(Method::AgentTrace {
             target: reopened.target(),

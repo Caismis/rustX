@@ -4,7 +4,7 @@
 // native Attempt outline; an unloaded mark pages its native outline page in
 // before navigating.
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import type { ConversationTurn } from '../../../../protocol/app-server/v41';
+import type { ConversationTurn, ConversationTurnPage, ConversationTurnId } from '../../../../protocol/app-server/v42';
 import type { AppServerClient } from '../../client/app-server';
 import { shallowEqual, useClientSelector } from '../../client/selectors';
 import { turnKey } from '../../client/transcript';
@@ -43,9 +43,6 @@ const TurnMark = memo(function TurnMark({ item, index, start, label, active, bus
  * active mark centers only outside the fade-free band while the pointer is
  * elsewhere. Previews follow pointer movement or focus, never scrolling. */
 export function TurnNavigator({ client, sessionId, onNavigate, active }: { client: AppServerClient; sessionId: string; onNavigate: (turn: ConversationTurn | number) => void; active?: string | null }) {
-  const tx = useTranslation(), previewId = useId();
-  const [previewKey, setPreviewKey] = useState<string | null>(null);
-  const [focusedKey, setFocusedKey] = useState<string | null>(null);
   const view = useClientSelector(client, state => {
     const view = state.views[sessionId];
     return { target: view?.target, attachment: view?.attachment, outline: view?.turnOutline, navigation: view?.turnNavigation,
@@ -59,24 +56,37 @@ export function TurnNavigator({ client, sessionId, onNavigate, active }: { clien
   const currentId = useMemo(() => view.running && view.conversation && view.attempt ? { conversation_id: view.conversation, attempt_id: view.attempt } : undefined,
     [view.running, view.conversation, view.attempt]);
   const page = view.outline?.page;
-  const items = useMemo(() => turnRail(page, currentId, view.location), [page, currentId, view.location]);
   const missingLocation = !!page && !!view.location && BigInt(page.cut.transcript) < BigInt(view.location);
   useEffect(() => { if (missingLocation && !view.outline?.loading && !view.outline?.error && view.attachment === 'attached') void client.refreshTurns(sessionId); },
     [client, sessionId, missingLocation, view.outline?.loading, view.outline?.error, view.attachment, page?.offset]);
-  const attached = view.attachment === 'attached';
+  return <TurnNavigation page={page} currentId={currentId} location={view.location} loading={!!view.outline?.loading}
+    pending={view.navigation?.pending} error={view.navigation?.error ?? view.outline?.error}
+    attached={view.attachment === 'attached'} active={active} onNavigate={onNavigate}
+    onReload={() => { client.invalidateReading(sessionId); void client.refreshTurns(sessionId); }}/>;
+}
+
+/** Same Harness navigation surface for parent and child native outlines. */
+export function TurnNavigation({ page, currentId, location, loading = false, pending, error, attached, active, onNavigate, onReload }: {
+  page?: ConversationTurnPage; currentId?: ConversationTurnId; location?: string; loading?: boolean;
+  pending?: string; error?: string; attached: boolean; active?: string | null;
+  onNavigate: (turn: ConversationTurn | number) => void; onReload: () => void;
+}) {
+  const tx = useTranslation(), previewId = useId();
+  const [previewKey, setPreviewKey] = useState<string | null>(null);
+  const [focusedKey, setFocusedKey] = useState<string | null>(null);
+  const items = useMemo(() => turnRail(page, currentId, location), [page, currentId, location]);
   const isActive = (item: TurnRailItem) => !!item.id && (active !== undefined ? active === `turn:${item.id}` : !!currentId && turnKey(currentId) === item.id);
   // The owning viewport starts its gesture immediately, before outline I/O.
   const navigate = (item: TurnRailItem) => onNavigate(item.turn ?? item.ordinal);
-  const error = view.navigation?.error ?? view.outline?.error;
   // No rail and nothing to recover: no slot layer over the reading surface.
   if (items.count < 2 && !error) return null;
   return <div className={css.slot} data-turn-navigator>
-    <TurnRail navigationLabel={tx('agent:reading.turn-navigation')} loading={!!view.outline?.loading} items={items} activeId={active !== undefined ? active?.slice(5) : currentId && turnKey(currentId)} isActive={isActive}
-      isBusy={item => view.navigation?.pending === item.key || !!item.id && view.navigation?.pending === item.id} attached={attached} onNavigate={navigate}
+    <TurnRail navigationLabel={tx('agent:reading.turn-navigation')} loading={loading} items={items} activeId={active !== undefined ? active?.slice(5) : currentId && turnKey(currentId)} isActive={isActive}
+      isBusy={item => pending === item.key || !!item.id && pending === item.id} attached={attached} onNavigate={navigate}
       previewKey={previewKey} setPreviewKey={setPreviewKey} focusedKey={focusedKey} setFocusedKey={setFocusedKey} previewId={previewId}
       label={item => item.ordinal === 0 ? tx('agent:reading.current-turn') : tx(item.turn ? 'agent:reading.jump-turn' : 'agent:reading.jump-load-turn', { n: item.ordinal })}
       title={item => item.turn?.prompt || (item.ordinal === 0 ? tx('agent:reading.current-turn') : tx('agent:reading.turn', { n: item.ordinal }))} />
-    {error && <div className={css.feedback} role="alert"><p>{error}</p><button type="button" onClick={() => { client.invalidateReading(sessionId); void client.refreshTurns(sessionId); }}>{tx('agent:reading.reload-turns')}</button></div>}
+    {error && <div className={css.feedback} role="alert"><p>{error}</p><button type="button" onClick={() => { onReload(); }}>{tx('agent:reading.reload-turns')}</button></div>}
   </div>;
 }
 

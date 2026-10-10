@@ -148,7 +148,7 @@ pub async fn representative_scenario(
             call: Method::AgentTranscript {
                 target: a.clone(),
                 agent_id: child_id.clone(),
-                before: None,
+                at: rustx::durable::reading::ConversationWindowAt::Latest,
                 limit: 32,
             },
         })

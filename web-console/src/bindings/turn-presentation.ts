@@ -1,4 +1,4 @@
-import type { TurnProcessView, CompletedResponseView, RuntimeClientTranscriptEntry } from '../../../protocol/app-server/v41';
+import type { TurnProcessView, CompletedResponseView, RuntimeClientTranscriptEntry } from '../../../protocol/app-server/v42';
 
 export type TurnNode =
   | { kind: 'process'; key: string; process: TurnProcessView }

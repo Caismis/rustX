@@ -447,11 +447,11 @@ export class AppServerSession {
     const target = this.#target;
     try {
       const result = await this.#client.call("agent/transcript", {
-        target, agent_id: agentId, before: before ?? null,
+        target, agent_id: agentId, at: before == null ? { type: "latest" } : { type: "older", before, cut: null },
         limit: TRANSCRIPT_PROJECTION_PAGE_LIMIT,
-      }, "transcript");
+      }, "transcript_window");
       if (epoch !== this.#epoch || !sameTarget(target, this.#target)) return undefined;
-      return result.page;
+      return result.window.page;
     } catch (error) {
       if (epoch !== this.#epoch || !sameTarget(target, this.#target)) return undefined;
       throw error;
@@ -622,7 +622,7 @@ export class AppServerSession {
     return result.agent;
   }
 
-  async sendMessage(agentId: AgentId, message: string, attachments: import("../../../protocol/app-server/v41.js").UploadReceipt[] = []) {
+  async sendMessage(agentId: AgentId, message: string, attachments: import("../../../protocol/app-server/v42.js").UploadReceipt[] = []) {
     return this.#client.call("agent/sendMessage", { target: this.#target, agent_id: agentId, message, attachments }, "agent_message");
   }
 

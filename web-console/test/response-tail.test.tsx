@@ -4,7 +4,7 @@ import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { ConversationStats } from '../src/app/agent/UsageStats';
 import { localeController } from '../src/locale/controller';
 import { prependTranscript, refreshTranscript, replaceTranscript } from '../src/client/transcript';
-import type { CompletedResponseView, RuntimeClientSnapshot } from '../../protocol/app-server/v41';
+import type { CompletedResponseView, RuntimeClientSnapshot } from '../../protocol/app-server/v42';
 import { snapshot } from './fixture';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); act(() => localeController.setLocale('en')); });
@@ -71,12 +71,12 @@ it('composer pills read native totals and the last measured request, never the l
   const occupancy={input_tokens:7700,context_window_tokens:262144,model:'historical-model',breakdown:{system_tokens:1900,tool_tokens:6000,message_tokens:0}};
   act(()=>localeController.setLocale('zh'));
   const ui=render(<ConversationStats statistics={statistics} occupancy={occupancy}/>);
-  fireEvent.click(ui.getByRole('button',{name:'12 轮 34 步 · 49 tok/s'}));
+  fireEvent.click(ui.getByRole('button',{name:'12 轮 34 步 · 49 词元/秒'}));
   const session=within(await ui.findByRole('dialog',{name:'会话统计'}));
   expect(session.getByText('20.5秒')).toBeTruthy(); expect(session.getByText('160分52秒')).toBeTruthy(); expect(session.getByText('3.1秒')).toBeTruthy();
-  fireEvent.click(ui.getByRole('button',{name:'22.8K tok · 缓存命中 61%'}));
-  const usage=within(await ui.findByRole('dialog',{name:'Token 用量'}));
-  expect(usage.getByText('22,840 tok')).toBeTruthy(); expect(usage.getByText('8,729 tok')).toBeTruthy(); expect(usage.getByText('13,568 tok')).toBeTruthy();
+  fireEvent.click(ui.getByRole('button',{name:'22.8K 词元 · 缓存命中 61%'}));
+  const usage=within(await ui.findByRole('dialog',{name:'词元用量'}));
+  expect(usage.getByText('22,840 词元')).toBeTruthy(); expect(usage.getByText('8,729 词元')).toBeTruthy(); expect(usage.getByText('13,568 词元')).toBeTruthy();
   // Every request reported usage, so no coverage row is shown.
   expect(usage.queryByText('用量上报')).toBeNull();
   fireEvent.click(ui.getByRole('button',{name:'上下文已用 3%'}));
@@ -87,8 +87,8 @@ it('composer pills read native totals and the last measured request, never the l
   ui.rerender(<ConversationStats statistics={{...statistics,timing:undefined,requests_with_usage:'33',reported_usage:{input_tokens:100,output_tokens:20,total_tokens:120}}}/>);
   expect(ui.getByText('12 轮 34 步').closest('button')).toBeNull();
   expect(ui.queryByRole('button',{name:/上下文已用/})).toBeNull();
-  fireEvent.click(ui.getByRole('button',{name:'120 tok'}));
-  const partial=within(await ui.findByRole('dialog',{name:'Token 用量'}));
+  fireEvent.click(ui.getByRole('button',{name:'120 词元'}));
+  const partial=within(await ui.findByRole('dialog',{name:'词元用量'}));
   expect(partial.getByText('输入')).toBeTruthy(); expect(partial.getByText('33/34')).toBeTruthy();
 });
 it('an unresolved response outside the fresh window is reread instead of freezing missing completion', () => {

@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Header layout adapted from ui-subagent/SubagentHeaderLineage; see PROVENANCE.md. */
 import { useLayoutEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
-import type { RuntimeClientAgent, AgentStatistics } from '../../../../protocol/app-server/v41';
+import type { RuntimeClientAgent, AgentStatistics } from '../../../../protocol/app-server/v42';
 import type { AppServerClient } from '../../client/app-server';
 import { useClientSelector } from '../../client/selectors';
 import { useTranslation } from '../../locale/react';
@@ -76,5 +76,7 @@ export function SubagentAside({ id, visible }: { id: string; visible: boolean })
   const scope = useSubagents(), tx = useTranslation();
   const agent = scope?.agents.find(agent => agent.agent_id === id);
   if (!scope || !agent) return <p role="status">{tx('common:activity.unavailable')}</p>;
-  return <div className={`${conversationCss.scrollBody} ${css.aside}`} data-conversation-scroll><AgentCard embedded visible={visible} agent={agent} metrics={scope.metrics[id]} metricsError={scope.metricErrors[id]} client={scope.client} sessionId={scope.sessionId}/></div>;
+  return <section className={`conversation-panel ${conversationCss.body} ${conversationCss.embeddedBody}`} data-content-phase="active">
+    <div className={`${conversationCss.scrollBody} ${css.aside}`} data-conversation-scroll><AgentCard embedded visible={visible} agent={agent} metrics={scope.metrics[id]} metricsError={scope.metricErrors[id]} client={scope.client} sessionId={scope.sessionId}/></div>
+  </section>;
 }

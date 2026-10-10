@@ -128,7 +128,7 @@ fn message_preview(
     })
 }
 
-/// The first human prompt of a local turn: the earliest eligible message
+/// The opening human message or delegated Agent task of a local turn: the earliest eligible message
 /// adopted with this Attempt, or adopted while idle after the previous Attempt
 /// started and before this one did. Steering of the previous turn carries that
 /// turn's identity and never opens this one.
@@ -146,7 +146,8 @@ fn local_prompt(
                AND e.sequence>(SELECT COALESCE(MAX(sequence),0) FROM events INDEXED BY events_kind_idx
                  WHERE sequence<?2 AND json_extract(event_json,'$.event.type')='attempt_started')
                AND (e.attempt_id=?1 OR (e.attempt_id IS NULL AND e.sequence<?2))
-               AND json_extract(l.message_json,'$.role')='user' AND json_extract(l.message_json,'$.source')='human'
+               AND json_extract(l.message_json,'$.role')='user'
+               AND (json_extract(l.message_json,'$.source')='human' OR json_type(l.message_json,'$.source.agent')='object')
                AND COALESCE(json_extract(l.message_json,'$.kind'),'message')='message'
              ORDER BY e.sequence,CAST(m.key AS INTEGER)",
         )

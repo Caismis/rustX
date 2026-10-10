@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v41 envelope and method vocabulary.
+//! Rust authority for the App Server v42 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 41;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 42;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -282,11 +282,22 @@ pub enum Method {
         agent_id: crate::runtime::identity::AgentId,
         record_id: String,
     },
+    /// Read the exact child's bounded canonical history; never accepts a child path.
     #[serde(rename = "agent/transcript")]
     AgentTranscript {
         target: AttachmentTarget,
         agent_id: crate::runtime::identity::AgentId,
-        before: Option<crate::runtime_client::snapshot::RuntimeClientTranscriptCursor>,
+        at: crate::durable::reading::ConversationWindowAt,
+        #[schemars(range(min = 1, max = 64))]
+        limit: usize,
+    },
+    /// All turns across the Agent's activations, in native start order.
+    #[serde(rename = "agent/turns")]
+    AgentTurns {
+        target: AttachmentTarget,
+        agent_id: crate::runtime::identity::AgentId,
+        offset: Option<usize>,
+        #[schemars(range(min = 1, max = 64))]
         limit: usize,
     },
     #[serde(rename = "subagent/disposeWorkspace")]
@@ -649,9 +660,6 @@ pub enum MethodResult {
         /// because inspection detail is by far the largest result: keeping it
         /// off the shared enum keeps every other response cheap to move.
         detail: Option<Box<crate::runtime_client::trace::TraceDetail>>,
-    },
-    Transcript {
-        page: crate::runtime_client::snapshot::RuntimeClientTranscriptPage,
     },
     SessionHistory {
         conversation_id: ConversationId,

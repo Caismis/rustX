@@ -68,7 +68,7 @@ See [startup ownership](../docs/issue-419/ownership.md) for fences and failure l
 navigation and the exact native attachment. Settings target actors are shared
 with the permission seat; no configuration coordinator lives in the composer.
 
-App Server v41 / Runtime Client v63 publishes one native `turn_process` summary
+App Server v42 / Runtime Client v64 publishes one native `turn_process` summary
 on exact Assistant/Tool members for running, completed and unsuccessful Attempts.
 Control identity, cursor, counts and clock come from native evidence; failed and
 stopped Turns always remain open. CompletedResponseView still owns successful

@@ -1,5 +1,5 @@
 import { useTranslation } from '../../locale/react';
-import type { ForegroundToolExecution } from '../../../../protocol/app-server/v41';
+import type { ForegroundToolExecution } from '../../../../protocol/app-server/v42';
 import { toolCard } from '../../bindings/tools';
 import { askUserRow } from '../../bindings/ask-user';
 import { QuestionRow } from '../../presentation/agent/QuestionRow';

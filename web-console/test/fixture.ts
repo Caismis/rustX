@@ -1,6 +1,6 @@
 import type { ProductHostWorkspaces } from '../src/workspaces/host';
-import type { TraceDetail } from '../../protocol/app-server/v41';
-import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v41';
+import type { TraceDetail } from '../../protocol/app-server/v42';
+import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v42';
 import { fixtures } from '../../protocol/app-server/fixtures';
 import { cfg3Source } from './cfg3-data';
 import { AppServerClient, RpcFailure, sameTarget, type Socket } from '../src/client/app-server';
@@ -32,9 +32,9 @@ export function interaction(type: 'approval' | 'questionnaire', id = 'A', intera
     },
   };
 }
-export function childConversation(page: RuntimeClientSnapshot['transcript'], agentId = 'agent-worker', activationId = 'activation-a'): Extract<MethodResult, {type:'agent_conversation'}> {
+export function childConversation(page: RuntimeClientSnapshot['transcript'], agentId = 'agent-worker', activationId = 'activation-a', conversationId = 'conversation-worker'): Extract<MethodResult, {type:'agent_conversation'}> {
   return {type:'agent_conversation', conversation:{agent_id:agentId, activation_id:activationId, cursor:null,
-    snapshot:{...snapshot(), conversation_id:`conversation-${agentId}`, transcript:page}}};
+    snapshot:{...snapshot(), conversation_id:conversationId, transcript:page}}};
 }
 export class FakeSocket implements Socket {
   onopen: Socket['onopen'] = null;
@@ -80,12 +80,12 @@ export class Server {
   held = new Set<Request['method']>();
   requests: { request: Request; socket: FakeSocket }[] = [];
   private waiters: { method: Request['method']; count: number; resolve: (request: Request) => void }[] = [];
-  version = 41;
+  version = 42;
   /** Record details this scenario staged, keyed by Trace record identity. */
   readonly traceDetails = new Map<string, TraceDetail>();
   capabilities = capabilities;
   socketFactory = (_url: string, protocols: string[]) => {
-    if (protocols[0] !== 'rustx.app-server.v41' || protocols[1] !== `rustx-token.${TOKEN}`) throw new Error('Wrong browser admission protocol');
+    if (protocols[0] !== 'rustx.app-server.v42' || protocols[1] !== `rustx-token.${TOKEN}`) throw new Error('Wrong browser admission protocol');
     const socket = new FakeSocket((request, source) => this.receive(request, source), () => { this.targets.get(socket)?.clear(); this.reservations.get(socket)?.clear(); }); this.sockets.push(socket);
     queueMicrotask(() => socket.open()); return socket;
   };
@@ -241,7 +241,8 @@ export class Server {
       case 'agent/statistics': return { type: 'agent_statistics', metrics: { statistics: { turns: '0', steps: '0', completed_responses: '0', model_requests: '0', requests_with_usage: '0' }, occupancy: null, duration: { settled_ms: '0', active: null } } };
       case 'agent/conversationCancel': return {type:'agent_conversation_cancelled',accepted:true};
       case 'agent/conversation': result = { type: 'agent_conversation', conversation: { agent_id: request.params.agent_id, activation_id: 'activation-a', cursor: null, snapshot: { ...snapshot(), transcript: { entries: [] } } } }; break;
-      case 'agent/transcript': return { type: 'transcript', page: { entries: [] } };
+      case 'agent/turns': return { type: 'conversation_turns', page: { cut: { conversation_id: this.snapshots.get(id)?.agents?.find(agent => agent.agent_id === request.params.agent_id)?.child_conversation_id ?? 'conversation-worker', journal: '0', transcript: '0', mutation_revision: '0' }, offset: 0, total: 0, turns: [] } };
+      case 'agent/transcript': return { type: 'transcript_window', window: { cut: { conversation_id: this.snapshots.get(id)?.agents?.find(agent => agent.agent_id === request.params.agent_id)?.child_conversation_id ?? 'conversation-worker', journal: '0', transcript: '0', mutation_revision: '0' }, page: { entries: [] } } };
       case 'session/models': return { type: 'models', catalog: { models: [] } };
       default: throw new Error(`Fixture needs an explicit native result for ${request.method}`);
     }
@@ -264,4 +265,4 @@ export class Server {
   }
 }
 
-export function readingWindow(page: import('../../protocol/app-server/v41').RuntimeClientTranscriptPage) { return { cut: { conversation_id: 'conversation-A', journal: '1000', transcript: '1000', mutation_revision: '0' }, page }; }
+export function readingWindow(page: import('../../protocol/app-server/v42').RuntimeClientTranscriptPage) { return { cut: { conversation_id: 'conversation-A', journal: '1000', transcript: '1000', mutation_revision: '0' }, page }; }

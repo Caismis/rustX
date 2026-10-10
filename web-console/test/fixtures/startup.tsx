@@ -1,3 +1,4 @@
+import { childNavigation } from './child-navigation';
 import { agentMetrics } from '../agent-statistics-fixture';
 import { createRoot } from 'react-dom/client';
 import { App } from '../../src/app/App';
@@ -5,7 +6,7 @@ import { Server, snapshot, childConversation } from '../fixture';
 import { cfg3Source, cfg3Effective } from '../cfg3-data';
 import { traceRecord, traceTool, requestDetail, toolDetail } from '../trace-fixture';
 import { RpcFailure } from '../../src/client/app-server';
-import type { Request } from '../../../protocol/app-server/v41';
+import type { Request } from '../../../protocol/app-server/v42';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -93,9 +94,10 @@ if (new URL(location.href).searchParams.has('subagents')) {
   });
   server.handlers.set('agent/conversation', request => {
     if (request.method !== 'agent/conversation') throw Error('Wrong method');
-    return childConversation({ entries: [{ cursor: '1', item: { type: 'message', message: { role: 'assistant', id: `${request.params.agent_id}-reply`, content: [{ type: 'text', text: `# Child research report\n\nSelected agent: ${request.params.agent_id}\n\nSources have been checked.\n\n` + 'Detailed findings and supporting evidence. '.repeat(120) }] } } }] }, request.params.agent_id);
+    return childConversation({ entries: [{ cursor: '1', item: { type: 'message', message: { role: 'assistant', id: `${request.params.agent_id}-reply`, content: [{ type: 'text', text: `# Child research report\n\nSelected agent: ${request.params.agent_id}\n\nSources have been checked.\n\n` + 'Detailed findings and supporting evidence. '.repeat(120) }] } } }] }, request.params.agent_id, 'activation-a', saved.agents!.find(agent => agent.agent_id === request.params.agent_id)!.child_conversation_id);
   });
 }
+if (new URL(location.href).searchParams.has('child-turn-navigation')) childNavigation(server);
 let nativeDefault = 'fixture/native';
 server.handlers.set('session/create', request => {
   if (request.method !== 'session/create') throw Error('Wrong method');

@@ -88,7 +88,28 @@ impl RuntimeAttachment {
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.access(false)?.agent_statistics(id).await
     }
-    native_control!(agent_transcript_page, false, id: &crate::runtime::identity::AgentId, before: Option<super::snapshot::RuntimeClientTranscriptCursor>, limit: usize);
+    /// Read a child's complete native turn directory in bounded pages.
+    /// # Errors
+    /// Rejects closed attachments, unknown children and invalid page bounds.
+    pub fn agent_turns(
+        &self,
+        id: &crate::runtime::identity::AgentId,
+        offset: Option<usize>,
+        limit: usize,
+    ) -> Result<crate::durable::reading::ConversationTurnPage, RuntimeClientError> {
+        self.access(false)?.agent_turns(id, offset, limit)
+    }
+    /// Locate one child Turn or page around its captured native cut.
+    /// # Errors
+    /// Rejects foreign identities, invalid cuts and unavailable history.
+    pub fn agent_transcript_window(
+        &self,
+        id: &crate::runtime::identity::AgentId,
+        at: &crate::durable::reading::ConversationWindowAt,
+        limit: usize,
+    ) -> Result<super::snapshot::ConversationWindow, RuntimeClientError> {
+        self.access(false)?.agent_transcript_window(id, at, limit)
+    }
 
     /// Wait for this exact finite Job's physical settlement.
     /// # Errors
@@ -348,10 +369,20 @@ impl RuntimeAttachment {
             }
             RuntimeClientRequest::AgentTranscript {
                 agent_id,
-                before,
+                at,
                 limit,
                 ..
-            } => inner.agent_transcript_page(&agent_id, before, limit),
+            } => inner
+                .agent_transcript_window(&agent_id, &at, limit)
+                .map(|window| RuntimeClientResult::TranscriptWindow { window }),
+            RuntimeClientRequest::AgentTurns {
+                agent_id,
+                offset,
+                limit,
+                ..
+            } => inner
+                .agent_turns(&agent_id, offset, limit)
+                .map(|page| RuntimeClientResult::ConversationTurns { page }),
             RuntimeClientRequest::JobWait { .. }
             | RuntimeClientRequest::JobCancel { .. }
             | RuntimeClientRequest::AgentSendMessage { .. }

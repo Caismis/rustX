@@ -1970,8 +1970,8 @@ file/artifact access resolves the owned child conversation and workspace.
 
 WebUI reuses AgentComposer and AttachmentIntake, scopes both conversation and
 trajectory preview resources to the Agent, and retires native observation reads
-when navigation changes. No child model settings are introduced. App Server v41,
-Runtime Client v63, child IPC v30 and Product Host file-read v3 are synchronized.
+when navigation changes. No child model settings are introduced. App Server v42,
+Runtime Client v64, child IPC v30 and Product Host file-read v3 are synchronized.
 The Browser plugin is unavailable; the repository's pinned Playwright browser
 validates real native child processes and deterministic provider streams.
 
@@ -1995,3 +1995,11 @@ from a partial transcript. Source hashes and dependency closures are refreshed.
 
 The existing base theme now retains Harness radius tokens (4/8/12/16/20/28px);
 their missing definitions had invalidated catalog and other source-port radii.
+
+### Child turn directory and history positioning (2026-10-10)
+
+`TurnNavigator.tsx` now exposes the same Harness-derived rail presentation for
+parent and child conversations. The native child reader and `SubagentChat`
+composition are rustX-owned: `agent/turns` supplies the complete paged directory,
+and `agent/transcript` resolves native Turn identities at child-owned read cuts.
+The child watch remains independent of the bounded historical reading window.

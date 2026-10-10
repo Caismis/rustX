@@ -1222,66 +1222,7 @@ impl ClientInner {
         at: &crate::durable::reading::ConversationWindowAt,
         limit: usize,
     ) -> Result<crate::runtime_client::snapshot::ConversationWindow, RuntimeClientError> {
-        let failed =
-            |error: crate::durable::ConversationStoreError| RuntimeClientError::InvalidState {
-                message: error.to_string(),
-            };
-        let read = self.store.conversation_window(at, limit).map_err(failed)?;
-        let mut page = transcript_page_view(read.page)
-            .map_err(|message| RuntimeClientError::RuntimeFailure { message })?;
-        super::response::decorate_window(self.store.as_ref(), &mut page, read.cut.journal)
-            .map_err(failed)?;
-        if !read
-            .cut
-            .reconstructible_from(&self.store.conversation_read_cut().map_err(failed)?)
-        {
-            return Err(RuntimeClientError::InvalidState {
-                message: "conversation history was edited during the read; read it again".into(),
-            });
-        }
-        Ok(crate::runtime_client::snapshot::ConversationWindow {
-            cut: read.cut,
-            page,
-            newer_cursor: read.newer_cursor.map(Into::into),
-            target: read.target,
-            target_cursor: read.target_cursor.map(Into::into),
-        })
-    }
-
-    /// Read-only child history, addressed exclusively through this parent's registry.
-    pub(crate) fn subagent_transcript_page(
-        &self,
-        id: &crate::runtime::identity::SubagentId,
-        before: Option<RuntimeClientTranscriptCursor>,
-        limit: usize,
-    ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        validate_transcript_page_limit(limit)?;
-        let runtime = self
-            .runtime
-            .as_ref()
-            .ok_or_else(|| RuntimeClientError::UnknownSubagent {
-                subagent_id: id.clone(),
-            })?;
-        let store = runtime
-            .subagent_transcript_store(id)
-            .map_err(|error| match error {
-                crate::runtime::subagent::SubagentTranscriptError::Unknown(subagent_id) => {
-                    RuntimeClientError::UnknownSubagent { subagent_id }
-                }
-                crate::runtime::subagent::SubagentTranscriptError::Unavailable(message) => {
-                    RuntimeClientError::RuntimeFailure {
-                        message: format!("subagent history unavailable: {message}"),
-                    }
-                }
-            })?;
-        let page = read_transcript_page(&store, before, limit, || {
-            store
-                .presentation_frontier()
-                .map_err(|error| RuntimeClientError::RuntimeFailure {
-                    message: error.to_string(),
-                })
-        })?;
-        Ok(RuntimeClientResult::TranscriptPage { page })
+        read_conversation_window(self.store.as_ref(), at, limit)
     }
 
     /// Reads one bounded page of historical user-message boundaries, selected
@@ -1903,19 +1844,53 @@ impl ClientInner {
         })
     }
 
-    pub(crate) fn agent_transcript_page(
+    fn agent_reading_store(
         &self,
         id: &crate::runtime::identity::AgentId,
-        before: Option<super::snapshot::RuntimeClientTranscriptCursor>,
+    ) -> Result<crate::durable::SqliteConversationStore, RuntimeClientError> {
+        let registry = self.agent_registry()?;
+        let agent =
+            registry
+                .agent_snapshot(id)
+                .ok_or_else(|| RuntimeClientError::UnknownAgent {
+                    agent_id: id.clone(),
+                })?;
+        registry
+            .transcript_store(&agent.latest_activation)
+            .map_err(|error| match error {
+                crate::runtime::subagent::SubagentTranscriptError::Unknown(subagent_id) => {
+                    RuntimeClientError::UnknownSubagent { subagent_id }
+                }
+                crate::runtime::subagent::SubagentTranscriptError::Unavailable(message) => {
+                    RuntimeClientError::RuntimeFailure {
+                        message: format!("subagent history unavailable: {message}"),
+                    }
+                }
+            })
+    }
+
+    pub(crate) fn agent_turns(
+        &self,
+        id: &crate::runtime::identity::AgentId,
+        offset: Option<usize>,
         limit: usize,
-    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+    ) -> Result<crate::durable::reading::ConversationTurnPage, RuntimeClientError> {
         validate_transcript_page_limit(limit)?;
-        let agent = self.agent_registry()?.agent_snapshot(id).ok_or_else(|| {
-            RuntimeClientError::UnknownAgent {
-                agent_id: id.clone(),
-            }
-        })?;
-        self.subagent_transcript_page(&agent.latest_activation, before, limit)
+        self.agent_reading_store(id)?
+            .conversation_turns(offset.unwrap_or(usize::MAX), limit)
+            .map_err(|error| RuntimeClientError::InvalidState {
+                message: error.to_string(),
+            })
+    }
+
+    pub(crate) fn agent_transcript_window(
+        &self,
+        id: &crate::runtime::identity::AgentId,
+        at: &crate::durable::reading::ConversationWindowAt,
+        limit: usize,
+    ) -> Result<crate::runtime_client::snapshot::ConversationWindow, RuntimeClientError> {
+        validate_transcript_page_limit(limit)?;
+        read_conversation_window(&self.agent_reading_store(id)?, at, limit)
     }
 
     /// Disposes one retained terminal subagent workspace through the
@@ -2953,6 +2928,36 @@ fn read_transcript_page(
     Ok(page)
 }
 
+/// Both parent and child navigation read from their own canonical store.
+fn read_conversation_window(
+    store: &dyn crate::durable::ConversationStore,
+    at: &crate::durable::reading::ConversationWindowAt,
+    limit: usize,
+) -> Result<crate::runtime_client::snapshot::ConversationWindow, RuntimeClientError> {
+    let failed = |error: crate::durable::ConversationStoreError| RuntimeClientError::InvalidState {
+        message: error.to_string(),
+    };
+    let read = store.conversation_window(at, limit).map_err(failed)?;
+    let mut page = transcript_page_view(read.page)
+        .map_err(|message| RuntimeClientError::RuntimeFailure { message })?;
+    super::response::decorate_window(store, &mut page, read.cut.journal).map_err(failed)?;
+    if !read
+        .cut
+        .reconstructible_from(&store.conversation_read_cut().map_err(failed)?)
+    {
+        return Err(RuntimeClientError::InvalidState {
+            message: "conversation history was edited during the read; read it again".into(),
+        });
+    }
+    Ok(crate::runtime_client::snapshot::ConversationWindow {
+        cut: read.cut,
+        page,
+        newer_cursor: read.newer_cursor.map(Into::into),
+        target: read.target,
+        target_cursor: read.target_cursor.map(Into::into),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -3335,15 +3340,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn child_transcript_invalid_limits_precede_unknown_subagent_resolution() {
+    async fn child_reading_invalid_limits_precede_ownership_resolution() {
         let (_, fixture) = host_fixture(vec![], ToolRegistry::new(), status_engine()).await;
-        let id = crate::runtime::identity::SubagentId::new("unknown-child");
+        let id = crate::runtime::identity::AgentId::new("unknown-child");
         for limit in [0, crate::durable::TRANSCRIPT_PAGE_LIMIT_MAX + 1] {
             assert!(matches!(
-                fixture
-                    .host
-                    .inner
-                    .subagent_transcript_page(&id, None, limit),
+                fixture.host.inner.agent_transcript_window(
+                    &id,
+                    &crate::durable::reading::ConversationWindowAt::Latest,
+                    limit
+                ),
+                Err(RuntimeClientError::InvalidRequest { .. })
+            ));
+            assert!(matches!(
+                fixture.host.inner.agent_turns(&id, None, limit),
                 Err(RuntimeClientError::InvalidRequest { .. })
             ));
             assert!(matches!(
@@ -3351,10 +3361,12 @@ mod tests {
                 Err(RuntimeClientError::InvalidRequest { .. })
             ));
         }
+        // This fixture intentionally has no Agent registry. Valid bounds enter
+        // ownership resolution; invalid bounds above never reach it.
         for limit in [1, crate::durable::TRANSCRIPT_PAGE_LIMIT_MAX] {
             assert!(matches!(
-                fixture.host.inner.subagent_transcript_page(&id, None, limit),
-                Err(RuntimeClientError::UnknownSubagent { subagent_id }) if subagent_id == id
+                fixture.host.inner.agent_transcript_window(&id, &crate::durable::reading::ConversationWindowAt::Latest, limit),
+                Err(RuntimeClientError::InvalidState { message }) if message == "Agent registry unavailable"
             ));
         }
     }

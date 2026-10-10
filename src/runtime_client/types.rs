@@ -261,7 +261,8 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// Version 59 refreshes retained Trace records with their resolved native location.
 /// Version 61 adds child-owned Trace reads and exact current Attempt activity.
 /// Version 62 distinguishes native non-human and mixed Trace input.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 63;
+/// Version 64 adds child turn directories and cut-bound transcript windows.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 64;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -548,7 +549,13 @@ pub enum RuntimeClientRequest {
     AgentTranscript {
         id: RequestId,
         agent_id: crate::runtime::identity::AgentId,
-        before: Option<super::snapshot::RuntimeClientTranscriptCursor>,
+        at: crate::durable::reading::ConversationWindowAt,
+        limit: usize,
+    },
+    AgentTurns {
+        id: RequestId,
+        agent_id: crate::runtime::identity::AgentId,
+        offset: Option<usize>,
         limit: usize,
     },
     /// Dispose the exact retained workspace owned by one terminal subagent.
@@ -608,6 +615,7 @@ impl RuntimeClientRequest {
             | Self::AgentTrace { id, .. }
             | Self::AgentTraceDetail { id, .. }
             | Self::AgentTranscript { id, .. }
+            | Self::AgentTurns { id, .. }
             | Self::SubagentWorkspaceDispose { id, .. }
             | Self::Detach { id, .. }
             | Self::Shutdown { id, .. } => *id,
@@ -645,6 +653,7 @@ impl RuntimeClientRequest {
             Self::AgentTrace { .. } => "agent_trace",
             Self::AgentTraceDetail { .. } => "agent_trace_detail",
             Self::AgentTranscript { .. } => "agent_transcript",
+            Self::AgentTurns { .. } => "agent_turns",
             Self::SubagentWorkspaceDispose { .. } => "subagent_workspace_dispose",
             Self::Detach { .. } => "detach",
             Self::Shutdown { .. } => "shutdown",
@@ -795,6 +804,12 @@ pub enum RuntimeClientResult {
     /// `None` when that identity names no record at the read cut.
     TraceDetail {
         detail: Option<Box<super::trace::TraceDetail>>,
+    },
+    TranscriptWindow {
+        window: super::snapshot::ConversationWindow,
+    },
+    ConversationTurns {
+        page: crate::durable::reading::ConversationTurnPage,
     },
     TranscriptPage {
         /// The bounded durable transcript page.
@@ -1111,7 +1126,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 63);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 64);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

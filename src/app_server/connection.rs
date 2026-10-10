@@ -1339,6 +1339,7 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
         | Method::AgentTrace { target, .. }
         | Method::AgentTraceDetail { target, .. }
         | Method::AgentTranscript { target, .. }
+        | Method::AgentTurns { target, .. }
         | Method::SubagentDispose { target, .. }
         | Method::CompactContext { target, .. }
         | Method::SessionBoundaries { target, .. }
@@ -1525,14 +1526,29 @@ async fn dispatch_runtime(
         } => native_result(authority.agent_trace_detail(&agent_id, record_id).await),
         Method::AgentTranscript {
             agent_id,
-            before,
+            at,
             limit,
             ..
-        } => match authority.agent_transcript_page(&agent_id, before, limit) {
+        } => match authority.agent_transcript_window(&agent_id, &at, limit) {
             Err(RuntimeClientError::RuntimeFailure { .. }) => {
                 Err(domain(ErrorData::AgentHistoryUnavailable { agent_id }))
             }
-            result => native_result(result),
+            result => result
+                .map(|window| MethodResult::TranscriptWindow { window })
+                .map_err(client_error),
+        },
+        Method::AgentTurns {
+            agent_id,
+            offset,
+            limit,
+            ..
+        } => match authority.agent_turns(&agent_id, offset, limit) {
+            Err(RuntimeClientError::RuntimeFailure { .. }) => {
+                Err(domain(ErrorData::AgentHistoryUnavailable { agent_id }))
+            }
+            result => result
+                .map(|page| MethodResult::ConversationTurns { page })
+                .map_err(client_error),
         },
         Method::SubagentDispose {
             target: _,
@@ -1659,7 +1675,13 @@ fn native_result(
         RuntimeClientResult::ContextCompacted { context } => MethodResult::Context { context },
         RuntimeClientResult::TracePage { page } => MethodResult::Trace { page },
         RuntimeClientResult::TraceDetail { detail } => MethodResult::TraceDetail { detail },
-        RuntimeClientResult::TranscriptPage { page } => MethodResult::Transcript { page },
+        RuntimeClientResult::TranscriptPage { .. } => {
+            unreachable!("App Server transcript reads use cut-bound windows")
+        }
+        RuntimeClientResult::TranscriptWindow { window } => {
+            MethodResult::TranscriptWindow { window }
+        }
+        RuntimeClientResult::ConversationTurns { page } => MethodResult::ConversationTurns { page },
         RuntimeClientResult::Goal { view } => MethodResult::Goal { view },
         RuntimeClientResult::Job { job } => MethodResult::Job { job },
         RuntimeClientResult::Jobs {

@@ -1430,8 +1430,6 @@ pub(crate) struct RuntimeInner {
     /// Test-only coordinator synchronization hooks.
     #[cfg(test)]
     probe: Mutex<Option<CoordinatorProbe>>,
-    #[cfg(test)]
-    subagent_transcript_store_reads: std::sync::atomic::AtomicUsize,
     /// Test-only one-shot pre-tool policy injection for a runtime-created
     /// attempt. Production constructs the required policy from the admitted
     /// effective `ApprovalMode`; this hook never changes the production
@@ -3833,8 +3831,6 @@ impl ConversationRuntime {
             #[cfg(test)]
             probe: Mutex::new(None),
             #[cfg(test)]
-            subagent_transcript_store_reads: std::sync::atomic::AtomicUsize::new(0),
-            #[cfg(test)]
             test_pre_tool_policy: Mutex::new(None),
         });
         // Recovery has already durably terminalized every orphaned child.
@@ -5910,25 +5906,6 @@ impl ConversationRuntime {
             .subagents
             .as_ref()
             .and_then(|subagents| subagents.snapshot(subagent_id))
-    }
-
-    /// Resolve an exact owned child's read-only canonical store.
-    pub(crate) fn subagent_transcript_store(
-        &self,
-        id: &crate::runtime::identity::SubagentId,
-    ) -> Result<
-        crate::durable::SqliteConversationStore,
-        crate::runtime::subagent::SubagentTranscriptError,
-    > {
-        #[cfg(test)]
-        self.inner
-            .subagent_transcript_store_reads
-            .fetch_add(1, Ordering::Relaxed);
-        self.inner
-            .subagents
-            .as_ref()
-            .ok_or_else(|| crate::runtime::subagent::SubagentTranscriptError::Unknown(id.clone()))?
-            .transcript_store(id)
     }
 
     /// Requests cancellation of one subagent child through the
@@ -12294,12 +12271,6 @@ mod tests {
 
         // The staged child commits real ownership but never creates a child
         // database. Its existing history is therefore deterministically unavailable.
-        let resolver_reads = || {
-            runtime
-                .inner
-                .subagent_transcript_store_reads
-                .load(std::sync::atomic::Ordering::Relaxed)
-        };
         let unknown = crate::runtime::identity::AgentId::new("unknown-child");
         assert!(matches!(attachment.agent_statistics(&unknown).await,
             Err(RuntimeClientError::UnknownAgent { agent_id }) if agent_id == unknown));
@@ -12310,32 +12281,26 @@ mod tests {
         for id in [&accepted.child_agent_id, &unknown] {
             for limit in [0, crate::durable::TRANSCRIPT_PAGE_LIMIT_MAX + 1] {
                 assert!(matches!(
-                    attachment.agent_transcript_page(id, None, limit),
+                    attachment.agent_transcript_window(
+                        id,
+                        &crate::durable::reading::ConversationWindowAt::Latest,
+                        limit
+                    ),
                     Err(RuntimeClientError::InvalidRequest { .. })
                 ));
             }
         }
-        assert_eq!(
-            resolver_reads(),
-            0,
-            "invalid limits must not enter ownership/storage resolution"
-        );
         for limit in [1, crate::durable::TRANSCRIPT_PAGE_LIMIT_MAX] {
             assert!(matches!(
-                attachment.agent_transcript_page(&unknown, None, limit),
+                attachment.agent_transcript_window(&unknown, &crate::durable::reading::ConversationWindowAt::Latest, limit),
                 Err(RuntimeClientError::UnknownAgent { agent_id }) if agent_id == unknown
             ));
             assert!(matches!(
-                attachment.agent_transcript_page(&accepted.child_agent_id, None, limit),
+                attachment.agent_transcript_window(&accepted.child_agent_id, &crate::durable::reading::ConversationWindowAt::Latest, limit),
                 Err(RuntimeClientError::RuntimeFailure { message })
                     if message.starts_with("subagent history unavailable:")
             ));
         }
-        assert_eq!(
-            resolver_reads(),
-            2,
-            "only owned Agent identities reach history storage resolution"
-        );
         let _ = subagents.cancel(&accepted.subagent_id, CancellationReason::UserRequested);
         subagents
             .wait_until_settled(&accepted.subagent_id)

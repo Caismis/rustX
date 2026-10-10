@@ -62,6 +62,25 @@ async fn real_child_resumes_same_identity_history_and_frozen_authority() {
     assert_eq!(settled.agents[0].activation_state, SubagentState::Succeeded);
     assert_eq!(report_count(&settled, "CHILD-ANSWER"), 1);
 
+    let Ok(MethodResult::ConversationTurns {
+        page: first_outline,
+    }) = process
+        .call(Method::AgentTurns {
+            target: process.target(),
+            agent_id: first.agent_id.clone(),
+            offset: None,
+            limit: 1,
+        })
+        .await
+    else {
+        panic!("first child outline must be readable");
+    };
+    assert_eq!(first_outline.total, 1);
+    let first_turn = first_outline.turns[0].clone();
+    assert_eq!(first_turn.id.conversation_id, first.child_conversation_id);
+    assert!(first_turn.prompt.contains("count the workspace files"));
+    assert!(first_turn.response.contains("CHILD-ANSWER"));
+
     // Resume must use the admitted Agent authority, never re-read this
     // changed named definition or current model configuration from disk.
     let definition = root.path().join("workspace/.agents/agents/explore.toml");
@@ -150,17 +169,107 @@ async fn real_child_resumes_same_identity_history_and_frozen_authority() {
         .call(Method::AgentTranscript {
             target: process.target(),
             agent_id: first.agent_id.clone(),
-            before: None,
+            at: rustx::durable::reading::ConversationWindowAt::Latest,
             limit: 64,
         })
         .await;
-    let Ok(MethodResult::Transcript { page }) = transcript else {
+    let Ok(MethodResult::TranscriptWindow { window }) = transcript else {
         panic!("canonical child transcript: {transcript:?}");
     };
-    let history = serde_json::to_string(&page).unwrap();
+    let history = serde_json::to_string(&window.page).unwrap();
     assert!(history.contains("CHILD-ANSWER: three files"));
     assert!(history.contains("CONTINUE-411"));
     assert!(history.contains("SECOND-ANSWER: retained history"));
+    // The directory covers every activation even when only one row is loaded.
+    let Ok(MethodResult::ConversationTurns {
+        page: newest_outline,
+    }) = process
+        .call(Method::AgentTurns {
+            target: process.target(),
+            agent_id: first.agent_id.clone(),
+            offset: None,
+            limit: 1,
+        })
+        .await
+    else {
+        panic!("newest child outline");
+    };
+    assert_eq!(newest_outline.total, 2);
+    assert_eq!(newest_outline.offset, 1);
+    assert_eq!(newest_outline.turns[0].ordinal, 2);
+    assert!(newest_outline.turns[0].prompt.contains("CONTINUE-411"));
+    let Ok(MethodResult::ConversationTurns {
+        page: older_outline,
+    }) = process
+        .call(Method::AgentTurns {
+            target: process.target(),
+            agent_id: first.agent_id.clone(),
+            offset: Some(0),
+            limit: 1,
+        })
+        .await
+    else {
+        panic!("older child outline");
+    };
+    assert_eq!(older_outline.total, 2);
+    assert_eq!(older_outline.turns[0], first_turn);
+    // Appended turns cannot move a previously captured location/cut.
+    let Ok(MethodResult::TranscriptWindow { window: located }) = process
+        .call(Method::AgentTranscript {
+            target: process.target(),
+            agent_id: first.agent_id.clone(),
+            at: rustx::durable::reading::ConversationWindowAt::Turn {
+                id: first_turn.id.clone(),
+                cut: first_outline.cut.clone(),
+            },
+            limit: 1,
+        })
+        .await
+    else {
+        panic!("native child turn location");
+    };
+    assert_eq!(located.cut, first_outline.cut);
+    assert_eq!(located.target.as_ref(), Some(&first_turn.id));
+    assert_eq!(located.target_cursor, first_turn.cursor.map(Into::into));
+    assert_eq!(located.page.entries.len(), 1);
+    assert_eq!(
+        located.page.entries[0].cursor,
+        located.target_cursor.unwrap()
+    );
+    let mut foreign_turn = first_turn.id.clone();
+    foreign_turn.conversation_id = process.target().conversation_id;
+    assert!(
+        process
+            .call(Method::AgentTranscript {
+                target: process.target(),
+                agent_id: first.agent_id.clone(),
+                at: rustx::durable::reading::ConversationWindowAt::Turn {
+                    id: foreign_turn,
+                    cut: first_outline.cut.clone()
+                },
+                limit: 1,
+            })
+            .await
+            .is_err(),
+        "a parent turn must never select child content"
+    );
+    let mut foreign_cut = first_outline.cut.clone();
+    foreign_cut.conversation_id = process.target().conversation_id;
+    assert!(
+        process
+            .call(Method::AgentTranscript {
+                target: process.target(),
+                agent_id: first.agent_id.clone(),
+                at: rustx::durable::reading::ConversationWindowAt::Turn {
+                    id: first_turn.id.clone(),
+                    cut: foreign_cut
+                },
+                limit: 1,
+            })
+            .await
+            .is_err(),
+        "a parent cut cannot authorize child history"
+    );
     let session_id = process.session_id.clone();
     let (status, stderr) = process.shutdown().await;
     assert!(status.success(), "{status}: {stderr}");
@@ -184,6 +293,22 @@ async fn real_child_resumes_same_identity_history_and_frozen_authority() {
     );
     assert_eq!(restored.agents[0].activation_id, accepted_activation);
     assert_eq!(restored.agents[0].state, AgentState::Inactive);
+    let Ok(MethodResult::ConversationTurns {
+        page: recovered_outline,
+    }) = recovered
+        .call(Method::AgentTurns {
+            target: recovered.target(),
+            agent_id: first.agent_id.clone(),
+            offset: Some(0),
+            limit: 64,
+        })
+        .await
+    else {
+        panic!("recovered child directory");
+    };
+    assert_eq!(recovered_outline.total, 2);
+    assert_eq!(recovered_outline.turns[0], first_turn);
+    assert_eq!(recovered_outline.turns[1], newest_outline.turns[0]);
     let third = recovered
         .call(Method::AgentSendMessage {
             target: recovered.target(),

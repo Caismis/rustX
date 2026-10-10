@@ -24,7 +24,7 @@ const native = vi.hoisted(() => {
       const request = message as ObservedRequest;
       state.requests.push(request);
       for (const waiter of state.waiters.splice(0)) waiter();
-      if (request.method === 'initialize') queueMicrotask(() => this.deliver({ jsonrpc: '2.0', id: request.id, result: { type: 'initialized', authority_id: 'fixture-app-server-authority', protocol_version: 41, capabilities: nativeCapabilities } }));
+      if (request.method === 'initialize') queueMicrotask(() => this.deliver({ jsonrpc: '2.0', id: request.id, result: { type: 'initialized', authority_id: 'fixture-app-server-authority', protocol_version: 42, capabilities: nativeCapabilities } }));
       return Promise.resolve();
     }
     onMessage(listener: (record: unknown) => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }

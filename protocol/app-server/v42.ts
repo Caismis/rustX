@@ -275,7 +275,16 @@ export type Request1 =
       params: {
         target: AttachmentTarget;
         agent_id: AgentId;
-        before?: RuntimeClientTranscriptCursor | null;
+        at: ConversationWindowAt;
+        limit: number;
+      };
+    }
+  | {
+      method: 'agent/turns';
+      params: {
+        target: AttachmentTarget;
+        agent_id: AgentId;
+        offset?: number | null;
         limit: number;
       };
     }
@@ -724,10 +733,6 @@ export type SubagentId = string;
  * fails explicitly and never wraps.
  */
 export type RuntimeClientCursor = string;
-/**
- * The cursor domain of durable transcript paging.
- */
-export type RuntimeClientTranscriptCursor = string;
 /**
  * The identity of one exact historical Conversation Surface state.
  *
@@ -1200,10 +1205,6 @@ export type MethodResult =
       type: 'trace_detail';
     }
   | {
-      page: RuntimeClientTranscriptPage;
-      type: 'transcript';
-    }
-  | {
       conversation_id: ConversationId;
       window: ConversationWindow;
       type: 'session_history';
@@ -1670,6 +1671,10 @@ export type AgentStatusModuleId = 'time' | 'background' | 'todo';
 export type TraceContributionPresentation = {
   AgentStatus: AgentStatusView;
 };
+/**
+ * The cursor domain of durable transcript paging.
+ */
+export type RuntimeClientTranscriptCursor = string;
 /**
  * One structured Agent Status section of the external view.
  */
@@ -6396,6 +6401,13 @@ export interface TraceMessageDetail {
   blocks: TraceContentBlock[];
   truncated: boolean;
 }
+export interface ConversationWindow {
+  cut: ConversationReadCut;
+  page: RuntimeClientTranscriptPage;
+  newer_cursor?: RuntimeClientTranscriptCursor | null;
+  target?: ConversationTurnId | null;
+  target_cursor?: RuntimeClientTranscriptCursor | null;
+}
 /**
  * One bounded newest-or-older page of derived transcript history.
  */
@@ -7485,13 +7497,6 @@ export interface QuestionnaireSubmission1 {
    */
   answers: QuestionnaireAnswerEntry[];
 }
-export interface ConversationWindow {
-  cut: ConversationReadCut;
-  page: RuntimeClientTranscriptPage;
-  newer_cursor?: RuntimeClientTranscriptCursor | null;
-  target?: ConversationTurnId | null;
-  target_cursor?: RuntimeClientTranscriptCursor | null;
-}
 export interface ConversationTurnPage {
   cut: ConversationReadCut;
   total: number;
@@ -7509,7 +7514,7 @@ export interface ConversationTurn {
    */
   cursor?: TranscriptCursor | null;
   /**
-   * The turn's first human prompt; empty when none was adopted for it.
+   * The turn's opening human message or Agent task; empty when none was adopted.
    */
   prompt: string;
   /**

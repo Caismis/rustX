@@ -96,6 +96,17 @@ test('native child live cuts, independent title, active and file-only resume upl
     await child.getByRole('button', { name: 'Send', exact: true }).click();
     await expect(child.getByText('File-only child continuation completed.', { exact: true })).toBeVisible();
     await expect(child).toHaveAttribute('data-agent-id', id!); await expect(child).toHaveAttribute('data-agent-state', 'inactive');
+    // The child rail spans its original and resumed native Attempts.
+    const rail = page.getByRole('navigation', { name: 'Turn navigation', exact: true });
+    await expect(rail).toBeVisible();
+    const firstTurn = rail.getByRole('button', { name: 'Jump to turn 1', exact: true });
+    await firstTurn.hover();
+    await expect(page.getByRole('tooltip')).not.toBeEmpty();
+    await firstTurn.click(); await expect(firstTurn).toHaveAttribute('aria-current', 'true');
+    const lastTurn = rail.getByRole('button').last();
+    await lastTurn.click(); await expect(lastTurn).toHaveAttribute('aria-current', 'true');
+    expect(wire.requests.some(request => request.method === 'agent/turns')).toBe(true);
+    await page.screenshot({ path: '/tmp/rustx-native-child-turn-navigation.png' });
     expect(wire.responses.filter(row => row.method === 'agent/sendMessage').map(row => row.result)).toMatchObject([
       { type: 'agent_message', activation_id: activation, resumed: false }, { type: 'agent_message', resumed: true },
     ]);

@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub const TURN_PAGE_MAX: usize = 64;
-/// One rail-card line of the turn's opening human prompt.
+/// One rail-card line of the turn's opening human message or Agent task.
 pub const TURN_PROMPT_PREVIEW_MAX: usize = 50;
 /// Three rail-card lines of the turn's final response.
 pub const TURN_RESPONSE_PREVIEW_MAX: usize = 120;
@@ -46,7 +46,7 @@ pub struct ConversationTurn {
     pub ordinal: usize,
     /// None until native work has a visible member or terminal position.
     pub cursor: Option<super::TranscriptCursor>,
-    /// The turn's first human prompt; empty when none was adopted for it.
+    /// The turn's opening human message or Agent task; empty when none was adopted.
     #[schemars(length(max = 50))]
     pub prompt: String,
     /// The turn's final text-bearing response; empty until the turn settles.
@@ -102,7 +102,7 @@ pub struct TurnReadingProvenance {
     pub process_message_ids: Vec<crate::runtime::identity::MessageId>,
     /// Canonical predecessor of a terminal-only location; None precedes all content.
     pub preceding_message_id: Option<crate::runtime::identity::MessageId>,
-    /// The canonical human prompt that opened the turn, when one was retained.
+    /// The canonical human message or Agent task that opened the turn, when retained.
     pub prompt_message_id: Option<crate::runtime::identity::MessageId>,
     pub outcome: InheritedTurnOutcome,
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
