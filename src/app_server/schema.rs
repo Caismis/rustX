@@ -333,6 +333,10 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                 revision: EXACT,
             },
         },
+        Method::AgentStatistics {
+            target: target.clone(),
+            agent_id: crate::runtime::identity::AgentId::new("agent-fixture"),
+        },
         Method::AgentTranscript {
             target: target.clone(),
             agent_id: crate::runtime::identity::AgentId::new("agent-fixture"),
@@ -400,6 +404,9 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             matched: 0,
             limit: crate::tools::background::MAX_JOB_LIST_LIMIT,
             truncated: false,
+        },
+        MethodResult::AgentStatistics {
+            metrics: crate::runtime_client::agent_statistics::AgentStatistics::default(),
         },
         MethodResult::InboundMutation {
             outcome: crate::durable::inbox::PendingMutationOutcome::Conflict,

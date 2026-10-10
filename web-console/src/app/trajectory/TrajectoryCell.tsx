@@ -13,7 +13,7 @@ import css from './Trajectory.module.css';
 export type CellKind = TraceKind | 'system' | 'context';
 
 export function cellKind(item: InspectableDisplayItem): CellKind {
-  return item.type === 'SystemPromptCell' ? 'system' : item.type === 'ContextRow' ? 'context' : item.record.kind;
+  return item.type === 'SystemPromptCell' ? 'system' : item.type === 'ContextRow' || item.record.kind === 'user' && !!item.record.agent_id ? 'context' : item.record.kind;
 }
 
 /** Harness role labels; a compaction record is shown as its Compacted result. */

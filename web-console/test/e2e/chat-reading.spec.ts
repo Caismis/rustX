@@ -9,7 +9,7 @@ for (const width of [1440, 390]) test(`small upward gestures own Chat reading at
   await page.evaluate(() => (window as any).startupFixture.release('session/attach'));
   if (width < 600) await page.getByRole('button', { name: 'Collapse Sidebar', exact: true }).click();
   await page.setViewportSize({ width, height: 900 });
-  const viewport = page.locator('.conversation-scroll');
+  const viewport = page.locator('[data-conversation-scroll]').first();
   const latest = page.locator('[data-chat-latest]');
   const top = () => viewport.evaluate(el => el.scrollTop);
   const floor = () => viewport.evaluate(el => el.scrollHeight - el.clientHeight);

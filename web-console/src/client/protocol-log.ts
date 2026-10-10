@@ -21,6 +21,7 @@ export class ProtocolLog {
   private dropped = 0;
   private truncated = 0;
   private paused = false;
+  private publicationPending = false;
   private listeners = new Set<() => void>();
   private view: LogView = { entries: [], dropped: 0, truncated: 0, paused: false };
   constructor(readonly maxEntries = 300, readonly maxBytes = 1_048_576, readonly maxEntryBytes = 32_768) {}
@@ -38,6 +39,12 @@ export class ProtocolLog {
         if (method === 'session/uploadPrepare' && envelope.result?.transfer) envelope.result.transfer.path = '[upload capability omitted]';
         if (method === 'artifact/read' && envelope.result?.data) envelope.result.data = '[artifact bytes omitted]';
         if (method === 'session/uploadPrepare' || method?.startsWith('artifact/')) raw = JSON.stringify(envelope);
+        // Authoring payloads are not general-purpose protocol diagnostics,
+        // including rejected requests sent by a non-UI caller.
+        if (method === 'configuration/sourceWrite' && envelope.params?.mutation) {
+          envelope.params.mutation = '[configuration write omitted]';
+          raw = JSON.stringify(envelope);
+        }
         sessionId = envelope.params?.target?.session_id ?? envelope.params?.session_id ?? sessionId
           ?? envelope.result?.target?.session_id ?? envelope.result?.session?.id ?? envelope.result?.result?.session_id;
       }
@@ -60,7 +67,16 @@ export class ProtocolLog {
   clear() { this.entries = []; this.bytes = 0; this.dropped = 0; this.truncated = 0; this.publish(false); }
   private publish(freeze = this.paused) {
     this.view = { entries: freeze ? this.view.entries : [...this.entries], dropped: this.dropped, truncated: this.truncated, paused: this.paused };
-    for (const listener of this.listeners) listener();
+    // Recording and snapshot order are synchronous; diagnostic subscribers never
+    // interleave RPC admission, socket dispatch, or correlated response settlement.
+    if (this.publicationPending) return;
+    this.publicationPending = true;
+    queueMicrotask(() => {
+      this.publicationPending = false;
+      for (const listener of this.listeners) {
+        try { listener(); } catch (error) { console.error('Protocol diagnostic observer failed', error); }
+      }
+    });
   }
 }
 export function filterLog(view: LogView, method: string, session: string, kind = '') {

@@ -356,3 +356,9 @@
   clip: rect(0 0 0 0);
   white-space: nowrap;
 }
+
+/* Keep lifecycle labels on one line while the summary yields on narrow panes. */
+.summary + small {
+  flex: none;
+  white-space: nowrap;
+}

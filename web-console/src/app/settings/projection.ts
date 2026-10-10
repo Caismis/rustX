@@ -5,11 +5,8 @@ import type {
 } from '../../../../protocol/app-server/v39';
 import type { ConnectionState } from '../../client/app-server';
 
-/** The single owner a Settings instance is bound to for its whole lifetime.
- * There is deliberately no ordinary User/Workspace selector: the global entry
- * opens User authoring and the exact Workspace object entry opens Workspace
- * authoring. Presenting one target's facts never merges another target's
- * meaning. */
+/** Each Settings target names one exact configuration owner. The catalog scope
+ * menu switches targets; transactions and source facts remain owned separately. */
 export interface UserSettingsTarget { kind: 'user' }
 export interface WorkspaceSettingsTarget { kind: 'workspace'; id: string; displayName: string }
 export type SettingsTarget = UserSettingsTarget | WorkspaceSettingsTarget;
@@ -513,11 +510,4 @@ export function settingsLifecycle(input: { connection: ConnectionState; hasSourc
     return input.targetValid ? 'ready' : 'stale';
   }
   return 'failed';
-}
-export function settingsLifecycleLabel(tx: Translate, lifecycle: SettingsLifecycle): string {
-  return lifecycle === 'connecting' ? tx('settings:copy.connecting-to-the-app-server')
-    : lifecycle === 'loading' ? tx('settings:copy.loading-authoritative-sources')
-      : lifecycle === 'ready' ? tx('settings:copy.authoritative-source-observed')
-        : lifecycle === 'stale' ? tx('settings:copy.last-observation-retained-current-status-uncertain')
-          : tx('settings:copy.source-authority-unavailable');
 }

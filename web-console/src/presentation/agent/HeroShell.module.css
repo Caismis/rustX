@@ -233,3 +233,9 @@
   line-height: 18px;
   color: var(--dsw-alias-state-error-primary);
 }
+
+/* Inline composer menus must paint above the Workspace selector's sibling
+   stacking context, while the closed composer retains ordinary hero order. */
+.body > :has([data-trigger-menu], [data-model-picker]) {
+  z-index: 11;
+}

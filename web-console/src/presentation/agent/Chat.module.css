@@ -44,32 +44,44 @@
   flex-direction: column;
 }
 
-/* `hidden="until-found"` retains a zero-height box so browser find can reveal
-   its subtree. Direct Chat Node Seats and auxiliary rows share one flow;
-   hidden and empty Seats do not contribute spacing. */
-.column > :not([hidden]):not(.flowItem:empty)
-  ~ :not([hidden]):not(.flowItem:empty) {
-  margin-top: var(--dsh-chat-flow-gap, 16px);
+/* Harness flow rhythm: process rows 6px, replies 12px, Turn boundaries 16px.
+   Apply it both between native entries and inside their anchored seats. */
+.column > :where(:not([hidden]):not(:empty)) ~ :where(:not([hidden]):not(:empty)) {
+  margin-top: 6px;
 }
 
-/* Settled-flow identity boundary. It is neutral until it becomes the natural
-   measurement/mount unit for a virtualizer without changing the column gap. */
-.flowItem {
+.flowItem { min-width: 0; }
+.flow[hidden] { display: none; }
+
+.flow {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
 }
 
-/* A closed process reads as one summary immediately followed by its answer.
-   Expanded process rows return to the ordinary 16px rhythm. */
-.flowItem[data-turn-process-answer] {
-  --dsh-chat-flow-gap: 8px;
+.flow > :where(:not([hidden]):not(:empty):not([role="status"]))
+  ~ :where(:not([hidden]):not(:empty):not([role="status"])) {
+  margin-top: 6px;
 }
 
-/* A keyed renderer may intentionally decline its row after dispatch (the
-   completed-turn tail does this when it owns neither actions nor extensions).
-   An empty flex item must not consume the column gap. */
-.flowItem:empty {
-  display: none;
+.column > [data-chat-group-part="response"]:not([hidden]),
+.column > [data-chat-group-part="response"]:not([hidden])
+  + :not([hidden]):not(:empty),
+.flow > [data-assistant-message]:not([hidden]),
+.flow > [data-assistant-message]:not([hidden]) + :not([hidden]):not(:empty) {
+  margin-top: 12px;
 }
+
+.column > [data-chat-flow-kind="turn-process"],
+.column > [data-chat-flow-kind="user"]:not(:first-child),
+.column > .flowItem:has([data-turn-process]),
+.column > [data-chat-flow-kind="turn-process"] + :not([hidden]):not(:empty),
+.flow > [data-turn-process] ~ :not([hidden]):not(:empty):not([role="status"]) {
+  margin-top: 16px;
+}
+
+/* A first reply inside a seat has its spacing supplied by the outer flow. */
+.flow > [data-assistant-message]:nth-child(1 of :not([hidden]):not(:empty)) { margin-top: 0; }
 
 .callRow {
   border-radius: 6px;
@@ -78,63 +90,90 @@
 /* Selection still sets data-selected for details linkage; no outline —
    tool rows match Think chrome (no selected ring). */
 
-/* Turn activity keeps the former loader's one-line footprint. A pale
-   brand-blue band sweeps from left to right; reduced-motion keeps it static. */
-.turnStatus {
-  align-self: flex-start;
-  flex: none;
+.running {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  --dsh-chat-flow-gap: 12px;
+  --dsw-alias-label-shimmer: var(--dsw-alias-label-deep-diving-shimmer);
+  color: var(--dsw-alias-label-deep-diving);
+  font-size: calc(var(--dsh-content-font-size, 14px) - 2px);
+  line-height: calc(22px + var(--dsh-content-font-delta, 0px));
+}
+
+.column > .running { margin-top: 12px; }
+.column > :nth-last-child(2 of :not([hidden]):not(:empty)):is(.flowItem:not([data-chat-flow-kind="user"])) ~ .running > .runningDivider {
+  display: block;
+}
+
+.runningDivider {
+  display: none;
+  width: 100%;
+  height: 0.5px;
+  margin: 8px 0 10px;
+  background: color-mix(in srgb, var(--dsw-alias-border-l1) 75%, var(--dsw-alias-border-l2));
+  pointer-events: none;
+}
+
+.runningContent {
   display: inline-flex;
   align-items: center;
-  height: calc(26px + var(--dsh-content-font-delta, 0px));
-  font: var(--dsw-font-s-strong-14);
-  /* The status line reads at the body size: the fixed 14 token supplies the
-     family/weight, the axis supplies the size. At default that is 14px text
-     on a 22px line inside a 26px row; both box heights shift by the same
-     delta, preserving the 8px (22 − 14) leading and the 4px (26 − 22) row
-     padding at every size. */
-  font-size: var(--dsh-content-font-size, 14px);
-  line-height: calc(22px + var(--dsh-content-font-delta, 0px));
-  white-space: nowrap;
-  background: linear-gradient(
-    90deg,
-    var(--dsw-static-deepseek-500) 0%,
-    var(--dsw-static-deepseek-500) 40%,
-    var(--dsw-static-deepseek-200) 50%,
-    var(--dsw-static-deepseek-500) 60%,
-    var(--dsw-static-deepseek-500) 100%
-  );
-  background-position: 100% 0;
-  background-size: 250% 100%;
-  background-clip: text;
-  color: transparent;
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  animation: dsh-turn-status-shimmer 1.8s linear infinite;
+  min-width: 0;
+  gap: 6px;
 }
 
-.turnStatusClock {
-  margin-left: 8px;
-  font: var(--dsw-font-xs-13);
-  font-size: var(--dsh-content-font-size-secondary, 13px);
-  line-height: calc(20px + var(--dsh-content-font-delta-secondary, 0px));
-  font-weight: 400;
+.runningText {
+  min-width: 0;
   font-variant-numeric: tabular-nums;
-  color: var(--dsw-alias-label-caption);
-  -webkit-text-fill-color: var(--dsw-alias-label-caption);
 }
 
-@keyframes dsh-turn-status-shimmer {
-  to {
-    background-position: 0 0;
+.runningIcon {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  width: calc(14px + var(--dsh-content-font-delta, 0px));
+  height: calc(14px + var(--dsh-content-font-delta, 0px));
+  /* The fixed footprint contains the animation's layout and paint. */
+  contain: strict;
+  overflow: hidden;
+}
+
+.runningWhaleAnimated {
+  display: none;
+  position: absolute;
+  inset: 0;
+}
+
+.runningWhaleStill {
+  display: initial;
+}
+
+@supports (mask-mode: alpha) and (mask-image: url('')) {
+  @media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
+    .runningWhaleAnimated {
+      display: block;
+      background: currentColor;
+      mask: url('./running-whale@2x.png') center / 100% 100% no-repeat;
+      mask-mode: alpha;
+      /* Keep animated-mask repaints on an icon-sized composited layer. */
+      will-change: transform;
+    }
+
+    .runningWhaleStill {
+      display: none;
+    }
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .turnStatus {
-    background-position: 0 0;
-    background-size: 100% 100%;
-    animation: none;
-  }
+.runningAnnouncement {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .hint {

@@ -69,6 +69,7 @@ export class Server {
   private completed = new Map<Request, Response>();
   private reservations = new WeakMap<FakeSocket, Set<string>>();
   loaded = new Set<string>();
+  residentConversations = new Map<string, string>();
   coldLoads = new Map<string, number>();
   maxClaims = 0;
   private targets = new WeakMap<FakeSocket, Map<string, AttachmentTarget>>();
@@ -156,17 +157,26 @@ export class Server {
       case 'server/info': result = { type: 'server_info', capabilities: this.capabilities }; break;
       case 'session/summary': result = { type: 'session_summary', summary: this.summary(request.params.session_id) }; break;
       case 'session/list': if (request.params.limit > 32) throw new Error('Native Session page limit is 32'); result = { type: 'sessions', sessions: [...this.snapshots.keys()].map(id => this.summary(id)).sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).filter(row => !request.params.query || [row.id, row.name, row.preview].some(text => text?.toLowerCase().includes(request.params.query!.toLowerCase()))).slice(request.params.offset, request.params.offset + request.params.limit) }; break;
+      case 'session/read': result = { type: 'session', session: { id, active_node: this.summary(id).active_node, active_conversation_id: (this.nodeSnapshots.get(this.summary(id).active_node) ?? this.snapshots.get(id)!).conversation_id, node_count: 1, created_at: '0', updated_at: '0' } }; break;
+      case 'session/tree': {
+        const nodes = [{ id: this.summary(id).active_node, conversation_id: (this.nodeSnapshots.get(this.summary(id).active_node) ?? this.snapshots.get(id)!).conversation_id }, ...[...this.nodeSnapshots].map(([id, snapshot]) => ({ id, conversation_id: snapshot.conversation_id }))];
+        result = { type: 'tree', nodes: nodes.slice(request.params.offset, request.params.offset + request.params.limit).map((node, i) => ({ ...node, ordinal: String(i), origin: { type: 'new' }, created_at: '0' })), next_offset: null }; break;
+      }
+      case 'session/statistics': result = { type: 'session_statistics', conversation_id: (this.nodeSnapshots.get(request.params.node_id ?? '') ?? this.snapshots.get(id)!).conversation_id, statistics: (this.nodeSnapshots.get(request.params.node_id ?? '') ?? this.snapshots.get(id)!).transcript.statistics ?? { turns: '0', steps: '0', completed_responses: '0', model_requests: '0', requests_with_usage: '0' } }; break;
+      case 'session/traceHistory': result = { type: 'session_trace_history', conversation_id: (this.nodeSnapshots.get(request.params.node_id ?? '') ?? this.snapshots.get(id)!).conversation_id, page: (this.nodeSnapshots.get(request.params.node_id ?? '') ?? this.snapshots.get(id)!).trace }; break;
+      case 'session/traceHistoryDetail': result = { type: 'session_trace_history_detail', conversation_id: (this.nodeSnapshots.get(request.params.node_id ?? '') ?? this.snapshots.get(id)!).conversation_id, detail: null }; break;
       case 'session/history': {
         const history = (request.params.node_id ? this.nodeSnapshots.get(request.params.node_id) : undefined) ?? this.snapshots.get(request.params.session_id)!;
         if (!history) throw new RpcFailure({ code: -32000, message: 'Unknown Session' });
-        result = { type: 'session_history', conversation_id: history.conversation_id, window: { cut: { conversation_id: 'conversation-A', journal: '1000', transcript: '1000', mutation_revision: '0' }, page: history.transcript } }; break;
+        result = { type: 'session_history', conversation_id: history.conversation_id, window: { cut: { conversation_id: history.conversation_id, journal: '1000', transcript: '1000', mutation_revision: '0' }, page: history.transcript } }; break;
       }
       case 'session/attach': {
         this.reservations.get(socket)?.delete(id);
-        if (!this.loaded.has(id)) { this.loaded.add(id); this.coldLoads.set(id, (this.coldLoads.get(id) ?? 0) + 1); }
+        const attachedSnapshot = (request.params.node_id ? this.nodeSnapshots.get(request.params.node_id) : this.nodeSnapshots.get(this.summary(id).active_node)) ?? this.snapshots.get(id)!;
+        if (this.loaded.has(id) && this.residentConversations.get(id) !== attachedSnapshot.conversation_id) throw new RpcFailure({ code: -32000, message: 'Session already resident in another Conversation', data: { kind: 'operation_failed' } });
+        if (!this.loaded.has(id)) { this.loaded.add(id); this.residentConversations.set(id, attachedSnapshot.conversation_id); this.coldLoads.set(id, (this.coldLoads.get(id) ?? 0) + 1); }
         if (this.sockets.some(source => this.claims(source).some(target => target.session_id === id))) throw new RpcFailure({ code: -32000, message: 'Controller in use', data: { kind: 'controller_in_use' } });
         const targets = this.targets.get(socket) ?? new Map<string, AttachmentTarget>();
-        const attachedSnapshot = (request.params.node_id ? this.nodeSnapshots.get(request.params.node_id) : undefined) ?? this.snapshots.get(id)!;
         targets.set(id, { session_id: id, conversation_id: attachedSnapshot.conversation_id, runtime_incarnation: String(9007199254740992n + BigInt(this.coldLoads.get(id)!)), attachment_id: `${id}-${++this.attachmentSequence}` });
         this.targets.set(socket, targets);
         this.maxClaims = Math.max(this.maxClaims, targets.size);
@@ -176,13 +186,20 @@ export class Server {
       case 'configuration/sourcesRead': result = { type: 'source_settings', projection: cfg3Source() }; break;
       case 'session/turns': result = { type: 'conversation_turns', page: { cut: { conversation_id: this.target(id, socket).conversation_id, journal: '0', transcript: '0', mutation_revision: '0' }, offset: 0, total: 0, turns: [] } }; break;
       case 'session/settings': result = { type: 'settings', revision: '0', settings: { cwd: `/workspace/${id}` } }; break;
-      case 'session/snapshot': result = { type: 'snapshot', snapshot: this.snapshots.get(id)!, cursor: String(this.cursor) }; break;
+      case 'session/snapshot': result = { type: 'snapshot', snapshot: this.snapshots.get(id)?.conversation_id === request.params.target.conversation_id ? this.snapshots.get(id)! : [...this.nodeSnapshots.values()].find(snapshot => snapshot.conversation_id === request.params.target.conversation_id)!, cursor: String(this.cursor) }; break;
       case 'session/subscribe': result = { type: 'subscribed', after_cursor: request.params.after_cursor }; break;
       // Inspection detail is served per record, so the fixture answers from
       // the details its scenario staged and reports absence otherwise.
       case 'session/traceDetail': result = { type: 'trace_detail', detail: this.traceDetails.get(request.params.record_id) ?? null }; break;
       case 'session/detach': this.targets.get(socket)!.delete(id); result = { type: 'detached' }; break;
-      case 'session/switchNode': this.targets.get(socket)!.delete(id); this.loaded.delete(id); result = { type: 'session', session: { id, node_count: 1, active_node: request.params.node_id, active_conversation_id: `conv-${id}`, created_at: '0', updated_at: '0' } }; break;
+      case 'session/switchNode': {
+        this.targets.get(socket)!.delete(id);
+        const conversation = (this.nodeSnapshots.get(request.params.node_id) ?? this.snapshots.get(id)!).conversation_id;
+        this.loaded.add(id); this.residentConversations.set(id, conversation);
+        this.coldLoads.set(id, (this.coldLoads.get(id) ?? 0) + 1);
+        this.summaries.set(id, { ...this.summaries.get(id), active_node: request.params.node_id });
+        result = { type: 'session', session: { id, node_count: 1, active_node: request.params.node_id, active_conversation_id: conversation, created_at: '0', updated_at: '0' } }; break;
+      }
       case 'turn/start': case 'turn/steer': result = { type: 'inbound_accepted', message_id: 'accepted-user', inbound_sequence: '1' }; break;
       case 'turn/cancel': result = { type: 'cancellation_accepted', attempt_id: 'attempt-A' }; break;
       case 'goal/control': {
@@ -217,6 +234,9 @@ export class Server {
         this.snapshots.set(id, next); this.cursor++;
         result = { type: 'interaction_settled', interaction: request.params.interaction }; break;
       }
+      case 'agent/statistics': return { type: 'agent_statistics', metrics: { statistics: { turns: '0', steps: '0', completed_responses: '0', model_requests: '0', requests_with_usage: '0' }, occupancy: null, duration: { settled_ms: '0', active: null } } };
+      case 'agent/transcript': return { type: 'transcript', page: { entries: [] } };
+      case 'session/models': return { type: 'models', catalog: { models: [] } };
       default: throw new Error(`Fixture needs an explicit native result for ${request.method}`);
     }
     return result;

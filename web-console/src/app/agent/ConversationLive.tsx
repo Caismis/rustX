@@ -31,30 +31,35 @@ export function ConversationLive({ client, sessionId, mode, disabled, onHistoric
   const tx=useTranslation(), viewport=useRef<ChatViewport>(null), [active,setActive]=useState<string | null>();
   const submission = useSyncExternalStore(client.firstSubmissions.subscribe, () => sessionId ? client.firstSubmissions.session(sessionId) : undefined);
   const waiting = !!submission && ['attaching', 'uploading', 'admitting'].includes(submission.phase);
+  const tracePreview = useClientSelector(client, state => {
+    const view = sessionId ? state.views[sessionId] : undefined;
+    return mode === 'trajectory' && view?.attachment === 'attaching' ? view.tracePreview : undefined;
+  });
   const view = useClientSelector(client, state => {
     const view = sessionId ? state.views[sessionId] : undefined;
     if (!view) return undefined;
     const preview = view.attachment === 'attaching' ? view.preview : undefined;
     const snapshot = preview ? { messages: [], attempt: null, statuses: [], conversation_id: preview.conversationId, transcript: preview.history.page } : view.snapshot;
     if (!snapshot) return undefined;
-    return { id: view.id, target: view.target, messages: snapshot.messages, attempt: snapshot.attempt,
+    return { id: view.id, target: view.target, observation: view.attachmentObservation, readable: !disabled && client.isAttachmentObservationCurrent(view.id, view.attachmentObservation), messages: snapshot.messages, attempt: snapshot.attempt,
       transcript: snapshot.transcript, statuses: snapshot.statuses, conversation_id: snapshot.conversation_id,
       readingPreview: !!preview, history: preview?.history ?? view.history, trace: mode === 'trajectory' ? view.trace : undefined,
-      safe: lineageSwitchSafe(view), disabled: disabled || view.attachment !== 'attached' || view.attachmentIntent !== 'wanted'
+      safe: lineageSwitchSafe(view), disabled: disabled || !client.isAttachmentControlCurrent(view.id, view.attachmentObservation)
         || !!view.modelMutation || !!view.snapshot?.shutting_down || !!view.snapshot?.durability_failure };
   }, shallowEqual);
   const fork = useForkPoint(client, mode === 'chat' ? view?.target : undefined, view?.history?.page.inherited_through);
   const located = useRef<object | undefined>(undefined);
   useEffect(() => {
-    if (!view?.target || mode !== 'chat' || !sourceLocation || sourceLocation.target !== view.target || located.current === sourceLocation) return;
+    if (!view?.target || !view.readable || mode !== 'chat' || !sourceLocation || sourceLocation.target !== view.target || located.current === sourceLocation) return;
     const intent = viewport.current?.beginNavigation();
     if (!intent) return;
     located.current = sourceLocation;
     const target = view.target;
     void client.navigateMessage(view.id, sourceLocation.messageId, intent.current).then(landed => {
-      if (landed) intent.commit(`message:${sourceLocation.messageId}`, () => client.getSnapshot().views[view.id]?.target === target);
+      if (landed) intent.commit(`message:${sourceLocation.messageId}`, () => client.getSnapshot().views[view.id]?.target === target && client.isAttachmentObservationCurrent(view.id, view.observation));
     });
-  }, [client, view?.target, mode, sourceLocation]);
+  }, [client, view?.target, view?.observation, view?.readable, mode, sourceLocation]);
+  if (sessionId && tracePreview) return <Trajectory key={sessionId} cache={tracePreview.cache} onSelect={id => client.selectTrace(sessionId, id)} onLoadDetail={id => { void client.loadTraceDetail(sessionId, id); }} loadEarlier={() => void client.loadEarlierTrace(sessionId).catch(() => {})}/>;
   if (!view) return sessionId ? <ChatViewport latestLabel={tx('agent:agent-transcript.return-to-latest')}><PendingMessage client={client} sessionId={sessionId}/></ChatViewport> : null;
   return mode === 'trajectory' && view.trace
     ? <Trajectory key={`${view.id}:${view.target?.attachment_id}`} cache={view.trace} onSelect={id => client.selectTrace(view.id, id)} onLoadDetail={id => { void client.loadTraceDetail(view.id, id); }} loadEarlier={() => void client.loadEarlierTrace(view.id).catch(() => {})}/>
@@ -75,7 +80,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, onHistoric
       latestTurn={view.attempt && view.attempt.phase.type!=='settled' ? turnAnchor({conversation_id:view.conversation_id,attempt_id:view.attempt.attempt_id}) : undefined}
       historical={!!view.history?.window} onLatest={() => client.returnToLatest(view.id)} onActiveTurn={setActive}>
       {fork.error && <div role="alert"><p>{fork.error}</p><button type="button" onClick={fork.retry}>{tx('agent:fork-point.reload')}</button></div>}
-      {(view.messages.length > 0 || !!view.transcript.entries?.length || !waiting) && <AgentTranscript requestFeedback={attemptId => <ModelRetries client={client} sessionId={view.id} attemptId={attemptId}/>} snapshot={view} history={view.history} loadLater={() => void client.loadLater(view.id)} loadEarlier={() => void (view.readingPreview ? client.loadEarlierPreview(view.id) : client.loadEarlier(view.id)).catch(() => {})} lineageSwitchSafe={view.safe} historicalDisabled={view.disabled} onHistorical={onHistorical} forkPoint={fork.point} onOpenSource={onOpenSource} sourceDisabled={fork.point?.origin.source_session === view.id && !view.safe}/>}
+      {(view.messages.length > 0 || !!view.transcript.entries?.length || !waiting) && <AgentTranscript requestFeedback={attemptId => <ModelRetries client={client} sessionId={view.id} attemptId={attemptId}/>} snapshot={view} history={view.history} loadLater={() => void client.loadLater(view.id)} loadEarlier={() => void (view.readingPreview ? client.loadEarlierPreview(view.id) : client.loadEarlier(view.id)).catch(() => {})} lineageSwitchSafe={view.safe} historicalDisabled={view.disabled} onHistorical={onHistorical} forkPoint={fork.point} onOpenSource={onOpenSource} sourceDisabled={!view.readable || fork.point?.origin.source_session === view.id && !view.safe}/>}
       <ConversationActivity client={client} sessionId={view.id}/>
       <PendingMessage client={client} sessionId={view.id}/>
     </ChatViewport>;
@@ -105,7 +110,7 @@ export function ConversationTotals({ client, sessionId }: { client: AppServerCli
     const view = state.views[sessionId];
     // A detached or disconnected view's last reading is not current occupancy.
     const current = state.connection === 'connected' && view?.attachment === 'attached';
-    return { statistics: view?.snapshot?.transcript.statistics, occupancy: current ? view?.snapshot?.context?.last_request_occupancy : undefined };
+    return { statistics: view?.attachment === 'attaching' ? view.statisticsPreview?.statistics ?? view.snapshot?.transcript.statistics : view?.snapshot?.transcript.statistics, occupancy: current ? view?.snapshot?.context?.last_request_occupancy : view?.attachment === 'attaching' ? view.statisticsPreview?.occupancy ?? view.snapshot?.context?.last_request_occupancy : undefined };
   }, shallowEqual);
   return <ConversationStats statistics={facts.statistics} occupancy={facts.occupancy}/>;
 }

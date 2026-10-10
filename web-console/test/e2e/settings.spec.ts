@@ -19,10 +19,10 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
-    // Global Settings opens at General, one of exactly six product pages.
-    await expect(page.getByRole('tablist', { name: 'Settings pages' }).getByRole('tab')).toHaveText(['General', 'Models', 'Agent', 'Tools & Permissions', 'Extensions', 'Advanced']);
+    // Global Settings opens at General, one of seven product pages.
+    await expect(page.getByRole('tablist', { name: 'Settings pages' }).getByRole('tab')).toHaveText(['General', 'Models', 'Agent', 'Tools & Permissions', 'MCP servers', 'Extensions', 'Advanced']);
     expect(await selectedSettingsPage(page)).toBe('General');
-    const saved = async (unit: string) => { await expect(settings.getByText(`${unit} saved. Native coordination owns application.`)).toBeVisible(); };
+    const saved = async (unit: string) => { await expect(settings.getByText(`${unit} saved.`)).toBeVisible(); };
     const row = (name: string) => settings.getByRole('row', { name, exact: true });
     await openSettingsPage(page, 'Models'); await expandModelAuthoring(page);
     await settings.getByLabel('New Provider identity').fill('acceptance');

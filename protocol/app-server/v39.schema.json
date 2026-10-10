@@ -745,6 +745,35 @@
           "properties": {
             "method": {
               "type": "string",
+              "const": "agent/statistics"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "agent_id": {
+                  "$ref": "#/$defs/AgentId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "agent_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
               "const": "agent/sendMessage"
             },
             "params": {
@@ -1112,6 +1141,133 @@
                 "session_id",
                 "at",
                 "limit"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Inspect durable trace without composing a runtime or acquiring control.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "session/traceHistory"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                },
+                "node_id": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionNodeId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "before": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/TraceCursor"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "limit": {
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "session_id",
+                "limit"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "session/traceHistoryDetail"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                },
+                "node_id": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionNodeId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "record_id": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "session_id",
+                "record_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "session/statistics"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                },
+                "node_id": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionNodeId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "session_id"
               ]
             }
           },
@@ -5771,6 +5927,85 @@
         {
           "type": "object",
           "properties": {
+            "conversation_id": {
+              "$ref": "#/$defs/ConversationId"
+            },
+            "statistics": {
+              "$ref": "#/$defs/ConversationStatistics"
+            },
+            "occupancy": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ContextOccupancy"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "session_statistics"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "conversation_id",
+            "statistics"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "conversation_id": {
+              "$ref": "#/$defs/ConversationId"
+            },
+            "page": {
+              "$ref": "#/$defs/TracePage"
+            },
+            "type": {
+              "type": "string",
+              "const": "session_trace_history"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "conversation_id",
+            "page"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "conversation_id": {
+              "$ref": "#/$defs/ConversationId"
+            },
+            "detail": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TraceDetail"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "session_trace_history_detail"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "conversation_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "window": {
               "$ref": "#/$defs/ConversationWindow"
             },
@@ -5896,6 +6131,23 @@
           "required": [
             "type",
             "agent"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "metrics": {
+              "$ref": "#/$defs/AgentStatistics"
+            },
+            "type": {
+              "type": "string",
+              "const": "agent_statistics"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "metrics"
           ]
         },
         {
@@ -14653,6 +14905,81 @@
         "base_commit",
         "head_commit",
         "dirty"
+      ]
+    },
+    "AgentStatistics": {
+      "type": "object",
+      "properties": {
+        "statistics": {
+          "$ref": "#/$defs/ConversationStatistics"
+        },
+        "occupancy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ContextOccupancy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "duration": {
+          "$ref": "#/$defs/AgentDuration"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "statistics",
+        "duration"
+      ]
+    },
+    "AgentDuration": {
+      "type": "object",
+      "properties": {
+        "settled_ms": {
+          "description": "Sum of this child's closed working intervals, excluding inactive gaps.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "active": {
+          "description": "Last interval, if its terminal event has not been observed.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentActiveInterval"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "settled_ms"
+      ]
+    },
+    "AgentActiveInterval": {
+      "type": "object",
+      "properties": {
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "observed_at": {
+          "description": "Last durable evidence. Non-running children freeze here, including recovery.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "running": {
+          "description": "Authoritative live lifecycle, never inferred from a missing terminal.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "started_at",
+        "observed_at",
+        "running"
       ]
     },
     "RuntimeClientAgentWorkspaceDisposalOutcome": {

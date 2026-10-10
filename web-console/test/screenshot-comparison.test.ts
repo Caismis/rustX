@@ -91,11 +91,15 @@ it.each([
       expect(region.maxChangedPixels).toBeGreaterThan(0);
       expect(region.maxChannelDelta).toBeGreaterThan(0);
     }
-    for (const [a, index] of entry.regions.map((region, index) => [region, index] as const))
-      for (const b of entry.regions.slice(index + 1)) {
-        const overlap = a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
-        expect(overlap).toBe(false);
-      }
+    // Index each approved pixel once. The row-span evidence contains hundreds
+    // of tiny regions; pairwise assertions are quadratic in the region count.
+    // A duplicate cell proves overlap, and every measurement must have an owner.
+    const owners = new Map<string, NoiseRegion>();
+    for (const region of entry.regions) for (const [x, y] of cells(region)) {
+      const key = `${x},${y}`;
+      expect(owners.has(key)).toBe(false);
+      owners.set(key, region);
+    }
     // Every recorded measurement binds to exactly one region, inside both
     // bounds, and the region's budget covers its own evidence.
     const measured = entry.pixels as MeasuredNoisePixel[];
@@ -104,11 +108,11 @@ it.each([
     for (const [x, y, before, after] of measured) {
       expect(pixel(image, x, y)).toEqual(before);
       expect(after).not.toEqual(before);
-      const owners = entry.regions.filter(region => x >= region.x && x < region.x + region.width && y >= region.y && y < region.y + region.height);
-      expect(owners).toHaveLength(1);
+      const owner = owners.get(`${x},${y}`);
+      expect(owner).toBeDefined();
       const delta = Math.max(...before.map((channel, i) => Math.abs(after[i] - channel)));
-      expect(delta).toBeLessThanOrEqual(owners[0].maxChannelDelta);
-      perRegion.set(owners[0], (perRegion.get(owners[0]) ?? 0) + 1);
+      expect(delta).toBeLessThanOrEqual(owner!.maxChannelDelta);
+      perRegion.set(owner!, (perRegion.get(owner!) ?? 0) + 1);
     }
     for (const region of entry.regions) expect(perRegion.get(region) ?? 0).toBeLessThanOrEqual(region.maxChangedPixels);
   }
@@ -417,11 +421,12 @@ it('K: a dimension change fails, for strict and noise-policy references alike', 
   expect(heightResult.report).toContain(`dimensions: expected 390x844, actual 390x843`);
 });
 
-// The Composer card and send circle rasterize on their own layers, so no
-// reference that draws them carries measured noise: one changed pixel fails.
+// Composer references without measured rasterizer evidence remain strict.
 it.each([
   ...['idle-empty', 'idle-draft', 'running-empty', 'running-draft', 'attachment', 'context']
-    .flatMap(state => ['light', 'dark'].map(theme => `composer-${state}-${theme}-390-linux.png`)),
+    .flatMap(state => ['light', 'dark'].map(theme => `composer-${state}-${theme}-390-linux.png`))
+    .filter(name => !['composer-attachment-dark-390-linux.png', 'composer-context-dark-390-linux.png'].includes(name))
+    .filter(name => !['running-empty', 'running-draft', 'attachment', 'context'].some(state => name === `composer-${state}-light-390-linux.png`)),
   'mobile-expanded-dark-linux.png',
 ])('%s is strict', name => {
   expect(noisePolicy.some(entry => entry.reference === name)).toBe(false);
@@ -432,4 +437,46 @@ it.each([
     const result = compare(changed, name, expected, noisePolicy);
     expect(result.ok).toBe(false); expect(result.report).toContain('no noise regions are registered');
   }
+});
+
+it.each([...['running-empty', 'running-draft', 'attachment', 'context'].map(state => [state, 'light']), ['attachment', 'dark'], ['context', 'dark']])('Composer %s %s noise rejects every adjacent unmeasured pixel', (state, theme) => {
+  const name = `composer-${state}-${theme}-390-linux.png`, expected = reference(name);
+  const entry = noisePolicy.find(entry => entry.reference === name)!;
+  const measured = new Set(entry.pixels!.map(([x, y]) => `${x},${y}`));
+  for (const region of entry.regions) for (const [x, y] of cells(region)) expect(measured.has(`${x},${y}`)).toBe(true);
+  const neighbours = new Set<string>();
+  for (const [x, y] of entry.pixels!) for (const [nx, ny] of [[x-1,y],[x+1,y],[x,y-1],[x,y+1]]) {
+    if (nx >= 0 && ny >= 0 && nx < expected.width && ny < expected.height && !measured.has(`${nx},${ny}`)) neighbours.add(`${nx},${ny}`);
+  }
+  expect(neighbours.size).toBeGreaterThan(0);
+  const changed = copy(expected);
+  for (const key of neighbours) { const [x, y] = key.split(',').map(Number); nudge(changed, x, y, 1); }
+  const result = compare(changed, name, expected, noisePolicy);
+  expect(result.ok).toBe(false); expect(result.changedOutsideRegions).toBe(neighbours.size);
+});
+
+it('dark attachment measured raster evidence passes while adjacent pixels and larger channel deltas fail', () => {
+  const name = 'composer-attachment-dark-390-linux.png', expected = reference(name);
+  const evidence = noisePolicy.find(entry => entry.reference === name)!;
+  const actual = copy(expected);
+  for (const [x, y, , after] of evidence.pixels!) paint(actual, x, y, after);
+  const check = (image: RgbaImage) => compareScreenshot({ referenceName: name, expected, actual: image, noisePolicy });
+  expect(check(actual).ok).toBe(true);
+  expect(check(actual).totalChanged).toBe(8);
+  const adjacent = copy(actual); nudge(adjacent, 289, 153, 1);
+  expect(check(adjacent).ok).toBe(false);
+  const overDelta = copy(expected); nudge(overDelta, 293, 153, 8);
+  expect(check(overDelta).ok).toBe(false);
+});
+
+// The former dark-context glyph allowance hid a deterministic sticky-paint
+// displacement. Typography must now be exact in both themes.
+it.each(['light', 'dark'])('Composer context %s rejects a one-pixel model label displacement', theme => {
+  const name = `composer-context-${theme}-390-linux.png`, expected = reference(name);
+  const actual = copy(expected);
+  for (let y = 290; y > 270; y--) for (let x = 119; x < 245; x++) paint(actual, x, y, pixel(expected, x, y - 1));
+  const result = compare(actual, name, expected, noisePolicy);
+  expect(result.totalChanged).toBeGreaterThan(0);
+  expect(result.changedOutsideRegions).toBe(result.totalChanged);
+  expect(result.ok).toBe(false);
 });

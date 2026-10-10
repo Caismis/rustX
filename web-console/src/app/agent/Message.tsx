@@ -1,3 +1,5 @@
+import { InboundMessage } from './InboundMessage';
+import { useConversationPreferences } from '../conversation-preferences';
 import { useTranslation } from '../../locale/react';
 import type { MessageBlock, UserContentBlock, AssistantContentBlock, InFlightBlock } from '../../../../protocol/app-server/v39';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
@@ -12,13 +14,14 @@ import { markdownPreviewText } from '../../presentation/markdown/preview';
 
 export function Content({ blocks, markdown = false, streaming = false, tools = [], reasoningHidden = false, include }: { reasoningHidden?: boolean; tools?: ForegroundToolExecution[]; markdown?: boolean; streaming?: boolean; blocks: (UserContentBlock | AssistantContentBlock | InFlightBlock)[]; include?: readonly number[] }) {
   const tx = useTranslation();
+  const [preferences] = useConversationPreferences();
   return blocks.map((block, index) => {
     // A step piece renders listed blocks at their canonical indices, which Tool lookup keys on.
     if (include && !include.includes(index)) return null;
     if (block.type === 'text') return markdown ? <MarkdownText key={index} text={block.text} streaming={streaming} /> : <span key={index}>{block.text}</span>;
     if (block.type === 'uploaded_file') return <AttachmentCard key={`${block.batch_id}/${block.name}/${index}`} name={block.name} image={false} />;
     if (block.type === 'image' || block.type === 'file') return <Artifact key={block.artifact_id} id={block.artifact_id} image={block.type === 'image'} mimeType={block.type === 'file' ? block.mime_type ?? undefined : undefined} name={(block.type === 'image' ? block.alt : block.name) ?? undefined} />;
-    if (block.type === 'reasoning') return <Reasoning key={index} text={block.text ?? ''} running={streaming} hidden={reasoningHidden}/>;
+    if (block.type === 'reasoning') return <Reasoning key={index} text={block.text ?? ''} running={streaming} hidden={reasoningHidden} preview={streaming || preferences.transcriptMode !== 'compact'}/>;
     if (block.type === 'refusal') return <p key={index}>{block.text}</p>;
     if (block.type === 'tool_call') {
       const id = 'call_id' in block ? block.call_id : block.id;
@@ -36,6 +39,7 @@ export function Message({ message, tools = [], actions, streaming = false, block
     return <CompactionMessage title={tx('agent:context.succeeded')} summary={tx('agent:context.expand')} preview={preview} description={tx('agent:compaction.description')}><Content blocks={message.content} markdown /></CompactionMessage>;
   }
   if (message.role === 'user' && message.kind && message.kind !== 'message') return <details><summary>{tx('agent:message.context')}{' '}{Object.keys(message.kind)[0]}</summary><Content blocks={message.content} markdown/></details>;
+  if (message.role === 'user' && message.source !== 'human') return <InboundMessage message={message}/>;
   return message.role === 'user' ? <UserMessage label={tx('agent:message.your-message')} actions={actions}><Content blocks={message.content}/></UserMessage>
     : <AssistantMessage label={tx(streaming ? 'agent:agent-transcript.streaming-response' : 'agent:message.assistant-response')}><Content blocks={blocks ?? message.content} markdown tools={tools} streaming={streaming} reasoningHidden={reasoningHidden} include={include}/></AssistantMessage>;
 }

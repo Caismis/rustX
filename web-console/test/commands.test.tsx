@@ -107,7 +107,7 @@ function nativeFixture() {
   server.handlers.set('session/models', () => ({ type: 'models', catalog: { models: [{ model: 'fixture/first' }, { model: 'fixture/second' }] } } as Extract<MethodResult, { type: 'models' }>));
   server.handlers.set('session/setModel', request => { if (request.method !== 'session/setModel') throw new Error('wrong method'); model = request.params.config.model; return { type: 'model', model: modelView() }; });
   server.handlers.set('session/boundaries', () => ({ type: 'boundaries', surface_revision: boundary.surface_revision, boundaries: [boundary] }));
-  server.handlers.set('session/tree', () => ({ type: 'tree', nodes }));
+  server.handlers.set('session/tree', request => ({ type: 'tree', nodes: request.method === 'session/tree' && request.params.session_id === 'B' ? [{ id: 'node-B', conversation_id: 'conversation-B', ordinal: '1', origin: { type: 'new' } }] : nodes }));
   const transition = (request: Request): MethodResult => {
     if (request.method !== 'session/fork' && request.method !== 'session/branch') throw new Error('wrong method');
     if (request.params.surface_revision !== boundary.surface_revision || request.params.boundary !== boundary.message.id) throw new RpcFailure({ code: -32602, message: 'Invalid historical Surface revision or user boundary' });
@@ -187,7 +187,7 @@ describe('successful command draft consumption', () => {
   });
   it('dismissal preserves a fuzzy invocation', async () => {
     const input = await open('/mdl');
-    fireEvent.keyDown(document, { key: 'Escape' });
+    fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Escape' });
     expect(input).toHaveProperty('value', '/mdl'); expect(document.activeElement).toBe(input);
   });
   it('known model refusal preserves its fuzzy invocation', async () => {
@@ -572,15 +572,8 @@ describe('typed native operations and continuation fencing', () => {
     if (method === 'session/fork') expect(server.client.getSnapshot().sessions.some(session => session.id === 'child')).toBe(true);
     await expect(scope.setModel('fixture/first')).rejects.toThrow('Obsolete');
   });
-  it('renders and filters native selector options, dispatches Enter, and visibly locks a rejected stale mutation', async () => {
+  it('visibly locks a rejected stale history mutation', async () => {
     const { navigation } = await subject(); const close = vi.fn();
-    render(<CommandPanel request={{ id: 'model' }} client={server.client} sessionId="A" current={navigation.capture()} close={close} succeeded={() => {}} opened={() => {}} />);
-    await screen.findByRole('option', { name: /fixture\/second/ });
-    fireEvent.change(screen.getByLabelText('Filter options'), { target: { value: 'second' } });
-    expect(screen.getAllByRole('option')).toHaveLength(1);
-    await act(async () => fireEvent.keyDown(screen.getByLabelText('Filter options'), { key: 'Enter' }));
-    expect(close).toHaveBeenCalledTimes(1);
-    cleanup();
     server.handlers.set('session/fork', () => { throw new RpcFailure({ code: -32602, message: 'Invalid historical Surface revision' }); });
     render(<CommandPanel request={{ id: 'fork' }} client={server.client} sessionId="A" current={navigation.capture()} close={close} succeeded={() => {}} opened={() => {}} />);
     const row = await screen.findByRole('option', { name: /Try this/ });
@@ -623,45 +616,6 @@ function expectTailSwitching(disabled: boolean) {
   expect(screen.getByRole('button', { name: 'Branch into a new Session' })).toHaveProperty('disabled', false);
 
 }
-
-
-it('model/profile selector membership and native selection are invariant across live locale switches', async () => {
-  const sequences: Request[][] = [];
-  for (const locale of ['en', 'zh'] as const) {
-    server = new Server(); nativeFixture();
-    server.handlers.set('session/models', () => ({ type: 'models', catalog: { models: [
-      { model: 'fixture/first' }, { model: 'native/模型.Model', reasoningProfiles: [{ id: 'profile-原样', enabled: true }] },
-    ] } } as Extract<MethodResult, { type: 'models' }>));
-    await server.attached('A');
-    act(() => localeController.setLocale(locale));
-    const close = vi.fn();
-    render(<CommandPanel request={{ id: 'model' }} client={server.client} sessionId="A" current={() => true} close={close} succeeded={() => {}} opened={() => {}} />);
-    await screen.findAllByRole('option');
-    const rowIds = () => screen.queryAllByRole('option').map(row => row.getAttribute('data-choice-id'));
-    const reads = [...server.requests];
-    for (const [query, expected] of [
-      ['reasoning', ['native/模型.Model:profile-原样']], ['推理配置', ['native/模型.Model:profile-原样']],
-      ['native/模型.Model', ['native/模型.Model', 'native/模型.Model:profile-原样']], ['profile-原样', ['native/模型.Model:profile-原样']],
-    ] as const) {
-      fireEvent.change(screen.getByRole('textbox'), { target: { value: query } });
-      for (const active of ['en', 'zh'] as const) {
-        act(() => localeController.setLocale(active));
-        expect(rowIds(), `${active}: ${query}`).toEqual(expected);
-        expect(server.requests).toEqual(reads);
-      }
-    }
-    act(() => localeController.setLocale(locale));
-    expect(screen.getByRole('textbox', { name: translator(locale)('commands:command-panel.filter-options') })).toBeTruthy();
-    const before = server.requests.length;
-    await act(async () => fireEvent.click(screen.getByRole('option')));
-    await waitFor(() => expect(close).toHaveBeenCalledExactlyOnceWith());
-    sequences.push(server.requests.slice(before).map(row => row.request));
-    cleanup(); server.client.disconnect();
-  }
-  expect(sequences[0].map(request => request.method)).toEqual(['session/setModel', 'session/snapshot', 'session/model', 'session/models']);
-  expect(sequences[0][0]).toMatchObject({ method: 'session/setModel', params: { config: { model: 'native/模型.Model', reasoningProfile: 'profile-原样' } } });
-  expect(sequences[1]).toEqual(sequences[0]);
-});
 
 
 it('lineage origin labels stay deferred and bilingual without changing node IDs or reads', async () => {

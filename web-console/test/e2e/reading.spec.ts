@@ -83,7 +83,7 @@ test('native distant reading rail, detached/latest follow and measured width in 
     });
     await routeWorkspaceHost(page, fixture); await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token);
     await page.locator(`button[data-session-id="${id}"]`).click();
-    const rail = page.getByRole('navigation', { name: 'Turn navigation' }), viewport = page.locator('.conversation-scroll');
+    const rail = page.getByRole('navigation', { name: 'Turn navigation' }), viewport = page.locator('[data-conversation-scroll]').first();
     const railScroll = (top: number) => rail.locator(':scope > div').first().evaluate((el, top) => { el.scrollTop = top; }, top);
     // Every native turn has a mark; following the latest output places the newest in view.
     const newest = rail.locator('[data-turn-ordinal="300"]');

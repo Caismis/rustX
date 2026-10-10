@@ -286,3 +286,26 @@ it('421: Web consumes the generated bounded Tool vocabulary through the actual c
   expect(tool.arguments).toEqual({ text: '{"command":"bounded input', truncated: true });
   expect(server.requests.filter(item => item.request.method === 'session/traceDetail')).toHaveLength(0);
 });
+
+it('cold trace supports paging and details without runtime attachment, and retires late reads', async () => {
+  server = new Server(); await server.connect(); server.held.add('session/attach');
+  server.handlers.set('session/traceHistory', request => ({ type: 'session_trace_history', conversation_id: 'conversation-A', page: request.method === 'session/traceHistory' && request.params.before ? { records: [entry(9)], next_cursor: null } : { records: [entry(10)], next_cursor: 'trace:10' } }));
+  server.handlers.set('session/traceHistoryDetail', () => ({ type: 'session_trace_history_detail', conversation_id: 'conversation-A', detail: detail(10) }));
+  const attach = server.client.attach('A');
+  const opening = await server.waitFor('session/attach', 1);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(server.client.getSnapshot().views.A.tracePreview?.cache.page.records).toEqual([entry(10)]);
+  expect(server.client.getSnapshot().views.A.target).toBeUndefined();
+  await server.client.loadEarlierTrace('A');
+  expect(server.client.getSnapshot().views.A.tracePreview?.cache.page.records).toEqual([entry(9), entry(10)]);
+  await server.client.loadTraceDetail('A', 'trace:9');
+  expect(server.client.getSnapshot().views.A.tracePreview?.cache.details['trace:9']?.detail).toEqual(detail(10));
+  server.client.selectTrace('A', 'trace:10');
+  server.held.add('session/traceHistoryDetail');
+  const read = server.client.loadTraceDetail('A', 'trace:10');
+  const request = await server.waitFor('session/traceHistoryDetail', 2);
+  server.reply(opening); await attach;
+  server.reply(request); await read;
+  expect(server.client.getSnapshot().views.A.tracePreview).toBeUndefined();
+  expect(server.client.getSnapshot().views.A.trace?.details['trace:10']).toBeUndefined();
+});

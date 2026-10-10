@@ -6925,7 +6925,7 @@ and retained workspace facts do not manufacture transcript completion facts.
 The TUI has one disposable child page, fenced by parent attachment epoch and
 child selection/read generation. Reconnect reconstructs from current authority;
 Esc closes presentation without runtime mutation. Child HITL remains routed to
-the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-agent-conversations-v35).
+the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-agent-conversations-v38).
 
 ## Image Tool and Bash presentation (#412)
 
@@ -6940,3 +6940,133 @@ Chat multimodal Tool messages. Request projection, bounded artifact resolution
 and image context cost are shared; adapters own only encoding and placement.
 Model declarations remain explicit. Endpoint incompatibility is a provider error,
 without placement capability splits, provider-name checks or synthetic User fallback.
+
+### Child Agent meters (Runtime Client 60 / App Server 38)
+
+`agent/statistics` resolves a stable Agent identity exclusively through its
+parent registry and opens the existing child store read-only. It returns the
+same `ConversationStatistics` and request-owned `ContextOccupancy` used by the
+main conversation, plus a child working-interval clock. It neither activates a
+child nor waits for its next response. The WebUI reuses the main conversation's
+statistics dock and completed-response presentation in the child reader.
+
+The native host caches a finite, incremental fold per child Conversation. Only
+new durable facts are folded; failed reads do not advance the cache. Reopening
+reconstructs the same reading. Usage counts only requests executed by that child,
+including reported failed/retried request usage, excluding inherited transcript
+execution. Missing provider reports stay explicit through usage coverage.
+Timing uses the existing native generation evidence and foreground tool spans.
+Elapsed working time sums Attempt intervals across activations, excluding idle
+gaps. An unfinished interval advances in the UI only when its start belongs to
+the exact current activation and its child driver still attests execution. The
+lease starts at the child's reliable DelegateAccepted frame, survives cancellation
+and sealing (Stopping closes admission, not execution), and ends on a terminal
+frame, control loss, or driver drop. It is independent of physical containment
+and terminal publication. Durable Attempt terminal events end the working
+interval even before physical cleanup completes. An unconfirmed interval freezes
+at its last durable fact; recovery has no live driver lease. The lease is read
+after the durable fold, so blocking store work cannot preserve an expired proof. Durable store opening, frontier, replay and occupancy reads execute on the
+blocking pool. The cache map lock only locates a per-Conversation fold; each fold
+has its own lock, so a blocked child does not serialize unrelated meter reads or
+hold up async dispatch. The TUI transport recognizes the same read method.
+
+The Web `AppServerClient.agentMeters` owner survives Session changes and React
+unmounts. It discovers demand from the current finite native Agent inventory;
+there is no pending closure per revision and no drop-oldest queue. It retains
+at most one reading/error per current inventory identity, prunes removed or
+superseded entries, and forgets old-scope readings on retirement. Demand identity
+includes connection generation, exact Session/attachment target, Agent and child
+Conversation, activation, state and observation revision. Both the transport's
+existing pre-send admission proof and response publication verify this identity.
+
+At most two current-scope reads run. A round-robin cursor serves all valid
+inventory demands; selected unread demand can take at most every other admission,
+so selection and a busy Agent cannot starve independent Agents. Presentation-only
+rerenders do not dispatch redundant reads. A native rejection is a terminal error
+for that demand, not zero usage or an automatic retry. Live revisions invalidate
+readings and never contribute durable usage or timing evidence.
+
+Attachment observation admission belongs to the client's existing serialized
+attachment lifecycle. Desired `attachmentIntent`, retained native `target`, and
+committed `attachmentObservation` are distinct facts. `performAttach` commits the
+observation identity with the validated native attach result, binding generation,
+exact target, Node and the operation's intent revision captured before queueing Open. It cannot commit that
+identity if Release revoked the operation while its acknowledgement was pending;
+the returned target is still retained so the queued detach can settle normally.
+
+Every Open captures an immutable Node before joining the attachment queue. An
+omitted selector is resolved from observed Session metadata, never reread from
+mutable view state at dispatch. The native Session tree establishes its immutable
+Node/Conversation mapping before attach dispatch; the acknowledgement must match
+that mapping as well as its own snapshot. Conflicting cross-Node Opens are
+rejected without changing desired Node while an acquisition or claim is owned.
+Callers use the explicit switch lifecycle, or Release followed by Open. A queued
+Open for another Node cannot refresh a retained target after failed detach.
+Desired Node and retained claim Node remain separate; target access and refresh
+cannot route new operations into that mismatch. Obsolete successful attach responses
+retain only cleanup ownership, not Snapshot publication. A switch acknowledgement
+settles its original claim without overwriting a later Release/Open Node intent.
+
+Cold history, statistics, Trace pages and Trace details share one proof of
+Session, Node, native Conversation, generation, attachment epoch and intent
+revision. The same proof fences dispatch and publication; history cuts and every
+response Conversation must match it. These reads use only durable inspection and
+never acquire an attachment or start a runtime on their own.
+
+Release synchronously clears observation admission in the same state transition
+that sets `attachmentIntent` to released and advances its revision. An immediate
+Open only records wanted intent and queues behind detach. Neither the old target
+nor a replacement React scope can admit observations while that detach is pending.
+A rejected detach retains its native target and claim, but Open/refresh do not
+mint observation authority. Explicit successful detach followed by attach (or
+existing transport reconnection and native attach recovery) establishes fresh
+authority. No native operation is implicitly cancelled or declared settled.
+
+The client-owned `isAttachmentObservationCurrent` predicate verifies the exact
+committed admission identity, generation, target, wanted intent/revision, attached
+state and deletion fence. React projects that proof; the existing statistics
+pre-send and publication checks both consume it. A new target gets fresh readings;
+late old-target results cannot publish or suppress its demand. Transport loss,
+attachment retirement and Session closure clear the admission fact. Meter presence
+never controls the ordinary attachment-operation queue.
+
+A full 64-entry RPC pending map is temporary admission deferral, not a native
+statistics error. The request pipeline attaches its capacity revision to this
+never-dispatched refusal. Meter reservations are released, no terminal reading is
+stored, and one client-wide deferred cut pauses admission with all inventory
+demands still discoverable. Only a strictly newer capacity-availability cut can
+resume it. The pipeline advances the cut after removing a pending request through
+correlated settlement or unsent refusal, and coalesces delivery in a microtask
+after pending-map mutation/pumping. It notifies only when initialized transport
+and pending capacity are available. Revision comparison preserves a wakeup that
+arrives before the refusal continuation. Renders, selection and activity updates
+cannot retry a capacity refusal; no timer or second RPC queue is involved. A
+correlated native failure remains terminal for its unchanged demand, and an
+unknown transmitted outcome keeps its charged slot.
+
+Across every scope and connection generation of one client, at most four meter
+requests remain unconfirmed: two current slots plus a bounded retirement allowance.
+A switch from two stalled A reads can admit two B reads immediately. Further
+switches do not allocate another allowance. Undispatched obsolete RPCs fail the
+existing admission proof. Sent reads stay charged until a correlated native
+response proves completion; an unsent rejection proves no work began. The native
+blocking read has no cancellation/settlement API. Timeout, disconnect, component
+cleanup and ignored responses therefore **do not** release its accounting slot.
+Lost acknowledgements remain charged for the client lifetime, even after reconnect.
+Only four minimal flight records survive; old inventory/callback queues do not.
+
+This is a truthful bounded-progress contract, not a cancellation guarantee: if
+all four acknowledgements remain unavailable, current demand stays discoverable
+but cannot dispatch, and the UI explicitly reports statistics unavailable while
+previous reads remain unresolved. Unlimited switching past permanently stalled
+work cannot guarantee progress without native cancellable-read settlement; this
+repair does not invent that protocol or release physical capacity on a timer.
+Other client instances have independent budgets; this is not a server-wide quota.
+
+The Composer model menu and `/model` picker consume the same native catalog and
+selection policy. Model and profile identifiers retain native order and defaults;
+a different model without an explicit profile uses native defaults. Selecting the
+current model or its effective profile preserves the configured choice and sends
+no mutation. Both controls use the existing Session model mutation/confirmation
+owner; a cold choice is only local intent until native acknowledgement and the
+authoritative reread. Unknown outcomes remain visible and are never replayed.

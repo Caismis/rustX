@@ -1511,3 +1511,31 @@ it('Request markers retain canonical native state independently of error decorat
   expect(document.querySelector('[data-request-owner="trace:0"]')?.getAttribute('data-state')).toBe('running');
   expect(document.querySelector('[data-request-owner="trace:1"]')?.getAttribute('data-state')).toBe('completed');
 });
+
+
+it('keeps question Tool records but excludes interaction audits from every trajectory surface', () => {
+  const tx = translator('en');
+  const question = traceTool(1, { tool: { ...traceTool(1).tool!, tool_id: 'tool-ask-user', name: 'ask_user', arguments: { text: '{"questions":[{"question":"What should I do?"}]}', truncated: false } } });
+  const audits = ['running', 'completed', 'cancelled'].map((state, n) => traceRecord(n + 2, {
+    kind: 'interaction', request: null, state: state as TraceRecord['state'],
+    preview: { text: 'internal-question-audit', truncated: false },
+    location: n === 2 ? {} : question.location,
+  }));
+  const records = [question, ...audits];
+  const cache = cacheOf(records);
+  const projection = projectTrajectory(tx, cache.page.records);
+  const items = flattenTrajectory(tx, projection).filter(isInspectable);
+  expect(items.map(item => item.record.id)).toEqual([question.id]);
+  expect(searchItems(projection, 'internal-question-audit')?.size).toBe(0);
+  expect(searchItems(projection, 'ask_user')?.size).toBe(1);
+  for (const mode of ['sequence', 'duration'] as const) {
+    const timeline = trajectoryTimeline(tx, projection, mode);
+    expect(timeline?.spans.some(span => audits.some(audit => audit.id === span.id || audit.id === span.ownerId))).toBe(false);
+  }
+  // A paged window containing only audits must not invent empty Turns/Steps.
+  expect(projectTrajectory(tx, audits).sections).toEqual([]);
+  expect(cache.page.records).toEqual(records);
+  show(cache);
+  expect(screen.queryByText('INTERACT')).toBeNull();
+  expect(screen.getByText('ask_user')).toBeTruthy();
+});

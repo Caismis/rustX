@@ -33,7 +33,7 @@ export function ConversationSeat({ client, host, authority, associations, sessio
 }) {
   const seat = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
-    const element = seat.current!, body = element.parentElement!;
+    const element = seat.current!, body = element.closest<HTMLElement>('.conversation-panel')!;
     const measure = () => body.style.setProperty('--dsh-composer-height', `${element.getBoundingClientRect().height}px`);
     measure();
     const observer = new ResizeObserver(measure);
@@ -48,7 +48,7 @@ export function ConversationSeat({ client, host, authority, associations, sessio
   const [sending, setSending] = useState<string>();
   const [failure, setFailure] = useState<{ owner: string; message: string }>();
   const error = failure?.owner === owner ? failure.message : undefined;
-  const attached = state.connection === 'connected' && !view?.deleting && view?.attachmentIntent === 'wanted' && view.attachment === 'attached';
+  const attached = state.connection === 'connected' && !!view && client.isAttachmentControlCurrent(view.id, view.attachmentObservation);
   const disabled = !attached || !!view?.modelMutation || !!view?.snapshot?.shutting_down || !!view?.snapshot?.durability_failure;
   return <div ref={seat} className={css.composerSeat} data-composer-seat="">
     <div hidden={!!view?.snapshot?.pending_interactions?.length}>
@@ -77,10 +77,10 @@ export function ConversationSeat({ client, host, authority, associations, sessio
 }
 function composerFacts(view: ReturnType<AppServerClient['getSnapshot']>['views'][string] | undefined) {
   if (!view) return undefined;
-  return { id: view.id, target: view.target, attachment: view.attachment, attachmentIntent: view.attachmentIntent, deleting: view.deleting,
-    modelMutation: view.modelMutation, cancellation: view.cancellation, active: activeAttempt(view.snapshot), attemptId: view.snapshot?.attempt?.attempt_id,
+  return { id: view.id, target: view.target, attachmentObservation: view.attachmentObservation, attachment: view.attachment, attachmentIntent: view.attachmentIntent, deleting: view.deleting,
+    modelMutation: view.modelMutation, modelIntent: view.modelIntent, cancellation: view.cancellation, active: activeAttempt(view.snapshot), attemptId: view.snapshot?.attempt?.attempt_id,
     resources: view.snapshot?.resources?.revision, attemptModel: view.snapshot?.attempt?.model,
-    lineage: lineageSwitchSafe(view), goal: !!goalDock(view.snapshot), model: view.snapshot?.model,
+    lineage: lineageSwitchSafe(view), goal: !!goalDock(view.snapshot), model: view.snapshot?.model, settings: view.settings,
     conversation: view.snapshot?.conversation_id, shuttingDown: view.snapshot?.shutting_down, durability: view.snapshot?.durability_failure,
     interactions: !!view.snapshot?.pending_interactions?.length };
 }

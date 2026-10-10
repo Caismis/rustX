@@ -46,6 +46,23 @@ it('a source-message reply cannot substitute a different native message',async()
  server.socket.success(request,{type:'transcript_window',window:{cut,target:null,target_cursor:'2',newer_cursor:'65',page:{entries:Array.from({length:64},(_,i)=>entry(i+2))}}});
  expect(await work).toBe(false);expect(server.client.getSnapshot().views.A.history).toBe(history);expect(server.client.getSnapshot().views.A.turnNavigation?.error).toContain('Invalid native message window');
 });
+it.each(['loaded', 'held'] as const)('a %s source-message jump cannot land after Node switching revokes its observation', async kind => {
+ await ready();
+ server.nodeSnapshots.set('next-node', { ...snapshot(), conversation_id: 'conversation-next' });
+ server.held.add('session/switchNode');
+ const source = kind === 'held' ? server.client.navigateMessage('A', 'm1') : undefined;
+ const read = source ? await server.waitFor('session/transcript', 1) : undefined;
+ const switching = server.client.switchNode('A', 'next-node');
+ const mutation = await server.waitFor('session/switchNode', 1);
+ const view = server.client.getSnapshot().views.A;
+ expect(server.client.isAttachmentObservationCurrent('A', view.attachmentObservation)).toBe(false);
+ const history = view.history;
+ if (read) { server.reply(read); expect(await source).toBe(false); }
+ else expect(await server.client.navigateMessage('A', 'm6010')).toBe(false);
+ expect(server.client.getSnapshot().views.A.history).toBe(history);
+ expect(reads()).toHaveLength(kind === 'held' ? 1 : 0);
+ server.reply(mutation); await switching;
+});
 it('6063 Turns: distant jump is one read and 64 retained entries; live authority continues independently',async()=>{
  await ready();const work=server.client.navigateTurn('A',turn(1));
  expect(server.client.getSnapshot().views.A.turnNavigation?.pending).toBe(turnKey(turn(1).id));

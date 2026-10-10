@@ -9,6 +9,7 @@ import { AttachmentIntake, transferInputs, pasteText, type IntakeInput, type Int
 import type { UploadPolicy, UploadReceipt, UploadedFile, UserInputBlock } from '../../../../protocol/app-server/v39';
 import { commands, available, parseCommand, type CommandId } from '../commands/registry';
 import { matchCommands } from '../commands/matching';
+import { ModelPicker, type ModelPickerState } from '../composer/ModelPicker';
 import { CommandMenu, type MenuAction } from '../commands/CommandMenu';
 import { IconPlusOutline16, IconSendOutline14 } from '../../presentation/primitives/icons';
 import { useInputTrigger } from '../composer/input-trigger';
@@ -21,7 +22,8 @@ import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 import { Button } from '../../presentation/primitives/Button';
 import css from '../../presentation/agent/Composer.module.css';
 const emptyContent: UserInputBlock[] = [];
-export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner, uploadPolicy, onReconcile, binding = 'default', firstSubmission, disabled, submitDisabled = false, busy, active, onSend, onUpload, onCancel, onCommand, commandAvailable, hasGoal = false, lineageSwitchSafe = false, initialContent = emptyContent, consumed, model, permission, onDraftSend, cancellationAvailable = !disabled, cancellationScope }: {
+export function AgentComposer({ modelPicker, onRetainedRemove, onRetainedRecover, intakeOwner, uploadPolicy, onReconcile, binding = 'default', firstSubmission, disabled, submitDisabled = false, busy, active, onSend, onUpload, onCancel, onCommand, commandAvailable, hasGoal = false, lineageSwitchSafe = false, initialContent = emptyContent, consumed, model, permission, onDraftSend, cancellationAvailable = !disabled, cancellationScope }: {
+  modelPicker?: ModelPickerState;
   onRetainedRemove?: (id: string) => void; onRetainedRecover?: (retry: boolean) => void;
   intakeOwner?: AttachmentIntake; uploadPolicy?: UploadPolicy; onReconcile?: UploadPort['status'];
   firstSubmission?: FirstSubmission; binding?: string; submitDisabled?: boolean; disabled: boolean; busy: boolean; active: boolean; model?: ReactNode; permission?: ReactNode;
@@ -86,7 +88,11 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
   }
   useTextareaAutosize(input, draft);
   const query = trigger.state?.query;
-  const menu = !!trigger.state && !disabled && !busy;
+  const modelInvocation = useRef<string | undefined>(undefined);
+  const [modelRequested, setModelRequested] = useState(false);
+  useEffect(() => setModelRequested(false), [binding]);
+  const modelMenu = !!modelPicker && (modelRequested || trigger.state?.source === 'typed' && trigger.state.query.toLowerCase() === 'model') && commandAvailable?.('model') !== false && !disabled && !busy;
+  const menu = !modelMenu && !!trigger.state && !disabled && !busy;
   const commandRows = onCommand ? matchCommands(query ?? '', commands.filter(command => available(command, active, hasGoal, lineageSwitchSafe) && (commandAvailable?.(command.id) ?? true))) : [];
   const rows: readonly { id: MenuAction }[] = [
     ...(trigger.state?.source === 'launcher' ? [{ id: 'file' as const }] : []),
@@ -113,6 +119,7 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
     if (files.length || restored.length) { setError(message('agent:copy.remove-draft-attachments-before-invoking-a-command')); return; }
     const definition = commands.find(command => command.id === id)!;
     if (!onCommand || !available(definition, active, hasGoal, lineageSwitchSafe) || commandAvailable?.(id) === false) { setError(message('agent:copy.command-unavailable-in-the-current-session-state')); return; }
+    if (id === 'model' && modelPicker) { modelInvocation.current = trigger.state?.source === 'launcher' ? undefined : draft; setModelRequested(true); trigger.dismiss(); return; }
     invocation.current = { id, draft: trigger.state?.source === 'launcher' ? '' : draft };
     trigger.dismiss(); setError(''); trigger.restore(); onCommand(id);
   };
@@ -152,6 +159,7 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
     {error && <p role="alert">{error}</p>}
     {!restoreSupported && <p role="alert">{tx('agent:agent-composer.cannot-restore-this-ordered-native-input-in-the-flat-web-editor')}</p>}
     <div className={css.card} data-composer-card aria-busy={busy}>
+      {modelMenu && <ModelPicker state={modelPicker!} close={() => { setModelRequested(false); trigger.dismiss(); trigger.restore(); }} chosen={() => { setModelRequested(false); trigger.dismiss(); setDraft(value => value === modelInvocation.current || value.trim().toLowerCase() === '/model' ? '' : value); trigger.restore(); }}/>}
       {menu && <CommandMenu rows={rows} active={highlight} select={selectMenu} highlight={trigger.highlight}
         fileDescription={uploadPolicy ? tx('agent:upload.limits', { count: uploadPolicy.max_uploads_per_user_input, file: uploadPolicy.max_file_bytes, batch: uploadPolicy.max_upload_bytes_per_user_input }) : tx('agent:upload.policy')} />}
       {restored.map((receipt, index) => <div key={JSON.stringify([receipt.batch_id, receipt.token])}><span>{tx('agent:agent-composer.native-restored-upload-batch')}{' '}{receipt.batch_id}</span><Button disabled={disabled || busy} onClick={() => setRestored(current => current.filter((_, at) => at !== index))}>{tx('agent:agent-composer.remove-draft-upload')}</Button></div>)}

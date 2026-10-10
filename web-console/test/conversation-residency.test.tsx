@@ -63,7 +63,7 @@ it('streaming publications update the transcript but do not render AppFrame or c
   await act(async () => emit({ type: 'read_domains_updated', transcript: clock.transcript, todos: clock.todos }));
   const before = [vi.mocked(AppFrame).mock.calls.length, vi.mocked(AgentComposer).mock.calls.length];
   await act(async () => vi.advanceTimersByTime(5000));
-  expect(screen.getByRole('button', { name: 'Deep diving for 5s' })).toBeTruthy();
+  expect(screen.getByText('Deep diving for 5s ···')).toBeTruthy();
   expect([vi.mocked(AppFrame).mock.calls.length, vi.mocked(AgentComposer).mock.calls.length]).toEqual(before);
   expect(screen.queryByText('Working…')).toBeNull();
 });
@@ -74,6 +74,8 @@ function host() {
   return { ...server.workspaceHost, configureWorkspace: async () => ({ kind: 'read' as const, projection: source }), resolveWorkspace: async () => ({ cwd: '/workspace/A' }), classifyLocations: async (paths: string[]) => paths.map(() => ({ authorized: true as const, workspaceId: 'workspace-a' })) };
 }
 function nativeModel() {
+  server.handlers.set('session/models', () => ({ type: 'models', catalog: { models: [model('fixture/root'), model('fixture/chosen')] } }));
+  server.handlers.set('session/model', () => ({ type: 'model', model: server.snapshots.get('A')!.model! }));
   server.handlers.set('session/create', request => {
     if (request.method !== 'session/create') throw Error('wrong method');
     const selection = request.params.settings.model ?? { model: 'fixture/root' };
@@ -153,9 +155,8 @@ it.each(['/model', 'unrelated prose'])('hero model selection settles the command
   const message = input();
   fireEvent.change(message, { target: { value: draft } });
   if (draft !== '/model') { fireEvent.click(screen.getByRole('button', { name: 'Add' })); fireEvent.keyDown(message, { key: 'ArrowDown' }); }
-  fireEvent.keyDown(message, { key: 'Tab' });
-  fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
-  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'fixture/chosen' })));
+  if (draft !== '/model') fireEvent.keyDown(message, { key: 'Tab' });
+  await act(async () => fireEvent.click(screen.getByRole('option', { name: 'fixture/chosen' })));
   await waitFor(() => expect(message.value).toBe(draft === '/model' ? '' : draft));
   expect(screen.queryByRole('menu')).toBeNull();
   expect(document.activeElement).toBe(message);
@@ -246,7 +247,7 @@ it.each(['cancelled', 'failed', 'timed_out', 'limit_exceeded'] as const)('execut
     const next = live(); next.attempt!.phase = { type: phase };
     await act(async () => server.update('A', next));
     expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Deep diving/ })).toBeTruthy();
+    expect(document.querySelector('[data-chat-running]')).toBeTruthy();
     expect(calls()).toEqual(before);
   }
   await act(async () => server.update('A', live('streamed transition')));
@@ -286,7 +287,7 @@ it('a settled live Attempt without a journal projection cannot manufacture termi
   expect(document.querySelector('[data-turn-process]')).toBeNull();
 });
 
-it('typing while attachment is held cannot offer native commands before admission', async () => {
+it('typing while attachment is held offers the model picker without calling native session commands', async () => {
   await server.connect(); nativeModel(); server.held.add('session/attach');
   server.handlers.set('session/models',()=>({type:'models',catalog:{models:[model('fixture/root')]}}));
   server.handlers.set('session/model',()=>({type:'model',model:cfg3Effective().effective_model}));
@@ -295,13 +296,13 @@ it('typing while attachment is held cannot offer native commands before admissio
   const opening=await server.waitFor('session/attach',1),message=input();
   expect(message.disabled).toBe(false);
   fireEvent.change(message,{target:{value:'/mdl'}});
-  expect(screen.queryByRole('option',{name:/Model/})).toBeNull();
+  expect(screen.getByRole('option',{name:/Model/})).toBeTruthy();
   expect(server.requests.filter(row=>row.request.method==='session/model')).toHaveLength(0);
   await act(async()=>server.reply(opening));
   expect(screen.getByRole('option',{name:/Model/})).toBeTruthy();
   expect(input()).toBe(message);expect(message.value).toBe('/mdl');
   await act(async()=>fireEvent.keyDown(message,{key:'Enter'}));
-  expect(screen.getByRole('dialog',{name:'/model'})).toBeTruthy();
+  expect(screen.getByRole('combobox',{name:'Search models…'})).toBeTruthy();
 });
 
 it('files selected before first attachment retain exact draft identity and submit once after attachment', async () => {
@@ -328,4 +329,111 @@ it('files selected before first attachment retain exact draft identity and submi
   expect(JSON.stringify(start.params)).toContain('exact draft');expect(JSON.stringify(start.params)).toContain('file-0');
   await act(async()=>server.reply(start));
   expect(owner.snapshot()).toHaveLength(0);upload.mockRestore();
+});
+
+it('cold sessions accept a prompt while initialization is held, then admit it exactly once', async () => {
+  await server.connect(); nativeModel();
+  server.held.add('session/attach'); server.held.add('turn/start');
+  await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+  const opening = await server.waitFor('session/attach', 1);
+  const message = input();
+  expect(message.disabled).toBe(false);
+  fireEvent.change(message, { target: { value: 'send while connecting' } });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
+  expect(screen.getByText('send while connecting')).toBeTruthy();
+  expect(document.querySelector('[data-first-submission="attaching"]')?.textContent).toContain('Connecting');
+  expect(message.value).toBe('');
+  expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(0);
+  await act(async () => fireEvent.click(screen.getByRole('tab', { name: 'Trajectory' })));
+  expect(screen.getByRole('searchbox')).toBeTruthy();
+  await act(async () => fireEvent.click(screen.getByRole('tab', { name: 'Chat' })));
+  expect(screen.getByText('send while connecting')).toBeTruthy();
+  await act(async () => server.reply(opening));
+  const start = await server.waitFor('turn/start', 1);
+  expect(JSON.stringify(start.params)).toContain('send while connecting');
+  await act(async () => server.reply(start));
+  expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
+  expect(server.requests.filter(row => row.request.method === 'session/create')).toHaveLength(0);
+});
+
+it('a cold connection failure keeps the unsent prompt recoverable without dispatching a turn', async () => {
+  await server.connect(); nativeModel(); server.held.add('session/attach');
+  await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+  const opening = await server.waitFor('session/attach', 1);
+  fireEvent.change(input(), { target: { value: 'retain on connection failure' } });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
+  await act(async () => server.socket.deliver({ jsonrpc: '2.0', id: opening.id, error: { code: -32000, message: 'Runtime initialization failed' } }));
+  expect(input().value).toBe('retain on connection failure');
+  expect(server.client.firstSubmissions.session('A')?.phase).toBe('failed');
+  expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(0);
+});
+
+it('restoring a cold selected view does not retire its own in-flight admission', async () => {
+  await server.connect(); nativeModel(); server.held.add('session/attach');
+  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
+  await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
+  await server.waitFor('session/attach', 1);
+  expect(input().disabled).toBe(false);
+  expect(server.client.getSnapshot().views.A.preview?.conversationId).toBe('conversation-A');
+  expect(server.client.getSnapshot().views.A.tracePreview?.conversationId).toBe('conversation-A');
+});
+
+it('cold composer reads native model and whole-conversation usage before runtime is ready', async () => {
+  await server.connect(); nativeModel(); server.held.add('session/attach');
+  server.snapshots.get('A')!.transcript.statistics = { turns: '8', steps: '46', completed_responses: '8', model_requests: '46', requests_with_usage: '46', reported_usage: { input_tokens: 900000, output_tokens: 100000, total_tokens: 1000000 } };
+  server.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: '/workspace/A', model: { model: 'cold/native-model' } } }));
+  await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+  await server.waitFor('session/attach', 1);
+  await waitFor(() => expect(document.querySelector('[data-model-select]')?.textContent).toContain('cold/native-model'));
+  expect(document.querySelector('[data-composer-stat="activity"]')?.textContent).toContain('46');
+  expect(document.querySelector('[data-composer-seat]')?.textContent).toContain('1M');
+  expect(input().disabled).toBe(false);
+  fireEvent.change(input(), { target: { value: 'send before ready' } });
+  expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', false);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
+  expect(document.querySelector('[data-first-submission="attaching"]')).toBeTruthy();
+});
+
+it('cold /model uses the workspace catalog and applies the last choice before the queued prompt', async () => {
+  await server.connect(); nativeModel(); server.held.add('session/attach'); server.held.add('session/setModel'); server.held.add('turn/start');
+  await act(async () => { render(<App client={server.client} workspaceHost={host()}/>); });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+  const opening = await server.waitFor('session/attach', 1);
+  await waitFor(() => expect(document.querySelector('[data-model-select]')).toHaveProperty('disabled', false));
+  fireEvent.change(input(), { target: { value: '/model' } });
+  await waitFor(() => expect(screen.getByRole('combobox', { name: 'Search models…' })).toBeTruthy());
+  await act(async () => fireEvent.click(screen.getByRole('option', { name: 'fixture/chosen' })));
+  expect(server.client.getSnapshot().views.A.modelIntent?.config.model).toBe('fixture/chosen');
+  expect(server.requests.filter(row => row.request.method === 'session/setModel')).toHaveLength(0);
+  fireEvent.change(input(), { target: { value: 'use my selected model' } });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
+  expect(document.querySelector('[data-first-submission="attaching"]')).toBeTruthy();
+  await act(async () => server.reply(opening));
+  const selection = await server.waitFor('session/setModel', 1);
+  expect(selection.params).toMatchObject({ config: { model: 'fixture/chosen' } });
+  expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(0);
+  await act(async () => server.reply(selection));
+  const start = await server.waitFor('turn/start', 1);
+  expect(server.client.getSnapshot().views.A.snapshot?.model?.configured.model).toBe('fixture/chosen');
+  expect(server.client.getSnapshot().views.A.modelIntent).toBeUndefined();
+  await act(async () => server.reply(start));
+});
+
+it.each(['release', 'switch'] as const)('Composer controls agree with synchronous %s revocation while the native reply is held', async transition => {
+  await server.attached('A');
+  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
+  await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
+  fireEvent.change(input(), { target: { value: 'preserved draft' } });
+  const send = screen.getByRole('button', { name: 'Send' });
+  expect(send).toHaveProperty('disabled', false);
+  const method = transition === 'release' ? 'session/detach' : 'session/switchNode'; server.held.add(method);
+  let work!: Promise<void>;
+  await act(async () => { work = transition === 'release' ? server.client.release('A') : server.client.switchNode('A', 'node-A'); });
+  expect(send).toHaveProperty('disabled', true); expect(input().value).toBe('preserved draft');
+  await expect(server.client.send('A', 'not admitted')).rejects.toThrow('not authoritatively attached');
+  expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(0);
+  await act(async () => { server.reply(await server.waitFor(method, 1)); await work; });
 });

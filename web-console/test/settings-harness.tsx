@@ -1,5 +1,5 @@
 import { expect, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createActor } from 'xstate';
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { AppServerClient } from '../src/client/app-server';
@@ -106,12 +106,15 @@ export function openSettingsNavigation(target: SettingsTarget, page?: SettingsPa
  * Rendering it again with another `target` is the product's decision to open
  * that owner's Settings, so it is delivered to the machine as exactly that
  * `OPEN` event. */
+let contractNavigation: SettingsNavigationActor | undefined;
+
 export function SettingsSurface({ target, initialPage, navigation, connection, ...props }: Omit<SettingsProps, 'navigation' | 'connection'> & {
   client: AppServerClient; target: SettingsTarget; initialPage?: SettingsPage;
   navigation?: SettingsNavigationActor; connection?: ConnectionController;
 }) {
   const [actor] = useState(() => navigation ?? openSettingsNavigation(target, initialPage));
   const [controller] = useState(() => connection ?? new ConnectionController(props.client));
+  useLayoutEffect(() => { contractNavigation = actor; return () => { if (contractNavigation === actor) contractNavigation = undefined; }; }, [actor]);
   const opened = useRef(settingsTargetKey(target));
   useLayoutEffect(() => {
     if (opened.current === settingsTargetKey(target)) return;
@@ -137,14 +140,24 @@ export async function openSettingsPage(name: string) {
 /** Open a detail from a resource list through its actual row, so list/detail
  * navigation in a test is the same interaction a user performs. */
 export async function openResourceRow(name: string) {
-  fireEvent.click(await screen.findByRole('row', { name }));
+  const card = screen.queryByRole('listitem', { name });
+  fireEvent.click(card ? within(card).getAllByRole('button')[0] : await screen.findByRole('row', { name }));
+  if (contractNavigation?.getSnapshot().context.page === 'mcp') openMcpContractEditor(name);
+}
+
+/** Existing native-definition contract tests exercise the detailed editor's
+ * valid navigation state directly. The removed footer link is not a product
+ * workflow; user-facing MCP form/save flows live in mcp-page.test.tsx. */
+export function openMcpContractEditor(name?: string) {
+  const identity = name ?? (screen.getByLabelText('Name') as HTMLInputElement).value;
+  act(() => contractNavigation?.send({type:'FOCUS',focus:{kind:'mcp',name:identity,mode:'permissions'}}));
 }
 
 /** Wait until the open Settings surface holds a current authoritative
  * observation. Source paths and revisions are diagnostics and live on
  * Advanced, so readiness is asserted from the lifecycle itself. */
 export async function settingsReady() {
-  await screen.findByText('Authoritative source observed');
+  await waitFor(() => expect(document.querySelector('[data-lifecycle=ready]')).toBeTruthy());
 }
 
 /** The primary page currently displayed. */

@@ -31,7 +31,7 @@ it('switching and unmounting open Session views remains presentation-only', asyn
   expect(screen.getAllByRole('tree', { name: 'Session browser' })).toHaveLength(1);
   expect(screen.queryByRole('tablist', { name: 'Open Session views' })).toBeNull();
   ui.unmount();
-  expect(server.requests.slice(baseline).every(row => ['session/settings', 'session/snapshot', 'session/configuration', 'session/turns'].includes(row.request.method))).toBe(true);
+  expect(server.requests.slice(baseline).every(row => ['session/settings', 'session/snapshot', 'session/configuration', 'session/turns', 'session/models'].includes(row.request.method))).toBe(true);
   expect(server.client.getSnapshot().views.A.attachment).toBe('attached');
   expect(server.client.getSnapshot().views.B.attachment).toBe('attached');
 });
@@ -96,7 +96,7 @@ it('closing A immediately emits exactly its detach, preserving B, runtime work a
   expect(screen.getByLabelText('Session title').textContent).toBe('Session B');
   expect(server.client.getSnapshot().views.A.attachmentIntent).toBe('released');
   const detach = await server.waitFor('session/detach', 1);
-  expect(server.requests.slice(baseline).filter(({ request }) => !['session/settings', 'session/configuration', 'session/turns'].includes(request.method)).map(({ request }) => ({ method: request.method, params: request.params }))).toEqual([{ method: 'session/detach', params: { target } }]);
+  expect(server.requests.slice(baseline).filter(({ request }) => !['session/settings', 'session/configuration', 'session/turns', 'session/models'].includes(request.method)).map(({ request }) => ({ method: request.method, params: request.params }))).toEqual([{ method: 'session/detach', params: { target } }]);
   expect(server.client.getSnapshot().views.A.attachment).toBe('attached'); // No optimistic server fact.
   await act(async () => { server.reply(detach); await server.client.release('A'); });
   expect(server.claims().map(item => item.session_id)).toEqual(['B']);
@@ -106,7 +106,7 @@ it('closing A immediately emits exactly its detach, preserving B, runtime work a
   expect(server.loaded.has('A')).toBe(true);
   expect(server.snapshots.get('A')?.attempt?.phase.type).toBe('running');
   await act(() => server.connect());
-  expect(server.requests.slice(baseline).filter(({ request }) => request.method === 'session/attach').map(({ request }) => request.params)).toEqual([{ session_id: 'B' }]);
+  expect(server.requests.slice(baseline).filter(({ request }) => request.method === 'session/attach').map(({ request }) => request.params)).toEqual([{ session_id: 'B', node_id: 'node-B' }]);
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })); await server.client.attach('A'); });
   expect(screen.getByRole('button', { name: 'Allow once' })).toBeTruthy();
   expect(server.client.getSnapshot().views.A.attachmentIntent).toBe('wanted');

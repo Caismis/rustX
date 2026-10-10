@@ -101,7 +101,7 @@ impl TimingFold {
 
 /// Whole-conversation work totals: Harness session statistics over native
 /// request generation evidence and foreground Tool lifecycle timestamps.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(crate) struct ActivityFold {
     model_ms: Option<u64>,
     ttft_ms: u64,

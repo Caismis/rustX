@@ -47,9 +47,11 @@ it('reads the attached node across tree pages, ignoring the mutable default and 
   server = new Server();
   server.handlers.set('session/read', () => ({ type: 'session', session: { id: 'A', active_node: 'attached-node', active_conversation_id: 'conversation-A', node_count: 33, created_at: '2026-10-07T00:00:00Z', updated_at: '2026-10-07T00:00:00Z' } }));
   const s = snapshot(); s.transcript = { inherited_through: '1', entries: [entry(1), entry(2)] };
-  server.snapshots.set('A', s); await server.attached('A');
+  server.snapshots.set('A', s);
   const node: SessionNode = { ordinal: '33', id: 'attached-node', conversation_id: 'conversation-A', origin };
   server.handlers.set('session/tree', request => ({ type: 'tree', nodes: request.method === 'session/tree' && request.params.offset === 32 ? [node] : [{ ...node, id: 'default-node', conversation_id: 'other', origin: { type: 'new' } }], next_offset: request.method === 'session/tree' && request.params.offset === 32 ? null : 32 }));
+  await server.attached('A');
+  const initialTreeReads = server.requests.filter(row => row.request.method === 'session/tree').length;
   const ui = await act(async () => render(<ConversationLive client={server!.client} sessionId="A" mode="chat" disabled={false} onHistorical={() => {}} onOpenSource={() => {}}/>));
   await waitFor(() => expect(ui.getByRole('group', { name: 'Fork point' })).toBeTruthy());
   expect(ui.getByText(/Forked from/).title).toContain('2026');
@@ -57,7 +59,7 @@ it('reads the attached node across tree pages, ignoring the mutable default and 
   node.origin = { type: 'clone', source_session: 'B', source_node: 'source-node', source_surface_revision: '8' };
   cleanup();
   const original = await act(async () => render(<ConversationLive client={server!.client} sessionId="A" mode="chat" disabled={false} onHistorical={() => {}}/>));
-  await waitFor(() => expect(server!.requests.filter(row => row.request.method === 'session/tree')).toHaveLength(4));
+  await waitFor(() => expect(server!.requests.filter(row => row.request.method === 'session/tree')).toHaveLength(initialTreeReads + 4));
   expect(original.queryByRole('group', { name: 'Fork point' })).toBeNull();
 });
 

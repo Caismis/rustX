@@ -431,7 +431,7 @@ exact aggregate generation. Failed requests with evidence remain included.
 Immutable bootstrap provenance preserves response timing and usage through
 Branch/Fork/reopen/deeper lineage without copying source execution records.
 Destination execution totals remain destination-local. Mandatory versions are
-App Server v39, Runtime Client v53, SQLite v44, and Session catalog v13, with no
+App Server v39, Runtime Client v60, SQLite v44, and Session catalog v13, with no
 old protocol artifacts or compatibility readers.
 
 Projection cost is currently O(J + R): indexed 128-event batches over the captured
@@ -492,7 +492,7 @@ the existing transaction coordinator. A confirmation gates elevation. The source
 controls future admission; an already-admitted Attempt remains frozen. Composer
 model intent is different: it never authors the Workspace default model.
 
-App Server v39 / Runtime Client v53 project one `turn_process` owner on exact
+App Server v39 / Runtime Client v60 project one `turn_process` owner on exact
 canonical Assistant and Tool members. Native Journal identities, whole-process
 counts and an immutable control cursor survive unsuccessful settlement and
 bounded paging. Failed/stopped processes stay open; successful final-answer,

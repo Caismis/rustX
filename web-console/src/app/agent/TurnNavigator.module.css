@@ -1,14 +1,13 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
 /* Adapted from DeepSeek Harness ui-chat TurnNavigator.module.css. */
 
-/* The rail is a sibling of the clipped transcript, not its descendant. The
-   reading surface ends at the composer, so the slot is exactly the band a
-   reader sees and the frame centers in it. */
+/* The rail is portaled beside the shared session scroller. Reserve the live
+   composer height so it remains centered in the visible reading band. */
 .slot {
   position: absolute;
-  inset: 0;
-  /* Above transcript CodeBlock banners (z-index 6); the composer seat is
-     outside the reading surface. */
+  inset: 0 0 var(--dsh-composer-height, 0px);
+  /* Above transcript CodeBlock banners (z-index 6); the sticky composer
+     shares this rank and remains above the rail. */
   z-index: 7;
   /* Query the transcript's usable width while keeping the rail full-bleed. */
   padding-inline: calc(var(--dsh-composer-side-clearance) + 16px);
