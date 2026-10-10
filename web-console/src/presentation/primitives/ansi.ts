@@ -158,9 +158,13 @@ interface SgrState {
 /** The default state: no color, no attributes. */
 const SGR_NONE: SgrState = { fg: '', bg: '', attrs: [] }
 
+// Keep only decorations supported by anser; unknown parameters must not grow
+// the state copied into every replayed cell.
+const ATTR_OPENERS = new Set(['1', '2', '3', '4', '5', '7', '8', '9'])
+
 /** Attribute closers, mapped to the opener parameters each one turns off. */
 const ATTR_CLOSERS: Record<string, readonly string[]> = {
-  22: ['1', '2'], 23: ['3'], 24: ['4'], 25: ['5', '6'], 27: ['7'], 28: ['8'], 29: ['9'],
+  21: ['1'], 22: ['1', '2'], 23: ['3'], 24: ['4'], 25: ['5', '6'], 27: ['7'], 28: ['8'], 29: ['9'],
 }
 
 /**
@@ -195,7 +199,7 @@ function foldSgr(state: SgrState, params: string): SgrState {
     if (code === '49') { next = { ...next, bg: '' }; continue }
     if ((numeric >= 30 && numeric <= 37) || (numeric >= 90 && numeric <= 97)) { next = { ...next, fg: code }; continue }
     if ((numeric >= 40 && numeric <= 47) || (numeric >= 100 && numeric <= 107)) { next = { ...next, bg: code }; continue }
-    if (!next.attrs.includes(code)) next = { ...next, attrs: [...next.attrs, code] }
+    if (ATTR_OPENERS.has(code) && !next.attrs.includes(code)) next = { ...next, attrs: [...next.attrs, code] }
   }
   return next
 }

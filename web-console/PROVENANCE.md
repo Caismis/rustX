@@ -2083,6 +2083,8 @@ The expanded Bash surface retains all returned lines, separate command/output
 scrollers, 150px/224px bounds, the 11px code font with 18px minimum line seats,
 16px radius, 4px flow indentation, sticky raw-output copy and copied feedback.
 ANSI styles use upstream Anser 2.3.5 and safe React spans; source markup is text.
+Cursor replay keeps only Anser-supported decorations and honors its SGR 21 bold
+reset, so unknown SGR parameters cannot accumulate into quadratic replay output.
 Generic IN/OUT sections scroll independently with a full-width divider. Business
 icons remain stable on failure, summaries use native failure/stopped tones and
 lifecycle announcements are visually hidden. Keyboard expansion and running copy
