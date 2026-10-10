@@ -3740,11 +3740,19 @@
       "destination": "web-console/src/app/agent/UsageStats.module.css",
       "upstream_sha256": "05e0331a05f12215343a46bba97dd191cf338fdc7b5cc8ad3ba8e0f247154c66",
       "classification": "A",
-      "treatment": "Harness StatsPills, TurnUsagePanel and ContextMeter styles combined; radius tokens inlined, dock row added for the rustX composer seat.",
+      "treatment": "Harness StatsPills, TurnUsagePanel and ContextMeter styles combined; radius tokens inlined. InputBar non-wrapping dock row with shrinkable statistic labels and a non-shrinking context meter shared by main and child composer seats.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [],
-      "local_sha256": "2237cdfb3a3a6e65e2bc36423b8b2ecfd164cb237f24803e3a6b1abc66a82f6c"
+      "local_sha256": "3eedcb1d4ac4aa39e4393d6c23773c568fe9245cde249e0858062ad5124cb8a8",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.module.css",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "3728d67da4e1d1c2dd102d66f42f0c129a5c1e17e6a1167d738c999d0d87f60b",
+          "treatment": "Retain the centered, non-wrapping composer dock and 12px spacing."
+        }
+      ]
     },
     {
       "upstream": "packages/client/ui-open-in-app/src/client/OpenTargetButton.tsx",

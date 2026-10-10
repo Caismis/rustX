@@ -30,6 +30,23 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
   const seat = selected.locator('[data-composer-seat]');
   await expect(selected.locator('[data-composer-dock]')).toContainText('200 tok/s');
   await expect(selected.locator('[data-composer-dock]')).toContainText('10%');
+  const singleStatsRow = async () => {
+    const dock = selected.locator('[data-composer-dock]');
+    const bounds = (await dock.boundingBox())!;
+    const buttons = dock.getByRole('button');
+    await expect(buttons).toHaveCount(3);
+    const rects = await buttons.evaluateAll(elements => elements.map(el => {
+      const { x, y, width, height } = el.getBoundingClientRect();
+      return { x, y, width, height };
+    }));
+    for (const rect of rects) {
+      expect(Math.abs(rect.y + rect.height / 2 - (rects[2].y + rects[2].height / 2))).toBeLessThanOrEqual(1);
+      expect(rect.x).toBeGreaterThanOrEqual(bounds.x);
+      expect(rect.x + rect.width).toBeLessThanOrEqual(bounds.x + bounds.width + 1);
+    }
+    await expect(buttons.last()).toHaveText('10%');
+  };
+  await singleStatsRow();
   const atTail = async () => {
     await expect.poll(() => scroller.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThanOrEqual(1);
     await expect.poll(async () => {
@@ -41,6 +58,7 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
   const small = (await seat.boundingBox())!.height;
   for (let line = 0; line < 5; line++) { await input.pressSequentially('Child guidance'); await input.press('Shift+Enter'); await atTail(); }
   expect((await seat.boundingBox())!.height).toBeGreaterThan(small + 50);
+  await singleStatsRow();
   await page.screenshot({ path: `/tmp/rustx-subagent-input-${theme}-${width}.png` });
   const card = (await selected.locator('[data-composer-card]').boundingBox())!;
   expect(card.x).toBeGreaterThanOrEqual(0); expect(card.x + card.width).toBeLessThanOrEqual(width);

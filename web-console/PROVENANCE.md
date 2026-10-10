@@ -2034,3 +2034,14 @@ viewport-based model wrapper caps are removed. Existing sticky seat measurement
 continues to reserve draft, toolbar and statistics height for main and child chats.
 The rounded card uses an explicit zero transform for its raster layer; native
 selector menus are document portals and editor menus are card-relative.
+
+## Single-row composer statistics
+
+Reference: Harness `5badb15009ae1756c3afe0ae0cef1faafc290ccc`,
+`ui-conversation/src/client/skeleton/InputBar.module.css` dock and
+`ui-chat/src/client/chat/StatsPills.module.css` labels. The shared main/child
+statistics dock uses the same non-wrapping centered row and 12px spacing.
+Activity and usage labels can shrink with ellipses while the context meter
+retains its ring and full percentage. Accessible names and click-open panels
+preserve complete native readings at narrow pane widths. No statistics,
+occupancy or streaming authority changes.

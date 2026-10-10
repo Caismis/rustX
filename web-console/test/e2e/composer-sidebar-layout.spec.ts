@@ -19,6 +19,20 @@ for (const locale of ['en', 'zh']) test(`composer follows its pane width with bo
     expect(dock.y).toBeGreaterThanOrEqual(box.y + box.height);
     expect(dock.y + dock.height).toBeLessThanOrEqual(page.viewportSize()!.height);
     expect(dock.width).toBeLessThanOrEqual((await page.locator('.conversation-panel:visible').boundingBox())!.width);
+    const readings = page.locator('[data-composer-dock]:visible').getByRole('button');
+    await expect(readings).toHaveCount(3);
+    const rects = await readings.evaluateAll(elements => elements.map(el => {
+      const { x, y, width, height } = el.getBoundingClientRect();
+      return { x, y, width, height };
+    }));
+    for (const rect of rects) {
+      expect(Math.abs(rect.y + rect.height / 2 - (rects[2].y + rects[2].height / 2))).toBeLessThanOrEqual(1);
+      expect(rect.x).toBeGreaterThanOrEqual(dock.x);
+      expect(rect.x + rect.width).toBeLessThanOrEqual(dock.x + dock.width + 1);
+    }
+    // Truncation cannot consume the context percentage or the statistics icons.
+    await expect(readings.last()).toHaveText('10%');
+    expect(await readings.locator('svg').evaluateAll(icons => icons.every(icon => icon.getBoundingClientRect().width === 14))).toBe(true);
     for (const control of [add, card.locator('button[aria-haspopup="menu"]').first(), model, send]) {
       const rect = (await control.boundingBox())!;
       expect(rect.x).toBeGreaterThanOrEqual(box.x);
@@ -47,6 +61,19 @@ for (const locale of ['en', 'zh']) test(`composer follows its pane width with bo
     expect((await card.boundingBox())!.height).toBe(height);
   };
   await resize(680); // 400px main pane: permissions lose their label, not their control.
+  const readings = page.locator('[data-composer-dock]:visible').getByRole('button');
+  const inspectStatistics = async () => {
+    await readings.nth(0).click();
+    await expect(page.locator('[data-session-stats-details]')).toContainText('200');
+    await page.keyboard.press('Escape');
+    await readings.nth(1).click();
+    await expect(page.locator('[data-session-stats-usage]')).toContainText('80%');
+    await page.keyboard.press('Escape');
+    await readings.nth(2).click();
+    await expect(page.getByRole('dialog')).toContainText('10K / 100K');
+    await page.keyboard.press('Escape');
+  };
+  await inspectStatistics();
   await expect.poll(() => card.locator('button[aria-haspopup="menu"]').first().evaluate(el => getComputedStyle(el.querySelectorAll('span')[1]!).display)).toBe('none');
   expect((await model.boundingBox())!.width).toBeLessThanOrEqual((await card.locator('[data-composer-controls]').boundingBox())!.width * .45);
   await card.locator('button[aria-haspopup="menu"]').first().click();
@@ -70,6 +97,7 @@ for (const locale of ['en', 'zh']) test(`composer follows its pane width with bo
   await expect(model).toContainText('DeepSeek/deepseek-flash');
   await oneRow();
   await page.screenshot({ path: `/tmp/rustx-composer-sidebar-${locale}.png` });
+  await page.locator('[data-composer-seat]:visible').screenshot({ path: `/tmp/rustx-stats-sidebar-${locale}.png` });
   await page.getByRole('button', { name: locale === 'zh' ? '收起侧边栏' : 'Collapse Sidebar', exact: true }).click();
   await oneRow();
   await page.getByRole('button', { name: locale === 'zh' ? '打开侧边栏' : 'Expand Sidebar', exact: true }).click();
@@ -84,6 +112,8 @@ for (const locale of ['en', 'zh']) test(`composer follows its pane width with bo
   await oneRow();
   await page.setViewportSize({ width: 320, height: 844 });
   await oneRow();
+  await inspectStatistics();
+  await page.screenshot({ path: `/tmp/rustx-stats-mobile-${locale}.png` });
   // On very narrow seats, demand measurement collapses the model to its icon.
   await expect.poll(() => model.evaluate(el => getComputedStyle(el.querySelector('span')!).display)).toBe('none');
   await model.click();
