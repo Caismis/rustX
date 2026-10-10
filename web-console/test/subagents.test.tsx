@@ -1,10 +1,12 @@
+import { agentDuration } from '../src/app/agent/subagent-state';
 import { agentMetrics } from './agent-statistics-fixture';
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
+import { AgentConversationContext } from '../src/app/agent/subagent-context';
 import { Message } from '../src/app/agent/Message';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { RuntimeFacts } from '../src/app/agent/Activity';
-import { agentDuration, SubagentScope, SubagentHeader, SubagentSurface } from '../src/app/agent/Subagents';
+import { SubagentScope, SubagentHeader, SubagentSurface } from '../src/app/agent/Subagents';
 import { cellKind } from '../src/app/trajectory/TrajectoryCell';
 import { Server, snapshot } from './fixture';
 import type { RuntimeClientAgent, MessageBlock } from '../../protocol/app-server/v41';
@@ -30,7 +32,7 @@ it('agents move out of the message footer and open through the header without lo
   const ui = render(<SubagentScope client={server.client} sessionId="A"><SubagentHeader title="Parent"/><SubagentSurface><input aria-label="Root draft" defaultValue="keep me"/><RuntimeFacts snapshot={server.snapshots.get('A')!}/></SubagentSurface></SubagentScope>);
   expect(ui.queryByLabelText('Agent Research')).toBeNull();
   fireEvent.click(ui.getByRole('button', { name: 'Subagents' }));
-  await act(async () => { fireEvent.click(ui.getByRole('menuitem', { name: /Research/ })); });
+  await act(async () => { fireEvent.click(ui.getByRole('treeitem', { name: /Research/ })); });
   expect(ui.getByLabelText('Agent Research')).toBeTruthy();
   expect(await ui.findByRole('button', { name: /12K tok/ })).toBeTruthy();
   expect(ui.container.querySelector('[data-composer-dock]')).toBeTruthy();
@@ -300,4 +302,14 @@ it.each([1, 80])('actual 64-request saturation defers %i stable Agent demands un
   for (let i = 0; i < 10; i++) ui.rerender(view());
   expect(reads()).toHaveLength(count);
   request.mockRestore();
+});
+
+it('native task titles identify inbound senders and parent messages stay contextual', async () => {
+  const server = new Server(); servers.push(server); await server.attached('A');
+  server.snapshots.get('A')!.agents = [{ ...agent, agent: 'explore', title: 'Verify source documents' }]; await server.client.refresh('A');
+  const ui = render(<SubagentScope client={server.client} sessionId="A"><AgentTranscript snapshot={{ ...snapshot(), transcript: { entries: [{ cursor: '1', item: { type: 'message', message: report } }] } }}/></SubagentScope>);
+  expect(ui.getByRole('button', { name: /Message from Verify source documents/ })).toBeTruthy();
+  ui.rerender(<AgentConversationContext value={agent}><AgentTranscript snapshot={{ ...snapshot(), transcript: { entries: [{ cursor: '2', item: { type: 'message', message: { ...report, source: { agent: { agent_id: agent.parent_agent_id } } } } }] } }}/></AgentConversationContext>);
+  expect(ui.getByRole('button', { name: /Message from parent agent/ })).toBeTruthy();
+  expect(ui.container.querySelector('[data-user-message]')).toBeNull();
 });

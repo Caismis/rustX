@@ -1974,3 +1974,24 @@ when navigation changes. No child model settings are introduced. App Server v41,
 Runtime Client v63, child IPC v30 and Product Host file-read v3 are synchronized.
 The Browser plugin is unavailable; the repository's pinned Playwright browser
 validates real native child processes and deterministic provider streams.
+
+
+Subagent catalog and sidebar audit (2026-10-10): inspected the pinned Harness
+`ui-subagent/src/client/SubagentHeaderLineage.tsx`, its CSS, `SubagentReadOnlyComposer.tsx`
+and `sidebar-chat/index.tsx`. The new inventoried SubagentCatalog ports the tree
+hierarchy, disclosure alignment, current-title emphasis, two-row usage/duration,
+150ms hover-open / 120ms hover-close with click pinning, focus restoration, tree
+keyboard navigation, and a separate sidebar-chat button. Native parent IDs supply
+all membership and ancestry; no upstream Session controller or transport is retained.
+The existing DockLayout hosts resident child chats, including hidden-tab drafts,
+with visibility scoped native watchers. The main child trajectory remains mounted
+across conversation-view changes to preserve its filter and detail selection.
+Native source identity and independent title label inbound agent messages, with
+explicit parent-source context in child conversations. Unavailable agents receive
+a read-only explanation while retaining their inaccessible draft for native repair.
+No child model controls or one-shot mode are inferred. Whole-conversation child
+turn-outline / locate APIs remain absent, so the main turn navigator is not projected
+from a partial transcript. Source hashes and dependency closures are refreshed.
+
+The existing base theme now retains Harness radius tokens (4/8/12/16/20/28px);
+their missing definitions had invalidated catalog and other source-port radii.

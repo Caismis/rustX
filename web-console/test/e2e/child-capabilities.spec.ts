@@ -25,7 +25,7 @@ test('native child live cuts, independent title, active and file-only resume upl
     expect(childIndex).toBeDefined();
     const childGate = childIndex - 1, parentGate = 1 - childGate;
     const parentTitle = await page.locator('#session-title').innerText();
-    const open = async () => { await page.getByRole('button', { name: 'Subagents', exact: true }).click(); await page.getByRole('menuitem', { name: /Research UI capabilities/ }).click(); };
+    const open = async () => { await page.getByRole('button', { name: 'Subagents', exact: true }).click(); await page.getByRole('treeitem', { name: /Research UI capabilities/ }).click(); };
     await open();
     const child = page.locator('section[data-agent-id]');
     const id = await child.getAttribute('data-agent-id');

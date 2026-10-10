@@ -189,9 +189,11 @@ it('owner Unavailable differs from terminal Inactive and disables impossible set
   expect(ui.getByText('Unavailable')).toBeTruthy();
   expect(ui.queryByText('Inactive')).toBeNull();
   expect(ui.queryByRole('button', { name: 'Stop' })).toBeNull();
-  for (const name of ['Send', 'Wait for activation']) expect((ui.getByRole('button', { name }) as HTMLButtonElement).disabled).toBe(true);
+  expect(ui.queryByRole('button', { name: 'Send' })).toBeNull();
+  expect(ui.getByText('This agent is unavailable. Its conversation is read-only.')).toBeTruthy();
+  expect((ui.getByRole('button', { name: 'Wait for activation' }) as HTMLButtonElement).disabled).toBe(true);
   expect((ui.getByRole('button', { name: 'Transcript' }) as HTMLButtonElement).disabled).toBe(false);
-  expect((ui.getByRole('textbox', { name: 'Message Agent Worker' }) as HTMLInputElement).value).toBe('Preserved draft');
+  expect((ui.getByLabelText('Message Agent Worker') as HTMLInputElement).value).toBe('Preserved draft');
   expect(server.requests.filter(row => row.request.method === 'agent/sendMessage')).toHaveLength(1);
 });
 

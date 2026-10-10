@@ -117,7 +117,7 @@ it('one Agent row survives inactive settlement and a later activation, including
   expect(row?.getAttribute('data-activation-id')).toBe('activation-a');
   ui.rerender(<RuntimeFacts snapshot={{ ...s, agents: [{ ...agent, state: 'inactive', activation_state: 'succeeded', current_activation: null, detail: 'Final report committed' }] }}/>);
   expect(ui.container.querySelector('[data-agent-id="durable-child"]')).toBe(row);
-  expect(row?.textContent).toContain('succeeded');
+  expect(row?.textContent).toContain('Completed');
   expect(row?.textContent).toContain('Final report committed');
   expect(row?.hasAttribute('data-activation-id')).toBe(false);
   const resumed = { ...s, agents: [{ ...agent, activation_id: 'activation-b', current_activation: 'activation-b' }] };

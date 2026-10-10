@@ -14,4 +14,6 @@
 .agentConversation[data-view='trajectory'][data-agent-id] > :global([data-composer-seat]) { position: absolute; right: var(--dsh-scrollbar-width); bottom: 0; left: 0; }
 
 .headerStatus { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dsw-alias-label-tertiary); }
-@media (max-width: 600px) { .headerStatus { display: none; } }
+@media (max-width: 600px) { .agentActions .headerStatus { display: none; } }
+
+.readOnly { display: flex; align-items: center; gap: 8px; padding: 20px; border: 1px solid var(--dsw-alias-border-l1); border-radius: var(--dsw-radius-xl); color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-layer-1); }

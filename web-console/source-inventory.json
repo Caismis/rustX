@@ -47,7 +47,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "d873ee31455bac72ef72591650b0517238fe82e592a4875488b23641e5332153",
+      "local_sha256": "39782028fbafcb60607f3fdce6e8759f035a409855a1a223d8f99eb8ed5fb116",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
@@ -2341,7 +2341,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "b6b9f7614d9f46838287437ffd5b1edb751740aa83286e766c778cf6675706e1",
+      "local_sha256": "ef15e70e8df529d84a7db70e6d0509a3b8bdf499c70daa2cecee1dd6e6dfb494",
       "classification": "A"
     },
     {
@@ -3251,7 +3251,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "6c295b2ab5f06bde4e8d452736ac3045713b6f05662874486184addac80d3aa6"
+      "local_sha256": "380ff5a939c056e2354ffd95e40b81b8460a9346c585f69a0fa80681c9fd5722"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -3795,7 +3795,7 @@
         "Harness slot registry",
         "Harness terminal Host and Session store"
       ],
-      "local_sha256": "c8d8f7777d8f015d1b96fc38746c8af5b8e9e7e9c202594f19261c3888212f0c",
+      "local_sha256": "96571c0b17d055570cf0be34d5b0c02fd2627db5bf1665c5d3cf55da085c71fc",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-sidebar-terminal/src/client/TerminalGuide.tsx",
@@ -5664,18 +5664,14 @@
         "../../client/selectors",
         "../../locale/react",
         "../../presentation/agent/Conversation.module.css",
-        "../../presentation/primitives/Menu",
-        "../../presentation/primitives/StateDot",
-        "../../presentation/primitives/icons",
         "../components/ActivityCards",
+        "./SubagentCatalog",
         "./Subagents.module.css",
         "./subagent-context",
-        "./subagent-state",
-        "./token-format",
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "f9989328e64639d870ebca3ead51513653e6ed93d749e46c6d85311454226ac0"
+      "local_sha256": "8d171ecf8643da9b39126d7acc9057ec5b94da409f56966c2fa96029445a47be"
     },
     {
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
@@ -5687,7 +5683,7 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [],
-      "local_sha256": "d52d08d448abb100e256eaea5c0239a8c3d0a931f619daddbbe2fc58977c4ca8"
+      "local_sha256": "a84ec3250191dc3bb9318fa95e4ae6cdfb351ae4e7af8a8534c90156afd253b8"
     },
     {
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
@@ -5791,6 +5787,41 @@
       "retained_dependencies": [],
       "excluded_dependencies": [],
       "local_sha256": "9882b96b5d057ac54a47dca8a218bfd246d05baf0bf504c55f0bb951cdfab1b8"
+    },
+    {
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream": "packages/client/ui-subagent/src/client/SubagentHeaderLineage.tsx",
+      "destination": "web-console/src/app/agent/SubagentCatalog.tsx",
+      "treatment": "Source-derived native inventory tree, hover pinning, keyboard navigation, hierarchy, metrics and sidebar-chat entry; no upstream runtime retained.",
+      "upstream_sha256": "f9ae4d3ed5ec8d5bde052316e7ccb85ec7fdb88af77e03d03527004e1b0b2ccf",
+      "retained_dependencies": [
+        "../../../../protocol/app-server/v41",
+        "../../locale/react",
+        "../../presentation/primitives/StateDot",
+        "../../presentation/primitives/Tooltip",
+        "../../presentation/primitives/icons",
+        "./SubagentCatalog.module.css",
+        "./subagent-context",
+        "./subagent-state",
+        "./token-format",
+        "@floating-ui/react-dom",
+        "react",
+        "react-dom"
+      ],
+      "excluded_dependencies": [],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "local_sha256": "7cf205782832cac747672951d2995ee33acb0832acba31cfb7139244b3f04f13"
+    },
+    {
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream": "packages/client/ui-subagent/src/client/SubagentHeaderLineage.module.css",
+      "destination": "web-console/src/app/agent/SubagentCatalog.module.css",
+      "treatment": "Source-derived native inventory tree, hover pinning, keyboard navigation, hierarchy, metrics and sidebar-chat entry; no upstream runtime retained.",
+      "upstream_sha256": "1ab6fd03a72dc32b05a6832ceca512e6000f1fd7c61016d4ef1a98529897dc32",
+      "retained_dependencies": [],
+      "excluded_dependencies": [],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "local_sha256": "0a5e95b9753d239e2c46e4906e2e1302ce37a60377dbb98b43c702b709bbc5cc"
     }
   ],
   "inspected_only": [

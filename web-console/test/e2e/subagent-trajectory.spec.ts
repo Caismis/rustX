@@ -10,7 +10,7 @@ for (const width of [1440, 390]) test(`child-owned trajectory, paging and conver
   await page.evaluate(() => (window as any).startupFixture.release('session/attach'));
   if (width < 600) await page.getByRole('button', { name: 'Collapse Sidebar', exact: true }).click();
   await page.getByRole('button', { name: 'Subagents', exact: true }).click();
-  await page.getByRole('menuitem', { name: /Verify findings/ }).click();
+  await page.getByRole('treeitem', { name: /Verify findings/ }).click();
   const input = page.getByRole('textbox', { name: 'Message Agent Verify findings' });
   await input.fill('Preserved child draft');
   await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
@@ -35,6 +35,10 @@ for (const width of [1440, 390]) test(`child-owned trajectory, paging and conver
   await page.screenshot({ path: `/tmp/rustx-child-trajectory-${width}.png` });
   await page.getByRole('tab', { name: 'Chat', exact: true }).click();
   await expect(input).toHaveValue('Preserved child draft');
+  await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
+  await expect(page.getByRole('searchbox', { name: 'Search trajectory' })).toHaveValue('child-1 tool 70');
+  await expect(inspector).toBeVisible();
+  await page.getByRole('tab', { name: 'Chat', exact: true }).click();
   await page.getByRole('button', { name: 'Session A', exact: true }).click();
   await expect(page.locator('textarea:visible')).not.toHaveValue('Preserved child draft');
   expect(errors).toEqual([]);

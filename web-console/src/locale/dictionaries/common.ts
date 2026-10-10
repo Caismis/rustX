@@ -1,6 +1,13 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
   "subagents.list": "Subagents",
+  "subagents.completed": "Completed",
+  "subagents.expand-branch": "Expand {name}",
+  "subagents.collapse-branch": "Collapse {name}",
+  "subagents.open-aside": "Open {name} in sidebar",
+  "subagents.parent-message": "Message from parent agent",
+  "subagents.reply-placeholder": "Send a message to resume…",
+  "subagents.read-only": "This agent is unavailable. Its conversation is read-only.",
   "subagents.message": "Message from {name}",
   "subagents.count": "{count} subagents",
   "subagents.result": "Call result",
@@ -245,6 +252,13 @@ export const en = {
 export type CommonKey = keyof typeof en;
 export const zh = {
   "subagents.list": "子智能体",
+  "subagents.completed": "已完成",
+  "subagents.expand-branch": "展开 {name} 的子智能体",
+  "subagents.collapse-branch": "收起 {name} 的子智能体",
+  "subagents.open-aside": "在侧栏打开 {name}",
+  "subagents.parent-message": "父智能体发来消息",
+  "subagents.reply-placeholder": "发送消息以恢复…",
+  "subagents.read-only": "此智能体已不可用，对话仅供查看。",
   "subagents.message": "{name} 发来消息",
   "subagents.count": "{count} 个子智能体",
   "subagents.result": "调用结果",
