@@ -1826,17 +1826,23 @@ dependency closures describe this final source, including the v38 import renames
 
 ## UI optimization: MCP screenshot alignment
 
-The four user-supplied ZCode screenshots are the visual reference for the
-scope-local empty list, collapsed form, expanded environment field and JSON
-editor. Source comparison used ZCode `29628c9acdb81b703bbd4080c207a0e7ce5e276e`,
+ZCode `29628c9acdb81b703bbd4080c207a0e7ce5e276e` remains the interaction
+reference for the scope-local list, form/JSON mode switch and optional fields:
 `McpServerForm.tsx`, `McpServerList.tsx`, `McpSettingsSection.tsx`,
-`SettingsFormActions.tsx`, and `mcpSettingsShared.ts`. The dedicated editor now
-uses 192px short fields, 32px controls, a 16px inset outlined card, an optional
-JSON environment field, top-right mode tabs and bottom-right Save/Cancel.
-The list uses a large title, scoped toolbar, outlined actions and dashed empty
-state. Shared Harness-derived controls remain in use, with neutral dark surfaces
-scoped to MCP to match the supplied screenshots; no
-ZCode component implementation or runtime is copied.
+`SettingsFormActions.tsx`, `PluginScopeMenu.tsx`, and `mcpSettingsShared.ts`.
+Existing definitions have a fixed scope; a returned list keeps its own selected
+owner. Mode switching and saves retain the native CAS transaction semantics.
+
+Presentation follows Harness `5badb15009ae1756c3afe0ae0cef1faafc290ccc`:
+`ModelsSection.module.css`, `SettingsRoot.module.css` and settings-form fields.
+The MCP list and editor inherit the shared settings palette, with 20px page
+headings, 13px fields, 36px inputs, outlined list cards, a module-filled editor,
+shared capsule buttons, chevron disclosures and a sticky Save/Cancel row.
+No MCP-only dark palette or list/editor background override remains. Status
+indicators use theme state tokens; Refresh animates during a check and honors
+reduced motion. The editor includes a return-to-list control; long endpoint or
+command descriptions expose their full text on hover.
+No ZCode runtime or component implementation is copied.
 
 The generic unit shell, argument array rows, working-directory/advanced fields,
 retained-secret checkboxes, redundant form explanations and list permission

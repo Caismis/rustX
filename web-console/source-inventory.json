@@ -532,7 +532,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "17b868ea343560b928b1c330a8664dbb85b273d443e893c38fc2dd94f0d53da4"
+      "local_sha256": "64d1768279162db5fe130270334913287eb2d7c92c60b116ed51b30abb9f9650"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
@@ -2244,7 +2244,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "9107ba340e1a4655e649f591db6de524b0dd55cc966653c6f4ccdee31bfeb0cb",
+      "local_sha256": "9fcb2a507c60c18c0d466edabda8eb984133f67e629587f24c5595a45d8aa84c",
       "retained_dependencies": [],
       "classification": "B"
     },
@@ -5686,7 +5686,7 @@
       "upstream": "packages/client/ui-settings-models/src/client/ModelsSection.module.css",
       "destination": "web-console/src/app/settings/mcp/McpPage.module.css",
       "upstream_sha256": "0de105abac343887fbea8508fc0e20b6903505a3f689dd05b1125ff02886e801",
-      "local_sha256": "59c600b9eb1b294f2dd62a6a738ecaa5ec2b7f4251d08752651edcab29d5278b",
+      "local_sha256": "eb2604b93cbec9f5f263b6603bae5f883c8d55f45d728b38ff2ce3a5a14ff6c2",
       "classification": "B",
       "treatment": "Harness-derived settings theme and controls with ZCode screenshot geometry: outlined compact form, short fields, footer actions, segmented modes and scoped MCP list. MCP finite diagnostics: native revision-bound connectivity checks and shared status colors; upstream baseline unchanged.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",

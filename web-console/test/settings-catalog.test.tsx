@@ -37,7 +37,7 @@ it('scope menu preserves the resource category and keeps definition drafts bound
   await screen.findByRole('heading', { name: 'Workspace Settings — A' });
   expect(screen.getByRole('tab', { name: 'MCP servers', selected: true })).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Configuration scope' }));
-  fireEvent.click(await screen.findByRole('menuitem', { name: 'User (global)' }));
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'User' }));
   await screen.findByRole('heading', { name: 'User Settings' });
   await openResourceRow('search');
   expect((screen.getByLabelText('MCP command') as HTMLInputElement).value).toBe('unsaved-server');
@@ -80,16 +80,17 @@ it('a rejected MCP toggle exposes the failure and cannot blindly retry', async (
   expect(writes(s)).toHaveLength(1);
 });
 
-it('MCP observation stays unknown and navigation and refresh only read configuration', async () => {
+it('MCP navigation and refresh perform finite connectivity checks without writing configuration', async () => {
   const s = cfg3Client();
   s.source.user.authored!.agent = {tools:{sources:{search:'all'}}};
   await catalog(s);
-  await screen.findByRole('img', {name:/MCP server status is not yet available/});
+  await screen.findByRole('img', {name:/Connection check passed/});
   await openSettingsPage('MCP servers');
   fireEvent.click(screen.getByRole('button', {name:'Refresh'}));
   await settingsReady();
   await openSettingsPage('General');
   await openSettingsPage('MCP servers');
-  expect([...new Set(s.request.mock.calls.map(([op]) => op.method))]).toEqual(['configuration/sourcesRead']);
+  await waitFor(() => expect(screen.getByRole('img', {name:/Connection check passed/})).toBeTruthy());
+  expect([...new Set(s.request.mock.calls.map(([op]) => op.method))].sort()).toEqual(['configuration/sourcesRead','mcp/probe']);
   expect(writes(s)).toHaveLength(0);
 });

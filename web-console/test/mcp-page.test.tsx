@@ -24,7 +24,7 @@ it('MCP has its own navigation and saves a new HTTP server before returning to t
  expect(screen.queryByRole('listitem',{name:'exa'})).toBeNull();
 });
 it('JSON import requires a supported configuration and saves only the selected identity',async()=>{
- const s=await open();fireEvent.click(screen.getByRole('button',{name:'⇩ Import'}));
+ const s=await open();fireEvent.click(screen.getByRole('button',{name:'Import'}));
  fireEvent.change(screen.getByLabelText('Complete configuration'),{target:{value:JSON.stringify({mcpServers:{docs:{command:'npx',args:['-y','docs'],sensitive_env:{TOKEN:'$TOKEN'}}}})}});
  fireEvent.click(screen.getByRole('button',{name:'Form'}));
  expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('docs');
@@ -76,7 +76,7 @@ it('invalid reference JSON cannot save an earlier valid draft or escape through 
  expect(writes(s)[0].mutation).toMatchObject({authored:{definition:{sensitive_env:{}}}});
 });
 it('saves directly from JSON using the same native source transaction',async()=>{
- const s=await open();fireEvent.click(screen.getByRole('button',{name:'⇩ Import'}));
+ const s=await open();fireEvent.click(screen.getByRole('button',{name:'Import'}));
  fireEvent.change(screen.getByLabelText('Complete configuration'),{target:{value:'{"mcpServers":{"json-save":{"url":"https://example.com/mcp"}}}'}});
  fireEvent.click(screen.getByRole('button',{name:'Save'}));
  await screen.findByRole('listitem',{name:'json-save'});
@@ -124,7 +124,7 @@ it('JSON edits survive repeated mode selection and are applied when returning to
  expect(writes(s)[0].mutation).toMatchObject({id:'json-form',authored:{definition:{type:'http',url:'https://example.com/mcp'}}});
 });
 it('invalid JSON remains editable when switching back to the form',async()=>{
- const s=await open();fireEvent.click(screen.getByRole('button',{name:'⇩ Import'}));
+ const s=await open();fireEvent.click(screen.getByRole('button',{name:'Import'}));
  fireEvent.change(screen.getByLabelText('Complete configuration'),{target:{value:'{broken'}});
  fireEvent.click(screen.getByRole('button',{name:'Form'}));
  expect((screen.getByLabelText('Complete configuration') as HTMLTextAreaElement).value).toBe('{broken');

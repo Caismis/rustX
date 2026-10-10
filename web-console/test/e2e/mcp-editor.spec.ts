@@ -15,14 +15,14 @@ for (const width of [1440, 390]) test(`MCP compact creation form, reference JSON
   const form=page.getByRole('form',{name:'New MCP server'});
   await expect(form.getByLabel('Command',{exact:true})).toBeVisible();
   await expect(form.getByLabel('Arguments (space-separated)',{exact:true})).toBeVisible();
-  await expect(form.getByLabel('Command',{exact:true})).toHaveCSS('height','32px');
-  await expect(form.getByLabel('Command',{exact:true})).toHaveCSS('font-size','14px');
+  await expect(form.getByLabel('Command',{exact:true})).toHaveCSS('height','36px');
+  await expect(form.getByLabel('Command',{exact:true})).toHaveCSS('font-size','13px');
   await expect(form.getByRole('button',{name:'Add Arguments'})).toHaveCount(0);
   await expect(form.getByText(/New User definition|Empty list/)).toHaveCount(0);
   const type=await form.getByRole('button',{name:'stdio (local command) Type',exact:true}).boundingBox();
-  expect(type!.width).toBeLessThanOrEqual(192);
+  expect(type!.width).toBeLessThanOrEqual(240);
   if (width===1440) {
-    expect((await form.getByLabel('Name',{exact:true}).boundingBox())!.width).toBe(192);
+    expect((await form.getByLabel('Name',{exact:true}).boundingBox())!.width).toBe(240);
     expect((await form.boundingBox())!.height).toBeLessThan(450);
   }
   await expect(form.getByLabel('Environment variables (JSON)')).toBeHidden();
@@ -40,6 +40,7 @@ for (const width of [1440, 390]) test(`MCP compact creation form, reference JSON
   await form.getByRole('button',{name:'Save',exact:true}).click();
   await expect(page.getByRole('listitem',{name:'browser-compact'})).toBeVisible();
   await page.getByRole('button',{name:'MCP browser-compact',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Configuration scope',exact:true})).toBeDisabled();
   await page.getByRole('button',{name:'JSON',exact:true}).click();
   const json=page.getByLabel('Complete configuration');
   expect(JSON.parse(await json.inputValue())['browser-compact']).toMatchObject({command:'npx',args:['-y','server','--directory','/a b',''],sensitive_env:{TOKEN:'$TOKEN'}});
@@ -95,7 +96,7 @@ for (const width of [1440, 390]) test(`MCP connectivity indicators match across 
     }
     await expect(surface.getByRole('listitem',{name:'exa'}).locator('[data-status]')).toHaveAttribute('data-status','reachable');
     await expect(surface.getByRole('listitem',{name:'broken'}).locator('[data-status]')).toHaveAttribute('data-status','connection_failed');
-    await expect(surface.getByRole('listitem',{name:'exa'}).locator('[data-status]')).toHaveCSS('background-color','rgb(34, 197, 94)');
+    await expect(surface.getByRole('listitem',{name:'exa'}).locator('[data-status]')).toHaveCSS('background-color',await page.locator('body').evaluate(el=>getComputedStyle(el).getPropertyValue('--dsw-alias-state-success-primary').trim()));
     await surface.getByRole('button',{name:'Refresh',exact:true}).click();
     await expect(surface.getByRole('button',{name:'Refresh',exact:true})).toBeEnabled();
     await expect(surface.getByRole('img',{name:'Connection check passed. This is not the Agent\'s live connection.'})).toBeVisible();
