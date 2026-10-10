@@ -2786,13 +2786,14 @@ async fn goal84_recovery_authorizes_pending_human_but_does_not_infer_continuatio
                 rustx::runtime::recovery::ResumeDisposition::PendingInboundOnly
             },
         );
+        // Subscribe before activation: a fast recovered attempt can settle on
+        // another worker before activate() returns. notify_waiters does not
+        // retain that notification for futures created after settlement.
+        let settled = composed.runtime.settlement_signal().notified();
         composed.runtime.activate();
-        tokio::time::timeout(
-            Duration::from_secs(10),
-            composed.runtime.settlement_signal().notified(),
-        )
-        .await
-        .expect("recovered attempt settles");
+        tokio::time::timeout(Duration::from_secs(10), settled)
+            .await
+            .expect("recovered attempt settles");
         assert!(
             model.requests()[0]
                 .messages
