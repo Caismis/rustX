@@ -156,9 +156,11 @@ impl Fixture {
             let index = usize::from(body.contains("request-B"));
             let request: serde_json::Value = serde_json::from_str(body).unwrap();
             if tool == Some("review") {
-                let child = request["tools"].as_array().unwrap().iter().any(|tool| tool["function"]["name"] == "workflow_output");
+                let offers = |name: &str| request["tools"].as_array().unwrap().iter().any(|tool| tool["function"]["name"] == name);
+                let child = offers("workflow_output");
                 let messages = request["messages"].as_array().unwrap();
-                if child || messages.last().is_some_and(|message| message["role"] == "user") {
+                // Root calls the Workflow only when its adopted closure offers it.
+                if child || (offers("review") && messages.last().is_some_and(|message| message["role"] == "user")) {
                     let name = if child { "workflow_output" } else { "review" };
                     let chunk = serde_json::json!({"id":"workflow","object":"chat.completion.chunk","created":1,"model":"a",
                         "choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"workflow-call","type":"function",

@@ -535,9 +535,9 @@ impl ProspectiveSessionConfig {
         self.same_model(self.session_model(), other, other.session_model())
     }
 
-    /// Whether every admitted named Agent's own model selection is
-    /// effectively unchanged.
-    pub(crate) fn same_agent_models(&self, other: &Self) -> bool {
+    /// Whether two complete closures admit the same named Agents with
+    /// effectively the same model invocations.
+    fn same_agent_models(&self, other: &Self) -> bool {
         let agents = self.admitted_agent_dependencies();
         agents == other.admitted_agent_dependencies()
             && agents.iter().all(|name| {
@@ -553,6 +553,24 @@ impl ProspectiveSessionConfig {
                     _ => false,
                 }
             })
+    }
+
+    /// Whether publishing this capture's catalog leaves every named Agent
+    /// invocation of the `adopted` closure unchanged. Which Agents are admitted
+    /// and how they are defined stays the adopted closure's until Capability
+    /// adoption, so an Agent this source newly admits, drops or redefines is
+    /// that unit's change, never one to an adopted invocation. An adopted Agent
+    /// naming no model inherits the invoking Attempt's frozen model; one naming
+    /// a selection resolves it against the catalog the Session publishes, so
+    /// that selection must resolve to the same invocation here.
+    pub(crate) fn preserves_adopted_agent_models(&self, adopted: &Self) -> bool {
+        adopted.admitted_agent_dependencies().iter().all(|name| {
+            adopted
+                .subagents
+                .get(name)
+                .and_then(|definition| definition.profile().model.clone())
+                .is_none_or(|model| adopted.same_model(&model, self, &model))
+        })
     }
 
     fn same_model(

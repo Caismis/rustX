@@ -208,15 +208,17 @@ impl ConfigurationApplications {
         let mut adopted = retained();
         #[cfg(test)]
         manager.configuration_catalog_gate(&session).await;
-        // The Provider unit settles on its own when no invocation an Attempt
-        // would freeze changes, or when the Session's own selection is one
-        // the new catalog no longer admits: the catalog is what the
-        // replacement is chosen from, so neither an unrelated Instructions,
-        // context or Capability change nor a removed selection may hold it
-        // back. A removed selection is never prepared, because there is no
-        // invocation to construct from it. Any other unit is then prepared
-        // against this published binding, so its candidate can neither
-        // restore the older catalog nor adopt over this publication.
+        // The Provider unit settles on its own when publishing the catalog
+        // changes no invocation the adopted closure would freeze, or when the
+        // Session's own selection is one the new catalog no longer admits: the
+        // catalog is what the replacement is chosen from, so neither an
+        // unrelated Instructions, context or Capability change — including a
+        // named Agent the source newly admits, drops or redefines — nor a
+        // removed selection may hold it back. A removed selection is never
+        // prepared, because there is no invocation to construct from it. Any
+        // other unit is then prepared against this published binding, so its
+        // candidate can neither restore the older catalog nor adopt over this
+        // publication.
         let mut provider_published = false;
         {
             let mut state = self.lock();
@@ -224,7 +226,7 @@ impl ConfigurationApplications {
                 return;
             }
             if let Some(old) = &adopted
-                && capture.same_agent_models(old)
+                && capture.preserves_adopted_agent_models(old)
                 && (capture.same_session_model(old) || capture.selection_unavailable().is_some())
             {
                 let others_unchanged = capture.same_capabilities(old) && capture.same_context(old);
