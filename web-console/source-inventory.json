@@ -5452,14 +5452,16 @@
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageItem.tsx",
       "destination": "web-console/src/app/agent/ModelRetry.tsx",
-      "treatment": "Adapted Harness retry disclosure and activity shimmer. Uses existing native Trace request facts; no browser retry scheduling or inferred delays/limits.",
+      "treatment": "Adapted Harness durable retry disclosure and shimmer. Places each native timeout retry before its own first retained request publication, preserves independent collapsed records and disclosure state while the publication moves seats; no browser retry scheduling or inferred delays/limits.",
       "upstream_sha256": "c9e3bffd724e93ffe7fcb3566d02d2300ae6ab55678bd094f26e4e58d6c24713",
       "retained_dependencies": [
+        "../../../../protocol/app-server/v42",
         "../../bindings/model-retry",
         "../../client/app-server",
         "../../client/selectors",
         "../../locale/react",
         "../../presentation/primitives/TextShimmer",
+        "./AgentTranscript",
         "./ModelRetry.module.css",
         "react"
       ],
@@ -5468,7 +5470,7 @@
         "Harness retry event protocol and runtime authority"
       ],
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "local_sha256": "596c3dbcb0b4e8c3ea7fa842d636afc237744ff84d4a95deefd9ef4545a4784e",
+      "local_sha256": "8044d20c3d5d28387ea1f785c4c093b16cc3043bcb177df8b03a798a54bba3b7",
       "classification": "A"
     },
     {

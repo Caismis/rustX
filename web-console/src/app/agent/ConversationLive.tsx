@@ -1,6 +1,6 @@
 import type { AppServerClient } from '../../client/app-server';
 import { shallowEqual, useClientSelector } from '../../client/selectors';
-import { ModelRetries } from './ModelRetry';
+import { useModelRetryFeedback } from './ModelRetry';
 import { AgentTranscript } from './AgentTranscript';
 import { RuntimeFacts } from './Activity';
 import { ConversationStats } from './UsageStats';
@@ -13,13 +13,13 @@ import { ChatViewport } from '../../presentation/layout/ChatViewport';
 import { Trajectory } from '../trajectory/Trajectory';
 import type { ResponseAction } from '../commands/native';
 import type { CompletedResponseView } from '../../../../protocol/app-server/v42';
-import { useRef, useState, useSyncExternalStore } from 'react';
+import { useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { UserMessage, AssistantMessage } from '../../presentation/agent/Message';
 import pendingCss from './PendingMessage.module.css';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 import { useTranslation } from '../../locale/react';
 import { TurnNavigator } from './TurnNavigator';
-import { turnAnchor } from '../../client/transcript';
+import { transcriptPresentation, turnAnchor } from '../../client/transcript';
 
 export function ConversationLive({ client, sessionId, mode, disabled, onHistorical }: {
   client: AppServerClient; sessionId?: string; mode: 'chat' | 'trajectory'; disabled: boolean;
@@ -44,6 +44,9 @@ export function ConversationLive({ client, sessionId, mode, disabled, onHistoric
       safe: lineageSwitchSafe(view), disabled: disabled || !client.isAttachmentControlCurrent(view.id, view.attachmentObservation)
         || !!view.modelMutation || !!view.snapshot?.shutting_down || !!view.snapshot?.durability_failure };
   }, shallowEqual);
+  const readingEntries = useMemo(() => view ? transcriptPresentation(view.history, view.transcript) : [], [view?.history, view?.transcript]);
+  const requestFeedback = useModelRetryFeedback(client, sessionId ?? '', readingEntries,
+    !view?.history?.window ? view?.attempt?.in_flight?.message_id : undefined);
   if (sessionId && tracePreview) return <Trajectory key={sessionId} cache={tracePreview.cache} onSelect={id => client.selectTrace(sessionId, id)} onLoadDetail={id => { void client.loadTraceDetail(sessionId, id); }} loadEarlier={() => void client.loadEarlierTrace(sessionId).catch(() => {})}/>;
   if (!view) return sessionId ? <ChatViewport latestLabel={tx('agent:agent-transcript.return-to-latest')}><PendingMessage client={client} sessionId={sessionId}/></ChatViewport> : null;
   return mode === 'trajectory' && view.trace
@@ -64,7 +67,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, onHistoric
       }}/>}
       latestTurn={view.attempt && view.attempt.phase.type!=='settled' ? turnAnchor({conversation_id:view.conversation_id,attempt_id:view.attempt.attempt_id}) : undefined}
       historical={!!view.history?.window} onLatest={() => client.returnToLatest(view.id)} onActiveTurn={setActive}>
-      {(view.messages.length > 0 || !!view.transcript.entries?.length || !waiting) && <AgentTranscript requestFeedback={attemptId => <ModelRetries client={client} sessionId={view.id} attemptId={attemptId}/>} snapshot={view} history={view.history} loadLater={() => void client.loadLater(view.id)} loadEarlier={() => void (view.readingPreview ? client.loadEarlierPreview(view.id) : client.loadEarlier(view.id)).catch(() => {})} lineageSwitchSafe={view.safe} historicalDisabled={view.disabled} onHistorical={onHistorical}/>}
+      {(view.messages.length > 0 || !!view.transcript.entries?.length || !waiting) && <AgentTranscript requestFeedback={requestFeedback} snapshot={view} history={view.history} loadLater={() => void client.loadLater(view.id)} loadEarlier={() => void (view.readingPreview ? client.loadEarlierPreview(view.id) : client.loadEarlier(view.id)).catch(() => {})} lineageSwitchSafe={view.safe} historicalDisabled={view.disabled} onHistorical={onHistorical}/>}
       <ConversationActivity client={client} sessionId={view.id}/>
       <PendingMessage client={client} sessionId={view.id}/>
     </ChatViewport>;

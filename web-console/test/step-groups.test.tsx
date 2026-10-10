@@ -52,6 +52,23 @@ it('an independent message closes the open group', () => {
   expect(pieces.get('final')?.map(piece => piece.kind)).toEqual(['group', 'reply']);
 });
 
+it('an independently seated retry splits process groups without pulling later reasoning and tools before the retry', () => {
+  const entries = turn();
+  const pieces = stepGroups(entries, () => true, entry => entry.item.type === 'message' && entry.item.message.id === 'asking');
+  const before = pieces.get('opening')!.at(-1)!;
+  const after = pieces.get('asking')![0];
+  expect(before.kind === 'group' && before.group.members.map(member => member.entry.cursor)).toEqual(['opening', 'audit']);
+  expect(after.kind === 'group' && after.group.members.map(member => member.entry.cursor)).toEqual(['asking', 'final']);
+  render(<AgentTranscript snapshot={{ ...snapshot(), transcript: { entries } }} requestFeedback={{ messages: new Map([['asking', <span key="retry">Retry boundary</span>]]), attempts: new Map() }}/>);
+  const marker = screen.getByText('Retry boundary');
+  expect(marker.closest('[hidden]')).toBeNull();
+  const [earlier, laterRead] = screen.getAllByText('Assembling read…', { exact: true });
+  const later = screen.getByText('Assembling ask_user…', { exact: true });
+  expect(earlier.compareDocumentPosition(marker) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(marker.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(marker.compareDocumentPosition(laterRead) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
 it('the expanded settled turn shows Harness group titles that open their members in place', () => {
   const entries = turn();
   render(<AgentTranscript snapshot={{ ...snapshot(), transcript: { entries } }}/>);

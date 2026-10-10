@@ -1623,6 +1623,19 @@ there is no countdown or maximum; a timeout alone is not labelled an active retr
 Actual started retries shimmer while attached and running. Settled or disconnected
 observations stop the animation. No runtime, protocol or retry policy is changed.
 
+Retry placement was rechecked against the same Harness revision's
+`conversation-nodes/retry.ts`, `conversation-nodes/process-groups.ts` and
+`chat-branch-tails.client.spec.tsx`: completed retries remain independent durable
+rows with collapsed failure disclosures. rustX now seats each Step's retry before
+its first retained native request publication, instead of collecting the whole
+Attempt's retries beneath its completion summary. No-publication requests keep
+their exact Attempt feedback seat. Retry boundaries close the preceding process
+group so later reasoning and Tools cannot fold ahead of the independent retry.
+Native MessageIds determine placement across
+streaming, canonical settlement, clipped history and reattachment; neighboring
+messages supply no ownership. Disclosure state follows the native retry chain
+when its publication changes render seats, without automatic detail reads.
+
 
 Appearance preferences follow local Harness `ui-theme` at
 `5badb15009ae1756c3afe0ae0cef1faafc290ccc`: `AppearanceRow.tsx`,
