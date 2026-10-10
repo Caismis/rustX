@@ -2234,7 +2234,7 @@
       "destination": "web-console/src/presentation/settings/SettingsRoot.module.css",
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.module.css",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation WEB-RESET-03: bounded category labels hidden in horizontal narrow navigation. #392: the mask moves onto the React Aria overlay and the dialog/tab roots gain layout classes. #392 repair: the horizontal page strip is laid out from React Aria data-orientation; only the narrow panel geometry stays on the breakpoint. #393: the panel is 1000px bounded by the viewport, min(820px, viewport − 48px) high, r24, and a size container; rail 216px. Narrow layout is an @container query on the panel's own width; the horizontal strip rules are deleted, and the modal shell keeps only its viewport bound on a media query. #400 focus lifecycle: Settings uses bounded Base UI Dialog behavior; Harness styling and native/product ownership retained.",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation WEB-RESET-03: bounded category labels hidden in horizontal narrow navigation. #392: the mask moves onto the React Aria overlay and the dialog/tab roots gain layout classes. #392 repair: the horizontal page strip is laid out from React Aria data-orientation; only the narrow panel geometry stays on the breakpoint. #393: the panel is 1000px bounded by the viewport, min(820px, viewport − 48px) high, r24, and a size container; rail 216px. Narrow layout is an @container query on the panel's own width; the horizontal strip rules are deleted, and the modal shell keeps only its viewport bound on a media query. #400 focus lifecycle: Settings uses bounded Base UI Dialog behavior; Harness styling and native/product ownership retained. #459: the panel is its own compositing layer (will-change: opacity) so its r24 elevation-ring corners rasterize independently of page repaint history.",
       "upstream_sha256": "52a665b2c19ce30b35811c7b8b4c73e4ee94342d86e8e6fec77e61e1ced5738b",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -2243,7 +2243,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "9fcb2a507c60c18c0d466edabda8eb984133f67e629587f24c5595a45d8aa84c",
+      "local_sha256": "582661085ff56a11deef35a7d031537c0d7838ad47e850ff31187eaa117d16f0",
       "retained_dependencies": [],
       "classification": "B"
     },
