@@ -1,5 +1,5 @@
-import parse from 'shell-quote/parse';
-import quote from 'shell-quote/quote';
+import parse from 'shell-quote/parse.js';
+import quote from 'shell-quote/quote.js';
 
 export const formatArguments = (args: string[] = []) => quote(args);
 /** Presentation only: native receives argv, never a shell command. */

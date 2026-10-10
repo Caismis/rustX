@@ -18,9 +18,9 @@ for (const width of [1440, 390]) test(`subagent receipts, list, inspection and c
   await expect(calls.nth(1)).toContainText('Inactive');
   await expect(calls.nth(2)).toContainText('succeeded');
   await expect(calls.locator('pre')).toHaveCount(0);
-  await calls.nth(0).getByRole('button', { name: 'View', exact: true }).click();
-  await expect(calls.nth(0).locator('pre')).toContainText('activation_id');
-  await calls.nth(0).getByRole('button', { name: 'View', exact: true }).click();
+  // Detailed execution evidence now opens the native Trace inspector; the
+  // receipt no longer duplicates it as a raw JSON disclosure.
+  await expect(calls.nth(0).getByRole('button', { name: 'Inspect', exact: true })).toBeVisible();
   await page.screenshot({ path: `/tmp/rustx-subagent-details-${width}.png`, fullPage: true });
   await calls.nth(0).getByRole('button', { name: 'Verify findings', exact: true }).click();
   const composer = page.locator('[data-agent-id="child-1"] [data-composer-card]');

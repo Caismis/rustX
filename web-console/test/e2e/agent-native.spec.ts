@@ -41,7 +41,7 @@ test('native interrupt and wait capture one activation; the same Agent resumes w
     const childGate = `agent-initial-${2 - parentIndex}`;
     const parentTitle = await page.locator('#session-title').innerText();
     await page.getByRole('button', { name: 'Subagents', exact: true }).click();
-    await page.getByRole('menuitem', { name: /Review workspace/ }).click();
+    await page.getByRole('treeitem', { name: /Review workspace/ }).click();
     const agent = page.locator('[data-agent-id]');
     await expect(agent).toHaveCount(1);
     await expect(agent).toHaveAttribute('data-agent-state', 'active');

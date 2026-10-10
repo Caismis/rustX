@@ -34,7 +34,8 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
     };
     const openMcp = async () => {
       await openSettingsPage(page, 'MCP servers');
-      if (await settings.getByRole('button', { name: 'MCP servers', exact: true }).isVisible()) await settings.getByRole('button', { name: 'MCP servers', exact: true }).click();
+      const back = settings.getByRole('button', { name: '← MCP servers', exact: true });
+      if (await back.isVisible()) await back.click();
       await openSettingsPage(page, 'MCP servers');
     };
     await openModel();
