@@ -12,9 +12,6 @@
   min-width: 0;
 }
 
-.root > span { max-width: 100%; min-width: 0; }
-.trigger > svg { flex-shrink: 0; }
-
 /* Figma 313:14108 ToggleButton: 13/20 medium secondary label, 4px gap,
    12px caption chevron; 28px chip height matches the sibling Plan /
    Read-only selects in the same tool row. */
