@@ -36,7 +36,7 @@ pub const UPLOAD_POLICY: UploadPolicy = UploadPolicy {
     max_file_bytes: 2 * 1024 * 1024,
     max_transfer_bytes: 4 * 1024 * 1024,
     max_files_per_transfer: 8,
-    max_uploads_per_user_input: 8,
+    max_uploads_per_user_input: crate::message::content::MAX_INPUT_ATTACHMENTS,
     max_upload_bytes_per_user_input: 4 * 1024 * 1024,
     max_concurrent_transfers: 2,
     max_chunk_bytes: 64 * 1024,

@@ -152,6 +152,16 @@ fn current_app_server_documentation_matches_negotiated_version() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let doc = std::fs::read_to_string(root.join("docs/app-server-protocol.md")).unwrap();
     let version = APP_SERVER_PROTOCOL_VERSION;
+    let runtime = rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION;
+    assert!(doc.contains(&format!(
+        "Only App Server v{version} / Runtime Client v{runtime} are supported."
+    )));
+    assert!(doc.contains(&format!(
+        "Clients must upgrade together to v{version}/v{runtime}."
+    )));
+    assert!(doc.contains(&format!(
+        "The internal Runtime Client vocabulary is v{runtime}."
+    )));
     assert!(doc.starts_with(&format!("# App Server protocol v{version}\n")));
     let section = |heading: &str| {
         doc.split_once(heading)

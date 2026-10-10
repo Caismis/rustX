@@ -216,7 +216,7 @@ test('spawn exception after scratch allocation converges on cleanup without star
 
 test('native readiness parser accepts only the bounded bound-loopback announcement', () => {
   assert.equal(appServerEndpoint('rustx app-server listening ws://127.0.0.1:1234'), 'ws://127.0.0.1:1234');
-  for (const line of ['listening ws://127.0.0.1:1234', 'rustx app-server listening ws://0.0.0.0:1234', 'rustx app-server listening ws://127.0.0.1:12 unexpected', 'x'.repeat(513)]) assert.equal(appServerEndpoint(line), undefined);
+  for (const line of ['listening ws://127.0.0.1:1234', 'rustx app-server listening ws://0.0.0.0:1234', 'rustx app-server listening ws://127.0.0.1:12 unexpected', 'rustx app-server listening ws://127.0.0.1:0', 'rustx app-server listening ws://127.0.0.1:65536', 'x'.repeat(513)]) assert.equal(appServerEndpoint(line), undefined);
 });
 
 test('each composition mints distinct credentials; browser handoff waits for carrier readiness', async t => {

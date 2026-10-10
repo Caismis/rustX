@@ -80,6 +80,10 @@ mod tests {
     }
 }
 
+/// Maximum trusted file attachments admitted by one user input, across transports.
+/// Storage, transfer-byte limits and receipt ownership remain Session concerns.
+pub const MAX_INPUT_ATTACHMENTS: usize = 8;
+
 /// Runtime-authored identity of a Session-owned mutable workspace file.
 /// The owning Session supplies allocation roots; history never stores host paths.
 #[derive(

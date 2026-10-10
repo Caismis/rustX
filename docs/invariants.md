@@ -7658,3 +7658,11 @@ Conversation-owned immutable PNG snapshots. See [image reading](image-reading.md
   evidence. Retained evidence grants no operation authority. See
   [Workspace ownership](../web-console/WORKSPACES.md) and
   [connection ownership](../web-console/CONNECTION.md) for bounds and precedence.
+
+### Attachment input admission
+
+An over-limit attachment input is rejected before guidance tickets, mailbox
+writes, activation identity/reservations, preparation or accepted/delivered facts.
+The shared message-domain limit is eight attachments per input; attachment-only
+input remains valid. Session receipt ownership and upload storage checks precede
+conversion into trusted references and remain separate from Runtime admission.

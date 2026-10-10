@@ -2084,7 +2084,12 @@ scrollers, 150px/224px bounds, the 11px code font with 18px minimum line seats,
 16px radius, 4px flow indentation, sticky raw-output copy and copied feedback.
 ANSI styles use upstream Anser 2.3.5 and safe React spans; source markup is text.
 Cursor replay keeps only Anser-supported decorations and honors its SGR 21 bold
-reset, so unknown SGR parameters cannot accumulate into quadratic replay output.
+reset. All retained numeric tokens are normalized decimal values; indexed/RGB
+components are integers in 0..255. Known color modes consume their full fixed
+payload even on rejection; an unknown mode discards the rest of that SGR.
+Rejected groups preserve the previous color. Both cursor and no-cursor paths
+apply this policy before Anser. Each emitted opening is at most 52 characters,
+independently of raw numeric-token lengths.
 Generic IN/OUT sections scroll independently with a full-width divider. Business
 icons remain stable on failure, summaries use native failure/stopped tones and
 lifecycle announcements are visually hidden. Keyboard expansion and running copy

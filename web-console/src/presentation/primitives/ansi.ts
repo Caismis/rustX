@@ -164,7 +164,7 @@ const ATTR_OPENERS = new Set(['1', '2', '3', '4', '5', '7', '8', '9'])
 
 /** Attribute closers, mapped to the opener parameters each one turns off. */
 const ATTR_CLOSERS: Record<string, readonly string[]> = {
-  21: ['1'], 22: ['1', '2'], 23: ['3'], 24: ['4'], 25: ['5', '6'], 27: ['7'], 28: ['8'], 29: ['9'],
+  21: ['1'], 22: ['1', '2'], 23: ['3'], 24: ['4'], 25: ['5'], 27: ['7'], 28: ['8'], 29: ['9'],
 }
 
 /**
@@ -173,41 +173,54 @@ const ATTR_CLOSERS: Record<string, readonly string[]> = {
  * @param params - the sequence's raw parameter string (`31`, `1;4`, `38;5;208`).
  * @returns the state the sequence leaves in force.
  */
+/** Decimal SGR tokens only; never retain their raw, potentially huge spelling. */
+function sgrInteger(raw: string | undefined): number | undefined {
+  if (raw === undefined || !/^\d+$/.test(raw)) return undefined
+  const value = Number(raw)
+  return Number.isSafeInteger(value) ? value : undefined
+}
+
 function foldSgr(state: SgrState, params: string): SgrState {
-  const codes = params === '' ? ['0'] : params.split(';')
+  const codes = params.split(';')
   let next = state
   for (let index = 0; index < codes.length; index++) {
-    const code = String(codes[index])
-    if (code === '' || code === '0') { next = SGR_NONE; continue }
-    // Extended color: `38;5;N` / `38;2;R;G;B` and the `48` background pair
-    // consume their own arguments, so they are taken whole.
-    if (code === '38' || code === '48') {
-      const kind = codes[index + 1] ?? ''
-      const span = kind === '2' ? 4 : kind === '5' ? 2 : 0
-      const value = codes.slice(index, index + span + 1).join(';')
-      next = code === '38' ? { ...next, fg: value } : { ...next, bg: value }
-      index += span
+    const numeric = codes[index] === '' ? 0 : sgrInteger(codes[index])
+    if (numeric === undefined) continue
+    if (numeric === 0) { next = SGR_NONE; continue }
+    if (numeric === 38 || numeric === 48) {
+      const kind = sgrInteger(codes[++index])
+      // Unknown modes have no known payload arity: discard the remainder of
+      // this SGR, rather than interpreting rejected color bytes as attributes.
+      if (kind !== 2 && kind !== 5) break
+      const count = kind === 2 ? 3 : 1
+      const components = codes.slice(index + 1, index + 1 + count).map(sgrInteger)
+      index += count
+      // Consume the entire known group even when incomplete or invalid. Keep
+      // the previous color; subsequent independent SGR parameters still apply.
+      if (components.length !== count || components.some(value => value === undefined || value > 255)) continue
+      const value = [numeric, kind, ...components].join(';')
+      next = numeric === 38 ? { ...next, fg: value } : { ...next, bg: value }
       continue
     }
+    const code = String(numeric)
     const closes = ATTR_CLOSERS[code]
     if (closes !== undefined) {
       next = { ...next, attrs: next.attrs.filter(attr => !closes.includes(attr)) }
       continue
     }
-    const numeric = Number(code)
-    if (code === '39') { next = { ...next, fg: '' }; continue }
-    if (code === '49') { next = { ...next, bg: '' }; continue }
+    if (numeric === 39) { next = { ...next, fg: '' }; continue }
+    if (numeric === 49) { next = { ...next, bg: '' }; continue }
     if ((numeric >= 30 && numeric <= 37) || (numeric >= 90 && numeric <= 97)) { next = { ...next, fg: code }; continue }
     if ((numeric >= 40 && numeric <= 47) || (numeric >= 100 && numeric <= 107)) { next = { ...next, bg: code }; continue }
-    if (ATTR_OPENERS.has(code) && !next.attrs.includes(code)) next = { ...next, attrs: [...next.attrs, code] }
+    if (ATTR_OPENERS.has(code) && !next.attrs.includes(code)) next = { ...next, attrs: [...next.attrs, code].sort() }
   }
   return next
 }
 
 /**
  * Render a state as the one canonical sequence that establishes it from the
- * default, so a boundary emits a bounded string no matter how the state was
- * reached.
+ * default, so a boundary emits at most 52 characters (8 attributes and two RGB
+ * colors), independently of the raw parameter lengths.
  * @param state - the state to open.
  * @returns the SGR sequence, or the empty string for the default state.
  */
@@ -389,8 +402,13 @@ function applyCursorMovements(text: string): string {
     // would allocate a cell per character of output this card never redraws —
     // an `ls -R` or a 5k-line log. Only its own SGR has to be folded, so a later
     // line that DOES replay enters with the right state.
-    replayed.push(line)
-    for (const match of line.matchAll(SGR_SEQUENCE)) sgr = foldSgr(sgr, String(match[1]))
+    replayed.push(line.replace(SGR_SEQUENCE, (_sequence, params: string) => {
+      const next = foldSgr(sgr, params)
+      if (sameSgr(next, sgr)) return ''
+      const reset = sameSgr(sgr, SGR_NONE) ? '' : '\u001b[0m'
+      sgr = next
+      return reset + openSgr(next)
+    }))
   }
   return replayed.join('\n')
 }

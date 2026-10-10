@@ -23,7 +23,7 @@ Trace. These asynchronous read-only methods neither resume nor settle a child,
 work after child process exit, and do not depend on its live inspection socket.
 `SubagentObservation.attempt_id` is the exact current child Attempt, cleared at
 settlement. Live repairs require that identity and exact request/tool identity;
-durable terminal facts always win. Clients must upgrade together to v44/v64.
+durable terminal facts always win. Clients must upgrade together to v44/v66.
 
 
 Child statistics remain available through `agent/statistics { target, agent_id }`.
@@ -129,7 +129,7 @@ Only App Server v44 / Runtime Client v66 are supported. Earlier peers are reject
 The earlier v22/v48 revision introduced native whole-conversation Turn/Step
 totals, measured request timing, the latest exact Attempt clock, and authored
 `SessionModelsView::Available.default_model` from the same creation capture as
-its catalog. v44/v60 retain these capabilities. A browser product preference can
+its catalog. The current v44/v66 pair retains these capabilities. A browser product preference can
 seed new Session intent; it does not alter authored configuration or existing
 Sessions.
 
@@ -1326,7 +1326,7 @@ the authored unit in that scope. Clients never write whole config documents.
 ## Current Session lifecycle contract
 
 Initialization requires exactly v44 and WebSocket requires `rustx.app-server.v44`.
-v37 and all earlier versions are rejected without fallback. Rust DTOs generate
+v43 and all earlier versions are rejected without fallback. Rust DTOs generate
 `v44.ts`, `v44.schema.json`, and the serialized fixtures; only the current version is kept.
 Manual runtime unload is absent from the public method/result vocabulary.
 Session lists have no residency field. Deletion blockers have no current-Session
@@ -1696,10 +1696,11 @@ it. An accepted response is never retracted. See
 [file delivery](file-delivery.md#delivery-access-for-app-server-clients) for
 the synchronization.
 
-The internal Runtime Client vocabulary is v60. Only App Server v44 clients
+The internal Runtime Client vocabulary is v66. Only App Server v44 clients
 are generated; earlier versions are rejected, with no aliases or compatibility
-decoder. Event envelope 1, SQLite 49, Session catalog 13 and subagent IPC v29
-remain unchanged. Present is root-only until a real child delivery owner exists.
+decoder. The current storage/control formats are Event envelope 1, SQLite 50, Session
+catalog 15 and subagent IPC v30. Child file and artifact reads use the registered
+child Conversation and the parent attachment's native delivery authority.
 
 
 ### Manual compaction correlation boundary

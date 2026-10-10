@@ -7075,3 +7075,11 @@ current model or its effective profile preserves the configured choice and sends
 no mutation. Both controls use the existing Session model mutation/confirmation
 owner; a cold choice is only local intent until native acknowledgement and the
 authoritative reread. Unknown outcomes remain visible and are never replayed.
+
+### Per-input attachment admission
+
+`message::content::MAX_INPUT_ATTACHMENTS` owns the generic eight-file input
+limit. Session uploads advertise that same limit while independently owning
+transport/storage bounds and receipt resolution into trusted references. The
+Subagent registry validates it before guidance admission or activation
+reservation; Runtime does not depend on Session upload policy.

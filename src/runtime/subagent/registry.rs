@@ -5575,6 +5575,7 @@ mod tests {
     include!("registry/agent_recovery_tests.rs");
     include!("registry/agent_duration_tests.rs");
     include!("registry/agent_bootstrap_tests.rs");
+    mod input_admission;
     include!("registry/review_tests.rs");
     include!("registry/physical_proof_tests.rs");
     mod archive_ownership;

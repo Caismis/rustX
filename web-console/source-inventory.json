@@ -5871,14 +5871,14 @@
       "destination": "web-console/src/presentation/primitives/ansi.ts",
       "upstream_sha256": "ead9aad984518d58d325ead446914895395707e392053d96349b693ca56eda5e",
       "classification": "A",
-      "treatment": "Retained ANSI rendering with Anser 2.3.5, safe React spans and Harness theme colours. Raw output remains the copy authority. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. Cursor replay retains only Anser-supported decorations and applies SGR 21 bold reset, preventing unknown SGR parameters from expanding replay output quadratically.",
+      "treatment": "Retained ANSI rendering with Anser 2.3.5, safe React spans and Harness theme colours. Raw output remains the copy authority. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. Cursor replay retains only Anser-supported decorations and applies SGR 21 bold reset, preventing unknown SGR parameters from expanding replay output quadratically. Normalize decimal SGR tokens before retention, validate indexed/RGB payloads with fixed consumption, and bound every emitted opening to 52 characters; normalize the no-cursor path too.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "anser",
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "10b334abe083825eb54b669935f053262bfa9848cdef51b4aa7f1834b2077136"
+      "local_sha256": "dc8a651db36b6e52e5d7b0be0358e1259bad62f32e9038703ff0287eaec1d251"
     }
   ],
   "inspected_only": [

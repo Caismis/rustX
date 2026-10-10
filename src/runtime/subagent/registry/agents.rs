@@ -512,8 +512,7 @@ impl SubagentRegistry {
         if attachments.is_empty() {
             Self::validate_guidance_message(message).map_err(AgentControlError::Message)?;
         } else if message.len() > super::MAX_TASK_BYTES
-            || attachments.len()
-                > crate::local_runtime::session::uploads::UPLOAD_POLICY.max_uploads_per_user_input
+            || attachments.len() > crate::message::content::MAX_INPUT_ATTACHMENTS
         {
             return Err(AgentControlError::Message(
                 SubagentSteerError::InvalidMessage {
