@@ -16,8 +16,9 @@ import { McpEditor } from './McpEditor';
 import css from './McpPage.module.css';
 
 /** Scope-local MCP management using the shared Harness settings presentation. */
-export function McpPage({ source, scope, revision, focus, onFocus, scopeControl, refresh, refreshing, probeStates = {} }: {
+export function McpPage({ source, scope, revision, focus, onFocus, scopeControl, refresh, refreshing, probeStates = {}, testConnection, probeAvailable = false }: {
   probeStates?: Record<string, ProbeState>;
+  testConnection?: (id: string) => void; probeAvailable?: boolean;
   source: SourceSettings; scope: SourceScope; revision?: string; focus?: PageFocus['mcp'];
   onFocus: (focus?: PageFocus['mcp']) => void; scopeControl: ReactNode; refresh: () => void; refreshing: boolean;
 }) {
@@ -52,6 +53,7 @@ export function McpPage({ source, scope, revision, focus, onFocus, scopeControl,
           <McpStatusIcon entry={entry} probe={probeStates[entry.name]}/>
           <span className={css.content}><span>{entry.name}</span><small title={entry.diagnostics[0] ?? description(entry.name,scope,entry.path)}>{entry.diagnostics[0] ?? description(entry.name,scope,entry.path)}</small></span>
         </button>
+        <Button size="sm" variant="outline" disabled={!probeAvailable || entry.valid === false || probeStates[entry.name] === 'checking'} aria-label={`${tx('settings:mcp.test-connection')} ${entry.name}`} onClick={() => testConnection?.(entry.name)}>{tx('settings:mcp.test-connection')}</Button>
         {revision && <ResourceAvailability family="mcp" name={entry.name} valid={entry.valid} source={source} scope={scope} revision={revision}/>}
       </div>)}</div> : <div className={css.empty}>
         <span>{tx(query ? 'settings:catalog.no-results' : 'settings:mcp.empty')}</span><p>{tx(query ? 'settings:catalog.no-results-description' : 'settings:mcp.empty-help')}</p>

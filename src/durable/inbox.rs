@@ -268,6 +268,16 @@ pub(crate) fn inbound_adoption_event(
     }
 }
 
+/// Immutable history-only facts owned by one canonical compaction checkpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompactionCheckpointStatistics {
+    /// Number of canonical messages replaced, including prior summaries.
+    pub retired_messages: u64,
+    /// Deterministic history estimate, excluding prompt and tool definitions.
+    pub retired_tokens: u64,
+}
+
 /// The canonical lineage seed of one new conversation lineage.
 ///
 /// A lineage is seeded with two distinguishable parts, because what a
@@ -312,6 +322,7 @@ pub struct LineageSeed {
     canonical: Vec<MessageBlock>,
     surface_history: Vec<SurfaceOp>,
     surface: Vec<MessageId>,
+    checkpoints: std::collections::BTreeMap<MessageId, CompactionCheckpointStatistics>,
     completed_responses: Vec<super::response::CompletedResponseProvenance>,
     turns: Vec<super::reading::TurnReadingProvenance>,
 }
@@ -336,6 +347,7 @@ impl LineageSeed {
             canonical,
             surface_history,
             surface,
+            checkpoints: std::collections::BTreeMap::new(),
             completed_responses: Vec::new(),
             turns: Vec::new(),
         }
@@ -373,9 +385,11 @@ impl LineageSeed {
     /// are not the seeded Ledger in its own order. None is a state any
     /// sequence of durable transitions could reach, and a store that accepted
     /// one would hold a Surface history it could never reconstruct.
+    #[allow(clippy::too_many_lines)] // One ordered validation of paired Ledger, Surface and checkpoint facts.
     pub fn replayed(
         canonical: Vec<MessageBlock>,
         surface_history: Vec<SurfaceOp>,
+        checkpoints: std::collections::BTreeMap<MessageId, CompactionCheckpointStatistics>,
     ) -> Result<Self, ConversationStoreError> {
         let known: std::collections::BTreeMap<MessageId, &MessageBlock> = canonical
             .iter()
@@ -402,6 +416,25 @@ impl LineageSeed {
                     return Err(ConversationStoreError::InvalidReference(format!(
                         "the seeded Surface Replace replacement {replacement} is not a \
                          User(Runtime / CompactionSummary) message"
+                    )));
+                }
+            }
+            if let SurfaceOp::Replace {
+                start,
+                end,
+                replacement,
+            } = operation
+            {
+                let first = surface.iter().position(|id| id == start);
+                let last = surface.iter().position(|id| id == end);
+                if let (Some(first), Some(last)) = (first, last)
+                    && first <= last
+                    && checkpoints
+                        .get(replacement)
+                        .is_none_or(|stats| stats.retired_messages != (last - first + 1) as u64)
+                {
+                    return Err(ConversationStoreError::InvalidReference(format!(
+                        "seeded checkpoint {replacement} has missing or inconsistent statistics"
                     )));
                 }
             }
@@ -437,13 +470,44 @@ impl LineageSeed {
                 render(&committed.iter().collect::<Vec<_>>())
             )));
         }
+        let summaries: std::collections::BTreeSet<_> = canonical
+            .iter()
+            .filter_map(|message| match message {
+                MessageBlock::User(user) if user.kind.is_compaction_summary() => {
+                    Some(user.id.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        if checkpoints
+            .keys()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+            != summaries
+            || checkpoints
+                .values()
+                .any(|stats| stats.retired_messages == 0)
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "lineage requires exactly one immutable statistics fact per checkpoint".into(),
+            ));
+        }
         Ok(Self {
             canonical,
             surface_history,
             surface,
+            checkpoints,
             completed_responses: Vec::new(),
             turns: Vec::new(),
         })
+    }
+
+    /// Retained immutable checkpoint facts, keyed by the copied summary identity.
+    #[must_use]
+    pub fn checkpoints(
+        &self,
+    ) -> &std::collections::BTreeMap<MessageId, CompactionCheckpointStatistics> {
+        &self.checkpoints
     }
 
     /// Attach immutable response provenance to this seed's exact canonical identities.
@@ -1787,14 +1851,13 @@ pub trait ConversationStore: Send + Sync + 'static {
         message_id: &MessageId,
     ) -> Result<Option<SurfaceRevision>, ConversationStoreError>;
 
-    /// Immutable replacement revision and retired span of a canonical checkpoint.
-    /// Unlike append revision, this resolves Replace operations, including copied lineage.
-    /// # Errors
-    /// Backend failures remain errors; an unrelated message has no replacement span.
-    fn compaction_span(
+    /// Reads required immutable checkpoint statistics and local Journal attribution
+    /// through keyed Ledger/Journal lookups. No retired history is hydrated.
+    fn compaction_checkpoint(
         &self,
         summary_message_id: &MessageId,
-    ) -> Result<Option<(SurfaceRevision, SurfaceSpan)>, ConversationStoreError>;
+        through: u64,
+    ) -> Result<(CompactionCheckpointStatistics, Option<bool>), ConversationStoreError>;
 
     /// Reconstructs one exact historical Surface revision from immutable
     /// Surface operations.

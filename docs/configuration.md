@@ -497,9 +497,10 @@ builtin = ["read", "read_image", "bash"]
 
 ### MCP settings observation
 
-The MCP settings list checks enabled authored definitions when opened, when its
-scope/configuration/selection changes, and on Refresh. These are finite native
-`mcp/probe` diagnostics, not Session connections. Each check captures one exact
+The MCP settings list is passive: opening, switching scope, searching and Refresh
+only inspect configuration. An explicit per-definition Test connection action
+starts a finite native `mcp/probe` diagnostic rather than a Session connection.
+Each check captures one exact
 source document revision, performs initialization and `tools/list`, then awaits
 transport/process cleanup before returning. No business tool is called. The
 indicator describes the last configuration connectivity check, not live Agent

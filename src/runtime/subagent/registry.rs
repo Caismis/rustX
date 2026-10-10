@@ -1004,7 +1004,7 @@ pub enum SubagentSteerError {
         /// The named child.
         subagent_id: SubagentId,
     },
-    /// The guidance message is empty or exceeds [`MAX_TASK_BYTES`].
+    /// The guidance input is empty, exceeds [`MAX_TASK_BYTES`] or the shared attachment limit.
     InvalidMessage {
         /// The offending byte length.
         bytes: usize,
@@ -1056,7 +1056,9 @@ impl core::fmt::Display for SubagentSteerError {
             }
             Self::InvalidMessage { bytes } => write!(
                 f,
-                "the steer message must be non-empty and at most {MAX_TASK_BYTES} bytes ({bytes} given)"
+                "the guidance input must contain text or attachments, at most {MAX_TASK_BYTES} bytes \
+                 and at most {} attachments ({bytes} bytes given)",
+                crate::message::content::MAX_INPUT_ATTACHMENTS
             ),
             Self::CancellationCommitted { reason } => write!(
                 f,
@@ -1244,7 +1246,7 @@ pub enum SubagentStartOutcome {
 pub enum SubagentStartError {
     /// The owning conversation is draining or draining-complete.
     ConversationInactive,
-    /// The delegated task is empty or exceeds [`MAX_TASK_BYTES`].
+    /// The task input is empty, exceeds [`MAX_TASK_BYTES`] or the shared attachment limit.
     InvalidTask {
         /// The offending byte length.
         bytes: usize,
@@ -1320,8 +1322,9 @@ impl core::fmt::Display for SubagentStartError {
             }
             Self::InvalidTask { bytes } => write!(
                 f,
-                "the delegated task is empty or exceeds the {MAX_TASK_BYTES}-byte bound \
-                 ({bytes} bytes)"
+                "the task input must contain text or attachments, at most {MAX_TASK_BYTES} bytes \
+                 and at most {} attachments ({bytes} bytes given)",
+                crate::message::content::MAX_INPUT_ATTACHMENTS
             ),
             Self::ContextOversized { bytes } => write!(
                 f,
@@ -2198,12 +2201,6 @@ impl SubagentRegistry {
         access: &mut Option<WorkspaceAccess>,
         resume: Option<&agents::ResumeIdentity>,
     ) -> Result<PreparedSubagent, SubagentStartError> {
-        #[cfg(test)]
-        self.state
-            .lock()
-            .unwrap()
-            .prepared_policies
-            .push(spec.authority.execution_policy);
         if let Some(access) = access.as_ref() {
             let matches = matches!(&spec.admission.terminal, SubagentTerminalMode::WorkflowOutput { node_id, .. } if node_id.as_ref() == access.node());
             if !matches || spec.authority.resolved.workspace_policy != access.policy() {
@@ -2216,11 +2213,10 @@ impl SubagentRegistry {
         if preparation_cancellation.is_cancelled() {
             return Err(SubagentStartError::Cancelled);
         }
-        let task_bytes = spec.admission.task.len();
-        if (spec.admission.task.trim().is_empty() && spec.admission.attachments.is_empty())
-            || task_bytes > MAX_TASK_BYTES
-        {
-            return Err(SubagentStartError::InvalidTask { bytes: task_bytes });
+        if !Self::valid_input(&spec.admission.task, spec.admission.attachments.len()) {
+            return Err(SubagentStartError::InvalidTask {
+                bytes: spec.admission.task.len(),
+            });
         }
         if let Some(context) = &spec.admission.context {
             let bytes = context.len();
@@ -2228,6 +2224,12 @@ impl SubagentRegistry {
                 return Err(SubagentStartError::ContextOversized { bytes });
             }
         }
+        #[cfg(test)]
+        self.state
+            .lock()
+            .unwrap()
+            .prepared_policies
+            .push(spec.authority.execution_policy);
         if self.config.mailbox.begin_running_admission().is_err() {
             return Err(SubagentStartError::ConversationInactive);
         }
@@ -3682,18 +3684,11 @@ impl SubagentRegistry {
         }
     }
 
-    /// Validate a bounded parent-authored message before lifecycle arbitration.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SubagentSteerError::InvalidMessage`] for an empty or
-    /// oversized message.
-    pub(crate) fn validate_guidance_message(message: &str) -> Result<(), SubagentSteerError> {
-        let bytes = message.len();
-        if message.trim().is_empty() || bytes > MAX_TASK_BYTES {
-            return Err(SubagentSteerError::InvalidMessage { bytes });
-        }
-        Ok(())
+    /// Shared task/guidance content admission, before ownership or preparation.
+    fn valid_input(message: &str, attachments: usize) -> bool {
+        (!message.trim().is_empty() || attachments > 0)
+            && message.len() <= MAX_TASK_BYTES
+            && attachments <= crate::message::content::MAX_INPUT_ATTACHMENTS
     }
 
     /// Advances one ticket to
@@ -3752,7 +3747,7 @@ impl SubagentRegistry {
     /// dropping it removes exactly its own ticket under this same mutex.
     ///
     /// The message must already be validated by
-    /// [`Self::validate_guidance_message`]. Production admission is composed
+    /// the shared input policy. Production admission is composed
     /// inside `send_message` under the same Agent owner mutex.
     #[cfg(test)]
     fn admit_guidance(

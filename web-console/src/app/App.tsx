@@ -297,7 +297,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
       {/* Settings renders the navigation machine's state and nothing else: which
           target, page and detail are open is decided there, including whether
           this target may reach the client-owned Connection surface at all. */}
-      <Settings navigation={navigationActor} connection={connection} client={client} host={workspaceHost} theme={theme} setTheme={setTheme} />
+      <Settings associations={associations} navigation={navigationActor} connection={connection} client={client} host={workspaceHost} theme={theme} setTheme={setTheme} />
     </>}>
     {!connected && !view && <section className="notice" aria-label={tx('common:app.connection-recovery')}><p>{selection.busy ? tx('common:app.connecting') : tx('common:app.unable-to-connect-to-rustx')}</p>
       {selection.mode === 'local' && !selection.busy && <p>{tx('common:app.no-local-managed-connection-is-available-reopen-the-launcher-url')}</p>}

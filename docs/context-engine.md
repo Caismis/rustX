@@ -1001,8 +1001,20 @@ or finish without usage. A new measurement replaces it using its own frozen snap
 Pending or failed compaction preserves that reading. A successful compaction atomically
 records the rebuilt primary context estimate, capacity and model; `estimated` marks
 its provenance. This reading replaces the preceding request measurement and survives
-attachment/restart, without contributing to cumulative provider usage. Transcript checkpoint metadata derives the exact replaced canonical-message count
-and native history-only estimate from the immutable replacement span, including
-retired checkpoints and copied lineage. Summary prose contributes no facts. Zero is a real
+attachment/restart, without contributing to cumulative provider usage. Transcript checkpoint metadata consumes the immutable per-summary replaced
+canonical-message count and history-only estimate committed by the native
+replacement transaction, including retired checkpoints and copied lineage. Summary prose contributes no facts. Zero is a real
 measurement; absence or invalid capacity is unavailable, never zero. Paging does
 not change measurement authority and navigation does not generate requests.
+
+Compaction checkpoint statistics are immutable Ledger facts, committed atomically
+with the exact Surface replacement and its completion Journal fact. The native
+commit estimates only the selected canonical retired span once with the default
+history estimator; System Prompt, tools, billing and Context occupancy remain
+independent. Each summary keeps its own count and estimate, including when a
+later checkpoint retires that summary. Lineage copies retain those values and
+omit local completion correlation. Transcript decoration uses one keyed Ledger
+lookup and at most one keyed local Journal lookup per requested summary; it never
+reconstructs the retired Surface, hydrates retired messages, or scans the Journal.
+Missing or malformed checkpoint facts are explicit read errors. SQLite schema 51
+requires these facts; older development stores are refused without migration.

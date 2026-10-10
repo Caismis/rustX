@@ -195,6 +195,10 @@ pub struct LineageReadCut {
     pub messages: Vec<crate::message::types::MessageBlock>,
     pub canonical: Vec<crate::message::types::MessageBlock>,
     pub surface_history: Vec<crate::conversation::SurfaceOp>,
+    pub checkpoints: std::collections::BTreeMap<
+        crate::runtime::identity::MessageId,
+        super::inbox::CompactionCheckpointStatistics,
+    >,
     pub completed_responses: Vec<super::response::CompletedResponseProvenance>,
     pub turns: Vec<TurnReadingProvenance>,
 }

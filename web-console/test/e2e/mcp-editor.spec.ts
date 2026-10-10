@@ -94,12 +94,15 @@ for (const width of [1440, 390]) test(`MCP connectivity indicators match across 
       await surface.getByRole('button',{name:'Configuration scope',exact:true}).click();
       await page.getByRole('menuitem',{name:'Workspace A',exact:true}).click();
     }
+    await expect(surface.getByRole('listitem',{name:'exa'}).locator('[data-status]')).toHaveAttribute('data-status','unknown');
+    await surface.getByRole('button',{name:'Test connection exa',exact:true}).click();
+    await surface.getByRole('button',{name:'Test connection broken',exact:true}).click();
     await expect(surface.getByRole('listitem',{name:'exa'}).locator('[data-status]')).toHaveAttribute('data-status','reachable');
     await expect(surface.getByRole('listitem',{name:'broken'}).locator('[data-status]')).toHaveAttribute('data-status','connection_failed');
     await expect(surface.getByRole('listitem',{name:'exa'}).locator('[data-status]')).toHaveCSS('background-color',await page.locator('body').evaluate(el=>getComputedStyle(el).getPropertyValue('--dsw-alias-state-success-primary').trim()));
     await surface.getByRole('button',{name:'Refresh',exact:true}).click();
     await expect(surface.getByRole('button',{name:'Refresh',exact:true})).toBeEnabled();
-    await expect(surface.getByRole('img',{name:'Connected and available.'})).toBeVisible();
+    await expect(surface.getByRole('img',{name:'Connection test succeeded.'})).toBeVisible();
   }
   await surface.screenshot({path:`/tmp/rustx-mcp-probes-${width}.png`});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);

@@ -509,11 +509,7 @@ impl SubagentRegistry {
         if caller_cancellation.is_cancelled() {
             return Err(AgentControlError::Start(SubagentStartError::Cancelled));
         }
-        if attachments.is_empty() {
-            Self::validate_guidance_message(message).map_err(AgentControlError::Message)?;
-        } else if message.len() > super::MAX_TASK_BYTES
-            || attachments.len() > crate::message::content::MAX_INPUT_ATTACHMENTS
-        {
+        if !Self::valid_input(message, attachments.len()) {
             return Err(AgentControlError::Message(
                 SubagentSteerError::InvalidMessage {
                     bytes: message.len(),

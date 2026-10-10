@@ -9,6 +9,7 @@
 //! died here" boundary — no sleeps and no timing assumptions participate.
 
 use chrono::{DateTime, TimeZone, Utc};
+use rustx::context::TokenEstimator;
 use rustx::conversation::SurfaceOp;
 use rustx::durable::{
     AcceptedInbound, ConversationStore, ConversationStoreError, InboundDraft, LineageSeed,
@@ -619,7 +620,15 @@ fn a_seeded_lineage_keeps_canonical_facts_its_surface_does_not_show() {
             replacement: MessageId::new("msg-summary"),
         },
     ];
-    let seed = LineageSeed::replayed(canonical.clone(), surface_history.clone())
+    let checkpoints = std::collections::BTreeMap::from([(
+        MessageId::new("msg-summary"),
+        rustx::durable::inbox::CompactionCheckpointStatistics {
+            retired_messages: 2,
+            retired_tokens: rustx::context::DefaultTokenEstimator
+                .estimate_conversation_input(&canonical[..2]),
+        },
+    )]);
+    let seed = LineageSeed::replayed(canonical.clone(), surface_history.clone(), checkpoints)
         .expect("a Surface history over the seeded Ledger");
 
     let store = SqliteConversationStore::open(
@@ -706,6 +715,7 @@ fn a_seeded_surface_history_must_replay_against_the_seeded_ledger() {
             vec![SurfaceOp::Append {
                 message_id: MessageId::new("msg-absent"),
             }],
+            std::collections::BTreeMap::new()
         ),
         Err(ConversationStoreError::InvalidReference(_))
     ));
@@ -721,6 +731,7 @@ fn a_seeded_surface_history_must_replay_against_the_seeded_ledger() {
                     message_id: MessageId::new("msg-live"),
                 },
             ],
+            std::collections::BTreeMap::new()
         ),
         Err(ConversationStoreError::InvalidReference(_))
     ));
@@ -749,6 +760,7 @@ fn a_seeded_surface_history_must_replay_against_the_seeded_ledger() {
                     replacement: MessageId::new("msg-not-a-summary"),
                 },
             ],
+            std::collections::BTreeMap::new()
         ),
         Err(ConversationStoreError::InvalidReference(_))
     ));
@@ -793,6 +805,7 @@ fn a_seeded_lineage_must_introduce_its_ledger_in_ledger_order() {
                         message_id: MessageId::new("msg-b"),
                     },
                 ],
+                std::collections::BTreeMap::new()
             ),
             Err(ConversationStoreError::InvalidReference(_))
         ),
@@ -812,6 +825,7 @@ fn a_seeded_lineage_must_introduce_its_ledger_in_ledger_order() {
                 vec![SurfaceOp::Append {
                     message_id: MessageId::new("msg-a"),
                 }],
+                std::collections::BTreeMap::new()
             ),
             Err(ConversationStoreError::InvalidReference(_))
         ),

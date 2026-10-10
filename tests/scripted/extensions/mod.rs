@@ -3596,6 +3596,10 @@ async fn goal351_model_create_goal_starts_no_nested_attempt_and_continues_after_
                 store
                     .load_surface_history(store.load_head().unwrap().revision)
                     .unwrap(),
+                store
+                    .read_lineage_cut(store.load_head().unwrap().revision)
+                    .unwrap()
+                    .checkpoints,
             )
             .unwrap()
             .with_turns(provenance)

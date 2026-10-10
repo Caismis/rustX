@@ -649,6 +649,10 @@ fn real_compaction_preserves_response_identity_cut_and_cumulative_usage() {
             .unwrap(),
         &store
             .read_lineage_cut(store.load_head().unwrap().revision)
+            .unwrap()
+            .checkpoints,
+        &store
+            .read_lineage_cut(store.load_head().unwrap().revision)
             .map(|cut| cut.completed_responses)
             .unwrap(),
         &store

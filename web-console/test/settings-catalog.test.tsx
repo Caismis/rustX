@@ -80,17 +80,19 @@ it('a rejected MCP toggle exposes the failure and cannot blindly retry', async (
   expect(writes(s)).toHaveLength(1);
 });
 
-it('MCP navigation and refresh perform finite connectivity checks without writing configuration', async () => {
+it('MCP navigation, search and refresh stay passive; Test connection executes one definition', async () => {
   const s = cfg3Client();
-  s.source.user.authored!.agent = {tools:{sources:{search:'all'}}};
   await catalog(s);
-  await screen.findByRole('img', {name:/Connected and available/});
+  expect(s.request.mock.calls.some(([op]) => op.method === 'mcp/probe')).toBe(false);
   await openSettingsPage('MCP servers');
+  fireEvent.change(screen.getByRole('searchbox'), {target:{value:'search'}});
   fireEvent.click(screen.getByRole('button', {name:'Refresh'}));
   await settingsReady();
   await openSettingsPage('General');
   await openSettingsPage('MCP servers');
-  await waitFor(() => expect(screen.getByRole('img', {name:/Connected and available/})).toBeTruthy());
-  expect([...new Set(s.request.mock.calls.map(([op]) => op.method))].sort()).toEqual(['configuration/sourcesRead','mcp/probe']);
+  expect(s.request.mock.calls.some(([op]) => op.method === 'mcp/probe')).toBe(false);
+  fireEvent.click(screen.getByRole('button', {name:'Test connection search'}));
+  await screen.findByRole('img', {name:/Connection test succeeded/});
+  expect(s.request.mock.calls.filter(([op]) => op.method === 'mcp/probe')).toHaveLength(1);
   expect(writes(s)).toHaveLength(0);
 });

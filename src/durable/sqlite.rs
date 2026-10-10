@@ -28,6 +28,7 @@ use std::sync::atomic::AtomicUsize;
 
 use sha2::{Digest, Sha256};
 
+use crate::context::TokenEstimator;
 use crate::conversation::{SurfaceOp, SurfaceRevision, SurfaceSpan};
 use crate::events::interaction::{
     InteractionSubject, interaction_arguments_digest, validate_interaction_settlement,
@@ -310,7 +311,9 @@ fn count_conversation_store_open() {
 /// Version 48 retains native turn-reading provenance and the semantic read-mutation epoch.
 /// Version 49 separates immutable inherited outcomes from live execution state.
 /// Version 50 retains the required independent task title in private Agent authority.
-pub const SQLITE_SCHEMA_VERSION: i64 = 50;
+/// Version 51 stores immutable checkpoint statistics and local completion correlation
+/// with the canonical Ledger summary. Older development stores are refused.
+pub const SQLITE_SCHEMA_VERSION: i64 = 51;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -380,11 +383,11 @@ pub struct SqliteConversationStore {
     #[cfg(test)]
     pub(crate) fail_adopt_remaining: Arc<AtomicUsize>,
     #[cfg(test)]
-    #[cfg(test)]
     pub(crate) fail_select_remaining: Arc<AtomicUsize>,
     #[cfg(test)]
     pub(crate) fail_compaction_remaining: Arc<AtomicUsize>,
     #[cfg(test)]
+    pub(crate) checkpoint_read_counts: Arc<[AtomicUsize; 3]>,
     #[cfg(test)]
     pub(crate) fail_event_remaining: Arc<AtomicUsize>,
     #[cfg(test)]
@@ -767,11 +770,11 @@ impl SqliteConversationStore {
             #[cfg(test)]
             fail_adopt_remaining: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
-            #[cfg(test)]
             fail_select_remaining: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
             fail_compaction_remaining: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
+            checkpoint_read_counts: Arc::new(std::array::from_fn(|_| AtomicUsize::new(0))),
             #[cfg(test)]
             fail_event_remaining: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
@@ -1948,6 +1951,7 @@ impl ConversationStore for SqliteConversationStore {
         Ok(watermark > 0)
     }
 
+    #[allow(clippy::too_many_lines)] // One atomic bootstrap owns Ledger, Surface and inherited facts.
     fn initialize_lineage(&self, seed: &LineageSeed) -> Result<(), ConversationStoreError> {
         let messages = seed.canonical();
         let mut connection = self.lock()?;
@@ -1963,6 +1967,20 @@ impl ConversationStore for SqliteConversationStore {
             .optional()
             .map_err(|error| storage(format!("bootstrap probe: {error}")))?;
         if let Some((count, digest, responses, turns)) = bootstrap {
+            for message in messages {
+                if let MessageBlock::User(user) = message
+                    && user.kind.is_compaction_summary()
+                {
+                    let retained = load_compaction_checkpoint(&transaction, &user.id, u64::MAX)?.0;
+                    if seed
+                        .checkpoints()
+                        .get(&user.id)
+                        .is_some_and(|supplied| *supplied != retained)
+                    {
+                        return Err(ConversationStoreError::InitialHistoryMismatch);
+                    }
+                }
+            }
             let supplied_count = i64::try_from(messages.len())
                 .map_err(|_| storage("initial message count is not representable"))?;
             if count != supplied_count
@@ -1977,6 +1995,17 @@ impl ConversationStore for SqliteConversationStore {
                 return Err(ConversationStoreError::InitialHistoryMismatch);
             }
         } else {
+            for message in messages {
+                if let MessageBlock::User(user) = message
+                    && user.kind.is_compaction_summary()
+                    && !seed.checkpoints().contains_key(&user.id)
+                {
+                    return Err(ConversationStoreError::InvalidReference(format!(
+                        "seeded checkpoint {} has no required statistics",
+                        user.id
+                    )));
+                }
+            }
             let existing: i64 = transaction
                 .query_row("SELECT COUNT(*) FROM message_ledger", [], |row| row.get(0))
                 .map_err(|error| storage(format!("bootstrap ledger probe: {error}")))?;
@@ -2010,6 +2039,20 @@ impl ConversationStore for SqliteConversationStore {
             append_terminals(None)?;
             for message in messages {
                 append_seeded_ledger_message(&transaction, message)?;
+                if let Some(statistics) = seed
+                    .checkpoints()
+                    .get(&crate::conversation::message_id_of(message))
+                {
+                    transaction
+                        .execute(
+                            "UPDATE message_ledger SET checkpoint_json=?2 WHERE message_id=?1",
+                            params![
+                                crate::conversation::message_id_of(message).as_str(),
+                                encode(statistics, "seeded checkpoint statistics")?
+                            ],
+                        )
+                        .map_err(|error| storage(format!("seed checkpoint: {error}")))?;
+                }
                 append_terminals(Some(&crate::conversation::message_id_of(message)))?;
             }
             // The seed's Surface history becomes this lineage's own retained
@@ -2153,6 +2196,8 @@ impl ConversationStore for SqliteConversationStore {
         &self,
         ids: &[MessageId],
     ) -> Result<Vec<MessageBlock>, ConversationStoreError> {
+        #[cfg(test)]
+        self.checkpoint_read_counts[0].fetch_add(ids.len(), Ordering::SeqCst);
         let connection = self.lock()?;
         ids.iter().map(|id| load_message(&connection, id)).collect()
     }
@@ -2196,27 +2241,16 @@ impl ConversationStore for SqliteConversationStore {
             .transpose()
     }
 
-    fn compaction_span(
+    fn compaction_checkpoint(
         &self,
         summary_message_id: &MessageId,
-    ) -> Result<Option<(SurfaceRevision, SurfaceSpan)>, ConversationStoreError> {
-        let row: Option<(i64, String)> = self.lock()?.query_row(
-            "SELECT revision,op_json FROM surface_ops WHERE json_extract(op_json, '$.op') = 'replace' AND json_extract(op_json, '$.replacement') = ?1 ORDER BY revision LIMIT 1",
-            [summary_message_id.as_str()], |row| Ok((row.get(0)?, row.get(1)?)),
-        ).optional().map_err(|error| storage(format!("compaction span: {error}")))?;
-        row.map(|(revision, json)| {
-            let op: SurfaceOp = decode(&json, "compaction span")?;
-            let SurfaceOp::Replace { start, end, .. } = op else {
-                return Err(storage(
-                    "compaction span references a non-replacement operation",
-                ));
-            };
-            Ok((
-                SurfaceRevision::new(nonnegative(revision, "compaction revision")?),
-                SurfaceSpan::new(start, end),
-            ))
-        })
-        .transpose()
+        through: u64,
+    ) -> Result<(super::inbox::CompactionCheckpointStatistics, Option<bool>), ConversationStoreError>
+    {
+        #[cfg(test)]
+        self.checkpoint_read_counts[2].fetch_add(1, Ordering::SeqCst);
+        let connection = self.lock()?;
+        load_compaction_checkpoint(&connection, summary_message_id, through)
     }
 
     fn load_surface_history(
@@ -2231,6 +2265,8 @@ impl ConversationStore for SqliteConversationStore {
         &self,
         revision: SurfaceRevision,
     ) -> Result<Vec<MessageId>, ConversationStoreError> {
+        #[cfg(test)]
+        self.checkpoint_read_counts[1].fetch_add(1, Ordering::SeqCst);
         let connection = self.lock()?;
         reconstruct_surface(&connection, revision)
     }
@@ -2385,6 +2421,18 @@ impl ConversationStore for SqliteConversationStore {
         if self.consume_compaction_fault(CompactionFaultOperation::BeforeSummaryInsert) {
             return Err(storage("fault injected: before compaction summary insert"));
         }
+        // Estimate the exact validated replacement span once, under the same
+        // transaction that owns its summary and Surface transition. This also
+        // enforces the contract for direct native commit callers.
+        let retired = head.active_message_ids[start..=end]
+            .iter()
+            .map(|id| load_message_tx(&transaction, id))
+            .collect::<Result<Vec<_>, _>>()?;
+        let statistics = super::inbox::CompactionCheckpointStatistics {
+            retired_messages: retired.len() as u64,
+            retired_tokens: crate::context::DefaultTokenEstimator
+                .estimate_conversation_input(&retired),
+        };
         let summary_cursor = append_message_ledger(
             &transaction,
             &MessageBlock::User(input.summary.clone()),
@@ -2443,6 +2491,10 @@ impl ConversationStore for SqliteConversationStore {
             return Err(storage("fault injected: before compaction event insert"));
         }
         let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        transaction.execute(
+            "UPDATE message_ledger SET checkpoint_json=?2,compaction_event_sequence=?3 WHERE message_id=?1",
+            params![input.summary.id.as_str(), encode(&statistics, "checkpoint statistics")?, seq_to_i64(persisted.event.sequence)?],
+        ).map_err(|error| storage(format!("checkpoint facts: {error}")))?;
         #[cfg(test)]
         if self.consume_compaction_fault(CompactionFaultOperation::AfterEventInsert) {
             return Err(storage("fault injected: after compaction event insert"));
@@ -5417,7 +5469,9 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
             CREATE TABLE IF NOT EXISTS message_ledger (
                 position INTEGER PRIMARY KEY,
                 message_id TEXT NOT NULL UNIQUE,
-                message_json TEXT NOT NULL
+                message_json TEXT NOT NULL,
+                checkpoint_json TEXT,
+                compaction_event_sequence INTEGER REFERENCES events(sequence)
             );
             CREATE TABLE IF NOT EXISTS canonical_tool_calls (
                 assistant_message_id TEXT NOT NULL REFERENCES message_ledger(message_id),
@@ -5599,7 +5653,13 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         ),
         (
             "message_ledger",
-            &["position", "message_id", "message_json"],
+            &[
+                "position",
+                "message_id",
+                "message_json",
+                "checkpoint_json",
+                "compaction_event_sequence",
+            ],
         ),
         (
             "transcript_order",
@@ -6333,6 +6393,55 @@ fn message_exists(
             |row| row.get(0),
         )
         .map_err(|error| storage(format!("message identity probe: {error}")))
+}
+
+/// Both lookups use existing unique Ledger identity and Journal sequence keys.
+fn load_compaction_checkpoint(
+    connection: &Connection,
+    id: &MessageId,
+    through: u64,
+) -> Result<(super::inbox::CompactionCheckpointStatistics, Option<bool>), ConversationStoreError> {
+    let row: Option<(Option<String>, Option<i64>)> = connection.query_row(
+        "SELECT checkpoint_json,compaction_event_sequence FROM message_ledger WHERE message_id=?1",
+        [id.as_str()], |row| Ok((row.get(0)?, row.get(1)?)),
+    ).optional().map_err(|error| storage(format!("checkpoint lookup: {error}")))?;
+    let (statistics, sequence) = row.ok_or_else(|| {
+        ConversationStoreError::InvalidReference(format!("checkpoint {id} is unavailable"))
+    })?;
+    let statistics: super::inbox::CompactionCheckpointStatistics = decode(
+        &statistics.ok_or_else(|| {
+            ConversationStoreError::InvalidReference(format!(
+                "checkpoint {id} has no required statistics"
+            ))
+        })?,
+        "checkpoint statistics",
+    )?;
+    if statistics.retired_messages == 0 {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "checkpoint {id} retires no messages"
+        )));
+    }
+    let manual = match sequence {
+        Some(sequence) if nonnegative(sequence, "compaction completion sequence")? <= through => {
+            let json: String = connection
+                .query_row(
+                    "SELECT event_json FROM events WHERE sequence=?1",
+                    [sequence],
+                    |row| row.get(0),
+                )
+                .map_err(|error| storage(format!("checkpoint completion: {error}")))?;
+            let event: RuntimeEventEnvelope = decode(&json, "checkpoint completion")?;
+            if !matches!(&event.event, RuntimeEvent::CompactionCompleted { summary_message_id, .. } if summary_message_id == id)
+            {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "checkpoint {id} has invalid completion correlation"
+                )));
+            }
+            Some(event.attempt_id.is_none())
+        }
+        _ => None,
+    };
+    Ok((statistics, manual))
 }
 
 fn load_message(
@@ -10323,6 +10432,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // One retired-history seed and canonical occurrence contract.
     fn transcript_tool_lineage_seed_keeps_retired_reused_call_occurrences() {
         let call = ToolCall {
             id: ToolCallId::new("call-1"),
@@ -10382,9 +10492,17 @@ mod tests {
                 message_id: MessageId::new("b"),
             },
         ];
+        let checkpoints = BTreeMap::from([(
+            MessageId::new("summary"),
+            crate::durable::inbox::CompactionCheckpointStatistics {
+                retired_messages: 2,
+                retired_tokens: crate::context::DefaultTokenEstimator
+                    .estimate_conversation_input(&canonical[..2]),
+            },
+        )]);
         let store = store();
         store
-            .initialize_lineage(&LineageSeed::replayed(canonical, history).unwrap())
+            .initialize_lineage(&LineageSeed::replayed(canonical, history, checkpoints).unwrap())
             .unwrap();
         let unresolved = crate::runtime_client::snapshot::transcript_page_view(
             store.load_transcript_page(None, 1).unwrap(),
@@ -10930,6 +11048,48 @@ mod tests {
     }
 
     #[test]
+    fn malformed_checkpoint_facts_fail_explicitly_without_history_recovery() {
+        let store = store();
+        store.initialize(&[user_message("a", "A")]).unwrap();
+        let input = CompactionCommitInput {
+            summary: summary_message("summary", "summary"),
+            span: SurfaceSpan::new(MessageId::new("a"), MessageId::new("a")),
+            expected_revision: store.load_head().unwrap().revision,
+            tokens_before: TokenMeasurement {
+                input_tokens: 10,
+                source: TokenMeasurementSource::Estimated,
+            },
+            estimated_tokens_after: 2,
+            attempt_id: None,
+            turn_id: None,
+            timestamp: Utc::now(),
+            occupancy: None,
+        };
+        store.commit_compaction(input).unwrap();
+        for value in [
+            None,
+            Some("{}"),
+            Some("{\"retired_messages\":0,\"retired_tokens\":1}"),
+            Some("{\"retired_messages\":1,\"retired_tokens\":-1}"),
+        ] {
+            store
+                .conn
+                .lock()
+                .unwrap()
+                .execute(
+                    "UPDATE message_ledger SET checkpoint_json=?1 WHERE message_id='summary'",
+                    [value],
+                )
+                .unwrap();
+            assert!(
+                store
+                    .compaction_checkpoint(&MessageId::new("summary"), u64::MAX)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn every_compaction_stage_fault_exposes_only_the_old_complete_state() {
         let faults = [
             CompactionFaultOperation::BeforeSummaryInsert,
@@ -10978,8 +11138,30 @@ mod tests {
                     .any(|message| crate::conversation::message_id_of(message) == summary_id)
             );
             assert!(store.read_events(None, 20).unwrap().events.is_empty());
+            assert!(store.compaction_checkpoint(&summary_id, u64::MAX).is_err());
+            assert_eq!(
+                store
+                    .conn
+                    .lock()
+                    .unwrap()
+                    .query_row(
+                        "SELECT count(*) FROM message_ledger WHERE checkpoint_json IS NOT NULL",
+                        [],
+                        |row| row.get::<_, i64>(0)
+                    )
+                    .unwrap(),
+                0
+            );
 
             let (new_revision, _, event, _) = store.commit_compaction(input()).unwrap();
+            assert_eq!(
+                store
+                    .compaction_checkpoint(&summary_id, u64::MAX)
+                    .unwrap()
+                    .0
+                    .retired_messages,
+                2
+            );
             assert_eq!(new_revision, old_revision.next());
             assert!(matches!(
                 event.event,
@@ -14856,7 +15038,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 50);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 51);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -14925,7 +15107,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 50);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 51);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current

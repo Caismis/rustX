@@ -223,6 +223,40 @@ mod tests {
         super::super::settings::revision(Some(text.as_bytes()))
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn passive_source_inspection_never_starts_a_configured_stdio_process() {
+        let directory = tempfile::tempdir().unwrap();
+        let owner = owner(directory.path());
+        let marker = directory.path().join("native-started");
+        let script = format!("printf started > {marker:?}");
+        let config =
+            format!("[mcp_servers.explicit]\ncommand = '/bin/sh'\nargs = ['-c', {script:?}]\n");
+        let revision = write(&owner, &SourceTarget::User, &config);
+        let workspace = SourceTarget::Workspace {
+            directory: directory.path().canonicalize().unwrap(),
+        };
+        write(&owner, &workspace, &config);
+        for target in [&SourceTarget::User, &workspace, &SourceTarget::User] {
+            owner.read_source_settings(target).unwrap();
+            owner.read_source_settings(target).unwrap();
+            assert!(
+                !marker.exists(),
+                "passive reads must never start native MCP"
+            );
+        }
+        let result = probe(
+            owner,
+            SourceTarget::User,
+            McpServerId::new("explicit"),
+            revision,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.outcome, McpProbeOutcome::ConnectionFailed);
+        assert_eq!(std::fs::read_to_string(marker).unwrap(), "started");
+    }
+
     #[tokio::test]
     async fn probe_is_scope_local_revision_bound_and_never_calls_business_tools() {
         let fixture = HttpFixture::start(HttpFixtureControl::default()).await;

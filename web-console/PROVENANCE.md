@@ -1895,8 +1895,10 @@ The browser fixture exercises the real UI against deterministic source
 responses; it does not claim a live MCP server connection or pinned-container
 pixel-baseline equivalence.
 
-MCP connectivity indicators follow ZCode's automatic settings checks and existing
-Refresh control (`McpSettingsSection.tsx`, `zcode-protocol/mcp.ts`). rustX uses
+MCP connectivity indicators retain ZCode's row presentation and existing Refresh
+control (`McpSettingsSection.tsx`, `zcode-protocol/mcp.ts`). rustX requires an
+explicit per-definition Test connection action; Refresh only reads configuration.
+rustX uses
 finite `mcp/probe` operations instead of ZCode's retained `mcp-status` process
 connections. Green means the authored configuration passed its last handshake
 and tool-list check; tooltips distinguish it from a live Agent connection.

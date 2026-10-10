@@ -140,3 +140,65 @@ async fn inactive_attachment_limit_precedes_activation_and_accepts_attachment_on
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn direct_preparation_validates_content_before_any_admission_effect() {
+    let plane = plane(4);
+    let counters = || {
+        let state = plane.registry.state.lock().unwrap();
+        (
+            state.next_ordinal,
+            state.records.len(),
+            state.prepared_policies.len(),
+            state.staged_overrides.len(),
+        )
+    };
+    for (text, count) in [
+        ("", 0),
+        ("", MAX_INPUT_ATTACHMENTS + 1),
+        ("task", MAX_INPUT_ATTACHMENTS + 1),
+    ] {
+        let mut spec = start_spec(text);
+        spec.admission.attachments = attachments(count);
+        let before = counters();
+        let journal = serde_json::to_value(events(&plane)).unwrap();
+        let snapshots = plane.registry.all_snapshots();
+        let cancellation = CancellationSignal::new();
+        let mut prepare = Box::pin(plane.registry.prepare(&spec, &cancellation));
+        assert!(matches!(
+            futures_util::poll!(&mut prepare),
+            std::task::Poll::Ready(Err(SubagentStartError::InvalidTask { .. }))
+        ));
+        assert_eq!(counters(), before);
+        assert_eq!(plane.registry.all_snapshots(), snapshots);
+        assert_eq!(serde_json::to_value(events(&plane)).unwrap(), journal);
+    }
+    let mut cancelled_spec = start_spec("");
+    cancelled_spec.admission.attachments = attachments(MAX_INPUT_ATTACHMENTS + 1);
+    let cancellation = CancellationSignal::new();
+    cancellation.cancel();
+    let before = counters();
+    assert!(matches!(
+        plane.registry.prepare(&cancelled_spec, &cancellation).await,
+        Err(SubagentStartError::Cancelled)
+    ));
+    assert_eq!(counters(), before);
+    for (text, count) in [("task", 0), ("", MAX_INPUT_ATTACHMENTS)] {
+        let mut child = stage_exit0(&plane);
+        let mut spec = start_spec(text);
+        spec.admission.attachments = attachments(count);
+        let accepted = start(&plane, &spec).await;
+        let delegate = child.accept_delegate().await;
+        assert_eq!(delegate.attachments, spec.admission.attachments);
+        assert_eq!(delegate.task, text);
+        child
+            .send_result(ChildResultStatus::Succeeded, Some("done"))
+            .await;
+        drop(child);
+        plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .unwrap();
+    }
+}
