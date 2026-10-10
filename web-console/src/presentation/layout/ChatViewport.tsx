@@ -53,6 +53,18 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     if (!this.mounted || this.frame !== undefined) return;
     this.frame = requestAnimationFrame(this.commitLayout);
   };
+  private onComposerBeforeInput = (event: Event) => {
+    if ((event.target as Element).closest('[data-composer-seat]')) this.onScroll();
+  };
+  private onComposerInput = (event: Event) => {
+    if (!(event.target as Element).closest('[data-composer-seat]')) return;
+    // Editing can move the scrollport as the browser reveals the textarea's
+    // caret (especially replacing a multiline selection). Acknowledge that
+    // layout movement without turning it into reader intent. The frame then
+    // follows the tail or restores the existing reading anchor as usual.
+    this.writtenTop = this.scroller()!.scrollTop;
+    this.markLayoutDirty();
+  };
   private commitLayout = () => {
     this.frame = undefined;
     const el = this.scroller();
@@ -158,6 +170,8 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     // Its initial offset is layout state, not a new reader gesture.
     this.writtenTop = scroller.scrollTop;
     scroller.addEventListener('scroll', this.onScroll);
+    scroller.addEventListener('beforeinput', this.onComposerBeforeInput, true);
+    scroller.addEventListener('input', this.onComposerInput);
     if (scroller !== this.viewport.current) this.setState({ chromeHost: scroller.parentElement! });
     this.markLayoutDirty();
     if (typeof ResizeObserver !== 'undefined') {
@@ -185,6 +199,8 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
   }
   componentWillUnmount() {
     this.scroller()?.removeEventListener('scroll', this.onScroll);
+    this.scroller()?.removeEventListener('beforeinput', this.onComposerBeforeInput, true);
+    this.scroller()?.removeEventListener('input', this.onComposerInput);
     this.mounted = false;
     this.retireNavigation();
     this.observer?.disconnect();

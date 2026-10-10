@@ -16,7 +16,6 @@ import { editableContent } from '../composer/editor-content';
 import { composerSubmissionPolicy, type SubmitGesture } from '../composer/submission-policy';
 import { useBusyEnter } from '../composer/preferences';
 import { StopSequence, type StopScope } from '../composer/stop-sequence';
-import { useTextareaAutosize } from '../composer/useTextareaAutosize';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 import { Button } from '../../presentation/primitives/Button';
 import css from '../../presentation/agent/Composer.module.css';
@@ -85,7 +84,6 @@ export function AgentComposer({ modelPicker, onRetainedRemove, onRetainedRecover
     if (!intakeOwner) intake.clear(); setError(''); setDragging(false);
     invocation.current = undefined; trigger.dismiss();
   }
-  useTextareaAutosize(input, draft);
   const query = trigger.state?.query;
   const modelInvocation = useRef<string | undefined>(undefined);
   const [modelRequested, setModelRequested] = useState(false);

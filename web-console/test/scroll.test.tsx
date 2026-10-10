@@ -512,7 +512,7 @@ it('uses the shared session scroller including its composer and keeps floating c
   vi.stubGlobal('ResizeObserver', class { constructor(callback: () => void) { resize = callback; } observe(element: Element) { observed.push(element); } disconnect() {} });
   const ui = render(<section><div data-conversation-scroll>
     <ChatViewport latestLabel="Latest"><div data-chat-anchor-key="a">Message</div></ChatViewport>
-    <div data-composer-seat>Composer</div>
+    <div data-composer-seat><textarea aria-label="Draft"/></div>
   </div></section>);
   const outer = ui.container.querySelector<HTMLElement>('[data-conversation-scroll]')!;
   const inner = ui.container.querySelector<HTMLElement>('.conversation-scroll')!;
@@ -530,12 +530,24 @@ it('uses the shared session scroller including its composer and keeps floating c
   expect(outer.scrollTop).toBe(500);
   total += 100; resize(); flush();
   expect(outer.scrollTop).toBe(600);
+  const draft = ui.getByRole('textbox', { name: 'Draft' });
+  fireEvent(draft, new Event('beforeinput', { bubbles: true }));
+  total += 100;
+  outer.scrollTop = 300; // Browser caret reveal during a multiline replacement.
+  fireEvent.input(draft); fireEvent.scroll(outer); flush();
+  expect(outer.scrollTop).toBe(700);
+  // Reader movement before the edit must still detach even if its scroll event
+  // has not arrived yet; composer input must not pull it back to the tail.
+  outer.scrollTop = 200;
+  fireEvent(draft, new Event('beforeinput', { bubbles: true }));
+  total += 100; fireEvent.input(draft); resize(); flush();
+  expect(outer.scrollTop).toBe(200);
   outer.scrollTop = 200;
   ui.rerender(<section><div data-conversation-scroll>
     <ChatViewport key="next-session" latestLabel="Latest"><div data-chat-anchor-key="b">Next session</div></ChatViewport>
     <div data-composer-seat>Composer</div>
   </div></section>);
-  flush(); expect(outer.scrollTop).toBe(600);
+  flush(); expect(outer.scrollTop).toBe(800);
 });
 
 it('an explicit final-turn jump keeps its mark selected when the short tail clamps above its owner', () => {

@@ -152,11 +152,15 @@
   to { opacity: 1; }
 }
 
-/* The measured native draft surface grows until its own CSS cap. figma .InputText 34:10434 drew pl 16 / pr 12 / pt 4; the
+/* The native draft surface grows until its own CSS cap. figma .InputText 34:10434 drew pl 16 / pr 12 / pt 4; the
    left pad tightened to 14, and the right pad is 8 here plus .scroll's 4px
    bar inset. */
 .input {
   box-sizing: border-box;
+  /* Size in one browser layout pass. Temporarily collapsing the textarea to
+     measure scrollHeight clamps the conversation's scrollTop and breaks tail
+     following while typing. Native sizing also handles wrapping on resize. */
+  field-sizing: content;
   /* Docked floor: one 24px line + 4px top pad = 28 content height; 36 leaves
      an 8px breath below the line (the hero keeps its own 52px floor below). */
   min-height: 36px;

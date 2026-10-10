@@ -38,7 +38,6 @@
         "../composer/preferences",
         "../composer/stop-sequence",
         "../composer/submission-policy",
-        "../composer/useTextareaAutosize",
         "../new-conversation/first-submit",
         "react"
       ],
@@ -48,7 +47,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "013d3c8e254e64fa8376ac71a12253a1a87453be5f3af6e05927d4a7f87e3756",
+      "local_sha256": "cf961ad5fa3289ef4d0c836e359692e0dc76eba33b6be2cc1e7798dcfb6cf782",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
@@ -955,7 +954,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "89a514a8d7ab530472520fd2858fadb94503a8d80d4bbfd8c8cc93df767a7226"
+      "local_sha256": "5dfb3f0f8ea3a1a5eb8cf5b27cbf2db5c1e71e4a2f41e11b13049dec3b534570"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -1318,7 +1317,7 @@
         "Harness attachment identity and storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "23988041ca381fc151eb5a2640dfeef0bde994843f07138f798c07460f0966b5",
+      "local_sha256": "bbf7eb5d80025bbfa22cc402e8d9e8fe260ce25f3f109a365cfae9d23b3a0530",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/ChatView.tsx",

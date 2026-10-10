@@ -755,7 +755,7 @@ settings file was inspected for the Queue default, not imported. The existing
 prop; its upstream pin and hash are unchanged. The settings
 store, Lexical, slot/plugin system, continuable-child transport and queued-item
 steering remain excluded. rustX's typed client/native owners replace those
-runtime boundaries. The textarea measurement hook is rustX code.
+runtime boundaries. The native textarea uses CSS content sizing; no temporary-collapse measurement hook remains.
 
 All twelve reviewed source versions are recorded in the inspection inventory
 unless already present. MIT/DeepSeek copyright is retained in the adapted policy;
@@ -1876,3 +1876,17 @@ connections. Green means the authored configuration passed its last handshake
 and tool-list check; tooltips distinguish it from a live Agent connection.
 Source revision, target and transport identity fence results. Workspace probes
 use the existing Product Host registration lane; no browser path grants authority.
+
+
+Composer growth repair (2026-10-10): inspected local Harness `5badb15009`
+`ui-conversation/src/client/skeleton/ConversationContent.tsx` and
+`ui-chat/src/client/chat/{use-chat-viewport,use-chat-reading,use-scroll-follow}.ts`.
+The shared sticky composer, seat ResizeObserver and independent tail/reading
+intent remain intact. rustX's native textarea now uses `field-sizing: content`
+instead of collapsing its height to measure each edit. ChatViewport acknowledges
+browser caret scrolling during composer input without treating it as a reader
+gesture; pre-input sampling retains genuine prior reader movement. The frame
+remains the sole owner of automatic scroll corrections. Harness's Lexical editor
+and its transport are not imported. Regression checks use actual multiline
+keystrokes, pasted capped drafts, shrinking, width reflow and detached reading in
+the production App with a fixture transport, at desktop and mobile widths.
