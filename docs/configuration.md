@@ -494,7 +494,14 @@ authority for future selection. It is published to an existing Session without
 preparation when every invocation of that Session is unchanged, and also when the
 Session's own configured Model or Profile is one the new catalog no longer
 admits: the catalog is what the replacement is chosen from, and a stale Session
-selection never makes a valid catalog unpublishable. Under the gate Attempt
+selection never makes a valid catalog unpublishable. The Provider unit settles on
+its own: an Instructions, context or Capability change in the same generation
+neither holds it back nor is adopted by it. Those units are then prepared as
+usual against the binding just published, and their candidate waits for
+adoption as before, so the Session can discover and select a replacement first.
+An explicit selection committed meanwhile recaptures the generation over the new
+selection; the older candidate's expected binding no longer matches and it
+cannot adopt. Under the gate Attempt
 admission takes, the Session's selection authority, the catalog its configuration
 generation carries and its retained binding are committed together, all or
 nothing, and the configuration generation advances, while the current resolved
@@ -503,10 +510,11 @@ verbatim. From that commit, `session/models` advertises the published catalog
 and `session/setModel` (and Runtime Client `model_catalog`/`model_set`) resolve
 against exactly that catalog, never unpublished sources. An admitted Attempt
 keeps the snapshot and registry it froze. A failed or overtaken generation never
-publishes, so the last good catalog remains the authority. When the edit changes
-an invocation the Session can still resolve, the catalog arrives with that
-change's adoption; when it also changes capabilities or context, the Session's
-selection is carried into that candidate as it is, available or not. A cold
+publishes, so the last good catalog remains the authority; a catalog the source
+document cannot validate fails that generation's context units with it. When the
+edit changes an invocation the Session can still resolve — its own or an
+admitted named Agent's — the catalog arrives with that change's adoption,
+together with any capability or context change of the same generation. A cold
 Session receives the catalog when it next becomes resident. New Sessions start
 from the Workspace's published creation catalog.
 

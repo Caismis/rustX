@@ -196,34 +196,44 @@ impl ConfigurationApplications {
                 return;
             }
         };
-        let adopted = manager
-            .sessions
-            .configuration_bindings
-            .lock()
-            .expect("Session configuration bindings")
-            .get(&session)
-            .cloned();
+        let retained = || {
+            manager
+                .sessions
+                .configuration_bindings
+                .lock()
+                .expect("Session configuration bindings")
+                .get(&session)
+                .cloned()
+        };
+        let mut adopted = retained();
         #[cfg(test)]
         manager.configuration_catalog_gate(&session).await;
+        // The Provider unit settles on its own when no invocation an Attempt
+        // would freeze changes, or when the Session's own selection is one
+        // the new catalog no longer admits: the catalog is what the
+        // replacement is chosen from, so neither an unrelated Instructions,
+        // context or Capability change nor a removed selection may hold it
+        // back. A removed selection is never prepared, because there is no
+        // invocation to construct from it. Any other unit is then prepared
+        // against this published binding, so its candidate can neither
+        // restore the older catalog nor adopt over this publication.
+        let mut provider_published = false;
         {
             let mut state = self.lock();
             if !state.current(scope, identity) {
                 return;
             }
-            // Catalog-only publication: nothing an Attempt freezes changes,
-            // or the Session's own selection is one the new catalog no longer
-            // admits. The latter is published too — the catalog is what the
-            // replacement is chosen from — and never prepared, because there
-            // is no invocation to construct from a removed selection.
-            if let Some(adopted) = &adopted
-                && capture.same_capabilities(adopted)
-                && capture.same_context(adopted)
-                && capture.same_agent_models(adopted)
-                && (capture.same_session_model(adopted)
-                    || capture.selection_unavailable().is_some())
+            if let Some(old) = &adopted
+                && capture.same_agent_models(old)
+                && (capture.same_session_model(old) || capture.selection_unavailable().is_some())
             {
-                if let Err(diagnostic) =
-                    state.make_available(scope, identity, &capture, &manager.credentials)
+                let others_unchanged = capture.same_capabilities(old) && capture.same_context(old);
+                // Capture validated the catalog and its default; publication
+                // resolves it. Source availability composes the whole
+                // generation, so it waits for any unit still to prepare.
+                if others_unchanged
+                    && let Err(diagnostic) =
+                        state.make_available(scope, identity, &capture, &manager.credentials)
                 {
                     drop(state);
                     self.fail_units(
@@ -240,13 +250,13 @@ impl ConfigurationApplications {
                 }
                 // Invocation equivalence settles adoption, not discovery: the
                 // valid catalog still reaches this Session's future selection.
-                let published = if capture.same_catalog(adopted) {
+                let published = if capture.same_catalog(old) {
                     Ok(true)
                 } else {
                     Self::publish_catalog(&mut state, manager, &session, &capture)
                 };
                 match published {
-                    Ok(true) => {
+                    Ok(true) if others_unchanged => {
                         for unit in [
                             ApplyUnit::Capabilities,
                             ApplyUnit::Instructions,
@@ -257,8 +267,23 @@ impl ConfigurationApplications {
                         self.notify(&state);
                         return;
                     }
+                    Ok(true) => {
+                        state.publish(scope, identity, ApplyUnit::Provider, || {
+                            UnitApplication::Applied
+                        });
+                        self.notify(&state);
+                        provider_published = true;
+                    }
                     Ok(false) => {}
                     Err(diagnostic) => {
+                        // Nothing was published. The generation's context is
+                        // prepared over this catalog, so it fails with it;
+                        // unchanged capabilities have nothing to apply.
+                        if capture.same_capabilities(old) {
+                            state.publish(scope, identity, ApplyUnit::Capabilities, || {
+                                UnitApplication::Applied
+                            });
+                        }
                         drop(state);
                         self.fail_units(
                             scope,
@@ -274,6 +299,10 @@ impl ConfigurationApplications {
                     }
                 }
             }
+        }
+        if provider_published {
+            // Remaining preparation composes over the binding just published.
+            adopted = retained();
         }
         let Some(runtime) = runtime else {
             let mut state = self.lock();
@@ -413,15 +442,17 @@ impl ConfigurationApplications {
                 // Independent instructions can still use the complete adopted
                 // capability/provider binding, including its resource leases.
                 let old = adopted.as_ref().expect("retained Session binding");
-                let provider = if capture.same_provider(old) {
-                    UnitApplication::Applied
-                } else {
-                    UnitApplication::Failed {
-                        diagnostic: "provider preparation depends on failed capability closure"
-                            .into(),
-                    }
-                };
-                state.publish(scope, identity, ApplyUnit::Provider, || provider);
+                if !provider_published {
+                    let provider = if capture.same_provider(old) {
+                        UnitApplication::Applied
+                    } else {
+                        UnitApplication::Failed {
+                            diagnostic: "provider preparation depends on failed capability closure"
+                                .into(),
+                        }
+                    };
+                    state.publish(scope, identity, ApplyUnit::Provider, || provider);
+                }
                 if capture.same_context(old) {
                     state.publish(scope, identity, ApplyUnit::Instructions, || {
                         UnitApplication::Applied
@@ -637,7 +668,9 @@ impl ConfigurationApplications {
             ApplyUnit::Instructions,
             ApplyUnit::Provider,
         ] {
-            if capability_failed && unit != ApplyUnit::Instructions {
+            if (capability_failed && unit != ApplyUnit::Instructions)
+                || (provider_published && unit == ApplyUnit::Provider)
+            {
                 continue;
             }
             let unit_outcome = if context_only && unit == ApplyUnit::Capabilities {
