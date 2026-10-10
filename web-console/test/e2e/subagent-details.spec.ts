@@ -24,7 +24,7 @@ for (const width of [1440, 390]) test(`subagent receipts, list, inspection and c
   await page.screenshot({ path: `/tmp/rustx-subagent-details-${width}.png`, fullPage: true });
   await calls.nth(0).getByRole('button', { name: 'Verify findings', exact: true }).click();
   const composer = page.locator('[data-agent-id="child-1"] [data-composer-card]');
-  await expect(composer.getByRole('textbox')).toHaveAttribute('placeholder', 'Describe what you want to do…');
+  await expect(composer.getByRole('textbox')).toHaveAttribute('placeholder', 'Give this Session a task…');
   await expect(composer.getByRole('status')).toHaveCount(0);
   await expect(composer.getByRole('button', { name: 'Transcript' })).toHaveCount(0);
   await expect(composer.getByRole('button', { name: 'Wait for activation' })).toHaveCount(0);

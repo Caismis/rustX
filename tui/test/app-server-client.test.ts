@@ -107,8 +107,8 @@ describe("initialization", () => {
   it("negotiates the protocol version once and records server capabilities", async () => {
     const { client, transport } = await initialized();
     const params = paramsOf(transport.log.matching("initialize")[0]!, "initialize");
-    assert.equal(APP_SERVER_PROTOCOL_VERSION, 40);
-    assert.equal(params.protocol_version, 40);
+    assert.equal(APP_SERVER_PROTOCOL_VERSION, 41);
+    assert.equal(params.protocol_version, 41);
     assert.equal(params.client.name, "rustx-tui");
     assert.deepEqual(client.capabilities, CAPABILITIES);
     assert.equal(transport.log.count("initialize"), 1);
@@ -144,7 +144,7 @@ describe("initialization", () => {
       protocol_version: 28,
       capabilities: CAPABILITIES,
     });
-    await assert.rejects(pending, /negotiated protocol 28, this client speaks 40/);
+    await assert.rejects(pending, /negotiated protocol 28, this client speaks 41/);
   });
 });
 
@@ -747,7 +747,7 @@ describe("bounded request ownership", () => {
     const { client, transport } = await initialized(); t.after(() => client.close());
     const pending: Promise<unknown>[] = [];
     for (let i = 0; i < 4; i++) pending.push(client.call("job/wait", { target: target(), job_id: `job-${i}` }, "job"));
-    for (let i = 0; i < 2; i++) pending.push(client.call("agent/sendMessage", { target: target(), agent_id: `agent-${i}`, message: "guidance" }, "agent_message"));
+    for (let i = 0; i < 2; i++) pending.push(client.call("agent/sendMessage", { target: target(), agent_id: `agent-${i}`, attachments: [], message: "guidance" }, "agent_message"));
     for (let i = 0; i < 7; i++) pending.push(client.call("agent/list", { target: target() }, "agents"));
     for (let i = 0; i < 2; i++) pending.push(client.call("job/cancel", { target: target(), job_id: `job-${i}` }, "job"));
     const settled = Promise.allSettled(pending);
@@ -756,7 +756,7 @@ describe("bounded request ownership", () => {
     await transport.log.awaitRequests(16);
     assert.equal(client.pendingCount, 15);
     await assert.rejects(client.call("job/wait", { target: target(), job_id: "extra" }, "job"), /wait capacity/);
-    await assert.rejects(client.call("agent/sendMessage", { target: target(), agent_id: "extra", message: "draft" }, "agent_message"), /admission capacity/);
+    await assert.rejects(client.call("agent/sendMessage", { target: target(), agent_id: "extra", attachments: [], message: "draft" }, "agent_message"), /admission capacity/);
     await assert.rejects(client.call("agent/list", { target: target() }, "agents"), /rpc capacity/);
     await assert.rejects(client.call("job/cancel", { target: target(), job_id: "extra" }, "job"), /control capacity/);
     assert.equal(transport.log.requests.length, 16);
@@ -835,7 +835,7 @@ describe("request-scoped delivery cancellation", () => {
     // Control saturated first: the cancellation must not need a control slot.
     for (let i = 0; i < 2; i++) pending.push(client.call("job/cancel", { target: target(), job_id: `job-${i}` }, "job"));
     for (let i = 0; i < 4; i++) pending.push(client.call("job/wait", { target: target(), job_id: `wait-${i}` }, "job"));
-    for (let i = 0; i < 2; i++) pending.push(client.call("agent/sendMessage", { target: target(), agent_id: `agent-${i}`, message: "m" }, "agent_message"));
+    for (let i = 0; i < 2; i++) pending.push(client.call("agent/sendMessage", { target: target(), agent_id: `agent-${i}`, attachments: [], message: "m" }, "agent_message"));
     for (let i = 0; i < 4; i++) pending.push(client.call("agent/list", { target: target() }, "agents"));
     const owners = [new AbortController(), new AbortController(), new AbortController()];
     const outcomes = owners.map((owner) =>

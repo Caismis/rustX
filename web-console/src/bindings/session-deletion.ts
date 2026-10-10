@@ -1,5 +1,5 @@
 import { message, type Message } from '../locale/translation';
-import type { RuntimeClientSessionDeletionResult } from '../../../protocol/app-server/v40';
+import type { RuntimeClientSessionDeletionResult } from '../../../protocol/app-server/v41';
 
 /** Product copy must preserve committed, blocked and uncertain deletion outcomes. */
 export function sessionDeletionNotice(result: RuntimeClientSessionDeletionResult): Message {

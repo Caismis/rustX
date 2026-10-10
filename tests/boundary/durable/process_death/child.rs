@@ -1240,6 +1240,7 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 name: "subagent",
                 arguments: serde_json::json!({
                     "agent": "explore",
+                    "title": "Inspect workspace note",
                     "task": "inspect the workspace note"
                 }),
             };
@@ -1562,6 +1563,7 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 name: "subagent",
                 arguments: serde_json::json!({
                     "agent": "explore",
+                    "title": "Inspect workspace note",
                     "task": "inspect the workspace note"
                 }),
             };
@@ -1879,7 +1881,7 @@ async fn real_subagent_scenario(root: &Path, scenario: &str) {
         id: "call-real-subagent",
         tool_id: "tool-subagent",
         name: "subagent",
-        arguments: serde_json::json!({ "agent": "explore", "task": "count the workspace files" }),
+        arguments: serde_json::json!({ "agent": "explore", "title": "Count workspace files", "task": "count the workspace files" }),
     };
     let final_turn = || {
         vec![

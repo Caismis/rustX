@@ -4,12 +4,10 @@
 `ToolExecutor`, and `NativeToolRegistration`. The normal Tool Plane and Agent Loop
 own invocation, cancellation, settlement, and atomic canonical Tool-result commit.
 There is no delivery database, special Agent Loop branch, or browser model state.
-`present` belongs only to the root Session-capable Agent plane. Named child
-selection produces the existing ScopeUnsupported admission diagnostic; child
-invocation overrides reject it as ChildUnsafeSelector, and frozen child
-composition cannot register it. Child-only Conversations have no published
-Session filesystem mapping, so this Tool is intentionally unavailable there.
-Child-file promotion or delivery ownership is not part of this feature.
+`present` is available to root and child Agent planes when their frozen Tool
+selection includes it. Child declarations remain in their own Conversation;
+preview and download resolve ownership through the parent's SubagentRegistry and
+the child's native workspace. Files are never copied or promoted to the parent.
 
 ## Declaration
 
@@ -72,7 +70,7 @@ Attempt, or model request.
 
 ## Authorized read and containment
 
-App Server v40 has no public `session/fileRead` Method. An ordinary authenticated
+App Server v41 has no public `session/fileRead` Method. An ordinary authenticated
 App Server connection cannot enter the file-read seam, even with the exact
 attachment, canonical Tool message ID, delivery index, Session cwd, and reference.
 Initialize client names are metadata and have no authorization role.
@@ -256,7 +254,7 @@ unavailable. Native startup rejects reuse of the ordinary credential, symlink or
 non-regular secret files, and files readable by other users.
 
 Only `/product-host/file-read` WebSocket admission accepts the private
-`rustx.product-host.file-read.v2` subprotocol plus `rustx-product-host.<secret>`.
+`rustx.product-host.file-read.v3` subprotocol plus `rustx-product-host.<secret>`.
 The response selects only the public subprotocol name, never the secret. Ordinary
 transport credentials cannot authenticate this lane, and this credential cannot
 authenticate the ordinary App Server lane. Handshake admission creates a native
@@ -689,3 +687,18 @@ access is never given to the browser.
 The closed PDF, OOXML and HTML viewer families extend this ownership contract;
 see [advanced document previews](document-previews.md) for their admission,
 conversion, isolation, resource and platform limits.
+
+## Child conversation deliveries
+
+The native `present` tool is available to children when selected by their admitted
+profile or invocation override. It records deliveries under their own conversation
+and workspace authority. Unselected child profiles do not gain the tool.
+
+Agent-scoped preview and download share the root renderer and delivery coordinator.
+Their source includes the stable AgentId. Native ownership lookup resolves that
+Agent's committed child conversation and frozen workspace; file delivery indices
+are validated against successful child Tool output. Managed artifacts are read
+from the child artifact root. Product Host v3 carries the AgentId through file and
+artifact reads, including document conversion. Root and child resources with equal
+artifact identifiers remain separate namespaces. Existing allocation, revocation,
+bounded read and publication checks apply to both.

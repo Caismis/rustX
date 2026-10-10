@@ -242,4 +242,4 @@ recovery uses existing idempotent cleanup/finalization and idempotent fence rele
 
 A client-side unknown outcome requires authoritative observation, not cleanup
 recovery or mutation replay. Only server-confirmed committed outcomes grant the
-explicit recovery action. At that review, App Server v11 and native Runtime Client v40 were unchanged.
+explicit recovery action. At that review, App Server v11 and native Runtime Client v41 were unchanged.

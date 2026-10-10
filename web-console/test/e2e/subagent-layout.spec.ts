@@ -52,11 +52,11 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
   await expect(scroller).toHaveJSProperty('scrollTop', 300);
   await page.getByRole('button', { name: 'Session A', exact: true }).click();
   await trigger.click(); await page.getByRole('menuitem', { name: /Research sources/ }).click();
-  await expect(page.getByRole('button', { name: 'Interrupt', exact: true })).toBeEnabled();
-  await expect(page.getByRole('button', { name: 'Send message', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: /^(Send|Steer)$/, exact: true })).toHaveCount(0);
   await page.getByRole('textbox', { name: 'Message Agent Research sources', exact: true }).fill('Other child draft');
-  await expect(page.getByRole('button', { name: 'Send message', exact: true })).toBeEnabled();
-  await expect(page.getByRole('button', { name: 'Interrupt', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: /^(Send|Steer)$/, exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0);
   await trigger.click(); await page.getByRole('menuitem', { name: /Verify findings/ }).click();
   await expect(input).toHaveValue('Keep child draft');
   await expect(scroller).toHaveJSProperty('scrollTop', 300);

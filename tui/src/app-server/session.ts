@@ -622,8 +622,8 @@ export class AppServerSession {
     return result.agent;
   }
 
-  async sendMessage(agentId: AgentId, message: string) {
-    return this.#client.call("agent/sendMessage", { target: this.#target, agent_id: agentId, message }, "agent_message");
+  async sendMessage(agentId: AgentId, message: string, attachments: import("../../../protocol/app-server/v41.js").UploadReceipt[] = []) {
+    return this.#client.call("agent/sendMessage", { target: this.#target, agent_id: agentId, message, attachments }, "agent_message");
   }
 
   async waitAgent(agentId: AgentId) {

@@ -4,8 +4,8 @@ import { StateDot } from '../../presentation/primitives/StateDot';
 import { displayText, message as uiMessage, type DisplayText } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
 import { createPortal } from 'react-dom';
-import { useEffect, useLayoutEffect, useState, useSyncExternalStore } from 'react';
-import type { AgentStatistics, RuntimeClientAgent, RuntimeClientJob, RuntimeClientTranscriptPage, MethodResult, WorkflowRunView, WorkflowRunId } from '../../../../protocol/app-server/v40';
+import { useEffect, useLayoutEffect, useContext, useMemo, useState, useSyncExternalStore } from 'react';
+import type { AgentStatistics, RuntimeClientAgent, RuntimeClientJob, RuntimeClientTranscriptPage, MethodResult, WorkflowRunView, WorkflowRunId } from '../../../../protocol/app-server/v41';
 import type { Observation } from '../../client/session-lifecycle/port';
 import { AppServerClient, RpcFailure } from '../../client/app-server';
 import { json } from '../../bindings/projection';
@@ -20,7 +20,8 @@ import { ConversationStats } from '../agent/UsageStats';
 import { agentDot, agentRunning, agentStatus } from '../agent/subagent-state';
 import { SubagentTrajectory } from '../agent/SubagentTrajectory';
 import { ComposerSeat } from '../agent/ComposerSeat';
-import { SubagentComposer } from '../agent/SubagentComposer';
+import { AgentComposer } from '../agent/AgentComposer';
+import { ArtifactResources } from '../../client/artifacts';
 import { IconRefreshOutline14, IconClockOutline16 } from '../../presentation/primitives/icons';
 
 const detail = (value: string) => value.length > 1024 ? `${value.slice(0, 1024)}…` : value;
@@ -51,13 +52,13 @@ function useActivityRequest({ client, sessionId }: Controls) {
   const pending = visible && !!state?.pending, error = visible ? state?.error : undefined;
   const enabled = !!client && !!sessionId && client.isAttachmentControlCurrent(sessionId, proof);
   async function run(operation: (client: AppServerClient, target: ReturnType<AppServerClient['target']>, current: () => boolean) => Promise<void>) {
-    if (!enabled || pending || !client || !sessionId || !proof) return;
+    if (!enabled || pending || !client || !sessionId || !proof) return false;
     const target = client.target(sessionId), owner = { proof };
     const current = () => client.isAttachmentObservationCurrent(sessionId, owner.proof);
-    if (!current()) return;
+    if (!current()) return false;
     setState({ operation: owner, pending: true });
-    try { await operation(client, target, current); if (current()) await client.refresh(sessionId); }
-    catch (cause) { if (current()) setState(previous => current() && previous?.operation === owner ? { ...previous, error: activityFailure(cause) } : previous); }
+    try { await operation(client, target, current); if (current()) await client.refresh(sessionId); return current(); }
+    catch (cause) { if (current()) setState(previous => current() && previous?.operation === owner ? { ...previous, error: activityFailure(cause) } : previous); return false; }
     finally { setState(previous => previous?.operation === owner ? { ...previous, pending: false } : previous); }
   }
   return { run, disabled: !enabled || pending, pending, error };
@@ -75,33 +76,48 @@ export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible
   const observeSettlement = (result: AgentWait, current: () => boolean) => {
     if (admission) setSettledActivation(previous => current() ? { proof: admission, activation_id: result.activation_id, outcome: result.outcome } : previous);
   };
-  const [message, setMessage] = useState('');
+
   const [transcript, setTranscript] = useState<RuntimeClientTranscriptPage>();
   const [transcriptRefresh, refreshTranscript] = useState(0);
   const [transcriptLoading, setTranscriptLoading] = useState(false);
   const [transcriptError, setTranscriptError] = useState<string>();
+  const [conversation, setConversation] = useState<Extract<MethodResult, { type: 'agent_conversation' }>['conversation']>();
+  const preview = useContext(PreviewContext);
   const { client, sessionId } = controls;
   const admission = useSyncExternalStore(client?.subscribe ?? noSubscription, () => sessionId ? client?.getSnapshot().views[sessionId]?.attachmentObservation : undefined);
-  useEffect(() => { if (admission) setTranscript(undefined); }, [admission]);
-  // A selected child view refreshes canonical content when native activation
-  // facts change. It never turns a transcript read into a lifecycle decision.
+  useEffect(() => { if (admission) { setTranscript(undefined); setConversation(undefined); } }, [admission]);
+  const artifacts = useMemo(() => client && sessionId && admission ? new ArtifactResources(client, sessionId, agent.agent_id) : undefined, [client, sessionId, admission, agent.agent_id]);
+  useEffect(() => () => artifacts?.dispose(), [artifacts]);
+  const scopedPreview = useMemo(() => preview ? {
+    openPreview: (artifact: Parameters<typeof preview.openPreview>[0]) => preview.openPreview({ ...artifact, source: { ...artifact.source, agentId: agent.agent_id } }),
+    download: (artifact: Parameters<typeof preview.download>[0]) => preview.download({ ...artifact, source: { ...artifact.source, agentId: agent.agent_id } }),
+  } : undefined, [preview, agent.agent_id]);
+  // Event-driven native watch: every response is a coherent child-owned cut.
+  // Cursor and activation travel together; no client invents stream identity.
   useEffect(() => {
-    if (!client || !sessionId || !admission || !client.isAttachmentObservationCurrent(sessionId, admission)) { setTranscriptLoading(false); return; }
-    const target = admission.target;
-    let observing = true;
+    if (!visible || !client || !sessionId || !admission || !client.isAttachmentObservationCurrent(sessionId, admission)) { setTranscriptLoading(false); return; }
+    let observing = true; const controller = new AbortController();
     const current = () => observing && client.isAttachmentObservationCurrent(sessionId, admission);
     setTranscriptLoading(true); setTranscriptError(undefined);
-    void client.request({ method: 'agent/transcript', params: { target, agent_id: agent.agent_id, limit: 64 } }, 'transcript', undefined, current)
-      .then(result => { if (current()) setTranscript(previous => {
-        if (!current()) return previous;
-        if (!previous || (previous.entries?.length ?? 0) <= 64) return result.page;
-        const latest = new Set(result.page.entries?.map(entry => entry.cursor));
-        return { ...result.page, next_cursor: previous.next_cursor, entries: [...(previous.entries ?? []).filter(entry => !latest.has(entry.cursor)), ...(result.page.entries ?? [])] };
-      }); })
-      .catch(cause => { if (current()) setTranscriptError(cause instanceof Error ? cause.message : String(cause)); })
-      .finally(() => { if (current()) setTranscriptLoading(false); });
-    return () => { observing = false; };
-  }, [client, sessionId, admission, agent.agent_id, agent.activation_id, agent.state, agent.observation.revision, transcriptRefresh]);
+    void (async () => {
+      let after: Extract<MethodResult, { type: 'agent_conversation' }>['conversation']['cursor'];
+      while (current()) {
+        const result = await client.request({ method: 'agent/conversation', params: { target: admission.target, agent_id: agent.agent_id, after } }, 'agent_conversation', undefined, current, controller.signal);
+        if (!current()) return;
+        setConversation(result.conversation);
+        const page = result.conversation.snapshot.transcript;
+        setTranscript(previous => {
+          if (!previous || (previous.entries?.length ?? 0) <= 64) return page;
+          const latest = new Set(page.entries?.map(entry => entry.cursor));
+          return { ...page, next_cursor: previous.next_cursor, entries: [...(previous.entries ?? []).filter(entry => !latest.has(entry.cursor)), ...(page.entries ?? [])] };
+        });
+        setTranscriptLoading(false);
+        after = result.conversation.cursor;
+        if (!after) return;
+      }
+    })().catch(cause => { if (current()) { setTranscriptError(cause instanceof Error ? cause.message : String(cause)); setTranscriptLoading(false); } });
+    return () => { observing = false; controller.abort(); };
+  }, [client, sessionId, admission, agent.agent_id, agent.activation_id, agent.state, transcriptRefresh, visible]);
   const unavailable = agent.state === 'unavailable';
   const acceptsMessage = agent.state === 'active' || agent.state === 'inactive';
   const readTranscript = (before?: string) => request.run(async (client, target, owned) => {
@@ -109,10 +125,10 @@ export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible
     const result = await client.request({ method: 'agent/transcript', params: { target, agent_id: agent.agent_id, before, limit: 64 } }, 'transcript', undefined, current);
     if (current()) { setTranscript(previous => !current() ? previous : before && previous ? { ...result.page, entries: [...(result.page.entries ?? []), ...(previous.entries ?? [])] } : result.page); }
   });
-  return <section className={css.agentConversation} data-agent-id={agent.agent_id} data-agent-state={agent.state} data-view={mode} data-activation-id={agent.current_activation ?? undefined} aria-label={tx('common:activity.agent-label', { name: agent.agent })}>
+  return <ArtifactContext.Provider value={artifacts}><PreviewContext.Provider value={scopedPreview}><section className={css.agentConversation} data-agent-id={agent.agent_id} data-agent-state={agent.state} data-view={mode} data-activation-id={agent.current_activation ?? undefined} aria-label={tx('common:activity.agent-label', { name: agent.agent })}>
     <div hidden={mode !== 'chat'} className={css.agentChat}><ChatViewport latestLabel={tx('agent:agent-transcript.return-to-latest')}><div className={chatCss.column}>
       {transcript?.next_cursor && <Button size="sm" disabled={request.disabled} onClick={() => void readTranscript(transcript.next_cursor!)}>{tx('common:activity.older')}</Button>}
-      <ArtifactContext.Provider value={undefined}><PreviewContext.Provider value={undefined}>{transcript && <AgentTranscript snapshot={{ conversation_id: agent.child_conversation_id, messages: [], statuses: [], attempt: null, transcript }} historicalDisabled/>}</PreviewContext.Provider></ArtifactContext.Provider>
+      {transcript && <AgentTranscript snapshot={conversation ? { ...conversation.snapshot, transcript } : { conversation_id: agent.child_conversation_id, messages: [], statuses: [], attempt: null, transcript }} historicalDisabled/>}
       {transcriptLoading && !transcript && <p role="status">{tx('common:activity.reading')}</p>}
       {transcript && !transcript.entries?.length && <p>{tx('common:activity.empty')}</p>}
       {metricsError && <p role="alert">{metricsError}</p>}
@@ -129,16 +145,21 @@ export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible
     </div>, headerHost)}
     <ComposerSeat>
       {!client && <div role="status"><StateDot state={agentDot(agent)}/>{agentStatus(agent, tx)}</div>}
-      {client && <SubagentComposer name={agent.agent} value={message} onChange={setMessage}
-        disabled={request.disabled || !acceptsMessage} pending={request.pending}
-        send={() => { const submitted = message; void request.run(async (client, target, current) => { await client.request({ method: 'agent/sendMessage', params: { target, agent_id: agent.agent_id, message: submitted } }, 'agent_message', undefined, current); if (current()) { setMessage(value => current() && value === submitted ? '' : value); refreshTranscript(value => current() ? value + 1 : value); } }); }}
-        running={agentRunning(agent)}
-        interruptDisabled={interruptRequest.disabled || unavailable || agent.state === 'inactive'}
-        interrupt={() => void interruptRequest.run(async (client, target, current) => { const result = await client.request({ method: 'agent/interrupt', params: { target, agent_id: agent.agent_id } }, 'agent_wait', undefined, current); if (current()) observeSettlement(result, current); })}
-        />}
+      {client && sessionId && <AgentComposer messageLabel={tx('common:activity.message-label', { name: agent.title })} busyEnterBehavior="steer" binding={`${sessionId}:${agent.agent_id}`}
+        disabled={request.disabled && !request.pending || !acceptsMessage} busy={request.pending} active={agentRunning(agent)}
+        uploadPolicy={client.getSnapshot().capabilities?.upload_policy}
+        onUpload={(files, operation) => client.upload(sessionId, files, { current: () => client.isAttachmentControlCurrent(sessionId, admission), acknowledged: () => {} }, operation)}
+        onReconcile={operation => client.uploadStatus(sessionId, operation)}
+        onSend={(message, attachments, _delivery, acknowledged) => request.run(async (client, target, current) => {
+          await client.request({ method: 'agent/sendMessage', params: { target, agent_id: agent.agent_id, message, attachments: [...attachments] } }, 'agent_message', acknowledged, current);
+          if (current()) refreshTranscript(value => value + 1);
+        })}
+        cancellationAvailable={!interruptRequest.disabled && !unavailable && agent.state !== 'inactive'}
+        onCancel={() => void interruptRequest.run(async (client, target, current) => { const result = await client.request({ method: 'agent/interrupt', params: { target, agent_id: agent.agent_id } }, 'agent_wait', undefined, current); if (current()) observeSettlement(result, current); })}
+      />}
       <ConversationStats statistics={metrics?.statistics} occupancy={metrics?.occupancy}/>
     </ComposerSeat>
-  </section>;
+  </section></PreviewContext.Provider></ArtifactContext.Provider>;
 }
 
 export function JobCard({ job, ...controls }: { job: RuntimeClientJob } & Controls) {

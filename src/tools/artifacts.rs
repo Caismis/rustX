@@ -342,11 +342,19 @@ impl ArtifactStore {
     /// # Errors
     /// Missing, invalid, non-regular or oversized artifacts are refused.
     pub fn read_bounded(&self, id: &ArtifactId) -> Result<Vec<u8>, ArtifactError> {
+        Self::read_bounded_from(&self.root, id)
+    }
+
+    /// Read existing conversation-owned bytes without creating a store.
+    pub(crate) fn read_bounded_from(
+        root: &Path,
+        id: &ArtifactId,
+    ) -> Result<Vec<u8>, ArtifactError> {
         validate_id(id)?;
         let mut file = File::options()
             .read(true)
             .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
-            .open(self.path_of(id))
+            .open(root.join(format!("{}.bin", id.as_str())))
             .map_err(|_| ArtifactError::WriteFailed("artifact unavailable".into()))?;
         let metadata = file
             .metadata()

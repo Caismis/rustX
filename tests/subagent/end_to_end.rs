@@ -1652,6 +1652,7 @@ async fn hard_parent_death_recovery(kill_child_without_drain: bool) {
                 target: recovered.target(),
                 agent_id: agent_id.clone(),
                 message: "cannot overlap unproven old ownership".into(),
+                attachments: Vec::new(),
             })
             .await;
         assert!(is_agent_settlement(&response), "{response:?}");

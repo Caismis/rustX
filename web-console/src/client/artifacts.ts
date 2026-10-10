@@ -8,15 +8,15 @@ export class ArtifactResources {
   private urls = new Set<string>();
   private active = 0;
   private disposed = false;
-  constructor(private client: AppServerClient, private sessionId: string) {}
-  private async transfer<T>(id: string, consume: (bytes: Uint8Array<ArrayBuffer>) => T, signal?: AbortSignal): Promise<T> {
+  constructor(private client: AppServerClient, private sessionId: string, private agentId?: string) {}
+  private async transfer<T>(id: string, consume: (bytes: Uint8Array<ArrayBuffer>) => T, signal?: AbortSignal, agentId = this.agentId): Promise<T> {
     if (this.disposed) throw new Error('Obsolete artifact view');
     if (this.active >= ARTIFACT_MAX_TRANSFERS || this.urls.size + this.active >= ARTIFACT_MAX_URLS) throw new Error('Artifact capacity reached; close a preview and retry.');
     const target = this.client.target(this.sessionId);
     const revision = this.client.getSnapshot().authorityRevision;
     this.active++;
     try {
-      const result = await this.client.request({ method: 'artifact/read', params: { target, artifact_id: id } }, 'artifact_bytes', undefined,
+      const result = await this.client.request(agentId ? { method: 'agent/artifactRead', params: { target, agent_id: agentId, artifact_id: id } } : { method: 'artifact/read', params: { target, artifact_id: id } }, 'artifact_bytes', undefined,
         () => !this.disposed && !signal?.aborted && revision === this.client.getSnapshot().authorityRevision
           && sameTarget(this.client.getSnapshot().views[this.sessionId]?.target, target));
       if (this.disposed || signal?.aborted || revision !== this.client.getSnapshot().authorityRevision || !sameTarget(this.client.getSnapshot().views[this.sessionId]?.target, target)) throw new Error('Obsolete artifact response');
@@ -35,9 +35,9 @@ export class ArtifactResources {
     });
   }
   /** Original bytes for an occurrence lease; that lease owns its URL separately. */
-  readBytes(id: string, signal: AbortSignal): Promise<Uint8Array<ArrayBuffer>> {
+  readBytes(id: string, signal: AbortSignal, agentId = this.agentId): Promise<Uint8Array<ArrayBuffer>> {
     signal.throwIfAborted();
-    return this.transfer(id, bytes => { signal.throwIfAborted(); return bytes; }, signal);
+    return this.transfer(id, bytes => { signal.throwIfAborted(); return bytes; }, signal, agentId);
   }
   release(url: string) { if (this.urls.delete(url)) URL.revokeObjectURL(url); }
   dispose() { this.disposed = true; for (const url of this.urls) URL.revokeObjectURL(url); this.urls.clear(); }

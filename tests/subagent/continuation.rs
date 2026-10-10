@@ -82,6 +82,7 @@ async fn real_child_resumes_same_identity_history_and_frozen_authority() {
             target: process.target(),
             agent_id: first.agent_id.clone(),
             message: "CONTINUE-411: use your earlier answer".into(),
+            attachments: Vec::new(),
         })
         .await;
     let Ok(MethodResult::AgentMessage {
@@ -188,6 +189,7 @@ async fn real_child_resumes_same_identity_history_and_frozen_authority() {
             target: recovered.target(),
             agent_id: first.agent_id.clone(),
             message: "THIRD-411: continue after recovery".into(),
+            attachments: Vec::new(),
         })
         .await;
     let Ok(MethodResult::AgentMessage {

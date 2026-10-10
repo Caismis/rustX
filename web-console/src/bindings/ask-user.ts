@@ -1,4 +1,4 @@
-import type { ForegroundToolExecution } from '../../../protocol/app-server/v40';
+import type { ForegroundToolExecution } from '../../../protocol/app-server/v41';
 import type { QuestionRowView } from '../presentation/agent/QuestionRow';
 
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);

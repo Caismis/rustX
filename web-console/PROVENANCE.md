@@ -709,7 +709,9 @@ The same immutable `ddefc45fbc7f8e46dd73185e68295696d1297887` baseline supplies:
 - `presentation/primitives/Switch.tsx` and `.module.css`: controlled accessible
   toggle and token-based appearance, with the retained MIT notice.
 - `presentation/right-panel/ArtifactPreview.module.css`: bounded adaptation of
-  TextPreview header, scroll body and wrap treatment. Host filesystem operations,
+  TextPreview 38px path/action header, scroll body and wrap treatment, plus
+  MarkdownBody document padding and normal whitespace. Native preview strips reuse
+  the already attributed dockkit chips, file icons and sidebar chrome. Host filesystem operations,
   registry, resource store, slots, automatic reload and binary renderer framework
   are excluded. The TS preview component is rustX-authored.
 
@@ -1946,14 +1948,29 @@ reads recorded native ToolResult JSON: create and message operations display
 receipts, lists retain recorded Agent states, and waits display their captured
 activation outcomes. The live roster supplies navigation only. Manual refresh and
 wait controls move to the child header; the input retains its native send/interrupt
-controls and the shared composer geometry. No child model, permission, attachment,
-one-shot closure, per-task title or live text stream capability is invented.
-Child file preview/download also lacks a child-scoped native read API.
+controls and the shared composer geometry. At that revision the child model/permission controls were absent. The child capability update below replaces the committed-only transcript, input and preview paths with native ownership.
 File cards without a Preview owner show metadata with a disabled preview action,
-so absence of native access is not presented as a working click target. Child transcript
-reads expose committed history; independent Trace and statistics remain available.
+so absence of native access is not presented as a working click target. Independent Trace and statistics use their existing native read domains.
 Native adopted inputs now distinguish human messages from runtime/Agent/mixed
 context; late context keeps its chronological position within its native Attempt.
 Browser tests use the production App and fixture transport at 1440 and 390 pixels.
 The Browser plugin is unavailable in this session, so verification uses the
 project's installed Playwright. Screenshots are fixture evidence, not a live model run.
+
+### Native child capabilities (2026-10-10)
+
+Studied Harness `tool-subagent` description/prompt separation and `ui-subagent`
+`sidebar-chat/index.tsx`, which retains a child Session and reuses the full
+conversation/input component. Also inspected ZCode's `SubagentSessionSidePane`
+and Codex's App Server thread subscriptions. The implementation keeps rustX
+execution authority in Rust: task titles are frozen and persisted at creation;
+child reads reuse the child's complete Runtime Client snapshot/cursor endpoint;
+active and inactive input carries native Session upload references through IPC;
+file/artifact access resolves the owned child conversation and workspace.
+
+WebUI reuses AgentComposer and AttachmentIntake, scopes both conversation and
+trajectory preview resources to the Agent, and retires native observation reads
+when navigation changes. No child model settings are introduced. App Server v41,
+Runtime Client v63, child IPC v30 and Product Host file-read v3 are synchronized.
+The Browser plugin is unavailable; the repository's pinned Playwright browser
+validates real native child processes and deterministic provider streams.

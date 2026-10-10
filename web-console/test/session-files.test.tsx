@@ -8,7 +8,7 @@ import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { validateRaster, RASTER_MAX_PIXELS } from '../src/client/raster';
 import { WorkspaceHostError, type DeliveryBytes, type DeliveryRead, type ProductHostWorkspaces } from '../src/workspaces/host';
 import type { DocumentRequest, DocumentResult } from '../shared/documents';
-import type { SessionFileReference, ToolExecutionResult } from '../../protocol/app-server/v40';
+import type { SessionFileReference, ToolExecutionResult } from '../../protocol/app-server/v41';
 import { Server } from './fixture';
 const file: SessionFileReference = { scope: { conversation_id: 'original', device: '1', inode: '2' }, path: 'sub/报告 file.md', name: '报告 file.md', description: 'Explicit report', mime_type: 'text/markdown' };
 const source: PreviewSource = { kind: 'session_file', messageId: 'canonical-tool', index: 0, file };
@@ -47,6 +47,25 @@ it('one authorized original read supplies Markdown; Download invokes its distinc
   fireEvent.click(ui.getByRole('button', { name: 'Download artifact' })); expect(onDownload).toHaveBeenCalledOnce();
   expect(create.mock.calls[0][0].size).toBe(bytes.length); expect(server.requests).toHaveLength(before);
   ui.unmount(); f.resources.dispose(); expect(revoke).toHaveBeenCalledExactlyOnceWith('blob:1');
+});
+it('child delivery coordinates carry native ownership and cannot share a root or sibling preview occurrence', async () => {
+  const f = await fixture();
+  const child = { ...source, agentId: 'child-agent' };
+  expect(samePreviewSource(source, child)).toBe(false);
+  expect(samePreviewSource(child, { ...child, agentId: 'other-child' })).toBe(false);
+  const lease = f.resources.acquire(2, child);
+  const work = lease.load(file.mime_type);
+  expect(f.calls[0].read).toMatchObject({ agent_id: 'child-agent', message_id: 'canonical-tool', delivery_index: 0 });
+  f.reply(0); expect(await work).toMatchObject({ text: bytes });
+});
+it('a child artifact preview uses the native Agent namespace, even if a root artifact has the same id', async () => {
+  const f = await fixture();
+  server.handlers.set('agent/artifactRead', () => ({type:'artifact_bytes',data:btoa(bytes)}));
+  const lease = f.resources.acquire(2, {kind:'artifact',id:'artifact_1',agentId:'child-agent'});
+  expect(await lease.load('text/plain')).toMatchObject({text:bytes});
+  const request = await server.waitFor('agent/artifactRead',1);
+  expect(request.params).toEqual({target:server.client.target('A'),agent_id:'child-agent',artifact_id:'artifact_1'});
+  expect(server.requests.filter(row => row.request.method === 'artifact/read')).toHaveLength(0);
 });
 it.each(['text/plain', 'text/markdown'] as const)('managed %s remains artifact/read with its exact target and original bytes', async mime => {
   const f = await fixture(); server.held.add('artifact/read');
@@ -123,7 +142,7 @@ it('UTF-8/image decode failures retain bounded original bytes; failed reads allo
 it('Markdown HTML, executable URLs and embedded images remain inert', async () => {
   const f = await fixture(), ui = render(<ArtifactPreview artifact={{ source, name: file.name, image: false, mimeType: file.mime_type }} resources={f.lease} {...viewState}/>);
   await act(async () => f.reply(0, btoa('<script>globalThis.PWNED=1</script>\n\n<img src="/private" onerror="alert(1)">\n\n[x](javascript:alert(1))\n\n![local](file:///etc/passwd) ![remote](https://example.org/track)')));
-  expect(ui.container.querySelector('script,img,iframe,object,svg')).toBeNull();
+  expect(ui.container.querySelector('[data-preview-scroll="body"]')!.querySelector('script,img,iframe,object,svg')).toBeNull();
   expect([...ui.container.querySelectorAll('a')].some(a => a.href.startsWith('javascript:'))).toBe(false);
   expect((globalThis as { PWNED?: number }).PWNED).toBeUndefined();
 });

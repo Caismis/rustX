@@ -36,6 +36,119 @@
           "properties": {
             "method": {
               "type": "string",
+              "const": "agent/artifactRead"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "agent_id": {
+                  "$ref": "#/$defs/AgentId"
+                },
+                "artifact_id": {
+                  "$ref": "#/$defs/ArtifactId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "agent_id",
+                "artifact_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "agent/deliveryRead"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "agent_id": {
+                  "$ref": "#/$defs/AgentId"
+                },
+                "message_id": {
+                  "$ref": "#/$defs/MessageId"
+                },
+                "delivery_index": {
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 0,
+                  "maximum": 7
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "agent_id",
+                "message_id",
+                "delivery_index"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "agent/deliveryLocate"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "agent_id": {
+                  "$ref": "#/$defs/AgentId"
+                },
+                "message_id": {
+                  "$ref": "#/$defs/MessageId"
+                },
+                "delivery_index": {
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 0,
+                  "maximum": 7
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "agent_id",
+                "message_id",
+                "delivery_index"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
               "const": "artifact/read"
             },
             "params": {
@@ -745,6 +858,70 @@
           "properties": {
             "method": {
               "type": "string",
+              "const": "agent/conversationCancel"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "request_id": {
+                  "$ref": "#/$defs/RequestId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "request_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "agent/conversation"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "agent_id": {
+                  "$ref": "#/$defs/AgentId"
+                },
+                "after": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/AgentConversationCursor"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "agent_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
               "const": "agent/statistics"
             },
             "params": {
@@ -779,6 +956,12 @@
             "params": {
               "type": "object",
               "properties": {
+                "attachments": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/UploadReceipt"
+                  }
+                },
                 "target": {
                   "$ref": "#/$defs/AttachmentTarget"
                 },
@@ -791,6 +974,7 @@
               },
               "additionalProperties": false,
               "required": [
+                "attachments",
                 "target",
                 "agent_id",
                 "message"
@@ -2294,6 +2478,10 @@
       "description": "The identity of one Runtime Client attachment.\n\nDistinct from [`ConversationId`], [`AttemptId`], [`RuntimeClientCursor`],\nand request ids: one attachment is one client session, and reconnecting\nalways receives a new attachment identity.",
       "type": "string"
     },
+    "AgentId": {
+      "description": "Identifies an Agent independently of its finite activations.\nFor a continuable child, this is the durable Agent-domain identity of\nits child Conversation and remains unchanged across resume.",
+      "type": "string"
+    },
     "ArtifactId": {
       "description": "Identifies a durable artifact produced or referenced by the runtime.\n\nAn artifact is identified by an opaque runtime-owned id, never by a\nlocal filesystem path: paths are executor concerns and are not a\nuniversal durable artifact identity.",
       "type": "string"
@@ -2782,18 +2970,56 @@
       "type": "string",
       "pattern": "^exec_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     },
-    "AgentId": {
-      "description": "Identifies an Agent independently of its finite activations.\nFor a continuable child, this is the durable Agent-domain identity of\nits child Conversation and remains unchanged across resume.",
+    "AgentConversationCursor": {
+      "type": "object",
+      "properties": {
+        "activation_id": {
+          "$ref": "#/$defs/SubagentId"
+        },
+        "cursor": {
+          "$ref": "#/$defs/RuntimeClientCursor"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "activation_id",
+        "cursor"
+      ]
+    },
+    "SubagentId": {
+      "description": "Identifies one finite activation owned by an Agent, or one finite\nWorkflow child execution.\n\nRepeated native Agent activations have distinct `SubagentId`s while\nretaining the same durable `AgentId`. This is not an OS pid: process\nidentity or PID reuse can never establish durable ownership or proof\nof physical settlement.",
       "type": "string"
+    },
+    "RuntimeClientCursor": {
+      "description": "The external cursor of the Runtime Client observation stream.\n\nA cursor identifies one position in the externally visible\n`RuntimeClientEvent` sequence: cursor `C` means \"every Runtime Client\nevent through event `C` has been applied to the snapshot\". It is:\n\n- monotonic within the Runtime Client observation stream;\n- **not** an alias of `u64`;\n- **not** the mailbox [`InboundSequence`](crate::runtime::inbound::InboundSequence);\n- **not** [`RuntimeEventEnvelope::sequence`](crate::events::types::RuntimeEventEnvelope);\n- **not** any future Event Journal sequence;\n- owned by the runtime observation stream, so it survives attachment\n  detach/reconnect;\n- independent of its numeric representation: protocol versioning never\n  derives anything from cursor encoding.\n\nCursor allocation is committed by exactly one linearization owner (the\nRuntime Client projection) together with event publication; overflow\nfails explicitly and never wraps.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+    },
+    "UploadReceipt": {
+      "description": "A server-issued capability, scoped to exactly one Session.",
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "$ref": "#/$defs/SessionId"
+        },
+        "batch_id": {
+          "type": "string"
+        },
+        "token": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "session_id",
+        "batch_id",
+        "token"
+      ]
     },
     "RuntimeClientTranscriptCursor": {
       "description": "The cursor domain of durable transcript paging.",
       "type": "string",
       "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-    },
-    "SubagentId": {
-      "description": "Identifies one finite activation owned by an Agent, or one finite\nWorkflow child execution.\n\nRepeated native Agent activations have distinct `SubagentId`s while\nretaining the same durable `AgentId`. This is not an OS pid: process\nidentity or PID reuse can never establish durable ownership or proof\nof physical settlement.",
-      "type": "string"
     },
     "InitializeParams": {
       "type": "object",
@@ -2898,11 +3124,6 @@
           "const": "after"
         }
       ]
-    },
-    "RuntimeClientCursor": {
-      "description": "The external cursor of the Runtime Client observation stream.\n\nA cursor identifies one position in the externally visible\n`RuntimeClientEvent` sequence: cursor `C` means \"every Runtime Client\nevent through event `C` has been applied to the snapshot\". It is:\n\n- monotonic within the Runtime Client observation stream;\n- **not** an alias of `u64`;\n- **not** the mailbox [`InboundSequence`](crate::runtime::inbound::InboundSequence);\n- **not** [`RuntimeEventEnvelope::sequence`](crate::events::types::RuntimeEventEnvelope);\n- **not** any future Event Journal sequence;\n- owned by the runtime observation stream, so it survives attachment\n  detach/reconnect;\n- independent of its numeric representation: protocol versioning never\n  derives anything from cursor encoding.\n\nCursor allocation is committed by exactly one linearization owner (the\nRuntime Client projection) together with event publication; overflow\nfails explicitly and never wraps.",
-      "type": "string",
-      "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
     },
     "UserInputBlock": {
       "description": "Clients author text and reference completed server receipts only.",
@@ -6229,6 +6450,40 @@
         {
           "type": "object",
           "properties": {
+            "accepted": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "const": "agent_conversation_cancelled"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "accepted"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "conversation": {
+              "$ref": "#/$defs/AgentConversation"
+            },
+            "type": {
+              "type": "string",
+              "const": "agent_conversation"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "conversation"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "metrics": {
               "$ref": "#/$defs/AgentStatistics"
             },
@@ -7135,27 +7390,6 @@
         "receipt",
         "file",
         "path"
-      ]
-    },
-    "UploadReceipt": {
-      "description": "A server-issued capability, scoped to exactly one Session.",
-      "type": "object",
-      "properties": {
-        "session_id": {
-          "$ref": "#/$defs/SessionId"
-        },
-        "batch_id": {
-          "type": "string"
-        },
-        "token": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "session_id",
-        "batch_id",
-        "token"
       ]
     },
     "UploadedFileRef": {
@@ -14390,6 +14624,9 @@
       "description": "One durable child Agent, keyed by `agent_id` across every activation.\n\nThe registry owns lifecycle arbitration. Journal ownership facts rebuild\nidentity and activation correlation; canonical child history owns content.\n`activation_id` identifies the latest activation, while `current_activation`\nis absent when inactive or reserving the next activation. Neither replaces\nthe stable Agent identity. Activity is bounded observation, never authority.",
       "type": "object",
       "properties": {
+        "title": {
+          "type": "string"
+        },
         "parent_agent_id": {
           "$ref": "#/$defs/AgentId"
         },
@@ -14468,6 +14705,7 @@
       },
       "additionalProperties": false,
       "required": [
+        "title",
         "parent_agent_id",
         "activation_id",
         "agent_id",
@@ -15022,828 +15260,35 @@
         "dirty"
       ]
     },
-    "AgentStatistics": {
+    "AgentConversation": {
       "type": "object",
       "properties": {
-        "statistics": {
-          "$ref": "#/$defs/ConversationStatistics"
+        "agent_id": {
+          "$ref": "#/$defs/AgentId"
         },
-        "occupancy": {
+        "activation_id": {
+          "$ref": "#/$defs/SubagentId"
+        },
+        "cursor": {
+          "description": "None for a durable, settled read, which has no live observation stream.",
           "anyOf": [
             {
-              "$ref": "#/$defs/ContextOccupancy"
+              "$ref": "#/$defs/AgentConversationCursor"
             },
             {
               "type": "null"
             }
           ]
         },
-        "duration": {
-          "$ref": "#/$defs/AgentDuration"
+        "snapshot": {
+          "$ref": "#/$defs/RuntimeClientSnapshot"
         }
       },
       "additionalProperties": false,
       "required": [
-        "statistics",
-        "duration"
-      ]
-    },
-    "AgentDuration": {
-      "type": "object",
-      "properties": {
-        "settled_ms": {
-          "description": "Sum of this child's closed working intervals, excluding inactive gaps.",
-          "type": "string",
-          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-        },
-        "active": {
-          "description": "Last interval, if its terminal event has not been observed.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AgentActiveInterval"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "settled_ms"
-      ]
-    },
-    "AgentActiveInterval": {
-      "type": "object",
-      "properties": {
-        "started_at": {
-          "type": "string",
-          "format": "date-time"
-        },
-        "observed_at": {
-          "description": "Last durable evidence. Non-running children freeze here, including recovery.",
-          "type": "string",
-          "format": "date-time"
-        },
-        "running": {
-          "description": "Authoritative live lifecycle, never inferred from a missing terminal.",
-          "type": "boolean"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "started_at",
-        "observed_at",
-        "running"
-      ]
-    },
-    "RuntimeClientAgentWorkspaceDisposalOutcome": {
-      "description": "The public result of disposing a retained subagent workspace.",
-      "oneOf": [
-        {
-          "description": "The retained physical worktree and its exact runtime branch were\nremoved by this request.",
-          "type": "string",
-          "const": "disposed"
-        },
-        {
-          "description": "The same child resource was disposed by an earlier request. No\nphysical deletion is attempted for this result.",
-          "type": "string",
-          "const": "already_disposed"
-        },
-        {
-          "description": "The exact worktree was removed, but branch compare-delete settlement\nremains pending and the identity-based request may be retried.",
-          "type": "string",
-          "const": "disposal_pending"
-        },
-        {
-          "description": "The child has no retained isolated resource to dispose.",
-          "type": "string",
-          "const": "no_retained_workspace"
-        }
-      ]
-    },
-    "ServerCapabilities": {
-      "type": "object",
-      "properties": {
-        "upload_policy": {
-          "$ref": "#/$defs/UploadPolicy"
-        },
-        "multi_session": {
-          "type": "boolean"
-        },
-        "single_writable_controller": {
-          "type": "boolean"
-        },
-        "headless_interactions": {
-          "type": "boolean"
-        },
-        "delivery_access": {
-          "description": "Whether this connection holds transport-granted delivery access.\nReporting it grants nothing; the native seam checks the capability.",
-          "type": "boolean"
-        },
-        "experimental_methods": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "upload_policy",
-        "multi_session",
-        "single_writable_controller",
-        "headless_interactions",
-        "delivery_access",
-        "experimental_methods"
-      ]
-    },
-    "UploadPolicy": {
-      "description": "Finite native storage admission, independent of image and control-frame limits.",
-      "type": "object",
-      "properties": {
-        "max_file_bytes": {
-          "type": "integer",
-          "format": "uint",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "max_transfer_bytes": {
-          "type": "integer",
-          "format": "uint",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "max_files_per_transfer": {
-          "type": "integer",
-          "format": "uint",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "max_uploads_per_user_input": {
-          "type": "integer",
-          "format": "uint",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "max_upload_bytes_per_user_input": {
-          "type": "integer",
-          "format": "uint",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "max_concurrent_transfers": {
-          "type": "integer",
-          "format": "uint",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "max_chunk_bytes": {
-          "type": "integer",
-          "format": "uint",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "max_file_bytes",
-        "max_transfer_bytes",
-        "max_files_per_transfer",
-        "max_uploads_per_user_input",
-        "max_upload_bytes_per_user_input",
-        "max_concurrent_transfers",
-        "max_chunk_bytes"
-      ]
-    },
-    "SessionSnapshot": {
-      "description": "Bounded authoritative metadata for one Session.\n\nThe graph is deliberately not embedded here. Callers that need the graph\nuse the bounded tree page seam below, so `/session`, switch results, and\nrestart metadata never materialize every historical node.",
-      "type": "object",
-      "properties": {
-        "id": {
-          "description": "Session identity.",
-          "$ref": "#/$defs/SessionId"
-        },
-        "name": {
-          "description": "The user-defined display name, when this Session has one.\n\nA Session is born unnamed. The name is display metadata a user\nchooses, never an identity: nothing resolves a Session by it, and an\nunnamed Session is a complete, ordinary Session.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "created_at": {
-          "description": "Creation instant.",
-          "type": "string",
-          "format": "date-time"
-        },
-        "updated_at": {
-          "description": "Last metadata/active-node publication instant.",
-          "type": "string",
-          "format": "date-time"
-        },
-        "active_node": {
-          "description": "The active node selected in this Session.",
-          "$ref": "#/$defs/SessionNodeId"
-        },
-        "active_conversation_id": {
-          "description": "The conversation owned by the active node.",
-          "$ref": "#/$defs/ConversationId"
-        },
-        "node_count": {
-          "description": "Number of persisted nodes, useful metadata for a bounded tree view.",
-          "type": "integer",
-          "format": "uint",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        }
-      },
-      "required": [
-        "id",
-        "created_at",
-        "updated_at",
-        "active_node",
-        "active_conversation_id",
-        "node_count"
-      ]
-    },
-    "SessionSummary": {
-      "description": "Native display metadata, shared by exact identity reads and catalog rows.",
-      "type": "object",
-      "properties": {
-        "ownership_generation": {
-          "description": "Native execution ownership generation, encoded as an exact decimal integer.\nChanges only when active-node ownership is replaced; never a display timestamp.",
-          "type": "string"
-        },
-        "cwd": {
-          "description": "Canonical durable Session cwd, projected without loading a runtime.",
-          "type": "string"
-        },
-        "id": {
-          "description": "Session identity.",
-          "$ref": "#/$defs/SessionId"
-        },
-        "name": {
-          "description": "The user-defined display name, when this Session has one.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "preview": {
-          "description": "The first ordinary user message of this Session's root lineage,\nbounded to one line. It is what an unnamed row is recognized by, and\nit is the client-facing projection of the persisted\n`display_preview`: the catalog stores the derived line so listing,\npagination, and search never open a conversation store. `None` is\nlegitimate — no ordinary user message exists yet, or the first one\nhas no renderable text — and yields the client-side identity\nfallback.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "updated_at": {
-          "description": "Latest committed human-message time, or creation time for a new Session.",
-          "type": "string",
-          "format": "date-time"
-        },
-        "active_node": {
-          "description": "Active node in the session.",
-          "$ref": "#/$defs/SessionNodeId"
-        }
-      },
-      "required": [
-        "ownership_generation",
-        "cwd",
-        "id",
-        "updated_at",
-        "active_node"
-      ]
-    },
-    "SessionNode": {
-      "description": "One node in the native Session graph.",
-      "type": "object",
-      "properties": {
-        "ordinal": {
-          "description": "Explicit durable publication order, never inferred from UUID bytes.",
-          "type": "string",
-          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-        },
-        "id": {
-          "description": "Node identity.",
-          "$ref": "#/$defs/SessionNodeId"
-        },
-        "parent": {
-          "description": "Parent node within the same Session, when this is a tree branch.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SessionNodeId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "conversation_id": {
-          "description": "The one independent linear `ConversationRuntime` lineage of this node.",
-          "$ref": "#/$defs/ConversationId"
-        },
-        "origin": {
-          "description": "Immutable product-level origin metadata.",
-          "$ref": "#/$defs/SessionNodeOrigin"
-        }
-      },
-      "required": [
-        "ordinal",
-        "id",
-        "conversation_id",
-        "origin"
-      ]
-    },
-    "SessionNodeOrigin": {
-      "description": "Why one `SessionNode` was created.",
-      "oneOf": [
-        {
-          "description": "A new empty conversation lineage.",
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "new"
-            }
-          },
-          "required": [
-            "type"
-          ]
-        },
-        {
-          "description": "A clone with structure selected at source Surface revision R.\nTemporal provenance was frozen separately at invocation-time native cut C.",
-          "type": "object",
-          "properties": {
-            "source_session": {
-              "description": "Source Session identity.",
-              "$ref": "#/$defs/SessionId"
-            },
-            "source_node": {
-              "description": "Source node identity.",
-              "$ref": "#/$defs/SessionNodeId"
-            },
-            "source_surface_revision": {
-              "description": "Selected structural source revision R, not an execution timestamp.",
-              "$ref": "#/$defs/SurfaceRevision"
-            },
-            "type": {
-              "type": "string",
-              "const": "clone"
-            }
-          },
-          "required": [
-            "type",
-            "source_session",
-            "source_node",
-            "source_surface_revision"
-          ]
-        },
-        {
-          "description": "A lineage structurally narrowed at one selected message boundary.\nTemporal provenance remains bounded to the captured native cut C.",
-          "type": "object",
-          "properties": {
-            "source_session": {
-              "description": "Source Session identity.",
-              "$ref": "#/$defs/SessionId"
-            },
-            "source_node": {
-              "description": "Source node identity.",
-              "$ref": "#/$defs/SessionNodeId"
-            },
-            "source_surface_revision": {
-              "description": "Selected structural source revision R, not an execution timestamp.",
-              "$ref": "#/$defs/SurfaceRevision"
-            },
-            "source_message": {
-              "description": "Exact selected source message; `side` determines the retained prefix.",
-              "$ref": "#/$defs/MessageId"
-            },
-            "side": {
-              "description": "Explicit retained side of the selected message.",
-              "$ref": "#/$defs/LineageSide"
-            },
-            "type": {
-              "type": "string",
-              "const": "fork"
-            }
-          },
-          "required": [
-            "type",
-            "source_session",
-            "source_node",
-            "source_surface_revision",
-            "source_message",
-            "side"
-          ]
-        }
-      ]
-    },
-    "SessionUserMessageBoundary": {
-      "description": "One user-message boundary the native product exposes for `/fork` and\n`/tree`. The revision fixes structural selection; temporal evidence is\ncaptured separately at the copy operation's native read cut C.",
-      "type": "object",
-      "properties": {
-        "surface_revision": {
-          "description": "The exact retained Surface revision containing the message.",
-          "$ref": "#/$defs/SurfaceRevision"
-        },
-        "message": {
-          "description": "The canonical user message at that boundary.",
-          "$ref": "#/$defs/UserMessageBlock"
-        }
-      },
-      "required": [
-        "surface_revision",
-        "message"
-      ]
-    },
-    "RuntimeClientSessionDeletionResult": {
-      "description": "Bounded external outcomes shared by App Server and local presentation.",
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "preview": {
-              "$ref": "#/$defs/RuntimeClientSessionDeletePreview"
-            },
-            "status": {
-              "type": "string",
-              "const": "preview"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "status",
-            "preview"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "session_id": {
-              "$ref": "#/$defs/SessionId"
-            },
-            "status": {
-              "type": "string",
-              "const": "deleted"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "status",
-            "session_id"
-          ]
-        },
-        {
-          "description": "Invalidates confirmation; only a fresh preview supplies a replacement token.",
-          "type": "object",
-          "properties": {
-            "session_id": {
-              "$ref": "#/$defs/SessionId"
-            },
-            "status": {
-              "type": "string",
-              "const": "stale"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "status",
-            "session_id"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "session_id": {
-              "$ref": "#/$defs/SessionId"
-            },
-            "reason": {
-              "$ref": "#/$defs/RuntimeClientSessionDeletionBlocker"
-            },
-            "status": {
-              "type": "string",
-              "const": "blocked"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "status",
-            "session_id",
-            "reason"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "session_id": {
-              "$ref": "#/$defs/SessionId"
-            },
-            "status": {
-              "type": "string",
-              "const": "committed_cleanup_pending"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "status",
-            "session_id"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "session_id": {
-              "$ref": "#/$defs/SessionId"
-            },
-            "status": {
-              "type": "string",
-              "const": "committed_durability_uncertain"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "status",
-            "session_id"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "session_id": {
-              "$ref": "#/$defs/SessionId"
-            },
-            "status": {
-              "type": "string",
-              "const": "not_found"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "status",
-            "session_id"
-          ]
-        }
-      ]
-    },
-    "RuntimeClientSessionDeletePreview": {
-      "description": "Confirmation metadata; counts include the complete native ownership graph.",
-      "type": "object",
-      "properties": {
-        "session_id": {
-          "$ref": "#/$defs/SessionId"
-        },
-        "name": {
-          "description": "Display name, truncated to at most 256 Unicode scalar values.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "target_revision": {
-          "type": "string"
-        },
-        "owned_node_count": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "owned_conversation_count": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "owned_child_count": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "session_id",
-        "target_revision",
-        "owned_node_count",
-        "owned_conversation_count",
-        "owned_child_count"
-      ]
-    },
-    "RuntimeClientSessionDeletionBlocker": {
-      "description": "Bounded safety summary. Resource identities and storage diagnostics stay native.",
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "kind": {
-              "type": "string",
-              "const": "resource_conflict"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "resource_count": {
-              "type": "integer",
-              "format": "uint64",
-              "minimum": 0,
-              "maximum": 9007199254740991
-            },
-            "kind": {
-              "type": "string",
-              "const": "workspace"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "kind",
-            "resource_count"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "kind": {
-              "type": "string",
-              "const": "invalid_ownership"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "additionalProperties": false
-        }
-      ]
-    },
-    "ConfigurationApplication": {
-      "type": "object",
-      "properties": {
-        "scope": {
-          "description": "The application-scope key. A Session application carries the Session\nidentity here; a source application carries `SourceTarget::\napplication_scope`. It is an application key, never a source owner.",
-          "type": "string"
-        },
-        "sources": {
-          "description": "The authored source owners this application composes, lowest authority\nfirst. The User document always participates; a Workspace-rooted capture\nalso names the exact canonical configuration directory it was taken\nfrom. This is the only fact that answers which authoring surface owns a\nconfiguration failure; it is never derived from `scope`.",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/SourceTarget"
-          }
-        },
-        "version": {
-          "type": "string",
-          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-        },
-        "desired": {
-          "$ref": "#/$defs/ApplicationIdentity"
-        },
-        "units": {
-          "type": "object",
-          "properties": {
-            "capabilities": {
-              "$ref": "#/$defs/UnitApplication"
-            },
-            "execution_policy": {
-              "$ref": "#/$defs/UnitApplication"
-            },
-            "instructions": {
-              "$ref": "#/$defs/UnitApplication"
-            },
-            "process_bindings": {
-              "$ref": "#/$defs/UnitApplication"
-            },
-            "provider": {
-              "$ref": "#/$defs/UnitApplication"
-            },
-            "shared_capacity": {
-              "$ref": "#/$defs/UnitApplication"
-            }
-          },
-          "additionalProperties": false
-        },
-        "candidate": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AvailableConfiguration"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "scope",
-        "sources",
-        "version",
-        "desired",
-        "units"
-      ]
-    },
-    "UnitApplication": {
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "status": {
-              "type": "string",
-              "const": "applied"
-            }
-          },
-          "required": [
-            "status"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "status": {
-              "type": "string",
-              "const": "preparing"
-            }
-          },
-          "required": [
-            "status"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "impact": {
-              "$ref": "#/$defs/CacheImpact"
-            },
-            "status": {
-              "type": "string",
-              "const": "ready"
-            }
-          },
-          "required": [
-            "status",
-            "impact"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "diagnostic": {
-              "type": "string"
-            },
-            "status": {
-              "type": "string",
-              "const": "failed"
-            }
-          },
-          "required": [
-            "status",
-            "diagnostic"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "status": {
-              "type": "string",
-              "const": "process_restart"
-            }
-          },
-          "required": [
-            "status"
-          ]
-        }
-      ]
-    },
-    "CacheImpact": {
-      "type": "string",
-      "enum": [
-        "preserved",
-        "prefix_changed",
-        "cache_namespace_changed",
-        "unproven"
-      ]
-    },
-    "AvailableConfiguration": {
-      "type": "object",
-      "properties": {
-        "identity": {
-          "$ref": "#/$defs/ApplicationIdentity"
-        },
-        "expected_binding": {
-          "type": "string",
-          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-        },
-        "impact": {
-          "$ref": "#/$defs/CacheImpact"
-        }
-      },
-      "required": [
-        "identity",
-        "expected_binding",
-        "impact"
+        "agent_id",
+        "activation_id",
+        "snapshot"
       ]
     },
     "RuntimeClientSnapshot": {
@@ -19007,6 +18452,830 @@
         "status"
       ]
     },
+    "AgentStatistics": {
+      "type": "object",
+      "properties": {
+        "statistics": {
+          "$ref": "#/$defs/ConversationStatistics"
+        },
+        "occupancy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ContextOccupancy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "duration": {
+          "$ref": "#/$defs/AgentDuration"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "statistics",
+        "duration"
+      ]
+    },
+    "AgentDuration": {
+      "type": "object",
+      "properties": {
+        "settled_ms": {
+          "description": "Sum of this child's closed working intervals, excluding inactive gaps.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "active": {
+          "description": "Last interval, if its terminal event has not been observed.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentActiveInterval"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "settled_ms"
+      ]
+    },
+    "AgentActiveInterval": {
+      "type": "object",
+      "properties": {
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "observed_at": {
+          "description": "Last durable evidence. Non-running children freeze here, including recovery.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "running": {
+          "description": "Authoritative live lifecycle, never inferred from a missing terminal.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "started_at",
+        "observed_at",
+        "running"
+      ]
+    },
+    "RuntimeClientAgentWorkspaceDisposalOutcome": {
+      "description": "The public result of disposing a retained subagent workspace.",
+      "oneOf": [
+        {
+          "description": "The retained physical worktree and its exact runtime branch were\nremoved by this request.",
+          "type": "string",
+          "const": "disposed"
+        },
+        {
+          "description": "The same child resource was disposed by an earlier request. No\nphysical deletion is attempted for this result.",
+          "type": "string",
+          "const": "already_disposed"
+        },
+        {
+          "description": "The exact worktree was removed, but branch compare-delete settlement\nremains pending and the identity-based request may be retried.",
+          "type": "string",
+          "const": "disposal_pending"
+        },
+        {
+          "description": "The child has no retained isolated resource to dispose.",
+          "type": "string",
+          "const": "no_retained_workspace"
+        }
+      ]
+    },
+    "ServerCapabilities": {
+      "type": "object",
+      "properties": {
+        "upload_policy": {
+          "$ref": "#/$defs/UploadPolicy"
+        },
+        "multi_session": {
+          "type": "boolean"
+        },
+        "single_writable_controller": {
+          "type": "boolean"
+        },
+        "headless_interactions": {
+          "type": "boolean"
+        },
+        "delivery_access": {
+          "description": "Whether this connection holds transport-granted delivery access.\nReporting it grants nothing; the native seam checks the capability.",
+          "type": "boolean"
+        },
+        "experimental_methods": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "upload_policy",
+        "multi_session",
+        "single_writable_controller",
+        "headless_interactions",
+        "delivery_access",
+        "experimental_methods"
+      ]
+    },
+    "UploadPolicy": {
+      "description": "Finite native storage admission, independent of image and control-frame limits.",
+      "type": "object",
+      "properties": {
+        "max_file_bytes": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "max_transfer_bytes": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "max_files_per_transfer": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "max_uploads_per_user_input": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "max_upload_bytes_per_user_input": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "max_concurrent_transfers": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "max_chunk_bytes": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "max_file_bytes",
+        "max_transfer_bytes",
+        "max_files_per_transfer",
+        "max_uploads_per_user_input",
+        "max_upload_bytes_per_user_input",
+        "max_concurrent_transfers",
+        "max_chunk_bytes"
+      ]
+    },
+    "SessionSnapshot": {
+      "description": "Bounded authoritative metadata for one Session.\n\nThe graph is deliberately not embedded here. Callers that need the graph\nuse the bounded tree page seam below, so `/session`, switch results, and\nrestart metadata never materialize every historical node.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Session identity.",
+          "$ref": "#/$defs/SessionId"
+        },
+        "name": {
+          "description": "The user-defined display name, when this Session has one.\n\nA Session is born unnamed. The name is display metadata a user\nchooses, never an identity: nothing resolves a Session by it, and an\nunnamed Session is a complete, ordinary Session.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "description": "Creation instant.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "description": "Last metadata/active-node publication instant.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "active_node": {
+          "description": "The active node selected in this Session.",
+          "$ref": "#/$defs/SessionNodeId"
+        },
+        "active_conversation_id": {
+          "description": "The conversation owned by the active node.",
+          "$ref": "#/$defs/ConversationId"
+        },
+        "node_count": {
+          "description": "Number of persisted nodes, useful metadata for a bounded tree view.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "id",
+        "created_at",
+        "updated_at",
+        "active_node",
+        "active_conversation_id",
+        "node_count"
+      ]
+    },
+    "SessionSummary": {
+      "description": "Native display metadata, shared by exact identity reads and catalog rows.",
+      "type": "object",
+      "properties": {
+        "ownership_generation": {
+          "description": "Native execution ownership generation, encoded as an exact decimal integer.\nChanges only when active-node ownership is replaced; never a display timestamp.",
+          "type": "string"
+        },
+        "cwd": {
+          "description": "Canonical durable Session cwd, projected without loading a runtime.",
+          "type": "string"
+        },
+        "id": {
+          "description": "Session identity.",
+          "$ref": "#/$defs/SessionId"
+        },
+        "name": {
+          "description": "The user-defined display name, when this Session has one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "preview": {
+          "description": "The first ordinary user message of this Session's root lineage,\nbounded to one line. It is what an unnamed row is recognized by, and\nit is the client-facing projection of the persisted\n`display_preview`: the catalog stores the derived line so listing,\npagination, and search never open a conversation store. `None` is\nlegitimate — no ordinary user message exists yet, or the first one\nhas no renderable text — and yields the client-side identity\nfallback.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updated_at": {
+          "description": "Latest committed human-message time, or creation time for a new Session.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "active_node": {
+          "description": "Active node in the session.",
+          "$ref": "#/$defs/SessionNodeId"
+        }
+      },
+      "required": [
+        "ownership_generation",
+        "cwd",
+        "id",
+        "updated_at",
+        "active_node"
+      ]
+    },
+    "SessionNode": {
+      "description": "One node in the native Session graph.",
+      "type": "object",
+      "properties": {
+        "ordinal": {
+          "description": "Explicit durable publication order, never inferred from UUID bytes.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "id": {
+          "description": "Node identity.",
+          "$ref": "#/$defs/SessionNodeId"
+        },
+        "parent": {
+          "description": "Parent node within the same Session, when this is a tree branch.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionNodeId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "conversation_id": {
+          "description": "The one independent linear `ConversationRuntime` lineage of this node.",
+          "$ref": "#/$defs/ConversationId"
+        },
+        "origin": {
+          "description": "Immutable product-level origin metadata.",
+          "$ref": "#/$defs/SessionNodeOrigin"
+        }
+      },
+      "required": [
+        "ordinal",
+        "id",
+        "conversation_id",
+        "origin"
+      ]
+    },
+    "SessionNodeOrigin": {
+      "description": "Why one `SessionNode` was created.",
+      "oneOf": [
+        {
+          "description": "A new empty conversation lineage.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "new"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "A clone with structure selected at source Surface revision R.\nTemporal provenance was frozen separately at invocation-time native cut C.",
+          "type": "object",
+          "properties": {
+            "source_session": {
+              "description": "Source Session identity.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "source_node": {
+              "description": "Source node identity.",
+              "$ref": "#/$defs/SessionNodeId"
+            },
+            "source_surface_revision": {
+              "description": "Selected structural source revision R, not an execution timestamp.",
+              "$ref": "#/$defs/SurfaceRevision"
+            },
+            "type": {
+              "type": "string",
+              "const": "clone"
+            }
+          },
+          "required": [
+            "type",
+            "source_session",
+            "source_node",
+            "source_surface_revision"
+          ]
+        },
+        {
+          "description": "A lineage structurally narrowed at one selected message boundary.\nTemporal provenance remains bounded to the captured native cut C.",
+          "type": "object",
+          "properties": {
+            "source_session": {
+              "description": "Source Session identity.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "source_node": {
+              "description": "Source node identity.",
+              "$ref": "#/$defs/SessionNodeId"
+            },
+            "source_surface_revision": {
+              "description": "Selected structural source revision R, not an execution timestamp.",
+              "$ref": "#/$defs/SurfaceRevision"
+            },
+            "source_message": {
+              "description": "Exact selected source message; `side` determines the retained prefix.",
+              "$ref": "#/$defs/MessageId"
+            },
+            "side": {
+              "description": "Explicit retained side of the selected message.",
+              "$ref": "#/$defs/LineageSide"
+            },
+            "type": {
+              "type": "string",
+              "const": "fork"
+            }
+          },
+          "required": [
+            "type",
+            "source_session",
+            "source_node",
+            "source_surface_revision",
+            "source_message",
+            "side"
+          ]
+        }
+      ]
+    },
+    "SessionUserMessageBoundary": {
+      "description": "One user-message boundary the native product exposes for `/fork` and\n`/tree`. The revision fixes structural selection; temporal evidence is\ncaptured separately at the copy operation's native read cut C.",
+      "type": "object",
+      "properties": {
+        "surface_revision": {
+          "description": "The exact retained Surface revision containing the message.",
+          "$ref": "#/$defs/SurfaceRevision"
+        },
+        "message": {
+          "description": "The canonical user message at that boundary.",
+          "$ref": "#/$defs/UserMessageBlock"
+        }
+      },
+      "required": [
+        "surface_revision",
+        "message"
+      ]
+    },
+    "RuntimeClientSessionDeletionResult": {
+      "description": "Bounded external outcomes shared by App Server and local presentation.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "preview": {
+              "$ref": "#/$defs/RuntimeClientSessionDeletePreview"
+            },
+            "status": {
+              "type": "string",
+              "const": "preview"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "preview"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "session_id": {
+              "$ref": "#/$defs/SessionId"
+            },
+            "status": {
+              "type": "string",
+              "const": "deleted"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "session_id"
+          ]
+        },
+        {
+          "description": "Invalidates confirmation; only a fresh preview supplies a replacement token.",
+          "type": "object",
+          "properties": {
+            "session_id": {
+              "$ref": "#/$defs/SessionId"
+            },
+            "status": {
+              "type": "string",
+              "const": "stale"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "session_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "session_id": {
+              "$ref": "#/$defs/SessionId"
+            },
+            "reason": {
+              "$ref": "#/$defs/RuntimeClientSessionDeletionBlocker"
+            },
+            "status": {
+              "type": "string",
+              "const": "blocked"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "session_id",
+            "reason"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "session_id": {
+              "$ref": "#/$defs/SessionId"
+            },
+            "status": {
+              "type": "string",
+              "const": "committed_cleanup_pending"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "session_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "session_id": {
+              "$ref": "#/$defs/SessionId"
+            },
+            "status": {
+              "type": "string",
+              "const": "committed_durability_uncertain"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "session_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "session_id": {
+              "$ref": "#/$defs/SessionId"
+            },
+            "status": {
+              "type": "string",
+              "const": "not_found"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "session_id"
+          ]
+        }
+      ]
+    },
+    "RuntimeClientSessionDeletePreview": {
+      "description": "Confirmation metadata; counts include the complete native ownership graph.",
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "$ref": "#/$defs/SessionId"
+        },
+        "name": {
+          "description": "Display name, truncated to at most 256 Unicode scalar values.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target_revision": {
+          "type": "string"
+        },
+        "owned_node_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "owned_conversation_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "owned_child_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "session_id",
+        "target_revision",
+        "owned_node_count",
+        "owned_conversation_count",
+        "owned_child_count"
+      ]
+    },
+    "RuntimeClientSessionDeletionBlocker": {
+      "description": "Bounded safety summary. Resource identities and storage diagnostics stay native.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "resource_conflict"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "resource_count": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "kind": {
+              "type": "string",
+              "const": "workspace"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "resource_count"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "invalid_ownership"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ConfigurationApplication": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "description": "The application-scope key. A Session application carries the Session\nidentity here; a source application carries `SourceTarget::\napplication_scope`. It is an application key, never a source owner.",
+          "type": "string"
+        },
+        "sources": {
+          "description": "The authored source owners this application composes, lowest authority\nfirst. The User document always participates; a Workspace-rooted capture\nalso names the exact canonical configuration directory it was taken\nfrom. This is the only fact that answers which authoring surface owns a\nconfiguration failure; it is never derived from `scope`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SourceTarget"
+          }
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "desired": {
+          "$ref": "#/$defs/ApplicationIdentity"
+        },
+        "units": {
+          "type": "object",
+          "properties": {
+            "capabilities": {
+              "$ref": "#/$defs/UnitApplication"
+            },
+            "execution_policy": {
+              "$ref": "#/$defs/UnitApplication"
+            },
+            "instructions": {
+              "$ref": "#/$defs/UnitApplication"
+            },
+            "process_bindings": {
+              "$ref": "#/$defs/UnitApplication"
+            },
+            "provider": {
+              "$ref": "#/$defs/UnitApplication"
+            },
+            "shared_capacity": {
+              "$ref": "#/$defs/UnitApplication"
+            }
+          },
+          "additionalProperties": false
+        },
+        "candidate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AvailableConfiguration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "scope",
+        "sources",
+        "version",
+        "desired",
+        "units"
+      ]
+    },
+    "UnitApplication": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "applied"
+            }
+          },
+          "required": [
+            "status"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "preparing"
+            }
+          },
+          "required": [
+            "status"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "impact": {
+              "$ref": "#/$defs/CacheImpact"
+            },
+            "status": {
+              "type": "string",
+              "const": "ready"
+            }
+          },
+          "required": [
+            "status",
+            "impact"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "diagnostic": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "const": "failed"
+            }
+          },
+          "required": [
+            "status",
+            "diagnostic"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "process_restart"
+            }
+          },
+          "required": [
+            "status"
+          ]
+        }
+      ]
+    },
+    "CacheImpact": {
+      "type": "string",
+      "enum": [
+        "preserved",
+        "prefix_changed",
+        "cache_namespace_changed",
+        "unproven"
+      ]
+    },
+    "AvailableConfiguration": {
+      "type": "object",
+      "properties": {
+        "identity": {
+          "$ref": "#/$defs/ApplicationIdentity"
+        },
+        "expected_binding": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "impact": {
+          "$ref": "#/$defs/CacheImpact"
+        }
+      },
+      "required": [
+        "identity",
+        "expected_binding",
+        "impact"
+      ]
+    },
     "EffectiveConfiguration": {
       "description": "Redacted, immutable facts read at the runtime configuration publication lock.",
       "type": "object",
@@ -20631,6 +20900,19 @@
             "kind": {
               "type": "string",
               "const": "delivery_cancelled"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "observation_cancelled"
             }
           },
           "required": [

@@ -870,6 +870,7 @@ fn the_runtime_client_projection_carries_the_named_identity() {
         started_at: chrono::Utc::now(),
     };
     let view = RuntimeClientAgent {
+        title: "Explore task".to_owned(),
         activation_id: snapshot.subagent_id.clone(),
         agent_id: snapshot.child_agent_id.clone(),
         child_conversation_id: snapshot.child_conversation_id.clone(),

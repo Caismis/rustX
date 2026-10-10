@@ -512,10 +512,7 @@ mod tests {
         let delivery = parse(serde_json::json!({"tools": {"builtin": ["present"]}}))
             .unwrap()
             .validate_spelling();
-        assert!(matches!(
-            delivery,
-            Err(SubagentOverrideError::ChildUnsafeSelector { .. })
-        ));
+        assert!(delivery.is_ok(), "child deliveries have native ownership");
         let recursive = parse(serde_json::json!({"tools": {"builtin": ["subagent"]}}))
             .expect("parses")
             .validate_spelling();

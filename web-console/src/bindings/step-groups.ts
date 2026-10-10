@@ -1,4 +1,4 @@
-import type { RuntimeClientTranscriptEntry, TurnProcessOutcome } from '../../../protocol/app-server/v40';
+import type { RuntimeClientTranscriptEntry, TurnProcessOutcome } from '../../../protocol/app-server/v41';
 import type { StepActivity, StepCounts } from '../presentation/agent/StepGroup';
 
 /** One member of a step group: an Assistant message's listed blocks, or a whole bodied entry. */

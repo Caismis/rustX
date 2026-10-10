@@ -18,6 +18,8 @@ pub const MAX_AGENT_LIST_LIMIT: usize = 64;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DurableAgentAuthority {
+    /// Immutable task label, independent of the named execution profile.
+    pub title: String,
     pub resolved: ResolvedSubagentSpec,
     pub execution_policy: super::super::InheritedExecutionPolicy,
     pub approval_mode: crate::runtime::types::ApprovalMode,
@@ -105,6 +107,7 @@ pub enum AgentState {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AgentSnapshot {
+    pub title: String,
     pub agent_id: AgentId,
     pub conversation_id: ConversationId,
     pub parent_agent_id: AgentId,
@@ -160,6 +163,56 @@ pub enum AgentControlError {
 }
 
 impl SubagentRegistry {
+    pub(crate) async fn wait_for_agent_state(
+        &self,
+        id: &AgentId,
+        predicate: impl Fn(AgentState) -> bool,
+    ) -> Option<AgentSnapshot> {
+        let mut changes = self.state_version.subscribe();
+        loop {
+            changes.borrow_and_update();
+            let snapshot = self.agent_snapshot(id)?;
+            if predicate(snapshot.state) {
+                return Some(snapshot);
+            }
+            if changes.changed().await.is_err() {
+                return None;
+            }
+        }
+    }
+
+    pub(crate) fn agent_artifact_root(&self, id: &AgentId) -> Option<std::path::PathBuf> {
+        let agent = self.agent_snapshot(id)?;
+        Some(
+            super::super::child_conversation_store_path(
+                self.config.spawn.product_root.root(),
+                &self.config.spawn.session_id,
+                &agent.conversation_id,
+            )
+            .parent()?
+            .to_path_buf(),
+        )
+    }
+    pub(crate) fn agent_workspace(
+        &self,
+        id: &AgentId,
+    ) -> Option<super::super::super::workspace::WorkspaceSnapshot> {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let agent = state.agents.get(id)?;
+        if agent.workspace.is_poisoned() {
+            return None;
+        }
+        let activation = &state.records[*state.index.get(&agent.latest_activation)?];
+        Some(activation.workspace.clone())
+    }
+    pub(crate) fn agent_inspection_path(&self, id: &AgentId) -> Option<std::path::PathBuf> {
+        let agent = self.agent_snapshot(id)?;
+        Some(super::super::child_conversation_inspection_socket_path(
+            self.config.spawn.product_root.root(),
+            &agent.conversation_id,
+        ))
+    }
+
     pub(super) fn agent_snapshot_locked(
         state: &RegistryState,
         id: &AgentId,
@@ -181,6 +234,7 @@ impl SubagentRegistry {
             }
         };
         Some(AgentSnapshot {
+            title: agent.authority.title.clone(),
             agent_id: id.clone(),
             conversation_id: agent.conversation_id.clone(),
             parent_agent_id: activation.parent_agent_id.clone(),
@@ -417,6 +471,24 @@ impl SubagentRegistry {
         id: &AgentId,
         message: &str,
         origin: super::AgentActivationOrigin,
+        cancellation: CancellationSignal,
+    ) -> Result<AgentMessageAccepted, AgentControlError> {
+        self.send_message_with_attachments(id, message, &[], origin, cancellation)
+            .await
+    }
+    /// Send Session-resolved files with guidance, or resume an inactive Agent.
+    /// # Errors
+    /// Rejects unknown Agents, transient settlement, invalid or empty input,
+    /// and admission/publication failures without replaying the mutation.
+    /// # Panics
+    /// Panics if a durable Agent loses its activation under the registry mutex.
+    #[allow(clippy::too_many_lines)] // One atomic arbitration and its owned continuation.
+    pub async fn send_message_with_attachments(
+        &self,
+        id: &AgentId,
+        message: &str,
+        attachments: &[crate::message::content::UploadedFileRef],
+        origin: super::AgentActivationOrigin,
         caller_cancellation: CancellationSignal,
     ) -> Result<AgentMessageAccepted, AgentControlError> {
         enum Decision {
@@ -437,7 +509,18 @@ impl SubagentRegistry {
         if caller_cancellation.is_cancelled() {
             return Err(AgentControlError::Start(SubagentStartError::Cancelled));
         }
-        Self::validate_guidance_message(message).map_err(AgentControlError::Message)?;
+        if attachments.is_empty() {
+            Self::validate_guidance_message(message).map_err(AgentControlError::Message)?;
+        } else if message.len() > super::MAX_TASK_BYTES
+            || attachments.len()
+                > crate::local_runtime::session::uploads::UPLOAD_POLICY.max_uploads_per_user_input
+        {
+            return Err(AgentControlError::Message(
+                SubagentSteerError::InvalidMessage {
+                    bytes: message.len(),
+                },
+            ));
+        }
         let ownership = self
             .config
             .spawn
@@ -471,7 +554,12 @@ impl SubagentRegistry {
                     let decision = match activation.lifecycle {
                         SubagentLifecycle::Running => {
                             let (sequence, answer, ticket) = self
-                                .admit_guidance_locked(&mut state, &activation_id, message)
+                                .admit_guidance_locked(
+                                    &mut state,
+                                    &activation_id,
+                                    message,
+                                    attachments,
+                                )
                                 .map_err(|error| match error {
                                     SubagentSteerError::ControlLost => {
                                         AgentControlError::NotDelivered
@@ -500,6 +588,7 @@ impl SubagentRegistry {
                             let spec = SubagentStartSpec {
                                 authority: agent.authority.clone(),
                                 admission: super::ActivationAdmission {
+                                    attachments: attachments.to_vec(),
                                     task: message.to_owned(),
                                     context: None,
                                     origin: origin.clone(),

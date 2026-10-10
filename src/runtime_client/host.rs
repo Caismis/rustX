@@ -1528,6 +1528,68 @@ impl ClientInner {
             .ok_or_else(unavailable)
     }
 
+    pub(crate) fn agent_file_workspace(
+        &self,
+        id: &crate::runtime::identity::AgentId,
+    ) -> Result<crate::runtime::workspace::WorkspaceSnapshot, RuntimeClientError> {
+        self.agent_registry()?
+            .agent_workspace(id)
+            .ok_or_else(|| RuntimeClientError::InvalidState {
+                message: "child workspace unavailable".into(),
+            })
+    }
+    pub(crate) fn agent_file_reference(
+        &self,
+        id: &crate::runtime::identity::AgentId,
+        message_id: &crate::runtime::identity::MessageId,
+        index: usize,
+    ) -> Result<crate::tools::session_files::SessionFileReference, RuntimeClientError> {
+        let agent = self.agent_view(id)?;
+        let store = self
+            .agent_registry()?
+            .transcript_store(&agent.activation_id)
+            .map_err(|_| RuntimeClientError::InvalidState {
+                message: "child history unavailable".into(),
+            })?;
+        let host =
+            RuntimeClientHost::new_durable(std::sync::Arc::new(store), None).map_err(|e| {
+                RuntimeClientError::RuntimeFailure {
+                    message: e.to_string(),
+                }
+            })?;
+        let file = host.inner.session_file_reference(message_id, index)?;
+        if file.scope.conversation_id != agent.child_conversation_id {
+            return Err(RuntimeClientError::InvalidState {
+                message: "delivery does not belong to this child".into(),
+            });
+        }
+        Ok(file)
+    }
+    pub(crate) fn agent_artifact_read(
+        &self,
+        id: &crate::runtime::identity::AgentId,
+        artifact_id: &crate::runtime::identity::ArtifactId,
+    ) -> Result<String, RuntimeClientError> {
+        use base64::Engine;
+        let agent = self.agent_view(id)?;
+        let registry = self.agent_registry()?;
+        let _store = registry
+            .transcript_store(&agent.activation_id)
+            .map_err(|_| RuntimeClientError::InvalidState {
+                message: "child history unavailable".into(),
+            })?;
+        let root =
+            registry
+                .agent_artifact_root(id)
+                .ok_or_else(|| RuntimeClientError::UnknownAgent {
+                    agent_id: id.clone(),
+                })?;
+        let bytes = crate::tools::artifacts::ArtifactStore::read_bounded_from(&root, artifact_id)
+            .map_err(|_| RuntimeClientError::InvalidState {
+            message: "child artifact unavailable or exceeds 256 KiB".into(),
+        })?;
+        Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+    }
     /// Read a bounded conversation-owned artifact without exposing its path.
     pub(crate) fn artifact_read(
         &self,
@@ -1799,13 +1861,15 @@ impl ClientInner {
         &self,
         id: &crate::runtime::identity::AgentId,
         message: String,
+        attachments: Vec<crate::message::content::UploadedFileRef>,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.ensure_writable_runtime()?;
         let accepted = self
             .agent_registry()?
-            .send_message(
+            .send_message_with_attachments(
                 id,
                 &message,
+                &attachments,
                 crate::runtime::subagent::AgentActivationOrigin::ClientControl,
                 crate::runtime::cancellation::CancellationSignal::new(),
             )

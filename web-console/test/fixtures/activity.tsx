@@ -6,15 +6,15 @@ import { ArtifactContext } from '../../src/app/components/Artifact';
 import { ArtifactResources } from '../../src/client/artifacts';
 import { AgentCard } from '../../src/app/components/ActivityCards';
 import { RuntimeFacts } from '../../src/app/agent/Activity';
-import type { RuntimeClientAgent } from '../../../protocol/app-server/v40';
-import { Server, snapshot } from '../fixture';
+import type { RuntimeClientAgent } from '../../../protocol/app-server/v41';
+import { Server, snapshot, childConversation } from '../fixture';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/design-platform.css';
 import '../../src/presentation/theme/reset.css';
 import '../../src/app/console.css';
 const server = new Server();
 const s = snapshot();
-const agent: RuntimeClientAgent = {
+const agent: RuntimeClientAgent = { title: 'Worker',
   agent_id: 'agent-worker', parent_agent_id: 'parent-agent', activation_id: 'activation-a', current_activation: 'activation-a',
   child_conversation_id: 'conversation-worker', agent: 'Worker', state: 'active', activation_state: 'running',
   definition_digest: 'definition', profile_digest: 'profile', started_at: '2026-09-25T00:00:00Z',
@@ -24,7 +24,7 @@ const agent: RuntimeClientAgent = {
 s.agents = [agent];
 s.jobs = [{ job_id: 'job-build', tool_id: 'tool-bash', tool_name: 'Build', state: 'running', bash: { command: 'printf authoritative-command', description: 'Check the build <safely>' } }];
 server.snapshots.set('A', s);
-server.handlers.set('agent/transcript', () => ({ type: 'transcript', page: { entries: [{ cursor: '1', item: { type: 'message', message: { role: 'assistant', id: 'report', content: [{ type: 'text', text: '## Final report\nCanonical child output.' }] } } }] } }));
+server.handlers.set('agent/conversation', () => childConversation( { entries: [{ cursor: '1', item: { type: 'message', message: { role: 'assistant', id: 'report', content: [{ type: 'text', text: '## Final report\nCanonical child output.' }] } } }] }));
 server.handlers.set('agent/sendMessage', request => {
   if (request.method !== 'agent/sendMessage') throw new Error('Wrong operation');
   const resumed = agent.state === 'inactive';

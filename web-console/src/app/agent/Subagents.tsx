@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Header layout adapted from ui-subagent/SubagentHeaderLineage; see PROVENANCE.md. */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import type { RuntimeClientAgent, AgentStatistics } from '../../../../protocol/app-server/v40';
+import type { RuntimeClientAgent, AgentStatistics } from '../../../../protocol/app-server/v41';
 import type { AppServerClient } from '../../client/app-server';
 import { useClientSelector } from '../../client/selectors';
 import { useTranslation } from '../../locale/react';
@@ -80,7 +80,7 @@ function SubagentMenu({ agents, selected, label, openChild }: { agents: RuntimeC
     </button>}
     items={agents.map(agent => ({ id: agent.agent_id, label: <span className={css.row} data-agent-id={agent.agent_id} data-agent-state={agent.state}>
       <span className={css.rowActivity}><StateDot state={agentDot(agent)} size={7}/></span>
-      <span className={css.content}><span className={`${css.name} ${selected === agent.agent_id ? css.current : ''}`}>{agent.agent}</span><span className={css.secondary}>{agentStatus(agent, tx)}{agent.observation.activity.type === 'tool' ? ` · ${agent.observation.activity.tool_id.replace(/^tool-/, '')}` : ''}</span></span>
+      <span className={css.content}><span className={`${css.name} ${selected === agent.agent_id ? css.current : ''}`}>{agent.title}</span><span className={css.secondary}>{agentStatus(agent, tx)}{agent.observation.activity.type === 'tool' ? ` · ${agent.observation.activity.tool_id.replace(/^tool-/, '')}` : ''}</span></span>
       <span className={css.metrics}>{scope.metrics[agent.agent_id]?.statistics.reported_usage && <span>{tx('agent:usage.count', { count: formatTokens(scope.metrics[agent.agent_id].statistics.reported_usage!.total_tokens, tx) })}</span>}{scope.metrics[agent.agent_id] && <span>{formatDuration(agentDuration(scope.metrics[agent.agent_id], now), tx)}</span>}</span><IconChevronRightOutline14/>
     </span> }))} onSelect={id => { openChild(id); close(); }}/>
 }
@@ -95,8 +95,8 @@ export function SubagentHeader({ title }: { title: string }) {
   const children = selected ? agents.filter(agent => agent.parent_agent_id === selected.agent_id) : [];
   return <div className={css.lineage}>
     {selected ? <><button className={css.parent} onClick={() => open()}>{title}</button><span className={css.separator}>/</span>
-      {ancestors.map(agent => <span key={agent.agent_id} className={css.ancestor}><button className={css.parent} onClick={() => open(agent.agent_id)}>{agent.agent}</button><span className={css.separator}>/</span></span>)}
-      <SubagentMenu agents={siblings} selected={selected.agent_id} label={selected.agent} openChild={open}/>
+      {ancestors.map(agent => <span key={agent.agent_id} className={css.ancestor}><button className={css.parent} onClick={() => open(agent.agent_id)}>{agent.title}</button><span className={css.separator}>/</span></span>)}
+      <SubagentMenu agents={siblings} selected={selected.agent_id} label={selected.title} openChild={open}/>
       {!!children.length && <SubagentMenu agents={children} label={tx('common:subagents.count', { count: children.length })} openChild={open}/>}</>
       : <><span id="session-title" aria-label={tx(scope.sessionId ? 'agent:conversation-header.session-title' : 'agent:conversation-header.product-title')} className={css.title}>{title}</span>
         {!!siblings.length && <SubagentMenu agents={siblings} label={tx('common:subagents.count', { count: siblings.length })} openChild={open}/>}</>}

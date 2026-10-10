@@ -129,7 +129,8 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     if (!read || !Number.isInteger(read.delivery_index) || read.delivery_index < 0 || read.delivery_index > 7
       || typeof read.message_id !== 'string' || !read.message_id || read.message_id.length > 256
       || !read.target || typeof read.target.session_id !== 'string' || typeof read.target.conversation_id !== 'string'
-      || typeof read.target.attachment_id !== 'string' || Object.keys(read).some(key => !['target', 'message_id', 'delivery_index'].includes(key))) throw new Error('Invalid delivery coordinates');
+      || typeof read.target.attachment_id !== 'string' || Object.keys(read).some(key => !['target', 'message_id', 'delivery_index', 'agent_id'].includes(key))) throw new Error('Invalid delivery coordinates');
+    if (read.agent_id !== undefined && (typeof read.agent_id !== 'string' || !read.agent_id || read.agent_id.length > 256)) throw new Error('Invalid Agent coordinates');
     if (!this.config.productHostToken) throw new Error('Product Host native file mapping unavailable');
     if (this.fileReads.size >= 2) throw new Error('Session file read capacity reached');
     const operation = new AbortController();
@@ -159,12 +160,13 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       || !request.target || typeof request.target.session_id !== 'string' || typeof request.target.attachment_id !== 'string'
       || !request.source || !['session_file', 'artifact'].includes(request.source.kind)) throw new Error('Invalid document coordinates');
     const source = request.source;
+    if (source.agent_id !== undefined && (typeof source.agent_id !== 'string' || !source.agent_id || source.agent_id.length > 256)) throw new Error('Invalid Agent coordinates');
     if (source.kind === 'artifact') {
       if (typeof source.artifact_id !== 'string' || source.artifact_id.length > 256
-        || Object.keys(source).some(key => !['kind', 'artifact_id'].includes(key))) throw new Error('Invalid document coordinates');
+        || Object.keys(source).some(key => !['kind', 'artifact_id', 'agent_id'].includes(key))) throw new Error('Invalid document coordinates');
     } else if (typeof source.message_id !== 'string' || source.message_id.length > 256 || !Number.isInteger(source.delivery_index)
       || source.delivery_index < 0 || source.delivery_index > 7
-      || Object.keys(source).some(key => !['kind', 'message_id', 'delivery_index'].includes(key))) throw new Error('Invalid document coordinates');
+      || Object.keys(source).some(key => !['kind', 'message_id', 'delivery_index', 'agent_id'].includes(key))) throw new Error('Invalid document coordinates');
     if (!this.config.productHostToken) throw new Error('preview_unavailable');
     if (this.documentReads.size) throw new Error('capacity');
     const operation = new AbortController(); this.documentReads.add(operation);
@@ -174,7 +176,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       signal?.throwIfAborted();
       return await deriveDocument(request, async () => {
         this.mutationScope(scope); operation.signal.throwIfAborted();
-        if (source.kind === 'session_file') return this.readDelivery(scope, { target: request.target, message_id: source.message_id, delivery_index: source.delivery_index }, operation.signal);
+        if (source.kind === 'session_file') return this.readDelivery(scope, { target: request.target, message_id: source.message_id, delivery_index: source.delivery_index, agent_id: source.agent_id }, operation.signal);
         const result = await readNativeSource(this.config.endpoint, this.config.productHostToken!, request.target, source, [], operation.signal);
         this.mutationScope(scope); operation.signal.throwIfAborted(); return result;
       }, operation.signal);

@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { ForegroundToolExecution } from '../../protocol/app-server/v40';
+import type { ForegroundToolExecution } from '../../protocol/app-server/v41';
 import { subagentToolDetails } from '../src/app/agent/subagent-tool-details';
 import { DomainActivity } from '../src/app/agent/DomainActivity';
 afterEach(cleanup);
@@ -9,11 +9,11 @@ const call = (name: string, input: unknown, result: unknown): ForegroundToolExec
   state: { type: 'settled', arguments: JSON.stringify(input), result: { status: { type: 'success' }, duration_ms: 1, content: [{ type: 'json', value: result as never }] } },
 });
 it('creation is a start receipt, not the child terminal outcome', () => {
-  const details = subagentToolDetails(call('subagent', { task: 'Inspect source' }, { agent_id: 'child', activation_id: 'first', state: 'active', agent: 'explore' }));
-  expect(details.items).toEqual([{ agentId: 'child', name: 'explore', text: 'Inspect source', status: 'common:subagents.started', tone: 'ongoing' }]);
+  const details = subagentToolDetails(call('subagent', { title: 'Inspect source tree', task: 'Inspect source' }, { agent_id: 'child', activation_id: 'first', state: 'active', agent: 'explore' }));
+  expect(details.items).toEqual([{ agentId: 'child', name: 'Inspect source tree', text: 'Inspect source', status: 'common:subagents.started', tone: 'ongoing' }]);
 });
 it('list reads recorded owner state and retains the native bound', () => {
-  const details = subagentToolDetails(call('list_agents', {}, { returned: 2, matched: 3, truncated: true, agents: [{ agent_id: 'a', agent: 'First', state: 'inactive' }, { agent_id: 'b', agent: 'Second', state: 'active' }] }));
+  const details = subagentToolDetails(call('list_agents', {}, { returned: 2, matched: 3, truncated: true, agents: [{ agent_id: 'a', agent: 'explore', title: 'First', state: 'inactive' }, { agent_id: 'b', agent: 'explore', title: 'Second', state: 'active' }] }));
   expect(details.count).toBe(2);
   expect(details.truncated).toEqual({ returned: 2, matched: 3 });
   expect(details.items.map(item => item.status)).toEqual(['common:subagents.inactive', 'common:subagents.active']);
@@ -30,7 +30,7 @@ it('message acceptance is a delivery receipt and incomplete arguments invent no 
   expect(subagentToolDetails(tool)).toEqual({ target: undefined, task: undefined, items: [] });
 });
 it('expanded list has human details and exposes raw JSON only on explicit inspection', () => {
-  const tool = call('list_agents', {}, { returned: 1, matched: 1, truncated: false, agents: [{ agent_id: 'a', agent: 'Research', state: 'active' }] });
+  const tool = call('list_agents', {}, { returned: 1, matched: 1, truncated: false, agents: [{ agent_id: 'a', agent: 'explore', title: 'Research', state: 'active' }] });
   const ui = render(<DomainActivity tool={tool}/>);
   fireEvent.click(ui.getByRole('button', { name: /Agents/ }));
   expect(ui.getByText('Research')).toBeTruthy();

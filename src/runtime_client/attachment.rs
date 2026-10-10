@@ -108,6 +108,16 @@ impl RuntimeAttachment {
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.access(true)?.job_wait(id, true).await
     }
+    /// Read a coherent child-owned conversation cut, waiting after its cursor.
+    /// # Errors
+    /// Closed attachments, unknown Agents and unavailable live endpoints reject.
+    pub async fn agent_conversation(
+        &self,
+        id: &crate::runtime::identity::AgentId,
+        after: Option<super::agent_conversation::AgentConversationCursor>,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.access(false)?.agent_conversation(id, after).await
+    }
     /// Deliver to the active child or atomically admit its next activation.
     /// # Errors
     /// Read-only attachments, unknown Agents and stopping Agents are rejected.
@@ -115,8 +125,11 @@ impl RuntimeAttachment {
         &self,
         id: &crate::runtime::identity::AgentId,
         message: String,
+        attachments: Vec<crate::message::content::UploadedFileRef>,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.access(true)?.agent_send_message(id, message).await
+        self.access(true)?
+            .agent_send_message(id, message, attachments)
+            .await
     }
     /// Capture and wait for the activation current at owner admission.
     /// # Errors
@@ -327,7 +340,8 @@ impl RuntimeAttachment {
             RuntimeClientRequest::JobList { .. } => Ok(inner.job_list()),
             RuntimeClientRequest::AgentStatus { agent_id, .. } => inner.agent_status(&agent_id),
             RuntimeClientRequest::AgentList { .. } => inner.agent_list(),
-            RuntimeClientRequest::AgentStatistics { .. }
+            RuntimeClientRequest::AgentConversation { .. }
+            | RuntimeClientRequest::AgentStatistics { .. }
             | RuntimeClientRequest::AgentTrace { .. }
             | RuntimeClientRequest::AgentTraceDetail { .. } => {
                 unreachable!("Agent statistics are read asynchronously")
@@ -389,6 +403,9 @@ impl RuntimeAttachment {
         }
 
         let domain_result = match &request {
+            RuntimeClientRequest::AgentConversation {
+                agent_id, after, ..
+            } => Some(inner.agent_conversation(agent_id, after.clone()).await),
             RuntimeClientRequest::AgentStatistics { agent_id, .. } => {
                 Some(inner.agent_statistics(agent_id).await)
             }
@@ -415,8 +432,15 @@ impl RuntimeAttachment {
                 Some(inner.job_wait(job_id, true).await)
             }
             RuntimeClientRequest::AgentSendMessage {
-                agent_id, message, ..
-            } => Some(inner.agent_send_message(agent_id, message.clone()).await),
+                agent_id,
+                message,
+                attachments,
+                ..
+            } => Some(
+                inner
+                    .agent_send_message(agent_id, message.clone(), attachments.clone())
+                    .await,
+            ),
             RuntimeClientRequest::AgentWait { agent_id, .. } => {
                 Some(inner.agent_wait(agent_id, false).await)
             }

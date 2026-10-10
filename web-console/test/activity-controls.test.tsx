@@ -3,19 +3,19 @@ import { translator } from '../src/locale/translation';
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import type { RuntimeClientAgent, RuntimeClientJob } from '../../protocol/app-server/v40';
+import type { RuntimeClientAgent, RuntimeClientJob } from '../../protocol/app-server/v41';
 import { RpcFailure } from '../src/client/app-server';
 import { RuntimeFacts as OtherActivity } from '../src/app/agent/Activity';
 import { AgentCard } from '../src/app/components/ActivityCards';
 import type { ComponentProps } from 'react';
 function RuntimeFacts(props: ComponentProps<typeof OtherActivity>) { return <><OtherActivity {...props}/>{props.snapshot.agents?.map(agent => <AgentCard key={agent.agent_id} agent={agent} client={props.client} sessionId={props.sessionId}/>)}</>; }
-import { Server, snapshot } from './fixture';
+import { Server, snapshot, childConversation } from './fixture';
 import { Tool } from '../src/app/agent/Tool';
 beforeEach(() => { const host = document.createElement('div'); host.id = 'subagent-header-actions'; document.body.append(host); });
 afterEach(() => { cleanup(); document.getElementById('subagent-header-actions')?.remove(); });
 const servers: Server[] = [];
 afterEach(() => { for (const server of servers.splice(0)) server.client.disconnect(); });
-export const agentFixture = (): RuntimeClientAgent => ({
+export const agentFixture = (): RuntimeClientAgent => ({ title: 'Worker',
   agent_id: 'agent-worker', parent_agent_id: 'parent-agent', child_conversation_id: 'conversation-worker', agent: 'Worker',
   activation_id: 'activation-a', current_activation: 'activation-a', state: 'active', activation_state: 'running',
   definition_digest: 'definition', profile_digest: 'profile', started_at: '2026-09-15T00:00:00Z',
@@ -30,19 +30,19 @@ it('Active and Inactive send use one owner operation; wait remains interruptible
   server.held.add('agent/wait');
   const ui = render(<RuntimeFacts snapshot={s} client={server.client} sessionId="A"/>);
   await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Wait for activation' })); await server.waitFor('agent/wait', 1); });
-  expect((ui.getByRole('button', { name: 'Interrupt' }) as HTMLButtonElement).disabled).toBe(false);
-  await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Interrupt' })); await server.waitFor('agent/interrupt', 1); });
+  expect((ui.getByRole('button', { name: 'Stop' }) as HTMLButtonElement).disabled).toBe(false);
+  await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Stop' })); await server.waitFor('agent/interrupt', 1); });
   expect(ui.getByText('cancelled')).toBeTruthy();
   expect(ui.queryByRole('alert')).toBeNull();
   await act(async () => {
     fireEvent.change(ui.getByRole('textbox', { name: 'Message Agent Worker' }), { target: { value: 'Active input' } });
-    fireEvent.click(ui.getByRole('button', { name: 'Send message' })); await server.waitFor('agent/sendMessage', 1);
+    fireEvent.click(ui.getByRole('button', { name: /^(Send|Steer)$/ })); await server.waitFor('agent/sendMessage', 1);
   });
   const inactive = { ...agent, state: 'inactive' as const, current_activation: null, activation_state: 'cancelled' as const };
   ui.rerender(<RuntimeFacts snapshot={{ ...s, agents: [inactive] }} client={server.client} sessionId="A"/>);
   await act(async () => {
     fireEvent.change(ui.getByRole('textbox', { name: 'Message Agent Worker' }), { target: { value: 'Later input' } });
-    fireEvent.click(ui.getByRole('button', { name: 'Send message' })); await server.waitFor('agent/sendMessage', 2);
+    fireEvent.click(ui.getByRole('button', { name: /^(Send|Steer)$/ })); await server.waitFor('agent/sendMessage', 2);
   });
   expect(server.requests.filter(row => row.request.method === 'agent/sendMessage').map(row => row.request)).toMatchObject([
     { params: { agent_id: 'agent-worker', message: 'Active input' } }, { params: { agent_id: 'agent-worker', message: 'Later input' } },
@@ -86,7 +86,7 @@ it.each(['agent/wait', 'agent/interrupt'] as const)('a completed %s response can
   }
   const ui = render(<Harness/>);
   let waited: Awaited<ReturnType<Server['waitFor']>>;
-  await act(async () => { fireEvent.click(ui.getByRole('button', { name: method === 'agent/wait' ? 'Wait for activation' : 'Interrupt' })); waited = await server.waitFor(method, 1); });
+  await act(async () => { fireEvent.click(ui.getByRole('button', { name: method === 'agent/wait' ? 'Wait for activation' : 'Stop' })); waited = await server.waitFor(method, 1); });
   const row = ui.container.querySelector('[data-agent-id="agent-worker"]');
   server.snapshots.set('A', { ...s, agents: [{ ...agent, activation_id: 'activation-b', current_activation: 'activation-b' }] });
   await act(async () => { server.reply(waited!); await server.waitFor('session/snapshot', 2); });
@@ -100,16 +100,16 @@ it('selected child transcript refreshes canonical final content at settlement an
   const server = new Server(); servers.push(server); await server.attached('A');
   const s = snapshot(); const agent = agentFixture(); s.agents = [agent]; server.snapshots.set('A', s);
   let report = 'First committed child message';
-  server.handlers.set('agent/transcript', () => ({ type: 'transcript', page: { entries: [{ cursor: '1', item: { type: 'message', message: { role: 'assistant', id: 'child-report', content: [{ type: 'text', text: report }] } } }] } }));
+  server.handlers.set('agent/conversation', () => childConversation( { entries: [{ cursor: '1', item: { type: 'message', message: { role: 'assistant', id: 'child-report', content: [{ type: 'text', text: report }] } } }] }));
   const ui = render(<RuntimeFacts snapshot={s} client={server.client} sessionId="A"/>);
-  await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Transcript' })); await server.waitFor('agent/transcript', 1); });
+  await act(async () => { await server.waitFor('agent/conversation', 1); });
   expect(ui.getByText(report)).toBeTruthy();
   report = 'Final report from canonical child history';
   await act(async () => { ui.rerender(<RuntimeFacts snapshot={{ ...s, agents: [{ ...agent, state: 'inactive', current_activation: null, activation_state: 'succeeded' }] }} client={server.client} sessionId="A"/>); });
-  await server.waitFor('agent/transcript', 2);
+  await server.waitFor('agent/conversation', 2);
   expect(ui.getByText(report)).toBeTruthy();
   await act(async () => { ui.rerender(<RuntimeFacts snapshot={{ ...s, agents: [{ ...agent, activation_id: 'activation-b', current_activation: 'activation-b' }] }} client={server.client} sessionId="A"/>); });
-  await server.waitFor('agent/transcript', 3);
+  await server.waitFor('agent/conversation', 3);
   expect(ui.getByText(report)).toBeTruthy();
   expect(ui.getByText(report)).toBeTruthy();
 });
@@ -122,14 +122,14 @@ it('native Stopping refusal preserves the draft and never falls back to a resume
   const ui = render(<RuntimeFacts snapshot={s} client={server.client} sessionId="A"/>);
   await act(async () => {
     fireEvent.change(ui.getByRole('textbox', { name: 'Message Agent Worker' }), { target: { value: 'Keep this input' } });
-    fireEvent.click(ui.getByRole('button', { name: 'Send message' }));
+    fireEvent.click(ui.getByRole('button', { name: /^(Send|Steer)$/ }));
     await server.waitFor('agent/sendMessage', 1);
   });
   expect(ui.getByRole('alert').textContent).toContain('Agent is stopping');
   expect((ui.getByRole('textbox', { name: 'Message Agent Worker' }) as HTMLInputElement).value).toBe('Keep this input');
   expect(server.requests.filter(row => row.request.method === 'agent/sendMessage')).toHaveLength(1);
   ui.rerender(<RuntimeFacts snapshot={{ ...s, agents: [{ ...agentFixture(), state: 'stopping', activation_state: 'stopping' }] }} client={server.client} sessionId="A"/>);
-  expect((ui.getByRole('button', { name: 'Send message' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((ui.getByRole('textbox', {name:'Message Agent Worker'}) as HTMLTextAreaElement).disabled).toBe(true);
   expect(ui.getByText('Stopping…')).toBeTruthy();
 });
 
@@ -142,16 +142,16 @@ it('native admission remains waitable and interruptible while its send is pendin
   const ui = render(<RuntimeFacts snapshot={s} client={server.client} sessionId="A"/>);
   await act(async () => {
     fireEvent.change(ui.getByRole('textbox', { name: 'Message Agent Worker' }), { target: { value: 'Resume input' } });
-    fireEvent.click(ui.getByRole('button', { name: 'Send message' })); await server.waitFor('agent/sendMessage', 1);
+    fireEvent.click(ui.getByRole('button', { name: /^(Send|Steer)$/ })); await server.waitFor('agent/sendMessage', 1);
   });
   const row = ui.container.querySelector('[data-agent-id="agent-worker"]');
   ui.rerender(<RuntimeFacts snapshot={{ ...s, agents: [{ ...agent, state: 'admitting', current_activation: 'admission-b' }] }} client={server.client} sessionId="A"/>);
   expect(ui.getByText('Admitting…')).toBeTruthy();
   expect(row?.getAttribute('data-activation-id')).toBe('admission-b');
-  expect((ui.getByRole('button', { name: 'Send message' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((ui.getByRole('textbox', {name:'Message Agent Worker'}) as HTMLTextAreaElement).disabled).toBe(true);
   await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Wait for activation' })); await server.waitFor('agent/wait', 1); });
-  expect((ui.getByRole('button', { name: 'Interrupt' }) as HTMLButtonElement).disabled).toBe(false);
-  await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Interrupt' })); await server.waitFor('agent/interrupt', 1); });
+  expect((ui.getByRole('button', { name: 'Stop' }) as HTMLButtonElement).disabled).toBe(false);
+  await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Stop' })); await server.waitFor('agent/interrupt', 1); });
   expect(ui.getByText('Agent was inactive when the operation observed it.')).toBeTruthy();
   expect((ui.getByRole('textbox', { name: 'Message Agent Worker' }) as HTMLInputElement).value).toBe('Resume input');
   expect(ui.queryByRole('alert')).toBeNull();
@@ -164,12 +164,12 @@ it('native seal reopening restores Active controls on the same Agent and activat
   fireEvent.change(ui.getByRole('textbox', { name: 'Message Agent Worker' }), { target: { value: 'Keep draft across sealing' } });
   const row = ui.container.querySelector('[data-agent-id="agent-worker"]');
   ui.rerender(<RuntimeFacts snapshot={{ ...s, agents: [{ ...agent, state: 'stopping', activation_state: 'stopping' }] }} client={server.client} sessionId="A"/>);
-  expect((ui.getByRole('button', { name: 'Send message' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((ui.getByRole('textbox', {name:'Message Agent Worker'}) as HTMLTextAreaElement).disabled).toBe(true);
   ui.rerender(<RuntimeFacts snapshot={s} client={server.client} sessionId="A"/>);
   expect(ui.container.querySelector('[data-agent-id="agent-worker"]')).toBe(row);
   expect(row?.getAttribute('data-activation-id')).toBe('activation-a');
   expect(ui.getByText('Working')).toBeTruthy();
-  expect((ui.getByRole('button', { name: 'Send message' }) as HTMLButtonElement).disabled).toBe(false);
+  expect((ui.getByRole('button', { name: /^(Send|Steer)$/ }) as HTMLButtonElement).disabled).toBe(false);
   expect((ui.getByRole('textbox', { name: 'Message Agent Worker' }) as HTMLInputElement).value).toBe('Keep draft across sealing');
 });
 
@@ -180,7 +180,7 @@ it('owner Unavailable differs from terminal Inactive and disables impossible set
   const ui = render(<RuntimeFacts snapshot={s} client={server.client} sessionId="A"/>);
   await act(async () => {
     fireEvent.change(ui.getByRole('textbox', { name: 'Message Agent Worker' }), { target: { value: 'Preserved draft' } });
-    fireEvent.click(ui.getByRole('button', { name: 'Send message' })); await server.waitFor('agent/sendMessage', 1);
+    fireEvent.click(ui.getByRole('button', { name: /^(Send|Steer)$/ })); await server.waitFor('agent/sendMessage', 1);
   });
   expect(ui.getByRole('alert').textContent).toContain('remains unresolved');
   expect(ui.getByRole('alert').textContent).not.toContain('retry');
@@ -188,8 +188,8 @@ it('owner Unavailable differs from terminal Inactive and disables impossible set
   ui.rerender(<RuntimeFacts snapshot={{ ...s, agents: [unavailable] }} client={server.client} sessionId="A"/>);
   expect(ui.getByText('Unavailable')).toBeTruthy();
   expect(ui.queryByText('Inactive')).toBeNull();
-  expect(ui.queryByRole('button', { name: 'Interrupt' })).toBeNull();
-  for (const name of ['Send message', 'Wait for activation']) expect((ui.getByRole('button', { name }) as HTMLButtonElement).disabled).toBe(true);
+  expect(ui.queryByRole('button', { name: 'Stop' })).toBeNull();
+  for (const name of ['Send', 'Wait for activation']) expect((ui.getByRole('button', { name }) as HTMLButtonElement).disabled).toBe(true);
   expect((ui.getByRole('button', { name: 'Transcript' }) as HTMLButtonElement).disabled).toBe(false);
   expect((ui.getByRole('textbox', { name: 'Message Agent Worker' }) as HTMLInputElement).value).toBe('Preserved draft');
   expect(server.requests.filter(row => row.request.method === 'agent/sendMessage')).toHaveLength(1);
@@ -201,9 +201,9 @@ it('Starting activation uses authoritative Admitting owner state', async () => {
   const ui = render(<RuntimeFacts snapshot={s} client={server.client} sessionId="A"/>);
   expect(ui.getByText('Admitting…')).toBeTruthy();
   expect(ui.queryByText('Stopping…')).toBeNull();
-  expect(ui.queryByRole('button', { name: 'Send message' })).toBeNull();
+  expect(ui.queryByRole('button', { name: /^(Send|Steer)$/ })).toBeNull();
   expect((ui.getByRole('textbox', { name: 'Message Agent Worker' }) as HTMLTextAreaElement).disabled).toBe(true);
-  expect((ui.getByRole('button', { name: 'Interrupt' }) as HTMLButtonElement).disabled).toBe(false);
+  expect((ui.getByRole('button', { name: 'Stop' }) as HTMLButtonElement).disabled).toBe(false);
 });
 
 it.each(['job/wait', 'job/cancel'] as const)('%s finishes with native publication failure and preserves owner state', async method => {
@@ -243,7 +243,7 @@ it.each([['agent_not_delivered', 'input was not delivered'], ['agent_delivery_un
   const ui = render(<RuntimeFacts snapshot={s} client={server.client} sessionId="A"/>);
   await act(async () => {
     fireEvent.change(ui.getByRole('textbox', { name: 'Message Agent Worker' }), { target: { value: 'Keep this guidance' } });
-    fireEvent.click(ui.getByRole('button', { name: 'Send message' })); await server.waitFor('agent/sendMessage', 1);
+    fireEvent.click(ui.getByRole('button', { name: /^(Send|Steer)$/ })); await server.waitFor('agent/sendMessage', 1);
   });
   expect(ui.getByRole('alert').textContent).toContain(expected);
   expect((ui.getByRole('textbox', { name: 'Message Agent Worker' }) as HTMLInputElement).value).toBe('Keep this guidance');
@@ -277,20 +277,20 @@ it('a wait response from an obsolete attachment cannot publish an activation res
 
 it('child transcript cannot publish from a retained cleanup claim and fresh proof starts a fresh read', async () => {
   const server = new Server(); servers.push(server); await server.attached('A');
-  server.held.add('agent/transcript'); server.held.add('session/detach');
+  server.held.add('agent/conversation'); server.held.add('session/detach');
   const ui = render(<AgentCard agent={agentFixture()} client={server.client} sessionId="A"/>);
-  const old = await server.waitFor('agent/transcript', 1);
+  const old = await server.waitFor('agent/conversation', 1);
   let release!: Promise<void>;
   await act(async () => { release = server.client.release('A'); void release.catch(() => {}); await server.waitFor('session/detach', 1); });
   const page = (text: string) => ({ entries: [{ cursor: '1', item: { type: 'message' as const, message: { id: text, role: 'assistant' as const, content: [{ type: 'text' as const, text }] } } }] });
-  await act(async () => { server.socket.success(old, { type: 'transcript', page: page('obsolete child result') }); });
+  await act(async () => { server.socket.success(old, childConversation(page('obsolete child result'))); });
   expect(ui.queryByText('obsolete child result')).toBeNull(); expect(ui.queryByText('Reading child conversation…')).toBeNull();
   expect(server.claims()).toHaveLength(1);
   await act(async () => { server.reply(await server.waitFor('session/detach', 1)); await release; await server.client.attach('A'); });
-  const fresh = await server.waitFor('agent/transcript', 2);
-  await act(async () => { server.socket.success(fresh, { type: 'transcript', page: page('current child result') }); });
+  const fresh = await server.waitFor('agent/conversation', 2);
+  await act(async () => { server.socket.success(fresh, childConversation(page('current child result'))); });
   expect(ui.getByText('current child result')).toBeTruthy(); expect(ui.queryByText('obsolete child result')).toBeNull();
-  expect(server.requests.filter(row => row.request.method === 'agent/transcript')).toHaveLength(2);
+  expect(server.requests.filter(row => row.request.method === 'agent/conversation')).toHaveLength(2);
   expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(2);
   expect(server.requests.filter(row => row.request.method === 'session/detach')).toHaveLength(1); expect(server.claims()).toHaveLength(1);
 });
@@ -298,25 +298,25 @@ it('child transcript cannot publish from a retained cleanup claim and fresh proo
 it('older child transcript retains its original observation proof through native response', async () => {
   const server = new Server(); servers.push(server); await server.attached('A');
   const page = (text: string, cursor: string) => ({ entries: [{ cursor, item: { type: 'message' as const, message: { id: text, role: 'assistant' as const, content: [{ type: 'text' as const, text }] } } }], next_cursor: cursor });
-  server.handlers.set('agent/transcript', () => ({ type: 'transcript', page: page('current child page', '10') }));
+  server.handlers.set('agent/conversation', () => childConversation(page('current child page', '10')));
   const ui = render(<AgentCard agent={agentFixture()} client={server.client} sessionId="A"/>);
-  await act(async () => { await server.waitFor('agent/transcript', 1); });
+  await act(async () => { await server.waitFor('agent/conversation', 1); });
   expect(ui.getByText('current child page')).toBeTruthy();
-  server.held.add('agent/transcript'); server.held.add('session/detach');
-  await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Older messages' })); await server.waitFor('agent/transcript', 2); });
-  const older = await server.waitFor('agent/transcript', 2); let release!: Promise<void>;
+  server.held.add('agent/conversation'); server.held.add('agent/transcript'); server.held.add('session/detach');
+  await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Older messages' })); await server.waitFor('agent/transcript', 1); });
+  const older = await server.waitFor('agent/transcript', 1); let release!: Promise<void>;
   await act(async () => { release = server.client.release('A'); void release.catch(() => {}); await server.waitFor('session/detach', 1); });
   await act(async () => { server.socket.success(older, { type: 'transcript', page: page('obsolete older page', '1') }); });
   expect(ui.queryByText('obsolete older page')).toBeNull(); expect(ui.getByText('current child page')).toBeTruthy();
-  expect(server.requests.filter(row => row.request.method === 'agent/transcript')).toHaveLength(2);
+  expect(server.requests.filter(row => row.request.method === 'agent/transcript')).toHaveLength(1);
   expect(server.requests.filter(row => row.request.method === 'session/snapshot')).toHaveLength(0);
   await act(async () => { server.reply(await server.waitFor('session/detach', 1)); await release; }); expect(server.claims()).toHaveLength(0);
   await act(async () => { await server.client.attach('A'); });
   expect(ui.queryByText('current child page')).toBeNull();
-  const fresh = await server.waitFor('agent/transcript', 3);
-  await act(async () => { server.socket.success(fresh, { type: 'transcript', page: page('fresh child page', '20') }); });
+  const fresh = await server.waitFor('agent/conversation', 2);
+  await act(async () => { server.socket.success(fresh, childConversation(page('fresh child page', '20'))); });
   expect(ui.getByText('fresh child page')).toBeTruthy(); expect(ui.queryByText('current child page')).toBeNull();
-  expect(server.requests.filter(row => row.request.method === 'agent/transcript')).toHaveLength(3);
+  expect(server.requests.filter(row => row.request.method === 'agent/transcript')).toHaveLength(1);
   expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(2);
   expect(server.requests.filter(row => row.request.method === 'session/detach')).toHaveLength(1); expect(server.claims()).toHaveLength(1);
 });
@@ -328,8 +328,8 @@ it.each(['wait-release', 'interrupt-switch', 'message-release'] as const)('%s ca
   server.held.add(method); server.held.add('session/detach'); server.held.add('session/switchNode');
   const ui = render(<AgentCard agent={agent} client={server.client} sessionId="A"/>);
   await act(async () => {
-    if (kind === 'message-release') { fireEvent.change(ui.getByRole('textbox'), { target: { value: 'Preserve draft' } }); fireEvent.click(ui.getByRole('button', { name: 'Send message' })); }
-    else fireEvent.click(ui.getByRole('button', { name: kind === 'wait-release' ? 'Wait for activation' : 'Interrupt' }));
+    if (kind === 'message-release') { fireEvent.change(ui.getByRole('textbox'), { target: { value: 'Preserve draft' } }); fireEvent.click(ui.getByRole('button', { name: /^(Send|Steer)$/ })); }
+    else fireEvent.click(ui.getByRole('button', { name: kind === 'wait-release' ? 'Wait for activation' : 'Stop' }));
     await server.waitFor(method, 1);
   });
   const old = await server.waitFor(method, 1); let cleanup!: Promise<void>;
@@ -368,8 +368,8 @@ it('current wait settlement remains independent from interrupt completion', asyn
   server.held.add('agent/wait'); server.handlers.set('agent/interrupt', () => result);
   const ui = render(<AgentCard agent={agent} client={server.client} sessionId="A"/>);
   await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Wait for activation' })); await server.waitFor('agent/wait', 1); });
-  expect((ui.getByRole('button', { name: 'Interrupt' }) as HTMLButtonElement).disabled).toBe(false);
-  await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Interrupt' })); await server.waitFor('session/snapshot', 1); });
+  expect((ui.getByRole('button', { name: 'Stop' }) as HTMLButtonElement).disabled).toBe(false);
+  await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Stop' })); await server.waitFor('session/snapshot', 1); });
   expect(ui.getByText('cancelled')).toBeTruthy(); expect((ui.getByRole('button', { name: 'Wait for activation' }) as HTMLButtonElement).disabled).toBe(true);
   await act(async () => { server.socket.success(await server.waitFor('agent/wait', 1), result); await server.waitFor('session/snapshot', 2); });
   expect(ui.getByText('cancelled')).toBeTruthy(); expect((ui.getByRole('button', { name: 'Wait for activation' }) as HTMLButtonElement).disabled).toBe(false);

@@ -7,7 +7,7 @@ import { useSubagents } from './subagent-context';
 import css from '../../presentation/agent/Tool.module.css';
 import { useTranslation } from '../../locale/react';
 import type { TranslationKey } from '../../locale/translation';
-import type { ForegroundToolExecution } from '../../../../protocol/app-server/v40';
+import type { ForegroundToolExecution } from '../../../../protocol/app-server/v41';
 import { ToolCard } from '../../presentation/agent/ToolCard';
 import { toolCard } from '../../bindings/tools';
 

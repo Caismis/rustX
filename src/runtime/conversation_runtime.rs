@@ -7875,12 +7875,14 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             authority: crate::runtime::subagent::DurableAgentAuthority {
+                                title: "Explore task".to_owned(),
                                 execution_policy:
                                     crate::runtime::subagent::InheritedExecutionPolicy::default(),
                                 resolved: test_resolved_subagent("explore"),
                                 approval_mode: crate::runtime::ApprovalMode::Policy,
                             },
                             admission: crate::runtime::subagent::ActivationAdmission {
+                                attachments: Vec::new(),
                                 task: "pre-constructed".to_owned(),
                                 context: None,
                                 origin:
@@ -8005,12 +8007,14 @@ mod tests {
                 .prepare(
                     &crate::runtime::subagent::SubagentStartSpec {
                         authority: crate::runtime::subagent::DurableAgentAuthority {
+                            title: "Explore task".to_owned(),
                             execution_policy:
                                 crate::runtime::subagent::InheritedExecutionPolicy::default(),
                             resolved: test_resolved_subagent("explore"),
                             approval_mode: crate::runtime::ApprovalMode::Policy,
                         },
                         admission: crate::runtime::subagent::ActivationAdmission {
+                            attachments: Vec::new(),
                             task: "transfer race".to_owned(),
                             context: None,
                             origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
@@ -8151,12 +8155,14 @@ mod tests {
             .prepare(
                 &crate::runtime::subagent::SubagentStartSpec {
                     authority: crate::runtime::subagent::DurableAgentAuthority {
+                        title: "Explore task".to_owned(),
                         execution_policy:
                             crate::runtime::subagent::InheritedExecutionPolicy::default(),
                         resolved: test_resolved_subagent("explore"),
                         approval_mode: crate::runtime::ApprovalMode::Policy,
                     },
                     admission: crate::runtime::subagent::ActivationAdmission {
+                        attachments: Vec::new(),
                         task: "refused after claim".to_owned(),
                         context: None,
                         origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
@@ -11504,12 +11510,14 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             authority: crate::runtime::subagent::DurableAgentAuthority {
+                                title: "Explore task".to_owned(),
                                 execution_policy:
                                     crate::runtime::subagent::InheritedExecutionPolicy::default(),
                                 resolved: test_resolved_subagent("explore"),
                                 approval_mode: crate::runtime::ApprovalMode::Policy,
                             },
                             admission: crate::runtime::subagent::ActivationAdmission {
+                                attachments: Vec::new(),
                                 task: "first terminal".to_owned(),
                                 context: None,
                                 origin:
@@ -11576,12 +11584,14 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             authority: crate::runtime::subagent::DurableAgentAuthority {
+                                title: "Explore task".to_owned(),
                                 execution_policy:
                                     crate::runtime::subagent::InheritedExecutionPolicy::default(),
                                 resolved: test_resolved_subagent("explore"),
                                 approval_mode: crate::runtime::ApprovalMode::Policy,
                             },
                             admission: crate::runtime::subagent::ActivationAdmission {
+                                attachments: Vec::new(),
                                 task: "second terminal".to_owned(),
                                 context: None,
                                 origin:
@@ -11813,12 +11823,14 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             authority: crate::runtime::subagent::DurableAgentAuthority {
+                                title: "Explore task".to_owned(),
                                 execution_policy:
                                     crate::runtime::subagent::InheritedExecutionPolicy::default(),
                                 resolved: test_resolved_subagent("explore"),
                                 approval_mode: crate::runtime::ApprovalMode::Policy,
                             },
                             admission: crate::runtime::subagent::ActivationAdmission {
+                                attachments: Vec::new(),
                                 task: "hold the adoption gate".to_owned(),
                                 context: None,
                                 origin:
@@ -11994,12 +12006,14 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             authority: crate::runtime::subagent::DurableAgentAuthority {
+                                title: "Explore task".to_owned(),
                                 execution_policy:
                                     crate::runtime::subagent::InheritedExecutionPolicy::default(),
                                 resolved: test_resolved_subagent("explore"),
                                 approval_mode: crate::runtime::ApprovalMode::Policy,
                             },
                             admission: crate::runtime::subagent::ActivationAdmission {
+                                attachments: Vec::new(),
                                 task: "owned child".to_owned(),
                                 context: None,
                                 origin:
@@ -12077,12 +12091,14 @@ mod tests {
             .prepare(
                 &crate::runtime::subagent::SubagentStartSpec {
                     authority: crate::runtime::subagent::DurableAgentAuthority {
+                        title: "Explore task".to_owned(),
                         execution_policy:
                             crate::runtime::subagent::InheritedExecutionPolicy::default(),
                         resolved: test_resolved_subagent("explore"),
                         approval_mode: crate::runtime::ApprovalMode::Policy,
                     },
                     admission: crate::runtime::subagent::ActivationAdmission {
+                        attachments: Vec::new(),
                         task: "rejected after failure".to_owned(),
                         context: None,
                         origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
@@ -12240,12 +12256,14 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             authority: crate::runtime::subagent::DurableAgentAuthority {
+                                title: "Explore task".to_owned(),
                                 execution_policy:
                                     crate::runtime::subagent::InheritedExecutionPolicy::default(),
                                 resolved: test_resolved_subagent("explore"),
                                 approval_mode: crate::runtime::ApprovalMode::Policy,
                             },
                             admission: crate::runtime::subagent::ActivationAdmission {
+                                attachments: Vec::new(),
                                 task: "owned".to_owned(),
                                 context: None,
                                 origin:
@@ -12361,12 +12379,14 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             authority: crate::runtime::subagent::DurableAgentAuthority {
+                                title: "Explore task".to_owned(),
                                 execution_policy:
                                     crate::runtime::subagent::InheritedExecutionPolicy::default(),
                                 resolved: test_resolved_subagent("explore"),
                                 approval_mode: crate::runtime::ApprovalMode::Policy,
                             },
                             admission: crate::runtime::subagent::ActivationAdmission {
+                                attachments: Vec::new(),
                                 task: "owned".to_owned(),
                                 context: None,
                                 origin:
@@ -12483,12 +12503,14 @@ mod tests {
                 .prepare(
                     &crate::runtime::subagent::SubagentStartSpec {
                         authority: crate::runtime::subagent::DurableAgentAuthority {
+                            title: "Explore task".to_owned(),
                             execution_policy:
                                 crate::runtime::subagent::InheritedExecutionPolicy::default(),
                             resolved: test_resolved_subagent("explore"),
                             approval_mode: crate::runtime::ApprovalMode::Policy,
                         },
                         admission: crate::runtime::subagent::ActivationAdmission {
+                            attachments: Vec::new(),
                             task: "racing".to_owned(),
                             context: None,
                             origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
@@ -13144,12 +13166,14 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             authority: crate::runtime::subagent::DurableAgentAuthority {
+                                title: "Explore task".to_owned(),
                                 execution_policy:
                                     crate::runtime::subagent::InheritedExecutionPolicy::default(),
                                 resolved: test_resolved_subagent("explore"),
                                 approval_mode: crate::runtime::ApprovalMode::Policy,
                             },
                             admission: crate::runtime::subagent::ActivationAdmission {
+                                attachments: Vec::new(),
                                 task: "owned".to_owned(),
                                 context: None,
                                 origin:
@@ -13253,12 +13277,14 @@ mod tests {
             .prepare(
                 &crate::runtime::subagent::SubagentStartSpec {
                     authority: crate::runtime::subagent::DurableAgentAuthority {
+                        title: "Explore task".to_owned(),
                         execution_policy:
                             crate::runtime::subagent::InheritedExecutionPolicy::default(),
                         resolved: test_resolved_subagent("explore"),
                         approval_mode: crate::runtime::ApprovalMode::Policy,
                     },
                     admission: crate::runtime::subagent::ActivationAdmission {
+                        attachments: Vec::new(),
                         task: "rejected".to_owned(),
                         context: None,
                         origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
@@ -15766,12 +15792,14 @@ mod tests {
             .prepare(
                 &crate::runtime::subagent::SubagentStartSpec {
                     authority: crate::runtime::subagent::DurableAgentAuthority {
+                        title: "Explore task".to_owned(),
                         execution_policy:
                             crate::runtime::subagent::InheritedExecutionPolicy::default(),
                         resolved: test_resolved_subagent("reviewer"),
                         approval_mode: ApprovalMode::Policy,
                     },
                     admission: crate::runtime::subagent::ActivationAdmission {
+                        attachments: Vec::new(),
                         task: "Produce the workflow result.".to_owned(),
                         context: None,
                         origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
@@ -15905,11 +15933,13 @@ mod tests {
             .prepare(
                 &SubagentStartSpec {
                     authority: DurableAgentAuthority {
+                        title: "Explore task".to_owned(),
                         resolved: test_resolved_subagent("reviewer"),
                         execution_policy: InheritedExecutionPolicy::default(),
                         approval_mode: ApprovalMode::Policy,
                     },
                     admission: ActivationAdmission {
+                        attachments: Vec::new(),
                         task: "unproven child with abandoned publication".into(),
                         context: None,
                         origin: AgentActivationOrigin::CreationTool {
@@ -16010,11 +16040,13 @@ mod tests {
             .prepare(
                 &SubagentStartSpec {
                     authority: DurableAgentAuthority {
+                        title: "Explore task".to_owned(),
                         resolved: test_resolved_subagent("reviewer"),
                         execution_policy: InheritedExecutionPolicy::default(),
                         approval_mode: ApprovalMode::Policy,
                     },
                     admission: ActivationAdmission {
+                        attachments: Vec::new(),
                         task: "Exercise failed physical settlement".into(),
                         context: None,
                         origin: AgentActivationOrigin::CreationTool {

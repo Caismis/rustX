@@ -138,6 +138,7 @@ it('keyboard focus reveals a clipped tab through only its bounded strip without 
   const strip = ui.getByRole('tablist'), a = ui.getByRole('tab', { name: 'A' }), b = ui.getByRole('tab', { name: 'B' });
   let viewportWidth = 300, scroll = 0;
   Object.defineProperties(strip, { scrollWidth: { value: 600 }, clientWidth: { value: 300 }, scrollLeft: { get: () => scroll, set: value => { scroll = Math.max(0, Math.min(600 - viewportWidth, value)); } } });
+  strip.scrollTo = vi.fn(options => { strip.scrollLeft = (options as ScrollToOptions).left ?? 0; });
   Object.defineProperty(strip, 'getBoundingClientRect', { value: () => ({ left: 0, right: viewportWidth }) });
   Object.defineProperty(a.parentElement!, 'getBoundingClientRect', { value: () => ({ left: 500 - strip.scrollLeft, right: 600 - strip.scrollLeft }) });
   Object.defineProperty(b.parentElement!, 'getBoundingClientRect', { value: () => ({ left: -strip.scrollLeft, right: 100 - strip.scrollLeft }) });
@@ -147,6 +148,7 @@ it('keyboard focus reveals a clipped tab through only its bounded strip without 
   expect(document.activeElement).toBe(b); expect(strip.scrollLeft).toBe(0); expect(b.getAttribute('aria-selected')).toBe('true');
   viewportWidth = 299.5; fireEvent.keyDown(b, { key: 'ArrowLeft' });
   expect(strip.scrollLeft).toBe(300.5); expect(a.parentElement!.getBoundingClientRect().right).toBeLessThanOrEqual(viewportWidth);
+  expect(strip.scrollTo).toHaveBeenLastCalledWith({ left: 301, behavior: 'instant' });
 });
 it('pointer divider captures, coalesces visual frames, commits once and cancellation restores', () => {
   owner.openPreview(artifact('a')); owner.openPreview(artifact('b')); owner.measure(1000, owner.getSnapshot().geometryEpoch); owner.split(); const ui = render(<Shell/>), divider = ui.getByRole('separator');

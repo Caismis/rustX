@@ -1,4 +1,4 @@
-import type { RuntimeClientAgent, SubagentState, ForegroundToolExecution } from '../../../../protocol/app-server/v40';
+import type { RuntimeClientAgent, SubagentState, ForegroundToolExecution } from '../../../../protocol/app-server/v41';
 import type { TranslationKey } from '../../locale/translation';
 
 export interface AgentToolItem {
@@ -42,11 +42,11 @@ export function subagentToolDetails(tool: ForegroundToolExecution): AgentToolDet
     details.count = value.agents.length;
     details.items = value.agents.flatMap(entry => {
       const agent = object(entry), agentId = string(agent?.agent_id);
-      return agent && agentId ? [{ agentId, name: string(agent.agent), ...states[string(agent.state) ?? ''] }] : [];
+      return agent && agentId ? [{ agentId, name: string(agent.title), ...states[string(agent.state) ?? ''] }] : [];
     });
     if (value.truncated === true && typeof value.returned === 'number' && typeof value.matched === 'number') details.truncated = { returned: value.returned, matched: value.matched };
   } else if (tool.tool_id === 'tool-subagent' && details.target) {
-    details.items = [{ agentId: details.target, name: string(value.agent), text: task, status: 'common:subagents.started', tone: 'ongoing' }];
+    details.items = [{ agentId: details.target, name: string(input?.title), text: task, status: 'common:subagents.started', tone: 'ongoing' }];
   } else if (tool.tool_id === 'tool-send_message' && details.target) {
     details.items = [{ agentId: details.target, text: task, status: 'common:subagents.accepted', tone: 'done' }];
   } else if ((tool.tool_id === 'tool-wait_agent' || tool.tool_id === 'tool-interrupt_agent') && details.target) {

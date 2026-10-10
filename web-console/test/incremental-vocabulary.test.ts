@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { foldRuntimeEvent as fold } from '../../protocol/app-server/projection';
-import type { RuntimeClientEvent as Event, RuntimeClientSnapshot as Snapshot } from '../../protocol/app-server/v40';
+import type { RuntimeClientEvent as Event, RuntimeClientSnapshot as Snapshot } from '../../protocol/app-server/v41';
 import capture from './fixtures/incremental-native.json';
 import { interaction } from './fixture';
 
@@ -29,7 +29,7 @@ it('every Session event variant has an explicit transition or documented domain 
   apply({ type: 'context_compaction_failed', context: { compaction_in_progress: false, compaction_count: 0 }, error: 'native failure' }); expect(state.context?.compaction_in_progress).toBe(false);
   apply({ type: 'context_compacted', context: { compaction_in_progress: false, compaction_count: 3 } }); expect(state.context?.compaction_count).toBe(3);
   apply({ type: 'job_updated', job: { job_id: 'e', tool_id: 'bash', tool_name: 'bash', state: 'succeeded' } }); expect(state.jobs?.[0].job_id).toBe('e');
-  apply({ type: 'agent_updated', agent: { activation_id: 's', agent_id: 'child', parent_agent_id: 'parent', child_conversation_id: 'c', agent: 'worker', definition_digest: 'd', profile_digest: 'p', state: 'inactive', activation_state: 'succeeded', observation: { attempt_id: null, revision: '1', activity: { type: 'awaiting_activity' }, counters: { model_requests: 1, model_retries: 0, tool_executions: 0 } }, started_at: audit.timestamp, workspace: { logical_workspace: '/workspace', isolation: { type: 'shared' }, resource_state: 'none' } } }); expect(state.agents?.[0].activation_id).toBe('s');
+  apply({ type: 'agent_updated', agent: { title: 'worker', activation_id: 's', agent_id: 'child', parent_agent_id: 'parent', child_conversation_id: 'c', agent: 'worker', definition_digest: 'd', profile_digest: 'p', state: 'inactive', activation_state: 'succeeded', observation: { attempt_id: null, revision: '1', activity: { type: 'awaiting_activity' }, counters: { model_requests: 1, model_retries: 0, tool_executions: 0 } }, started_at: audit.timestamp, workspace: { logical_workspace: '/workspace', isolation: { type: 'shared' }, resource_state: 'none' } } }); expect(state.agents?.[0].activation_id).toBe('s');
   apply({ type: 'capability_updated', capabilities: { configured_tools: [], revision: '12' } }); expect(state.capabilities.revision).toBe('12');
   const native = capture.initial.result.snapshot as unknown as Snapshot;
   apply({ type: 'resource_generation_updated', plugins: native.effective_plugins, model: native.model!, approval_mode: 'full_access', capabilities: native.capabilities, resources: native.resources! }); expect(state.effective_approval_mode).toBe('full_access');

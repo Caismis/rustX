@@ -41,7 +41,7 @@ test('native interrupt and wait capture one activation; the same Agent resumes w
     const childGate = `agent-initial-${2 - parentIndex}`;
     const parentTitle = await page.locator('#session-title').innerText();
     await page.getByRole('button', { name: 'Subagents', exact: true }).click();
-    await page.getByRole('menuitem', { name: /reviewer/ }).click();
+    await page.getByRole('menuitem', { name: /Review workspace/ }).click();
     const agent = page.locator('[data-agent-id]');
     await expect(agent).toHaveCount(1);
     await expect(agent).toHaveAttribute('data-agent-state', 'active');
@@ -50,7 +50,7 @@ test('native interrupt and wait capture one activation; the same Agent resumes w
     await page.getByRole('button', { name: 'Transcript', exact: true }).click();
     await expect(agent.getByText('WEB_AGENT_CHILD: review the workspace', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Wait for activation', exact: true }).click();
-    await agent.getByRole('button', { name: 'Interrupt', exact: true }).click();
+    await agent.getByRole('button', { name: 'Stop', exact: true }).click();
     await expect(agent).toHaveAttribute('data-agent-state', 'inactive');
     await expect(agent.getByRole('status').filter({ hasText: /^cancelled$/ })).toBeVisible();
     await initialSettlements;
@@ -60,8 +60,8 @@ test('native interrupt and wait capture one activation; the same Agent resumes w
     }))));
     await expect(agent.getByRole('alert')).toHaveCount(0);
     await fixture.release(childGate);
-    await agent.getByRole('textbox', { name: 'Message Agent reviewer' }).fill('WEB_AGENT_RESUME: continue the same review');
-    await agent.getByRole('button', { name: 'Send message', exact: true }).click();
+    await agent.getByRole('textbox', { name: 'Message Agent Review workspace' }).fill('WEB_AGENT_RESUME: continue the same review');
+    await agent.getByRole('button', { name: 'Send', exact: true }).click();
     await fixture.gate('agent-resumed');
     await resumeAcknowledged;
     await page.getByRole('button', { name: 'Transcript', exact: true }).click();

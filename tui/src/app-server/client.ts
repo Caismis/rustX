@@ -71,7 +71,7 @@ import {
 } from "./transport.ts";
 
 /** The protocol version this client speaks. Independent of every other version. */
-export const APP_SERVER_PROTOCOL_VERSION = 40;
+export const APP_SERVER_PROTOCOL_VERSION = 41;
 
 /** How this client identifies itself in `initialize`. */
 export const CLIENT_IDENTITY: ClientIdentity = {
@@ -174,6 +174,11 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   "job/list": "read",
   "job/wait": "read",
   "agent/list": "read",
+  "agent/conversation": "read",
+  "agent/conversationCancel": "connection_local",
+  "agent/artifactRead": "read",
+  "agent/deliveryRead": "read",
+  "agent/deliveryLocate": "read",
   "agent/sendMessage": "side_effecting",
   // A retry could capture a later activation, so a lost wait is never replayed.
   "agent/wait": "side_effecting",
@@ -471,7 +476,7 @@ export class AppServerClient {
 
     const record = decodeProtocolMessage(untrusted);
     if (record === undefined) {
-      this.#fail("invalid App Server v39 protocol message");
+      this.#fail("invalid App Server v41 protocol message");
       return;
     }
 

@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v40 envelope and method vocabulary.
+//! Rust authority for the App Server v41 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 40;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 41;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -78,6 +78,28 @@ pub use crate::local_runtime::session::uploads::UserInputBlock;
 #[serde(tag = "method", content = "params", deny_unknown_fields)]
 #[allow(clippy::large_enum_variant)] // Wire commands are short-lived and bounded by the transport frame.
 pub enum Method {
+    #[serde(rename = "agent/artifactRead")]
+    AgentArtifactRead {
+        target: AttachmentTarget,
+        agent_id: crate::runtime::identity::AgentId,
+        artifact_id: crate::runtime::identity::ArtifactId,
+    },
+    #[serde(rename = "agent/deliveryRead")]
+    AgentDeliveryRead {
+        target: AttachmentTarget,
+        agent_id: crate::runtime::identity::AgentId,
+        message_id: MessageId,
+        #[schemars(range(max = 7))]
+        delivery_index: usize,
+    },
+    #[serde(rename = "agent/deliveryLocate")]
+    AgentDeliveryLocate {
+        target: AttachmentTarget,
+        agent_id: crate::runtime::identity::AgentId,
+        message_id: MessageId,
+        #[schemars(range(max = 7))]
+        delivery_index: usize,
+    },
     #[serde(rename = "artifact/read")]
     ArtifactRead {
         target: AttachmentTarget,
@@ -214,6 +236,14 @@ pub enum Method {
     },
     #[serde(rename = "agent/list")]
     AgentList { target: AttachmentTarget },
+    #[serde(rename = "agent/conversationCancel")]
+    AgentConversationCancel { request_id: RequestId },
+    #[serde(rename = "agent/conversation")]
+    AgentConversation {
+        target: AttachmentTarget,
+        agent_id: crate::runtime::identity::AgentId,
+        after: Option<crate::runtime_client::agent_conversation::AgentConversationCursor>,
+    },
     #[serde(rename = "agent/statistics")]
     AgentStatistics {
         target: AttachmentTarget,
@@ -221,6 +251,7 @@ pub enum Method {
     },
     #[serde(rename = "agent/sendMessage")]
     AgentSendMessage {
+        attachments: Vec<crate::local_runtime::session::uploads::UploadReceipt>,
         target: AttachmentTarget,
         agent_id: crate::runtime::identity::AgentId,
         message: String,
@@ -518,6 +549,7 @@ pub enum ErrorData {
     AlreadyInitialized,
     /// The client cancelled this delivery request before publication.
     DeliveryCancelled,
+    ObservationCancelled,
     StaleAttachment,
     StaleRuntime,
     ControllerInUse,
@@ -659,6 +691,12 @@ pub enum MethodResult {
     },
     Agent {
         agent: Box<crate::runtime_client::snapshot::RuntimeClientAgent>,
+    },
+    AgentConversationCancelled {
+        accepted: bool,
+    },
+    AgentConversation {
+        conversation: crate::runtime_client::agent_conversation::AgentConversation,
     },
     AgentStatistics {
         metrics: crate::runtime_client::agent_statistics::AgentStatistics,

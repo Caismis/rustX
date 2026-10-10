@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import type { MethodResult, Request1 } from '../../protocol/app-server/v40';
+import type { MethodResult, Request1 } from '../../protocol/app-server/v41';
 import { OutcomeUncertain } from '../src/client/app-server';
 import { Server, snapshot } from './fixture';
 const servers: Server[] = [];
@@ -11,7 +11,7 @@ function operation(s: Server, method: DomainMethod): Request1 {
   if (method === 'context/compact') return { method, params: { target, request_id: 'compact-a' } };
   if (method === 'turn/cancel') return { method, params: { target } };
   return method === 'job/wait' || method === 'job/cancel' ? { method, params: { target, job_id: 'job-a' } }
-    : method === 'agent/sendMessage' ? { method, params: { target, agent_id: 'agent-a', message: 'input' } }
+    : method === 'agent/sendMessage' ? { method, params: { target, agent_id: 'agent-a', attachments: [], message: 'input' } }
     : { method, params: { target, agent_id: 'agent-a' } };
 }
 function result(method: DomainMethod): MethodResult {
@@ -19,7 +19,7 @@ function result(method: DomainMethod): MethodResult {
   if (method === 'turn/cancel') return { type: 'cancellation_accepted', attempt_id: 'attempt-A' };
   if (method === 'job/wait' || method === 'job/cancel') return { type: 'job', job: { job_id: 'job-a', tool_id: 'bash', tool_name: 'bash', state: 'cancelled' } };
   if (method === 'agent/sendMessage') return { type: 'agent_message', agent_id: 'agent-a', activation_id: 'activation-b', resumed: true };
-  return { type: 'agent_wait', agent_id: 'agent-a', activation_id: 'activation-b', outcome: null, agent: {
+  return { type: 'agent_wait', agent_id: 'agent-a', activation_id: 'activation-b', outcome: null, agent: { title: 'Worker',
     agent_id: 'agent-a', parent_agent_id: 'parent', child_conversation_id: 'child', agent: 'Worker',
     activation_id: 'activation-b', current_activation: null, state: 'inactive', activation_state: 'cancelled',
     definition_digest: 'definition', profile_digest: 'profile', started_at: '2026-09-15T00:00:00Z',
@@ -28,6 +28,31 @@ function result(method: DomainMethod): MethodResult {
   } };
 }
 const methods: DomainMethod[] = ['agent/wait', 'job/wait', 'agent/sendMessage', 'agent/interrupt', 'job/cancel'];
+it('retiring a child observation cancels its exact native read, while leaving Agent execution untouched', async () => {
+  const s = await connected(); s.held.add('agent/conversation');
+  const controller = new AbortController();
+  const work = s.client.request({method:'agent/conversation',params:{target:s.client.target('A'),agent_id:'agent-a',after:null}},
+    'agent_conversation',undefined,undefined,controller.signal);
+  const rejected = expect(work).rejects.toThrow('retired child observation');
+  const read = await s.waitFor('agent/conversation',1);
+  controller.abort();
+  const cancel = await s.waitFor('agent/conversationCancel',1);
+  expect(cancel.params).toEqual({request_id:read.id});
+  s.socket.deliver({jsonrpc:'2.0',id:read.id,error:{code:-32000,message:'retired child observation',data:{kind:'observation_cancelled'}}});
+  await rejected;
+  expect(s.requests.some(row => row.request.method === 'agent/interrupt')).toBe(false);
+  const queuedController = new AbortController();
+  const first = s.client.request({method:'agent/conversation',params:{target:s.client.target('A'),agent_id:'agent-a',after:null}},'agent_conversation');
+  const second = s.client.request({method:'agent/conversation',params:{target:s.client.target('A'),agent_id:'agent-b',after:null}},'agent_conversation');
+  void first.catch(() => {}); void second.catch(() => {});
+  await s.waitFor('agent/conversation',3);
+  const queued = s.client.request({method:'agent/conversation',params:{target:s.client.target('A'),agent_id:'agent-c',after:null}},'agent_conversation',undefined,undefined,queuedController.signal);
+  const queuedRejected = expect(queued).rejects.toThrow('retired before dispatch');
+  queuedController.abort(); await queuedRejected;
+  expect(s.requests.filter(row => row.request.method === 'agent/conversation')).toHaveLength(3);
+  expect(s.requests.filter(row => row.request.method === 'agent/conversationCancel')).toHaveLength(1);
+  s.client.disconnect();
+});
 it.each([...methods, 'turn/cancel', 'context/compact'] as const)('%s owns its lifetime without incidental traffic', async method => {
   const s = await connected(); s.held.add(method); vi.useFakeTimers();
   const settled = vi.fn(); const response = result(method);

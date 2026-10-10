@@ -4,7 +4,7 @@ import { ConversationPreferenceStore, conversationPreferences, CONVERSATION_PREF
 import { GeneralPage } from '../src/app/settings/general/GeneralPage';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { snapshot } from './fixture';
-import type { RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v40';
+import type { RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v41';
 
 afterEach(() => { cleanup(); conversationPreferences().update({fontSize:14, transcriptMode:'detailed', codingView:true}); });
 it('validates stored preferences and applies settings even when browser storage fails', () => {

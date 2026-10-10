@@ -1,5 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import type { RuntimeClientAgent } from '../../../../protocol/app-server/v40';
+import type { RuntimeClientAgent } from '../../../../protocol/app-server/v41';
 import type { AppServerClient } from '../../client/app-server';
 import type { Observation } from '../../client/session-lifecycle/port';
 import { AgentTraceReader } from '../../client/agent-trace';

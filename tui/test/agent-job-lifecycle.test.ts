@@ -46,7 +46,7 @@ for (const state of ["active", "inactive"] as const) {
     const h = await harness(snapshot({ agents: [subagent("worker", "frozen", state)] }));
     const sending = h.dispatcher.submit("/send-message agent-child follow up");
     const request = await nextRequest(h, "agent/sendMessage");
-    assert.deepEqual(request.params, { target: h.target, agent_id: "agent-child", message: "follow up" });
+    assert.deepEqual(request.params, { target: h.target, agent_id: "agent-child", message: "follow up", attachments: [] });
     h.transport.respond(request.id, { type: "agent_message", agent_id: "agent-child", activation_id: "activation-next", resumed: state === "inactive" });
     await sending;
     assert.equal(h.transport.transportCount("agent/status"), 0);

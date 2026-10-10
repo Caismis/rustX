@@ -963,6 +963,7 @@ pub struct RuntimeClientWorkspaceHandoff {
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub struct RuntimeClientAgent {
+    pub title: String,
     pub parent_agent_id: crate::runtime::identity::AgentId,
     /// The most recently admitted finite activation identity.
     pub activation_id: crate::runtime::identity::SubagentId,

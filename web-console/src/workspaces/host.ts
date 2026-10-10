@@ -1,7 +1,7 @@
-import type { McpProbeResult, SourceMutation, SourceSettings } from '../../../protocol/app-server/v40.ts';
-import type { AttachmentTarget, SessionFileReference } from '../../../protocol/app-server/v40.ts';
+import type { McpProbeResult, SourceMutation, SourceSettings } from '../../../protocol/app-server/v41.ts';
+import type { AttachmentTarget, SessionFileReference } from '../../../protocol/app-server/v41.ts';
 import type { DocumentRequest, DocumentResult } from '../../shared/documents.ts';
-export interface DeliveryRead { target: AttachmentTarget; message_id: string; delivery_index: number }
+export interface DeliveryRead { agent_id?: string; target: AttachmentTarget; message_id: string; delivery_index: number }
 export interface DeliveryBytes { file: SessionFileReference; data: string }
 export type WorkspaceConfigurationOperation =  { kind: 'read' | 'reconcile' } | { kind: 'mcp_probe'; id: string; expected_revision: string } | { kind: 'write'; expected_revision: string; mutation: SourceMutation };
 /** The separate authoritative read attempted after a confirmed write. It may

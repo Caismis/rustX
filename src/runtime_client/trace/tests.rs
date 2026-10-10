@@ -4277,7 +4277,7 @@ fn child_lifecycle_repair_uses_exact_attempt_and_request_and_never_revives_termi
     start(&store);
     let request = request(&store, 0);
     let mut agent: crate::runtime_client::snapshot::RuntimeClientAgent = serde_json::from_value(serde_json::json!({
-        "parent_agent_id": "parent", "agent_id": "child", "child_conversation_id": "conv_00000000-0000-7000-8000-000000000002",
+        "title": "Child task", "parent_agent_id": "parent", "agent_id": "child", "child_conversation_id": "conv_00000000-0000-7000-8000-000000000002",
         "activation_id": "activation", "current_activation": "activation", "agent": "worker", "definition_digest": "d", "profile_digest": "p",
         "state": "active", "activation_state": "running", "started_at": "2026-10-10T00:00:00Z",
         "observation": { "revision": 1, "attempt_id": "attempt-a", "activity": { "type": "model", "request_id": request.request_id, "retry": 0 }, "counters": { "model_requests": 1, "model_retries": 0, "tool_executions": 0 } },

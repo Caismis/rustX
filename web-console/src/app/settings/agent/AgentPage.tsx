@@ -1,5 +1,5 @@
 import { useTranslation } from '../../../locale/react';
-import type { AgentProjectInstructionsDocument, RuntimeLayer, SourceScope } from '../../../../../protocol/app-server/v40';
+import type { AgentProjectInstructionsDocument, RuntimeLayer, SourceScope } from '../../../../../protocol/app-server/v41';
 import { UnitForm } from '../forms/bridge';
 import { Names, TextField } from '../forms/controls';
 import css from '../../../presentation/settings/SettingsContent.module.css';

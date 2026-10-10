@@ -769,13 +769,22 @@ impl UploadRegistry {
 #[derive(Debug, Clone)]
 pub(crate) struct SessionUploadResolver {
     catalog: PathBuf,
-    conversation: crate::runtime::identity::ConversationId,
+    conversation: Option<crate::runtime::identity::ConversationId>,
+    session: Option<SessionId>,
 }
 impl SessionUploadResolver {
+    pub(crate) fn for_session(root: &Path, session: SessionId) -> Self {
+        Self {
+            catalog: root.join("sessions/catalog.json"),
+            conversation: None,
+            session: Some(session),
+        }
+    }
     pub(crate) fn new(root: &Path, conversation: crate::runtime::identity::ConversationId) -> Self {
         Self {
             catalog: root.join("sessions/catalog.json"),
-            conversation,
+            conversation: Some(conversation),
+            session: None,
         }
     }
 }
@@ -811,9 +820,12 @@ impl crate::model::uploads::UploadProjectionResolver for SessionUploadResolver {
             .sessions
             .values()
             .find(|s| {
+                if let Some(id) = &self.session {
+                    return &s.id == id;
+                }
                 s.nodes
                     .values()
-                    .any(|n| n.conversation_id == self.conversation)
+                    .any(|n| Some(&n.conversation_id) == self.conversation.as_ref())
             })
             .ok_or("upload Session is unavailable")?;
         session.uploads.validate().map_err(|e| e.to_string())?;

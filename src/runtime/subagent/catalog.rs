@@ -488,11 +488,10 @@ impl NamedAgentDefinition {
     }
 }
 
-/// Nested Agent ownership and published Session-file delivery mappings are not
-/// part of the child runtime composition.
+/// Nested Agent ownership is not part of the child runtime composition.
+/// Child file deliveries use their own conversation and workspace authority.
 /// Finite Job controls remain available to a child's own background registry.
-pub const CHILD_UNSAFE_BUILTIN_TOOLS: [&str; 5] = [
-    "present", // Delivery requires published native Session filesystem ownership.
+pub const CHILD_UNSAFE_BUILTIN_TOOLS: [&str; 4] = [
     "list_agents",
     "send_message",
     "wait_agent",

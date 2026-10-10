@@ -1628,13 +1628,20 @@ impl LocalConversationCore {
                 .with_lifecycle(runtime_config.lifecycle.as_ref().unwrap().clone()),
             );
             runtime_config.durable_binding = Some(ConversationStoreBinding::new(durable_store));
-            let tool_runtime = ConversationToolRuntime::from_config(
+            let mut tool_runtime = ConversationToolRuntime::from_config(
                 spec.child_conversation_id.clone(),
                 runtime_config,
             )
             .map_err(|error| LocalRuntimeError::ToolRuntime {
                 detail: format!("{error:?}"),
             })?;
+
+            tool_runtime.uploads = Some(Arc::new(
+                super::session::uploads::SessionUploadResolver::for_session(
+                    &spec.product_root,
+                    spec.session_id.clone(),
+                ),
+            ));
 
             // 7. The exact frozen Skill packages are materialized into the
             // child-private runtime root and their frozen `SkillVersionId` is
@@ -2279,7 +2286,7 @@ chat_reasoning_replay = "omit"
     }
 
     #[tokio::test]
-    async fn child_model_inventory_has_no_present_and_forced_delivery_fails_composition() {
+    async fn child_model_inventory_contains_present_only_when_frozen_admission_selects_it() {
         let directory = lab();
         let core = LocalConversationCore::compose_subagent_child(
             &spec(
@@ -2321,8 +2328,8 @@ chat_reasoning_replay = "omit"
         )
         .await;
         assert!(
-            matches!(result, Err(super::LocalRuntimeError::NativeTools { .. })),
-            "no child runtime can execute or commit a successful present result"
+            result.is_ok(),
+            "an admitted child can declare files through its own conversation"
         );
     }
 
