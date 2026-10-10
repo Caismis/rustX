@@ -23,8 +23,8 @@
   align-items: center;
   gap: 4px;
   min-width: 0;
-  max-width: 100%;
-  min-height: 28px;
+  max-width: min(360px, 45cqw);
+  height: 28px;
   padding: 0 4px 0 8px;
   border: none;
   /* Rounded chip chrome, matching the sibling permission trigger. */
@@ -51,9 +51,9 @@
   cursor: default;
 }
 
-/* Preserve both values; narrow layouts wrap instead of hiding text. */
-.triggerLabel { min-width: 0; overflow-wrap: anywhere; text-align: left; }
-.triggerEffort { flex: none; white-space: nowrap; color: var(--dsw-alias-label-caption); }
+/* Keep the model name readable; the effort absorbs width pressure first. */
+.triggerLabel { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.triggerEffort { flex-shrink: 1000; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-caption); }
 
 .chevron {
   flex: 0 0 auto;

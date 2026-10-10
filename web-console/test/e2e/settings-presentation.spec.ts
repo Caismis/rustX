@@ -119,7 +119,7 @@ test('desktop: seven pages share one stable Harness frame, distinct icons and on
   // Settings forms retain their geometry; Provider cards use pinned Harness ModelsSection geometry.
   await openSettingsPage(page, 'Agent');
   const identity = settings.getByRole('form', { name: 'Root identity' });
-  const configurationDetails = identity.getByRole('button', { name: 'Source revision & replacement', exact: true });
+  const configurationDetails = identity.getByRole('button', { name: 'Configuration details', exact: true });
   await expect(identity.locator('[data-authored]')).toBeHidden();
   await configurationDetails.click();
   await expect(identity.locator('[data-authored]')).toBeVisible();
@@ -168,7 +168,7 @@ test('Workspace inherited and overridden units, restore versus deletion, nested 
   const identity = settings.getByRole('form', { name: 'Root identity' });
   await identity.getByRole('button', { name: 'Configuration details', exact: true }).click();
   await expect(identity.locator('[data-authored="present"]')).toBeVisible();
-  await identity.getByRole('button', { name: 'Source revision & replacement', exact: true }).click();
+  await identity.getByRole('button', { name: 'Configuration details', exact: true }).click();
   await identity.getByLabel('Agent identity').fill('rustx-workspace-reviewer');
   await expect(identity).toHaveAttribute('data-draft', 'true');
   await expect(identity.getByRole('button', { name: 'Save Root identity' })).toBeEnabled();

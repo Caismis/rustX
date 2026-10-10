@@ -1055,7 +1055,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "341127e20189c265048ffe14be95c4b41c6e2ce8f7686030cb64dc531ff4f43c"
+      "local_sha256": "202c1f616e6e7e497be4af648c5510f760e618905fd6eae5034e4a5bd6215c58"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -1078,7 +1078,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "3f3705d08854689c452a8820a650e247f71a3150b6d4bb7537d97f028fc03173",
+      "local_sha256": "73194ee71ede66eebbf52ff15644b4a79dea725cd3d17c3631de4f20956607f8",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-model-selection/src/client/ModelSelect.tsx",

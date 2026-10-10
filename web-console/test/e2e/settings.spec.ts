@@ -78,17 +78,17 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     // The User source authors every Native Tool; this Workspace inherits that
     // effective value and authors nothing until an explicit edit.
     await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
-    await expect(settings.getByRole('button', { name: 'Save Built-in tools', exact: true })).toBeDisabled();
+    await expect(settings.getByRole('button', { name: 'Save Native Tools', exact: true })).toBeDisabled();
     await settings.getByLabel('read', { exact: true }).uncheck();
-    await settings.getByRole('button', { name: 'Save Built-in tools', exact: true }).click(); await saved('Built-in tools');
+    await settings.getByRole('button', { name: 'Save Native Tools', exact: true }).click(); await saved('Native Tools');
     await expect(settings.getByLabel('read_image', { exact: true })).not.toBeChecked();
     await expect(settings.getByRole('form', { name: 'read_image policy', exact: true })).toHaveCount(0);
     await settings.getByLabel('read_image', { exact: true }).check();
-    await settings.getByRole('button', { name: 'Save Built-in tools', exact: true }).click(); await saved('Built-in tools');
+    await settings.getByRole('button', { name: 'Save Native Tools', exact: true }).click(); await saved('Native Tools');
     await settings.getByRole('button', { name: 'Reload configuration', exact: true }).click();
     await expect(settings.getByLabel('read_image', { exact: true })).toBeChecked();
     await settings.getByLabel('read_image', { exact: true }).uncheck();
-    await settings.getByRole('button', { name: 'Save Built-in tools', exact: true }).click(); await saved('Built-in tools');
+    await settings.getByRole('button', { name: 'Save Native Tools', exact: true }).click(); await saved('Native Tools');
     await settings.getByRole('button', { name: 'Reload configuration', exact: true }).click();
     await expect(settings.getByLabel('read_image', { exact: true })).not.toBeChecked();
     // Source families share exact/all/none selection without activating definitions.
