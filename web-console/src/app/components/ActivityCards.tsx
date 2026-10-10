@@ -4,7 +4,7 @@ import { StateDot } from '../../presentation/primitives/StateDot';
 import { displayText, message as uiMessage, type DisplayText } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import type { AgentStatistics, RuntimeClientAgent, RuntimeClientJob, RuntimeClientTranscriptPage, MethodResult, WorkflowRunView, WorkflowRunId } from '../../../../protocol/app-server/v38';
+import type { AgentStatistics, RuntimeClientAgent, RuntimeClientJob, RuntimeClientTranscriptPage, MethodResult, WorkflowRunView, WorkflowRunId } from '../../../../protocol/app-server/v39';
 import type { Observation } from '../../client/session-lifecycle/port';
 import { AppServerClient, RpcFailure } from '../../client/app-server';
 import { json } from '../../bindings/projection';
@@ -17,6 +17,7 @@ import css from './ActivityCards.module.css';
 import { AgentTranscript } from '../agent/AgentTranscript';
 import { ConversationStats } from '../agent/UsageStats';
 import { agentDot, agentRunning, agentStatus } from '../agent/subagent-state';
+import { SubagentTrajectory } from '../agent/SubagentTrajectory';
 import { ComposerSeat } from '../agent/ComposerSeat';
 import { SubagentComposer } from '../agent/SubagentComposer';
 import { IconRefreshOutline14, IconClockOutline16 } from '../../presentation/primitives/icons';
@@ -62,7 +63,7 @@ function useActivityRequest({ client, sessionId }: Controls) {
 }
 
 /** Durable identity is the React key; the selected transcript survives resume. */
-export function AgentCard({ agent, metrics, metricsError, ...controls }: { agent: RuntimeClientAgent; metrics?: AgentStatistics; metricsError?: string } & Controls) {
+export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible = true, ...controls }: { agent: RuntimeClientAgent; metrics?: AgentStatistics; metricsError?: string; mode?: 'chat' | 'trajectory'; visible?: boolean } & Controls) {
   const tx = useTranslation();
   const request = useActivityRequest(controls);
   const waitRequest = useActivityRequest(controls);
@@ -105,8 +106,8 @@ export function AgentCard({ agent, metrics, metricsError, ...controls }: { agent
     const result = await client.request({ method: 'agent/transcript', params: { target, agent_id: agent.agent_id, before, limit: 64 } }, 'transcript', undefined, current);
     if (current()) { setTranscript(previous => !current() ? previous : before && previous ? { ...result.page, entries: [...(result.page.entries ?? []), ...(previous.entries ?? [])] } : result.page); }
   });
-  return <section className={css.agentConversation} data-agent-id={agent.agent_id} data-agent-state={agent.state} data-activation-id={agent.current_activation ?? undefined} aria-label={tx('common:activity.agent-label', { name: agent.agent })}>
-    <ChatViewport latestLabel={tx('agent:agent-transcript.return-to-latest')}><div className={chatCss.column}>
+  return <section className={css.agentConversation} data-agent-id={agent.agent_id} data-agent-state={agent.state} data-view={mode} data-activation-id={agent.current_activation ?? undefined} aria-label={tx('common:activity.agent-label', { name: agent.agent })}>
+    <div hidden={mode !== 'chat'} className={css.agentChat}><ChatViewport latestLabel={tx('agent:agent-transcript.return-to-latest')}><div className={chatCss.column}>
       {transcript?.next_cursor && <Button size="sm" disabled={request.disabled} onClick={() => void readTranscript(transcript.next_cursor!)}>{tx('common:activity.older')}</Button>}
       <ArtifactContext.Provider value={undefined}><PreviewContext.Provider value={undefined}>{transcript && <AgentTranscript snapshot={{ conversation_id: agent.child_conversation_id, messages: [], statuses: [], attempt: null, transcript }} historicalDisabled/>}</PreviewContext.Provider></ArtifactContext.Provider>
       {transcriptLoading && !transcript && <p role="status">{tx('common:activity.reading')}</p>}
@@ -116,8 +117,10 @@ export function AgentCard({ agent, metrics, metricsError, ...controls }: { agent
       {agent.detail && <p>{detail(agent.detail)}</p>}
       {settledActivation && settledActivation.proof === admission && <small role="status">{settledActivation.outcome ? tx(`common:state.${settledActivation.outcome}`) : tx('common:activity.observed-inactive')}</small>}
       {[request.error, waitRequest.error, interruptRequest.error].filter(Boolean).map((error, index) => <p role="alert" key={index}>{displayText(tx, error!)}</p>)}
-    </div></ChatViewport>
+    </div></ChatViewport></div>
+    {client && sessionId && mode === 'trajectory' && <div className={css.agentTrace}><SubagentTrajectory agent={agent} client={client} sessionId={sessionId} visible={visible && mode === 'trajectory'}/></div>}
     <ComposerSeat>
+      {!client && <div role="status"><StateDot state={agentDot(agent)}/>{agentStatus(agent, tx)}</div>}
       {client && <SubagentComposer name={agent.agent} value={message} onChange={setMessage}
         disabled={request.disabled || !acceptsMessage} pending={request.pending} inactive={agent.state === 'inactive'}
         send={() => { const submitted = message; void request.run(async (client, target, current) => { await client.request({ method: 'agent/sendMessage', params: { target, agent_id: agent.agent_id, message: submitted } }, 'agent_message', undefined, current); if (current()) { setMessage(value => current() && value === submitted ? '' : value); refreshTranscript(value => current() ? value + 1 : value); } }); }}

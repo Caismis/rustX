@@ -6,7 +6,7 @@ import { ArtifactContext } from '../../src/app/components/Artifact';
 import { ArtifactResources } from '../../src/client/artifacts';
 import { AgentCard } from '../../src/app/components/ActivityCards';
 import { RuntimeFacts } from '../../src/app/agent/Activity';
-import type { RuntimeClientAgent } from '../../../protocol/app-server/v38';
+import type { RuntimeClientAgent } from '../../../protocol/app-server/v39';
 import { Server, snapshot } from '../fixture';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -18,7 +18,7 @@ const agent: RuntimeClientAgent = {
   agent_id: 'agent-worker', parent_agent_id: 'parent-agent', activation_id: 'activation-a', current_activation: 'activation-a',
   child_conversation_id: 'conversation-worker', agent: 'Worker', state: 'active', activation_state: 'running',
   definition_digest: 'definition', profile_digest: 'profile', started_at: '2026-09-25T00:00:00Z',
-  observation: { revision: '1', activity: { type: 'awaiting_activity' }, counters: { model_requests: 0, model_retries: 0, tool_executions: 0 } },
+  observation: { attempt_id: null, revision: '1', activity: { type: 'awaiting_activity' }, counters: { model_requests: 0, model_retries: 0, tool_executions: 0 } },
   workspace: { logical_workspace: '/workspace', isolation: { type: 'shared' }, resource_state: 'none' },
 };
 s.agents = [agent];

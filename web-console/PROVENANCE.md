@@ -1415,7 +1415,7 @@ antialiased differently depending on which tile or partial repaint drew them:
 search capture, and other captures varied too. As its own layer it rendered
 identically in 45 of 45 targeted replays.
 
-Trace retained-input ownership repair updates generated imports to App Server v38.
+Trace retained-input ownership repair updates generated imports to App Server v39.
 Source inventory local hashes and dependency closure reflect this mechanical
 protocol change; all Harness upstream pins remain unchanged.
 
@@ -1655,7 +1655,7 @@ admission; navigation/transport replacement never replays the pending gesture.
 
 Quiet connection correction: keep the Harness resident chat/composer layout and
 render the locally submitted user bubble plus generic waiting feedback inside the
-conversation. Opening alone has no connecting notice. App Server v38 adds the
+conversation. Opening alone has no connecting notice. App Server v39 adds the
 read-only `session/history` window so cold stored history can render independently
 of resource preparation; this is a native durable read, never a fabricated runtime
 snapshot. Both clients fence late history reads against the current attachment.
@@ -1703,7 +1703,7 @@ The ISC license is shipped in `public/LICENSE-Lucide-1.17.txt` and the generated
 third-party notices. Only the React SVG wrapper is local.
 
 
-Child statistics now use App Server v38's native `agent/statistics` reading.
+Child statistics now use App Server v39's native `agent/statistics` reading.
 The Harness SubagentHeaderLineage token/duration columns accompany the existing
 state rows; the child reader reuses the main conversation's statistics dock,
 context meter and completed-response presentation. Native event folds retain
@@ -1822,7 +1822,7 @@ and the Inspect pill. `src/bindings/present.ts` is the rustX-authored adapter. I
 maps native foreground lifecycle to Harness phases and maps only a successful
 committed Tool message's typed `deliveries` to cards. Preview and Download stay
 with the existing PreviewWorkspace and original-byte owners. Inventory hashes and
-dependency closures describe this final source, including the v38 import renames.
+dependency closures describe this final source, including the v39 import renames.
 
 ## UI optimization: MCP screenshot alignment
 
@@ -1907,3 +1907,16 @@ or Harness's explicit one-shot mode projection, so those controls are not inferr
 from parent configuration. Browser validation exercises the production App with
 fixture agent identities and statistics, not a live model run or pixel-baseline
 claim.
+
+
+Child trajectory completion (2026-10-10): Harness subagent conversations reuse
+its ordinary conversation/trajectory view. rustX now exposes the same existing
+Trajectory presentation and composer geometry for children, backed by native
+agent/trace and agent/traceDetail over each child's durable store. The existing
+bounded TraceCache owns paging, lifecycle repairs and detail epochs; a child
+reader fences attachment replacement and coalesces activity refreshes. No parent
+trace records or current parent model configuration fill child data. Native
+child Attempt identity supplies exact current lifecycle correlation. The source
+revision remains pinned; App Server v39 / Runtime Client v61 require synchronized
+clients. Browser evidence uses fixture records; the real-process native suite
+separately verifies durable child authority and read-only behavior after exit.

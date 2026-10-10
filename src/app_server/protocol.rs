@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v38 envelope and method vocabulary.
+//! Rust authority for the App Server v39 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 38;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 39;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -234,6 +234,22 @@ pub enum Method {
     AgentInterrupt {
         target: AttachmentTarget,
         agent_id: crate::runtime::identity::AgentId,
+    },
+    /// Independent child-owned Trace read domain; no parent records are used.
+    #[serde(rename = "agent/trace")]
+    AgentTrace {
+        target: AttachmentTarget,
+        agent_id: crate::runtime::identity::AgentId,
+        before: Option<crate::runtime_client::trace::TraceCursor>,
+        limit: usize,
+        #[serde(default)]
+        records: Vec<crate::runtime_client::trace::TraceCursor>,
+    },
+    #[serde(rename = "agent/traceDetail")]
+    AgentTraceDetail {
+        target: AttachmentTarget,
+        agent_id: crate::runtime::identity::AgentId,
+        record_id: String,
     },
     #[serde(rename = "agent/transcript")]
     AgentTranscript {

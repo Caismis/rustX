@@ -329,6 +329,18 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             target: target.clone(),
             agent_id: crate::runtime::identity::AgentId::new("agent-fixture"),
         },
+        Method::AgentTrace {
+            target: target.clone(),
+            agent_id: crate::runtime::identity::AgentId::new("agent-fixture"),
+            before: None,
+            limit: 32,
+            records: Vec::new(),
+        },
+        Method::AgentTraceDetail {
+            target: target.clone(),
+            agent_id: crate::runtime::identity::AgentId::new("agent-fixture"),
+            record_id: "trace:1".into(),
+        },
         Method::AgentTranscript {
             target: target.clone(),
             agent_id: crate::runtime::identity::AgentId::new("agent-fixture"),
@@ -800,9 +812,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v38.schema.json", "v38.ts"]);
+        assert_eq!(generations, ["v39.schema.json", "v39.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v38.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v39.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

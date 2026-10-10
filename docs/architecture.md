@@ -6925,7 +6925,7 @@ and retained workspace facts do not manufacture transcript completion facts.
 The TUI has one disposable child page, fenced by parent attachment epoch and
 child selection/read generation. Reconnect reconstructs from current authority;
 Esc closes presentation without runtime mutation. Child HITL remains routed to
-the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-agent-conversations-v38).
+the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-agent-conversations-v39).
 
 ## Image Tool and Bash presentation (#412)
 
@@ -6941,7 +6941,7 @@ and image context cost are shared; adapters own only encoding and placement.
 Model declarations remain explicit. Endpoint incompatibility is a provider error,
 without placement capability splits, provider-name checks or synthetic User fallback.
 
-### Child Agent meters (Runtime Client 60 / App Server 38)
+### Child Agent meters (Runtime Client 61 / App Server 39)
 
 `agent/statistics` resolves a stable Agent identity exclusively through its
 parent registry and opens the existing child store read-only. It returns the

@@ -5,3 +5,10 @@
 .agentActions button { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--dsw-radius-sm); background: transparent; color: var(--dsw-alias-label-tertiary); cursor: pointer; }
 .agentActions button:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
 .agentActions button:disabled { opacity: 0.4; cursor: default; }
+
+.agentChat { display: contents; }
+.agentTrace { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.agentChat[hidden], .agentTrace[hidden] { display: none; }
+
+.agentConversation[data-view='trajectory'] { flex: 1 1 0; min-height: 0; overflow: hidden; }
+.agentConversation[data-view='trajectory'][data-agent-id] > :global([data-composer-seat]) { position: absolute; right: var(--dsh-scrollbar-width); bottom: 0; left: 0; }

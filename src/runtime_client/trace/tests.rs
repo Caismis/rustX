@@ -4256,3 +4256,77 @@ fn adopted_agent_messages_expose_sender_without_mislabeling_human_or_mixed_batch
     assert!(records[1].agent_id.is_none());
     assert!(records[2].agent_id.is_none());
 }
+
+#[test]
+fn child_lifecycle_repair_uses_exact_attempt_and_request_and_never_revives_terminal() {
+    use crate::runtime::subagent::{AgentState, SubagentActivity};
+    let store = store("conv_00000000-0000-7000-8000-000000000002");
+    start(&store);
+    let request = request(&store, 0);
+    let mut agent: crate::runtime_client::snapshot::RuntimeClientAgent = serde_json::from_value(serde_json::json!({
+        "parent_agent_id": "parent", "agent_id": "child", "child_conversation_id": "conv_00000000-0000-7000-8000-000000000002",
+        "activation_id": "activation", "current_activation": "activation", "agent": "worker", "definition_digest": "d", "profile_digest": "p",
+        "state": "active", "activation_state": "running", "started_at": "2026-10-10T00:00:00Z",
+        "observation": { "revision": 1, "attempt_id": "attempt-a", "activity": { "type": "model", "request_id": request.request_id, "retry": 0 }, "counters": { "model_requests": 1, "model_retries": 0, "tool_executions": 0 } },
+        "workspace": { "logical_workspace": "/workspace", "isolation": { "type": "shared" }, "resource_state": "none" }
+    })).unwrap();
+    let original = page(&store).records;
+    let mut records = original.clone();
+    repair_agent_records(&mut records, &agent);
+    assert!(
+        records
+            .iter()
+            .filter(|record| matches!(record.kind, TraceKind::Attempt | TraceKind::Request))
+            .all(|record| record.state == TraceState::Running)
+    );
+    let projection = TraceProjection::new(&store).unwrap();
+    let updates = projection
+        .refresh_agent(
+            &records
+                .iter()
+                .map(|record| record.position.clone())
+                .collect::<Vec<_>>(),
+            &agent,
+        )
+        .unwrap();
+    assert_eq!(updates.len(), records.len());
+    for update in updates {
+        assert_eq!(
+            update.state,
+            records
+                .iter()
+                .find(|record| record.id == update.id)
+                .unwrap()
+                .state
+        );
+    }
+    agent.observation.activity = SubagentActivity::Model {
+        request_id: RequestId::new("different-request"),
+        retry: 0,
+    };
+    records = original.clone();
+    repair_agent_records(&mut records, &agent);
+    assert_eq!(records.last().unwrap().state, TraceState::Incomplete);
+    agent.observation.attempt_id = Some(AttemptId::new("later-attempt"));
+    records = original.clone();
+    repair_agent_records(&mut records, &agent);
+    assert!(
+        records
+            .iter()
+            .all(|record| record.state != TraceState::Running)
+    );
+    agent.observation.attempt_id = Some(AttemptId::new("attempt-a"));
+    agent.state = AgentState::Unavailable;
+    records = original.clone();
+    repair_agent_records(&mut records, &agent);
+    assert!(
+        records
+            .iter()
+            .all(|record| record.state != TraceState::Running)
+    );
+    agent.state = AgentState::Active;
+    records = original;
+    records.last_mut().unwrap().state = TraceState::Failed;
+    repair_agent_records(&mut records, &agent);
+    assert_eq!(records.last().unwrap().state, TraceState::Failed);
+}

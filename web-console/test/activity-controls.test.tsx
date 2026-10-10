@@ -3,7 +3,7 @@ import { translator } from '../src/locale/translation';
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { RuntimeClientAgent, RuntimeClientJob } from '../../protocol/app-server/v38';
+import type { RuntimeClientAgent, RuntimeClientJob } from '../../protocol/app-server/v39';
 import { RpcFailure } from '../src/client/app-server';
 import { RuntimeFacts as OtherActivity } from '../src/app/agent/Activity';
 import { AgentCard } from '../src/app/components/ActivityCards';
@@ -18,7 +18,7 @@ export const agentFixture = (): RuntimeClientAgent => ({
   agent_id: 'agent-worker', parent_agent_id: 'parent-agent', child_conversation_id: 'conversation-worker', agent: 'Worker',
   activation_id: 'activation-a', current_activation: 'activation-a', state: 'active', activation_state: 'running',
   definition_digest: 'definition', profile_digest: 'profile', started_at: '2026-09-15T00:00:00Z',
-  observation: { revision: '1', activity: { type: 'awaiting_activity' }, counters: { model_requests: 0, model_retries: 0, tool_executions: 0 } },
+  observation: { attempt_id: null, revision: '1', activity: { type: 'awaiting_activity' }, counters: { model_requests: 0, model_retries: 0, tool_executions: 0 } },
   workspace: { logical_workspace: '/workspace', isolation: { type: 'shared' }, resource_state: 'none' },
 });
 it('Active and Inactive send use one owner operation; wait remains interruptible and captures a native activation', async () => {

@@ -1073,6 +1073,7 @@ mod tests {
         let (mut parent, mut child) = pair();
         let observation = super::super::activity::SubagentObservation {
             revision: 7,
+            attempt_id: None,
             activity: super::super::activity::SubagentActivity::Tool {
                 tool_call_id: crate::runtime::identity::ToolCallId::new("call-1"),
                 tool_id: crate::runtime::identity::ToolId::new("tool-bash"),

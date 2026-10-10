@@ -212,6 +212,24 @@ export type Request1 =
       };
     }
   | {
+      method: 'agent/trace';
+      params: {
+        target: AttachmentTarget;
+        agent_id: AgentId;
+        before?: TraceCursor | null;
+        limit: number;
+        records?: TraceCursor[];
+      };
+    }
+  | {
+      method: 'agent/traceDetail';
+      params: {
+        target: AttachmentTarget;
+        agent_id: AgentId;
+        record_id: string;
+      };
+    }
+  | {
       method: 'agent/transcript';
       params: {
         target: AttachmentTarget;
@@ -7552,6 +7570,10 @@ export interface SubagentObservation {
    * transition.
    */
   revision: string;
+  /**
+   * Exact child-owned current Attempt; absent before start and after settlement.
+   */
+  attempt_id?: AttemptId | null;
   /**
    * What the child is observably doing right now.
    */

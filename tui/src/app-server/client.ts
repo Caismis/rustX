@@ -71,7 +71,7 @@ import {
 } from "./transport.ts";
 
 /** The protocol version this client speaks. Independent of every other version. */
-export const APP_SERVER_PROTOCOL_VERSION = 38;
+export const APP_SERVER_PROTOCOL_VERSION = 39;
 
 /** How this client identifies itself in `initialize`. */
 export const CLIENT_IDENTITY: ClientIdentity = {
@@ -144,6 +144,8 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   "session/traceHistoryDetail": "read",
   "session/turns": "read",
   "agent/transcript": "read",
+  "agent/trace": "read",
+  "agent/traceDetail": "read",
   "agent/statistics": "read",
   "session/trace": "read",
   // Inspection detail is a pure historical read: it advances no cursor,
@@ -469,7 +471,7 @@ export class AppServerClient {
 
     const record = decodeProtocolMessage(untrusted);
     if (record === undefined) {
-      this.#fail("invalid App Server v38 protocol message");
+      this.#fail("invalid App Server v39 protocol message");
       return;
     }
 

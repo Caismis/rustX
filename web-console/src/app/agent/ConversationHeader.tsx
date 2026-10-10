@@ -7,7 +7,7 @@ import type { WorkspaceAuthority } from '../../workspaces/authority';
 import { useTranslation } from '../../locale/react';
 import { useState, type ReactNode } from 'react';
 import type { AppServerClient, SessionView } from '../../client/app-server';
-import type { SourceTarget } from '../../../../protocol/app-server/v38';
+import type { SourceTarget } from '../../../../protocol/app-server/v39';
 import { useClientSelector, sameValue } from '../../client/selectors';
 import { Menu } from '../../presentation/primitives/Menu';
 import { Button } from '../../presentation/primitives/Button';
@@ -47,11 +47,11 @@ export function ConversationHeader({ host, authority, client, view, workspaceId,
       {view && !subagents?.selected && <SessionConfiguration key={`${authorityRevision}:${view.id}`} client={client} view={view} openOwningSettings={openOwningSettings} />}
       {settingsFeedback}
       {view && !subagents?.selected && sessionSettingsOpen && <section aria-label={tx('agent:conversation-header.session-settings')}><p>{tx('agent:conversation-header.workspace')}{' '}{view.settings?.cwd ?? tx('agent:conversation-header.unavailable')}</p><WorkspaceControls client={client} host={host} workspaceId={workspaceId}>{source => <LiveAgentControls client={client} sessionId={view.id} coldSource={source}/>}</WorkspaceControls><Button onClick={() => setSessionSettingsOpen(false)}>{tx('agent:conversation-header.close-session-settings')}</Button></section>}
-      {view && !subagents?.selected && displayPreferences.codingView && <div className={agentCss.tabs} role="tablist" aria-label={tx('agent:conversation-header.conversation-view')} onKeyDown={navigateTabs}>{(['chat', 'trajectory'] as const).map(mode => <button type="button" className={`${agentCss.tab} ${conversationMode === mode ? agentCss.tabActive : ""}`} key={mode} role="tab" id={`view-tab-${mode}`} aria-controls="conversation-view" tabIndex={conversationMode === mode ? 0 : -1} aria-selected={conversationMode === mode} onClick={() => setConversationMode(mode)}>{mode === 'chat' ? tx('agent:conversation-header.chat') : tx('agent:conversation-header.trajectory')}</button>)}</div>}
+      {view && displayPreferences.codingView && <div className={agentCss.tabs} role="tablist" aria-label={tx('agent:conversation-header.conversation-view')} onKeyDown={navigateTabs}>{(['chat', 'trajectory'] as const).map(mode => <button type="button" className={`${agentCss.tab} ${conversationMode === mode ? agentCss.tabActive : ""}`} key={mode} role="tab" id={`view-tab-${mode}`} aria-controls="conversation-view" tabIndex={conversationMode === mode ? 0 : -1} aria-selected={conversationMode === mode} onClick={() => setConversationMode(mode)}>{mode === 'chat' ? tx('agent:conversation-header.chat') : tx('agent:conversation-header.trajectory')}</button>)}</div>}
       {error && <p role="alert">{error}</p>}
       </header>;
 }
-function LiveAgentControls({ client, sessionId, coldSource }: { client: AppServerClient; sessionId: string; coldSource?: import('../../../../protocol/app-server/v38').SourceSettings }) {
+function LiveAgentControls({ client, sessionId, coldSource }: { client: AppServerClient; sessionId: string; coldSource?: import('../../../../protocol/app-server/v39').SourceSettings }) {
   useClientSelector(client, state => {
     const view = state.views[sessionId];
     return { generation: state.generation, target: view?.target, attachment: view?.attachment, intent: view?.attachmentIntent,

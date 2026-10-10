@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import type { MethodResult, Request1 } from '../../protocol/app-server/v38';
+import type { MethodResult, Request1 } from '../../protocol/app-server/v39';
 import { OutcomeUncertain } from '../src/client/app-server';
 import { Server, snapshot } from './fixture';
 const servers: Server[] = [];
@@ -23,7 +23,7 @@ function result(method: DomainMethod): MethodResult {
     agent_id: 'agent-a', parent_agent_id: 'parent', child_conversation_id: 'child', agent: 'Worker',
     activation_id: 'activation-b', current_activation: null, state: 'inactive', activation_state: 'cancelled',
     definition_digest: 'definition', profile_digest: 'profile', started_at: '2026-09-15T00:00:00Z',
-    observation: { revision: '1', activity: { type: 'awaiting_activity' }, counters: { model_requests: 0, model_retries: 0, tool_executions: 0 } },
+    observation: { attempt_id: null, revision: '1', activity: { type: 'awaiting_activity' }, counters: { model_requests: 0, model_retries: 0, tool_executions: 0 } },
     workspace: { logical_workspace: '/workspace', isolation: { type: 'shared' }, resource_state: 'none' },
   } };
 }

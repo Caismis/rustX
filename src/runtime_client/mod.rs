@@ -99,6 +99,7 @@
 //! settling anything.
 
 pub mod agent_statistics;
+mod agent_trace;
 pub mod attachment;
 pub mod endpoint;
 pub mod event;

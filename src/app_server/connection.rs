@@ -1240,6 +1240,8 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
         | Method::AgentSendMessage { target, .. }
         | Method::AgentWait { target, .. }
         | Method::AgentInterrupt { target, .. }
+        | Method::AgentTrace { target, .. }
+        | Method::AgentTraceDetail { target, .. }
         | Method::AgentTranscript { target, .. }
         | Method::SubagentDispose { target, .. }
         | Method::CompactContext { target, .. }
@@ -1363,6 +1365,22 @@ async fn dispatch_runtime(
         Method::AgentStatistics { agent_id, .. } => {
             native_result(authority.agent_statistics(&agent_id).await)
         }
+        Method::AgentTrace {
+            agent_id,
+            before,
+            limit,
+            records,
+            ..
+        } => native_result(
+            authority
+                .agent_trace(&agent_id, before, limit, records)
+                .await,
+        ),
+        Method::AgentTraceDetail {
+            agent_id,
+            record_id,
+            ..
+        } => native_result(authority.agent_trace_detail(&agent_id, record_id).await),
         Method::AgentTranscript {
             agent_id,
             before,

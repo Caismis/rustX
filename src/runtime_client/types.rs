@@ -259,8 +259,8 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// eligibility to the snapshot and its change event; ordinary streaming never
 /// publishes it. Version 57 clients are rejected without a compatibility path.
 /// Version 59 refreshes retained Trace records with their resolved native location.
-/// Version 60 adds child-owned incremental statistics and active-interval clocks.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 60;
+/// Version 61 adds child-owned Trace reads and exact current Attempt activity.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 61;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -526,6 +526,18 @@ pub enum RuntimeClientRequest {
         id: RequestId,
         agent_id: crate::runtime::identity::AgentId,
     },
+    AgentTrace {
+        id: RequestId,
+        agent_id: crate::runtime::identity::AgentId,
+        before: Option<super::trace::TraceCursor>,
+        limit: usize,
+        records: Vec<super::trace::TraceCursor>,
+    },
+    AgentTraceDetail {
+        id: RequestId,
+        agent_id: crate::runtime::identity::AgentId,
+        record_id: String,
+    },
     AgentTranscript {
         id: RequestId,
         agent_id: crate::runtime::identity::AgentId,
@@ -585,6 +597,8 @@ impl RuntimeClientRequest {
             | Self::AgentSendMessage { id, .. }
             | Self::AgentWait { id, .. }
             | Self::AgentInterrupt { id, .. }
+            | Self::AgentTrace { id, .. }
+            | Self::AgentTraceDetail { id, .. }
             | Self::AgentTranscript { id, .. }
             | Self::SubagentWorkspaceDispose { id, .. }
             | Self::Detach { id, .. }
@@ -619,6 +633,8 @@ impl RuntimeClientRequest {
             Self::AgentSendMessage { .. } => "agent_send_message",
             Self::AgentWait { .. } => "agent_wait",
             Self::AgentInterrupt { .. } => "agent_interrupt",
+            Self::AgentTrace { .. } => "agent_trace",
+            Self::AgentTraceDetail { .. } => "agent_trace_detail",
             Self::AgentTranscript { .. } => "agent_transcript",
             Self::SubagentWorkspaceDispose { .. } => "subagent_workspace_dispose",
             Self::Detach { .. } => "detach",
@@ -632,6 +648,8 @@ impl RuntimeClientRequest {
         matches!(
             self,
             Self::AgentStatistics { .. }
+                | Self::AgentTrace { .. }
+                | Self::AgentTraceDetail { .. }
                 | Self::CompactContext { .. }
                 | Self::InteractionRespond { .. }
                 | Self::JobWait { .. }
@@ -1080,7 +1098,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 60);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 61);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

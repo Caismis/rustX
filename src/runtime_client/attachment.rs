@@ -327,7 +327,9 @@ impl RuntimeAttachment {
             RuntimeClientRequest::JobList { .. } => Ok(inner.job_list()),
             RuntimeClientRequest::AgentStatus { agent_id, .. } => inner.agent_status(&agent_id),
             RuntimeClientRequest::AgentList { .. } => inner.agent_list(),
-            RuntimeClientRequest::AgentStatistics { .. } => {
+            RuntimeClientRequest::AgentStatistics { .. }
+            | RuntimeClientRequest::AgentTrace { .. }
+            | RuntimeClientRequest::AgentTraceDetail { .. } => {
                 unreachable!("Agent statistics are read asynchronously")
             }
             RuntimeClientRequest::AgentTranscript {
@@ -390,6 +392,22 @@ impl RuntimeAttachment {
             RuntimeClientRequest::AgentStatistics { agent_id, .. } => {
                 Some(inner.agent_statistics(agent_id).await)
             }
+            RuntimeClientRequest::AgentTrace {
+                agent_id,
+                before,
+                limit,
+                records,
+                ..
+            } => Some(
+                inner
+                    .agent_trace(agent_id, before.clone(), *limit, records.clone())
+                    .await,
+            ),
+            RuntimeClientRequest::AgentTraceDetail {
+                agent_id,
+                record_id,
+                ..
+            } => Some(inner.agent_trace_detail(agent_id, record_id.clone()).await),
             RuntimeClientRequest::JobWait { job_id, .. } => {
                 Some(inner.job_wait(job_id, false).await)
             }

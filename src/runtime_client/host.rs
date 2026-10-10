@@ -1693,7 +1693,7 @@ impl ClientInner {
         })
     }
 
-    fn agent_registry(
+    pub(super) fn agent_registry(
         &self,
     ) -> Result<&crate::runtime::subagent::SubagentRegistry, RuntimeClientError> {
         self.runtime
@@ -1704,7 +1704,7 @@ impl ClientInner {
             })
     }
 
-    fn agent_view(
+    pub(super) fn agent_view(
         &self,
         id: &crate::runtime::identity::AgentId,
     ) -> Result<super::snapshot::RuntimeClientAgent, RuntimeClientError> {

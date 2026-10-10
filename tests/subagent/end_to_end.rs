@@ -817,6 +817,87 @@ async fn subagent_process_stack(alias_root: bool) {
         panic!("durable child history must be readable: {transcript:?}");
     };
     let page = serde_json::to_string(&page).unwrap();
+    let trace = reopened
+        .call(Method::AgentTrace {
+            target: reopened.target(),
+            agent_id: agent_id.clone(),
+            before: None,
+            limit: 32,
+            records: Vec::new(),
+        })
+        .await;
+    let Ok(MethodResult::Trace { page: trace }) = trace else {
+        panic!("child Trace after exit: {trace:?}");
+    };
+    assert!(
+        trace
+            .records
+            .iter()
+            .any(|record| record.kind == rustx::runtime_client::trace::TraceKind::Request)
+    );
+    let request = trace
+        .records
+        .iter()
+        .find(|record| record.request.is_some())
+        .unwrap();
+    assert_eq!(
+        request.state,
+        rustx::runtime_client::trace::TraceState::Completed
+    );
+    let request_id = request.id.clone();
+    let trace_text = serde_json::to_string(&trace).unwrap();
+    assert!(trace_text.contains("CHILD-ANSWER"));
+    assert!(
+        !trace_text.contains("please delegate"),
+        "parent input must not enter child Trace"
+    );
+    let detail = reopened
+        .call(Method::AgentTraceDetail {
+            target: reopened.target(),
+            agent_id: agent_id.clone(),
+            record_id: request_id,
+        })
+        .await;
+    let Ok(MethodResult::TraceDetail {
+        detail: Some(detail),
+    }) = detail
+    else {
+        panic!("child request detail: {detail:?}");
+    };
+    let detail_text = serde_json::to_string(&detail).unwrap();
+    assert!(detail_text.contains("count the workspace files"));
+    assert!(!detail_text.contains("please delegate"));
+    let older = reopened
+        .call(Method::AgentTrace {
+            target: reopened.target(),
+            agent_id: agent_id.clone(),
+            before: Some(trace.records.last().unwrap().position.clone()),
+            limit: 1,
+            records: trace
+                .records
+                .iter()
+                .map(|record| record.position.clone())
+                .collect(),
+        })
+        .await;
+    let Ok(MethodResult::Trace { page: older }) = older else {
+        panic!("child Trace paging: {older:?}");
+    };
+    assert_eq!(older.records.len(), 1);
+    assert_eq!(older.updates.len(), trace.records.len());
+    let invalid = reopened
+        .call(Method::AgentTrace {
+            target: reopened.target(),
+            agent_id: agent_id.clone(),
+            before: None,
+            limit: 0,
+            records: Vec::new(),
+        })
+        .await;
+    assert!(
+        invalid.is_err(),
+        "child Trace enforces the same bounded read contract"
+    );
     assert!(
         page.contains("count the workspace files"),
         "the child user task comes from its own durable Message Ledger"
@@ -1004,6 +1085,62 @@ async fn running_child_inspection_is_execution_independent() {
         })
         .await
         .expect("the parent continuation reaches its deterministic fixture");
+        // The product Trace API remains available while the provider is gated,
+        // including when the child's disposable inspection socket is unavailable.
+        let current_agent = tokio::time::timeout(LIVENESS, async {
+            loop {
+                let snapshot = parent.snapshot().await;
+                if let Some(agent) = snapshot.agents.into_iter().find(|agent| {
+                    matches!(
+                        agent.observation.activity,
+                        rustx::runtime::subagent::SubagentActivity::Model { .. }
+                    ) && agent.observation.attempt_id.is_some()
+                }) {
+                    break agent;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("child publishes exact live request activity");
+        let trace = parent
+            .call(Method::AgentTrace {
+                target: parent.target(),
+                agent_id: current_agent.agent_id.clone(),
+                before: None,
+                limit: 32,
+                records: Vec::new(),
+            })
+            .await;
+        let Ok(MethodResult::Trace { page: trace }) = trace else {
+            panic!("running child Trace: {trace:?}");
+        };
+        let requests: Vec<_> = trace
+            .records
+            .iter()
+            .filter(|record| record.kind == rustx::runtime_client::trace::TraceKind::Request)
+            .collect();
+        assert!(!requests.is_empty());
+        assert_eq!(
+            requests.last().unwrap().state,
+            rustx::runtime_client::trace::TraceState::Running
+        );
+        assert_eq!(
+            requests.last().unwrap().location.attempt_id,
+            current_agent.observation.attempt_id
+        );
+        let detail = parent
+            .call(Method::AgentTraceDetail {
+                target: parent.target(),
+                agent_id: current_agent.agent_id.clone(),
+                record_id: requests.last().unwrap().id.clone(),
+            })
+            .await;
+        assert!(matches!(
+            detail,
+            Ok(MethodResult::TraceDetail { detail: Some(_) })
+        ));
+
         let provider_attempts_before_inspection = server.attempt_count();
         assert_eq!(
             provider_attempts_before_inspection, 3,

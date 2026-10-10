@@ -69,7 +69,7 @@ it('Subagent and Workflow cards bind native identities and lifecycle facts witho
   s.agents = ['child-1', 'child-2'].map(activation_id => ({
     activation_id, agent_id: `agent-${activation_id}`, parent_agent_id: 'parent-agent', current_activation: activation_id, activation_state: 'running', child_conversation_id: `conv-${activation_id}`, agent: 'Same agent',
     definition_digest: 'private-digest', profile_digest: 'private-profile', state: 'active', started_at: '2026-09-15T00:00:00Z',
-    observation: { revision: '1', activity: { type: 'waiting', on: { type: 'approval', tool_id: 'bash' } }, counters: { model_requests: 1, model_retries: 0, tool_executions: 0 } },
+    observation: { attempt_id: null, revision: '1', activity: { type: 'waiting', on: { type: 'approval', tool_id: 'bash' } }, counters: { model_requests: 1, model_retries: 0, tool_executions: 0 } },
     workspace: { logical_workspace: '/private/workspace', isolation: { type: 'shared' }, resource_state: 'none' },
   }));
   s.workflows.runs = ['1', '2'].map(invocation => ({
@@ -108,7 +108,7 @@ it('one Agent row survives inactive settlement and a later activation, including
     agent_id: 'durable-child', parent_agent_id: 'parent-agent', activation_id: 'activation-a', current_activation: 'activation-a',
     child_conversation_id: 'child-conversation', agent: 'Worker', state: 'active' as const, activation_state: 'running' as const,
     definition_digest: 'definition', profile_digest: 'profile', started_at: '2026-09-15T00:00:00Z',
-    observation: { revision: '1', activity: { type: 'awaiting_activity' as const }, counters: { model_requests: 0, model_retries: 0, tool_executions: 0 } },
+    observation: { attempt_id: null, revision: '1', activity: { type: 'awaiting_activity' as const }, counters: { model_requests: 0, model_retries: 0, tool_executions: 0 } },
     workspace: { logical_workspace: '/workspace', isolation: { type: 'shared' as const }, resource_state: 'none' as const },
   };
   s.agents = [agent];
