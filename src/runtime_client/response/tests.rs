@@ -95,6 +95,38 @@ fn request_timed(
     generation: Option<crate::model::generation_evidence::GenerationEvidence>,
     failed: bool,
 ) {
+    let snapshot = start_request(store, attempt, retry);
+    append(
+        store,
+        attempt,
+        if failed {
+            RuntimeEvent::ModelRequestFailed {
+                request_id: snapshot.request_id,
+                error: crate::model::error::ModelError {
+                    kind: crate::model::error::ModelErrorKind::Transport,
+                    message: "controlled failure".into(),
+                    retry_disposition: crate::model::error::ModelRetryDisposition::Transient,
+                    retry_after_ms: None,
+                    provider_code: None,
+                    context_overflow: None,
+                    malformed_tool_proposal: None,
+                    timeout_phase: None,
+                    generation: None,
+                },
+                usage,
+                generation,
+            }
+        } else {
+            RuntimeEvent::ModelRequestCompleted {
+                request_id: snapshot.request_id,
+                finish_reason: ModelFinishReason::Stop,
+                usage,
+                generation,
+            }
+        },
+    );
+}
+fn start_request(store: &dyn ConversationStore, attempt: &str, retry: u32) -> RequestSnapshot {
     let snapshot = RequestSnapshot::new(
         RequestIdentity {
             attempt_id: AttemptId::new(attempt),
@@ -128,35 +160,7 @@ fn request_timed(
     store
         .commit_model_turn_start(&[], &snapshot, Utc.timestamp_opt(1_700_000_000, 0).unwrap())
         .unwrap();
-    append(
-        store,
-        attempt,
-        if failed {
-            RuntimeEvent::ModelRequestFailed {
-                request_id: snapshot.request_id,
-                error: crate::model::error::ModelError {
-                    kind: crate::model::error::ModelErrorKind::Transport,
-                    message: "controlled failure".into(),
-                    retry_disposition: crate::model::error::ModelRetryDisposition::Transient,
-                    retry_after_ms: None,
-                    provider_code: None,
-                    context_overflow: None,
-                    malformed_tool_proposal: None,
-                    timeout_phase: None,
-                    generation: None,
-                },
-                usage,
-                generation,
-            }
-        } else {
-            RuntimeEvent::ModelRequestCompleted {
-                request_id: snapshot.request_id,
-                finish_reason: ModelFinishReason::Stop,
-                usage,
-                generation,
-            }
-        },
-    );
+    snapshot
 }
 fn usage(cached: Option<u64>) -> ModelUsage {
     ModelUsage {
@@ -492,15 +496,24 @@ fn context_measurement_is_native_and_is_invalidated_by_compaction() {
             message_tokens: 98
         }
     );
-    request(&store, "a", 1, None);
+    // Streaming has no new provider sample yet, including after reopening a read.
+    start_request(&store, "a", 1);
     assert_eq!(
         crate::context::occupancy::read(&store, store.presentation_frontier().unwrap()).unwrap(),
-        None,
-        "a newer unmeasured request cannot inherit the previous reading"
+        Some(read.clone())
+    );
+    // Usage-free terminals must not erase the measurement, even across pages.
+    for retry in 2..=66 {
+        request(&store, "a", retry, None);
+    }
+    assert_eq!(
+        crate::context::occupancy::read(&store, store.presentation_frontier().unwrap()).unwrap(),
+        Some(read.clone()),
+        "a newer unmeasured request preserves the last measured reading"
     );
     let mut zero = usage(None);
     zero.input_tokens = 0;
-    request(&store, "a", 2, Some(zero));
+    request(&store, "a", 67, Some(zero));
     assert_eq!(
         crate::context::occupancy::read(&store, store.presentation_frontier().unwrap())
             .unwrap()
@@ -1065,7 +1078,7 @@ fn agent_statistics_replays_incrementally_with_full_native_metrics() {
     assert_eq!(live.statistics.model_requests, 2);
     assert_eq!(live.statistics.requests_with_usage, 1);
     assert_eq!(live.statistics.reported_usage.unwrap().total_tokens, 120);
-    assert!(live.occupancy.is_none());
+    assert_eq!(live.occupancy, first.occupancy);
     assert!(live.duration.active.as_ref().unwrap().running);
     assert_eq!(live.duration.settled_ms, 10_000);
     let frozen = fold.read(&store, cut, || None).unwrap();

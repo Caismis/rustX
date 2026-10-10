@@ -41,57 +41,57 @@ pub struct ContextBreakdown {
     pub message_tokens: u64,
 }
 
-/// Project the latest prepared request's provider reading at a finite cut.
-/// A newer unfinished request, or compaction, makes the prior reading absent.
+/// Project the latest provider measurement at a finite cut.
+/// New requests preserve the last measured reading while streaming. Compaction
+/// clears it until a later request reports usage; unsent text is never measured.
 /// # Errors
 /// Durable read failures are not treated as missing evidence.
 pub(crate) fn read(
     store: &dyn ConversationStore,
     through: u64,
 ) -> Result<Option<ContextOccupancy>, ConversationStoreError> {
-    let boundary = store.read_presentation_events(&FactQuery {
-        scope: FactScope::All,
-        kinds: vec![
-            "model_request_started",
-            "compaction_started",
-            "compaction_completed",
-        ],
-        before: None,
-        after: 0,
-        ascending: false,
-        through,
-        limit: 1,
-    })?;
-    let Some(event) = boundary.first() else {
-        return inherited(store);
-    };
-    let RuntimeEvent::ModelRequestStarted { request_id, .. } = &event.event else {
-        return Ok(None);
-    };
-    let terminal = store.read_presentation_events(&FactQuery {
-        scope: FactScope::Request(request_id.to_string()),
-        kinds: vec!["model_request_completed", "model_request_failed"],
-        before: None,
-        after: event.sequence,
-        ascending: true,
-        through,
-        limit: 1,
-    })?;
-    let Some(
-        RuntimeEvent::ModelRequestCompleted {
-            usage: Some(usage), ..
+    let mut before = None;
+    loop {
+        let events = store.read_presentation_events(&FactQuery {
+            scope: FactScope::All,
+            kinds: vec![
+                "model_request_completed",
+                "model_request_failed",
+                "compaction_started",
+                "compaction_completed",
+            ],
+            before,
+            after: 0,
+            ascending: false,
+            through,
+            limit: 64,
+        })?;
+        for event in &events {
+            match &event.event {
+                RuntimeEvent::ModelRequestCompleted {
+                    request_id,
+                    usage: Some(usage),
+                    ..
+                }
+                | RuntimeEvent::ModelRequestFailed {
+                    request_id,
+                    usage: Some(usage),
+                    ..
+                } => return measure(usage, &store.load_request_snapshot(request_id)?),
+                RuntimeEvent::CompactionStarted | RuntimeEvent::CompactionCompleted { .. } => {
+                    return Ok(None);
+                }
+                _ => {}
+            }
         }
-        | RuntimeEvent::ModelRequestFailed {
-            usage: Some(usage), ..
-        },
-    ) = terminal.first().map(|event| &event.event)
-    else {
-        return Ok(None);
-    };
-    measure(usage, &store.load_request_snapshot(request_id)?)
+        if events.len() < 64 {
+            return inherited(store);
+        }
+        before = events.last().map(|event| event.sequence);
+    }
 }
 
-/// Before its own first request, a lineage child reads the context its newest
+/// Before its own first measurement, a lineage child reads the context its newest
 /// inherited request measured, as a Harness fork's copied prefix does, unless
 /// its retained Surface compacted after that turn's content.
 fn inherited(

@@ -1920,3 +1920,17 @@ child Attempt identity supplies exact current lifecycle correlation. The source
 revision remains pinned; App Server v39 / Runtime Client v61 require synchronized
 clients. Browser evidence uses fixture records; the real-process native suite
 separately verifies durable child authority and read-only behavior after exit.
+
+### Streaming context occupancy (2026-10-10)
+
+Studied Harness `packages/llm/token-meter/src/usage-projection.ts`'s
+`contextPressureProjectionDefinition` and the composer `ContextMeter.tsx`.
+Harness retains the prompt-side measurement while a request streams, replacing
+it when a newer usage sample arrives. RustX now retains the last native measured
+request across unfinished and usage-free requests, with that request's frozen
+model/capacity and composition. Compaction still invalidates the old reading.
+This is a shared Rust Context owner change, consumed by WebUI, TUI and child
+statistics, without presentation-local caching or estimated streaming tokens.
+Browser plugin not available; regular Playwright verifies the production App's
+context ring during running snapshots, subsequent measurement and invalidation
+on desktop and mobile. Reference pin unchanged.

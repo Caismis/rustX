@@ -996,8 +996,8 @@ estimated breakdown, all frozen in the same native RequestSnapshot. The breakdow
 prices the Effective System Prompt and Tool definitions with the default
 `ceil(bytes / 4)` estimator; messages are the measured remainder, saturating at
 zero. Desired model
-selection cannot change its denominator. The latest prepared request must have its
-own reported usage; a newer unmeasured request invalidates the previous value.
+selection cannot change its denominator. The most recent provider measurement remains available while newer requests stream
+or finish without usage. A new measurement replaces it using its own frozen snapshot.
 Compaction invalidates occupancy until a later request measurement. Zero is a real
 measurement; absence or invalid capacity is unavailable, never zero. Paging does
 not change measurement authority and navigation does not generate requests.

@@ -100,6 +100,15 @@ render();
 const handled = new Set<Request>(server.requests.filter(row => row.request.method === 'initialize' || row.request.method === 'session/list').map(row => row.request));
 (window as any).startupFixture = {
   requests: () => server.requests.map(({ request }) => request),
+  async contextReading(input: number | null, running = false) {
+    const next = { ...server.snapshots.get('A')! };
+    next.context = { compaction_count: 0, compaction_in_progress: false, last_request_occupancy: input === null ? null : {
+      input_tokens: input, context_window_tokens: 100000, model: 'measured/model',
+      breakdown: { system_tokens: 1000, tool_tokens: 2000, message_tokens: input - 3000 },
+    } };
+    next.attempt = running ? { attempt_id: 'attempt-A', phase: { type: 'running' }, turn: 1, execution_settings: { resource_revision: '1', approval_mode: 'policy' } } : null;
+    await server.update('A', next);
+  },
   async appendSavedReply() {
     const entry = server.snapshots.get('A')!.transcript.entries!.at(-1)!;
     if (entry.item.type !== 'message' || entry.item.message.role !== 'assistant') throw Error('Expected saved reply');
