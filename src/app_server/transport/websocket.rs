@@ -2,6 +2,7 @@
 use super::{MAX_MESSAGE_BYTES, Outbound, WRITE_TIMEOUT, failure};
 use crate::{app_server::connection::AppServerConnection, app_server::host::AppServerHost};
 use futures_util::{SinkExt, StreamExt};
+use std::io::Write as _;
 use std::{
     io,
     sync::{Arc, Mutex, MutexGuard},
@@ -198,7 +199,10 @@ pub(crate) async fn serve_listener(
         tokio::select! {
             biased;
             () = shutdown.cancelled() => break Ok(()),
-            _ = clients.join_next(), if !clients.is_empty() => {
+            settled = clients.join_next(), if !clients.is_empty() => {
+                if let Some(Err(error)) = settled {
+                    let _ = writeln!(io::stderr(), "rustx app-server: connection task failed: {error}");
+                }
                 #[cfg(test)]
                 if let Some(slots) = &slots { slots.send_replace(clients.len()); }
             },
@@ -351,8 +355,15 @@ where
         shutdown,
     )
     .await;
-    if result.is_err() {
+    if let Err(error) = &result {
         endpoint.transport_failure();
+        // This listener survives an individual connection failure. Report
+        // framing, capacity and write failures where the dev launcher already
+        // captures diagnostics; never print the credential or RPC payload.
+        let _ = writeln!(
+            io::stderr(),
+            "rustx app-server: authenticated WebSocket connection failed: {error}"
+        );
     }
     result
 }

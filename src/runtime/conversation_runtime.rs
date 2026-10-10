@@ -285,6 +285,7 @@
 //! real post-activation semantic transition — bootstrap state never
 //! fabricates a live event.
 
+use std::io::Write as _;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
@@ -2725,6 +2726,16 @@ impl RuntimeInner {
             };
         }
         self.settlement.notify_waiters();
+        // A closed launcher's stderr is not a maintenance failure.
+        let _ = writeln!(
+            std::io::stderr(),
+            "rustx: manual context compaction settled for {}: {}",
+            self.conversation_id,
+            match &completion_result {
+                Ok(_) => "committed".to_owned(),
+                Err(error) => format!("failed: {error}"),
+            }
+        );
         completion.complete(completion_result);
         self.admit_next_attempt();
     }
@@ -4895,6 +4906,13 @@ impl ConversationRuntime {
             let completion_for_task = completion.clone();
             let inner = Arc::clone(&self.inner);
             drop(state);
+            // Diagnostics follow the runtime owner, not the requesting socket:
+            // disconnecting the requester cannot hide maintenance settlement.
+            let _ = writeln!(
+                std::io::stderr(),
+                "rustx: manual context compaction admitted for {}",
+                self.inner.conversation_id
+            );
             self.inner.executor.spawn(async move {
                 let task = inner
                     .run_manual_compaction(

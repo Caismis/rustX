@@ -83,6 +83,22 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
       await expect(marker).toHaveAttribute('aria-expanded', 'true');
       await marker.click();
       await expect(marker).toHaveAttribute('aria-expanded', 'false');
+      if (locale === 'en' && theme === 'light') {
+        // Exercise a fresh browser attachment, not only an in-place reconnect.
+        // Native maintenance has committed; reloading cannot replay /compact.
+        await page.reload();
+        // This fixture uses an explicit Remote credential held only in memory,
+        // rather than the dev launcher's authenticated local bootstrap.
+        await connectRemote(page, fixture.endpoint, fixture.token);
+        await expect(message).toBeEditable();
+        await expect(marker).toHaveCount(1);
+        await marker.click();
+        await expect(page.getByText('The user supplied compaction-evidence-435. Preserve that fact.', { exact: true })).toBeVisible();
+        await marker.click();
+        // Composer drafts are browser-memory state; restore the fixture's
+        // continuation input after creating a fresh page.
+        await message.fill(draft);
+      }
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       await message.press('Enter');
       await expect(page.getByRole('heading', { name: 'Continue after compaction?' })).toBeVisible();
