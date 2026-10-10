@@ -484,11 +484,25 @@ wire model, protocol, limits, compat, effective capabilities, the resolved
 Profile, reasoning state, output budget and request parameters. An omitted
 `profile` and an explicit `profile` naming the default resolve to the same
 invocation, and an edited, added or removed Profile that no such selection
-resolves through changes nothing for the Session: it prepares and adopts
-nothing, exactly as for an unselected Model. The catalog edit is still
-published — new Sessions start from it, and a later `session/setModel` resolves
-against the current sources — while a Session's own catalog view stays its
-adopted generation until it next adopts.
+resolves through changes nothing for the Session's invocation: it prepares and
+adopts nothing, exactly as for an unselected Model.
+
+Catalog publication is a separate contract from invocation adoption. When a
+valid source generation publishes and every invocation of an existing Session is
+unchanged, its selectable catalog — `models` and `providers`, never the
+new-Session default `agent.model` — is published to that Session without
+preparation: under the gate Attempt admission takes, the Session's selection
+authority and the catalog its configuration generation carries are replaced
+together and the configuration generation advances, while the current resolved
+invocations, their provider adapters and the capability snapshot are retained
+verbatim. From that commit, `session/models` advertises the published catalog
+and `session/setModel` (and Runtime Client `model_catalog`/`model_set`) resolve
+against exactly that catalog, never unpublished sources. An admitted Attempt
+keeps the snapshot and registry it froze. A failed or overtaken generation never
+publishes, so the last good catalog remains the authority. When the edit does
+change an invocation, the catalog arrives with that change's adoption. A cold
+Session receives the catalog when it next becomes resident. New Sessions start
+from the Workspace's published creation catalog.
 
 `session/adoptConfiguration` addresses a concrete ready candidate and expected
 Session binding revision. It returns typed Busy, NotReady or Conflict, or commits

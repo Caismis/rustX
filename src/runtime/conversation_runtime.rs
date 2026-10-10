@@ -4719,6 +4719,54 @@ impl ConversationRuntime {
         state.binding_revision = revision;
     }
 
+    /// Publish a newly available Model Catalog to this Session for future
+    /// selection without adopting anything.
+    ///
+    /// Under the lock Attempt admission and model changes take, the Session's
+    /// selection authority ([`SessionModelState::publish_catalog`]) and the
+    /// catalog its configuration generation carries are swapped together, so
+    /// `model_catalog`, `model_set` and every later admission observe one
+    /// catalog. The current invocations, their adapters and the capability
+    /// snapshot are retained verbatim; an admitted Attempt keeps the snapshot
+    /// and registry it froze. The binding revision advances so no candidate
+    /// prepared against the older catalog can adopt over this one, and
+    /// `retain` commits the retained binding at that revision inside the same
+    /// critical section. The caller holds the source/application fence.
+    ///
+    /// Returns `false`, changing nothing, when the current configuration would
+    /// resolve differently against `models`: that change needs preparation and
+    /// adoption.
+    pub(crate) fn publish_model_catalog(
+        &self,
+        capture: &crate::local_runtime::configuration::ProspectiveSessionConfig,
+        models: crate::model::invocation::ModelBindingRegistry,
+        retain: impl FnOnce(u64),
+    ) -> bool {
+        let mut state = self.inner.lock_state();
+        let mut model = state.model.clone();
+        if !model.publish_catalog(models.clone()) {
+            return false;
+        }
+        let Some(resources) = state.resources.with_model_catalog(capture, models) else {
+            return false;
+        };
+        let resources = Arc::new(resources);
+        state.binding_revision = state
+            .binding_revision
+            .checked_add(1)
+            .expect("Session binding revision exhausted");
+        retain(state.binding_revision);
+        state.model = model;
+        state.resources = resources.clone();
+        self.inner.observe(ConversationObservation::Resources {
+            model: Box::new(state.model.view()),
+            approval_mode: state.effective_approval_mode,
+            availability: resources.capability_availability().clone(),
+            snapshot: resources,
+        });
+        true
+    }
+
     /// Publish independent policy without changing the adopted context or any
     /// admitted Attempt. The native configuration owner holds its input fence
     /// across this call; this lock orders the swap against Attempt capture.
@@ -5587,6 +5635,13 @@ impl ConversationRuntime {
     #[cfg(test)]
     pub(crate) fn model_config(&self) -> SessionModelConfig {
         self.inner.lock_state().model.config().clone()
+    }
+
+    /// The resolved invocations the next Attempt would freeze, adapter
+    /// bindings included (test convenience).
+    #[cfg(test)]
+    pub(crate) fn model_snapshot(&self) -> AttemptModelSnapshot {
+        self.inner.lock_state().model.snapshot()
     }
 
     pub(crate) fn has_current_attempt(&self) -> bool {

@@ -299,6 +299,12 @@ impl std::ops::Deref for IndependentPolicy {
     }
 }
 
+/// The authored keys of the selectable Model Catalog: Models with their
+/// Profiles and the providers they bind. The Provider unit also owns
+/// `agent.model`, the default a new Session starts from, which is not part of
+/// what an existing Session can select.
+pub(crate) const CATALOG_KEYS: &[&str] = &["models", "providers"];
+
 /// Fixed unit ownership, shared by source and runtime projections. Replacing
 /// the owned keys also removes provenance for fields no longer authored.
 pub(crate) fn copy_unit_provenance(
@@ -307,30 +313,45 @@ pub(crate) fn copy_unit_provenance(
     unit: application::ApplyUnit,
 ) {
     use application::ApplyUnit;
-    let prefixes: &[&str] = match unit {
-        ApplyUnit::ExecutionPolicy => &[
-            "approval_mode",
-            "model_timeout_policy",
-            "tool_deadline_policy",
-        ],
-        ApplyUnit::SharedCapacity => &["subagents"],
-        ApplyUnit::Instructions => &["agent.instructions", "agent.agents_md", "context"],
-        ApplyUnit::Provider => &["agent.model", "models", "providers"],
-        ApplyUnit::Capabilities | ApplyUnit::ProcessBindings => unreachable!("not a composed unit"),
-    };
-    let owned = |key: &str| {
-        prefixes.iter().any(|prefix| {
-            key == *prefix
-                || key
-                    .strip_prefix(prefix)
-                    .is_some_and(|suffix| suffix.starts_with('.'))
-        })
-    };
-    target.retain(|key, _| !owned(key));
+    copy_provenance(
+        target,
+        source,
+        match unit {
+            ApplyUnit::ExecutionPolicy => &[
+                "approval_mode",
+                "model_timeout_policy",
+                "tool_deadline_policy",
+            ],
+            ApplyUnit::SharedCapacity => &["subagents"],
+            ApplyUnit::Instructions => &["agent.instructions", "agent.agents_md", "context"],
+            ApplyUnit::Provider => &["agent.model", "models", "providers"],
+            ApplyUnit::Capabilities | ApplyUnit::ProcessBindings => {
+                unreachable!("not a composed unit")
+            }
+        },
+    );
+}
+
+fn owns(prefixes: &[&str], key: &str) -> bool {
+    prefixes.iter().any(|prefix| {
+        key == *prefix
+            || key
+                .strip_prefix(prefix)
+                .is_some_and(|suffix| suffix.starts_with('.'))
+    })
+}
+
+/// Replace the provenance of exactly the keys under `prefixes`.
+pub(crate) fn copy_provenance(
+    target: &mut BTreeMap<String, Origin>,
+    source: &BTreeMap<String, Origin>,
+    prefixes: &[&str],
+) {
+    target.retain(|key, _| !owns(prefixes, key));
     target.extend(
         source
             .iter()
-            .filter(|(key, _)| owned(key))
+            .filter(|(key, _)| owns(prefixes, key))
             .map(|(key, value)| (key.clone(), value.clone())),
     );
 }
@@ -515,9 +536,8 @@ impl ProspectiveSessionConfig {
     /// ([`ModelCatalog::same_invocation`]), so authored spelling and
     /// unselected catalog entries never force a preparation, while any
     /// provider binding, wire model, limit, Profile, reasoning or parameter
-    /// change does. Catalog edits still reach future selections: Session model
-    /// changes recapture the current sources, and new Sessions start from the
-    /// published available catalog.
+    /// change does. Catalog edits reach future selections separately, through
+    /// catalog publication ([`Self::same_catalog`]).
     pub(crate) fn same_provider(&self, other: &Self) -> bool {
         let same_model =
             |left: &crate::model::session::SessionModelConfig,
@@ -555,6 +575,39 @@ impl ProspectiveSessionConfig {
                     _ => false,
                 }
             })
+    }
+
+    /// Whether this capture publishes the same selectable catalog
+    /// ([`CATALOG_KEYS`]) as `other`, regardless of what any selection
+    /// resolves to. A difference while [`Self::same_provider`] holds is a
+    /// catalog-only publication: future selection changes, the current
+    /// invocation does not.
+    pub(crate) fn same_catalog(&self, other: &Self) -> bool {
+        let provenance = |source: &BTreeMap<String, Origin>| {
+            source
+                .iter()
+                .filter(|(key, _)| owns(CATALOG_KEYS, key))
+                .map(|(key, origin)| (key.clone(), origin.clone()))
+                .collect::<Vec<_>>()
+        };
+        self.models == other.models
+            && self.effective.models == other.effective.models
+            && self.effective.providers == other.effective.providers
+            && provenance(&self.provenance) == provenance(&other.provenance)
+    }
+
+    /// This binding with `published`'s selectable catalog and every other
+    /// input, including the Session's own selection, retained.
+    pub(crate) fn with_published_catalog(mut self, published: &Self) -> Self {
+        self.models = published.models.clone();
+        self.effective
+            .models
+            .clone_from(&published.effective.models);
+        self.effective
+            .providers
+            .clone_from(&published.effective.providers);
+        copy_provenance(&mut self.provenance, &published.provenance, CATALOG_KEYS);
+        self
     }
 
     pub(crate) fn retaining_context_from(mut self, adopted: &Self) -> Self {
@@ -697,6 +750,36 @@ impl ProspectiveSessionConfig {
 }
 
 impl AdmittedSessionConfig {
+    /// The capture a Session model change resolves: this binding with
+    /// `selection`, against the Session's own published catalog — the one
+    /// its `session/models` advertises — never against unpublished sources.
+    pub(crate) fn with_session_model(
+        &self,
+        selection: crate::model::session::SessionModelConfig,
+    ) -> ProspectiveSessionConfig {
+        let mut capture = self.prospective.as_ref().clone();
+        capture.input.model = Some(selection);
+        capture
+    }
+    /// This binding at `binding_revision` with `published`'s catalog and its
+    /// own selection, context and capabilities retained.
+    pub(crate) fn with_published_catalog(
+        &self,
+        published: &ProspectiveSessionConfig,
+        binding_revision: u64,
+    ) -> Self {
+        Self {
+            binding_revision,
+            credentials: self.credentials.clone(),
+            prospective: Box::new(
+                self.prospective
+                    .as_ref()
+                    .clone()
+                    .with_published_catalog(published),
+            ),
+        }
+    }
+
     pub(crate) fn with_execution_policy(&self, desired: &IndependentPolicy) -> Self {
         let mut retained = self.clone();
         retained.prospective.compose_execution_policy(desired);
@@ -806,41 +889,6 @@ impl UserConfigManager {
         let resolved = self.resolve_model_candidate(request, None)?;
         let resolved = Self::resolve_runtime_configuration(resolved)?;
         self.resolve_resources(request, resolved)
-    }
-
-    pub(crate) fn capture_session_model(
-        &self,
-        adopted: &AdmittedSessionConfig,
-        selection: crate::model::session::SessionModelConfig,
-    ) -> Result<ProspectiveSessionConfig, String> {
-        let mut input = adopted.input.clone();
-        input.model = Some(selection);
-        let source = self
-            .capture_layers(&input, None)
-            .map_err(|error| error.to_string())?;
-        for (path, expected) in &source.revisions {
-            let actual = read_layer_revision(path, false, path != &self.sources.config_path)
-                .map_err(|error| error.to_string())?
-                .1;
-            if &actual != expected {
-                return Err("model inputs changed during capture; retry".into());
-            }
-        }
-        let mut candidate = adopted.prospective.as_ref().clone();
-        candidate.input = input;
-        candidate.models = ModelCatalog::from_document(
-            crate::model::authoring::Catalog {
-                schema_version: crate::model::catalog::MODEL_CATALOG_SCHEMA_VERSION,
-                providers: source.merged.providers.clone().unwrap_or_default(),
-                models: source.merged.models.clone().unwrap_or_default(),
-            }
-            .into(),
-        )
-        .map_err(|error| error.to_string())?;
-        candidate.effective.models = source.merged.models;
-        candidate.effective.providers = source.merged.providers;
-        candidate.source_revisions.extend(source.revisions);
-        Ok(candidate)
     }
 
     fn resolve_model_candidate(

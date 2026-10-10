@@ -852,6 +852,16 @@ impl SessionRuntimeManager {
             clock: Arc::new(SystemMonotonicClock::new()),
         })
     }
+    /// Parks a Session application just before it takes the publication
+    /// fence that settles an unchanged invocation, so a test can overtake it.
+    #[cfg(test)]
+    pub(super) async fn configuration_catalog_gate(&self, session: &SessionId) {
+        let Ok((node, _)) = self.sessions.catalog.lock().await.lineage(session, None) else {
+            return;
+        };
+        let probe = self.probe(&node.conversation_id);
+        probe.before_catalog_publication.park().await;
+    }
     #[cfg(test)]
     pub(super) async fn configuration_test_gate(
         &self,
@@ -1017,10 +1027,10 @@ impl SessionRuntimeManager {
                 .get(&session)
                 .cloned()
                 .ok_or(AdoptionError::NotReady)?;
-            let capture = owner
-                .configuration
-                .capture_session_model(&adopted, selection.clone())
-                .map_err(|diagnostic| AdoptionError::Failed { diagnostic })?;
+            // Selection admission resolves against the catalog this Session
+            // advertises: catalog publication commits the retained binding and
+            // the runtime authority together under this same fence.
+            let capture = adopted.with_session_model(selection.clone());
             let models = crate::model::invocation::ModelBindingRegistry::new(
                 capture
                     .models

@@ -372,6 +372,43 @@ impl SessionModelState {
         Ok(())
     }
 
+    /// Publishes a newly available catalog as the authority future
+    /// selections resolve against, without touching the current invocation.
+    ///
+    /// Catalog publication and invocation adoption are distinct: the current
+    /// configuration keeps the primary and Summary invocations it already
+    /// resolved, so no adapter, credential or parameter is re-resolved. That
+    /// is sound only while the current configuration resolves to effectively
+    /// the same invocations against `registry`
+    /// ([`ModelCatalog::same_invocation`]); otherwise nothing changes and
+    /// `false` is returned, because the change needs invocation preparation
+    /// and adoption instead. A frozen authority owns no catalog and always
+    /// refuses.
+    ///
+    /// [`ModelCatalog::same_invocation`]: crate::model::catalog::ModelCatalog::same_invocation
+    #[must_use]
+    pub fn publish_catalog(&mut self, registry: ModelBindingRegistry) -> bool {
+        let ModelAuthority::Catalog(current) = &self.authority else {
+            return false;
+        };
+        let (old, new) = (current.catalog().catalog(), registry.catalog().catalog());
+        let same = |selection: ModelSelection, layer| {
+            old.same_invocation(&selection, new, &selection, layer)
+        };
+        if !same(
+            self.config.selection(),
+            RequestParamsLayer::SessionOverrides,
+        ) || self
+            .config
+            .summary_selection()
+            .is_some_and(|summary| !same(summary, RequestParamsLayer::SummaryOverrides))
+        {
+            return false;
+        }
+        self.authority = ModelAuthority::Catalog(registry);
+        true
+    }
+
     /// The redacted client-facing projection of the session model state.
     #[must_use]
     pub fn view(&self) -> SessionModelView {

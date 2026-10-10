@@ -1630,12 +1630,13 @@ async fn t02_later_tool_batch_and_model_step_keep_admitted_registry_policy() {
 }
 
 #[tokio::test]
-async fn t09_unselected_model_and_default_edits_are_noop_for_existing_session_t15_new_default() {
+async fn t09_unselected_model_and_default_edits_publish_without_adoption_t15_new_default() {
     let fixture = Fixture::new().await;
     let id = &fixture.sessions[0].id;
     fixture.manager.load(id, None).await.unwrap();
     let runtime = fixture.manager.configuration_runtime(id).unwrap();
     let old = runtime.runtime_resources();
+    let invocation = runtime.model_snapshot();
     let source = fixture
         .manager
         .source_settings(
@@ -1667,7 +1668,24 @@ async fn t09_unselected_model_and_default_edits_are_noop_for_existing_session_t1
             .values()
             .all(|unit| *unit == UnitApplication::Applied)
     );
-    assert_eq!(old.revision(), runtime.runtime_resources().revision());
+    // The redefined unselected Model is published to this Session's catalog;
+    // its own invocation and every resource are retained, and the new
+    // default is not this Session's selection.
+    let published = runtime.runtime_resources();
+    assert_eq!(published.revision(), old.revision().next());
+    assert!(Arc::ptr_eq(old.capability(), published.capability()));
+    assert_eq!(runtime.model_snapshot(), invocation);
+    assert_eq!(
+        published
+            .configuration()
+            .unwrap()
+            .effective
+            .models
+            .as_ref()
+            .unwrap()["local/b"]
+            .id,
+        "b-redefined"
+    );
     assert_eq!(runtime.model_view().configured.model.to_string(), "local/a");
     let created = fixture
         .manager
@@ -4901,7 +4919,12 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
             view.effective.request_params,
             object(json!({"temperature": 0.5}))
         );
-        let unchanged = |resources: &Arc<_>, previous: &ConfigurationApplication| {
+        // A catalog-only publication: nothing is prepared or adopted, the
+        // resolved invocations and the capability snapshot are retained, and
+        // one new generation carries the published catalog.
+        let unchanged = |resources: &Arc<crate::runtime::resources::RuntimeResourceSnapshot>,
+                         invocation: &crate::model::session::AttemptModelSnapshot,
+                         previous: &ConfigurationApplication| {
             let application = fixture.manager.configuration_application(&id).unwrap();
             assert_ne!(
                 application.desired, previous.desired,
@@ -4915,15 +4938,20 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
                     .all(|unit| *unit == UnitApplication::Applied),
                 "{application:?}"
             );
-            assert!(
-                Arc::ptr_eq(resources, &runtime.runtime_resources()),
-                "no preparation was adopted"
+            let published = runtime.runtime_resources();
+            assert_eq!(published.revision(), resources.revision().next());
+            assert!(Arc::ptr_eq(resources.capability(), published.capability()));
+            assert_eq!(
+                &runtime.model_snapshot(),
+                invocation,
+                "no invocation was re-resolved"
             );
         };
 
         // An unselected Profile edit publishes the catalog but neither
         // prepares nor adopts anything for the unchanged invocation.
         let resources = runtime.runtime_resources();
+        let invocation = runtime.model_snapshot();
         let previous = fixture.manager.configuration_application(&id).unwrap();
         let fast_edited = ("fast", Some(32), json!({"temperature": 1.5, "top_p": 0.9}));
         write(
@@ -4936,7 +4964,7 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
         )
         .await;
         settled(&fixture, 0).await;
-        unchanged(&resources, &previous);
+        unchanged(&resources, &invocation, &previous);
         assert_eq!(runtime.model_view(), view);
 
         // An omitted and an explicit default Profile are one invocation: the
@@ -4957,6 +4985,7 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
         // Moving the default no longer reaches this Session's explicit
         // selection; a new Session follows the moved default.
         let resources = runtime.runtime_resources();
+        let invocation = runtime.model_snapshot();
         let previous = fixture.manager.configuration_application(&id).unwrap();
         write(
             &fixture,
@@ -4968,7 +4997,7 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
         )
         .await;
         settled(&fixture, 0).await;
-        unchanged(&resources, &previous);
+        unchanged(&resources, &invocation, &previous);
         assert_eq!(runtime.model_view().effective, view.effective);
         let created = fixture
             .manager
@@ -5860,6 +5889,7 @@ async fn issue456_following_and_pinned_default_profiles_diverge_only_when_the_de
             runtime(&pinned).runtime_resources().revision()
         );
         let pinned_resources = runtime(&pinned).runtime_resources();
+        let pinned_invocation = runtime(&pinned).model_snapshot();
 
         // The default moves: only the following Session's invocation changes.
         let following_resources = runtime(&following).runtime_resources();
@@ -5872,10 +5902,22 @@ async fn issue456_following_and_pinned_default_profiles_diverge_only_when_the_de
             settled(&f, 1).await.candidate.is_none(),
             "the pinned Profile did not move"
         );
+        // The pinned Session only receives the published catalog.
+        let published = runtime(&pinned).runtime_resources();
+        assert_eq!(published.revision(), pinned_resources.revision().next());
         assert!(Arc::ptr_eq(
-            &pinned_resources,
-            &runtime(&pinned).runtime_resources()
+            pinned_resources.capability(),
+            published.capability()
         ));
+        assert_eq!(runtime(&pinned).model_snapshot(), pinned_invocation);
+        assert_eq!(
+            runtime(&pinned).model_catalog().models[0]
+                .default_profile
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("fast")
+        );
         assert!(Arc::ptr_eq(
             &following_resources,
             &runtime(&following).runtime_resources()
@@ -5899,6 +5941,307 @@ async fn issue456_following_and_pinned_default_profiles_diverge_only_when_the_de
         assert_eq!(follows.effective.request_params["temperature"], json!(1.0));
         assert_eq!(pins.effective.request_params["temperature"], json!(0.5));
         f.close().await;
+    }))
+    .await;
+}
+
+/// Issue #459: one published catalog is the authority for a Session's
+/// discovery and selection admission, through the App Server routing
+/// (`SessionRuntimeManager::set_model`) and the Runtime Client alike. Edits,
+/// removals and default moves of unselected Profiles publish without
+/// preparing or rebuilding anything; a failed or overtaken publication never
+/// replaces the last good authority.
+#[allow(clippy::too_many_lines)] // one complete publication contract
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue459_catalog_publication_keeps_discovery_and_admission_on_one_authority() {
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    use crate::model::authoring::Profile;
+    use crate::model::catalog::{ModelCatalogView, ModelProfileId, ModelRef};
+    use crate::model::session::SessionModelConfig;
+    use crate::runtime_client::{RuntimeClientError, RuntimeClientResult};
+    use crate::toml_authoring::AuthoredRequestParams;
+    use serde_json::json;
+    type Authored<'a> = (&'a str, Option<u32>, serde_json::Value);
+    Box::pin(bounded(async {
+        let fixture = Fixture::new().await;
+        let id = fixture.sessions[0].id.clone();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        let probe = fixture
+            .manager
+            .probe(&fixture.sessions[0].active_conversation_id);
+        let host = fixture.manager.configuration_host(&id).unwrap();
+        let (client, _) = host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .unwrap();
+        let authored = fixture
+            .manager
+            .source_settings(&SourceTarget::User, None)
+            .await
+            .unwrap()
+            .user
+            .authored
+            .unwrap()
+            .models
+            .unwrap()["local/a"]
+            .clone();
+        let model = |default: &str, profiles: &[Authored]| {
+            let mut model = authored.clone();
+            model.request_params = None;
+            model.default_profile = Some(ModelProfileId::new(default));
+            model.profiles = Some(
+                profiles
+                    .iter()
+                    .map(|(name, budget, value)| {
+                        (
+                            ModelProfileId::new(*name),
+                            Profile {
+                                reasoning_enabled: None,
+                                max_output_tokens: *budget,
+                                request_params: AuthoredRequestParams(
+                                    serde_json::from_value(value.clone()).unwrap(),
+                                ),
+                            },
+                        )
+                    })
+                    .collect(),
+            );
+            ConfigMutation::Model {
+                id: "local/a".into(),
+                authored: Some(model),
+            }
+        };
+        let pinned = |profile: &str| SessionModelConfig {
+            profile: Some(ModelProfileId::new(profile)),
+            ..SessionModelConfig::of(ModelRef::parse("local/a").unwrap())
+        };
+        let entry = |catalog: &ModelCatalogView| {
+            let model = catalog
+                .models
+                .iter()
+                .find(|model| model.model.to_string() == "local/a")
+                .unwrap()
+                .clone();
+            let profiles: Vec<_> = model
+                .profiles
+                .iter()
+                .map(|profile| (profile.id.to_string(), profile.max_output_tokens))
+                .collect();
+            (model.default_profile.map(|id| id.to_string()), profiles)
+        };
+        // Discovery through the Runtime Client equals the App Server's read.
+        let discovered = || {
+            let RuntimeClientResult::ModelCatalog { catalog } = client.model_catalog().unwrap()
+            else {
+                panic!("Runtime Client catalog")
+            };
+            assert_eq!(catalog, runtime.model_catalog());
+            entry(&catalog)
+        };
+        let balanced: Authored = ("balanced", None, json!({"temperature": 0.5}));
+        let fast: Authored = ("fast", Some(64), json!({"temperature": 1.0}));
+        let creative: Authored = ("creative", None, json!({"temperature": 1.2}));
+        write(
+            &fixture,
+            0,
+            model(
+                "balanced",
+                &[balanced.clone(), fast.clone(), creative.clone()],
+            ),
+        )
+        .await;
+        let candidate = settled(&fixture, 0)
+            .await
+            .candidate
+            .expect("the selected Model gained Profiles");
+        fixture
+            .manager
+            .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
+            .unwrap();
+        fixture
+            .manager
+            .set_model(&id, pinned("balanced"))
+            .await
+            .unwrap();
+        settled(&fixture, 0).await;
+        let invocation = runtime.model_snapshot();
+        let capability = runtime.runtime_resources().capability().clone();
+        let preparations = probe.configuration_preparations.load(Ordering::SeqCst);
+        let published = |expected: (Option<&str>, &[(&str, Option<u32>)])| {
+            let expected = (
+                expected.0.map(str::to_owned),
+                expected
+                    .1
+                    .iter()
+                    .map(|(id, budget)| ((*id).to_owned(), *budget))
+                    .collect::<Vec<_>>(),
+            );
+            assert_eq!(discovered(), expected);
+            // Publication alone never re-resolves, prepares or rebuilds.
+            assert_eq!(runtime.model_snapshot(), invocation);
+            assert!(Arc::ptr_eq(
+                &capability,
+                runtime.runtime_resources().capability()
+            ));
+            assert_eq!(
+                probe.configuration_preparations.load(Ordering::SeqCst),
+                preparations
+            );
+        };
+        let applied = |application: ConfigurationApplication| {
+            assert!(application.candidate.is_none(), "{application:?}");
+            assert!(
+                application
+                    .units
+                    .values()
+                    .all(|unit| *unit == UnitApplication::Applied),
+                "{application:?}"
+            );
+        };
+
+        // An edited unselected Profile is published.
+        let fast_edited: Authored = ("fast", Some(32), json!({"temperature": 1.5, "top_p": 0.9}));
+        write(
+            &fixture,
+            0,
+            model(
+                "balanced",
+                &[balanced.clone(), fast_edited.clone(), creative.clone()],
+            ),
+        )
+        .await;
+        applied(settled(&fixture, 0).await);
+        published((
+            Some("balanced"),
+            &[("balanced", None), ("creative", None), ("fast", Some(32))],
+        ));
+
+        // A removed unselected Profile is no longer selectable on either path.
+        write(
+            &fixture,
+            0,
+            model("balanced", &[balanced.clone(), fast_edited.clone()]),
+        )
+        .await;
+        applied(settled(&fixture, 0).await);
+        published((Some("balanced"), &[("balanced", None), ("fast", Some(32))]));
+        let view = runtime.model_view();
+        assert!(matches!(
+            fixture.manager.set_model(&id, pinned("creative")).await,
+            Err(AdoptionError::Failed { .. })
+        ));
+        assert!(matches!(
+            client.model_set(pinned("creative")),
+            Err(RuntimeClientError::InvalidModelConfiguration { .. })
+        ));
+        assert_eq!(runtime.model_view(), view);
+
+        // A moved default never reaches the pinned selection.
+        write(
+            &fixture,
+            0,
+            model("fast", &[balanced.clone(), fast_edited.clone()]),
+        )
+        .await;
+        applied(settled(&fixture, 0).await);
+        published((Some("fast"), &[("balanced", None), ("fast", Some(32))]));
+
+        // A failed publication keeps the last good authority.
+        let revision = runtime.runtime_resources().revision();
+        let path = fixture
+            .manager
+            .source_settings(&SourceTarget::User, None)
+            .await
+            .unwrap()
+            .user
+            .path;
+        let good = std::fs::read_to_string(&path).unwrap();
+        let mut document: toml::Value = toml::from_str(&good).unwrap();
+        document["models"]["local/a"]["profiles"]
+            .as_table_mut()
+            .unwrap()
+            .insert(
+                "deep".into(),
+                toml::Value::try_from(json!({"request_params": "{\"temperature\":0.1}"})).unwrap(),
+            );
+        document["agent"]["model"]["model"] = "local/missing".into();
+        std::fs::write(&path, toml::to_string(&document).unwrap()).unwrap();
+        let workspace = SourceTarget::Workspace {
+            directory: fixture.workspaces[0].clone(),
+        };
+        fixture
+            .manager
+            .reconcile_configuration(&workspace)
+            .await
+            .unwrap();
+        let failed = settled(&fixture, 0).await;
+        assert!(
+            failed
+                .units
+                .values()
+                .any(|unit| matches!(unit, UnitApplication::Failed { .. })),
+            "{failed:?}"
+        );
+        published((Some("fast"), &[("balanced", None), ("fast", Some(32))]));
+        assert_eq!(runtime.runtime_resources().revision(), revision);
+        assert!(
+            fixture
+                .manager
+                .set_model(&id, pinned("deep"))
+                .await
+                .is_err()
+        );
+        std::fs::write(&path, good).unwrap();
+        fixture
+            .manager
+            .reconcile_configuration(&workspace)
+            .await
+            .unwrap();
+        applied(settled(&fixture, 0).await);
+        assert_eq!(runtime.runtime_resources().revision(), revision);
+
+        // An overtaken publication never becomes visible: only the newer
+        // generation publishes, exactly once.
+        probe.before_catalog_publication.arm();
+        let deep: Authored = ("deep", None, json!({"temperature": 0.1}));
+        write(
+            &fixture,
+            0,
+            model("fast", &[balanced.clone(), fast_edited.clone(), deep]),
+        )
+        .await;
+        probe.before_catalog_publication.entered().await;
+        let deeper: Authored = ("deeper", None, json!({"temperature": 0.05}));
+        write(
+            &fixture,
+            0,
+            model("fast", &[balanced.clone(), fast_edited.clone(), deeper]),
+        )
+        .await;
+        probe.before_catalog_publication.release();
+        applied(settled(&fixture, 0).await);
+        published((
+            Some("fast"),
+            &[("balanced", None), ("deeper", None), ("fast", Some(32))],
+        ));
+        assert_eq!(runtime.runtime_resources().revision(), revision.next());
+
+        // Selection admission resolves the edited Profile from the published
+        // catalog, never a retained older registry.
+        let RuntimeClientResult::ModelSet { model } = client.model_set(pinned("fast")).unwrap()
+        else {
+            panic!("model set")
+        };
+        assert_eq!(
+            model.effective.request_params,
+            serde_json::from_value::<crate::model::invocation::RequestParams>(
+                json!({"temperature": 1.5, "top_p": 0.9})
+            )
+            .unwrap()
+        );
+        assert_eq!(model.effective.max_output_tokens, 32);
+        drop(client);
+        fixture.close().await;
     }))
     .await;
 }

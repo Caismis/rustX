@@ -262,6 +262,34 @@ impl RuntimeResourceSnapshot {
         Ok(snapshot)
     }
 
+    /// Carry a newly published selectable Model Catalog in this exact adopted
+    /// generation. Capability, context and provider resources are shared
+    /// unchanged; the revision advances so observers reread the catalog.
+    pub(crate) fn with_model_catalog(
+        &self,
+        capture: &crate::local_runtime::configuration::ProspectiveSessionConfig,
+        models: crate::model::invocation::ModelBindingRegistry,
+    ) -> Option<Self> {
+        let mut configuration = self.configuration.as_deref()?.clone();
+        configuration.models = models;
+        configuration
+            .effective
+            .models
+            .clone_from(&capture.effective.models);
+        configuration.effective.providers =
+            crate::local_runtime::configuration::settings::redact(capture.effective.clone())
+                .providers;
+        crate::local_runtime::configuration::copy_provenance(
+            &mut configuration.provenance,
+            &capture.provenance,
+            crate::local_runtime::configuration::CATALOG_KEYS,
+        );
+        let mut snapshot = self.clone();
+        snapshot.configuration = Some(Arc::new(configuration));
+        snapshot.revision = self.revision.next();
+        Some(snapshot)
+    }
+
     pub(crate) fn with_revision(mut self, revision: RuntimeResourceRevision) -> Self {
         self.revision = revision;
         self
