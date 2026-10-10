@@ -851,6 +851,11 @@ impl ClientInner {
                 InboundAdmissionError::Mailbox(error) => RuntimeClientError::InvalidState {
                     message: error.to_string(),
                 },
+                error @ InboundAdmissionError::ModelUnavailable { .. } => {
+                    RuntimeClientError::InvalidModelConfiguration {
+                        message: error.to_string(),
+                    }
+                }
                 // The activation guidance seal belongs to the child plane;
                 // the human submit path never enters that class.
                 error @ InboundAdmissionError::GuidanceSealed => RuntimeClientError::InvalidState {
@@ -934,6 +939,11 @@ impl ClientInner {
                     }
                 }
                 ManualCompactionError::Shutdown => RuntimeClientError::RuntimeShutdown,
+                ManualCompactionError::ModelUnavailable { .. } => {
+                    RuntimeClientError::InvalidModelConfiguration {
+                        message: error.to_string(),
+                    }
+                }
                 ManualCompactionError::DurabilityFailed { message }
                 | ManualCompactionError::Durable { message } => {
                     RuntimeClientError::InvalidState { message }
@@ -2259,7 +2269,10 @@ impl RuntimeClientHost {
             super::projection::capability_view(
                 &seed.capabilities,
                 &seed.capability_availability,
-                Some(&seed.model.effective.capabilities),
+                seed.model
+                    .effective
+                    .as_ref()
+                    .map(|effective| &effective.capabilities),
             ),
             Some(seed.model.clone()),
             replay_limit,

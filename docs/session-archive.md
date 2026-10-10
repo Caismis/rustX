@@ -21,7 +21,7 @@ No decoder for older development archives is provided.
 All JSON is UTF-8. JSONL entries contain one archive-v3 logical value per
 line, ordered by the corresponding native immutable append coordinate. Mixed
 historical/private native types cross explicit archive projections, not raw serde. Empty
-histories have empty entries. Journal schema = 2 and requests schema = 2. Messages, surface, generations,
+histories have empty entries. Journal schema = 2 and requests schema = 3 (Model Profile, #456). Messages, surface, generations,
 publication_audits and inherited_responses remain at schema version 1;
 inherited_turns starts at schema version 1;
 the manifest also identifies the rustX package version and native durable schema.
@@ -32,7 +32,7 @@ the manifest also identifies the rustX package version and native durable schema
 | `sessions/<ConversationId>/journal.jsonl` | Projected Event Journal envelopes, including exact sequence and request-owned settled generation evidence; infrastructure diagnostics excluded |
 | `sessions/<ConversationId>/messages.jsonl` | Accepted Message Ledger values, including messages no longer on the active Surface |
 | `sessions/<ConversationId>/surface.jsonl` | Immutable Conversation Surface operations/revisions |
-| `sessions/<ConversationId>/requests.jsonl` | Explicit `ArchiveRequestSnapshotV2` projection of immutable Request Snapshots |
+| `sessions/<ConversationId>/requests.jsonl` | Explicit `ArchiveRequestSnapshotV3` projection of immutable Request Snapshots |
 | `sessions/<ConversationId>/generations.jsonl` | Request ID, source Journal sequence and existing `GenerationEvidence`; a convenience index of Journal-owned facts |
 | `sessions/<ConversationId>/publication_audits.jsonl` | Settled noncanonical publication audit values |
 | `sessions/<ConversationId>/inherited_responses.jsonl` | Immutable native completed-response lineage provenance from bootstrap, never reconstructed destination execution |
@@ -189,10 +189,10 @@ success is reported for the failed export.
 
 Archive v3 is a deliberate historical inspection contract. Adding fields to
 `RequestSnapshot` or its invocation does not add archive fields: the private
-`ArchiveRequestSnapshotV2` / invocation DTOs in `src/session_archive/projection.rs`
+`ArchiveRequestSnapshotV3` / invocation DTOs in `src/session_archive/projection.rs`
 name each exported field. They include request/Attempt/Step/retry and provisional
 Assistant identity, Surface revision, frozen prompt/System sections, model/protocol,
-context/output limits, reasoning state/profile, historical Tool definitions,
+context/output limits, reasoning state and Model Profile, historical Tool definitions,
 capability/context generations, request context IDs, request-time upload projection,
 carryover content/source/anchor and Agent Status facts.
 

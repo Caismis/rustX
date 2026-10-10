@@ -251,7 +251,7 @@ describe("subagent activity section", () => {
       child({ type: "awaiting_activity" }, {
         execution_profile: {
           model: "alpha/model-a",
-          reasoning_profile: "reasoning:high",
+          profile: "reasoning:high",
           reasoning_enabled: true,
         },
       }),
@@ -259,7 +259,7 @@ describe("subagent activity section", () => {
     assert.match(rendered, /alpha\/model-a · reasoning:high/);
   });
 
-  it("shows the model alone when no reasoning profile was selected", () => {
+  it("shows the model alone when no profile was selected", () => {
     const rendered = render([
       child({ type: "awaiting_activity" }, {
         execution_profile: {

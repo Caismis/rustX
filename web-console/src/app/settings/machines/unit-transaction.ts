@@ -165,6 +165,11 @@ export const unitTransactionMachine = setup({
     }),
     reviewObservation: assign({ base: ({ context }) => context.observed }),
     announceRetirement: sendParent(({ context }) => ({ type: 'UNIT.RETIRED' as const, identity: context.identity })),
+    /** The owner replaced what every editor of this unit presents — a
+     * discarded intent or a reviewed revision — so editor-local buffers that
+     * never became the draft (unparsed text) must resynchronize even when the
+     * presented value is unchanged. */
+    announceReset: sendParent(({ context }) => ({ type: 'UNIT.RESET' as const, identity: context.identity })),
   },
 }).createMachine({
   id: 'unitTransaction',
@@ -183,7 +188,7 @@ export const unitTransactionMachine = setup({
       on: {
         // Every region answers the same discard in this microstep; the
         // retirement decision is taken once they all have.
-        DISCARD: { guard: not('inFlight'), target: '.clean', actions: ['dropDraft', raise({ type: 'RELEASE' })] },
+        DISCARD: { guard: not('inFlight'), target: '.clean', actions: ['dropDraft', 'announceReset', raise({ type: 'RELEASE' })] },
       },
       states: {
         clean: { on: { EDIT: { guard: 'editable', target: 'dirty', actions: 'recordEdit' } } },
@@ -207,7 +212,7 @@ export const unitTransactionMachine = setup({
             OBSERVED: { actions: ['recordObservation', 'followObservation'] },
             EDIT: { guard: 'editable', target: 'pinned' },
             SUBMIT: 'pinned',
-            REVIEW: { target: 'pinned', actions: 'reviewObservation' },
+            REVIEW: { target: 'pinned', actions: ['reviewObservation', 'announceReset'] },
           },
         },
         pinned: {
@@ -222,7 +227,7 @@ export const unitTransactionMachine = setup({
               { guard: and(['settlesCommit', 'nothingAuthored']), target: 'following', actions: ['recordObservation', 'followObservation'] },
               { actions: 'recordObservation' },
             ],
-            REVIEW: { actions: 'reviewObservation' },
+            REVIEW: { actions: ['reviewObservation', 'announceReset'] },
             // Abandoning a pin that is browser intent follows native authority
             // again. A committed revision awaiting its observation is not
             // intent and stays.

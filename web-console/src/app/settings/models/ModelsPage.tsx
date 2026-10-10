@@ -5,11 +5,11 @@ import { useRef, useState } from 'react';
 import { GridList, GridListItem, Button as AriaButton } from 'react-aria-components';
 import type {
   Model, ModelLayer, Modality, ProviderView, ProviderWrite, SourceScope, SourceSettings,
-} from '../../../../../protocol/app-server/v38';
+} from '../../../../../protocol/app-server/v39';
 import { Badge } from '../../../presentation/settings/SettingsContent';
 import { Button } from '../../../presentation/primitives/Button';
 import { TypedUnitForm, UnitForm, useUnitEditing, type TypedUnitForm as TypedForm } from '../forms/bridge';
-import { Bool, Enum, Numeric, NumericText, RequestParameters, RequestParameterRows, Text } from '../forms/fields';
+import { Bool, Enum, Numeric, NumericText, RequestParameters, RequestParamsEditor, Text } from '../forms/fields';
 import { TextField } from '../forms/controls';
 import { Advanced, Choice, ConfirmAction, ResourceList, Search, type ResourceRow } from '../primitives/aria';
 import { catalogEntries, provenanceLabel, sourceView, type CatalogEntry } from '../projection';
@@ -23,6 +23,8 @@ export interface ModelsPageProps {
   source: SourceSettings; scope: SourceScope; revision: string;
   /** Every model identity this scope can reach, for the selectors. */
   models: string[];
+  /** The Model Profiles each reachable model declares, for the selectors. */
+  profiles: ModelProfiles;
   focus?: PageFocus['models'];
   onFocus: (focus?: PageFocus['models']) => void;
 }
@@ -47,13 +49,13 @@ function credentialLabel(tx: Translate, provider: ProviderView | undefined): str
  * adopted: rustX scope authority, native identities and exact-CAS semantic-unit
  * writes are unchanged, and the visual family remains the existing
  * Harness-derived one. */
-export function ModelsPage({ source, scope, revision, models, focus, onFocus }: ModelsPageProps) {
+export function ModelsPage({ source, scope, revision, models, profiles, focus, onFocus }: ModelsPageProps) {
   if (focus?.kind === 'provider') return <ProviderDetail source={source} scope={scope} revision={revision} id={focus.id} onFocus={onFocus} />;
   if (focus?.kind === 'model') return <ModelDetail source={source} scope={scope} revision={revision} id={focus.id} provider={focus.provider} onFocus={onFocus} />;
-  return <ProviderList source={source} scope={scope} revision={revision} models={models} onFocus={onFocus} />;
+  return <ProviderList source={source} scope={scope} revision={revision} models={models} profiles={profiles} onFocus={onFocus} />;
 }
 
-function ProviderList({ source, scope, revision, models, onFocus }: Omit<ModelsPageProps, 'focus'>) {
+function ProviderList({ source, scope, revision, models, profiles, onFocus }: Omit<ModelsPageProps, 'focus'>) {
   const tx = useTranslation();
   const landing = useRef<HTMLElement>(null);
   const [query, setQuery] = useState('');
@@ -92,7 +94,7 @@ function ProviderList({ source, scope, revision, models, onFocus }: Omit<ModelsP
       removalNotice={<p>{tx('settings:models-page.new-sessions-fall-back-to-the-native-default-model-once-no-sourc')}</p>}>
       {(value, change) => <>
         <p className={css.hint}>{tx('settings:models-page.this-is-the-model-new-sessions-start-from-it-is-not-the-model-an')}</p>
-        <ModelSelection value={value} change={change} models={models} />
+        <ModelSelection value={value} change={change} models={models} profiles={profiles} />
       </>}
     </UnitForm>
     </Advanced>
@@ -202,8 +204,8 @@ function LiteralCredential({ form }: { form: TypedForm<ProviderWrite> }) {
 /** One Model's complete typed contract.
  *
  * Every field native models is authored here, and the mutation replaces the
- * complete object. Editing the context window therefore cannot drop reasoning
- * profiles, request parameters, compatibility settings or capabilities: they
+ * complete object. Editing the context window therefore cannot drop Model
+ * Profiles, request parameters, compatibility settings or capabilities: they
  * are all part of the one value the transaction owns. */
 function ModelDetail({ source, scope, revision, id, provider, onFocus }: {
   source: SourceSettings; scope: SourceScope; revision: string; id: string; provider?: string;
@@ -245,9 +247,9 @@ function ModelFields({ form }: { form: TypedForm<Model> }) {
       <ModalitySet form={form} name="capabilities.input_modalities" label={tx('settings:models-page.input-modalities')} />
       <ModalitySet form={form} name="capabilities.output_modalities" label={tx('settings:models-page.output-modalities')} />
     </fieldset>
-    <Advanced title={tx('settings:models-page.reasoning-profiles')}><ReasoningProfiles form={form} /></Advanced>
+    <Advanced title={tx('settings:models-page.model-profiles')}><Profiles form={form} /></Advanced>
     <Advanced title={tx('settings:models-page.request-defaults-and-protocol-compatibility')}>
-      <RequestParameters form={form} name="request_params" />
+      <ModelRequestParameters form={form} />
       <Enum form={form} name="compat.chat_reasoning_replay" label={tx('settings:models-page.chat-reasoning-replay')} empty={tx('settings:copy.unspecified')}
         options={[['omit', tx('settings:model-option.omit')], ['reasoning_content', /* i18n-raw: exact protocol or wire-field identifier */ 'reasoning_content'], ['reasoning', /* i18n-raw: exact protocol or wire-field identifier */ 'reasoning']]} />
       <Enum form={form} name="compat.chat_max_tokens_field" label={tx('settings:models-page.chat-output-field')} empty={tx('settings:copy.unspecified')}
@@ -274,75 +276,117 @@ function ModalitySet({ form, name, label }: { form: TypedForm<Model>; name: 'cap
   }}</Field>;
 }
 
-interface Profile { enabled: boolean; request_params?: Record<string, unknown> }
-function ReasoningProfiles({ form }: { form: TypedForm<Model> }) {
+type Field = (props: { name: string; children: (field: { state: { value: unknown }; handleChange: (value: never) => void }) => React.ReactNode }) => React.ReactNode;
+type ProfileMap = NonNullable<Model['profiles']>;
+
+/** A Model's native request parameters, which exist only while the Model
+ * declares no profiles: each profile then authors its own complete object. */
+function ModelRequestParameters({ form }: { form: TypedForm<Model> }) {
+  const tx = useTranslation();
+  const Subscribe = form.Subscribe as unknown as (props: { selector: (state: { values: Model }) => boolean; children: (profiled: boolean) => React.ReactNode }) => React.ReactNode;
+  return <Subscribe selector={state => Object.keys(state.values.profiles ?? {}).length > 0}>{profiled => profiled
+    ? <p className={css.hint}>{tx('settings:models-page.profiles-own-request-parameters')}</p>
+    : <RequestParameters form={form} name="request_params" label={tx('settings:models-page.model-request-parameters')} />}</Subscribe>;
+}
+
+/** General Model Profiles: named, complete and independent invocation
+ * presets. A profile's name carries no meaning; its reasoning state, output
+ * default and native parameters are exactly what it declares. Native Rust
+ * validates the contract — a declared default, explicit reasoning state on a
+ * reasoning-capable Model, budgets within the hard maximum, protected keys. */
+function Profiles({ form }: { form: TypedForm<Model> }) {
   const tx = useTranslation();
   const [identity, setIdentity] = useState('');
-  const Field = form.Field as unknown as (props: { name: string; children: (field: { state: { value: unknown }; handleChange: (value: never) => void }) => React.ReactNode }) => React.ReactNode;
-  return <Field name="reasoning">{field => {
-    const reasoning = field.state.value as { default_profile: string; profiles: Record<string, Profile> } | null | undefined;
-    const profiles = reasoning?.profiles ?? {};
-    const set = (next: { default_profile: string; profiles: Record<string, Profile> } | null) => field.handleChange(next as never);
+  const Bound = form.Field as unknown as Field;
+  return <Bound name="request_params">{params => <Bound name="default_profile">{fallback => <Bound name="profiles">{field => {
+    const profiles = (field.state.value as ProfileMap | null | undefined) ?? {};
+    const identities = Object.keys(profiles);
+    const setProfiles = (next: ProfileMap) => field.handleChange((Object.keys(next).length ? next : undefined) as never);
+    const update = (id: string, profile: ProfileMap[string]) => setProfiles({ ...profiles, [id]: profile });
     return <>
-      <label>{tx('settings:models-page.default-profile')}<input value={reasoning?.default_profile ?? ''}
-        onChange={event => set({ default_profile: event.target.value, profiles })} /></label>
-      {Object.entries(profiles).map(([profileId, profile]) => <div key={profileId}>
-        <label><input type="checkbox" checked={profile.enabled}
-          onChange={event => set({ default_profile: reasoning!.default_profile, profiles: { ...profiles, [profileId]: { ...profile, enabled: event.target.checked } } })} />{profileId}</label>
-        <RequestParameterRows value={profile.request_params ?? {}}
-          change={request_params => set({ default_profile: reasoning!.default_profile, profiles: { ...profiles, [profileId]: { ...profile, request_params } } })} />
-        <Button onClick={() => { const next = { ...profiles }; delete next[profileId]; set({ default_profile: reasoning!.default_profile, profiles: next }); }}>{tx('settings:models-page.delete-profile')}{' '}{profileId}</Button>
-      </div>)}
+      {identities.length > 0 && <Choice label={tx('settings:models-page.default-profile')} value={(fallback.state.value as string | null | undefined) ?? ''}
+        options={[['', tx('settings:copy.unspecified')], ...identities.map(id => [id, id] as const)]}
+        onChange={id => fallback.handleChange((id || undefined) as never)} />}
+      {identities.map(id => <ProfileFields key={id} id={id} profile={profiles[id]} change={next => update(id, next)} remove={() => {
+        const next = { ...profiles }; delete next[id];
+        if (fallback.state.value === id) fallback.handleChange((Object.keys(next)[0] ?? undefined) as never);
+        setProfiles(next);
+      }} />)}
       <div className={css.actions}>
-        <label>{tx('settings:models-page.new-reasoning-profile')}<input value={identity} onChange={event => setIdentity(event.target.value)} /></label>
+        <TextField label={tx('settings:models-page.new-profile-identity')} value={identity} change={setIdentity} />
         <Button disabled={!identity || identity in profiles} onClick={() => {
-          set({ default_profile: reasoning?.default_profile ?? identity, profiles: { ...profiles, [identity]: { enabled: true, request_params: {} } } });
+          // The first profile starts from the Model's own parameters, which a
+          // Model with profiles no longer declares.
+          const seed = identities.length ? {} : (params.state.value as ProfileMap[string]['request_params'] | null | undefined) ?? {};
+          if (!identities.length) { params.handleChange(undefined as never); fallback.handleChange(identity as never); }
+          update(identity, { request_params: seed });
           setIdentity('');
         }}>{tx('settings:models-page.add-profile')}</Button>
       </div>
-      {reasoning && <Button onClick={() => set(null)}>{tx('settings:models-page.remove-reasoning-profiles')}</Button>}
+      {!identities.length && <p className={css.hint}>{tx('settings:models-page.no-profiles')}</p>}
     </>;
-  }}</Field>;
+  }}</Bound>}</Bound>}</Bound>;
 }
+
+function ProfileFields({ id, profile, change, remove }: { id: string; profile: ProfileMap[string]; change: (next: ProfileMap[string]) => void; remove: () => void }) {
+  const tx = useTranslation();
+  const reasoning = profile.reasoning_enabled;
+  return <fieldset data-profile={id}><legend>{tx('settings:models-page.profile-value', { p0: id })}</legend>
+    <Choice label={tx('settings:models-page.profile-reasoning')} value={reasoning === undefined || reasoning === null ? '' : String(reasoning)}
+      options={[['', tx('settings:copy.unspecified')], ['true', tx('settings:copy.on')], ['false', tx('settings:copy.off')]]}
+      onChange={next => change({ ...profile, reasoning_enabled: next === '' ? undefined : next === 'true' })} />
+    <label>{tx('settings:models-page.profile-output-default')}<input type="number" min="1" value={profile.max_output_tokens ?? ''}
+      onChange={event => change({ ...profile, max_output_tokens: event.target.value ? Number(event.target.value) : undefined })} /></label>
+    <RequestParamsEditor label={tx('settings:models-page.profile-request-parameters')} value={profile.request_params ?? {}} optional={false}
+      change={request_params => change({ ...profile, request_params: request_params ?? {} })} />
+    <Button onClick={remove}>{tx('settings:models-page.delete-profile')}{' '}{id}</Button>
+  </fieldset>;
+}
+
+/** The Model Profiles each model identity this scope reaches declares. */
+export type ModelProfiles = Readonly<Record<string, readonly string[]>>;
 
 /** The model-selection fields shared by the default model and a named Agent's
  * explicit child model. Both author a `ModelLayer`, so both reach exactly the
  * same controls and the same identity-discovery rule. */
-export function ModelSelection({ value, change, models }: { value: ModelLayer; change: (next: ModelLayer) => void; models: string[] }) {
+export function ModelSelection({ value, change, models, profiles }: { value: ModelLayer; change: (next: ModelLayer) => void; models: string[]; profiles: ModelProfiles }) {
   const tx = useTranslation();
   const summary = value.summary_model;
   const identities = (extra?: string) => [...new Set([...models, ...(extra ? [extra] : [])])];
   return <>
     <Choice label={tx('settings:models-page.model')} value={value.model ?? ''} options={[['', tx('settings:copy.select-model')], ...identities(value.model ?? undefined).map(id => [id, id] as const)]}
       onChange={model => change({ ...value, model: model || null })} />
-    <ModelRequestFields value={value} change={change} />
+    <ModelRequestFields value={value} change={change} profiles={profiles[value.model ?? ''] ?? []} />
     <Choice label={tx('settings:models-page.summary-model')} value={summary?.mode === 'explicit' ? summary.model : ''}
       options={[['', tx('settings:copy.follow-selected-model')], ...identities(summary?.mode === 'explicit' ? summary.model : undefined).map(id => [id, id] as const)]}
       onChange={model => change({ ...value, summary_model: model ? { ...(summary?.mode === 'explicit' ? summary : {}), mode: 'explicit', model } : { mode: 'session' } })} />
     {summary?.mode === 'explicit' && <fieldset><legend>{tx('settings:models-page.explicit-summary-model-settings')}</legend>
-      <ModelRequestFields value={summary} variant="summary" change={summary_model => change({ ...value, summary_model })} />
+      <ModelRequestFields value={summary} variant="summary" change={summary_model => change({ ...value, summary_model })} profiles={profiles[summary.model] ?? []} />
     </fieldset>}
   </>;
 }
-type RequestFields = Pick<ModelLayer, 'reasoning_profile' | 'max_output_tokens' | 'request_params'>;
+type RequestFields = Pick<ModelLayer, 'profile' | 'max_output_tokens' | 'request_params'>;
 /** Each variant owns complete, distinct labels so the Summary model's fields
  * and the outer model's fields stay unambiguously distinguishable, for a reader
  * and for a test alike, in every locale. */
 const REQUEST_FIELD_LABELS = {
-  default: { reasoning: 'settings:models-page.reasoning-profile', identity: 'settings:models-page.profile-identity', limit: 'settings:models-page.output-limit' },
-  summary: { reasoning: 'settings:models-page.reasoning-profile-summary', identity: 'settings:models-page.profile-identity-summary', limit: 'settings:models-page.output-limit-summary' },
+  default: { profile: 'settings:models-page.profile', limit: 'settings:models-page.output-limit', params: 'settings:models-page.request-parameter-overrides' },
+  summary: { profile: 'settings:models-page.profile-summary', limit: 'settings:models-page.output-limit-summary', params: 'settings:models-page.request-parameter-overrides-summary' },
 } as const satisfies Record<string, Record<string, TranslationKey>>;
-function ModelRequestFields<T extends RequestFields>({ value, change, variant = 'default' }: { value: T; change: (next: T) => void; variant?: keyof typeof REQUEST_FIELD_LABELS }) {
+/** A selection's Profile, output budget and explicit overrides. An omitted
+ * Profile selects the Model's own default; an override may not repeat a key
+ * the selected Profile declares, which native reports. */
+function ModelRequestFields<T extends RequestFields>({ value, change, profiles, variant = 'default' }: { value: T; change: (next: T) => void; profiles: readonly string[]; variant?: keyof typeof REQUEST_FIELD_LABELS }) {
   const tx = useTranslation();
   const labels = REQUEST_FIELD_LABELS[variant];
+  const selected = value.profile ?? '';
+  const choices = [...new Set([...profiles, ...(selected ? [selected] : [])])];
   return <>
-    <Choice label={tx(labels.reasoning)} value={value.reasoning_profile?.mode ?? ''}
-      options={[['', tx('settings:copy.domain-default')], ['catalog_default', tx('settings:copy.catalog-default')], ['profile', tx('settings:copy.named-profile')]]}
-      onChange={mode => change({ ...value, reasoning_profile: mode === 'profile' ? { mode: 'profile', name: '' } : mode === 'catalog_default' ? { mode: 'catalog_default' } : null })} />
-    {value.reasoning_profile?.mode === 'profile' && <TextField label={tx(labels.identity)} required value={value.reasoning_profile.name}
-      change={name => change({ ...value, reasoning_profile: { mode: 'profile', name } })} />}
+    {choices.length > 0 && <Choice label={tx(labels.profile)} value={selected}
+      options={[['', tx('settings:copy.model-default-profile')], ...choices.map(id => [id, id] as const)]}
+      onChange={profile => { const { profile: _, ...rest } = value; change((profile ? { ...rest, profile } : rest) as T); }} />}
     <label>{tx(labels.limit)}<input type="number" min="1" value={value.max_output_tokens?.mode === 'limit' ? value.max_output_tokens.tokens : ''}
       onChange={event => change({ ...value, max_output_tokens: event.target.value ? { mode: 'limit', tokens: Number(event.target.value) } : { mode: 'catalog_default' } })} /></label>
-    <RequestParameterRows value={value.request_params ?? {}} change={request_params => change({ ...value, request_params })} />
+    <RequestParamsEditor label={tx(labels.params)} value={value.request_params ?? undefined} change={request_params => change({ ...value, request_params })} />
   </>;
 }

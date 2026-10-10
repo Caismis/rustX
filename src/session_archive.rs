@@ -261,7 +261,7 @@ impl SessionArchiveCut {
             "session": self.session, "cwd": self.cwd, "nodes": self.nodes,
             "conversations": self.conversations.iter().map(|c| &c.manifest).collect::<Vec<_>>(),
             "artifacts": self.artifacts.iter().map(|a| &a.manifest).collect::<Vec<_>>(),
-            "schemas": {"journal":2,"messages":1,"surface":1,"requests":2,"generations":1,"publication_audits":1,"inherited_responses":1,"inherited_turns":1},
+            "schemas": {"journal":2,"messages":1,"surface":1,"requests":3,"generations":1,"publication_audits":1,"inherited_responses":1,"inherited_turns":1},
             "integrity": "ZIP CRC32 per entry",
             "excluded": ["provider-private continuation state", "infrastructure configuration and credentials", "opaque request parameters outside the inspection allowlist", "provider and runtime diagnostic prose/codes", "workflow recovery comparison guards"],
             "unavailable": ["historical workspace-upload bytes are not immutable durable artifacts; recorded references remain in history"]

@@ -2358,11 +2358,11 @@
           "description": "The selected catalog model.",
           "$ref": "#/$defs/ModelRef"
         },
-        "reasoningProfile": {
-          "description": "The selected reasoning profile; the model default is used when\nabsent.",
+        "profile": {
+          "description": "The selected Model Profile; the model's `default_profile` is used\nwhen absent.",
           "anyOf": [
             {
-              "$ref": "#/$defs/ReasoningProfileId"
+              "$ref": "#/$defs/ModelProfileId"
             },
             {
               "type": "null"
@@ -2376,7 +2376,7 @@
           "default": {}
         },
         "maxOutputTokens": {
-          "description": "The session output-budget override; the model's configured maximum is\nused when absent.",
+          "description": "The session output-budget override; the selected profile's default,\nelse the model's hard maximum, is used when absent.",
           "type": [
             "integer",
             "null"
@@ -2402,8 +2402,8 @@
       "description": "An authored Model identity. Its spelling has no provider or wire semantics.",
       "type": "string"
     },
-    "ReasoningProfileId": {
-      "description": "The identity of one reasoning profile declared by a model.\n\nThe runtime assigns no meaning to the name: `off`, `on`, `low`,\n`thinking-32k`, and `deep` are all just names whose wire behaviour is\nexactly the profile's configured `request_params`.",
+    "ModelProfileId": {
+      "description": "The identity of one Model Profile declared by a model.\n\nThe runtime assigns no meaning to the name: `fast`, `precise`, `creative`,\n`thinking-32k`, and `deep` are all just names whose behaviour is exactly\nthe profile's declared reasoning state, output default, and\n`request_params`.",
       "type": "string"
     },
     "SummaryModelPolicy": {
@@ -2431,11 +2431,11 @@
               "description": "The catalog model reference.",
               "$ref": "#/$defs/ModelRef"
             },
-            "reasoning_profile": {
-              "description": "The selected reasoning profile; the model default is used when\nabsent.",
+            "profile": {
+              "description": "The selected Model Profile; the model's `default_profile` is used\nwhen absent.",
               "anyOf": [
                 {
-                  "$ref": "#/$defs/ReasoningProfileId"
+                  "$ref": "#/$defs/ModelProfileId"
                 },
                 {
                   "type": "null"
@@ -4374,6 +4374,7 @@
       ]
     },
     "Model": {
+      "description": "One authored Model. A Model declares either model-level `request_params`\nor a nonempty `profiles` collection with a `default_profile`, never both.",
       "type": "object",
       "properties": {
         "provider": {
@@ -4390,6 +4391,7 @@
           "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
         },
         "max_output_tokens": {
+          "description": "The hard maximum output budget of every invocation of this Model.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0,
@@ -4399,18 +4401,34 @@
           "$ref": "#/$defs/Capabilities"
         },
         "request_params": {
-          "$ref": "#/$defs/RequestParamsToml",
-          "default": {}
-        },
-        "reasoning": {
+          "description": "Native request parameters of a Model without profiles. Presence is\nretained: a Model with profiles must not declare it, even as `{}`.",
           "anyOf": [
             {
-              "$ref": "#/$defs/Reasoning"
+              "$ref": "#/$defs/RequestParams"
             },
             {
               "type": "null"
             }
           ]
+        },
+        "default_profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelProfileId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "profiles": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/Profile"
+          }
         },
         "compat": {
           "$ref": "#/$defs/Compat",
@@ -4499,74 +4517,38 @@
         }
       ]
     },
-    "RequestParamsToml": {
-      "description": "Opaque provider-native structured TOML. Strings, integers, finite floats, booleans, arrays and tables only; no dates, times, datetimes, non-finite floats or explicit null. Protected wire keys are checked during model resolution.",
+    "RequestParams": {
+      "description": "Opaque provider-native request parameters as a structured JSON object. Nested objects, arrays and null are preserved. Every number is exactly an IEEE 754 binary64 value (I-JSON); another, such as 9007199254740993, is refused. Runtime-protected wire keys are checked during model validation.",
       "type": "object",
-      "additionalProperties": {
-        "$ref": "#/$defs/RequestParamsToml/$defs/value"
-      },
-      "$defs": {
-        "value": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "number"
-            },
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/RequestParamsToml/$defs/value"
-              }
-            },
-            {
-              "type": "object",
-              "additionalProperties": {
-                "$ref": "#/$defs/RequestParamsToml/$defs/value"
-              }
-            }
-          ]
-        }
-      }
-    },
-    "Reasoning": {
-      "type": "object",
-      "properties": {
-        "default_profile": {
-          "$ref": "#/$defs/ReasoningProfileId"
-        },
-        "profiles": {
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/Profile"
-          }
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "default_profile",
-        "profiles"
-      ]
+      "additionalProperties": true
     },
     "Profile": {
+      "description": "One authored Model Profile: a complete, independent invocation preset.",
       "type": "object",
       "properties": {
-        "enabled": {
-          "type": "boolean"
+        "reasoning_enabled": {
+          "description": "Required for every profile of a reasoning-capable Model; omission\nmeans `false` for a non-reasoning Model.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "max_output_tokens": {
+          "description": "Default output budget; at most the Model's `max_output_tokens`.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
         },
         "request_params": {
-          "$ref": "#/$defs/RequestParamsToml",
+          "$ref": "#/$defs/RequestParams",
           "default": {}
         }
       },
-      "additionalProperties": false,
-      "required": [
-        "enabled"
-      ]
+      "additionalProperties": false
     },
     "Compat": {
       "type": "object",
@@ -4717,10 +4699,11 @@
             }
           ]
         },
-        "reasoning_profile": {
+        "profile": {
+          "description": "The selected Model Profile; the Model's `default_profile` when omitted.",
           "anyOf": [
             {
-              "$ref": "#/$defs/ReasoningSelection"
+              "$ref": "#/$defs/ModelProfileId"
             },
             {
               "type": "null"
@@ -4730,7 +4713,7 @@
         "request_params": {
           "anyOf": [
             {
-              "$ref": "#/$defs/RequestParamsToml"
+              "$ref": "#/$defs/RequestParams"
             },
             {
               "type": "null"
@@ -4759,40 +4742,6 @@
         }
       },
       "additionalProperties": false
-    },
-    "ReasoningSelection": {
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "mode": {
-              "type": "string",
-              "const": "catalog_default"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "mode"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "name": {
-              "$ref": "#/$defs/ReasoningProfileId"
-            },
-            "mode": {
-              "type": "string",
-              "const": "profile"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "mode",
-            "name"
-          ]
-        }
-      ]
     },
     "ModelOutput": {
       "oneOf": [
@@ -4852,10 +4801,10 @@
             "model": {
               "$ref": "#/$defs/ModelRef"
             },
-            "reasoning_profile": {
+            "profile": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/ReasoningSelection"
+                  "$ref": "#/$defs/ModelProfileId"
                 },
                 {
                   "type": "null"
@@ -4863,7 +4812,7 @@
               ]
             },
             "request_params": {
-              "$ref": "#/$defs/RequestParamsToml",
+              "$ref": "#/$defs/RequestParams",
               "default": {}
             },
             "max_output_tokens": {
@@ -7273,19 +7222,38 @@
           "$ref": "#/$defs/SessionModelConfig"
         },
         "effective": {
-          "description": "The resolved effective primary invocation.",
-          "$ref": "#/$defs/ModelInvocationView"
+          "description": "The effective primary invocation last resolved for `configured`.\nAbsent only when the Session was loaded with an already unavailable\nselection.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelInvocationView"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "summary": {
-          "description": "The resolved summary policy.",
-          "$ref": "#/$defs/SummaryModelView"
+          "description": "The summary policy last resolved for `configured`, absent exactly\nwhen `effective` is.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SummaryModelView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unavailable": {
+          "description": "Why the Session's published Model Catalog does not admit\n`configured`. While present, `effective` and `summary` are display\nfacts only: no new Attempt is admitted until a valid selection is\ncommitted, and nothing falls back to a default.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false,
       "required": [
-        "configured",
-        "effective",
-        "summary"
+        "configured"
       ]
     },
     "ModelInvocationView": {
@@ -7321,11 +7289,11 @@
           "minimum": 0,
           "maximum": 4294967295
         },
-        "reasoningProfile": {
-          "description": "The selected reasoning profile, when the model declares any.",
+        "profile": {
+          "description": "The selected Model Profile, when the model declares any.",
           "anyOf": [
             {
-              "$ref": "#/$defs/ReasoningProfileId"
+              "$ref": "#/$defs/ModelProfileId"
             },
             {
               "type": "null"
@@ -7450,11 +7418,11 @@
               "minimum": 0,
               "maximum": 4294967295
             },
-            "reasoningProfile": {
-              "description": "The selected reasoning profile, when the model declares any.",
+            "profile": {
+              "description": "The selected Model Profile, when the model declares any.",
               "anyOf": [
                 {
-                  "$ref": "#/$defs/ReasoningProfileId"
+                  "$ref": "#/$defs/ModelProfileId"
                 },
                 {
                   "type": "null"
@@ -7500,7 +7468,7 @@
       ]
     },
     "ModelCatalogView": {
-      "description": "The safe public catalog view served to Runtime Clients.\n\nA client selects a model and a reasoning profile from this view; it never\nreads `rustx.toml` itself and never sees a credential, an adapter, or a\nprovider HTTP client.",
+      "description": "The safe public catalog view served to Runtime Clients.\n\nA client selects a model and a Model Profile from this view; it never\nreads `rustx.toml` itself and never sees a credential, an adapter, or a\nprovider HTTP client.",
       "type": "object",
       "properties": {
         "models": {
@@ -7548,19 +7516,19 @@
           "description": "The capabilities the runtime can actually deliver today.",
           "$ref": "#/$defs/ModelCapabilities"
         },
-        "reasoningProfiles": {
-          "description": "The declared reasoning profiles in deterministic order.",
+        "profiles": {
+          "description": "The declared Model Profiles in deterministic order.",
           "type": "array",
           "items": {
-            "$ref": "#/$defs/ReasoningProfileView"
+            "$ref": "#/$defs/ModelProfileView"
           },
           "default": []
         },
-        "defaultReasoningProfile": {
-          "description": "The profile selected when a session does not choose one.",
+        "defaultProfile": {
+          "description": "The profile selected when an invocation does not choose one.",
           "anyOf": [
             {
-              "$ref": "#/$defs/ReasoningProfileId"
+              "$ref": "#/$defs/ModelProfileId"
             },
             {
               "type": "null"
@@ -7583,23 +7551,33 @@
         "credentialSource"
       ]
     },
-    "ReasoningProfileView": {
-      "description": "One selectable reasoning profile of the public catalog view.\n\nOnly the identity and the semantic enabled state are exposed: the\nprofile's provider request parameters are provider-owned wire config that\na client never needs to select a profile.",
+    "ModelProfileView": {
+      "description": "One selectable Model Profile of the public catalog view.\n\nThe profile's provider request parameters are provider-owned wire\nconfiguration a client never needs to select a profile; the runtime\nsemantics it carries are exposed.",
       "type": "object",
       "properties": {
         "id": {
           "description": "The profile identity.",
-          "$ref": "#/$defs/ReasoningProfileId"
+          "$ref": "#/$defs/ModelProfileId"
         },
-        "enabled": {
+        "reasoningEnabled": {
           "description": "Whether the profile semantically enables reasoning.",
           "type": "boolean"
+        },
+        "maxOutputTokens": {
+          "description": "The profile's default output budget, when it declares one.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
         }
       },
       "additionalProperties": false,
       "required": [
         "id",
-        "enabled"
+        "reasoningEnabled"
       ]
     },
     "CredentialSourceView": {
@@ -9575,7 +9553,7 @@
         "reasoning_enabled": {
           "type": "boolean"
         },
-        "reasoning_profile": {
+        "profile": {
           "type": [
             "string",
             "null"
@@ -14656,18 +14634,18 @@
       ]
     },
     "SubagentExecutionProfile": {
-      "description": "The safe, redacted execution profile of one child, frozen at child start\n(Issue #178).\n\nDerived from the frozen model authority exactly once by\n[`SubagentExecutionProfile::from_frozen`]: it carries only the effective\nmodel identity and reasoning selection. Credentials, endpoints, provider\nbindings, and every other binding internal are never projected.",
+      "description": "The safe, redacted execution profile of one child, frozen at child start\n(Issue #178).\n\nDerived from the frozen model authority exactly once by\n[`SubagentExecutionProfile::from_frozen`]: it carries only the effective\nmodel identity, Model Profile, and reasoning state. Credentials, endpoints, provider\nbindings, and every other binding internal are never projected.",
       "type": "object",
       "properties": {
         "model": {
           "description": "The effective fully qualified model reference (`provider/model`).",
           "type": "string"
         },
-        "reasoning_profile": {
-          "description": "The selected reasoning profile, when the model declares any.",
+        "profile": {
+          "description": "The selected Model Profile, when the model declares any.",
           "anyOf": [
             {
-              "$ref": "#/$defs/ReasoningProfileId"
+              "$ref": "#/$defs/ModelProfileId"
             },
             {
               "type": "null"
@@ -14675,7 +14653,7 @@
           ]
         },
         "reasoning_enabled": {
-          "description": "Whether the selected profile semantically enables reasoning.",
+          "description": "Whether the invocation semantically enables reasoning.",
           "type": "boolean"
         }
       },
@@ -18882,6 +18860,7 @@
           "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
         },
         "source_revisions": {
+          "description": "The source manifest the adopted context generation was resolved from.\nIndependently published units — execution policy, shared capacity and\nthe Model Catalog — may be newer; `document` and `provenance` carry\ntheir values, and `application` says which revision each applied.",
           "type": "object",
           "additionalProperties": {
             "type": "string"
@@ -20028,6 +20007,24 @@
           "required": [
             "kind",
             "rejection"
+          ]
+        },
+        {
+          "description": "The Session's published Model Catalog does not admit its configured\nselection, so no work is accepted until `session/setModel` commits a\nselection it does admit. Nothing falls back to a default.",
+          "type": "object",
+          "properties": {
+            "diagnostic": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "model_unavailable"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "diagnostic"
           ]
         },
         {

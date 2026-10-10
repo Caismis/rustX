@@ -811,7 +811,8 @@ async fn exact_selection_reaches_provider_requests_and_domain_skill_projection()
                 "fixture/native-contract-model",
                 &support::model::ScriptedAdapterFactory::new(model.clone()),
             )
-            .snapshot();
+            .snapshot()
+            .unwrap();
             let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
             let result = AgentExecution::new(
                 request,

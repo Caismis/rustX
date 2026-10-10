@@ -694,7 +694,11 @@ async fn cancelled_attach_releases_reservation_but_not_manager_owned_load() {
     .await;
 }
 
-async fn attach(connection: &AppServerConnection, f: &Fixture, index: usize) -> AttachmentTarget {
+pub(super) async fn attach(
+    connection: &AppServerConnection,
+    f: &Fixture,
+    index: usize,
+) -> AttachmentTarget {
     let MethodResult::Attached { target, .. } = call(
         connection,
         10 + i64::try_from(index).unwrap(),
@@ -2528,21 +2532,22 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
             .as_ref()
             .unwrap()["local/a"]
             .clone();
-        model.reasoning = Some(crate::model::authoring::Reasoning {
-            default_profile: crate::model::catalog::ReasoningProfileId::new("old"),
-            profiles: ["old", "new"]
+        model.request_params = None;
+        model.default_profile = Some(crate::model::catalog::ModelProfileId::new("old"));
+        model.profiles = Some(
+            ["old", "new"]
                 .into_iter()
                 .map(|name| {
                     (
-                        crate::model::catalog::ReasoningProfileId::new(name),
+                        crate::model::catalog::ModelProfileId::new(name),
                         crate::model::authoring::Profile {
-                            enabled: false,
-                            request_params: crate::toml_authoring::RequestParamsToml::default(),
+                            reasoning_enabled: Some(false),
+                            ..Default::default()
                         },
                     )
                 })
                 .collect(),
-        });
+        );
         f.manager
             .source_settings(
                 &crate::local_runtime::configuration::settings::SourceTarget::User,
@@ -2608,10 +2613,19 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
             .unwrap()["local/a"]
             .clone();
         model.max_output_tokens = 2048;
-        model.reasoning.as_mut().unwrap().default_profile =
-            crate::model::catalog::ReasoningProfileId::new("new");
-        model.request_params = crate::toml_authoring::RequestParamsToml(
-            serde_json::from_value(serde_json::json!({"temperature": 0.8})).unwrap(),
+        // A Profile edit after admission: a new default whose complete
+        // native object carries a value the admitted Attempt never froze.
+        model.default_profile = Some(crate::model::catalog::ModelProfileId::new("new"));
+        model.profiles.as_mut().unwrap().insert(
+            crate::model::catalog::ModelProfileId::new("new"),
+            crate::model::authoring::Profile {
+                reasoning_enabled: Some(false),
+                max_output_tokens: Some(1024),
+                request_params: crate::toml_authoring::AuthoredRequestParams(
+                    serde_json::from_value(serde_json::json!({"temperature": 0.8, "stop": [null]}))
+                        .unwrap(),
+                ),
+            },
         );
         call(
             &connection,
@@ -2658,16 +2672,13 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
         assert_eq!(next.id.as_str(), "a");
         assert_eq!(next.max_output_tokens, 2048);
         assert_eq!(frozen.primary.max_output_tokens, 4096);
-        assert_eq!(
-            next.reasoning.as_ref().unwrap().default_profile.as_str(),
-            "new"
-        );
-        assert_eq!(
-            frozen.primary.reasoning_profile.as_ref().unwrap().as_str(),
-            "old"
-        );
-        assert_eq!(next.request_params["temperature"], 0.8);
-        assert!(!frozen.primary.request_params.contains_key("temperature"));
+        assert_eq!(next.default_profile.as_ref().unwrap().as_str(), "new");
+        assert_eq!(frozen.primary.profile.as_ref().unwrap().as_str(), "old");
+        let new = &next.profiles[&crate::model::catalog::ModelProfileId::new("new")];
+        assert_eq!(new.request_params["temperature"], 0.8);
+        assert_eq!(new.request_params["stop"][0], serde_json::Value::Null);
+        assert_eq!(new.max_output_tokens, Some(1024));
+        assert!(frozen.primary.request_params.is_empty());
         // Creation uses the successfully prepared source authority, after
         // native processing acknowledges availability. Existing A stays frozen.
         super::configuration::settled(&f, 0).await;
@@ -2695,6 +2706,757 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
             2048
         );
         f.gates[0].release();
+        f.close().await;
+    }))
+    .await;
+}
+
+/// Author `local/a` with exactly these Profiles through `sources/write`.
+async fn write_profiles(
+    connection: &AppServerConnection,
+    id: i64,
+    default: &str,
+    profiles: &[(&str, serde_json::Value)],
+) {
+    use crate::local_runtime::configuration::settings::{
+        ConfigMutation, SourceMutation, SourceTarget,
+    };
+    use crate::model::catalog::ModelProfileId;
+    let MethodResult::SourceSettings { projection, .. } = call(
+        connection,
+        id,
+        Method::SourcesRead {
+            target: SourceTarget::User,
+        },
+    )
+    .await
+    else {
+        panic!("source settings")
+    };
+    let mut model = projection
+        .user
+        .authored
+        .as_ref()
+        .unwrap()
+        .models
+        .as_ref()
+        .unwrap()["local/a"]
+        .clone();
+    model.request_params = None;
+    model.default_profile = Some(ModelProfileId::new(default));
+    model.profiles = Some(
+        profiles
+            .iter()
+            .map(|(name, params)| {
+                (
+                    ModelProfileId::new(*name),
+                    crate::model::authoring::Profile {
+                        request_params: crate::toml_authoring::AuthoredRequestParams(
+                            serde_json::from_value(params.clone()).unwrap(),
+                        ),
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect(),
+    );
+    call(
+        connection,
+        id + 1,
+        Method::SourcesWrite {
+            target: SourceTarget::User,
+            expected_revision: projection.user.revision,
+            mutation: SourceMutation::Config {
+                mutation: ConfigMutation::Model {
+                    id: "local/a".into(),
+                    authored: Some(model),
+                },
+            },
+        },
+    )
+    .await;
+}
+
+fn profile_ids(catalog: &crate::model::catalog::ModelCatalogView) -> Vec<String> {
+    catalog
+        .models
+        .iter()
+        .find(|model| model.model.to_string() == "local/a")
+        .unwrap()
+        .profiles
+        .iter()
+        .map(|profile| profile.id.to_string())
+        .collect()
+}
+
+/// Issue #459: catalog publication and invocation adoption are distinct
+/// contracts. A Profile published while an attached Session's invocation is
+/// unchanged reaches that Session's `session/models` and `session/setModel`
+/// without any preparation, adoption candidate or resource rebuild, and the
+/// Attempt admitted before it keeps its frozen invocation through a Tool
+/// continuation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue459_published_profile_reaches_attached_session_without_adoption() {
+    use crate::local_runtime::configuration::application::UnitApplication;
+    use crate::model::catalog::{ModelProfileId, ModelRef};
+    use crate::model::session::SessionModelConfig;
+    use serde_json::json;
+    use std::sync::atomic::Ordering;
+    bounded(Box::pin(async {
+        let f = Fixture::with_tool(Some("read")).await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let balanced = ("balanced", json!({"temperature": 0.5}));
+        let fast = ("fast", json!({"temperature": 1.0}));
+        write_profiles(
+            &connection,
+            100,
+            "balanced",
+            &[balanced.clone(), fast.clone()],
+        )
+        .await;
+        let target = attach(&connection, &f, 0).await;
+        let pinned = |profile: &str| SessionModelConfig {
+            profile: Some(ModelProfileId::new(profile)),
+            ..SessionModelConfig::of(ModelRef::parse("local/a").unwrap())
+        };
+        let MethodResult::Model { model } = call(
+            &connection,
+            102,
+            Method::ModelSet {
+                target: target.clone(),
+                config: Box::new(pinned("balanced")),
+            },
+        )
+        .await
+        else {
+            panic!("model")
+        };
+        assert_eq!(
+            model.effective.as_ref().unwrap().request_params["temperature"],
+            json!(0.5)
+        );
+        super::configuration::settled(&f, 0).await;
+        let models = |id| {
+            let connection = &connection;
+            let target = target.clone();
+            async move {
+                let MethodResult::Models { catalog } =
+                    call(connection, id, Method::ModelCatalog { target }).await
+                else {
+                    panic!("models")
+                };
+                catalog
+            }
+        };
+        assert_eq!(profile_ids(&models(103).await), ["balanced", "fast"]);
+
+        let managed = f.manager.load(&target.session_id, None).await.unwrap();
+        let runtime = f.manager.configuration_runtime(&target.session_id).unwrap();
+        let probe = f.manager.probe(&f.sessions[0].active_conversation_id);
+        let invocation = runtime.model_snapshot();
+        let resources = runtime.runtime_resources();
+        let preparations = probe.configuration_preparations.load(Ordering::SeqCst);
+        let previous = f
+            .manager
+            .configuration_application(&target.session_id)
+            .unwrap();
+        let mut eligibility = super::configuration::EligibilityStream::open(&f, &target.session_id);
+        let settlement = runtime.settlement_signal();
+        call(
+            &connection,
+            104,
+            Method::TurnStart {
+                target: target.clone(),
+                content: vec![UserInputBlock::Text(crate::message::content::TextBlock {
+                    text: "request-A".into(),
+                })],
+            },
+        )
+        .await;
+        f.gates[0].wait_entered().await;
+        let admitted = managed
+            .client()
+            .snapshot()
+            .unwrap()
+            .0
+            .attempt
+            .unwrap()
+            .model;
+
+        // `deep` is added; `balanced`, the selected Profile, is untouched.
+        let deep = ("deep", json!({"temperature": 0.1, "seed": 42}));
+        write_profiles(
+            &connection,
+            105,
+            "balanced",
+            &[balanced.clone(), fast.clone(), deep.clone()],
+        )
+        .await;
+        let application = super::configuration::settled(&f, 0).await;
+        assert_ne!(application.desired, previous.desired);
+        assert!(application.candidate.is_none(), "{application:?}");
+        assert!(
+            application
+                .units
+                .values()
+                .all(|unit| *unit == UnitApplication::Applied),
+            "{application:?}"
+        );
+        // Nothing was prepared or rebuilt: the same resolved invocations and
+        // adapters, the same capability snapshot; only the configuration
+        // generation that carries the catalog advanced.
+        assert_eq!(
+            probe.configuration_preparations.load(Ordering::SeqCst),
+            preparations
+        );
+        assert_eq!(runtime.model_snapshot(), invocation);
+        let published = runtime.runtime_resources();
+        assert!(std::sync::Arc::ptr_eq(
+            resources.capability(),
+            published.capability()
+        ));
+        assert_eq!(published.revision(), resources.revision().next());
+        // Native discovery: the App Server and the Runtime Client read one
+        // published catalog.
+        let catalog = models(107).await;
+        assert_eq!(profile_ids(&catalog), ["balanced", "deep", "fast"]);
+        let crate::runtime_client::RuntimeClientResult::ModelCatalog { catalog: client } = f
+            .manager
+            .configuration_host(&target.session_id)
+            .unwrap()
+            .model_catalog()
+            .unwrap()
+        else {
+            panic!("Runtime Client catalog")
+        };
+        assert_eq!(client, catalog);
+        assert_eq!(
+            managed
+                .client()
+                .snapshot()
+                .unwrap()
+                .0
+                .attempt
+                .unwrap()
+                .model,
+            admitted
+        );
+
+        // The admitted Attempt's Tool continuation still sends its frozen
+        // invocation.
+        f.gates[0].release();
+        settlement.notified().await;
+        let bodies = f.provider.request_bodies();
+        assert_eq!(bodies.len(), 2, "Tool proposal and its continuation");
+        for body in &bodies {
+            let body: serde_json::Value = serde_json::from_str(body).unwrap();
+            assert_eq!(body["temperature"], json!(0.5));
+            assert!(body.get("seed").is_none());
+        }
+
+        // Native selection admission resolves the published Profile, and the
+        // next Attempt sends exactly its parameters. Settlement precedes the
+        // Attempt task's release; selection waits for the idle runtime.
+        {
+            use crate::local_runtime::configuration::application::AdoptionEligibility;
+            eligibility.until(AdoptionEligibility::Busy).await;
+            eligibility.until(AdoptionEligibility::Eligible).await;
+        }
+        let MethodResult::Model { model } = call(
+            &connection,
+            108,
+            Method::ModelSet {
+                target: target.clone(),
+                config: Box::new(pinned("deep")),
+            },
+        )
+        .await
+        else {
+            panic!("model")
+        };
+        assert_eq!(
+            model.effective.as_ref().unwrap().profile,
+            Some(ModelProfileId::new("deep"))
+        );
+        let settlement = runtime.settlement_signal();
+        call(
+            &connection,
+            109,
+            Method::TurnStart {
+                target: target.clone(),
+                content: vec![UserInputBlock::Text(crate::message::content::TextBlock {
+                    text: "request-A deep".into(),
+                })],
+            },
+        )
+        .await;
+        settlement.notified().await;
+        // The history already holds a Tool result, so the fixture answers
+        // this Attempt in one request.
+        let bodies = f.provider.request_bodies();
+        assert_eq!(bodies.len(), 3);
+        let body: serde_json::Value = serde_json::from_str(&bodies[2]).unwrap();
+        assert_eq!(
+            (&body["temperature"], &body["seed"]),
+            (&json!(0.1), &json!(42))
+        );
+        f.close().await;
+    }))
+    .await;
+}
+
+/// The typed refusal of one App Server request.
+async fn refusal(connection: &AppServerConnection, id: i64, call: Method) -> ErrorData {
+    let response = connection
+        .handle_request(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(id),
+            call,
+        })
+        .await;
+    let Response::Failure(Failure {
+        error: RpcError {
+            data: Some(data), ..
+        },
+        ..
+    }) = response
+    else {
+        panic!("{response:?}")
+    };
+    data
+}
+
+/// Issue #459: a published catalog that removes the Profile an existing
+/// Session pins is published anyway. The Session keeps `fast` configured and
+/// reports it unavailable — no silent `balanced` — its admitted Attempt keeps
+/// the frozen `fast` invocation through a Tool continuation, new work is
+/// refused explicitly, and selecting `deep` through `session/setModel`
+/// recovers without preparation, a resource rebuild, a new Session or a
+/// reconnect.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue459_removed_selected_profile_is_reported_until_explicit_recovery() {
+    use crate::local_runtime::configuration::application::{AdoptionError, UnitApplication};
+    use crate::model::catalog::{ModelProfileId, ModelRef};
+    use crate::model::session::SessionModelConfig;
+    use serde_json::json;
+    use std::sync::atomic::Ordering;
+    bounded(Box::pin(async {
+        let f = Fixture::with_tool(Some("read")).await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let fast = ("fast", json!({"temperature": 1.0, "top_p": 0.5}));
+        let balanced = ("balanced", json!({"temperature": 0.5}));
+        let deep = ("deep", json!({"temperature": 0.1, "seed": 42}));
+        write_profiles(
+            &connection,
+            100,
+            "balanced",
+            &[fast.clone(), balanced.clone(), deep.clone()],
+        )
+        .await;
+        let target = attach(&connection, &f, 0).await;
+        let pinned = |profile: &str| SessionModelConfig {
+            profile: Some(ModelProfileId::new(profile)),
+            ..SessionModelConfig::of(ModelRef::parse("local/a").unwrap())
+        };
+        let set = |profile: &str| Method::ModelSet {
+            target: target.clone(),
+            config: Box::new(pinned(profile)),
+        };
+        call(&connection, 102, set("fast")).await;
+        super::configuration::settled(&f, 0).await;
+        let managed = f.manager.load(&target.session_id, None).await.unwrap();
+        let runtime = f.manager.configuration_runtime(&target.session_id).unwrap();
+        let probe = f.manager.probe(&f.sessions[0].active_conversation_id);
+        let resources = runtime.runtime_resources();
+        let preparations = probe.configuration_preparations.load(Ordering::SeqCst);
+        let selected = runtime.model_view();
+        assert!(selected.unavailable.is_none());
+        let mut eligibility =
+            super::configuration::EligibilityStream::open(&f, &target.session_id);
+
+        let settlement = runtime.settlement_signal();
+        call(
+            &connection,
+            103,
+            Method::TurnStart {
+                target: target.clone(),
+                content: vec![UserInputBlock::Text(crate::message::content::TextBlock {
+                    text: "request-A".into(),
+                })],
+            },
+        )
+        .await;
+        f.gates[0].wait_entered().await;
+        let admitted = managed.client().snapshot().unwrap().0.attempt.unwrap().model;
+
+        // `fast`, the pinned Profile, is removed from a valid catalog.
+        write_profiles(&connection, 104, "balanced", &[balanced.clone(), deep.clone()]).await;
+        let application = super::configuration::settled(&f, 0).await;
+        assert!(application.candidate.is_none(), "{application:?}");
+        assert!(
+            application
+                .units
+                .values()
+                .all(|unit| *unit == UnitApplication::Applied),
+            "{application:?}"
+        );
+        assert_eq!(
+            probe.configuration_preparations.load(Ordering::SeqCst),
+            preparations
+        );
+        let published = runtime.runtime_resources();
+        assert!(std::sync::Arc::ptr_eq(
+            resources.capability(),
+            published.capability()
+        ));
+        assert_eq!(published.revision(), resources.revision().next());
+
+        // Discovery: both native surfaces advertise the published catalog.
+        let MethodResult::Models { catalog } = call(
+            &connection,
+            106,
+            Method::ModelCatalog {
+                target: target.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("models")
+        };
+        assert_eq!(profile_ids(&catalog), ["balanced", "deep"]);
+        let crate::runtime_client::RuntimeClientResult::ModelCatalog { catalog: client } = f
+            .manager
+            .configuration_host(&target.session_id)
+            .unwrap()
+            .model_catalog()
+            .unwrap()
+        else {
+            panic!("Runtime Client catalog")
+        };
+        assert_eq!(client, catalog);
+
+        // The configured identity is still `fast`, reported unavailable; the
+        // invocation it last resolved is retained, never replaced by a default.
+        let MethodResult::Model { model } = call(
+            &connection,
+            107,
+            Method::ModelGet {
+                target: target.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("model")
+        };
+        assert_eq!(model.configured, pinned("fast"));
+        let diagnostic = model.unavailable.clone().expect("reported unavailable");
+        assert!(diagnostic.contains("fast"), "{diagnostic}");
+        assert_eq!(model.effective, selected.effective);
+        assert_eq!(model.summary, selected.summary);
+        assert_eq!(
+            managed.client().snapshot().unwrap().0.attempt.unwrap().model,
+            admitted
+        );
+
+        // The admitted Attempt finishes on its frozen `fast` invocation.
+        f.gates[0].release();
+        settlement.notified().await;
+        let bodies = f.provider.request_bodies();
+        assert_eq!(bodies.len(), 2, "Tool proposal and its continuation");
+        for body in &bodies {
+            let body: serde_json::Value = serde_json::from_str(body).unwrap();
+            assert_eq!((&body["temperature"], &body["top_p"]), (&json!(1.0), &json!(0.5)));
+        }
+
+        // New work is refused explicitly and nothing reaches the provider.
+        let refused = refusal(
+            &connection,
+            108,
+            Method::TurnStart {
+                target: target.clone(),
+                content: vec![UserInputBlock::Text(crate::message::content::TextBlock {
+                    text: "request-B".into(),
+                })],
+            },
+        )
+        .await;
+        assert!(
+            matches!(&refused, ErrorData::ModelUnavailable { diagnostic: refused } if *refused == format!("the configured session model is unavailable: {diagnostic}")),
+            "{refused:?}"
+        );
+        assert!(matches!(
+            refusal(
+                &connection,
+                109,
+                Method::CompactContext {
+                    target: target.clone(),
+                    request_id: "issue459".to_owned().try_into().unwrap(),
+                },
+            )
+            .await,
+            ErrorData::ModelUnavailable { .. }
+        ));
+        assert!(managed.client().snapshot().unwrap().0.inbound.pending.is_empty());
+        assert_eq!(f.provider.request_bodies().len(), 2);
+        // Re-selecting the removed Profile is refused by the published catalog.
+        assert!(matches!(
+            refusal(&connection, 110, set("fast")).await,
+            ErrorData::ConfigurationAdoption {
+                rejection: AdoptionError::Failed { .. }
+            }
+        ));
+        assert_eq!(runtime.model_view(), *model);
+
+        // Explicit recovery through the native mutation path, once the
+        // settled Attempt's task has released the runtime.
+        {
+            use crate::local_runtime::configuration::application::AdoptionEligibility;
+            eligibility.until(AdoptionEligibility::Busy).await;
+            eligibility.until(AdoptionEligibility::Eligible).await;
+        }
+        let MethodResult::Model { model } = call(&connection, 111, set("deep")).await else {
+            panic!("model")
+        };
+        assert!(model.unavailable.is_none());
+        assert_eq!(
+            model.effective.as_ref().unwrap().profile,
+            Some(ModelProfileId::new("deep"))
+        );
+        let settlement = runtime.settlement_signal();
+        call(
+            &connection,
+            112,
+            Method::TurnStart {
+                target: target.clone(),
+                content: vec![UserInputBlock::Text(crate::message::content::TextBlock {
+                    text: "request-C".into(),
+                })],
+            },
+        )
+        .await;
+        settlement.notified().await;
+        let bodies = f.provider.request_bodies();
+        assert_eq!(bodies.len(), 3);
+        let body: serde_json::Value = serde_json::from_str(&bodies[2]).unwrap();
+        assert_eq!(
+            (&body["temperature"], &body["seed"]),
+            (&json!(0.1), &json!(42))
+        );
+        assert!(body.get("top_p").is_none());
+        // Recovery rebuilt nothing: the same executable tool registry.
+        assert!(std::sync::Arc::ptr_eq(
+            resources.capability().tool_registry(),
+            runtime.runtime_resources().capability().tool_registry()
+        ));
+        assert_eq!(
+            probe.configuration_preparations.load(Ordering::SeqCst),
+            preparations
+        );
+        f.close().await;
+    }))
+    .await;
+}
+
+/// Issue #459: the acceptance sequence. An existing Session uses `local/a`; a
+/// valid published catalog removes it, introduces `local/c` and makes that
+/// the new-Session default. The Session keeps `local/a` configured and
+/// unavailable — nothing switches it — discovers `local/c`, refuses `local/a`
+/// as a new explicit selection, and after `session/setModel` the next Attempt
+/// sends `local/c`'s wire identity and exact Profile parameters, all on the
+/// same runtime incarnation and attachment.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue459_removed_selected_model_is_replaced_explicitly_in_place() {
+    use crate::local_runtime::configuration::application::{AdoptionError, UnitApplication};
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    use crate::model::catalog::ModelRef;
+    use crate::model::session::SessionModelConfig;
+    use serde_json::json;
+    use std::sync::atomic::Ordering;
+    bounded(Box::pin(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let model = |id: &str| SessionModelConfig::of(ModelRef::parse(id).unwrap());
+        let set = |id: &str| Method::ModelSet {
+            target: target.clone(),
+            config: Box::new(model(id)),
+        };
+        // The Session already resolves `local/a`; selecting it is a no-op.
+        call(&connection, 100, set("local/a")).await;
+        let managed = f.manager.load(&target.session_id, None).await.unwrap();
+        let incarnation = managed.incarnation_id();
+        let runtime = f.manager.configuration_runtime(&target.session_id).unwrap();
+        let probe = f.manager.probe(&f.sessions[0].active_conversation_id);
+        let compositions = probe.compositions.load(Ordering::SeqCst);
+        let preparations = probe.configuration_preparations.load(Ordering::SeqCst);
+        let resources = runtime.runtime_resources();
+        let selected = runtime.model_view();
+
+        // One valid source generation removes `local/a`, adds `local/c` with
+        // its own wire identity and Profile, and moves the default to it.
+        let source = f
+            .manager
+            .source_settings(&SourceTarget::User, None)
+            .await
+            .unwrap();
+        let mut document: toml::Value =
+            toml::from_str(&std::fs::read_to_string(&source.user.path).unwrap()).unwrap();
+        let models = document["models"].as_table_mut().unwrap();
+        let mut replacement = models.remove("local/a").unwrap();
+        let table = replacement.as_table_mut().unwrap();
+        table.remove("request_params");
+        table.insert("id".into(), "c".into());
+        table.insert("default_profile".into(), "steady".into());
+        table.insert(
+            "profiles".into(),
+            toml::toml! { steady = { request_params = "{\"temperature\":0.25,\"seed\":7}" } }
+                .into(),
+        );
+        models.insert("local/c".into(), replacement);
+        document["agent"]["model"]["model"] = "local/c".into();
+        std::fs::write(&source.user.path, toml::to_string(&document).unwrap()).unwrap();
+        call(
+            &connection,
+            101,
+            Method::ConfigurationReconcile {
+                target: SourceTarget::User,
+            },
+        )
+        .await;
+        let application = super::configuration::settled(&f, 0).await;
+        assert!(application.candidate.is_none(), "{application:?}");
+        assert!(
+            application
+                .units
+                .values()
+                .all(|unit| *unit == UnitApplication::Applied),
+            "{application:?}"
+        );
+        assert_eq!(
+            probe.configuration_preparations.load(Ordering::SeqCst),
+            preparations
+        );
+        let published = runtime.runtime_resources();
+        assert!(std::sync::Arc::ptr_eq(
+            resources.capability(),
+            published.capability()
+        ));
+        assert_eq!(published.revision(), resources.revision().next());
+        // The new-Session default travels with the catalog it is valid in.
+        assert_eq!(
+            runtime
+                .configuration_view()
+                .unwrap()
+                .root_agent
+                .model
+                .unwrap()
+                .model
+                .to_string(),
+            "local/c"
+        );
+
+        // The Session still asks for `local/a`, reported unavailable.
+        let MethodResult::Model { model: view } = call(
+            &connection,
+            102,
+            Method::ModelGet {
+                target: target.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("model")
+        };
+        assert_eq!(view.configured, model("local/a"));
+        assert!(view.unavailable.as_deref().unwrap().contains("local/a"));
+        assert_eq!(view.effective, selected.effective);
+        // Discovery advertises the replacement, and only the published catalog.
+        let MethodResult::Models { catalog } = call(
+            &connection,
+            103,
+            Method::ModelCatalog {
+                target: target.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("models")
+        };
+        let references: Vec<_> = catalog
+            .models
+            .iter()
+            .map(|entry| entry.model.to_string())
+            .collect();
+        assert_eq!(references, ["local/b", "local/c"]);
+        // `local/a` is no longer admitted as an explicit selection, and no
+        // turn runs on it.
+        assert!(matches!(
+            refusal(&connection, 104, set("local/a")).await,
+            ErrorData::ConfigurationAdoption {
+                rejection: AdoptionError::Failed { .. }
+            }
+        ));
+        assert!(matches!(
+            refusal(
+                &connection,
+                105,
+                Method::TurnStart {
+                    target: target.clone(),
+                    content: vec![UserInputBlock::Text(crate::message::content::TextBlock {
+                        text: "on a".into(),
+                    })],
+                },
+            )
+            .await,
+            ErrorData::ModelUnavailable { .. }
+        ));
+        assert!(f.provider.request_bodies().is_empty());
+
+        // Explicit selection of the replacement, then the next Attempt.
+        let MethodResult::Model { model: view } = call(&connection, 106, set("local/c")).await
+        else {
+            panic!("model")
+        };
+        assert!(view.unavailable.is_none());
+        let effective = view.effective.as_ref().unwrap();
+        assert_eq!(effective.model.to_string(), "local/c");
+        assert_eq!(effective.profile.as_ref().unwrap().as_str(), "steady");
+        f.gates[0].release();
+        let settlement = runtime.settlement_signal();
+        call(
+            &connection,
+            107,
+            Method::TurnStart {
+                target: target.clone(),
+                content: vec![UserInputBlock::Text(crate::message::content::TextBlock {
+                    text: "on c".into(),
+                })],
+            },
+        )
+        .await;
+        settlement.notified().await;
+        let bodies = f.provider.request_bodies();
+        assert_eq!(bodies.len(), 1);
+        let body: serde_json::Value = serde_json::from_str(&bodies[0]).unwrap();
+        assert_eq!(
+            (&body["model"], &body["temperature"], &body["seed"]),
+            (&json!("c"), &json!(0.25), &json!(7))
+        );
+        // No reload, recomposition or reattachment was involved.
+        let managed = f.manager.load(&target.session_id, None).await.unwrap();
+        assert_eq!(managed.incarnation_id(), incarnation);
+        assert_eq!(probe.compositions.load(Ordering::SeqCst), compositions);
+        call(
+            &connection,
+            108,
+            Method::ModelGet {
+                target: target.clone(),
+            },
+        )
+        .await;
         f.close().await;
     }))
     .await;

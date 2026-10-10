@@ -21,7 +21,7 @@
  * ```
  *
  * Two kinds of fact share this overlay and are never merged. A row describes
- * the **catalog**: what a model offers, and which reasoning profile the
+ * the **catalog**: what a model offers, and which Model Profile the
  * catalog would fall back to. The context block below describes the
  * **session and the attempt**: what was configured, what is effective, and
  * what a running attempt froze. A catalog default is never labelled as the
@@ -38,7 +38,7 @@
  *
  * Search runs over the same published catalog facts the rows display — the
  * model reference, the protocol, the modalities, the capability flags, the
- * reasoning profile ids, the limits — and over nothing else. See
+ * Model Profile ids, the limits — and over nothing else. See
  * {@link searchTerms}: there is no `claude`-means-Messages alias and no
  * family taxonomy, because the client is not an authority on what a model is.
  *
@@ -61,7 +61,8 @@ import type {
 } from "../../protocol/app-server.ts";
 import type { AttemptPresentation } from "../../presentation/state.ts";
 import {
-  describeConfiguredReasoning,
+  describeConfiguredProfile,
+  describeProfile,
   describeReasoning,
 } from "../../presentation/selectors.ts";
 import { role, style, plainText, plainWidth } from "../theme.ts";
@@ -281,7 +282,7 @@ export class ModelSelector implements PopupContent, Focusable {
     // Details only for the highlighted row, so the list stays scannable.
     if (selected) {
       rows.push(truncate(`    ${role.meta(capabilityLine(model))}`, width));
-      rows.push(truncate(`    ${role.meta(reasoningLine(model))}`, width));
+      rows.push(truncate(`    ${role.meta(profileLine(model))}`, width));
     }
     return rows;
   }
@@ -296,7 +297,8 @@ export class ModelSelector implements PopupContent, Focusable {
    */
   #rolesOf(model: ModelRef): string[] {
     const configured = this.#sessionModel.configured.model;
-    const effective = this.#sessionModel.effective.model;
+    // An unavailable selection has no effective model for new work.
+    const effective = this.#sessionModel.unavailable == null ? this.#sessionModel.effective?.model : undefined;
     const attempt = this.#attempt?.model?.primary.model;
     const unified =
       configured === effective && (attempt === undefined || attempt === effective);
@@ -326,16 +328,20 @@ export class ModelSelector implements PopupContent, Focusable {
   #renderContext(): string[] {
     const session = this.#sessionModel;
     const configured = session.configured.model;
-    const effective = session.effective.model;
+    const effective = session.unavailable == null ? session.effective : undefined;
     const lines: string[] = [];
-    if (configured === effective) {
+    if (effective == null) {
+      // The published catalog no longer admits the selection; choosing one
+      // it does is the only way forward, and nothing was chosen for the user.
+      lines.push(role.warning(`configured  ${configured} · unavailable: ${session.unavailable ?? "not in the published catalog"}`));
+    } else if (configured === effective.model) {
       lines.push(role.meta(`configured · effective  ${configured}`));
     } else {
       // Two distinct runtime facts, so two distinct lines. Collapsing them
       // into one "current" would hide that the session cannot use what it
       // asked for.
       lines.push(role.meta(`configured  ${configured}`));
-      lines.push(role.meta(`effective   ${effective}`));
+      lines.push(role.meta(`effective   ${effective.model}`));
     }
 
     const attempt = this.#attempt;
@@ -350,16 +356,21 @@ export class ModelSelector implements PopupContent, Focusable {
       );
     }
 
-    // The session's own reasoning configuration, which is neither a catalog
+    // The session's own profile configuration, which is neither a catalog
     // default nor something this overlay may change: only `model_set` does.
     lines.push(
       role.meta(
-        `configured reasoning  ${describeConfiguredReasoning(session.configured)}`,
+        `configured profile  ${describeConfiguredProfile(session.configured)}`,
       ),
     );
-    lines.push(
-      role.meta(`effective reasoning   ${describeReasoning(session.effective)}`),
-    );
+    if (effective != null) {
+      lines.push(
+        role.meta(`effective profile   ${describeProfile(effective)}`),
+      );
+      lines.push(
+        role.meta(`reasoning           ${describeReasoning(effective)}`),
+      );
+    }
     return lines;
   }
 }
@@ -378,29 +389,36 @@ export function capabilityLine(model: CatalogModelView): string {
 }
 
 /**
- * The reasoning profiles the *catalog* published, exactly as published.
+ * The Model Profiles the *catalog* published, exactly as published.
  *
- * Three genuinely different cases, kept different: unsupported, supported
- * with selectable profiles, and supported with none.
+ * A profile is an opaque invocation preset: its name carries no meaning, and
+ * its reasoning state and output default are shown as the runtime declared
+ * them. A reasoning-capable model without profiles is provider-default
+ * reasoning, never a synthesized profile list.
  */
-export function reasoningLine(model: CatalogModelView): string {
-  if (!model.effectiveCapabilities.reasoning) {
-    return "catalog reasoning: unsupported";
-  }
-  const profiles = model.reasoningProfiles ?? [];
+export function profileLine(model: CatalogModelView): string {
+  const reasoning = model.effectiveCapabilities.reasoning;
+  const profiles = model.profiles ?? [];
   if (profiles.length === 0) {
-    return "catalog reasoning: supported, no selectable profile";
+    return reasoning
+      ? "catalog profiles: none (provider-default reasoning)"
+      : "catalog profiles: none";
   }
   const names = profiles
-    .map((profile) => (profile.enabled ? profile.id : `${profile.id} (off)`))
+    .map((profile) => {
+      const facts = [
+        ...(reasoning ? [profile.reasoningEnabled ? "reasoning" : "no reasoning"] : []),
+        ...(profile.maxOutputTokens == null ? [] : [`${tokens(profile.maxOutputTokens)} out`]),
+      ];
+      return facts.length === 0 ? profile.id : `${profile.id} (${facts.join(", ")})`;
+    })
     .join(" ");
-  // Explicitly the *catalog's* fallback. It is not evidence that the session
-  // configured this profile, and the context block below says what it did.
+  // Explicitly the *catalog's* fallback, stated first so a narrow row keeps
+  // it. It is not evidence that the session configured this profile, and the
+  // context block below says what it did.
   const fallback =
-    model.defaultReasoningProfile === undefined
-      ? ""
-      : ` (catalog default ${model.defaultReasoningProfile})`;
-  return `catalog reasoning: ${names}${fallback}`;
+    model.defaultProfile == null ? "" : ` (catalog default ${model.defaultProfile})`;
+  return `catalog profiles${fallback}: ${names}`;
 }
 
 /** The protocol name, shortened for a list row. Cosmetic only. */
@@ -478,10 +496,8 @@ export function searchTerms(model: CatalogModelView): string[] {
     // cannot do the thing the query named.
     ...(capabilities.toolCalls ? ["tools"] : []),
     ...(capabilities.reasoning ? ["reasoning"] : []),
-    ...(model.reasoningProfiles ?? []).map((profile) => profile.id),
-    ...(model.defaultReasoningProfile == null
-      ? []
-      : [model.defaultReasoningProfile]),
+    ...(model.profiles ?? []).map((profile) => profile.id),
+    ...(model.defaultProfile == null ? [] : [model.defaultProfile]),
     tokens(model.contextWindow),
     tokens(model.maxOutputTokens),
   ];

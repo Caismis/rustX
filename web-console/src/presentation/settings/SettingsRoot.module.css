@@ -93,6 +93,11 @@
   overflow: hidden;
   background: var(--dsw-alias-bg-layer-2);
   box-shadow: var(--dsw-elevation-prominent);
+  /* Own compositing layer: the r24 corner arcs of the 0.5px elevation ring
+     otherwise rasterize differently with whichever partial repaint of the
+     page last drew them (measured in PR #459: three corner variants of one
+     state). Opacity, not transform, so fixed descendants keep the viewport. */
+  will-change: opacity;
   container: settings / inline-size;
   /* Elevated surface: the scrollbar thumb takes the l2 elevation tokens.
      Declared on the panel rather than the scrolling `.options` child so the

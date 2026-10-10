@@ -28,7 +28,7 @@ id = "composed-model"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
-request_params = { temperature = 0.3 }
+request_params = '{"temperature":0.3}'
 
 [models."local/composed-model".capabilities]
 input_modalities = ["text"]
@@ -208,15 +208,36 @@ async fn composition_owns_one_conversation_domain() {
         "local/composed-model"
     );
     assert_eq!(
-        snapshot.model.as_ref().unwrap().effective.context_window,
+        snapshot
+            .model
+            .as_ref()
+            .unwrap()
+            .effective
+            .as_ref()
+            .unwrap()
+            .context_window,
         128_000
     );
     assert_eq!(
-        snapshot.model.as_ref().unwrap().effective.protocol,
+        snapshot
+            .model
+            .as_ref()
+            .unwrap()
+            .effective
+            .as_ref()
+            .unwrap()
+            .protocol,
         ModelProtocol::OpenAiChatCompletions
     );
     assert_eq!(
-        snapshot.model.as_ref().unwrap().effective.request_params["temperature"],
+        snapshot
+            .model
+            .as_ref()
+            .unwrap()
+            .effective
+            .as_ref()
+            .unwrap()
+            .request_params["temperature"],
         serde_json::json!(0.3)
     );
     let serialized = serde_json::to_string(&snapshot).expect("serialize");

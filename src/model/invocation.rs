@@ -11,20 +11,20 @@
 //! a universal Rust struct: recognizing a new provider parameter must never
 //! require a rustX release.
 //!
-//! Effective parameters are resolved in exactly this order, and every step
-//! is a **top-level shallow overlay** — a nested object or an array is
-//! replaced atomically, never deep-merged:
+//! Effective parameters have exactly one base object, and the explicit
+//! selection overrides are one **top-level shallow overlay** — a nested
+//! object or an array is replaced atomically, never deep-merged, and a JSON
+//! `null` is a real wire value, never a deletion request:
 //!
 //! ```text
-//! model defaults
-//!   overlay selected reasoning profile
-//!   overlay session overrides
+//! Model without profiles:  model request_params    overlay selection overrides
+//! Model with profiles:     selected profile params overlay selection overrides
 //! ```
 //!
-//! with the extra rule that the selected reasoning profile **owns** every
-//! top-level key it declares: a session override that also declares one of
-//! those keys is a deterministic configuration failure, never resolved by
-//! merge order.
+//! A Profile is a complete preset: Model parameters are never merged into
+//! it. The selected profile **owns** every top-level key it declares: an
+//! override that also declares one of those keys is a deterministic
+//! configuration failure, never resolved by merge order.
 //!
 //! # Final wire placement
 //!
@@ -52,8 +52,8 @@
 //! runtime field.
 //!
 //! Provider-owned reasoning/sampling fields are deliberately *not* protected
-//! merely because rustX recognizes their names: a reasoning profile is
-//! expected to own fields such as `thinking`, `reasoning`, or
+//! merely because rustX recognizes their names: a Model Profile is expected
+//! to own fields such as `thinking`, `reasoning`, `temperature`, or
 //! `output_config`.
 
 use std::collections::BTreeMap;
@@ -66,8 +66,8 @@ use crate::model::adapter::ModelAdapter;
 #[cfg(test)]
 use crate::model::catalog::ResolvedProvider;
 use crate::model::catalog::{
-    Modality, ModelCapabilities, ModelCatalogView, ModelCompat, ModelDefinition, ModelRef,
-    ProviderId, ReasoningProfileId, ResolvedModelCatalog,
+    Modality, ModelCapabilities, ModelCatalogView, ModelCompat, ModelDefinition, ModelProfileId,
+    ModelRef, ProviderId, ResolvedModelCatalog,
 };
 use crate::model::error::{ModelError, ModelErrorKind};
 use crate::model::generation::GenerationSafetyPolicy;
@@ -83,10 +83,10 @@ pub type RequestParams = serde_json::Map<String, serde_json::Value>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RequestParamsLayer {
-    /// The catalog model's default parameters.
-    ModelDefaults,
-    /// A declared reasoning profile's parameters.
-    ReasoningProfile,
+    /// The native parameters of a Model without profiles.
+    ModelParams,
+    /// A declared Model Profile's parameters.
+    ModelProfile,
     /// The session's request-parameter overrides.
     SessionOverrides,
     /// An explicit summary model's request-parameter overrides.
@@ -98,8 +98,8 @@ pub enum RequestParamsLayer {
 impl fmt::Display for RequestParamsLayer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::ModelDefaults => "model default request parameters",
-            Self::ReasoningProfile => "reasoning profile request parameters",
+            Self::ModelParams => "model request parameters",
+            Self::ModelProfile => "model profile request parameters",
             Self::SessionOverrides => "session request-parameter overrides",
             Self::SummaryOverrides => "explicit summary request-parameter overrides",
             Self::EffectiveRequest => "effective request parameters",
@@ -201,6 +201,109 @@ pub fn validate_request_params_layer(
         }
     }
     Ok(())
+}
+
+/// One configured request-parameter number that does not survive a binary64
+/// round trip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InexactNumber {
+    /// The configuration layer that declared it.
+    pub layer: RequestParamsLayer,
+}
+
+impl fmt::Display for InexactNumber {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} carry a JSON number that is not exactly representable as an IEEE 754 binary64 value",
+            self.layer
+        )
+    }
+}
+
+impl std::error::Error for InexactNumber {}
+
+/// Whether one JSON number literal means the same value at every hop.
+///
+/// Authored request parameters travel through rustX, through binary64 JSON
+/// clients such as the browser, and back into native sources. Following the
+/// I-JSON interoperability rule (RFC 7493 §2.2), a number is accepted only when
+/// the value rustX holds and emits is the value its binary64 reading prints:
+/// `9007199254740993` (above 2^53), `2^60` and a decimal with more significant
+/// digits than binary64 carries are refused instead of being silently rounded
+/// by some later hop. The decision compares exact decimal values, so spelling
+/// (`1.50`, `15e-1`, `1.5`) is irrelevant.
+#[must_use]
+pub fn exact_json_number(literal: &str) -> bool {
+    // What rustX holds and emits for this literal.
+    let Ok(number) = serde_json::from_str::<serde_json::Number>(literal) else {
+        return false;
+    };
+    let emitted = number.to_string();
+    // What a binary64 reader holds, printed as its shortest round trip.
+    let Ok(binary) = emitted.parse::<f64>() else {
+        return false;
+    };
+    let value = decimal_value(literal);
+    binary.is_finite()
+        && value.is_some()
+        && value == decimal_value(&emitted)
+        && value == decimal_value(&format!("{binary:e}"))
+}
+
+/// The exact value of a decimal literal as `(negative, significant digits,
+/// exponent)`, with zero normalized to one value.
+fn decimal_value(literal: &str) -> Option<(bool, String, i64)> {
+    let (negative, unsigned) = literal
+        .strip_prefix('-')
+        .map_or((false, literal), |rest| (true, rest));
+    let (mantissa, exponent) = match unsigned.split_once(['e', 'E']) {
+        Some((mantissa, exponent)) => (mantissa, exponent.parse::<i64>().ok()?),
+        None => (unsigned, 0),
+    };
+    let (integer, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let digits = format!("{integer}{fraction}");
+    let leading = digits.trim_start_matches('0');
+    let significant = leading.trim_end_matches('0');
+    if significant.is_empty() {
+        return Some((false, String::new(), 0));
+    }
+    let exponent = exponent
+        .checked_sub(i64::try_from(fraction.len()).ok()?)?
+        .checked_add(i64::try_from(leading.len() - significant.len()).ok()?)?;
+    Some((negative, significant.to_owned(), exponent))
+}
+
+/// Validates that every number of one configuration layer, at any depth, is
+/// an [`exact_json_number`].
+///
+/// # Errors
+///
+/// Returns [`InexactNumber`] naming the layer; never the value or its key.
+pub fn validate_request_params_numbers(
+    params: &RequestParams,
+    layer: RequestParamsLayer,
+) -> Result<(), InexactNumber> {
+    if numbers_are_exact(params) {
+        Ok(())
+    } else {
+        Err(InexactNumber { layer })
+    }
+}
+
+/// Whether every number of `params`, at any depth, is an
+/// [`exact_json_number`].
+#[must_use]
+pub fn numbers_are_exact(params: &RequestParams) -> bool {
+    fn exact(value: &serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::Number(number) => exact_json_number(&number.to_string()),
+            serde_json::Value::Array(values) => values.iter().all(exact),
+            serde_json::Value::Object(map) => map.values().all(exact),
+            _ => true,
+        }
+    }
+    params.values().all(exact)
 }
 
 /// Applies one top-level shallow overlay.
@@ -401,8 +504,8 @@ pub struct ModelInvocationConfig {
 ///
 /// Everything an attempt needs to talk to a provider is frozen here: the
 /// provider binding and its adapter, the model identity and protocol, the
-/// context window, the output budget, the selected reasoning profile and its
-/// semantic enabled state, the effective request parameters, and the
+/// context window, the output budget, the selected Model Profile and the
+/// semantic reasoning state, the effective request parameters, and the
 /// effective capabilities.
 ///
 /// The type is deliberately **not** `Serialize`: it owns an adapter handle.
@@ -418,7 +521,7 @@ pub struct ResolvedModelInvocation {
     context_window: u64,
     model_max_output_tokens: u32,
     effective_output_tokens: u32,
-    reasoning_profile: Option<ReasoningProfileId>,
+    profile: Option<ModelProfileId>,
     reasoning_enabled: bool,
     request_params: RequestParams,
     capabilities: ModelCapabilities,
@@ -434,7 +537,7 @@ impl fmt::Debug for ResolvedModelInvocation {
             .field("protocol", &self.protocol)
             .field("context_window", &self.context_window)
             .field("effective_output_tokens", &self.effective_output_tokens)
-            .field("reasoning_profile", &self.reasoning_profile)
+            .field("profile", &self.profile)
             .field("reasoning_enabled", &self.reasoning_enabled)
             .field("request_params", &self.request_params)
             .field("capabilities", &self.capabilities)
@@ -456,7 +559,7 @@ impl PartialEq for ResolvedModelInvocation {
             && self.protocol == other.protocol
             && self.context_window == other.context_window
             && self.effective_output_tokens == other.effective_output_tokens
-            && self.reasoning_profile == other.reasoning_profile
+            && self.profile == other.profile
             && self.reasoning_enabled == other.reasoning_enabled
             && self.request_params == other.request_params
             && self.capabilities == other.capabilities
@@ -526,13 +629,13 @@ impl ResolvedModelInvocation {
         runtime_fallback_generation_safety_policy(self.effective_output_tokens)
     }
 
-    /// The selected reasoning profile, when the model declares any.
+    /// The selected Model Profile, when the model declares any.
     #[must_use]
-    pub const fn reasoning_profile(&self) -> Option<&ReasoningProfileId> {
-        self.reasoning_profile.as_ref()
+    pub const fn profile(&self) -> Option<&ModelProfileId> {
+        self.profile.as_ref()
     }
 
-    /// Whether the selected profile semantically enables reasoning.
+    /// Whether this invocation semantically enables reasoning.
     #[must_use]
     pub const fn reasoning_enabled(&self) -> bool {
         self.reasoning_enabled
@@ -573,7 +676,7 @@ impl ResolvedModelInvocation {
     ///
     /// This is how the context plane expresses its summary/output safety cap:
     /// the cap flows through the runtime-owned protected max-output field and
-    /// never mutates the reasoning profile or the request parameters.
+    /// never mutates the selected profile or the request parameters.
     #[must_use]
     pub(crate) fn with_output_cap(&self, cap: u32) -> Self {
         let mut capped = self.clone();
@@ -601,7 +704,7 @@ impl ResolvedModelInvocation {
             context_window: frozen.context_window,
             model_max_output_tokens: frozen.model_max_output_tokens,
             effective_output_tokens: frozen.max_output_tokens,
-            reasoning_profile: frozen.reasoning_profile.clone(),
+            profile: frozen.profile.clone(),
             reasoning_enabled: frozen.reasoning_enabled,
             request_params: frozen.request_params.clone(),
             capabilities: frozen.capabilities.clone(),
@@ -619,7 +722,7 @@ impl ResolvedModelInvocation {
             context_window: self.context_window,
             model_max_output_tokens: self.model_max_output_tokens,
             max_output_tokens: self.effective_output_tokens,
-            reasoning_profile: self.reasoning_profile.clone(),
+            profile: self.profile.clone(),
             reasoning_enabled: self.reasoning_enabled,
             request_params: self.request_params.clone(),
             capabilities: self.capabilities.clone(),
@@ -650,9 +753,9 @@ pub struct ModelInvocationView {
     pub model_max_output_tokens: u32,
     /// The effective output budget.
     pub max_output_tokens: u32,
-    /// The selected reasoning profile, when the model declares any.
+    /// The selected Model Profile, when the model declares any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reasoning_profile: Option<ReasoningProfileId>,
+    pub profile: Option<ModelProfileId>,
     /// Whether reasoning is semantically enabled.
     pub reasoning_enabled: bool,
     /// The effective opaque provider request parameters.
@@ -672,15 +775,15 @@ pub struct ModelInvocationView {
 pub struct ModelSelection {
     /// The selected catalog model.
     pub model: ModelRef,
-    /// The selected reasoning profile; the model default is used when
-    /// absent.
+    /// The selected Model Profile; the model's `default_profile` is used
+    /// when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reasoning_profile: Option<ReasoningProfileId>,
-    /// The session's request-parameter overrides.
+    pub profile: Option<ModelProfileId>,
+    /// The explicit request-parameter overrides.
     #[serde(default)]
     pub request_params: RequestParams,
-    /// The session's output-budget override; the model's configured maximum
-    /// is used when absent.
+    /// The explicit output-budget override; the selected profile's default,
+    /// else the model's hard maximum, is used when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
 }
@@ -691,10 +794,30 @@ impl ModelSelection {
     pub fn of(model: ModelRef) -> Self {
         Self {
             model,
-            reasoning_profile: None,
+            profile: None,
             request_params: RequestParams::new(),
             max_output_tokens: None,
         }
+    }
+}
+
+/// One authored top-level provider-native request key.
+///
+/// A key is authored JSON content as opaque as a value, and may itself be a
+/// credential, so no rendering — [`fmt::Display`] or [`fmt::Debug`] — prints
+/// it; only typed comparisons read it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct RequestKey(String);
+impl RequestKey {
+    /// The key text, for typed comparisons only.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+impl fmt::Debug for RequestKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("RequestKey(<opaque>)")
     }
 }
 
@@ -703,33 +826,38 @@ impl ModelSelection {
 pub enum ModelInvocationError {
     /// The catalog could not resolve the reference or its credential.
     Catalog(crate::model::catalog::ModelCatalogError),
-    /// The selected reasoning profile is not declared by the model.
-    UnknownReasoningProfile {
+    /// The selected Model Profile is not declared by the model.
+    UnknownProfile {
         /// The model.
         model: ModelRef,
         /// The requested profile.
-        profile: ReasoningProfileId,
+        profile: ModelProfileId,
     },
-    /// A reasoning profile was selected for a model that declares none.
-    ModelDeclaresNoReasoningProfiles {
+    /// A Model Profile was selected for a model that declares none.
+    ModelDeclaresNoProfiles {
         /// The model.
         model: ModelRef,
         /// The requested profile.
-        profile: ReasoningProfileId,
+        profile: ModelProfileId,
     },
-    /// The session override declares a key the selected reasoning profile
-    /// owns.
-    ReasoningProfileKeyOwnership {
+    /// An explicit override declares a top-level key the selected Model
+    /// Profile owns.
+    ProfileKeyOwnership {
         /// The model.
         model: ModelRef,
         /// The selected profile.
-        profile: ReasoningProfileId,
-        /// The contested key.
-        key: String,
+        profile: ModelProfileId,
+        /// The override layer that declares the key.
+        layer: RequestParamsLayer,
+        /// The first contested key, in the override's authored order.
+        key: RequestKey,
     },
     /// A configured request-parameter layer collides with a protected wire
     /// key.
     ProtectedKey(ProtectedKeyCollision),
+    /// A configured request-parameter layer carries a number that would not
+    /// survive a binary64 round trip.
+    InexactNumber(InexactNumber),
     /// The requested output budget is impossible for the model.
     InvalidOutputBudget {
         /// The model.
@@ -763,27 +891,29 @@ impl fmt::Display for ModelInvocationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Catalog(error) => write!(f, "{error}"),
-            Self::UnknownReasoningProfile { model, profile } => write!(
+            Self::UnknownProfile { model, profile } => write!(
                 f,
-                "model {model} declares no reasoning profile {:?}",
+                "model {model} declares no profile {:?}",
                 profile.as_str()
             ),
-            Self::ModelDeclaresNoReasoningProfiles { model, profile } => write!(
+            Self::ModelDeclaresNoProfiles { model, profile } => write!(
                 f,
-                "model {model} declares no reasoning profiles; {:?} cannot be selected",
+                "model {model} declares no profiles; profile {:?} cannot be selected",
                 profile.as_str()
             ),
-            Self::ReasoningProfileKeyOwnership {
+            Self::ProfileKeyOwnership {
                 model,
                 profile,
-                key,
+                layer,
+                key: _,
             } => write!(
                 f,
-                "model {model}: reasoning profile {:?} owns request key {key:?}; \
-                 a session override may not also declare it",
+                "model {model}: Model Profile parameter ownership collision: the \
+                 {layer} declare a top-level key profile {:?} already owns",
                 profile.as_str()
             ),
             Self::ProtectedKey(collision) => write!(f, "{collision}"),
+            Self::InexactNumber(inexact) => write!(f, "{inexact}"),
             Self::InvalidOutputBudget { model, detail } => {
                 write!(f, "model {model} output budget is invalid: {detail}")
             }
@@ -1031,7 +1161,7 @@ impl ModelBindingRegistry {
             context_window: analyzed.context_window,
             model_max_output_tokens: analyzed.model_max_output_tokens,
             effective_output_tokens: analyzed.max_output_tokens,
-            reasoning_profile: analyzed.reasoning_profile,
+            profile: analyzed.profile,
             reasoning_enabled: analyzed.reasoning_enabled,
             request_params: analyzed.request_params,
             capabilities: analyzed.capabilities,
@@ -1083,7 +1213,7 @@ impl ModelBindingRegistry {
             context_window: resolved.context_window,
             model_max_output_tokens: resolved.model_max_output_tokens,
             max_output_tokens: resolved.effective_output_tokens,
-            reasoning_profile: resolved.reasoning_profile.clone(),
+            profile: resolved.profile.clone(),
             reasoning_enabled: resolved.reasoning_enabled,
             request_params: resolved.request_params.clone(),
             capabilities: resolved.capabilities.clone(),
@@ -1125,32 +1255,39 @@ pub fn analyze_selection(
 ) -> Result<ModelInvocationView, ModelInvocationError> {
     let protocol = model.protocol;
 
-    let (profile_id, profile) = select_reasoning_profile(&selection.model, model, selection)?;
+    let (profile_id, profile) = select_profile(&selection.model, model, selection)?;
 
     validate_request_params_layer(&selection.request_params, protocol, layer)
         .map_err(ModelInvocationError::ProtectedKey)?;
+    validate_request_params_numbers(&selection.request_params, layer)
+        .map_err(ModelInvocationError::InexactNumber)?;
 
     // The selected profile owns every top-level key it declares.
     if let (Some(profile_id), Some(profile)) = (profile_id.as_ref(), profile) {
         for key in selection.request_params.keys() {
             if profile.request_params.contains_key(key) {
-                return Err(ModelInvocationError::ReasoningProfileKeyOwnership {
+                return Err(ModelInvocationError::ProfileKeyOwnership {
                     model: selection.model.clone(),
                     profile: profile_id.clone(),
-                    key: key.clone(),
+                    layer,
+                    key: RequestKey(key.clone()),
                 });
             }
         }
     }
 
-    let mut request_params = model.request_params.clone();
-    if let Some(profile) = profile {
-        overlay_shallow(&mut request_params, &profile.request_params);
-    }
+    // Exactly one base object: a selected profile is a complete preset and
+    // never inherits the Model's (necessarily absent) parameters.
+    let mut request_params = profile.map_or_else(
+        || model.request_params.clone(),
+        |profile| profile.request_params.clone(),
+    );
     overlay_shallow(&mut request_params, &selection.request_params);
 
     let effective_output_tokens = match selection.max_output_tokens {
-        None => model.max_output_tokens,
+        None => profile
+            .and_then(|profile| profile.max_output_tokens)
+            .unwrap_or(model.max_output_tokens),
         Some(0) => {
             return Err(ModelInvocationError::InvalidOutputBudget {
                 model: selection.model.clone(),
@@ -1183,15 +1320,12 @@ pub fn analyze_selection(
         context_window: model.context_window,
         model_max_output_tokens: model.max_output_tokens,
         max_output_tokens: effective_output_tokens,
-        reasoning_profile: profile_id,
-        // A reasoning-capable model without a profile block has
-        // provider-default reasoning semantics: reasoning is always on,
-        // but there is no selectable profile and no synthetic wire field.
-        reasoning_enabled: if model.capabilities.reasoning {
-            profile.is_none_or(|profile| profile.enabled)
-        } else {
-            false
-        },
+        profile: profile_id,
+        // A reasoning-capable model without profiles has provider-default
+        // reasoning semantics: reasoning is always on, but there is no
+        // selectable profile and no synthetic wire field.
+        reasoning_enabled: model.capabilities.reasoning
+            && profile.is_none_or(|profile| profile.reasoning_enabled),
         request_params,
         capabilities,
         declared_capabilities: model.capabilities.clone(),
@@ -1199,39 +1333,39 @@ pub fn analyze_selection(
 }
 
 type SelectedProfile<'a> = (
-    Option<ReasoningProfileId>,
-    Option<&'a crate::model::catalog::ReasoningProfile>,
+    Option<ModelProfileId>,
+    Option<&'a crate::model::catalog::ModelProfile>,
 );
 
-/// Selects the reasoning profile of one resolution: the explicit selection
-/// when present, otherwise the model default. No profile is ever
-/// synthesized.
-fn select_reasoning_profile<'a>(
+/// Selects the Model Profile of one resolution: the explicit selection when
+/// present, otherwise the model default. An explicit unknown or inapplicable
+/// selection fails; nothing falls back and no profile is synthesized.
+fn select_profile<'a>(
     reference: &ModelRef,
     model: &'a ModelDefinition,
     selection: &ModelSelection,
 ) -> Result<SelectedProfile<'a>, ModelInvocationError> {
-    let Some(requested) = selection.reasoning_profile.as_ref() else {
-        let Some(default) = model.default_reasoning_profile() else {
+    let Some(requested) = selection.profile.as_ref() else {
+        let Some(default) = model.default_profile.as_ref() else {
             return Ok((None, None));
         };
         let profile = model
-            .reasoning_profile(default)
+            .profile(default)
             .expect("catalog validation guarantees the default profile exists");
         return Ok((Some(default.clone()), Some(profile)));
     };
-    if model.reasoning.is_none() {
-        return Err(ModelInvocationError::ModelDeclaresNoReasoningProfiles {
+    if model.profiles.is_empty() {
+        return Err(ModelInvocationError::ModelDeclaresNoProfiles {
             model: reference.clone(),
             profile: requested.clone(),
         });
     }
-    let profile = model.reasoning_profile(requested).ok_or_else(|| {
-        ModelInvocationError::UnknownReasoningProfile {
+    let profile = model
+        .profile(requested)
+        .ok_or_else(|| ModelInvocationError::UnknownProfile {
             model: reference.clone(),
             profile: requested.clone(),
-        }
-    })?;
+        })?;
     Ok((Some(requested.clone()), Some(profile)))
 }
 
@@ -1455,7 +1589,7 @@ mod tests {
         assert!(protected_keys(ModelProtocol::OpenAiResponses).contains(&"include"));
         assert!(protected_keys(ModelProtocol::AnthropicMessages).contains(&"system"));
         // Provider-owned reasoning/sampling fields are deliberately not
-        // protected: a reasoning profile must be able to own them.
+        // protected: a Model Profile must be able to own them.
         for protocol in [
             ModelProtocol::OpenAiChatCompletions,
             ModelProtocol::OpenAiResponses,

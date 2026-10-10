@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 /// Explicit schema: new durable fields cannot silently become archive fields.
 #[derive(Serialize)]
-struct ArchiveRequestSnapshotV2<'a> {
+struct ArchiveRequestSnapshotV3<'a> {
     upload_projection: &'a crate::model::uploads::UploadProjection,
     request_id: &'a crate::runtime::identity::RequestId,
     identity: &'a crate::model::snapshot::RequestIdentity,
@@ -14,7 +14,7 @@ struct ArchiveRequestSnapshotV2<'a> {
     effective_system_prompt: &'a String,
     system_sections: &'a Vec<crate::context::assembly::AcceptedSystemSection>,
     context_window_tokens: &'a u64,
-    reasoning_profile: &'a Option<crate::model::catalog::ReasoningProfileId>,
+    profile: &'a Option<crate::model::catalog::ModelProfileId>,
     reasoning_enabled: &'a bool,
     tool_definitions: &'a Vec<crate::tools::types::ModelToolDefinition>,
     capability_revision: &'a crate::runtime::identity::CapabilityRevision,
@@ -44,7 +44,7 @@ pub(super) fn request(snapshot: &RequestSnapshot) -> Value {
         })
         .map(|(name, value)| (name.as_str(), value))
         .collect();
-    json!(ArchiveRequestSnapshotV2 {
+    json!(ArchiveRequestSnapshotV3 {
         upload_projection: &snapshot.upload_projection,
         request_id: &snapshot.request_id,
         identity: &snapshot.identity,
@@ -53,7 +53,7 @@ pub(super) fn request(snapshot: &RequestSnapshot) -> Value {
         effective_system_prompt: &snapshot.effective_system_prompt,
         system_sections: &snapshot.system_sections,
         context_window_tokens: &snapshot.context_window_tokens,
-        reasoning_profile: &snapshot.reasoning_profile,
+        profile: &snapshot.profile,
         reasoning_enabled: &snapshot.reasoning_enabled,
         tool_definitions: &snapshot.tool_definitions,
         capability_revision: &snapshot.capability_revision,

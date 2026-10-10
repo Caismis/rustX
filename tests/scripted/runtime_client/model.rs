@@ -13,8 +13,8 @@ use rustx::context::SessionContextPolicy;
 use rustx::message::content::TextBlock;
 use rustx::message::types::{ContentBlockIndex, UserContentBlock};
 use rustx::model::catalog::{
-    CredentialSourceView, MapCredentialEnvironment, ModelCatalog, ModelRef, ProviderId,
-    ReasoningProfileId,
+    CredentialSourceView, MapCredentialEnvironment, ModelCatalog, ModelProfileId, ModelRef,
+    ProviderId,
 };
 use rustx::model::invocation::ModelBindingRegistry;
 use rustx::model::session::{SessionModelConfig, SessionModelState, SummaryModelView};
@@ -61,13 +61,13 @@ fn fixture_models() -> Vec<FixtureModel> {
         FixtureModel::text("alpha/model-a", ModelProtocol::OpenAiChatCompletions)
             .with_context_window(128_000)
             .with_max_output_tokens(4_096)
-            .with_request_params(serde_json::json!({"temperature": 0.2}))
-            .with_reasoning(serde_json::json!({
-                "defaultProfile": "on",
-                "profiles": {
-                    "off": {"enabled": false, "requestParams": {"thinking": {"type": "disabled"}}},
-                    "on": {"enabled": true, "requestParams": {"thinking": {"type": "enabled"}}}
-                }
+            .claiming_reasoning()
+            // Each profile is a complete preset: both repeat the sampling key.
+            .with_profiles("on", serde_json::json!({
+                "off": {"reasoningEnabled": false, "maxOutputTokens": 2_048,
+                        "requestParams": {"thinking": {"type": "disabled"}, "temperature": 0.2}},
+                "on": {"reasoningEnabled": true,
+                       "requestParams": {"thinking": {"type": "enabled"}, "temperature": 0.2}}
             }))
             // Explicit Image intent is supported by the Chat adapter/runtime.
             .claiming_input("image"),
@@ -83,7 +83,7 @@ fn fixture_models() -> Vec<FixtureModel> {
         FixtureModel::text("always/always-on", ModelProtocol::OpenAiChatCompletions)
             .with_context_window(64_000)
             .with_max_output_tokens(512)
-            .always_on_reasoning(),
+            .claiming_reasoning(),
     ]
 }
 
@@ -168,23 +168,25 @@ async fn the_initialize_snapshot_carries_the_redacted_session_model() {
     let model = snapshot.model.as_ref().unwrap();
     assert_eq!(model.configured.model, model_ref("alpha/model-a"));
     assert_eq!(
-        model.effective.protocol,
+        model.effective.as_ref().unwrap().protocol,
         ModelProtocol::OpenAiChatCompletions
     );
-    assert_eq!(model.effective.context_window, 128_000);
-    assert_eq!(model.effective.max_output_tokens, 4_096);
+    assert_eq!(model.effective.as_ref().unwrap().context_window, 128_000);
+    assert_eq!(model.effective.as_ref().unwrap().max_output_tokens, 4_096);
     assert_eq!(
-        model.effective.reasoning_profile,
-        Some(ReasoningProfileId::new("on")),
+        model.effective.as_ref().unwrap().profile,
+        Some(ModelProfileId::new("on")),
         "the model's declared default profile is selected"
     );
-    assert!(model.effective.reasoning_enabled);
-    assert_eq!(model.summary, SummaryModelView::Session);
+    assert!(model.effective.as_ref().unwrap().reasoning_enabled);
+    assert_eq!(model.summary, Some(SummaryModelView::Session));
 
     // The effective capabilities are the intersection, not the raw claim.
     assert!(
         model
             .effective
+            .as_ref()
+            .unwrap()
             .declared_capabilities
             .input_modalities
             .contains(&rustx::model::Modality::Image),
@@ -193,6 +195,8 @@ async fn the_initialize_snapshot_carries_the_redacted_session_model() {
     assert!(
         model
             .effective
+            .as_ref()
+            .unwrap()
             .capabilities
             .input_modalities
             .contains(&rustx::model::Modality::Image),
@@ -202,11 +206,11 @@ async fn the_initialize_snapshot_carries_the_redacted_session_model() {
     // The effective request parameters are provider-owned config and carry no
     // credential material.
     assert_eq!(
-        model.effective.request_params["temperature"],
+        model.effective.as_ref().unwrap().request_params["temperature"],
         serde_json::json!(0.2)
     );
     assert_eq!(
-        model.effective.request_params["thinking"],
+        model.effective.as_ref().unwrap().request_params["thinking"],
         serde_json::json!({"type": "enabled"})
     );
 
@@ -253,19 +257,25 @@ async fn the_catalog_query_exposes_safe_selectable_models() {
     assert_eq!(primary.protocol, ModelProtocol::OpenAiChatCompletions);
     assert_eq!(primary.context_window, 128_000);
     assert_eq!(primary.max_output_tokens, 4_096);
-    assert_eq!(
-        primary.default_reasoning_profile,
-        Some(ReasoningProfileId::new("on"))
-    );
-    let profiles: Vec<(String, bool)> = primary
-        .reasoning_profiles
+    assert_eq!(primary.default_profile, Some(ModelProfileId::new("on")));
+    let profiles: Vec<(String, bool, Option<u32>)> = primary
+        .profiles
         .iter()
-        .map(|profile| (profile.id.to_string(), profile.enabled))
+        .map(|profile| {
+            (
+                profile.id.to_string(),
+                profile.reasoning_enabled,
+                profile.max_output_tokens,
+            )
+        })
         .collect();
     assert_eq!(
         profiles,
-        vec![("off".to_owned(), false), ("on".to_owned(), true)],
-        "profile identities and their semantic enabled state are exposed"
+        vec![
+            ("off".to_owned(), false, Some(2_048)),
+            ("on".to_owned(), true, None)
+        ],
+        "profile identities, reasoning state and output defaults are exposed"
     );
     assert!(
         primary
@@ -306,7 +316,7 @@ async fn a_valid_update_publishes_exactly_one_coherent_change() {
         .expect("subscribe");
 
     let desired = SessionModelConfig {
-        reasoning_profile: Some(ReasoningProfileId::new("off")),
+        profile: Some(ModelProfileId::new("off")),
         request_params: common::request_params(serde_json::json!({"top_k": 40})),
         max_output_tokens: Some(1_000),
         ..SessionModelConfig::of(model_ref("alpha/model-a"))
@@ -320,21 +330,21 @@ async fn a_valid_update_publishes_exactly_one_coherent_change() {
     };
     let model = *model;
     assert_eq!(model.configured, desired);
-    assert_eq!(model.effective.max_output_tokens, 1_000);
-    assert!(!model.effective.reasoning_enabled);
+    assert_eq!(model.effective.as_ref().unwrap().max_output_tokens, 1_000);
+    assert!(!model.effective.as_ref().unwrap().reasoning_enabled);
     assert_eq!(
-        model.effective.request_params["thinking"],
+        model.effective.as_ref().unwrap().request_params["thinking"],
         serde_json::json!({"type": "disabled"}),
         "the selected profile's parameters replaced the previous profile's"
     );
     assert_eq!(
-        model.effective.request_params["top_k"],
+        model.effective.as_ref().unwrap().request_params["top_k"],
         serde_json::json!(40)
     );
     assert_eq!(
-        model.effective.request_params["temperature"],
+        model.effective.as_ref().unwrap().request_params["temperature"],
         serde_json::json!(0.2),
-        "model defaults survive under the profile and session overlays"
+        "the selected profile is a complete preset under the session overlay"
     );
 
     let events = receive_until(&subscription, |event| {
@@ -381,7 +391,7 @@ async fn model_get_returns_the_authoritative_session_state() {
 
     let before = read(1);
     assert_eq!(before.configured.model, model_ref("alpha/model-a"));
-    assert_eq!(before.effective.context_window, 128_000);
+    assert_eq!(before.effective.as_ref().unwrap().context_window, 128_000);
 
     let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
         id: RequestId::new(2),
@@ -392,15 +402,17 @@ async fn model_get_returns_the_authoritative_session_state() {
     let after = read(3);
     assert_eq!(after.configured.model, model_ref("beta/model-b"));
     assert_eq!(
-        after.effective.context_window, 32_000,
+        after.effective.as_ref().unwrap().context_window,
+        32_000,
         "the context window follows the selected model"
     );
-    assert_eq!(after.effective.max_output_tokens, 2_048);
+    assert_eq!(after.effective.as_ref().unwrap().max_output_tokens, 2_048);
     assert_eq!(
-        after.effective.reasoning_profile, None,
+        after.effective.as_ref().unwrap().profile,
+        None,
         "a model that declares no profiles selects none"
     );
-    assert!(!after.effective.reasoning_enabled);
+    assert!(!after.effective.as_ref().unwrap().reasoning_enabled);
 }
 
 /// The TUI `/model X` operation sends a complete replacement: primary
@@ -415,13 +427,13 @@ async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_
 
     let summary_policy = rustx::model::session::SummaryModelPolicy::Explicit {
         model: model_ref("summary/summary-model"),
-        reasoning_profile: None,
+        profile: None,
         request_params: common::request_params(serde_json::json!({"summary_tag": "keep"})),
         max_output_tokens: Some(300),
     };
     let initial = SessionModelConfig {
         model: model_ref("alpha/model-a"),
-        reasoning_profile: Some(ReasoningProfileId::new("off")),
+        profile: Some(ModelProfileId::new("off")),
         request_params: common::request_params(serde_json::json!({"top_k": 40})),
         max_output_tokens: Some(1_000),
         summary_model: summary_policy.clone(),
@@ -434,7 +446,7 @@ async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_
 
     let selected = SessionModelConfig {
         model: model_ref("beta/model-b"),
-        reasoning_profile: None,
+        profile: None,
         request_params: rustx::model::RequestParams::new(),
         max_output_tokens: None,
         summary_model: summary_policy.clone(),
@@ -448,11 +460,14 @@ async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_
     };
 
     assert_eq!(model.configured, selected);
-    assert_eq!(model.effective.model, model_ref("beta/model-b"));
-    assert_eq!(model.effective.reasoning_profile, None);
-    assert_eq!(model.effective.max_output_tokens, 2_048);
-    assert!(model.effective.request_params.is_empty());
-    let SummaryModelView::Explicit(summary) = model.summary else {
+    assert_eq!(
+        model.effective.as_ref().unwrap().model,
+        model_ref("beta/model-b")
+    );
+    assert_eq!(model.effective.as_ref().unwrap().profile, None);
+    assert_eq!(model.effective.as_ref().unwrap().max_output_tokens, 2_048);
+    assert!(model.effective.as_ref().unwrap().request_params.is_empty());
+    let Some(SummaryModelView::Explicit(summary)) = model.summary else {
         panic!("the explicit summary policy survives the primary switch");
     };
     assert_eq!(summary.model, model_ref("summary/summary-model"));
@@ -466,7 +481,7 @@ async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_
     assert_eq!(snapshot.model.as_ref().unwrap().configured, selected);
     assert_eq!(
         snapshot.model.as_ref().unwrap().summary,
-        SummaryModelView::Explicit(summary)
+        Some(SummaryModelView::Explicit(summary))
     );
 }
 
@@ -485,8 +500,8 @@ async fn runtime_client_reports_always_on_reasoning_without_a_profile() {
     let Some(RuntimeClientResult::ModelSet { model }) = response.result else {
         panic!("model_set returns the session model: {response:?}");
     };
-    assert_eq!(model.effective.reasoning_profile, None);
-    assert!(model.effective.reasoning_enabled);
+    assert_eq!(model.effective.as_ref().unwrap().profile, None);
+    assert!(model.effective.as_ref().unwrap().reasoning_enabled);
 
     let catalog_response = attachment.handle_request(RuntimeClientRequest::ModelCatalogGet {
         id: RequestId::new(2),
@@ -499,8 +514,8 @@ async fn runtime_client_reports_always_on_reasoning_without_a_profile() {
         .iter()
         .find(|model| model.model == model_ref("always/always-on"))
         .expect("always-on model is listed");
-    assert!(always_on.reasoning_profiles.is_empty());
-    assert_eq!(always_on.default_reasoning_profile, None);
+    assert!(always_on.profiles.is_empty());
+    assert_eq!(always_on.default_profile, None);
 }
 
 /// A reconnecting client recovers the complete model state from the
@@ -536,11 +551,25 @@ async fn a_reconnecting_client_recovers_model_state_from_the_snapshot() {
     };
     assert_eq!(snapshot.model.as_ref().unwrap().configured, desired);
     assert_eq!(
-        snapshot.model.as_ref().unwrap().effective.max_output_tokens,
+        snapshot
+            .model
+            .as_ref()
+            .unwrap()
+            .effective
+            .as_ref()
+            .unwrap()
+            .max_output_tokens,
         777
     );
     assert_eq!(
-        snapshot.model.as_ref().unwrap().effective.context_window,
+        snapshot
+            .model
+            .as_ref()
+            .unwrap()
+            .effective
+            .as_ref()
+            .unwrap()
+            .context_window,
         32_000
     );
 }

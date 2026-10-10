@@ -262,6 +262,48 @@ impl RuntimeResourceSnapshot {
         Ok(snapshot)
     }
 
+    /// Carry a newly published Model Catalog — the whole Provider unit — in
+    /// this exact adopted generation, the way independent policy units are
+    /// composed: the unit's values, provenance and component revision move,
+    /// while `source_revisions` stays the baseline the adopted context was
+    /// resolved from. Capability, context and provider resources are shared
+    /// unchanged; the revision advances so observers reread the catalog.
+    pub(crate) fn with_model_catalog(
+        &self,
+        capture: &crate::local_runtime::configuration::ProspectiveSessionConfig,
+        models: crate::model::invocation::ModelBindingRegistry,
+    ) -> Option<Self> {
+        use crate::local_runtime::configuration::application::ApplyUnit;
+        let mut configuration = self.configuration.as_deref()?.clone();
+        configuration.models = models;
+        Arc::make_mut(&mut configuration.config)
+            .agent
+            .model
+            .clone_from(&capture.config.agent.model);
+        let effective =
+            crate::local_runtime::configuration::settings::redact(capture.effective.clone());
+        configuration.effective.models = effective.models;
+        configuration.effective.providers = effective.providers;
+        configuration
+            .effective
+            .agent
+            .get_or_insert_with(Default::default)
+            .model = effective.agent.and_then(|agent| agent.model);
+        crate::local_runtime::configuration::copy_unit_provenance(
+            &mut configuration.provenance,
+            &capture.provenance,
+            ApplyUnit::Provider,
+        );
+        configuration.component_revisions.insert(
+            ApplyUnit::Provider,
+            capture.component_revisions[&ApplyUnit::Provider].clone(),
+        );
+        let mut snapshot = self.clone();
+        snapshot.configuration = Some(Arc::new(configuration));
+        snapshot.revision = self.revision.next();
+        Some(snapshot)
+    }
+
     pub(crate) fn with_revision(mut self, revision: RuntimeResourceRevision) -> Self {
         self.revision = revision;
         self
@@ -322,6 +364,7 @@ impl RuntimeResourceSnapshot {
         let registry = model
             .registry()
             .ok_or("frozen model has no configuration adoption registry")?;
+        let snapshot = model.snapshot().map_err(|e| e.to_string())?;
         let binding = registry
             .freeze(&model.config().selection())
             .map_err(|e| e.to_string())?
@@ -338,7 +381,7 @@ impl RuntimeResourceSnapshot {
         let tools = self
             .capability
             .tool_registry()
-            .for_model(model.snapshot().primary().capabilities())
+            .for_model(snapshot.primary().capabilities())
             .definitions()
             .iter()
             .map(crate::tools::schema::compile_model_definition)
@@ -346,10 +389,10 @@ impl RuntimeResourceSnapshot {
             .map_err(|e| e.to_string())?;
         let primary = crate::model::request_shape::ConfigurationRequestShape::capture(
             binding,
-            model.snapshot().primary().context_window(),
+            snapshot.primary().context_window(),
             crate::model::ModelRequest {
                 images: std::collections::BTreeMap::new(),
-                invocation: model.snapshot().primary().invocation_config(),
+                invocation: snapshot.primary().invocation_config(),
                 messages: Vec::new(),
                 tools,
                 effective_system_prompt: crate::context::render_effective_system_prompt(&sections),
@@ -368,10 +411,10 @@ impl RuntimeResourceSnapshot {
             .binding;
         let summary = crate::model::request_shape::ConfigurationRequestShape::capture(
             summary_binding,
-            model.snapshot().summary_invocation().context_window(),
+            snapshot.summary_invocation().context_window(),
             crate::model::ModelRequest {
                 images: std::collections::BTreeMap::new(),
-                invocation: model.snapshot().summary_invocation().invocation_config(),
+                invocation: snapshot.summary_invocation().invocation_config(),
                 messages: Vec::new(),
                 tools: Vec::new(),
                 effective_system_prompt: String::new(),

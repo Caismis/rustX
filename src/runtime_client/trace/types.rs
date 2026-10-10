@@ -483,7 +483,7 @@ pub struct TraceRequestDetail {
     pub max_output_tokens: u32,
     pub context_window_tokens: u64,
     pub reasoning_enabled: bool,
-    pub reasoning_profile: Option<String>,
+    pub profile: Option<String>,
     /// Allowlisted provider-neutral sampling options; see the options
     /// allowlist for exactly which keys may appear.
     pub options: Vec<TraceRequestOption>,

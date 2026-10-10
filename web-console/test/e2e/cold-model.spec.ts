@@ -16,7 +16,7 @@ test('connecting conversation accepts dropdown and slash model choices before qu
   await input.fill('/model');
   await page.getByRole('option', { name: 'fixture/native', exact: true }).click();
   await model.click();
-  await page.getByRole('menuitem', { name: 'Reasoning profile', exact: true }).hover();
+  await page.getByRole('menuitem', { name: 'Profile', exact: true }).hover();
   await page.getByRole('menuitem', { name: 'low', exact: true }).click();
   await expect(model).toContainText('low');
   await page.evaluate(() => (window as any).startupFixture.hold('session/setModel'));
@@ -25,9 +25,9 @@ test('connecting conversation accepts dropdown and slash model choices before qu
   await page.waitForFunction(() => (window as any).startupFixture.requests().some((r: any) => r.method === 'session/setModel'));
   const before = await page.evaluate(() => (window as any).startupFixture.requests().filter((r: any) => ['session/setModel', 'turn/start'].includes(r.method)));
   expect(before).toHaveLength(1);
-  expect(before[0].params.config).toEqual({ model: 'fixture/native', reasoningProfile: 'low' });
+  expect(before[0].params.config).toEqual({ model: 'fixture/native', profile: 'low' });
   await page.evaluate(() => (window as any).startupFixture.release('session/setModel'));
   await page.waitForFunction(() => (window as any).startupFixture.requests().some((r: any) => r.method === 'turn/start'));
-  expect(await page.evaluate(() => (window as any).startupFixture.model('A').configured)).toEqual({ model: 'fixture/native', reasoningProfile: 'low' });
+  expect(await page.evaluate(() => (window as any).startupFixture.model('A').configured)).toEqual({ model: 'fixture/native', profile: 'low' });
   expect(errors).toEqual([]);
 });

@@ -1162,7 +1162,10 @@ impl LocalConversationCore {
                 .map_err(|detail| LocalRuntimeError::Capability { detail })?;
             let project_context_files = paths.project_context_files.clone();
             SessionModelState::new(registry.clone(), runtime_config.initial_model().clone())?;
-            let model = SessionModelState::new(
+            // A persisted selection the catalog no longer admits composes an
+            // unavailable Session: it loads, advertises this catalog and admits
+            // nothing until a valid selection is committed.
+            let model = SessionModelState::restore(
                 registry.clone(),
                 session_state
                     .model
@@ -2747,7 +2750,7 @@ chat_reasoning_replay = "omit"
         // enables the extension and configures it differently.
         std::fs::write(
             dir.path().join("workspace/rustx.toml"),
-            r#"schema_version = 9
+            r#"schema_version = 10
 agent_id = "agent-host"
 
 [context]
@@ -2909,7 +2912,7 @@ enabled = true
         let dir = lab();
         std::fs::write(
             dir.path().join("workspace/rustx.toml"),
-            r#"schema_version = 9
+            r#"schema_version = 10
 agent_id = "agent-host"
 
 [context]
@@ -3381,15 +3384,16 @@ enabled = true
 
         let model = core.runtime().model_view();
         assert_eq!(
-            model.effective.model, spec.resolved.model.primary.model,
+            model.effective.as_ref().unwrap().model,
+            spec.resolved.model.primary.model,
             "the child runs exactly the model its parent froze"
         );
         assert_eq!(
-            model.effective.protocol,
+            model.effective.as_ref().unwrap().protocol,
             spec.resolved.model.primary.protocol
         );
         assert_eq!(
-            model.effective.context_window,
+            model.effective.as_ref().unwrap().context_window,
             spec.resolved.model.primary.context_window
         );
         assert_eq!(
@@ -4058,7 +4062,7 @@ compat = { chat_reasoning_replay = "omit" }
 
         let echo_call_count_file = root.path().join("echo-call-count");
         let executable = std::env::current_exe().expect("test executable");
-        let mut config_document = serde_json::json!({"schema_version": 9, "agent_id": "agent-parent", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "mcp_servers": {
+        let mut config_document = serde_json::json!({"schema_version": 10, "agent_id": "agent-parent", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "mcp_servers": {
                 SERVER_NAME: {
                     "command": executable,
                     "args": fixture_spawn_args(test_name),

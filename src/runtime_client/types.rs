@@ -260,7 +260,10 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// publishes it. Version 57 clients are rejected without a compatibility path.
 /// Version 59 refreshes retained Trace records with their resolved native location.
 /// Version 60 adds child-owned incremental statistics and active-interval clocks.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 60;
+/// Version 61 replaces reasoning profiles with general Model Profiles in model
+/// selection, invocation and catalog views (#456). Version 60 clients are
+/// rejected without a compatibility projection.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 61;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -972,9 +975,11 @@ pub enum RuntimeClientError {
         /// Human-readable detail.
         message: String,
     },
-    /// A model configuration update could not be resolved.
+    /// A model configuration update could not be resolved, or new work was
+    /// refused because the Session's published catalog does not admit its
+    /// configured selection.
     ///
-    /// The update was rejected as a whole: no session state changed and no
+    /// The request was rejected as a whole: no session state changed and no
     /// model-configuration event was published. The message never carries a
     /// credential.
     InvalidModelConfiguration {
@@ -1080,7 +1085,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 60);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 61);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {
@@ -1289,7 +1294,7 @@ mod tests {
                 context_window: 128_000,
                 model_max_output_tokens: 4096,
                 max_output_tokens: 4096,
-                reasoning_profile: None,
+                profile: None,
                 reasoning_enabled: false,
                 request_params: RequestParams::new(),
                 capabilities: capabilities.clone(),

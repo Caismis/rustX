@@ -407,7 +407,7 @@ describe("CommandDispatcher", () => {
     const summaryPolicy = {
       mode: "explicit" as const,
       model: "summary/model-s",
-      reasoning_profile: "compact",
+      profile: "compact",
       request_params: { summary_tag: "keep" },
       max_output_tokens: 300,
     };
@@ -417,7 +417,7 @@ describe("CommandDispatcher", () => {
           ...sessionModel("alpha/model-a"),
           configured: {
             model: "alpha/model-a",
-            reasoningProfile: "on",
+            profile: "on",
             requestParams: { temperature: 0.2 },
             maxOutputTokens: 777,
             summaryModel: summaryPolicy,
@@ -457,7 +457,8 @@ describe("CommandDispatcher", () => {
               toolCalls: true,
               reasoning: false,
             },
-            defaultReasoningProfile: "off",
+            profiles: [{ id: "off", reasoningEnabled: false }],
+            defaultProfile: "off",
             credentialSource: { type: "environment", variable: "RUSTX_KEY" },
           },
         ],
@@ -465,11 +466,11 @@ describe("CommandDispatcher", () => {
     });
 
     const modelSet = await nextRequest(h, "session/setModel");
-    // A deliberate whole-state replacement: primary overrides reset, while
-    // the independent summary policy survives exactly.
+    // A deliberate whole-state replacement: primary overrides reset — the
+    // runtime resolves the new model's default profile — while the
+    // independent summary policy survives exactly.
     assert.deepEqual(paramsOf(modelSet, "session/setModel").config, {
       model: "beta/model-b",
-      reasoningProfile: "off",
       requestParams: {},
       summaryModel: summaryPolicy,
     });
@@ -921,7 +922,7 @@ describe("CommandDispatcher", () => {
       );
       const read = await nextRequest(h, "session/model");
       const current = sessionModel("alpha/model-a");
-      current.configured.reasoningProfile = "previous";
+      current.configured.profile = "previous";
       current.configured.requestParams = { temperature: 0.5 };
       current.configured.maxOutputTokens = 2048;
       current.configured.summaryModel = {
@@ -933,8 +934,8 @@ describe("CommandDispatcher", () => {
 
       const set = await nextRequest(h, "session/setModel");
       const expected = { ...current.configured };
-      if (profile === null) delete expected.reasoningProfile;
-      else expected.reasoningProfile = profile;
+      if (profile === null) delete expected.profile;
+      else expected.profile = profile;
       assert.deepEqual(paramsOf(set, "session/setModel").config, expected);
       h.transport.respond(set.id, {
         type: "model",

@@ -1,4 +1,4 @@
-import type { CompletedResponseView, AttachmentTarget, MethodResult, SessionUserMessageBoundary } from '../../../../protocol/app-server/v38';
+import type { CompletedResponseView, AttachmentTarget, MethodResult, SessionUserMessageBoundary } from '../../../../protocol/app-server/v39';
 import { AppServerClient, sameTarget } from '../../client/app-server';
 import { selectSessionModel } from '../model-preference';
 import { lineageSwitchSafe } from '../../bindings/projection';
@@ -36,11 +36,11 @@ export class CommandSession {
     if (this.client.getSnapshot().views[this.sessionId]?.modelMutation) await this.client.repairAgentModel(this.sessionId);
     this.requireCurrent(); return { current: current.model, catalog: catalog.catalog };
   }
-  async setModel(model: string, reasoningProfile?: string) {
+  async setModel(model: string, profile?: string) {
     this.requireCurrent();
     // Pick an exact catalog identity. Changing model resets model-specific overrides
     // to its native defaults; no provider inference or configuration editor.
-    await selectSessionModel(this.client, this.sessionId, { model, ...(reasoningProfile === undefined ? {} : { reasoningProfile }) });
+    await selectSessionModel(this.client, this.sessionId, { model, ...(profile === undefined ? {} : { profile }) });
     if (!this.current()) return;
     await this.client.repairAgentModel(this.sessionId);
     if (this.current()) return this.models();

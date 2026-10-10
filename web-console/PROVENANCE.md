@@ -1823,3 +1823,27 @@ maps native foreground lifecycle to Harness phases and maps only a successful
 committed Tool message's typed `deliveries` to cards. Preview and Download stay
 with the existing PreviewWorkspace and original-byte owners. Inventory hashes and
 dependency closures describe this final source, including the v38 import renames.
+
+### Issue #456: general Model Profiles
+
+The Harness-derived model/profile menu (`ModelSelect`), the command panel model
+rows and the adapted Models settings page now present rustX's general Model
+Profiles instead of reasoning profiles: menu and label copy says "Profile", and a
+profile row shows its native reasoning state and output default as published.
+The Model detail page edits each profile's complete native `request_params` as
+one JSON object (`RequestParamsEditor`, a rustX-authored field over the existing
+TanStack/XState unit bridge); invalid, non-object or duplicate-key text stays a
+local buffer that blocks submission, and formatting-only edits begin no draft.
+Native Rust remains the configuration authority. No upstream source is added.
+Inventory hashes and dependency closures describe this final source, including
+the v39 import renames.
+
+The #456 selection review separates configured from effective Profiles in the
+Harness-derived `ModelSelect`: its Profile submenu gains a "Model default
+profile" row, rows emit a typed selection intent instead of `(model, profile?)`,
+and the current marker follows the configured Profile while the trigger shows
+the effective one. The shared `Menu` now marks and announces the selected row of
+a submenu (`aria-current`, trailing check) exactly as it does a top-level row.
+The #456 stale Profile review also offers that Profile submenu, with a single
+"Use model defaults" row, on a Model that declares no Profiles while its
+configured Profile is pinned, so the pin can be cleared.

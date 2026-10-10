@@ -1,4 +1,4 @@
-import type { TraceDetail, TraceRecord } from '../../protocol/app-server/v38';
+import type { TraceDetail, TraceRecord } from '../../protocol/app-server/v39';
 
 /** One bounded summary record, as the server pages them. */
 export const traceRecord = (n: number, overrides: Partial<TraceRecord> = {}): TraceRecord => ({
@@ -69,7 +69,7 @@ export const requestDetail = (n: number, overrides: Partial<TraceDetail> = {}): 
     max_output_tokens: 128,
     context_window_tokens: '4096',
     reasoning_enabled: false,
-    reasoning_profile: null,
+    profile: null,
     options: [{ name: 'temperature', value: { value: 0.25, truncated: false } }],
     omitted_option_count: 2,
     predecessor: { availability: 'available', request_id: 'previous-request' },

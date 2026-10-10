@@ -41,9 +41,9 @@ fn effective(lower: &str, upper: &str) -> (CurrentRuntimeConfig, Origins) {
 const LOWER: &str = r#"
 [agent.model]
 model = "p/lower"
-request_params = { vendor = { flag = true } }
+request_params = '{"vendor":{"flag":true}}'
 max_output_tokens = { mode = "limit", tokens = 123 }
-reasoning_profile = { mode = "profile", name = "lower" }
+profile = "lower"
 summary_model = { mode = "explicit", model = "p/summary" }
 [context]
 reserve_tokens = 321
@@ -89,7 +89,7 @@ fn model_selection_replacement_cannot_inherit_request_fields() {
     for field in [
         "model",
         "request_params",
-        "reasoning_profile",
+        "profile",
         "max_output_tokens",
         "summary_model",
     ] {
@@ -99,7 +99,7 @@ fn model_selection_replacement_cannot_inherit_request_fields() {
 
 #[test]
 fn incomplete_higher_model_selection_does_not_borrow_lower_identity() {
-    for text in ["[agent.model]", "[agent.model]\nrequest_params = {}"] {
+    for text in ["[agent.model]", "[agent.model]\nrequest_params = '{}'"] {
         let (layer, _) = overlay(LOWER, text);
         assert!(layer.resolve().is_err(), "{text}");
     }

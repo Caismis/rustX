@@ -36,7 +36,7 @@ id = "subagent-model"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
-request_params = {{ temperature = 0.11 }}
+request_params = '{{"temperature":0.11}}'
 
 [models."fixture/subagent-model".capabilities]
 input_modalities = ["text"]

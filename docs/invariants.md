@@ -418,7 +418,7 @@ spine; clients merge live and older pages by durable transcript cursor. Entry
 identity only detects the same durable fact, and page reads do not move the
 live event cursor.
 
-App Server v38 navigation adds native Turn-relative finite windows at a captured
+App Server v39 navigation adds native Turn-relative finite windows at a captured
 `ConversationReadCut`. It owns positioning and mutation rejection. Web presentation
 retains at most 256 historical entries / 8 MiB plus the independent finite live
 snapshot; it never walks from a distant Turn to the live tail. New navigation,
@@ -6724,27 +6724,47 @@ contracts and provider protocols. These invariants are frozen by M2:
   Client-facing views carry at most the credential source *kind* and the
   environment variable *name*.
 
-- **`requestParams` is opaque and never normalized.** Effective parameters
-  resolve as model defaults → selected reasoning profile → session overrides,
-  each a **top-level shallow overlay**: nested objects and arrays are
-  replaced atomically, never deep-merged. Values are preserved exactly.
-  Unknown, non-protected keys are valid.
+- **`requestParams` is opaque and never normalized.** Source TOML authors it
+  as a JSON-encoded object string, parsed once at the source boundary with
+  duplicate keys rejected at any depth; every later layer and every client
+  projection carries the structured object. Its numbers are exactly those whose
+  value survives a binary64 round trip (RFC 7493 §2.2), enforced on source
+  parse, on the raw App Server request text before decoding (a decoder only
+  ever sees the already-rounded value), on native write and in catalog and
+  selection validation, so no hop — browser, native writer or provider —
+  rounds one.
+  Its diagnostics locate failures by field path and JSON line/column, never by
+  authored key or value. Effective parameters have exactly
+  one base — the Model's own object, or the selected Profile's complete object
+  — and one **top-level shallow overlay** of explicit selection overrides:
+  nested objects and arrays are replaced atomically, never deep-merged, and a
+  JSON `null` is a value, never a deletion. Values are preserved exactly.
+  Unknown, non-protected keys are valid. Semantic comparison is structural,
+  never by JSON text.
 
-- **A reasoning profile owns every top-level key it declares.** A session
-  override that also declares one of those keys is a deterministic
-  configuration failure, never resolved by merge order.
+- **A Model Profile is a complete, independent preset.** A Model with profiles
+  declares a nonempty set and a `default_profile` and no model-level
+  `requestParams` (presence is tracked, so not even `{}`); no profile inherits
+  from the Model or from another profile. A selected profile owns every
+  top-level key it declares: an override that also declares one of those keys
+  is a deterministic configuration failure, never resolved by merge order. The
+  failure keeps the contested key only as an opaque typed value; no Display,
+  Debug or protocol payload renders it.
 
 - **Model references are deterministic.** `provider/model-id` splits at the
-  first slash only. Provider IDs and reasoning-profile IDs reject `/`; model
+  first slash only. Provider IDs and Model Profile IDs reject `/`; model
   IDs preserve the full remainder but reject empty slash-separated segments.
   Thus `a/b` and `a/b/c` are valid, while `a/`, `/b`, and `a//b` are not.
 
-- **Reasoning is model-declared named profiles.** The runtime assigns no
-  meaning to a profile name, synthesizes no `off`/`low`/`medium`/`high`
-  profile, and injects no reasoning field of its own. A profile's wire
-  behaviour is exactly its configured `requestParams`. A model declaring
-  `capabilities.reasoning = false` may not declare a profile that
-  semantically enables reasoning.
+- **Profile names carry no semantics.** The runtime assigns no meaning to a
+  profile name, synthesizes no `off`/`low`/`medium`/`high` profile, and
+  injects no reasoning field of its own. A profile's wire behaviour is exactly
+  its configured `requestParams`. Its reasoning state is explicit rustX
+  semantics: required on every profile of a reasoning-capable Model, `false`
+  when omitted on a non-reasoning Model, and never `true` there. A profile's
+  optional output budget is a default within the Model's hard maximum; an
+  explicit selection limit replaces it and is bounded by the same maximum. An
+  unknown or inapplicable explicit profile fails; nothing falls back.
 
 - **Runtime-owned protected wire keys cannot be overwritten.** Each protocol
   declares its exact protected set. A collision fails at configuration time
@@ -7011,7 +7031,7 @@ contracts and provider protocols. These invariants are frozen by M2:
 
 - **Reasoning visibility is not reasoning configuration.** Whether reasoning
   content is drawn is a client display preference. What rustX asks a provider
-  for is `SessionModelConfig.reasoningProfile` / `reasoningEnabled`, and it is
+  for is `SessionModelConfig.profile` / `reasoningEnabled`, and it is
   changeable only through `model_set`. Hidden reasoning collapses to a marker;
   it never becomes assistant text and never disappears silently.
 
@@ -7037,10 +7057,10 @@ contracts and provider protocols. These invariants are frozen by M2:
   formats the published catalog and nothing more. The client never
   reads `rustx.toml`, instantiates a provider SDK, resolves an API key, or
   interprets provider protocol semantics. Only *effective* capability is
-  advertised. Reasoning profiles are shown exactly as published: a
-  reasoning-capable model with no profiles means reasoning is supported with
-  no selectable profile, and no universal off/low/medium/high scale is
-  invented. `requestParams` stays opaque provider-owned JSON — displayed and
+  advertised. Model Profiles are shown exactly as published, with their
+  declared reasoning state and output default: a reasoning-capable model with
+  no profiles means provider-default reasoning with no selectable profile, and
+  no universal off/low/medium/high scale is invented. `requestParams` stays opaque provider-owned JSON — displayed and
   passed, never interpreted.
 
 - **Configured, effective, and attempt-frozen models stay three facts.**
@@ -7054,10 +7074,10 @@ contracts and provider protocols. These invariants are frozen by M2:
   configured model.
 
 - **Catalog metadata is not runtime model configuration.** A `CatalogModelView`
-  describes what a model *offers*, including `defaultReasoningProfile`, which
+  describes what a model *offers*, including `defaultProfile`, which
   is the catalog's fallback. What the session asked for
-  (`SessionModelConfig.reasoningProfile`) and what the runtime resolved
-  (`ModelInvocationView.reasoningProfile` / `reasoningEnabled`) are separate
+  (`SessionModelConfig.profile`) and what the runtime resolved
+  (`ModelInvocationView.profile` / `reasoningEnabled`) are separate
   facts, presented separately. A catalog default is never labelled as the
   current configuration, and an absent configured profile is reported as
   absent rather than borrowing the catalog's.

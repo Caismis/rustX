@@ -591,6 +591,8 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
             onEntered={entered}
             onRowHidden={releaseHiddenSubmenu}
             cardRef={submenuRef}
+            selection={selection}
+            isSelected={(id) => id === selectedId || selectedIds?.includes(id) === true}
             onSelect={(id) => { onSelect(id); refocusAfterSelection() }}
           />
         ))}
@@ -720,7 +722,7 @@ function ItemCell({ onMouseEnter, onMouseLeave, submenu, children }: {
  * it, and the layout phase of that commit asks the menu to close it. It is
  * also not presented while the list itself is not.
  */
-function Submenu({ id, row, items, dense, compact, presented, enter, onEntered, onRowHidden, cardRef, onSelect }: {
+function Submenu({ id, row, items, dense, compact, presented, enter, onEntered, onRowHidden, cardRef, selection, isSelected, onSelect }: {
   id: string
   row: HTMLDivElement | null
   items: readonly MenuItem[]
@@ -736,6 +738,9 @@ function Submenu({ id, row, items, dense, compact, presented, enter, onEntered, 
    * this card. Called in the layout phase of the commit that reported it. */
   onRowHidden: () => void
   cardRef: { current: HTMLDivElement | null }
+  /** Submenu rows carry the parent's selection, marked and announced alike. */
+  selection: 'check' | 'fill'
+  isSelected: (id: string) => boolean
   onSelect: (id: string) => void
 }) {
   const portalContainer = useDialogPortal();
@@ -784,12 +789,14 @@ function Submenu({ id, row, items, dense, compact, presented, enter, onEntered, 
             key={sub.id}
             type="button"
             role="menuitem"
-            className={css.item}
+            className={clsx(css.item, isSelected(sub.id) && (selection === 'fill' ? css.selectedFill : css.selected))}
             disabled={sub.disabled}
+            aria-current={isSelected(sub.id) ? 'true' : undefined}
             onClick={() => { onSelect(sub.id) }}
           >
             {sub.icon !== undefined && <span className={css.itemIcon}>{sub.icon}</span>}
             <span className={css.itemLabel}>{sub.label}</span>
+            {isSelected(sub.id) && selection === 'check' && <IconCheckOutline16 className={css.check} />}
           </button>
         ))}
       </div>

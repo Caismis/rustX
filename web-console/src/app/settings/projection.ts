@@ -2,7 +2,7 @@ import type { Translate } from '../../locale/translation';
 import type {
   ConfigurationApplication, McpView, McpWrite, Origin, ProcessPolicyImpact, ResourceFamily, RuntimeLayer,
   SourceMutation, SourceScope, SourceSettings, SourceTarget, SourceView, UnitApplication,
-} from '../../../../protocol/app-server/v38';
+} from '../../../../protocol/app-server/v39';
 import type { ConnectionState } from '../../client/app-server';
 
 /** Each Settings target names one exact configuration owner. The catalog scope
@@ -340,6 +340,13 @@ export function catalogEntries<T>(source: SourceSettings | undefined, scope: Sou
  * a missing effective one, so no inheritance is reconstructed here. */
 export function catalogIdentities(source: SourceSettings | undefined, scope: SourceScope, container: CatalogContainer): string[] {
   return reachableIdentities(scope, sourceView(source, scope)?.authored?.[container], source?.resolved?.[container]);
+}
+/** The Model Profiles each model identity this scope reaches declares, from
+ * the same authored-then-effective definition the Models page edits. Profile
+ * identities are opaque; native resolution remains the selection authority. */
+export function catalogProfiles(source: SourceSettings | undefined, scope: SourceScope): Record<string, string[]> {
+  return Object.fromEntries(catalogEntries<{ profiles?: Record<string, unknown> | null }>(source, scope, 'models')
+    .map(entry => [entry.id, Object.keys((entry.authored ?? entry.effective)?.profiles ?? {})]));
 }
 /** The identities of one named semantic-unit container this scope must be able
  * to reach, on the same terms as a catalog: a Workspace reaches the native

@@ -170,7 +170,7 @@ async fn detach_then_shutdown(child: &mut Child) {
     terminate(child);
 }
 
-const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":38,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
+const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":39,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
 
 #[tokio::test]
 async fn app_server_stdio_real_process_shared_conformance() {
@@ -232,9 +232,9 @@ async fn app_server_websocket_authentication_framing_and_protocol_errors() {
         let old_offer = format!("rustx.app-server.v9, rustx-token.{}", driver::TOKEN);
         for offer in [
             None,
-            Some("rustx.app-server.v38"),
+            Some("rustx.app-server.v39"),
             Some(old_offer.as_str()),
-            Some("rustx.app-server.v38, rustx-token.wrong"),
+            Some("rustx.app-server.v39, rustx-token.wrong"),
         ] {
             let mut request = url.as_str().into_client_request().unwrap();
             if let Some(offer) = offer {
@@ -1317,7 +1317,7 @@ async fn app_server_archive_stdio_download_works_without_web_or_runtime_attachme
         assert_eq!(
             manifest["schemas"],
             serde_json::json!({
-                "journal": 2, "messages": 1, "surface": 1, "requests": 2,
+                "journal": 2, "messages": 1, "surface": 1, "requests": 3,
                 "generations": 1, "publication_audits": 1, "inherited_responses": 1, "inherited_turns": 1,
             })
         );
@@ -1369,7 +1369,7 @@ id = "process-model"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
-request_params = {{ temperature = 0.11 }}
+request_params = '{{"temperature":0.11}}'
 
 [models."fixture/process-model".capabilities]
 input_modalities = ["text"]
@@ -1424,7 +1424,7 @@ chat_reasoning_replay = "omit"
             serde_json::from_value(snapshot(&client, &target).await).unwrap();
         let model = snapshot.model.as_ref().unwrap();
         assert_eq!(model.configured.model.to_string(), "fixture/process-model");
-        assert_eq!(model.effective.context_window, 128_000);
+        assert_eq!(model.effective.as_ref().unwrap().context_window, 128_000);
         let names: Vec<_> = snapshot
             .capabilities
             .tools
@@ -1474,25 +1474,19 @@ chat_reasoning_replay = "omit"
     .await;
 }
 
-/// A Session whose persisted model the current catalog no longer offers is
-/// metadata-valid; only runtime composition discovers the problem. That
-/// failed attach changes no catalog byte, and every other Session still
-/// attaches (relocated from the retired launch client's failed-startup
-/// regressions onto App Server's composition path).
+/// A Session whose runtime composition fails — here its Workspace is gone —
+/// is metadata-valid; only composition discovers the problem. That failed
+/// attach changes no catalog byte, and every other Session still attaches
+/// (relocated from the retired launch client's failed-startup regressions
+/// onto App Server's composition path).
 #[tokio::test]
 async fn app_server_failed_attach_composition_leaves_the_catalog_untouched() {
     use rustx::app_server::protocol::*;
     bounded(async {
         let f = Fixture::new().await;
         let catalog_path = f.root.path().join("runtime/sessions/catalog.json");
-        let mut document: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&catalog_path).unwrap()).unwrap();
-        document["sessions"][f.sessions[0].as_str()]["state"]["model"] =
-            serde_json::to_value(rustx::model::session::SessionModelConfig::of(
-                rustx::model::catalog::ModelRef::parse("local/retired-model").unwrap(),
-            ))
-            .unwrap();
-        std::fs::write(&catalog_path, serde_json::to_vec_pretty(&document).unwrap()).unwrap();
+        // The Session's Workspace no longer exists, so it cannot compose.
+        std::fs::remove_dir(f.root.path().join("a")).unwrap();
         let before = std::fs::read(&catalog_path).unwrap();
         let mut child = f.command("stdio").spawn().unwrap();
         let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
@@ -1513,6 +1507,105 @@ async fn app_server_failed_attach_composition_leaves_the_catalog_untouched() {
             "a failed composition rewrote the catalog"
         );
         attach(&client, f.sessions[1].clone(), 3).await;
+        client.close().await;
+        detach_then_shutdown(&mut child).await;
+        assert!(child.wait().await.unwrap().success());
+    })
+    .await;
+}
+
+// Issue #459: a persisted selection the current catalog no longer admits is
+// the Session's own fact. Attach composes it unavailable and reports it,
+// turns are refused explicitly, nothing is persisted in its place, and
+// `session/setModel` corrects it.
+#[tokio::test]
+async fn app_server_retired_persisted_model_attaches_unavailable_without_rewriting_it() {
+    use rustx::app_server::protocol::*;
+    use rustx::model::catalog::ModelRef;
+    use rustx::model::session::SessionModelConfig;
+    bounded(async {
+        let f = Fixture::new().await;
+        let catalog_path = f.root.path().join("runtime/sessions/catalog.json");
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&catalog_path).unwrap()).unwrap();
+        let retired = SessionModelConfig::of(ModelRef::parse("local/retired-model").unwrap());
+        document["sessions"][f.sessions[0].as_str()]["state"]["model"] =
+            serde_json::to_value(&retired).unwrap();
+        std::fs::write(&catalog_path, serde_json::to_vec_pretty(&document).unwrap()).unwrap();
+        let before = std::fs::read(&catalog_path).unwrap();
+        let mut child = f.command("stdio").spawn().unwrap();
+        let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+        initialize_client(&client).await;
+        let target = attach(&client, f.sessions[0].clone(), 2).await;
+        let Response::Success(success) = rpc(
+            &client,
+            3,
+            Method::ModelGet {
+                target: target.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("model")
+        };
+        let MethodResult::Model { model } = success.result else {
+            panic!("model")
+        };
+        assert_eq!(model.configured, retired);
+        assert!(
+            model
+                .unavailable
+                .as_deref()
+                .is_some_and(|reason| reason.contains("local/retired-model"))
+        );
+        assert!(model.effective.is_none(), "nothing is substituted");
+        let refused = rpc(
+            &client,
+            4,
+            Method::TurnStart {
+                target: target.clone(),
+                content: vec![UserInputBlock::Text(rustx::message::content::TextBlock {
+                    text: "refused".into(),
+                })],
+            },
+        )
+        .await;
+        assert!(
+            matches!(
+                &refused,
+                Response::Failure(Failure {
+                    error: RpcError {
+                        data: Some(ErrorData::ModelUnavailable { .. }),
+                        ..
+                    },
+                    ..
+                })
+            ),
+            "{refused:?}"
+        );
+        assert_eq!(
+            std::fs::read(&catalog_path).unwrap(),
+            before,
+            "loading an unavailable selection persisted a replacement"
+        );
+        let Response::Success(success) = rpc(
+            &client,
+            5,
+            Method::ModelSet {
+                target,
+                config: Box::new(SessionModelConfig::of(
+                    ModelRef::parse("local/test").unwrap(),
+                )),
+            },
+        )
+        .await
+        else {
+            panic!("model")
+        };
+        let MethodResult::Model { model } = success.result else {
+            panic!("model")
+        };
+        assert!(model.unavailable.is_none());
         client.close().await;
         detach_then_shutdown(&mut child).await;
         assert!(child.wait().await.unwrap().success());
@@ -1638,7 +1731,7 @@ async fn app_server_delivery_access_is_explicit_transport_composition() {
         let trusted = driver::websocket_offering(
             &url,
             &format!(
-                "rustx.app-server.v38, rustx-token.{}, rustx-delivery-access.{secret}",
+                "rustx.app-server.v39, rustx-token.{}, rustx-delivery-access.{secret}",
                 driver::TOKEN
             ),
         )
@@ -1648,7 +1741,7 @@ async fn app_server_delivery_access_is_explicit_transport_composition() {
         assert!(
             driver::try_socket(
                 &url,
-                &format!("rustx.app-server.v38, rustx-delivery-access.{secret}")
+                &format!("rustx.app-server.v39, rustx-delivery-access.{secret}")
             )
             .await
             .is_err(),

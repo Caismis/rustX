@@ -3,7 +3,7 @@ import { useTranslation } from '../../../locale/react';
 import type {
   AgentProfileDocument, AgentSkillSelection, McpWrite, ResourceFamily,
   SourceScope, SourceSettings, SourceToolSelection,
-} from '../../../../../protocol/app-server/v38';
+} from '../../../../../protocol/app-server/v39';
 import { mcpTransport } from '../../../bindings/mcp';
 import { Badge, Facts } from '../../../presentation/settings/SettingsContent';
 import { Button } from '../../../presentation/primitives/Button';
@@ -15,14 +15,14 @@ import { Entries, Strings, Text } from '../forms/fields';
 import { Advanced, Choice } from '../primitives/aria';
 import { documentAuthoring, extensionFamilyLabel, type ExtensionFamily } from '../projection';
 import type { PageFocus } from '../machines/navigation';
-import { ModelSelection } from '../models/ModelsPage';
+import { ModelSelection, type ModelProfiles } from '../models/ModelsPage';
 import { extensionEntries, preparationLabel, preparationTitle, relationshipLabel, selectionLabel, validityLabel } from './inventory';
 import css from '../../../presentation/settings/SettingsContent.module.css';
 import workflow from '../../../presentation/settings/SettingsWorkflow.module.css';
 
 export interface ExtensionDetailProps {
   backLabel?: string;
-  source: SourceSettings; scope: SourceScope; models: string[];
+  source: SourceSettings; scope: SourceScope; models: string[]; profiles: ModelProfiles;
   /** The exact revision of this scope's `rustx.toml`, or `undefined` while it
    * does not parse. Root availability is a unit of that document, so it is
    * editable only while the document is; the definition documents are not. */
@@ -151,7 +151,7 @@ function McpFields({ form }: { form: import('../forms/bridge').TypedUnitForm<Mcp
  * native parsed it into are two facts: a file that does not parse is still this
  * scope's definition — winning, and shadowing any same-name User one — and it
  * is replaced or removed on its own revision. */
-function AgentDefinition({ source, scope, name, models }: ExtensionDetailProps) {
+function AgentDefinition({ source, scope, name, models, profiles }: ExtensionDetailProps) {
   const tx = useTranslation();
   const current = source.agents.find(agent => agent.scope === scope && agent.name === name);
   return <section aria-label={tx('settings:extension-detail.agent-definition')}><h4>{tx('settings:extension-detail.agent-definition')}</h4>
@@ -162,12 +162,12 @@ function AgentDefinition({ source, scope, name, models }: ExtensionDetailProps) 
       revision={current?.source.revision ?? source.absent_resource_revision}
       removalNotice={<p>{tx('settings:extension-detail.the-root-agent-s-delegation-allowlist-is-a-separate-unit-and-is')}</p>}
       mutation={value => ({ kind: 'agent', name, authored: value })}>
-      {form => <AgentFields form={form} models={models} />}
+      {form => <AgentFields form={form} models={models} profiles={profiles} />}
     </TypedUnitForm>
   </section>;
 }
 
-function AgentFields({ form, models }: { form: import('../forms/bridge').TypedUnitForm<AgentProfileDocument>; models: string[] }) {
+function AgentFields({ form, models, profiles }: { form: import('../forms/bridge').TypedUnitForm<AgentProfileDocument>; models: string[]; profiles: ModelProfiles }) {
   const tx = useTranslation();
   const Field = form.Field as unknown as (props: { name: string; children: (field: { state: { value: unknown }; handleChange: (value: never) => void }) => React.ReactNode }) => React.ReactNode;
   return <>
@@ -178,7 +178,7 @@ function AgentFields({ form, models }: { form: import('../forms/bridge').TypedUn
       const model = field.state.value as AgentProfileDocument['model'];
       return <>
         <label><input type="checkbox" checked={!!model} onChange={event => field.handleChange((event.target.checked ? {} : null) as never)} />{tx('settings:extension-detail.explicit-child-model')}</label>
-        {model ? <ModelSelection value={model} change={next => field.handleChange(next as never)} models={models} />
+        {model ? <ModelSelection value={model} change={next => field.handleChange(next as never)} models={models} profiles={profiles} />
           : <p>{tx('settings:extension-detail.inherit-the-invoking-attempt-s-already-frozen-effective-model')}</p>}
       </>;
     }}</Field>

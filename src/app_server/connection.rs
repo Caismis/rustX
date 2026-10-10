@@ -394,6 +394,14 @@ impl AppServerConnection {
             )));
         }
         let id = id?;
+        // Decoding rounds a number literal before any DTO can see it, so the
+        // provider-native parameter domain is decided on the original text.
+        if !super::wire::request_params_numbers_are_exact(json) {
+            return Some(Reply::plain(failure(
+                Some(id),
+                rpc_error(-32602, "Invalid params", None),
+            )));
+        }
         // Decode the original bytes, not the Value above: materializing a Value
         // first would erase duplicate fields before typed validation.
         if let Ok(request) = serde_json::from_str::<Request>(json) {
@@ -1584,6 +1592,12 @@ pub(super) fn client_error(error: RuntimeClientError) -> RpcError {
         RuntimeClientError::ConfigurationAdoption { rejection } => {
             ErrorData::ConfigurationAdoption { rejection }
         }
+        // The App Server selects models through `session/setModel`; a Runtime
+        // Client model refusal here is a turn or compaction refused because
+        // the published catalog no longer admits the configured selection.
+        RuntimeClientError::InvalidModelConfiguration { message } => ErrorData::ModelUnavailable {
+            diagnostic: message,
+        },
         RuntimeClientError::InteractionNotPending { interaction } => {
             ErrorData::InteractionNotPending { interaction }
         }
@@ -1671,6 +1685,9 @@ pub(super) fn domain(data: ErrorData) -> RpcError {
             "Agent is unavailable; physical settlement, publication, or workspace authority requires explicit repair"
         }
         ErrorData::UnknownAgent { .. } => "Unknown Agent in this conversation",
+        ErrorData::ModelUnavailable { .. } => {
+            "The Session's configured Model is not in its published catalog; select one it provides"
+        }
         _ => "Operation rejected",
     };
     rpc_error(-32000, message, Some(data))

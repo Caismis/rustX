@@ -6,9 +6,9 @@ use super::{
     },
     configuration::Origin,
 };
-use crate::model::catalog::{ModelRef, ReasoningProfileId};
+use crate::model::catalog::{ModelProfileId, ModelRef};
 use crate::model::session::{SessionModelConfig, SummaryModelPolicy};
-use crate::toml_authoring::RequestParamsToml;
+use crate::toml_authoring::AuthoredRequestParams;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -218,10 +218,11 @@ impl ToolsLayer {
 pub struct ModelLayer {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<ModelRef>,
+    /// The selected Model Profile; the Model's `default_profile` when omitted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reasoning_profile: Option<ReasoningSelection>,
+    pub profile: Option<ModelProfileId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub request_params: Option<RequestParamsToml>,
+    pub request_params: Option<AuthoredRequestParams>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<ModelOutput>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -252,21 +253,6 @@ partial!(NativeToolsLayer {
     grep: NativePolicyOverrideDocument,
     bash: NativePolicyOverrideDocument
 });
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
-pub enum ReasoningSelection {
-    CatalogDefault {},
-    Profile { name: ReasoningProfileId },
-}
-impl ReasoningSelection {
-    #[must_use]
-    pub fn resolve(self) -> Option<ReasoningProfileId> {
-        match self {
-            Self::CatalogDefault {} => None,
-            Self::Profile { name } => Some(name),
-        }
-    }
-}
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ModelOutput {
@@ -316,9 +302,9 @@ pub enum SummaryAuthoring {
     Explicit {
         model: ModelRef,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        reasoning_profile: Option<ReasoningSelection>,
+        profile: Option<ModelProfileId>,
         #[serde(default)]
-        request_params: RequestParamsToml,
+        request_params: AuthoredRequestParams,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_output_tokens: Option<ModelOutput>,
     },
@@ -329,12 +315,12 @@ impl SummaryAuthoring {
             Self::Session {} => SummaryModelPolicy::Session,
             Self::Explicit {
                 model,
-                reasoning_profile,
+                profile,
                 request_params,
                 max_output_tokens,
             } => SummaryModelPolicy::Explicit {
                 model,
-                reasoning_profile: reasoning_profile.and_then(ReasoningSelection::resolve),
+                profile,
                 request_params: request_params.0,
                 max_output_tokens: max_output_tokens.and_then(ModelOutput::resolve),
             },
@@ -466,11 +452,8 @@ pub(super) fn serialize_profile_model<S: serde::Serializer>(
         .as_ref()
         .map(|model| ModelLayer {
             model: Some(model.model.clone()),
-            reasoning_profile: model
-                .reasoning_profile
-                .clone()
-                .map(|name| ReasoningSelection::Profile { name }),
-            request_params: Some(RequestParamsToml(model.request_params.clone())),
+            profile: model.profile.clone(),
+            request_params: Some(AuthoredRequestParams(model.request_params.clone())),
             max_output_tokens: model
                 .max_output_tokens
                 .map(|tokens| ModelOutput::Limit { tokens }),
@@ -478,15 +461,13 @@ pub(super) fn serialize_profile_model<S: serde::Serializer>(
                 SummaryModelPolicy::Session => SummaryAuthoring::Session {},
                 SummaryModelPolicy::Explicit {
                     model,
-                    reasoning_profile,
+                    profile,
                     request_params,
                     max_output_tokens,
                 } => SummaryAuthoring::Explicit {
                     model: model.clone(),
-                    reasoning_profile: reasoning_profile
-                        .clone()
-                        .map(|name| ReasoningSelection::Profile { name }),
-                    request_params: RequestParamsToml(request_params.clone()),
+                    profile: profile.clone(),
+                    request_params: AuthoredRequestParams(request_params.clone()),
                     max_output_tokens: max_output_tokens
                         .map(|tokens| ModelOutput::Limit { tokens }),
                 },
@@ -509,7 +490,7 @@ impl ModelLayer {
     /// A primary model must be authored.
     pub fn resolve(self) -> Result<SessionModelConfig, String> {
         let mut model = SessionModelConfig::of(self.model.ok_or("missing model.model")?);
-        model.reasoning_profile = self.reasoning_profile.and_then(ReasoningSelection::resolve);
+        model.profile = self.profile;
         model.max_output_tokens = self.max_output_tokens.and_then(ModelOutput::resolve);
         model.request_params = self.request_params.unwrap_or_default().0;
         if let Some(summary) = self.summary_model {
@@ -554,7 +535,7 @@ impl RuntimeLayer {
             "agent.tools",
             "agent.skills",
             "agent.model.model",
-            "agent.model.reasoning_profile",
+            "agent.model.profile",
             "agent.model.request_params",
             "agent.model.max_output_tokens",
             "agent.model.summary_model",
@@ -768,10 +749,7 @@ milliseconds = 100
 [agent]
 [agent.model]
 model = "p/m"
-
-[agent.model.reasoning_profile]
-mode = "profile"
-name = "custom"
+profile = "custom"
 
 
 [agent.model.max_output_tokens]
@@ -788,12 +766,7 @@ timezone = "Asia/Shanghai"
     fn omission_inherits_and_each_domain_can_explicitly_reset() {
         let (inherited, _) = resolve(LOWER, "");
         assert_eq!(
-            inherited
-                .initial_model()
-                .clone()
-                .reasoning_profile
-                .unwrap()
-                .as_str(),
+            inherited.initial_model().clone().profile.unwrap().as_str(),
             "custom"
         );
         assert_eq!(
@@ -802,6 +775,8 @@ timezone = "Asia/Shanghai"
         );
         assert_eq!(inherited.context.summary_output_cap, Some(256));
         assert_eq!(inherited.tool_deadline_policy.idle_liveness_ms, Some(100));
+        // The model selection is one replacement unit: an upper selection that
+        // omits `profile` selects the Model's default profile.
         let (reset, origins) = resolve(
             LOWER,
             r#"[context]
@@ -817,8 +792,6 @@ mode = "disabled"
 [agent]
 [agent.model]
 model = "p/m"
-[agent.model.reasoning_profile]
-mode = "catalog_default"
 
 
 [agent.model.max_output_tokens]
@@ -831,7 +804,7 @@ mode = "catalog_default"
 timezone = "UTC"
 "#,
         );
-        assert_eq!(reset.initial_model().clone().reasoning_profile, None);
+        assert_eq!(reset.initial_model().clone().profile, None);
         assert_eq!(reset.initial_model().clone().max_output_tokens, None);
         assert_eq!(reset.context.summary_output_cap, None);
         assert_eq!(reset.tool_deadline_policy.idle_liveness_ms, None);
@@ -872,9 +845,7 @@ milliseconds = 200
 [agent]
 [agent.model]
 model = "p/m"
-[agent.model.reasoning_profile]
-mode = "profile"
-name = "catalog_default"
+profile = "catalog_default"
 
 
 [agent.model.max_output_tokens]
@@ -883,12 +854,7 @@ tokens = 1024
 "#,
         );
         assert_eq!(
-            config
-                .initial_model()
-                .clone()
-                .reasoning_profile
-                .unwrap()
-                .as_str(),
+            config.initial_model().clone().profile.unwrap().as_str(),
             "catalog_default"
         );
         assert_eq!(config.initial_model().clone().max_output_tokens, Some(1024));
@@ -900,8 +866,11 @@ tokens = 1024
         for text in [
             "typo = true",
             "approvalMode = 'policy'",
-            "[agent]\n[agent.model]\nmodel = \"p/m\"\n\n[agent.model.request_params_json]\n",
-            "[agent]\n[agent.model]\nmodel = \"p/m\"\n\n[agent.model.reasoning_profile]\nmode = \"catalog_default\"\nname = \"hidden\"\n",
+            "[agent]\n[agent.model]\nmodel = \"p/m\"\nrequest_params_json = '{}'\n",
+            "[agent]\n[agent.model]\nmodel = \"p/m\"\n\n[agent.model.reasoning_profile]\nmode = \"profile\"\nname = \"hidden\"\n",
+            "[agent]\n[agent.model]\nmodel = \"p/m\"\nreasoning_profile = \"hidden\"\n",
+            "[agent]\n[agent.model]\nmodel = \"p/m\"\nprofile = \"two words\"\n",
+            "[agent]\n[agent.model]\nmodel = \"p/m\"\n[agent.model.request_params]\ntemperature = 0.7\n",
             "[agent.model]\nmodel = 'p/m'\n[unterminated",
             "[agent.model]\nmodel = 'p/m'\nmodel = 'p/other'",
         ] {
@@ -946,50 +915,111 @@ tokens = 1024
         }
     }
 
-    #[test]
-    fn structured_params_round_trip_and_reject_unsupported_summary_values() {
-        let text = r#"[agent.model]
+    const SELECTION: &str = r#"[agent.model]
 model = "p/m"
-request_params = {temperature = 0.7, chat_template_kwargs = {enable_thinking = true}}
+profile = "fast"
+request_params = '{"future":{"nested":[1,"text",{"new":true},null]},"text":"x","flag":false,"temperature":0.7}'
 [agent.model.summary_model]
 mode = "explicit"
 model = "p/s"
-request_params = {documents = [{title = "A", options = {enabled = true}}]}
+profile = "summary"
+request_params = '''
+{"vendor": ["text", [1, 2], {"arbitrary": "yes", "unset": null}]}
+'''
+[agent.model.summary_model.max_output_tokens]
+mode = "limit"
+tokens = 256
 "#;
-        let config = layer(text).resolve().unwrap();
-        let serialized = toml::to_string_pretty(&config.agent).unwrap();
-        assert!(!serialized.contains("request_params_json"));
-        assert!(
-            serialized.contains("[model.request_params]"),
-            "{serialized}"
+
+    #[test]
+    fn root_and_named_selections_write_json_strings_and_reread_exactly() {
+        let config = layer(SELECTION).resolve().unwrap();
+        let model = config.initial_model().clone();
+        assert_eq!(model.profile.as_ref().unwrap().as_str(), "fast");
+        assert_eq!(
+            model.request_params["future"]["nested"][3],
+            serde_json::Value::Null
         );
+        let summary = model.summary_selection().unwrap();
+        assert_eq!(summary.profile.as_ref().unwrap().as_str(), "summary");
+        assert_eq!(summary.max_output_tokens, Some(256));
+        assert_eq!(
+            summary.request_params["vendor"][2]["unset"],
+            serde_json::Value::Null
+        );
+        // Named Agent documents use the same selection authoring.
+        let written = crate::toml_authoring::write(&config.agent).unwrap();
+        let table = written.parse::<toml::Table>().unwrap();
+        assert!(table["model"]["request_params"].is_str(), "{written}");
+        assert!(
+            table["model"]["summary_model"]["request_params"].is_str(),
+            "{written}"
+        );
+        assert_eq!(table["model"]["profile"].as_str(), Some("fast"));
         let again: super::super::config::AgentProfileDocument =
-            crate::toml_authoring::parse(serialized.as_bytes()).unwrap();
+            crate::toml_authoring::parse(written.as_bytes()).unwrap();
         assert_eq!(config.agent, again);
-        for value in [
-            "1979-05-27",
-            "07:32:00",
-            "1979-05-27T07:32:00Z",
-            "nan",
-            "+inf",
-            "-inf",
+        // The root runtime document writes the same source form.
+        let document = layer(SELECTION);
+        let written = crate::toml_authoring::write(&document).unwrap();
+        assert_eq!(layer(&written), document);
+        assert!(
+            written.parse::<toml::Table>().unwrap()["agent"]["model"]["request_params"].is_str()
+        );
+        // Client JSON keeps structured objects for the same documents.
+        let json = serde_json::to_value(&config.agent).unwrap();
+        assert_eq!(json["model"]["profile"], "fast");
+        assert_eq!(
+            json["model"]["summary_model"]["request_params"]["vendor"][2]["unset"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            serde_json::from_value::<super::super::config::AgentProfileDocument>(json).unwrap(),
+            config.agent
+        );
+    }
+
+    #[test]
+    fn selection_json_formatting_does_not_change_semantics() {
+        let reformatted = SELECTION.replace(
+            r#"'{"future":{"nested":[1,"text",{"new":true},null]},"text":"x","flag":false,"temperature":0.7}'"#,
+            "'''\n{ \"temperature\": 0.7, \"flag\": false,\n  \"text\": \"x\", \"future\": { \"nested\": [1, \"text\", {\"new\": true}, null] } }\n'''",
+        );
+        assert_ne!(reformatted, SELECTION);
+        assert_eq!(
+            layer(&reformatted).resolve().unwrap(),
+            layer(SELECTION).resolve().unwrap()
+        );
+    }
+
+    #[test]
+    fn invalid_selection_params_report_their_field_without_values() {
+        for (prefix, path) in [
+            ("[agent.model]\nmodel = 'p/m'", "agent.model.request_params"),
+            (
+                "[agent.model]\nmodel = 'p/m'\n[agent.model.summary_model]\nmode = 'explicit'\nmodel = 'p/s'",
+                "agent.model.summary_model.request_params",
+            ),
         ] {
-            for (prefix, path) in [
+            for (json, reason) in [
                 (
-                    "[agent.model]\nmodel = 'p/m'",
-                    "agent.model.request_params.items[1].when",
+                    "{\"SECRET_VALUE\":1,\"SECRET_VALUE\":2}",
+                    "repeats a JSON object key",
                 ),
+                ("{broken SECRET_VALUE", "is not valid JSON"),
+                ("[\"SECRET_VALUE\"]", "must encode a JSON object"),
+                ("null", "must encode a JSON object"),
                 (
-                    "[agent.model]\nmodel = 'p/m'\n[agent.model.summary_model]\nmode = 'explicit'\nmodel = 'p/s'",
-                    "agent.model.summary_model.request_params.items[1].when",
+                    "{\"SECRET_VALUE\":9007199254740993}",
+                    "has a JSON number that is not exactly representable",
                 ),
             ] {
-                let text = format!(
-                    "{prefix}\nrequest_params = {{items = [{{when = true}}, {{when = {value}}}]}}"
-                );
+                let text = format!("{prefix}\nrequest_params = '{json}'\n");
                 let error =
                     crate::toml_authoring::parse::<RuntimeLayer>(text.as_bytes()).unwrap_err();
-                assert!(error.contains(path), "{error}");
+                assert!(error.contains(&format!("{path} {reason}")), "{error}");
+                assert!(!error.contains("SECRET_VALUE"), "{error}");
+                assert!(!error.contains("9007199254740993"), "{error}");
                 // Named Agent authoring consumes the same ModelLayer adapter.
                 let named = text.replace("agent.model", "model");
                 let error = crate::toml_authoring::parse::<
@@ -1001,42 +1031,12 @@ request_params = {documents = [{title = "A", options = {enabled = true}}]}
                     "{error}"
                 );
             }
-        }
-    }
-    #[test]
-    fn structured_params_use_one_boundary_including_explicit_summary() {
-        let config = layer(r#"[agent]
-[agent.model]
-model = "p/m"
-request_params = { future = { nested = [1, "text", { new = true }] }, text = "x", flag = false, temperature = 0.7 }
-
-[agent.model.summary_model]
-mode = "explicit"
-model = "p/s"
-request_params = { vendor = ["text", [1, 2], { arbitrary = "yes" }] }
-"#).resolve().unwrap();
-        assert_eq!(
-            config.initial_model().clone().request_params["future"]["nested"][1],
-            serde_json::json!("text")
-        );
-        assert_eq!(
-            config.initial_model().clone().request_params["future"]["nested"][2]["new"],
-            true
-        );
-        assert_eq!(
-            config
-                .initial_model()
-                .clone()
-                .summary_selection()
-                .unwrap()
-                .request_params["vendor"][0],
-            serde_json::json!("text")
-        );
-        for json in ["null", "[]", "[1]", "42", "true", "\"string\"", "{broken"] {
-            let text =
-                format!("[agent]\n[agent.model]\nmodel = \"p/m\"\nrequest_params = '{json}'\n");
+            let text = format!("{prefix}\nrequest_params = {{temperature = 0.7}}\n");
             let error = crate::toml_authoring::parse::<RuntimeLayer>(text.as_bytes()).unwrap_err();
-            assert!(error.contains("request_params must be a TOML table"));
+            assert!(
+                error.contains(&format!("{path} must be a JSON-encoded string")),
+                "{error}"
+            );
         }
     }
 }

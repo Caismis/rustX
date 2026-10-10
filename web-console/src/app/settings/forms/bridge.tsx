@@ -1,8 +1,8 @@
 import { useTranslation } from '../../../locale/react';
-import { useContext, useEffect, useRef, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, type ReactNode } from 'react';
 import { useForm, type ReactFormExtendedApi } from '@tanstack/react-form';
 import { useSelector } from '@xstate/react';
-import type { SourceMutation } from '../../../../../protocol/app-server/v38';
+import type { SourceMutation } from '../../../../../protocol/app-server/v39';
 import { Button } from '../../../presentation/primitives/Button';
 import { SourceContext } from '../source-context';
 import { useSettingsActor, useUnitTransaction } from '../machines/react';
@@ -23,6 +23,15 @@ import css from '../../../presentation/settings/SettingsContent.module.css';
  * configuration transaction owner — see `useUnitEditing`. */
 export type TypedUnitForm<T> = ReactFormExtendedApi<
   T, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, never>;
+
+/** The owner-driven reset generation of the enclosing semantic unit: it
+ * changes exactly when the unit's transaction owner discards its intent,
+ * accepts a reviewed revision, or retires after a discard or a settled commit.
+ * An editor holding a local buffer that never becomes the draft — unparsed
+ * JSON text — resynchronizes on it even when the value it presents is
+ * unchanged. A new transaction, a field edit and a source observation never
+ * change it. Outside a unit it is constant. */
+export const UnitReset = createContext(0);
 
 /** Structural equality of two authored values.
  *
@@ -118,6 +127,8 @@ export interface UnitEditing<T> {
   readonly intent: boolean;
   /** This unit's own native outcome. Never another unit's. */
   readonly outcome: MutationOutcome;
+  /** See `UnitReset`. */
+  readonly resets: number;
   readonly base: string;
   readonly observed: string;
   readonly scope: 'user' | 'workspace';
@@ -205,6 +216,7 @@ export function useUnitEditing<T>({ authored, authoredPresent = authored !== und
   // The target reports one outcome at a time; this reads only the one that is
   // about this unit, so two independent sections never borrow each other's.
   const outcome = useSelector(actor, target => unitOutcome(target, identity), (left, right) => left.kind === right.kind && JSON.stringify(left) === JSON.stringify(right));
+  const resets = useSelector(actor, target => target.context.resets[identity] ?? 0);
   const draft = transaction?.draft as { value: T } | undefined;
   const unparsed = authoredPresent && authored === undefined;
   const base = transaction?.base ?? revision;
@@ -232,7 +244,7 @@ export function useUnitEditing<T>({ authored, authoredPresent = authored !== und
   const writable = definition !== 'inherited' && !awaitingObservation;
   const begin = (value: T) => actor.send({ type: 'UNIT.EDIT', identity, selector, revision, value });
   return {
-    identity, displayed, outcome, draft: draft !== undefined, authoredPresent, unparsed,
+    identity, displayed, outcome, resets, draft: draft !== undefined, authoredPresent, unparsed,
     overriding: draft !== undefined || authoredPresent, inheritance, committed, busy, admitted,
     base, observed, scope, facts, configUnit: unitMutation.kind === 'config',
     definition, shadowed, awaitingObservation, writable,
@@ -294,7 +306,7 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
   // that shadows nothing is a real deletion and is named as one.
   const restoresInherited = workspace && (unit.definition === undefined || unit.shadowed !== undefined);
   const owner = workspace ? tx('settings:extension-detail.workspace') : tx('settings:extension-detail.user');
-  return <form ref={card} tabIndex={-1} aria-label={title} className={css.unit} data-definition={unit.definition} data-draft={unit.draft || undefined}
+  return <UnitReset.Provider value={unit.resets}><form ref={card} tabIndex={-1} aria-label={title} className={css.unit} data-definition={unit.definition} data-draft={unit.draft || undefined}
     data-authored-value={unit.definition === 'authored' ? unit.unparsed ? 'unparsed' : 'parsed' : undefined}
     onSubmit={event => { event.preventDefault(); unit.submit(); }}>
     <fieldset disabled={unit.busy}><legend>{title}</legend>
@@ -358,7 +370,7 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
         {unit.reviewNeeded && <Button type="button" onClick={unit.review}>{tx('settings:bridge.use-reviewed-revision')}</Button>}
       </div>
     </fieldset>
-  </form>;
+  </form></UnitReset.Provider>;
 }
 
 /** What one whole-identity resource definition is in this scope, worded for

@@ -77,6 +77,7 @@ pub(super) struct Probe {
     pub(super) fail_configuration_once: std::sync::atomic::AtomicBool,
     pub(super) before_configuration_prepare: AsyncGate,
     pub(super) before_configuration_publish: AsyncGate,
+    pub(super) before_catalog_publication: AsyncGate,
     pub(super) idle_before_claim: Arc<crate::runtime::conversation_runtime::Gate>,
     pub(super) idle_after_claim: Arc<crate::runtime::conversation_runtime::Gate>,
     pub(super) activation: Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>,
@@ -101,6 +102,7 @@ impl Default for Probe {
             fail_configuration_once: std::sync::atomic::AtomicBool::new(false),
             before_configuration_prepare: AsyncGate::default(),
             before_configuration_publish: AsyncGate::default(),
+            before_catalog_publication: AsyncGate::default(),
             idle_before_claim: Arc::default(),
             idle_after_claim: Arc::default(),
             activation: Mutex::new(None),
@@ -154,9 +156,11 @@ impl Fixture {
             let index = usize::from(body.contains("request-B"));
             let request: serde_json::Value = serde_json::from_str(body).unwrap();
             if tool == Some("review") {
-                let child = request["tools"].as_array().unwrap().iter().any(|tool| tool["function"]["name"] == "workflow_output");
+                let offers = |name: &str| request["tools"].as_array().unwrap().iter().any(|tool| tool["function"]["name"] == name);
+                let child = offers("workflow_output");
                 let messages = request["messages"].as_array().unwrap();
-                if child || messages.last().is_some_and(|message| message["role"] == "user") {
+                // Root calls the Workflow only when its adopted closure offers it.
+                if child || (offers("review") && messages.last().is_some_and(|message| message["role"] == "user")) {
                     let name = if child { "workflow_output" } else { "review" };
                     let chunk = serde_json::json!({"id":"workflow","object":"chat.completion.chunk","created":1,"model":"a",
                         "choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"workflow-call","type":"function",

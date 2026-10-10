@@ -5,7 +5,7 @@ import { Server, snapshot } from '../fixture';
 import { cfg3Source, cfg3Effective } from '../cfg3-data';
 import { traceRecord } from '../trace-fixture';
 import { RpcFailure } from '../../src/client/app-server';
-import type { Request } from '../../../protocol/app-server/v38';
+import type { Request } from '../../../protocol/app-server/v39';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -28,15 +28,15 @@ server.handlers.set('session/model', request => {
 server.workspaceHost.resolveWorkspace = async () => ({ cwd: '/workspace/A' });
 server.workspaceHost.classifyLocations = async paths => paths.map(() => ({ authorized: true, workspaceId: 'workspace-a' }));
 const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], toolCalls: true, reasoning: false };
-server.workspaceHost.configureWorkspace = async () => ({ kind: 'read', projection: { ...cfg3Source(), session_models: { kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: ['fixture/native', 'fixture/second'].map(model => ({ model, protocol: 'openai_responses' as const, contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'environment', variable: 'KEY' }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, reasoningProfiles: [] })) } }, prospective_approval_mode: 'policy', target: { kind: 'workspace', directory: '/workspace/A' } } });
+server.workspaceHost.configureWorkspace = async () => ({ kind: 'read', projection: { ...cfg3Source(), session_models: { kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: ['fixture/native', 'fixture/second'].map(model => ({ model, protocol: 'openai_responses' as const, contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'environment', variable: 'KEY' }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [] })) } }, prospective_approval_mode: 'policy', target: { kind: 'workspace', directory: '/workspace/A' } } });
 if (new URL(location.href).searchParams.has('models')) {
   const saved = server.snapshots.get('A')!;
   saved.model = cfg3Effective().effective_model;
   saved.transcript.entries = Array.from({ length: 20 }, (_, index) => ({ cursor: String(index + 1), item: { type: 'message' as const, message: { id: `saved-${index}`, role: index % 2 ? 'assistant' as const : 'user' as const, source: 'human' as const, content: [{ type: 'text' as const, text: `Saved message ${index}: ` + 'Previously saved conversation content. '.repeat(12) }] } } }));
-  server.handlers.set('session/models', () => ({ type: 'models', catalog: { models: [{ model: saved.model!.configured.model, protocol: 'openai_responses' as const, contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'literal' }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, reasoningProfiles: [] }] } }));
+  server.handlers.set('session/models', () => ({ type: 'models', catalog: { models: [{ model: saved.model!.configured.model, protocol: 'openai_responses' as const, contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'literal' }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [] }] } }));
 }
 if (new URL(location.href).searchParams.has('cold-model')) {
-  const models = ['fixture/native', 'fixture/second'].map(model => ({ model, protocol: 'openai_responses' as const, contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'literal' as const }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, reasoningProfiles: [{ id: 'low', enabled: true }, { id: 'high', enabled: true }], defaultReasoningProfile: 'high' }));
+  const models = ['fixture/native', 'fixture/second'].map(model => ({ model, protocol: 'openai_responses' as const, contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'literal' as const }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [{ id: 'low', reasoningEnabled: true }, { id: 'high', reasoningEnabled: true }], defaultProfile: 'high' }));
   const configure = server.workspaceHost.configureWorkspace;
   server.workspaceHost.configureWorkspace = async (...args) => {
     const result = await configure(...args);
@@ -47,7 +47,7 @@ if (new URL(location.href).searchParams.has('cold-model')) {
   server.handlers.set('session/setModel', request => {
     if (request.method !== 'session/setModel') throw Error('Wrong method');
     const saved = server.snapshots.get(request.params.target.session_id)!;
-    saved.model = { ...saved.model!, configured: request.params.config, effective: { ...saved.model!.effective, model: request.params.config.model, reasoningProfile: request.params.config.reasoningProfile } };
+    saved.model = { ...saved.model!, configured: request.params.config, effective: { ...saved.model!.effective!, model: request.params.config.model, profile: request.params.config.profile } };
     return { type: 'model', model: saved.model };
   });
 }

@@ -246,7 +246,7 @@ impl Lab {
             .collect::<Vec<_>>();
         let root_agents = serde_json::Value::Array(names);
         crate::launch_fixture::write_roles(&self.workspace(), &mut subagents);
-        let document = serde_json::json!({"schema_version": 9, "agent_id": "agent-issue258", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "subagents": subagents, "agent": {"model": {"model": "local/model-a"}, "tools": {"builtin": builtin_tools}, "agents": root_agents, "workflows": []}});
+        let document = serde_json::json!({"schema_version": 10, "agent_id": "agent-issue258", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "subagents": subagents, "agent": {"model": {"model": "local/model-a"}, "tools": {"builtin": builtin_tools}, "agents": root_agents, "workflows": []}});
         std::fs::write(
             self.root().join("rustx.toml"),
             format!(

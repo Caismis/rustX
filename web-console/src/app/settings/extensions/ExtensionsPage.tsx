@@ -2,7 +2,7 @@ import { ResourceAvailability } from './ResourceAvailability';
 import type { ReactNode } from 'react';
 import { useState } from 'react';
 import { useTranslation } from '../../../locale/react';
-import type { ResourceFamily, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v38';
+import type { ResourceFamily, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v39';
 import { Button } from '../../../presentation/primitives/Button';
 import { IconAgentPresetOutline16, IconCodeOutline16 } from '../../../presentation/primitives/icons';
 import { NativeFacts } from '../../components/NativeFacts';
@@ -12,6 +12,7 @@ import type { PageFocus } from '../machines/navigation';
 import { TextField } from '../forms/controls';
 import { allExtensionEntries, collectionDiagnostics, extensionEntries, resourceFamilies, type ExtensionEntry } from './inventory';
 import { ExtensionDetail } from './ExtensionDetail';
+import type { ModelProfiles } from '../models/ModelsPage';
 import { NativeExtensions } from './NativeExtensions';
 import css from '../../../presentation/settings/SettingsContent.module.css';
 import catalog from './ResourceCatalog.module.css';
@@ -20,8 +21,8 @@ export type ExtensionFilter = 'all' | Exclude<ExtensionFamily, 'mcp'>;
 
 /** Resource management uses native ownership for groups and existing exact-scope
  * editors for writes. Browsing a catalog does not prepare or connect resources. */
-export function ExtensionsPage({ source, scope, revision, models, focus, onFocus, filter, onFilter, scopeControl, refresh, refreshing }: {
-  source: SourceSettings; scope: SourceScope; revision?: string; models: string[];
+export function ExtensionsPage({ source, scope, revision, models, profiles, focus, onFocus, filter, onFilter, scopeControl, refresh, refreshing }: {
+  source: SourceSettings; scope: SourceScope; revision?: string; models: string[]; profiles: ModelProfiles;
   focus?: PageFocus['extensions']; onFocus: (focus?: PageFocus['extensions']) => void;
   filter: ExtensionFilter; onFilter: (filter: ExtensionFilter) => void;
   scopeControl: ReactNode; refresh: () => void; refreshing: boolean;
@@ -35,7 +36,7 @@ export function ExtensionsPage({ source, scope, revision, models, focus, onFocus
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
   const title = filter === 'all' ? tx('settings:extensions-page.extensions') : filters.find(([id]) => id === filter)![1];
-  if (focus) return <ExtensionDetail source={source} scope={scope} revision={revision} models={models} family={focus.family} name={focus.name} onFocus={onFocus}/>;
+  if (focus) return <ExtensionDetail source={source} scope={scope} revision={revision} models={models} profiles={profiles} family={focus.family} name={focus.name} onFocus={onFocus}/>;
   const entries = filter === 'all' ? allExtensionEntries(source, scope).filter(entry => entry.family !== 'mcp') : filter === 'native' ? [] : extensionEntries(source, scope, filter);
   const canCreate = filter === 'agent';
   const describe = (entry: ExtensionEntry) => {
