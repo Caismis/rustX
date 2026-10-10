@@ -18,7 +18,7 @@ export const en = {
 
 
   "mcp.status-invalid": "The server configuration is invalid.",
-  "mcp.probe-reachable": "Connection check passed. This is not the Agent's live connection.",
+  "mcp.probe-reachable": "Connected and available.",
   "mcp.probe-checking": "Checking MCP connectivity…",
   "mcp.probe-connection_failed": "Connection check failed during initialization.",
   "mcp.probe-list_failed": "Connected, but reading the tool list failed.",
@@ -643,7 +643,7 @@ export const zh = {
 
 
   "mcp.status-invalid": "服务器配置无效。",
-  "mcp.probe-reachable": "连接检测成功。这不代表 Agent 当前会话的连接状态。",
+  "mcp.probe-reachable": "已连接并可用。",
   "mcp.probe-checking": "正在检测 MCP 连通性…",
   "mcp.probe-connection_failed": "连接检测失败：初始化未成功。",
   "mcp.probe-list_failed": "已连接，但读取工具列表失败。",

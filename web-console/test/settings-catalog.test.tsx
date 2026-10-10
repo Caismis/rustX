@@ -84,13 +84,13 @@ it('MCP navigation and refresh perform finite connectivity checks without writin
   const s = cfg3Client();
   s.source.user.authored!.agent = {tools:{sources:{search:'all'}}};
   await catalog(s);
-  await screen.findByRole('img', {name:/Connection check passed/});
+  await screen.findByRole('img', {name:/Connected and available/});
   await openSettingsPage('MCP servers');
   fireEvent.click(screen.getByRole('button', {name:'Refresh'}));
   await settingsReady();
   await openSettingsPage('General');
   await openSettingsPage('MCP servers');
-  await waitFor(() => expect(screen.getByRole('img', {name:/Connection check passed/})).toBeTruthy());
+  await waitFor(() => expect(screen.getByRole('img', {name:/Connected and available/})).toBeTruthy());
   expect([...new Set(s.request.mock.calls.map(([op]) => op.method))].sort()).toEqual(['configuration/sourcesRead','mcp/probe']);
   expect(writes(s)).toHaveLength(0);
 });
