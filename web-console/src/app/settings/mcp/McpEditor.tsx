@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import type { McpWrite, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v38';
+import type { McpWrite, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v39';
 import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
 import { useUnitEditing } from '../forms/bridge';

@@ -34,6 +34,14 @@ const test = base.extend<{ reading: { fixture: Awaited<ReturnType<typeof startDo
     const first = (await remote.client.call('session/turns', { target: attached.target, offset: 0, limit: 64 }, 'conversation_turns')).page.turns[0];
     const latest = (await remote.client.call('session/transcript', { target: attached.target, at: { type: 'latest' }, limit: 64 }, 'transcript_window')).window;
     expect(BigInt(latest.page.entries![0].cursor) - BigInt(first.cursor!)).toBeGreaterThan(512n);
+    const firstWindow = (await remote.client.call('session/transcript', { target: attached.target, at: { type: 'turn', id: first.id, cut: (await remote.client.call('session/turns', { target: attached.target, offset: 0, limit: 64 }, 'conversation_turns')).page.cut }, limit: 64 }, 'transcript_window')).window;
+    const sourceEntry = firstWindow.page.entries!.find(entry => entry.item.type === 'message' && entry.item.message.role === 'assistant')!;
+    if (sourceEntry.item.type !== 'message') throw new Error('Missing canonical source message');
+    const exact = (await remote.client.call('session/transcript', { target: attached.target, at: { type: 'message', id: sourceEntry.item.message.id, cut: firstWindow.cut }, limit: 1 }, 'transcript_window')).window;
+    expect(exact.target_cursor).toBe(sourceEntry.cursor);
+    expect(exact.target ?? null).toBeNull();
+    expect(exact.page.entries).toHaveLength(1);
+    expect(exact.page.entries![0].item).toMatchObject({ type: 'message', message: { id: sourceEntry.item.message.id } });
     await remote.client.call('session/detach', { target: attached.target }, 'detached'); await remote.shutdown();
       await use({ fixture, id, pass: () => { passed = true; } });
     } finally { await fixture.stop(passed); }

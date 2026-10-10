@@ -4,13 +4,14 @@
 // native Attempt outline; an unloaded mark pages its native outline page in
 // before navigating.
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import type { ConversationTurn } from '../../../../protocol/app-server/v38';
+import type { ConversationTurn } from '../../../../protocol/app-server/v39';
 import type { AppServerClient } from '../../client/app-server';
 import { shallowEqual, useClientSelector } from '../../client/selectors';
 import { turnKey } from '../../client/transcript';
 import { useTranslation } from '../../locale/react';
 import css from './TurnNavigator.module.css';
 import { currentTurnLocation, turnRail, turnRailRange, TURN_SPACING_PX, RAIL_INSET_PX, type TurnRailItem } from './turn-rail-items';
+import { HISTORY_PAGE_SIZE } from '../../client/transcript';
 
 /** Fade band the mask reserves at a scrollable end. */
 const FADE_PX = 24;
@@ -60,6 +61,20 @@ export function TurnNavigator({ client, sessionId, onNavigate, active }: { clien
     [view.running, view.conversation, view.attempt]);
   const page = view.outline?.page;
   const items = useMemo(() => turnRail(page, currentId, view.location), [page, currentId, view.location]);
+  const previewRead = useRef<string | null>(null);
+  useEffect(() => { previewRead.current = null; }, [view.target, view.generation]);
+  useEffect(() => {
+    if (!previewKey) { previewRead.current = null; return; }
+    const index = items.indexOfKey(previewKey), item = index === undefined ? undefined : items.item(index);
+    if (!item || item.turn || view.attachment !== 'attached' || view.outline?.loading || view.navigation?.pending) return;
+    const key = `${view.generation}:${view.conversation}:${item.key}`;
+    if (previewRead.current === key) return;
+    const timer = setTimeout(() => {
+      previewRead.current = key;
+      void client.readTurns(sessionId, Math.floor((item.ordinal - 1) / HISTORY_PAGE_SIZE) * HISTORY_PAGE_SIZE);
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [client, sessionId, items, previewKey, view.generation, view.conversation, view.attachment, view.outline?.loading, view.navigation?.pending]);
   const missingLocation = !!page && !!view.location && BigInt(page.cut.transcript) < BigInt(view.location);
   useEffect(() => { if (missingLocation && !view.outline?.loading && !view.outline?.error && view.attachment === 'attached') void client.refreshTurns(sessionId); },
     [client, sessionId, missingLocation, view.outline?.loading, view.outline?.error, view.attachment, page?.offset]);
@@ -87,6 +102,8 @@ function TurnRail({ navigationLabel, loading, items, activeId, isActive, isBusy,
   label: (item: TurnRailItem) => string; title: (item: TurnRailItem) => string;
 }) {
   const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const drag = useRef<{ pointer: number; start: number; moved: boolean; index?: number } | null>(null);
+  const suppressClick = useRef(false);
   const initialization = useRef({ placed: false, index: 0, follow: null as { index: number; count: number; height: number } | null });
   const pointerInsideRef = useRef(false);
   const [geometry, setGeometry] = useState({ top: 0, height: 0 });
@@ -137,7 +154,40 @@ function TurnRail({ navigationLabel, loading, items, activeId, isActive, isBusy,
   return <nav className={css.frame} aria-label={navigationLabel} aria-busy={loading || undefined}
     onPointerEnter={() => { pointerInsideRef.current = true; }}
     onPointerLeave={() => { pointerInsideRef.current = false; setPreviewKey(null); }}>
-    <div ref={scrollerRef} className={scroller.join(' ')} onScroll={event => { const top = event.currentTarget.scrollTop; setGeometry(value => ({ ...value, top })); }}>
+    <div ref={scrollerRef} className={scroller.join(' ')} onScroll={event => { const top = event.currentTarget.scrollTop; setGeometry(value => ({ ...value, top })); }}
+      onPointerDown={event => {
+        if (event.button !== 0) return;
+        suppressClick.current = false;
+        drag.current = { pointer: event.pointerId, start: event.clientY, moved: false };
+      }}
+      onPointerMove={event => {
+        const gesture = drag.current;
+        if (!gesture || gesture.pointer !== event.pointerId || !gesture.moved && Math.abs(event.clientY - gesture.start) < 4) return;
+        gesture.moved = true;
+        event.currentTarget.setPointerCapture(event.pointerId);
+        const rect = event.currentTarget.getBoundingClientRect();
+        if (event.clientY < rect.top + 16) event.currentTarget.scrollTop -= TURN_SPACING_PX;
+        if (event.clientY > rect.bottom - 16) event.currentTarget.scrollTop += TURN_SPACING_PX;
+        const index = Math.max(0, Math.min(items.count - 1, Math.round((event.clientY - rect.top + event.currentTarget.scrollTop - RAIL_INSET_PX) / TURN_SPACING_PX)));
+        gesture.index = index;
+        const top = event.currentTarget.scrollTop;
+        setGeometry(value => ({ ...value, top }));
+        setPreviewKey(items.item(index)?.key ?? null);
+      }}
+      onPointerUp={event => {
+        const gesture = drag.current;
+        drag.current = null;
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+        if (!gesture?.moved) return;
+        suppressClick.current = true;
+        const item = gesture.index === undefined ? undefined : items.item(gesture.index);
+        if (attached && item && (!item.turn || item.turn.cursor != null)) onNavigate(item);
+        setPreviewKey(null);
+      }}
+      onPointerCancel={() => { drag.current = null; setPreviewKey(null); }}
+      onClickCapture={event => {
+        if (suppressClick.current) { event.preventDefault(); event.stopPropagation(); suppressClick.current = false; }
+      }}>
       <div className={css.marks} style={{ height: totalSize }}>
         {virtualItems.map(({ index, key, start }) => {
           const item = items.item(index);

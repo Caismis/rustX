@@ -4338,6 +4338,11 @@ async fn the_observation_consumer_topology_never_changes_child_execution() {
         }
         if let Some(baseline) = baseline {
             let bridge = bridge.as_ref().expect("the stalled bridge");
+            assert_eq!(
+                bridge.queued_activity(),
+                1,
+                "the parked activity lane retains one latest snapshot"
+            );
             assert!(
                 bridge.queued_without_adoption() <= baseline + 1,
                 "the parked queue holds the reliable baseline plus at most one coalesced \
@@ -4644,6 +4649,11 @@ async fn a_stalled_parent_projection_coalesces_activity_and_converges() {
         working.observation.revision >= 2,
         "activity really flowed across the wire: {:?}",
         working.observation
+    );
+    assert_eq!(
+        bridge.queued_activity(),
+        1,
+        "200 revisions retain one latest activity snapshot"
     );
     assert!(
         bridge.queued_without_adoption() <= baseline + 1,

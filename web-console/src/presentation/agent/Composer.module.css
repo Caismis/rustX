@@ -380,4 +380,4 @@
 .attachments { display: flex; gap: 10px; overflow-x: auto; padding: 6px 14px; }
 .attachments:empty { display: none; }
 
-/* Quiet input preference, outside the operation toolbar. */
+.primary > span, .add > span { display: flex; }

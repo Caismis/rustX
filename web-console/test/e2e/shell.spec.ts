@@ -21,6 +21,25 @@ async function openClassifiedShell(page: Page, initial?: 'other-uncertain') {
   await expect(page.getByRole('button', { name: 'Workspace permissions', exact: true })).toBeVisible();
 }
 
+test('narrow sidebar overlays the conversation without squeezing its composer', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto(`${fixtureOrigin}/test/fixtures/shell.html`);
+  const center = page.locator('main');
+  await expect(page.getByRole('button', { name: 'Expand Sidebar' })).toBeVisible();
+  const width = (await center.boundingBox())!.width;
+  await page.getByRole('button', { name: 'Expand Sidebar' }).click();
+  await expect(page.getByRole('button', { name: 'Collapse Sidebar' })).toBeVisible();
+  expect((await center.boundingBox())!.width).toBe(width);
+  await expect(center).toHaveAttribute('inert', '');
+  await page.getByRole('button', { name: 'Collapse Sidebar' }).press('Escape');
+  await expect(page.getByRole('button', { name: 'Expand Sidebar' })).toBeVisible();
+  await expect(center).not.toHaveAttribute('inert', '');
+  await page.getByRole('button', { name: 'Expand Sidebar' }).click();
+  await page.getByRole('button', { name: 'Close navigation' }).click({ position: { x: 370, y: 400 } });
+  await expect(page.getByRole('button', { name: 'Expand Sidebar' })).toBeVisible();
+});
+
 test('stream publications and a turn-local clock preserve chrome identity, geometry and caret', async ({ page }) => {
   await page.clock.install({ time: new Date('2026-09-24T23:00:00Z') });
   await page.goto(`${fixtureOrigin}/test/fixtures/shell.html`);

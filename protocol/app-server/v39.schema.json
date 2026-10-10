@@ -2292,6 +2292,34 @@
             "id",
             "cut"
           ]
+        },
+        {
+          "description": "Exact canonical message position; absent cut captures current native facts.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/MessageId"
+            },
+            "cut": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ConversationReadCut"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "message"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "id"
+          ]
         }
       ]
     },
@@ -11508,6 +11536,17 @@
       "description": "One bounded newest-or-older page of derived transcript history.",
       "type": "object",
       "properties": {
+        "inherited_through": {
+          "description": "Last native transcript position inherited by this lineage; zero for an empty prefix.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeClientTranscriptCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "statistics": {
           "description": "Native whole-conversation totals, independent of this page.",
           "anyOf": [

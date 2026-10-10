@@ -6,11 +6,12 @@ import { useTranslation, useNotice } from '../../locale/react';
 // Native textarea replaces Lexical. Commands are client grammar; effects are typed.
 import { useEffect, useLayoutEffect, useState, useRef, useSyncExternalStore, type ReactNode } from 'react';
 import { AttachmentIntake, transferInputs, pasteText, type IntakeInput, type IntakeFile, type UploadPort } from '../../client/uploads';
-import type { UploadPolicy, UploadReceipt, UploadedFile, UserInputBlock } from '../../../../protocol/app-server/v38';
+import type { UploadPolicy, UploadReceipt, UploadedFile, UserInputBlock } from '../../../../protocol/app-server/v39';
 import { commands, available, parseCommand, type CommandId } from '../commands/registry';
 import { matchCommands } from '../commands/matching';
 import { ModelPicker, type ModelPickerState } from '../composer/ModelPicker';
 import { CommandMenu, type MenuAction } from '../commands/CommandMenu';
+import { IconPlusOutline16, IconSendOutline14 } from '../../presentation/primitives/icons';
 import { useInputTrigger } from '../composer/input-trigger';
 import { editableContent } from '../composer/editor-content';
 import { composerSubmissionPolicy, type SubmitGesture } from '../composer/submission-policy';
@@ -112,8 +113,9 @@ export function AgentComposer({ modelPicker, onRetainedRemove, onRetainedRecover
     window.addEventListener('blur', stopSequence.reset);
     return () => { window.removeEventListener('blur', stopSequence.reset); stopSequence.reset(); };
   }, [stopSequence]);
-  const invoke = (id: CommandId) => {
+  const invoke = (id: MenuAction) => {
     if (disabled || busy) return;
+    if (id === 'file') { trigger.dismiss(); trigger.restore(); picker.current?.click(); return; }
     if (files.length || restored.length) { setError(message('agent:copy.remove-draft-attachments-before-invoking-a-command')); return; }
     const definition = commands.find(command => command.id === id)!;
     if (!onCommand || !available(definition, active, hasGoal, lineageSwitchSafe) || commandAvailable?.(id) === false) { setError(message('agent:copy.command-unavailable-in-the-current-session-state')); return; }
@@ -209,7 +211,7 @@ export function AgentComposer({ modelPicker, onRetainedRemove, onRetainedRecover
       </div>
       <div className={css.row}>
         <div className={css.tools}>
-          <button type="button" className={css.add} aria-label={tx('commands:menu.add')} title={tx('commands:menu.add')} aria-haspopup="listbox" aria-expanded={!!menu} disabled={disabled || busy} onMouseDown={event => event.preventDefault()} onClick={trigger.toggle}>+</button>
+          <button type="button" className={css.add} aria-label={tx('commands:menu.add')} title={tx('commands:menu.add')} aria-haspopup="listbox" aria-expanded={!!menu} disabled={disabled || busy} onMouseDown={event => event.preventDefault()} onClick={trigger.toggle}><span aria-hidden="true"><IconPlusOutline16 /></span></button>
           <input ref={picker} type="file" hidden multiple aria-label={tx('agent:agent-composer.attach-files')} disabled={disabled || busy} onChange={event => { pick(Array.from(event.target.files ?? []).map(file => ({ file }))); event.target.value = ''; }}/>
           {permission}
         </div>
@@ -219,10 +221,11 @@ export function AgentComposer({ modelPicker, onRetainedRemove, onRetainedRecover
             disabled={primary.disabled} onMouseDown={event => event.preventDefault()} onClick={() => { if (primary.kind === 'stop') onCancel(); else void submit(); }}>
             {primary.kind === 'stop'
               ? <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden><rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor"/></svg>
-              : <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden><path d="M8 13V3m-4 4 4-4 4 4" fill="none" stroke="currentColor" strokeWidth="2"/></svg>}
+              : <span aria-hidden="true"><IconSendOutline14 /></span>}
           </button>
         </div>
       </div>
+
     </div>
   </div>;
 }

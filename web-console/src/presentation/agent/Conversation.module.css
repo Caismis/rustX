@@ -190,9 +190,9 @@
   position: relative;
   z-index: 1;
   display: flex;
-  gap: 36px;
+  gap: 12px;
   margin-top: 10px;
-  padding-left: 8px;
+  padding-left: 0;
 }
 
 /* figma .Tab 34:11442: 13/16 text (figma wt510, rendered 500). The 2px bar
@@ -200,7 +200,9 @@
    sitting over the rule. */
 .tab {
   position: relative;
-  padding: 0 0 9px;
+  height: 36px;
+  padding: 0 12px 9px;
+  border-radius: 8px;
   border: none;
   background: transparent;
   font-size: 13px;
@@ -213,9 +215,9 @@
 .tab::after {
   content: '';
   position: absolute;
-  right: 0;
+  right: 12px;
   bottom: -1px;
-  left: 0;
+  left: 12px;
   height: 2px;
   border-radius: 2px;
   background: transparent;

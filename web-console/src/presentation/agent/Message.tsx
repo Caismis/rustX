@@ -12,7 +12,7 @@ export function AssistantMessage({ label, children }: { label: string; children:
 }
 
 /** Harness's in-transcript checkpoint disclosure; content comes from the native Ledger. */
-export function CompactionMessage({ title, summary, children }: { title: string; summary: string; children: ReactNode }) {
+export function CompactionMessage({ title, summary, preview, description, children }: { title: string; summary: string; preview: string; description: string; children: ReactNode }) {
  const [open, setOpen] = useState(false);
  return <div className={css.compactionRow} data-compaction-marker="">
   <button type="button" className={css.compactionButton} aria-label={`${title} · ${summary}`} aria-expanded={open} onClick={() => setOpen(value => !value)}>
@@ -24,8 +24,8 @@ export function CompactionMessage({ title, summary, children }: { title: string;
    </span>
    <span className={css.compactionTitle}>{title}</span>
    <span className={css.compactionSep} aria-hidden="true"/>
-   <span className={css.compactionSummary}>{summary}</span>
+   <span className={css.compactionSummary}>{preview}</span>
   </button>
-  {open && <div className={css.compactionBody}>{children}</div>}
+  {open && <div className={css.compactionBody} data-compaction-body=""><p className={css.compactionDescription}>{description}</p>{children}</div>}
  </div>;
 }

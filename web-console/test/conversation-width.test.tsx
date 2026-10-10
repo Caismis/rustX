@@ -41,13 +41,13 @@ it('ResizeObserver sidebar/right-panel clamps and restores deliberate preference
  for(const available of [980,700,380,1200]){column=available;act(()=>resize());const width=Number.parseFloat(ui.body.style.getPropertyValue('--dsh-chat-content-width'));expect(width).toBe(displayedWidth(column,920));expect(width).toBeLessThan(column);expect(screen.queryAllByRole('slider')).toHaveLength(column>=816?2:0);}
  expect(ui.body.style.getPropertyValue('--dsh-chat-content-width')).toBe('920px');expect(writes).not.toHaveBeenCalled();
 });
-for(const value of ['garbage','NaN','-1','100000','0',' 900 ','{"width":900}'])it(`corrupt storage ${value} uses the measured default`,()=>{stored.set(WIDTH_PREFERENCE_KEY,value);expect(mount().body.style.getPropertyValue('--dsh-chat-content-width')).toBe('768px');});
+for(const value of ['garbage','NaN','-1','100000','0',' 900 ','{"width":900}'])it(`corrupt storage ${value} uses the measured default`,()=>{stored.set(WIDTH_PREFERENCE_KEY,value);expect(mount().body.style.getPropertyValue('--dsh-chat-content-width')).toBe('840px');});
 it('blocked storage reads/writes and absent storage leave Chat width usable',()=>{
  vi.stubGlobal('localStorage',{getItem(){throw new Error('blocked');},setItem(){throw new Error('quota');}});
- const ui=mount(),handle=ui.handle('right');fireEvent.keyDown(handle,{key:'ArrowRight'});expect(ui.body.style.getPropertyValue('--dsh-chat-content-width')).toBe('784px');
- column=700;act(()=>resize());column=1200;act(()=>resize());expect(ui.body.style.getPropertyValue('--dsh-chat-content-width')).toBe('784px');ui.unmount();vi.stubGlobal('localStorage',undefined);expect(()=>mount()).not.toThrow();
+ const ui=mount(),handle=ui.handle('right');fireEvent.keyDown(handle,{key:'ArrowRight'});expect(ui.body.style.getPropertyValue('--dsh-chat-content-width')).toBe('856px');
+ column=700;act(()=>resize());column=1200;act(()=>resize());expect(ui.body.style.getPropertyValue('--dsh-chat-content-width')).toBe('856px');ui.unmount();vi.stubGlobal('localStorage',undefined);expect(()=>mount()).not.toThrow();
 });
 it('keyboard width adjustments have accessible current bounds and reduced motion needs no animation',()=>{
- vi.stubGlobal('matchMedia',()=>({matches:true}));const ui=mount(),handle=ui.handle('left');fireEvent.keyDown(handle,{key:'ArrowRight',shiftKey:true});expect(handle.getAttribute('aria-valuenow')).toBe('832');
+ vi.stubGlobal('matchMedia',()=>({matches:true}));const ui=mount(),handle=ui.handle('left');fireEvent.keyDown(handle,{key:'ArrowRight',shiftKey:true});expect(handle.getAttribute('aria-valuenow')).toBe('904');
  fireEvent.keyDown(handle,{key:'Home'});expect(handle.getAttribute('aria-valuenow')).toBe('640');fireEvent.keyDown(handle,{key:'End'});expect(handle.getAttribute('aria-valuenow')).toBe('1024');expect(writes).toHaveBeenCalledTimes(3);expect(frame).toBeUndefined();
 });

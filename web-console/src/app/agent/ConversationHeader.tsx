@@ -7,11 +7,11 @@ import type { WorkspaceAuthority } from '../../workspaces/authority';
 import { useTranslation } from '../../locale/react';
 import { useState, type ReactNode } from 'react';
 import type { AppServerClient, SessionView } from '../../client/app-server';
-import type { SourceTarget } from '../../../../protocol/app-server/v38';
+import type { SourceTarget } from '../../../../protocol/app-server/v39';
 import { useClientSelector, sameValue } from '../../client/selectors';
 import { Menu } from '../../presentation/primitives/Menu';
 import { Button } from '../../presentation/primitives/Button';
-import { IconEllipsisOutline16, IconInspectOutline12 } from '../../presentation/primitives/icons';
+import { IconEllipsisOutline16, IconInspectOutline12, IconDownloadOutline16, IconForkOutline16 } from '../../presentation/primitives/icons';
 import { navigateTabs } from '../../presentation/primitives/tabs';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 import { sessionDisplayTitle } from '../../bindings/session-title';
@@ -51,7 +51,7 @@ export function ConversationHeader({ host, authority, client, view, workspaceId,
       {error && <p role="alert">{error}</p>}
       </header>;
 }
-function LiveAgentControls({ client, sessionId, coldSource }: { client: AppServerClient; sessionId: string; coldSource?: import('../../../../protocol/app-server/v38').SourceSettings }) {
+function LiveAgentControls({ client, sessionId, coldSource }: { client: AppServerClient; sessionId: string; coldSource?: import('../../../../protocol/app-server/v39').SourceSettings }) {
   useClientSelector(client, state => {
     const view = state.views[sessionId];
     return { generation: state.generation, target: view?.target, attachment: view?.attachment, intent: view?.attachmentIntent,
@@ -71,6 +71,6 @@ function SessionActions({ client, sessionId, connected, attached, commandOpen, s
   const safe = useClientSelector(client, state => lineageSwitchSafe(state.views[sessionId]));
   return <Menu open={sessionMenuOpen} onClose={() => setSessionMenuOpen(false)} align="end" dense autoFocus
           anchor={<Button size="sm" className={agentCss.iconButton} aria-label={tx('agent:conversation-header.session-actions')} aria-haspopup="menu" aria-expanded={sessionMenuOpen} onClick={() => setSessionMenuOpen(value => !value)}><IconEllipsisOutline16 /></Button>}
-          items={[{ id: 'settings', label: tx('agent:conversation-header.session-settings') }, { id: 'export', label: tx('agent:conversation-header.export'), disabled: !connected }, { id: 'tree', label: tx('agent:conversation-header.session-tree'), disabled: !attached || commandOpen || !safe }]}
+          items={[{ id: 'settings', label: tx('agent:conversation-header.session-settings') }, { id: 'export', label: tx('agent:conversation-header.export'), icon: <IconDownloadOutline16/>, disabled: !connected }, { id: 'tree', label: tx('agent:conversation-header.session-tree'), icon: <IconForkOutline16/>, disabled: !attached || commandOpen || !safe }]}
           onSelect={id => { setSessionMenuOpen(false); if (id === 'settings') settings(); else if (id === 'tree') tree(); else if (id === 'export') exportSession(); }} />;
 }

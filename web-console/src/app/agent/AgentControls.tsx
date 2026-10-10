@@ -1,10 +1,12 @@
 import { message } from '../../locale/translation';
 import { useTranslation, useNotice } from '../../locale/react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import type { ModelCatalogView, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v38';
+import type { ModelCatalogView, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v39';
 import { AppServerClient, isOutcomeUncertain, sameTarget, type SessionView } from '../../client/app-server';
 import type { ModelPickerState } from '../composer/ModelPicker';
 import { ModelSelect } from '../../presentation/agent/ModelSelect';
+import { Toast } from '../../presentation/primitives/Toast';
+import { IconWarningOutline16 } from '../../presentation/primitives/icons';
 import { Button } from '../../presentation/primitives/Button';
 import { activeAttempt } from '../../bindings/projection';
 import { catalogAdmits, catalogChoices, modelSelectionChanges } from '../../bindings/model-catalog';
@@ -16,6 +18,8 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
   const tx = useTranslation();
  const [catalog, setCatalog] = useState<ModelCatalogView>();
  const [busy, setBusy] = useState(false), [error, setError] = useNotice(), [blocked, setBlocked] = useState(true);
+ const [selectionError, setSelectionError] = useNotice(), [toastSequence, setToastSequence] = useState(0);
+ const root = useRef<HTMLDivElement>(null);
  const guard = useRef(false), epoch = useRef(0);
  const generation = client.getSnapshot().generation;
  const target = view?.target;
@@ -36,7 +40,7 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
        if (!current(at)) return;
        await client.repairAgentModel(view!.id);
      }
-     if (current(at)) setCatalog(result.catalog);
+     if (current(at)) { setCatalog(result.catalog); setError(''); }
    if (current(at)) setBlocked(false);
  };
  const load = (refresh = false) => {
@@ -45,15 +49,15 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
    void read(at).catch(cause => { if (current(at)) setError(String(cause)); }).finally(() => { if (current(at)) { guard.current = false; setBusy(false); } });
  };
  useEffect(() => {
-   ++epoch.current; setCatalog(undefined); setBlocked(true); setBusy(false); setError(''); guard.current = false;
+   ++epoch.current; setCatalog(undefined); setBlocked(true); setBusy(false); setError(''); setSelectionError(''); guard.current = false;
    if (!draft) load(true);
    return () => { ++epoch.current; };
- }, [target?.attachment_id, generation, attached, view?.snapshot?.resources?.revision]);
+ }, [target?.attachment_id, generation, attached, view?.snapshot?.resources?.revision, admission]);
  const mutate = async (operation: () => Promise<unknown>) => {
    if (pending || guard.current || blocked || busy || !attached) return false;
-   const at = epoch.current; guard.current = true; setBusy(true); setBlocked(true); setError('');
+   const at = epoch.current; guard.current = true; setBusy(true); setBlocked(true); setError(''); setSelectionError('');
    try { await operation(); if (current(at)) await read(at); return current(at); }
-   catch (cause) { if (epoch.current === at) setError(isOutcomeUncertain(cause) ? message('agent:copy.outcome-uncertain-no-replay-reconnect-and-reread-authority-before-continuing') : message('agent:copy.value-reread-authority-before-continuing', { p0: String(cause) })); }
+   catch (cause) { if (current(at)) { const notice = isOutcomeUncertain(cause) ? message('agent:copy.outcome-uncertain-no-replay-reconnect-and-reread-authority-before-continuing') : message('agent:copy.value-reread-authority-before-continuing', { p0: String(cause) }); setError(notice); setSelectionError(notice); setToastSequence(sequence => sequence + 1); } }
    finally { if (epoch.current === at) { guard.current = false; setBusy(false); } }
  };
  const model = view?.snapshot?.model;
@@ -78,11 +82,11 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
  const picker: ModelPickerState = { choices: catalogChoices(choices), current: currentModel, profile: currentProfile,
    disabled: draft ? draft.disabled || !choices : disabled || (connecting ? !coldCatalog : blocked), loading: draft ? !draft.source : connecting ? !coldSource : busy && !catalog,
    error: draft ? draftError : queued?.error ?? coldError ?? (view?.modelMutation?.status === 'uncertain' ? tx('agent:copy.outcome-uncertain-no-replay-reconnect-and-reread-authority-before-continuing') : error), choose };
- const toolbar = <div className="agent-control"><ModelSelect binding={JSON.stringify([generation, target?.attachment_id, draft?.source?.target, view?.snapshot?.resources?.revision])} choices={picker.choices}
+ const toolbar = <div ref={root} className="agent-control"><ModelSelect binding={JSON.stringify([generation, target?.attachment_id, draft?.source?.target, view?.snapshot?.resources?.revision])} choices={picker.choices}
    current={picker.current} profile={picker.profile} disabled={draft ? draft.disabled || !choices : disabled} loading={draft ? !draft.source : connecting ? !coldSource : blocked} error={picker.error} load={() => load()}
    choose={(selected, profile) => { void choose(selected, profile); }}/>
    {activeAttempt(view?.snapshot) && view?.snapshot?.attempt?.model && view?.snapshot.attempt.model.primary.model !== model?.effective.model && <small>{tx('agent:agent-controls.running')}{' '}{view?.snapshot?.attempt?.model?.primary.model}</small>}
    {!draft && !busy && (blocked && error || queued?.phase === 'failed') && <Button size="sm" disabled={!attached} onClick={() => load(true)}>{tx('agent:agent-controls.reread-models')}</Button>}
  </div>;
- return children ? children(toolbar, picker) : toolbar;
+ return <>{children ? children(toolbar, picker) : toolbar}{draftError && <p role="alert">{draftError}</p>}{selectionError && <Toast key={toastSequence} text={selectionError} icon={<IconWarningOutline16 />} anchor={root.current?.closest<HTMLElement>('[data-composer-card]') ?? null} onDone={() => setSelectionError('')}/>}</>;
 }

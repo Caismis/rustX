@@ -1,5 +1,5 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v38.js';
+import type {ProtocolMessage} from './v39.js';
 export const fixtures = [
   {
     "jsonrpc": "2.0",
@@ -115,7 +115,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 38,
+      "protocol_version": 39,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -133,7 +133,7 @@ export const fixtures = [
     "result": {
       "type": "initialized",
       "authority_id": "fixture-app-server-authority",
-      "protocol_version": 38,
+      "protocol_version": 39,
       "capabilities": {
         "upload_policy": {
           "max_file_bytes": 2097152,
@@ -417,6 +417,25 @@ export const fixtures = [
         "cut": null
       },
       "limit": 32
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "method": "session/transcript",
+    "params": {
+      "target": {
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "at": {
+        "type": "message",
+        "id": "source-message-fixture",
+        "cut": null
+      },
+      "limit": 64
     }
   },
   {
@@ -719,6 +738,7 @@ export const fixtures = [
           "mutation_revision": "0"
         },
         "page": {
+          "inherited_through": "0",
           "entries": []
         },
         "newer_cursor": null,

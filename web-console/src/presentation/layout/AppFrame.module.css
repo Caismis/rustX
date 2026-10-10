@@ -2,10 +2,12 @@
 .frame {
   position: relative; /* anchors the drag handles, which straddle column borders */
   display: grid;
-  grid-template-rows: 100%;
   height: 100%;
   overflow: hidden;
-  background: var(--dsw-alias-bg-base);
+  padding-top: 12px;
+  box-sizing: border-box;
+  grid-template-rows: minmax(0, 1fr);
+  background: var(--dsw-specific-sidebar-fill);
   /* Collapse/expand animates the tracks on the deepsuite sider curve
      (--ds-ease-in-out / --ds-transition-duration-slow, ui-theme base.css). */
   transition: grid-template-columns var(--ds-transition-duration-slow) var(--ds-ease-in-out);
@@ -59,10 +61,29 @@
   min-width: 0;
   overflow: hidden;
   background: var(--dsw-specific-sidebar-fill);
-  border-right: 0.5px solid var(--dsw-alias-border-l3);
+  border-right: none;
+}
+
+.frame[data-sidebar-overlay] .sidebarCol {
+  position: absolute;
+  inset: 12px auto 0 0;
+  z-index: 15;
+  box-shadow: var(--dsw-elevation-prominent);
+}
+
+.sidebarBackdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 14;
+  border: 0;
+  padding: 0;
+  background: var(--dsw-alias-bg-mask-1);
 }
 
 .centerCol {
+  grid-column: 2;
+  border-radius: 16px 0 0 0;
+  background: var(--dsw-alias-bg-base);
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -140,6 +161,7 @@
  * where it is. The occupant draws its own left border.
  */
 .rightbarCol {
+  grid-column: 3;
   /* The panel is anchored to the full frame, including fullscreen and floats. */
   position: static;
   min-width: 0;

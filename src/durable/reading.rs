@@ -82,6 +82,11 @@ pub enum ConversationWindowAt {
         id: ConversationTurnId,
         cut: ConversationReadCut,
     },
+    /// Exact canonical message position; absent cut captures current native facts.
+    Message {
+        id: crate::runtime::identity::MessageId,
+        cut: Option<ConversationReadCut>,
+    },
 }
 
 #[derive(Debug)]

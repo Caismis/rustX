@@ -2,7 +2,7 @@ import { useTranslation } from '../../../locale/react';
 import { useContext, useEffect, useRef, type ReactNode } from 'react';
 import { useForm, type ReactFormExtendedApi } from '@tanstack/react-form';
 import { useSelector } from '@xstate/react';
-import type { SourceMutation } from '../../../../../protocol/app-server/v38';
+import type { SourceMutation } from '../../../../../protocol/app-server/v39';
 import { Button } from '../../../presentation/primitives/Button';
 import { SourceContext } from '../source-context';
 import { useSettingsActor, useUnitTransaction } from '../machines/react';
@@ -309,9 +309,9 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
           override transition. */}
       <fieldset className={css.fields} disabled={!unit.writable}>{children}</fieldset>
       <Advanced title={tx('settings:bridge.source-revision-replacement')}>
-        <p className={css.hint} data-authored={unit.facts.authored.state} data-effective={unit.facts.effective.state}>
+        {unit.configUnit && unit.facts.authored.state !== 'unavailable' && <p className={css.hint} data-authored={unit.facts.authored.state} data-effective={unit.facts.effective.state}>
           {authoredStateLabel(tx, unit.facts.authored, unit.scope)} · {effectiveStateLabel(tx, unit.facts.effective)} · {provenanceLabel(tx, unit.facts.origin)}
-        </p>
+        </p>}
         {unit.inheritance && <Advanced title={tx('settings:bridge.native-resolved-value-not-session-adoption')}>
           <pre>{unit.facts.effective.state === 'available' ? JSON.stringify(unit.facts.effective.value, null, 2) : effectiveStateLabel(tx, unit.facts.effective)}</pre>
         </Advanced>}

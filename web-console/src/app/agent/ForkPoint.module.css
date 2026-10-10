@@ -1,0 +1,8 @@
+.row { display: flex; align-items: center; gap: 8px; margin: 20px 0; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 20px; }
+.row > svg { flex-shrink: 0; }
+.line { flex: 1; min-width: 12px; height: 1px; background: var(--dsw-alias-border-l3); }
+.label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.open { flex-shrink: 0; border: 0; background: transparent; padding: 2px 4px; color: var(--dsw-alias-label-secondary); font: inherit; cursor: pointer; border-radius: 4px; }
+.open:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+.open:focus-visible { outline: 2px solid var(--dsw-alias-label-primary); outline-offset: 2px; }
+.open:disabled { opacity: .4; cursor: not-allowed; }

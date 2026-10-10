@@ -28,6 +28,58 @@ fn located(
     window.page.entries.into_iter().next().unwrap()
 }
 
+#[test]
+fn inherited_boundary_includes_terminal_only_turns_and_survives_local_appends() {
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    assert_eq!(
+        store
+            .load_transcript_page(None, 64)
+            .unwrap()
+            .inherited_through
+            .get(),
+        0
+    );
+    let seed = LineageSeed::history(vec![message("seeded", "inherited")])
+        .with_turns(vec![TurnReadingProvenance {
+            id: ConversationTurnId {
+                conversation_id: ConversationId::generate(),
+                attempt_id: AttemptId::new("empty"),
+            },
+            process_message_ids: Vec::new(),
+            preceding_message_id: Some(MessageId::new("seeded")),
+            prompt_message_id: None,
+            outcome: InheritedTurnOutcome::TimedOut,
+            started_at: None,
+            ended_at: Some(Utc::now()),
+            execution: None,
+        }])
+        .unwrap();
+    store.initialize_lineage(&seed).unwrap();
+    let seeded = store.load_transcript_page(None, 64).unwrap();
+    assert_eq!(seeded.inherited_through.get(), 2);
+    assert_eq!(
+        seeded.entries.last().unwrap().cursor,
+        seeded.inherited_through
+    );
+    start(&store, "local");
+    commit(&store, "local", "local-message");
+    timeout(&store, "local");
+    let newest = store
+        .conversation_window(&ConversationWindowAt::Latest, 1)
+        .unwrap();
+    assert_eq!(newest.page.inherited_through, seeded.inherited_through);
+    let older = store
+        .conversation_window(
+            &ConversationWindowAt::Older {
+                cut: None,
+                before: newest.page.entries[0].cursor,
+            },
+            64,
+        )
+        .unwrap();
+    assert_eq!(older.page.inherited_through, seeded.inherited_through);
+}
+
 fn event(
     store: &SqliteConversationStore,
     attempt: &str,
@@ -328,6 +380,58 @@ fn copied_turns_preserve_origin_and_use_destination_locations() {
         matches!(&located(&destination, &outline.turns[0]).item,crate::durable::TranscriptItem::Message{message:MessageBlock::Assistant(message)} if message.id.as_str()=="copied-first")
     );
 }
+
+#[test]
+fn inherited_prompt_previews_use_explicit_opening_and_response_input_owners() {
+    for (opening, retry, expected) in [
+        (None, Some("opening"), "Original question"),
+        (Some("opening"), Some("steering"), "Original question"),
+        (None, None, ""),
+    ] {
+        let source = ConversationId::generate();
+        let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+        let response = crate::durable::response::CompletedResponseProvenance {
+            process_message_ids: vec![MessageId::new("first"), MessageId::new("final")],
+            closing_message_id: MessageId::new("final"),
+            origin: crate::durable::response::ResponseOrigin {
+                conversation_id: source.clone(),
+                attempt_id: AttemptId::new("inherited"),
+                closing_message_id: MessageId::new("source-final"),
+            },
+            completed_at: Utc::now(),
+            retry_message_id: retry.map(MessageId::new),
+            usage: None,
+            timing: None,
+            models: Vec::new(),
+        };
+        let seed = LineageSeed::history(vec![
+            human("opening", "Original question"),
+            message("first", "first response"),
+            human("steering", "Later steering question"),
+            message("final", "final response"),
+        ])
+        .with_turns(vec![TurnReadingProvenance {
+            id: ConversationTurnId {
+                conversation_id: source,
+                attempt_id: AttemptId::new("inherited"),
+            },
+            process_message_ids: response.process_message_ids.clone(),
+            preceding_message_id: None,
+            prompt_message_id: opening.map(MessageId::new),
+            outcome: InheritedTurnOutcome::Completed,
+            started_at: None,
+            ended_at: Some(response.completed_at),
+            execution: None,
+        }])
+        .unwrap()
+        .with_completed_responses(vec![response])
+        .unwrap();
+        store.initialize_lineage(&seed).unwrap();
+        let outline = store.conversation_turns(0, 64).unwrap();
+        assert_eq!(outline.turns[0].prompt, expected);
+        assert_eq!(outline.turns[0].response, "final response");
+    }
+}
 #[test]
 fn appends_keep_turn_locations_and_reads_stay_bounded() {
     let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
@@ -504,4 +608,143 @@ fn distant_turn_is_one_bounded_native_window_at_its_cut() {
             .all(|entry| entry.cursor.get() <= window.cut.transcript)
     );
     assert!(store.conversation_read_cut().unwrap().transcript > window.cut.transcript);
+}
+
+#[test]
+fn distant_source_message_is_one_bounded_window_at_its_native_cursor() {
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    let seed = LineageSeed::history(
+        (0..4096)
+            .map(|index| message(&format!("source-{index}"), "retained"))
+            .collect(),
+    );
+    store.initialize_lineage(&seed).unwrap();
+    let cut = store.conversation_read_cut().unwrap();
+    let id = MessageId::new("source-1");
+    let cursor = store.message_transcript_cursor(&id).unwrap().unwrap();
+    let window = store
+        .conversation_window(
+            &ConversationWindowAt::Message {
+                id: id.clone(),
+                cut: Some(cut.clone()),
+            },
+            64,
+        )
+        .unwrap();
+    assert_eq!(window.target, None);
+    assert_eq!(window.target_cursor, Some(cursor));
+    assert_eq!(window.page.entries.len(), 64);
+    assert_eq!(window.page.entries[0].cursor, cursor);
+    assert!(
+        matches!(&window.page.entries[0].item, crate::durable::TranscriptItem::Message { message } if message.id() == &id)
+    );
+    assert_eq!(window.cut, cut);
+    assert_eq!(
+        store.conversation_read_cut().unwrap(),
+        cut,
+        "position reads are side-effect free"
+    );
+    assert!(
+        store
+            .conversation_window(
+                &ConversationWindowAt::Message {
+                    id: MessageId::new("foreign"),
+                    cut: None
+                },
+                64
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn message_windows_reject_foreign_future_and_mutated_cuts() {
+    use crate::durable::inbox::{InboundDraft, PendingInboundRef, PendingMutationOutcome};
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    store
+        .initialize_lineage(&LineageSeed::history(vec![message("source", "retained")]))
+        .unwrap();
+    let id = MessageId::new("source");
+    let cut = store.conversation_read_cut().unwrap();
+    let mut foreign = cut.clone();
+    foreign.conversation_id = ConversationId::generate();
+    assert!(
+        store
+            .conversation_window(
+                &ConversationWindowAt::Message {
+                    id: id.clone(),
+                    cut: Some(foreign)
+                },
+                64
+            )
+            .is_err()
+    );
+    let mut future = cut.clone();
+    future.transcript += 1;
+    assert!(
+        store
+            .conversation_window(
+                &ConversationWindowAt::Message {
+                    id: id.clone(),
+                    cut: Some(future)
+                },
+                64
+            )
+            .is_err()
+    );
+    start(&store, "later");
+    commit_text(&store, "later", "late", "new");
+    timeout(&store, "later");
+    assert!(
+        store
+            .conversation_window(
+                &ConversationWindowAt::Message {
+                    id: MessageId::new("late"),
+                    cut: Some(cut)
+                },
+                64
+            )
+            .is_err()
+    );
+    let before = store.conversation_read_cut().unwrap();
+    let accepted = store
+        .accept_inbound(InboundDraft {
+            message_id: None,
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: "queued".into(),
+            })],
+            timestamp: Utc::now(),
+            correlation: None,
+        })
+        .unwrap();
+    assert_eq!(
+        store
+            .edit_pending(
+                &PendingInboundRef {
+                    sequence: accepted.sequence,
+                    message_id: accepted.message_id,
+                    revision: 0
+                },
+                "edited"
+            )
+            .unwrap(),
+        PendingMutationOutcome::Applied
+    );
+    assert!(
+        store
+            .conversation_window(
+                &ConversationWindowAt::Message {
+                    id: id.clone(),
+                    cut: Some(before)
+                },
+                64
+            )
+            .is_err()
+    );
+    let fresh = store
+        .conversation_window(&ConversationWindowAt::Message { id, cut: None }, 64)
+        .unwrap();
+    assert_eq!(fresh.cut, store.conversation_read_cut().unwrap());
 }
