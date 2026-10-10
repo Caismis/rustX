@@ -31,16 +31,22 @@ export function selectionChanges(model: string | undefined, pinned: string | und
  * one (native `SessionModelConfig` is whole-state), or `undefined` for a
  * genuine no-op.
  *
- * A Profile gesture on the same Model changes only `profile` and keeps every
- * independent setting — request overrides, output limit, explicit Summary;
- * native validation still decides whether they suit the new Profile. Choosing
- * the current Model keeps its pinned Profile. A different Model starts from its
- * native defaults: nothing is inherited from the previous Model. */
+ * A gesture changes primary-model-owned settings only; the Summary policy is
+ * independently owned and always carried unchanged. A Profile gesture on the
+ * same Model changes only `profile` and keeps every other setting — request
+ * overrides, output limit, explicit Summary; native validation still decides
+ * whether they suit the new Profile. Choosing the current Model keeps its
+ * pinned Profile. A different Model starts from its own primary defaults — its
+ * default Profile unless one is chosen, no request overrides, no output limit —
+ * exactly as the TUI's `/model`. */
 export function nextModelSelection(configured: SessionModelConfig | undefined, intent: ModelSelectionIntent): SessionModelConfig | undefined {
   const pinned = configured?.profile ?? undefined;
   if (!selectionChanges(configured?.model, pinned, intent)) return undefined;
   const profile = intentProfile(intent);
-  if (!configured || configured.model !== intent.model) return { model: intent.model, ...(profile === undefined ? {} : { profile }) };
+  if (!configured || configured.model !== intent.model) {
+    const summaryModel = configured?.summaryModel;
+    return { model: intent.model, ...(profile === undefined ? {} : { profile }), ...(summaryModel === undefined ? {} : { summaryModel }) };
+  }
   const { profile: _, ...independent } = configured;
   return profile === undefined ? independent : { ...independent, profile };
 }

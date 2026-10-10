@@ -41,23 +41,49 @@ it('a single-Model catalog reaches every configured Profile state without switch
   }
 });
 
-it('a same-Model Profile change keeps every independent setting; a different Model starts from its native defaults', () => {
+it('a same-Model Profile change keeps every independent setting; a different Model resets primary settings and keeps the Summary policy', () => {
+  const summaryModel: SessionModelConfig['summaryModel'] = { mode: 'explicit', model: 'example/summary', profile: 'short', request_params: { temperature: 0.1 }, max_output_tokens: 64 };
   const configured: SessionModelConfig = {
     model: chat,
     profile: 'fast',
     requestParams: { top_k: 40, nested: [null, { seed: 7 }] },
     maxOutputTokens: 512,
-    summaryModel: { mode: 'explicit', model: 'example/summary', profile: 'short', request_params: { temperature: 0.1 }, max_output_tokens: 64 },
+    summaryModel,
   };
   const { profile: _, ...independent } = configured;
   expect(nextModelSelection(configured, pin('balanced'))).toEqual({ ...independent, profile: 'balanced' });
   expect(nextModelSelection(configured, followDefault)).toEqual(independent);
-  expect(nextModelSelection(configured, { kind: 'model', model: 'example/other' })).toEqual({ model: 'example/other' });
-  expect(nextModelSelection(configured, { kind: 'profile', model: 'example/other', profile: 'fast' })).toEqual({ model: 'example/other', profile: 'fast' });
-  expect(nextModelSelection(configured, { kind: 'model-default', model: 'example/other' })).toEqual({ model: 'example/other' });
+  // A different Model gets its own default Profile (or the chosen one), no
+  // primary request overrides and no primary output limit; the independently
+  // owned Summary policy is carried whole, by value.
+  for (const [intent, primary] of [
+    [{ kind: 'model', model: 'example/other' }, { model: 'example/other' }],
+    [{ kind: 'profile', model: 'example/other', profile: 'fast' }, { model: 'example/other', profile: 'fast' }],
+    [{ kind: 'model-default', model: 'example/other' }, { model: 'example/other' }],
+  ] as [ModelSelectionIntent, SessionModelConfig][]) {
+    const switched = nextModelSelection(configured, intent)!;
+    expect(switched).toEqual({ ...primary, summaryModel });
+    for (const field of ['requestParams', 'maxOutputTokens'] as const) expect(Object.hasOwn(switched, field)).toBe(false);
+  }
+  // A Session-mode Summary is carried the same way; an absent one stays absent.
+  expect(nextModelSelection({ model: chat, summaryModel: { mode: 'session' } }, { kind: 'model', model: 'example/other' })).toEqual({ model: 'example/other', summaryModel: { mode: 'session' } });
+  expect(Object.hasOwn(nextModelSelection({ model: chat, maxOutputTokens: 512 }, { kind: 'model', model: 'example/other' })!, 'summaryModel')).toBe(false);
   // No configured selection yet: the gesture is the whole selection.
   expect(nextModelSelection(undefined, pin('balanced'))).toEqual({ model: chat, profile: 'balanced' });
   expect(nextModelSelection(undefined, followDefault)).toEqual({ model: chat });
+});
+
+it('switching the primary Model agrees with the TUI `/model X` contract', () => {
+  // The configured state of tui/test/commands.test.ts "changes the model only
+  // through model_catalog_get + model_set". The TUI sends
+  // `{ model, requestParams: {}, summaryModel }`; an omitted `requestParams`
+  // is natively the same empty object.
+  const summaryModel: SessionModelConfig['summaryModel'] = { mode: 'explicit', model: 'summary/model-s', profile: 'compact', request_params: { summary_tag: 'keep' }, max_output_tokens: 300 };
+  const configured: SessionModelConfig = { model: 'alpha/model-a', profile: 'on', requestParams: { temperature: 0.2 }, maxOutputTokens: 777, summaryModel };
+  const tui: SessionModelConfig = { model: 'beta/model-b', requestParams: {}, summaryModel };
+  const { requestParams, ...native } = tui;
+  expect(requestParams).toEqual({});
+  expect(nextModelSelection(configured, { kind: 'model', model: 'beta/model-b' })).toEqual(native);
 });
 
 it('a pinned Profile the Model no longer declares is cleared by the explicit default action alone, keeping every independent setting', () => {

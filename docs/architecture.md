@@ -7066,7 +7066,8 @@ Other client instances have independent budgets; this is not a server-wide quota
 
 The Composer model menu and `/model` picker consume the same native catalog and
 selection policy. Model and profile identifiers retain native order and defaults;
-a different model without an explicit profile uses native defaults. Selecting the
+a different model without an explicit profile uses native defaults for its
+primary settings and keeps the independent Summary policy. Selecting the
 current model or its effective profile preserves the configured choice and sends
 no mutation. Both controls use the existing Session model mutation/confirmation
 owner; a cold choice is only local intent until native acknowledgement and the

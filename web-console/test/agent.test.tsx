@@ -422,6 +422,47 @@ it('choosing the selected Model keeps a pinned Profile; the default action clear
   expect(sent().at(-1)).toEqual({ model: 'example/other' });
 });
 
+it('switching the primary Model resets primary settings and keeps the explicit Summary policy whole; native rejection is shown, not worked around', async () => {
+  const summaryModel = { mode: 'explicit' as const, model: 'example/summary', profile: 'short', request_params: { temperature: 0.1, nested: [null] }, max_output_tokens: 64 };
+  profileFixture({ model: 'example/chat', profile: 'fast', requestParams: { top_k: 40 }, maxOutputTokens: 256, summaryModel }, ['example/chat', 'example/other']);
+  await server.attached('A'); render(<Control/>);
+  const chooseModel = async (name: string) => {
+    await openModels();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
+    await chooseRow(name);
+  };
+  const configured = () => server.client.getSnapshot().views.A.snapshot?.model?.configured;
+  // A → B: the exact whole-state payload carries the complete Summary policy;
+  // the primary Profile pin, request overrides and output limit are reset.
+  await chooseModel('example/other');
+  expect(sent()).toEqual([{ model: 'example/other', summaryModel }]);
+  expect(configured()).toEqual({ model: 'example/other', summaryModel });
+  // A Profile on the same Model changes only the pin.
+  await profileMenu();
+  await chooseRow('fast');
+  expect(sent().at(-1)).toEqual({ model: 'example/other', summaryModel, profile: 'fast' });
+  // Returning to the Model default clears only the pin; repeats are no-ops.
+  await profileMenu();
+  await chooseRow('Model default profile (balanced)');
+  expect(sent().at(-1)).toEqual({ model: 'example/other', summaryModel });
+  await profileMenu();
+  await chooseRow('Model default profile (balanced)');
+  await chooseModel('example/other');
+  expect(sent()).toHaveLength(3);
+  // Native refuses the switch: the refusal is presented and nothing retries
+  // with a reset Summary.
+  server.handlers.set('session/setModel', () => { throw new RpcFailure({ code: -32602, message: 'Summary refused by native' }); });
+  await act(async () => { await openModels(); fireEvent.click(screen.getByRole('menuitem', { name: 'Model' })); fireEvent.click(screen.getByRole('menuitem', { name: 'example/chat' })); });
+  await waitFor(() => expect(screen.getAllByRole('alert').some(row => row.textContent?.includes('Summary refused by native'))).toBe(true));
+  expect(sent()).toEqual([
+    { model: 'example/other', summaryModel },
+    { model: 'example/other', summaryModel, profile: 'fast' },
+    { model: 'example/other', summaryModel },
+    { model: 'example/chat', summaryModel },
+  ]);
+  expect(configured()).toEqual({ model: 'example/other', summaryModel });
+});
+
 it('a catalog default change moves a following Session and leaves a pinned one, as native resolves them', async () => {
   const fixture = profileFixture({ model: 'example/chat' }); await server.attached('A'); render(<Control/>);
   await fixture.moveDefault('fast');

@@ -431,8 +431,12 @@ changes the configured intent, never compared to the effective Profile, so
 pinning the current default and returning to following it are real changes and
 only repeating the configured choice is a no-op. A same-Model Profile gesture
 replaces only `profile` in the whole-state `SessionModelConfig`, keeping request
-overrides, output limit and explicit Summary for native validation; a different
-Model starts from its native defaults. Draft Sessions and the new-Session
+overrides, output limit and explicit Summary for native validation. A different
+Model resets only primary-model-owned settings — its default Profile unless one
+is chosen, no request overrides, no output limit — and carries the
+independently owned Summary policy unchanged, exactly as the TUI's `/model`; a
+native refusal of that combination is shown, never retried with a reset
+Summary. Draft Sessions and the new-Session
 preference keep a pinned and an absent Profile distinct. A pinned Profile the
 catalog no longer declares for the configured Model is reported as unavailable
 and blocks a new Session; both controls then offer the same `model-default`
