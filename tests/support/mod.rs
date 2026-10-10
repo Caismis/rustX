@@ -110,6 +110,7 @@ pub fn attempt_model_with_window(
         &ScriptedAdapterFactory::new(adapter),
     )
     .snapshot()
+    .unwrap()
 }
 
 /// Without uv, the shared prerequisite skips a boundary only where the

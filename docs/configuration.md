@@ -487,22 +487,48 @@ invocation, and an edited, added or removed Profile that no such selection
 resolves through changes nothing for the Session's invocation: it prepares and
 adopts nothing, exactly as for an unselected Model.
 
-Catalog publication is a separate contract from invocation adoption. When a
-valid source generation publishes and every invocation of an existing Session is
-unchanged, its selectable catalog — `models` and `providers`, never the
-new-Session default `agent.model` — is published to that Session without
-preparation: under the gate Attempt admission takes, the Session's selection
-authority and the catalog its configuration generation carries are replaced
-together and the configuration generation advances, while the current resolved
+Catalog publication is a separate contract from invocation adoption. A valid
+source generation's Model Catalog — the Provider unit: `models`, `providers` and
+the new-Session default `agent.model` the catalog is validated with — is the
+authority for future selection. It is published to an existing Session without
+preparation when every invocation of that Session is unchanged, and also when the
+Session's own configured Model or Profile is one the new catalog no longer
+admits: the catalog is what the replacement is chosen from, and a stale Session
+selection never makes a valid catalog unpublishable. Under the gate Attempt
+admission takes, the Session's selection authority, the catalog its configuration
+generation carries and its retained binding are committed together, all or
+nothing, and the configuration generation advances, while the current resolved
 invocations, their provider adapters and the capability snapshot are retained
 verbatim. From that commit, `session/models` advertises the published catalog
 and `session/setModel` (and Runtime Client `model_catalog`/`model_set`) resolve
 against exactly that catalog, never unpublished sources. An admitted Attempt
 keeps the snapshot and registry it froze. A failed or overtaken generation never
-publishes, so the last good catalog remains the authority. When the edit does
-change an invocation, the catalog arrives with that change's adoption. A cold
+publishes, so the last good catalog remains the authority. When the edit changes
+an invocation the Session can still resolve, the catalog arrives with that
+change's adoption; when it also changes capabilities or context, the Session's
+selection is carried into that candidate as it is, available or not. A cold
 Session receives the catalog when it next becomes resident. New Sessions start
 from the Workspace's published creation catalog.
+
+A configured selection the published catalog does not admit is **unavailable**.
+The Session keeps it configured — nothing switches it to the catalog default or
+drops an explicit Summary policy — and `session/model` reports it in
+`unavailable` with the native diagnostic. Its last resolved `effective` and
+`summary` remain display facts only; a Session loaded with an already unavailable
+selection, after residency loss or a restart, has none. While unavailable, the
+Session admits no model work: `turn/start`, `turn/steer` and `context/compact`
+are refused with `model_unavailable`, and inbound accepted before the publication
+is held, never run on the removed selection and never dropped. Held work does not
+make the Session busy for the correction. The correction is an ordinary
+`session/setModel` (or Runtime Client `model_set`) with a complete selection the
+catalog admits, primary and explicit Summary alike; it commits through the usual
+fence and admits held work with exactly the new selection.
+
+The adopted generation's `source_revisions` stay the source manifest its context
+was resolved from. Independently published units — execution policy, shared
+capacity and the Model Catalog's Provider unit — carry their own component
+revision with their values and provenance, so a source file that also holds
+unrelated, not yet applied changes never makes those changes look adopted.
 
 `session/adoptConfiguration` addresses a concrete ready candidate and expected
 Session binding revision. It returns typed Busy, NotReady or Conflict, or commits

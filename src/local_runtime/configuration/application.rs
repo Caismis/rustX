@@ -257,11 +257,15 @@ impl ConfigurationApplications {
 impl ApplicationState {
     /// Initial resolution happens only for an uninitialized source scope. Once
     /// established, authored input cannot bypass successful native publication.
+    /// A new Session's selection must resolve. A `persisted` Session's
+    /// selection is its own earlier choice: when the catalog no longer admits
+    /// it, the Session still binds and loads, reporting it unavailable.
     pub(crate) fn initial_binding(
         &mut self,
         configuration: &super::UserConfigManager,
         input: &super::SessionConfigInput,
         credentials: &crate::credentials::CredentialSnapshot,
+        persisted: bool,
     ) -> Result<super::AdmittedSessionConfig, String> {
         let key = super::canonical_directory(&input.cwd)?;
         let mut capture = match self.creation_capture(configuration, &key, credentials)? {
@@ -277,7 +281,7 @@ impl ApplicationState {
                 .clone()
                 .unwrap_or_else(|| capture.config.initial_model().clone()),
         );
-        Self::validate_selection(&capture, credentials)?;
+        Self::validate_selection(&capture, credentials, persisted)?;
         capture.admit(|| credentials.clone())
     }
 
@@ -379,6 +383,7 @@ impl ApplicationState {
     fn validate_selection(
         capture: &super::ProspectiveSessionConfig,
         credentials: &crate::credentials::CredentialSnapshot,
+        persisted: bool,
     ) -> Result<(), String> {
         capture
             .config
@@ -400,14 +405,17 @@ impl ApplicationState {
             .map_err(|error| error.to_string())?;
         let models = crate::model::invocation::ModelBindingRegistry::new(catalog)
             .map_err(|error| error.to_string())?;
-        let model =
-            crate::model::session::SessionModelState::new(models, capture.session_model().clone())
-                .map_err(|error| error.to_string())?;
-        let snapshot = model.snapshot();
+        let selection = capture.session_model().clone();
+        let model = if persisted {
+            crate::model::session::SessionModelState::restore(models, selection)
+        } else {
+            crate::model::session::SessionModelState::new(models, selection)
+        }
+        .map_err(|error| error.to_string())?;
         // The same native budget validator used at runtime composition.
-        crate::runtime::conversation_runtime::validate_context_policy(
+        crate::runtime::conversation_runtime::validate_model_context(
             &capture.config.context_policy(),
-            &snapshot,
+            &model,
         )
         .map_err(|error| error.message)
     }
@@ -418,7 +426,7 @@ impl ApplicationState {
     ) -> Result<(), String> {
         let mut default = capture.clone();
         default.input.model = None;
-        Self::validate_selection(&default, credentials)
+        Self::validate_selection(&default, credentials, false)
     }
 
     fn make_available(

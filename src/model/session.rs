@@ -258,12 +258,23 @@ enum ModelAuthority {
 /// Updates are transactional: a failed update changes nothing, so a caller
 /// can publish a model-change observation exactly when `apply` returns
 /// `Ok`.
+///
+/// The configured selection, the catalog future selections resolve against,
+/// and the invocation last resolved for the configuration are distinct facts.
+/// A published catalog may no longer admit the configured selection; the
+/// state then records why ([`Self::unavailable`]) and refuses every new
+/// snapshot until a valid selection is applied. It never substitutes a
+/// default, and it keeps the invocation it last resolved, which only display
+/// reads.
 #[derive(Debug, Clone)]
 pub struct SessionModelState {
     authority: ModelAuthority,
     config: SessionModelConfig,
-    primary: ResolvedModelInvocation,
-    summary: AttemptSummaryModel,
+    /// The invocation last resolved for `config`; absent only when this
+    /// state was restored with an already unavailable selection.
+    resolved: Option<(ResolvedModelInvocation, AttemptSummaryModel)>,
+    /// Why the authority's catalog does not admit `config`.
+    unavailable: Option<ModelInvocationError>,
 }
 
 impl SessionModelState {
@@ -277,13 +288,71 @@ impl SessionModelState {
         registry: ModelBindingRegistry,
         config: SessionModelConfig,
     ) -> Result<Self, ModelInvocationError> {
-        let (primary, summary) = resolve(&registry, &config)?;
+        let resolved = resolve(&registry, &config)?;
         Ok(Self {
             authority: ModelAuthority::Catalog(registry),
             config,
-            primary,
-            summary,
+            resolved: Some(resolved),
+            unavailable: None,
         })
+    }
+
+    /// Restores a Session's persisted configuration against the catalog it
+    /// now publishes.
+    ///
+    /// Exactly like [`Self::new`], except that a selection the catalog no
+    /// longer admits — a removed Model or Profile, or a limit the Model no
+    /// longer allows — composes an unavailable state instead of failing: the
+    /// Session stays loadable, advertises the catalog, and refuses admission
+    /// until a valid selection is applied. Nothing is resolved for it.
+    ///
+    /// # Errors
+    ///
+    /// Returns every other resolution failure, such as a credential failure.
+    pub fn restore(
+        registry: ModelBindingRegistry,
+        config: SessionModelConfig,
+    ) -> Result<Self, ModelInvocationError> {
+        if let Err(error) = analyze_session_model_config(registry.catalog().catalog(), &config) {
+            return Ok(Self {
+                authority: ModelAuthority::Catalog(registry),
+                config,
+                resolved: None,
+                unavailable: Some(error),
+            });
+        }
+        Self::new(registry, config)
+    }
+
+    /// This Session's state for a candidate configuration generation that
+    /// publishes `registry` and carries `config` — the Session's own
+    /// selection, not a new choice.
+    ///
+    /// A configuration the catalog admits is resolved exactly like
+    /// [`Self::new`]. One it no longer admits is unavailable, keeping the
+    /// invocation this state last resolved when `config` is unchanged, so
+    /// adopting the candidate publishes the catalog without replacing,
+    /// re-resolving or substituting that invocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns every other resolution failure.
+    pub fn carry(
+        &self,
+        registry: ModelBindingRegistry,
+        config: SessionModelConfig,
+    ) -> Result<Self, ModelInvocationError> {
+        match analyze_session_model_config(registry.catalog().catalog(), &config) {
+            Ok(_) => Self::new(registry, config),
+            Err(error) => Ok(Self {
+                authority: ModelAuthority::Catalog(registry),
+                resolved: (config == self.config)
+                    .then(|| self.resolved.clone())
+                    .flatten(),
+                config,
+                unavailable: Some(error),
+            }),
+        }
     }
 
     /// Composes the session model state of a runtime whose model semantics
@@ -303,12 +372,12 @@ impl SessionModelState {
         frozen: &FrozenModelSpec,
         credentials: &dyn CredentialEnvironment,
     ) -> Result<Self, ModelInvocationError> {
-        let (primary, summary) = frozen.materialize(credentials)?;
+        let resolved = frozen.materialize(credentials)?;
         Ok(Self {
             authority: ModelAuthority::Frozen(Box::new(frozen.clone())),
             config: frozen.configured.clone(),
-            primary,
-            summary,
+            resolved: Some(resolved),
+            unavailable: None,
         })
     }
 
@@ -342,14 +411,32 @@ impl SessionModelState {
         }
     }
 
+    /// Why the authority's catalog does not admit the configured selection,
+    /// when it does not.
+    #[must_use]
+    pub const fn unavailable(&self) -> Option<&ModelInvocationError> {
+        self.unavailable.as_ref()
+    }
+
     /// Freezes the current configuration into an attempt model snapshot.
     ///
     /// This is a cheap clone of values resolved when the configuration was
     /// last accepted, so it is safe to call under the admission
     /// linearization lock.
-    #[must_use]
-    pub fn snapshot(&self) -> AttemptModelSnapshot {
-        AttemptModelSnapshot::new(self.primary.clone(), self.summary.clone())
+    ///
+    /// # Errors
+    ///
+    /// Returns why the selection is unavailable: no new model work may be
+    /// admitted with a selection the published catalog does not admit, and
+    /// the invocation last resolved for it is never a substitute.
+    pub fn snapshot(&self) -> Result<AttemptModelSnapshot, ModelInvocationError> {
+        match (&self.unavailable, &self.resolved) {
+            (None, Some((primary, summary))) => {
+                Ok(AttemptModelSnapshot::new(primary.clone(), summary.clone()))
+            }
+            (Some(error), _) => Err(error.clone()),
+            (None, None) => unreachable!("an admitted selection is always resolved"),
+        }
     }
 
     /// Applies a whole-state configuration replacement transactionally.
@@ -365,10 +452,10 @@ impl SessionModelState {
                 model: self.config.model.clone(),
             });
         };
-        let (primary, summary) = resolve(registry, &config)?;
+        let resolved = resolve(registry, &config)?;
         self.config = config;
-        self.primary = primary;
-        self.summary = summary;
+        self.resolved = Some(resolved);
+        self.unavailable = None;
         Ok(())
     }
 
@@ -377,13 +464,21 @@ impl SessionModelState {
     ///
     /// Catalog publication and invocation adoption are distinct: the current
     /// configuration keeps the primary and Summary invocations it already
-    /// resolved, so no adapter, credential or parameter is re-resolved. That
-    /// is sound only while the current configuration resolves to effectively
-    /// the same invocations against `registry`
-    /// ([`ModelCatalog::same_invocation`]); otherwise nothing changes and
-    /// `false` is returned, because the change needs invocation preparation
-    /// and adoption instead. A frozen authority owns no catalog and always
-    /// refuses.
+    /// resolved, so no adapter, credential or parameter is re-resolved, and
+    /// the configured selection is never changed.
+    ///
+    /// - When `registry` no longer admits the configuration, it is published
+    ///   anyway and the selection becomes unavailable: the catalog is what a
+    ///   valid replacement is chosen from, and no new snapshot is admitted
+    ///   until one is applied.
+    /// - When the configuration still resolves, publication is sound only
+    ///   while it resolves to effectively the same invocations
+    ///   ([`ModelCatalog::same_invocation`]). Otherwise — including a
+    ///   selection that becomes admissible again — nothing changes and
+    ///   `false` is returned, because that change needs invocation
+    ///   preparation and adoption.
+    ///
+    /// A frozen authority owns no catalog and always refuses.
     ///
     /// [`ModelCatalog::same_invocation`]: crate::model::catalog::ModelCatalog::same_invocation
     #[must_use]
@@ -392,16 +487,23 @@ impl SessionModelState {
             return false;
         };
         let (old, new) = (current.catalog().catalog(), registry.catalog().catalog());
+        if let Err(error) = analyze_session_model_config(new, &self.config) {
+            self.authority = ModelAuthority::Catalog(registry);
+            self.unavailable = Some(error);
+            return true;
+        }
         let same = |selection: ModelSelection, layer| {
             old.same_invocation(&selection, new, &selection, layer)
         };
-        if !same(
-            self.config.selection(),
-            RequestParamsLayer::SessionOverrides,
-        ) || self
-            .config
-            .summary_selection()
-            .is_some_and(|summary| !same(summary, RequestParamsLayer::SummaryOverrides))
+        if self.unavailable.is_some()
+            || !same(
+                self.config.selection(),
+                RequestParamsLayer::SessionOverrides,
+            )
+            || self
+                .config
+                .summary_selection()
+                .is_some_and(|summary| !same(summary, RequestParamsLayer::SummaryOverrides))
         {
             return false;
         }
@@ -414,13 +516,14 @@ impl SessionModelState {
     pub fn view(&self) -> SessionModelView {
         SessionModelView {
             configured: self.config.clone(),
-            effective: self.primary.view(),
-            summary: match &self.summary {
+            effective: self.resolved.as_ref().map(|(primary, _)| primary.view()),
+            summary: self.resolved.as_ref().map(|(_, summary)| match summary {
                 AttemptSummaryModel::Session => SummaryModelView::Session,
                 AttemptSummaryModel::Explicit(invocation) => {
                     SummaryModelView::Explicit(Box::new(invocation.view()))
                 }
-            },
+            }),
+            unavailable: self.unavailable.as_ref().map(ToString::to_string),
         }
     }
 }
@@ -449,22 +552,21 @@ pub struct SessionModelView {
     /// The authoritative desired configuration, exactly as a client would
     /// send it back through `model_set`.
     pub configured: SessionModelConfig,
-    /// The resolved effective primary invocation.
-    pub effective: ModelInvocationView,
-    /// The resolved summary policy.
-    pub summary: SummaryModelView,
-}
-
-impl SessionModelView {
-    /// The attempt view an attempt admitted with exactly this session state
-    /// would freeze.
-    #[must_use]
-    pub fn to_attempt_view(&self) -> AttemptModelView {
-        AttemptModelView {
-            primary: self.effective.clone(),
-            summary: self.summary.clone(),
-        }
-    }
+    /// The effective primary invocation last resolved for `configured`.
+    /// Absent only when the Session was loaded with an already unavailable
+    /// selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective: Option<ModelInvocationView>,
+    /// The summary policy last resolved for `configured`, absent exactly
+    /// when `effective` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<SummaryModelView>,
+    /// Why the Session's published Model Catalog does not admit
+    /// `configured`. While present, `effective` and `summary` are display
+    /// facts only: no new Attempt is admitted until a valid selection is
+    /// committed, and nothing falls back to a default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unavailable: Option<String>,
 }
 
 /// The redacted client-facing projection of a summary policy.

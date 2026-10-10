@@ -699,11 +699,11 @@ export class CommandDispatcher {
         ? [
             `session model -> ${updated.configured.model}; ${attemptNote}`,
             "change applies to next attempt; primary overrides reset; summary policy preserved",
-            `capabilities: ${capabilitySummary(updated.effective)}`,
+            `capabilities: ${updated.effective == null ? "unavailable" : capabilitySummary(updated.effective)}`,
           ].join("\n")
         : [
             `session model -> ${updated.configured.model}; primary overrides reset; summary policy preserved`,
-            `capabilities: ${capabilitySummary(updated.effective)}`,
+            `capabilities: ${updated.effective == null ? "unavailable" : capabilitySummary(updated.effective)}`,
           ].join("\n");
       return transient(
         "info",
@@ -940,45 +940,59 @@ export function renderModel(state: PresentationState): string {
   if (session === null) {
     return "Historical evidence is partial. Active Session model, approval, resources, and launch sources are unavailable. Consult retained Request Snapshots for request-specific evidence.";
   }
+  // A selection the published catalog no longer admits has no effective
+  // model for new work; the last resolved one is not offered as one.
+  const effective = session.unavailable == null ? session.effective : undefined;
   const lines = [
     `### ${state.settingsEvidence === "frozen_child" ? "Parent-provided child" : "Session"} model (next eligible admission)`,
     `- configured: \`${session.configured.model}\``,
-    `- effective: \`${session.effective.model}\` via ${session.effective.protocol}`,
-    `- context window: ${session.effective.contextWindow}`,
-    `- max output tokens: ${session.effective.maxOutputTokens} (model maximum ${session.effective.modelMaxOutputTokens})`,
-    // Configured and effective profiles are separate facts: the session asks,
-    // the runtime resolves, and a catalog default is neither of them.
-    `- configured profile: ${describeConfiguredProfile(session.configured)}`,
-    `- effective profile: ${describeProfile(session.effective)}`,
-    `- reasoning: ${describeReasoning(session.effective)}`,
-    `- capabilities: ${capabilitySummary(session.effective)}`,
   ];
-
-  const unavailable = unavailableInputModalities(session.effective);
-  if (unavailable.length > 0) {
-    // Only effective capability is advertised; the declaration explains why
-    // something the catalog claims is not offered.
+  if (effective == null) {
     lines.push(
-      `- declared but not usable today: input ${unavailable.join(", ")}`,
+      `- effective: unavailable — ${session.unavailable ?? "the published catalog does not admit the configured selection"}`,
+      "- nothing new is admitted until a Model or Profile the catalog publishes is selected",
+      `- configured profile: ${describeConfiguredProfile(session.configured)}`,
     );
+  } else {
+    lines.push(
+      `- effective: \`${effective.model}\` via ${effective.protocol}`,
+      `- context window: ${effective.contextWindow}`,
+      `- max output tokens: ${effective.maxOutputTokens} (model maximum ${effective.modelMaxOutputTokens})`,
+      // Configured and effective profiles are separate facts: the session asks,
+      // the runtime resolves, and a catalog default is neither of them.
+      `- configured profile: ${describeConfiguredProfile(session.configured)}`,
+      `- effective profile: ${describeProfile(effective)}`,
+      `- reasoning: ${describeReasoning(effective)}`,
+      `- capabilities: ${capabilitySummary(effective)}`,
+    );
+
+    const unavailable = unavailableInputModalities(effective);
+    if (unavailable.length > 0) {
+      // Only effective capability is advertised; the declaration explains why
+      // something the catalog claims is not offered.
+      lines.push(
+        `- declared but not usable today: input ${unavailable.join(", ")}`,
+      );
+    }
+
+    const params = effective.requestParams ?? {};
+    if (Object.keys(params).length > 0) {
+      // Opaque provider-owned configuration: displayed, never interpreted.
+      lines.push(
+        "- request parameters (provider-owned, opaque):",
+        "```json",
+        JSON.stringify(params, null, 2),
+        "```",
+      );
+    }
   }
 
-  const params = session.effective.requestParams ?? {};
-  if (Object.keys(params).length > 0) {
-    // Opaque provider-owned configuration: displayed, never interpreted.
-    lines.push(
-      "- request parameters (provider-owned, opaque):",
-      "```json",
-      JSON.stringify(params, null, 2),
-      "```",
-    );
-  }
-
+  const summary = session.summary ?? session.configured.summaryModel;
   lines.push(
     `- summary model: ${
-      session.summary.mode === "session"
+      summary == null || summary.mode === "session"
         ? "follows the attempt's primary model"
-        : `\`${session.summary.model}\``
+        : `\`${summary.model}\``
     }`,
   );
 
@@ -994,12 +1008,12 @@ export function renderModel(state: PresentationState): string {
       `- effective capabilities: ${attempt.model ? capabilitySummary(attempt.model.primary) : "unavailable"}`,
       `- read_image active: ${attempt.executionSettings?.read_image_active ?? "unavailable"}`,
     );
-    if (attempt.model && attempt.model.primary.model !== session.effective.model) {
+    if (attempt.model && effective != null && attempt.model.primary.model !== effective.model) {
       lines.push(
-        `- the session's effective model is \`${session.effective.model}\`; this attempt keeps the model it froze.`,
+        `- the session's effective model is \`${effective.model}\`; this attempt keeps the model it froze.`,
       );
     }
-    if (session.configured.model !== session.effective.model) {
+    if (effective != null && session.configured.model !== effective.model) {
       lines.push(
         `- the session is configured for \`${session.configured.model}\`, which is not what it would use today.`,
       );

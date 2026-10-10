@@ -68,7 +68,8 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
  const selected = draft ? draft.intent : configured;
  const currentModel = selected?.model;
  const currentProfile = selected?.profile ?? undefined;
- const effectiveProfile = !draft && attached && !queued && model?.effective.model === currentModel ? model?.effective.profile ?? undefined : undefined;
+ // An unavailable selection has no effective Profile for new work.
+ const effectiveProfile = !draft && attached && !queued && model?.unavailable == null && model?.effective?.model === currentModel ? model?.effective?.profile ?? undefined : undefined;
  const choose = async (intent: ModelSelectionIntent) => {
    if (!catalogAdmits(choices, intent.model, intentProfile(intent))) return false;
    const selection = nextModelSelection(selected, intent);
@@ -86,7 +87,7 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
  const toolbar = <div className="agent-control"><ModelSelect binding={JSON.stringify([generation, target?.attachment_id, draft?.source?.target, view?.snapshot?.resources?.revision])} choices={picker.choices}
    current={picker.current} profile={picker.profile} effectiveProfile={picker.effectiveProfile} disabled={draft ? draft.disabled || !choices : disabled} loading={draft ? !draft.source : connecting ? !coldSource : blocked} error={picker.error} load={() => load()}
    choose={intent => { void choose(intent); }}/>
-   {activeAttempt(view?.snapshot) && view?.snapshot?.attempt?.model && view?.snapshot.attempt.model.primary.model !== model?.effective.model && <small>{tx('agent:agent-controls.running')}{' '}{view?.snapshot?.attempt?.model?.primary.model}</small>}
+   {activeAttempt(view?.snapshot) && view?.snapshot?.attempt?.model && view?.snapshot.attempt.model.primary.model !== model?.effective?.model && <small>{tx('agent:agent-controls.running')}{' '}{view?.snapshot?.attempt?.model?.primary.model}</small>}
    {!draft && !busy && (blocked && error || queued?.phase === 'failed') && <Button size="sm" disabled={!attached} onClick={() => load(true)}>{tx('agent:agent-controls.reread-models')}</Button>}
  </div>;
  return children ? children(toolbar, picker) : toolbar;

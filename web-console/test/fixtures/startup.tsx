@@ -47,7 +47,7 @@ if (new URL(location.href).searchParams.has('cold-model')) {
   server.handlers.set('session/setModel', request => {
     if (request.method !== 'session/setModel') throw Error('Wrong method');
     const saved = server.snapshots.get(request.params.target.session_id)!;
-    saved.model = { ...saved.model!, configured: request.params.config, effective: { ...saved.model!.effective, model: request.params.config.model, profile: request.params.config.profile } };
+    saved.model = { ...saved.model!, configured: request.params.config, effective: { ...saved.model!.effective!, model: request.params.config.model, profile: request.params.config.profile } };
     return { type: 'model', model: saved.model };
   });
 }

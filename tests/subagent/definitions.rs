@@ -1031,7 +1031,7 @@ async fn a_frozen_child_model_never_observes_a_later_rustx_toml_edit() {
         dependencies().credentials.as_deref().unwrap(),
     )
     .expect("the child materializes the frozen authority");
-    let attempt = child.snapshot();
+    let attempt = child.snapshot().unwrap();
     assert_eq!(
         attempt.primary().protocol(),
         ModelProtocol::OpenAiChatCompletions,

@@ -9,7 +9,7 @@ beforeEach(async () => {
   server.handlers.set('session/setModel', request => {
     if (request.method !== 'session/setModel') throw Error('Wrong method');
     const snapshot = server.snapshots.get(request.params.target.session_id)!;
-    snapshot.model = { ...snapshot.model!, configured: request.params.config, effective: { ...snapshot.model!.effective, model: request.params.config.model, profile: request.params.config.profile } };
+    snapshot.model = { ...snapshot.model!, configured: request.params.config, effective: { ...snapshot.model!.effective!, model: request.params.config.model, profile: request.params.config.profile } };
     return { type: 'model', model: snapshot.model };
   });
   server.held.add('session/attach');

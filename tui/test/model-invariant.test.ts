@@ -295,10 +295,10 @@ describe("session model A -> B invariant", () => {
       runtimeCursor(0),
     );
 
-    assert.equal(state.sessionModel!.effective.capabilities.reasoning, true);
-    assert.equal(state.sessionModel!.effective.reasoningEnabled, true);
+    assert.equal(state.sessionModel!.effective!.capabilities.reasoning, true);
+    assert.equal(state.sessionModel!.effective!.reasoningEnabled, true);
     assert.equal(
-      state.sessionModel!.effective.profile,
+      state.sessionModel!.effective!.profile,
       undefined,
       "no profile is invented for a model that declares none",
     );
@@ -325,11 +325,11 @@ describe("session model A -> B invariant", () => {
       runtimeCursor(0),
     );
 
-    assert.deepEqual(state.sessionModel!.effective.capabilities.inputModalities, [
+    assert.deepEqual(state.sessionModel!.effective!.capabilities.inputModalities, [
       "text",
     ]);
     assert.ok(
-      state.sessionModel!.effective.declaredCapabilities.inputModalities.includes(
+      state.sessionModel!.effective!.declaredCapabilities.inputModalities.includes(
         "image",
       ),
       "the declaration is still available to explain the difference",

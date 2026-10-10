@@ -11,14 +11,14 @@ use crate::local_runtime::configuration::settings::{ConfigMutation, SourceMutati
 /// Runtime Client attachment observes it: the bootstrap snapshot value, then
 /// only published change events. Nothing here reads configuration authority
 /// or derives eligibility; every value is the runtime's own publication.
-struct EligibilityStream {
+pub(super) struct EligibilityStream {
     _attachment: crate::runtime_client::RuntimeAttachment,
     subscription: crate::runtime_client::EventSubscription,
     current: AdoptionEligibility,
 }
 
 impl EligibilityStream {
-    fn open(fixture: &Fixture, id: &crate::local_runtime::session::SessionId) -> Self {
+    pub(super) fn open(fixture: &Fixture, id: &crate::local_runtime::session::SessionId) -> Self {
         let host = fixture.manager.configuration_host(id).unwrap();
         let (attachment, _) = host
             .attach_read_only(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
@@ -35,7 +35,7 @@ impl EligibilityStream {
     /// Consumes published events until the runtime has published `expected`.
     /// Every eligibility event must change the value: a repeated publication
     /// fails here.
-    async fn until(&mut self, expected: AdoptionEligibility) {
+    pub(super) async fn until(&mut self, expected: AdoptionEligibility) {
         while self.current != expected {
             match self.subscription.next().await {
                 crate::runtime_client::EventDelivery::Event(event) => {
@@ -2730,15 +2730,23 @@ async fn t09_available_default_preparation_is_independent_of_retained_session_se
         )
         .await
         .unwrap();
+    // The removed selection does not block the source generation: the real
+    // capability change is prepared with the Session's selection carried as
+    // unavailable, and waits for explicit adoption. Nothing is live yet.
     let pending = settled(&fixture, 0).await;
+    let candidate = pending
+        .candidate
+        .clone()
+        .expect("prepared capability change");
     assert!(
         matches!(
             pending.units[&ApplyUnit::Provider],
-            UnitApplication::Failed { .. }
+            UnitApplication::Ready { .. }
         ),
         "{pending:?}"
     );
     assert_eq!(runtime.model_view().configured.model.to_string(), "local/a");
+    assert!(runtime.model_view().unavailable.is_none());
     assert!(Arc::ptr_eq(
         old.capability().tool_registry(),
         runtime.runtime_resources().capability().tool_registry()
@@ -2774,6 +2782,34 @@ async fn t09_available_default_preparation_is_independent_of_retained_session_se
         crate::tools::types::ToolApprovalPolicy::Always
     );
     assert_eq!(runtime.model_view().configured.model.to_string(), "local/a");
+    // Adoption publishes the capabilities and the catalog together; the old
+    // Session keeps its configured selection, now reported unavailable, and
+    // discovers the replacement without falling back to it.
+    fixture
+        .manager
+        .adopt_configuration(id, &candidate.identity, candidate.expected_binding)
+        .unwrap();
+    let view = runtime.model_view();
+    assert_eq!(view.configured.model.to_string(), "local/a");
+    assert!(view.unavailable.unwrap().contains("local/a"));
+    assert!(view.effective.is_some());
+    let catalog = runtime.model_catalog();
+    assert!(
+        catalog
+            .models
+            .iter()
+            .any(|model| model.model.to_string() == "local/b")
+    );
+    assert!(
+        !catalog
+            .models
+            .iter()
+            .any(|model| model.model.to_string() == "local/a")
+    );
+    assert!(!Arc::ptr_eq(
+        old.capability().tool_registry(),
+        runtime.runtime_resources().capability().tool_registry()
+    ));
     fixture.close().await;
 }
 
@@ -4493,6 +4529,7 @@ async fn issue422_creation_binding_precedes_multi_client_visibility() {
                         model: None,
                     },
                     &f.manager.credentials,
+                    false,
                 )
                 .unwrap();
             assert_eq!(fresh.session_model().model.to_string(), "local/b");
@@ -4809,12 +4846,12 @@ async fn issue456_json_string_sources_round_trip_and_formatting_is_semantically_
             .unwrap();
         fixture.manager.load(&created.session.id, None).await.unwrap();
         let view = fixture.manager.configuration_runtime(&created.session.id).unwrap().model_view();
-        assert_eq!(view.effective.profile, Some(ModelProfileId::new("creative")));
+        assert_eq!(view.effective.as_ref().unwrap().profile, Some(ModelProfileId::new("creative")));
         assert_eq!(
-            serde_json::Value::Object(view.effective.request_params.clone()),
+            serde_json::Value::Object(view.effective.as_ref().unwrap().request_params.clone()),
             serde_json::json!({"temperature": 1.3, "seed": null})
         );
-        let crate::model::session::SummaryModelView::Explicit(summary) = view.summary else {
+        let Some(crate::model::session::SummaryModelView::Explicit(summary)) = view.summary else {
             panic!("explicit summary");
         };
         assert_eq!(summary.max_output_tokens, 128);
@@ -4912,11 +4949,11 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
         let view = runtime.model_view();
         assert_eq!(view.configured.profile, None);
         assert_eq!(
-            view.effective.profile,
+            view.effective.as_ref().unwrap().profile,
             Some(ModelProfileId::new("balanced"))
         );
         assert_eq!(
-            view.effective.request_params,
+            view.effective.as_ref().unwrap().request_params,
             object(json!({"temperature": 0.5}))
         );
         // A catalog-only publication: nothing is prepared or adopted, the
@@ -5017,12 +5054,15 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
             .configuration_runtime(&created.session.id)
             .unwrap()
             .model_view();
-        assert_eq!(new.effective.profile, Some(ModelProfileId::new("fast")));
         assert_eq!(
-            new.effective.request_params,
+            new.effective.as_ref().unwrap().profile,
+            Some(ModelProfileId::new("fast"))
+        );
+        assert_eq!(
+            new.effective.as_ref().unwrap().request_params,
             object(json!({"temperature": 1.5, "top_p": 0.9}))
         );
-        assert_eq!(new.effective.max_output_tokens, 32);
+        assert_eq!(new.effective.as_ref().unwrap().max_output_tokens, 32);
 
         // An explicit Summary is compared on its own: editing the Profile only
         // the Summary resolves through needs preparation and adoption.
@@ -5063,7 +5103,7 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
             .manager
             .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
             .unwrap();
-        let crate::model::session::SummaryModelView::Explicit(summary) =
+        let Some(crate::model::session::SummaryModelView::Explicit(summary)) =
             runtime.model_view().summary
         else {
             panic!("explicit summary");
@@ -5147,7 +5187,15 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
             .manager
             .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
             .unwrap();
-        assert_eq!(runtime.model_view().effective.max_output_tokens, 128);
+        assert_eq!(
+            runtime
+                .model_view()
+                .effective
+                .as_ref()
+                .unwrap()
+                .max_output_tokens,
+            128
+        );
 
         // A provider binding change is never ignored, even with every
         // Profile untouched.
@@ -5548,7 +5596,7 @@ async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
         };
         let mut effective = expected.as_object().unwrap().clone();
         effective.insert("override".into(), serde_json::from_str(override_text).unwrap());
-        assert_eq!(runtime.model_view().effective.request_params, effective);
+        assert_eq!(runtime.model_view().effective.as_ref().unwrap().request_params, effective);
         let settlement = runtime.settlement_signal();
         runtime.submit_inbound(input("exact literals")).unwrap();
         f.gates[0].wait_entered().await;
@@ -5650,7 +5698,7 @@ async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
         f.manager.adopt_configuration(&id, &candidate.identity, candidate.expected_binding).unwrap();
         let resources = runtime.runtime_resources();
         let view = runtime.model_view();
-        assert_eq!(view.effective.request_params, object(json!({KEY: null, "temperature": 0.5})));
+        assert_eq!(view.effective.as_ref().unwrap().request_params, object(json!({KEY: null, "temperature": 0.5})));
         let quiet = |text: &str| assert!(!text.contains(MARKER), "{text}");
 
         // Session selections: the key collides whatever its value's type; an
@@ -5712,7 +5760,7 @@ async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
         else {
             panic!("model")
         };
-        assert_eq!(model.effective.request_params, object(json!({KEY: null, "temperature": 0.5, "top_k": 40})));
+        assert_eq!(model.effective.as_ref().unwrap().request_params, object(json!({KEY: null, "temperature": 0.5, "top_k": 40})));
         let view = runtime.model_view();
         let resources_after_selection = runtime.runtime_resources();
         assert_eq!(resources_after_selection.revision(), resources.revision());
@@ -5749,6 +5797,12 @@ async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
         }
         write(&f, 0, ConfigMutation::RootModel { authored: Some(root(json!({}), None)) }).await;
         settled(&f, 0).await;
+        // A valid default edit publishes the Provider unit to this Session
+        // without re-resolving its own invocation or touching capabilities.
+        let resources_after_default = runtime.runtime_resources();
+        assert_eq!(resources_after_default.revision(), resources_after_selection.revision().next());
+        assert!(Arc::ptr_eq(resources_after_default.capability(), resources_after_selection.capability()));
+        assert_eq!(runtime.model_view(), view);
 
         let reviewer = crate::runtime::subagent::SubagentName::parse("reviewer").unwrap();
         let source = f.manager.source_settings(&user, None).await.unwrap();
@@ -5790,7 +5844,7 @@ async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
             "{diagnostic}"
         );
         sources_quiet(&connection).await;
-        assert!(Arc::ptr_eq(&resources_after_selection, &runtime.runtime_resources()));
+        assert!(Arc::ptr_eq(&resources_after_default, &runtime.runtime_resources()));
         assert_eq!(runtime.model_view(), view);
         assert!(f.provider.request_bodies().is_empty());
         f.close().await;
@@ -5930,16 +5984,25 @@ async fn issue456_following_and_pinned_default_profiles_diverge_only_when_the_de
             runtime(&pinned).model_view(),
         );
         assert_eq!(
-            (follows.configured.profile, follows.effective.profile),
+            (
+                follows.configured.profile,
+                follows.effective.as_ref().unwrap().profile.clone()
+            ),
             (None, Some(ModelProfileId::new("fast")))
         );
         assert_eq!(pins.configured, explicit);
         assert_eq!(
-            pins.effective.profile,
+            pins.effective.as_ref().unwrap().profile,
             Some(ModelProfileId::new("balanced"))
         );
-        assert_eq!(follows.effective.request_params["temperature"], json!(1.0));
-        assert_eq!(pins.effective.request_params["temperature"], json!(0.5));
+        assert_eq!(
+            follows.effective.as_ref().unwrap().request_params["temperature"],
+            json!(1.0)
+        );
+        assert_eq!(
+            pins.effective.as_ref().unwrap().request_params["temperature"],
+            json!(0.5)
+        );
         f.close().await;
     }))
     .await;
@@ -6233,14 +6296,793 @@ async fn issue459_catalog_publication_keeps_discovery_and_admission_on_one_autho
             panic!("model set")
         };
         assert_eq!(
-            model.effective.request_params,
+            model.effective.as_ref().unwrap().request_params,
             serde_json::from_value::<crate::model::invocation::RequestParams>(
                 json!({"temperature": 1.5, "top_p": 0.9})
             )
             .unwrap()
         );
-        assert_eq!(model.effective.max_output_tokens, 32);
+        assert_eq!(model.effective.as_ref().unwrap().max_output_tokens, 32);
         drop(client);
+        fixture.close().await;
+    }))
+    .await;
+}
+
+/// Author `local/a` with exactly these Profiles (name, request parameters).
+fn issue459_profiles(
+    authored: &crate::model::authoring::Model,
+    default: &str,
+    profiles: &[(&str, serde_json::Value)],
+) -> ConfigMutation {
+    use crate::model::catalog::ModelProfileId;
+    let mut model = authored.clone();
+    model.request_params = None;
+    model.default_profile = Some(ModelProfileId::new(default));
+    model.profiles = Some(
+        profiles
+            .iter()
+            .map(|(name, params)| {
+                (
+                    ModelProfileId::new(*name),
+                    crate::model::authoring::Profile {
+                        request_params: crate::toml_authoring::AuthoredRequestParams(
+                            serde_json::from_value(params.clone()).unwrap(),
+                        ),
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect(),
+    );
+    ConfigMutation::Model {
+        id: "local/a".into(),
+        authored: Some(model),
+    }
+}
+
+async fn issue459_authored_a(fixture: &Fixture) -> crate::model::authoring::Model {
+    fixture
+        .manager
+        .source_settings(
+            &crate::local_runtime::configuration::settings::SourceTarget::User,
+            None,
+        )
+        .await
+        .unwrap()
+        .user
+        .authored
+        .unwrap()
+        .models
+        .unwrap()["local/a"]
+        .clone()
+}
+
+fn issue459_pinned(profile: Option<&str>) -> crate::model::session::SessionModelConfig {
+    crate::model::session::SessionModelConfig {
+        profile: profile.map(crate::model::catalog::ModelProfileId::new),
+        ..crate::model::session::SessionModelConfig::of(
+            crate::model::catalog::ModelRef::parse("local/a").unwrap(),
+        )
+    }
+}
+
+fn issue459_text(text: &str) -> Vec<crate::message::types::UserContentBlock> {
+    vec![crate::message::types::UserContentBlock::Text(
+        crate::message::content::TextBlock { text: text.into() },
+    )]
+}
+
+/// Issue #459: an unavailable selection is a Session fact, not a load
+/// failure. After residency loss the Session composes from its retained
+/// binding — the published catalog — as unavailable, with nothing resolved
+/// for the removed selection; after losing the retained binding too (as
+/// across a restart) the persisted selection binds the same way. Both refuse
+/// work and both recover through `session/setModel`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue459_unavailable_selection_survives_reload_and_cold_binding() {
+    use crate::model::catalog::ModelRef;
+    use crate::model::session::SessionModelConfig;
+    use crate::runtime::conversation_runtime::InboundAdmissionError;
+    Box::pin(bounded(async {
+        let fixture = Fixture::new().await;
+        let id = fixture.sessions[0].id.clone();
+        let conversation = fixture.sessions[0].active_conversation_id.clone();
+        fixture.manager.load(&id, None).await.unwrap();
+        let b = SessionModelConfig::of(ModelRef::parse("local/b").unwrap());
+        fixture.manager.set_model(&id, b.clone()).await.unwrap();
+        settled(&fixture, 0).await;
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Model {
+                id: "local/b".into(),
+                authored: None,
+            },
+        )
+        .await;
+        let application = settled(&fixture, 0).await;
+        assert!(application.candidate.is_none(), "{application:?}");
+        let resident = fixture
+            .manager
+            .configuration_runtime(&id)
+            .unwrap()
+            .model_view();
+        assert_eq!(resident.configured, b);
+        assert!(resident.unavailable.is_some());
+        assert!(
+            resident.effective.is_some(),
+            "the last resolved invocation is retained"
+        );
+
+        let reload = || async {
+            fixture.manager.unload(&conversation).await.unwrap();
+            fixture.manager.load(&id, None).await.unwrap();
+            let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+            let view = runtime.model_view();
+            assert_eq!(view.configured, b);
+            assert!(view.unavailable.as_deref().unwrap().contains("local/b"));
+            // Nothing is resolved for, or substituted into, a removed selection.
+            assert!(view.effective.is_none() && view.summary.is_none());
+            assert!(
+                runtime
+                    .model_catalog()
+                    .models
+                    .iter()
+                    .all(|model| model.model.to_string() != "local/b")
+            );
+            assert!(matches!(
+                runtime.submit_inbound(issue459_text("refused")),
+                Err(InboundAdmissionError::ModelUnavailable { .. })
+            ));
+            runtime
+        };
+        // Residency loss: composition from the retained, published binding.
+        reload().await;
+        // Restart-equivalent: no retained binding, only persisted settings.
+        fixture.manager.unload(&conversation).await.unwrap();
+        fixture
+            .manager
+            .sessions
+            .configuration_bindings
+            .lock()
+            .unwrap()
+            .remove(&id);
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = reload().await;
+        let view = fixture
+            .manager
+            .set_model(&id, issue459_pinned(None))
+            .await
+            .unwrap();
+        assert!(view.unavailable.is_none());
+        assert_eq!(runtime.model_view(), view);
+        assert!(fixture.provider.request_bodies().is_empty());
+        fixture.close().await;
+    }))
+    .await;
+}
+
+/// Issue #459: recovery leaves ordinary adoption intact. A selected Profile
+/// whose parameters change (and stays valid) is still prepared as a
+/// candidate; the live invocation is not replaced, the admitted Attempt keeps
+/// its frozen parameters, and a selection committed after preparation
+/// overtakes the candidate's expected binding so it can no longer adopt.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue459_changed_selected_profile_still_needs_fenced_adoption() {
+    use crate::runtime_client::RuntimeClientResult;
+    use serde_json::json;
+    Box::pin(bounded(async {
+        let fixture = Fixture::new().await;
+        let id = fixture.sessions[0].id.clone();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        let host = fixture.manager.configuration_host(&id).unwrap();
+        let (client, _) = host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .unwrap();
+        let authored = issue459_authored_a(&fixture).await;
+        let fast = ("fast", json!({"temperature": 1.0}));
+        write(
+            &fixture,
+            0,
+            issue459_profiles(
+                &authored,
+                "balanced",
+                &[("balanced", json!({"temperature": 0.5})), fast.clone()],
+            ),
+        )
+        .await;
+        let candidate = settled(&fixture, 0).await.candidate.unwrap();
+        fixture
+            .manager
+            .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
+            .unwrap();
+        fixture
+            .manager
+            .set_model(&id, issue459_pinned(Some("balanced")))
+            .await
+            .unwrap();
+        settled(&fixture, 0).await;
+        let mut eligibility = EligibilityStream::open(&fixture, &id);
+        let invocation = runtime.model_snapshot();
+        let settlement = runtime.settlement_signal();
+        runtime.submit_inbound(issue459_text("request-A")).unwrap();
+        fixture.gates[0].wait_entered().await;
+        let admitted = host.snapshot().unwrap().0.attempt.unwrap().model;
+
+        // The selected Profile's parameters change; it stays valid.
+        write(
+            &fixture,
+            0,
+            issue459_profiles(
+                &authored,
+                "balanced",
+                &[("balanced", json!({"temperature": 0.7})), fast.clone()],
+            ),
+        )
+        .await;
+        let application = settled(&fixture, 0).await;
+        let candidate = application
+            .candidate
+            .clone()
+            .expect("a changed invocation is prepared");
+        assert!(
+            matches!(
+                application.units[&ApplyUnit::Provider],
+                UnitApplication::Ready { .. }
+            ),
+            "{application:?}"
+        );
+        assert_eq!(runtime.model_snapshot(), invocation);
+        assert!(runtime.model_view().unavailable.is_none());
+        assert_eq!(host.snapshot().unwrap().0.attempt.unwrap().model, admitted);
+        fixture.gates[0].release();
+        settlement.notified().await;
+        let body: serde_json::Value =
+            serde_json::from_str(&fixture.provider.request_bodies()[0]).unwrap();
+        assert_eq!(body["temperature"], json!(0.5));
+
+        // A selection committed after preparation advances the binding the
+        // candidate expected: it cannot overwrite that selection. Settlement
+        // precedes the Attempt task's release; selection waits for idle.
+        eligibility.until(AdoptionEligibility::Busy).await;
+        eligibility.until(AdoptionEligibility::Eligible).await;
+        let RuntimeClientResult::ModelSet { model } =
+            client.model_set(issue459_pinned(Some("fast"))).unwrap()
+        else {
+            panic!("model set")
+        };
+        assert!(matches!(
+            fixture.manager.adopt_configuration(
+                &id,
+                &candidate.identity,
+                candidate.expected_binding
+            ),
+            Err(AdoptionError::Conflict)
+        ));
+        assert_eq!(runtime.model_view(), *model);
+        assert_eq!(
+            model.effective.unwrap().request_params["temperature"],
+            json!(1.0)
+        );
+        drop(client);
+        fixture.close().await;
+    }))
+    .await;
+}
+
+/// Issue #459: a selection change racing a catalog publication linearizes on
+/// one authority. While a publication that removes `fast` is parked before
+/// its fence, `session/setModel` admits `fast` against the catalog still
+/// published and overtakes the parked generation; the recaptured generation
+/// then publishes once, after the selection, and reports it unavailable —
+/// never replaced. Discovery and admission agree on that one catalog.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue459_selection_racing_catalog_publication_linearizes_on_one_authority() {
+    use crate::runtime_client::RuntimeClientResult;
+    use serde_json::json;
+    Box::pin(bounded(async {
+        let fixture = Fixture::new().await;
+        let id = fixture.sessions[0].id.clone();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        let probe = fixture
+            .manager
+            .probe(&fixture.sessions[0].active_conversation_id);
+        let host = fixture.manager.configuration_host(&id).unwrap();
+        let (client, _) = host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .unwrap();
+        let authored = issue459_authored_a(&fixture).await;
+        let balanced = ("balanced", json!({"temperature": 0.5}));
+        let fast = ("fast", json!({"temperature": 1.0}));
+        let deep = ("deep", json!({"temperature": 0.1}));
+        write(
+            &fixture,
+            0,
+            issue459_profiles(
+                &authored,
+                "balanced",
+                &[balanced.clone(), fast.clone(), deep.clone()],
+            ),
+        )
+        .await;
+        let candidate = settled(&fixture, 0).await.candidate.unwrap();
+        fixture
+            .manager
+            .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
+            .unwrap();
+        fixture
+            .manager
+            .set_model(&id, issue459_pinned(Some("balanced")))
+            .await
+            .unwrap();
+        settled(&fixture, 0).await;
+        let revision = runtime.runtime_resources().revision();
+
+        probe.before_catalog_publication.arm();
+        write(
+            &fixture,
+            0,
+            issue459_profiles(&authored, "balanced", &[balanced.clone(), deep.clone()]),
+        )
+        .await;
+        probe.before_catalog_publication.entered().await;
+        // Linearizes first, against the catalog that is still published.
+        let selected = fixture
+            .manager
+            .set_model(&id, issue459_pinned(Some("fast")))
+            .await
+            .unwrap();
+        assert!(selected.unavailable.is_none());
+        assert_eq!(
+            selected.effective.as_ref().unwrap().request_params["temperature"],
+            json!(1.0)
+        );
+        probe.before_catalog_publication.release();
+        let application = settled(&fixture, 0).await;
+        assert!(application.candidate.is_none(), "{application:?}");
+        assert!(
+            application
+                .units
+                .values()
+                .all(|unit| *unit == UnitApplication::Applied),
+            "{application:?}"
+        );
+
+        // Published exactly once, after the selection, which it reports
+        // unavailable while keeping it configured.
+        assert_eq!(runtime.runtime_resources().revision(), revision.next());
+        let view = runtime.model_view();
+        assert_eq!(view.configured, issue459_pinned(Some("fast")));
+        assert!(view.unavailable.as_deref().unwrap().contains("fast"));
+        assert_eq!(view.effective, selected.effective);
+        let RuntimeClientResult::ModelCatalog { catalog } = client.model_catalog().unwrap() else {
+            panic!("Runtime Client catalog")
+        };
+        assert_eq!(catalog, runtime.model_catalog());
+        let profiles: Vec<_> = catalog
+            .models
+            .iter()
+            .find(|model| model.model.to_string() == "local/a")
+            .unwrap()
+            .profiles
+            .iter()
+            .map(|profile| profile.id.to_string())
+            .collect();
+        assert_eq!(profiles, ["balanced", "deep"]);
+        assert!(matches!(
+            fixture
+                .manager
+                .set_model(&id, issue459_pinned(Some("fast")))
+                .await,
+            Err(AdoptionError::Failed { .. })
+        ));
+        let RuntimeClientResult::ModelSet { model } =
+            client.model_set(issue459_pinned(Some("deep"))).unwrap()
+        else {
+            panic!("model set")
+        };
+        assert!(model.unavailable.is_none());
+        assert_eq!(
+            model.effective.unwrap().request_params["temperature"],
+            json!(0.1)
+        );
+        drop(client);
+        fixture.close().await;
+    }))
+    .await;
+}
+
+/// Issue #459: recovery keeps the explicit Summary policy the Session's own
+/// choice. A removed primary Profile is replaced while the valid explicit
+/// Summary is kept; a removed Summary Model makes the selection unavailable
+/// on its own; switching only the primary while keeping that invalid Summary
+/// is refused explicitly; a complete valid configuration succeeds. Nothing
+/// resets the Summary automatically.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue459_recovery_keeps_the_explicit_summary_policy_explicit() {
+    use crate::model::catalog::ModelRef;
+    use crate::model::invocation::RequestParams;
+    use crate::model::session::{SessionModelConfig, SummaryModelPolicy, SummaryModelView};
+    use crate::runtime::conversation_runtime::InboundAdmissionError;
+    use serde_json::json;
+    Box::pin(bounded(async {
+        let fixture = Fixture::new().await;
+        let id = fixture.sessions[0].id.clone();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        let authored = issue459_authored_a(&fixture).await;
+        let fast = ("fast", json!({"temperature": 1.0}));
+        let deep = ("deep", json!({"temperature": 0.1}));
+        write(
+            &fixture,
+            0,
+            issue459_profiles(&authored, "deep", &[fast.clone(), deep.clone()]),
+        )
+        .await;
+        let candidate = settled(&fixture, 0).await.candidate.unwrap();
+        fixture
+            .manager
+            .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
+            .unwrap();
+        let summary_on = |model: &str| SummaryModelPolicy::Explicit {
+            model: ModelRef::parse(model).unwrap(),
+            profile: None,
+            request_params: RequestParams::new(),
+            max_output_tokens: Some(256),
+        };
+        let with_summary = |profile, summary| SessionModelConfig {
+            summary_model: summary,
+            ..issue459_pinned(profile)
+        };
+        fixture
+            .manager
+            .set_model(&id, with_summary(Some("fast"), summary_on("local/b")))
+            .await
+            .unwrap();
+        settled(&fixture, 0).await;
+
+        // The primary Profile is removed; the explicit Summary stays valid.
+        write(
+            &fixture,
+            0,
+            issue459_profiles(&authored, "deep", std::slice::from_ref(&deep)),
+        )
+        .await;
+        settled(&fixture, 0).await;
+        let view = runtime.model_view();
+        assert!(view.unavailable.as_deref().unwrap().contains("fast"));
+        assert_eq!(view.configured.summary_model, summary_on("local/b"));
+        // Replacing the primary keeps the explicit Summary, as both clients send it.
+        let view = fixture
+            .manager
+            .set_model(&id, with_summary(Some("deep"), summary_on("local/b")))
+            .await
+            .unwrap();
+        assert!(view.unavailable.is_none());
+        let Some(SummaryModelView::Explicit(summary)) = &view.summary else {
+            panic!("explicit summary")
+        };
+        assert_eq!(
+            (summary.model.to_string(), summary.max_output_tokens),
+            ("local/b".to_owned(), 256)
+        );
+        settled(&fixture, 0).await;
+
+        // The explicit Summary's Model is removed; the primary stays valid.
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Model {
+                id: "local/b".into(),
+                authored: None,
+            },
+        )
+        .await;
+        settled(&fixture, 0).await;
+        let view = runtime.model_view();
+        assert!(view.unavailable.as_deref().unwrap().contains("local/b"));
+        assert_eq!(
+            view.configured,
+            with_summary(Some("deep"), summary_on("local/b"))
+        );
+        assert!(matches!(
+            runtime.submit_inbound(issue459_text("refused")),
+            Err(InboundAdmissionError::ModelUnavailable { .. })
+        ));
+        // Switching only the primary keeps the invalid Summary and is refused.
+        let Err(AdoptionError::Failed { diagnostic }) = fixture
+            .manager
+            .set_model(&id, with_summary(None, summary_on("local/b")))
+            .await
+        else {
+            panic!("an invalid explicit Summary is refused")
+        };
+        assert!(diagnostic.contains("local/b"), "{diagnostic}");
+        assert_eq!(runtime.model_view(), view);
+        // A complete valid configuration corrects both.
+        let view = fixture
+            .manager
+            .set_model(&id, with_summary(None, summary_on("local/a")))
+            .await
+            .unwrap();
+        assert!(view.unavailable.is_none());
+        assert_eq!(view.configured.summary_model, summary_on("local/a"));
+        assert!(fixture.provider.request_bodies().is_empty());
+        fixture.close().await;
+    }))
+    .await;
+}
+
+/// Issue #459: catalog publication metadata says what was published and what
+/// was not. One User source update edits an unselected Model and the process
+/// shutdown deadline, which needs a restart. The catalog publishes as the
+/// whole Provider unit — its values, provenance and component revision —
+/// while the adopted-source baseline (`source_revisions`), the other units'
+/// revisions and the unapplied process field stay as they were. Reconciling
+/// the same sources again publishes nothing; adopting a real context change
+/// then moves the baseline and the units it composes forward.
+#[allow(clippy::too_many_lines)] // one metadata contract across three generations
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue459_catalog_publication_metadata_names_what_was_published() {
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    Box::pin(bounded(async {
+        let fixture = Fixture::new().await;
+        let id = fixture.sessions[0].id.clone();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        let retained = || {
+            fixture
+                .manager
+                .sessions
+                .configuration_bindings
+                .lock()
+                .unwrap()[&id]
+                .clone()
+        };
+        let before = runtime.runtime_resources();
+        let old = before.configuration().unwrap().clone();
+        let invocation = runtime.model_snapshot();
+        let process = fixture.manager.process_policy();
+
+        let path = fixture
+            .manager
+            .source_settings(&SourceTarget::User, None)
+            .await
+            .unwrap()
+            .user
+            .path;
+        let mut document: toml::Value =
+            toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        document["models"]["local/b"]
+            .as_table_mut()
+            .unwrap()
+            .insert("max_output_tokens".into(), 1024.into());
+        document.as_table_mut().unwrap().insert(
+            "app_server".into(),
+            toml::toml! { shutdown_deadline_ms = 12_345 }.into(),
+        );
+        std::fs::write(&path, toml::to_string(&document).unwrap()).unwrap();
+        let workspace = SourceTarget::Workspace {
+            directory: fixture.workspaces[0].clone(),
+        };
+        fixture
+            .manager
+            .reconcile_configuration(&workspace)
+            .await
+            .unwrap();
+        let application = settled(&fixture, 0).await;
+        let published_revision = application.desired.input_revision.clone().unwrap();
+        assert!(application.candidate.is_none(), "{application:?}");
+        assert_eq!(
+            application.units[&ApplyUnit::ProcessBindings],
+            UnitApplication::ProcessRestart
+        );
+        for unit in [
+            ApplyUnit::Capabilities,
+            ApplyUnit::Instructions,
+            ApplyUnit::Provider,
+        ] {
+            assert_eq!(
+                application.units[&unit],
+                UnitApplication::Applied,
+                "{application:?}"
+            );
+        }
+
+        // Discovery reflects the catalog; the invocation and capabilities do not move.
+        let entry = runtime
+            .model_catalog()
+            .models
+            .into_iter()
+            .find(|model| model.model.to_string() == "local/b")
+            .unwrap();
+        assert_eq!(entry.max_output_tokens, 1024);
+        assert_eq!(runtime.model_snapshot(), invocation);
+        let after = runtime.runtime_resources();
+        assert!(Arc::ptr_eq(before.capability(), after.capability()));
+        assert_eq!(after.revision(), before.revision().next());
+        let new = after.configuration().unwrap().clone();
+        // The Provider unit is published with its own component revision; the
+        // adopted-source baseline and every other unit keep theirs.
+        assert_eq!(
+            new.component_revisions[&ApplyUnit::Provider],
+            published_revision
+        );
+        assert_ne!(
+            old.component_revisions[&ApplyUnit::Provider],
+            published_revision
+        );
+        for unit in [
+            ApplyUnit::Capabilities,
+            ApplyUnit::Instructions,
+            ApplyUnit::ExecutionPolicy,
+            ApplyUnit::SharedCapacity,
+        ] {
+            assert_eq!(
+                new.component_revisions[&unit], old.component_revisions[&unit],
+                "{unit:?}"
+            );
+        }
+        assert_eq!(new.source_revisions, old.source_revisions);
+        assert_eq!(
+            new.effective.models.as_ref().unwrap()["local/b"].max_output_tokens,
+            1024
+        );
+        // The restart-bound process field is neither in the generation nor live.
+        assert_eq!(new.effective.app_server, old.effective.app_server);
+        assert_eq!(
+            fixture.manager.process_policy().shutdown_deadline_ms,
+            process.shutdown_deadline_ms
+        );
+        // The retained binding carries the same facts, so a reload composes
+        // exactly this generation's metadata.
+        let binding = retained();
+        assert_eq!(binding.component_revisions, new.component_revisions);
+        assert_eq!(binding.source_revisions, old.source_revisions);
+        // The wire projection keeps the adopted-source baseline.
+        let view = runtime.configuration_view().unwrap();
+        assert_eq!(view.source_revisions, old.source_revisions);
+        assert_eq!(
+            view.document.models.as_ref().unwrap()["local/b"].max_output_tokens,
+            1024
+        );
+
+        // The same sources again publish nothing.
+        fixture
+            .manager
+            .reconcile_configuration(&workspace)
+            .await
+            .unwrap();
+        let again = settled(&fixture, 0).await;
+        assert_eq!(again.desired, application.desired);
+        assert!(Arc::ptr_eq(&after, &runtime.runtime_resources()));
+
+        // Adopting a real context change moves the baseline forward.
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Instructions {
+                authored: Some("issue459 adopted".into()),
+            },
+        )
+        .await;
+        let candidate = settled(&fixture, 0)
+            .await
+            .candidate
+            .expect("an instruction change is prepared");
+        fixture
+            .manager
+            .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
+            .unwrap();
+        let adopted = runtime.runtime_resources().configuration().unwrap().clone();
+        let binding = retained();
+        assert_ne!(adopted.source_revisions, old.source_revisions);
+        assert_eq!(adopted.source_revisions, binding.source_revisions);
+        // A context adoption composes the Instructions and Provider units at
+        // its revision; units it did not compose keep theirs.
+        let revision = candidate.identity.input_revision.unwrap();
+        for unit in [ApplyUnit::Instructions, ApplyUnit::Provider] {
+            assert_eq!(adopted.component_revisions[&unit], revision, "{unit:?}");
+        }
+        for unit in [
+            ApplyUnit::Capabilities,
+            ApplyUnit::ExecutionPolicy,
+            ApplyUnit::SharedCapacity,
+        ] {
+            assert_eq!(
+                adopted.component_revisions[&unit], old.component_revisions[&unit],
+                "{unit:?}"
+            );
+        }
+        assert_eq!(
+            adopted.effective.models.as_ref().unwrap()["local/b"].max_output_tokens,
+            1024
+        );
+        // Adoption re-resolves through its own registry; the invocation's
+        // value is unchanged.
+        assert_eq!(runtime.model_snapshot().view(), invocation.view());
+        fixture.close().await;
+    }))
+    .await;
+}
+
+/// Issue #459: inbound accepted before a publication makes the selection
+/// unavailable is held, never run on the removed Profile and never dropped.
+/// The admission pass for it is parked before the coordinator lock while the
+/// publication commits, so it observes the unavailable selection. Held work
+/// does not make the Session busy for the explicit correction — otherwise the
+/// selection could never be fixed — and committing a valid selection admits
+/// it with exactly that selection's parameters.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue459_inbound_accepted_before_publication_waits_for_explicit_recovery() {
+    use serde_json::json;
+    Box::pin(bounded(async {
+        let fixture = Fixture::new().await;
+        let id = fixture.sessions[0].id.clone();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        let host = fixture.manager.configuration_host(&id).unwrap();
+        let authored = issue459_authored_a(&fixture).await;
+        let fast = ("fast", json!({"temperature": 1.0}));
+        let deep = ("deep", json!({"temperature": 0.1, "seed": 9}));
+        write(
+            &fixture,
+            0,
+            issue459_profiles(&authored, "deep", &[fast.clone(), deep.clone()]),
+        )
+        .await;
+        let candidate = settled(&fixture, 0).await.candidate.unwrap();
+        fixture
+            .manager
+            .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
+            .unwrap();
+        fixture
+            .manager
+            .set_model(&id, issue459_pinned(Some("fast")))
+            .await
+            .unwrap();
+        settled(&fixture, 0).await;
+        fixture.gates[0].release();
+
+        // Accepted while `fast` is published; its admission pass parks.
+        let gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+        let release = gate.arm_scoped();
+        runtime.install_configuration_admission_gate(gate.clone());
+        runtime.submit_inbound(issue459_text("queued")).unwrap();
+        tokio::task::spawn_blocking(move || gate.wait_entered())
+            .await
+            .unwrap();
+        write(
+            &fixture,
+            0,
+            issue459_profiles(&authored, "deep", std::slice::from_ref(&deep)),
+        )
+        .await;
+        settled(&fixture, 0).await;
+        assert!(runtime.model_view().unavailable.is_some());
+        drop(release);
+
+        // The held item is not run on the removed Profile, and it does not
+        // block the correction; committing the correction admits it.
+        let settlement = runtime.settlement_signal();
+        fixture
+            .manager
+            .set_model(&id, issue459_pinned(Some("deep")))
+            .await
+            .unwrap();
+        settlement.notified().await;
+        let bodies = fixture.provider.request_bodies();
+        assert_eq!(bodies.len(), 1, "exactly one request, on the replacement");
+        let held: serde_json::Value = serde_json::from_str(&bodies[0]).unwrap();
+        assert_eq!(
+            (&held["temperature"], &held["seed"]),
+            (&json!(0.1), &json!(9))
+        );
+        assert!(bodies[0].contains("queued"));
+        assert!(host.snapshot().unwrap().0.inbound.pending.is_empty());
         fixture.close().await;
     }))
     .await;

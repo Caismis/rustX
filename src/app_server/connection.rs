@@ -1592,6 +1592,12 @@ pub(super) fn client_error(error: RuntimeClientError) -> RpcError {
         RuntimeClientError::ConfigurationAdoption { rejection } => {
             ErrorData::ConfigurationAdoption { rejection }
         }
+        // The App Server selects models through `session/setModel`; a Runtime
+        // Client model refusal here is a turn or compaction refused because
+        // the published catalog no longer admits the configured selection.
+        RuntimeClientError::InvalidModelConfiguration { message } => ErrorData::ModelUnavailable {
+            diagnostic: message,
+        },
         RuntimeClientError::InteractionNotPending { interaction } => {
             ErrorData::InteractionNotPending { interaction }
         }
@@ -1679,6 +1685,9 @@ pub(super) fn domain(data: ErrorData) -> RpcError {
             "Agent is unavailable; physical settlement, publication, or workspace authority requires explicit repair"
         }
         ErrorData::UnknownAgent { .. } => "Unknown Agent in this conversation",
+        ErrorData::ModelUnavailable { .. } => {
+            "The Session's configured Model is not in its published catalog; select one it provides"
+        }
         _ => "Operation rejected",
     };
     rpc_error(-32000, message, Some(data))

@@ -975,9 +975,11 @@ pub enum RuntimeClientError {
         /// Human-readable detail.
         message: String,
     },
-    /// A model configuration update could not be resolved.
+    /// A model configuration update could not be resolved, or new work was
+    /// refused because the Session's published catalog does not admit its
+    /// configured selection.
     ///
-    /// The update was rejected as a whole: no session state changed and no
+    /// The request was rejected as a whole: no session state changed and no
     /// model-configuration event was published. The message never carries a
     /// credential.
     InvalidModelConfiguration {

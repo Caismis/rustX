@@ -426,6 +426,12 @@ pub enum ErrorData {
     ConfigurationAdoption {
         rejection: crate::local_runtime::configuration::application::AdoptionError,
     },
+    /// The Session's published Model Catalog does not admit its configured
+    /// selection, so no work is accepted until `session/setModel` commits a
+    /// selection it does admit. Nothing falls back to a default.
+    ModelUnavailable {
+        diagnostic: String,
+    },
     ArchivePreparationFailed {
         reason: crate::session_archive::SessionArchivePrepareError,
     },

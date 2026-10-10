@@ -1188,6 +1188,14 @@ preserves canonical history. `configuration/reconcile` rescans external inputs o
 starts a new same-revision application attempt. It is never a second Save step.
 See [the native contract](configuration.md#save-automatic-application-and-session-adoption).
 
+A published Model Catalog that no longer admits a Session's configured Model or
+Profile leaves it configured and unavailable: `session/model` carries
+`unavailable` (the native diagnostic), with the last resolved `effective` and
+`summary` as display facts, or neither when the Session was loaded unavailable.
+`turn/start`, `turn/steer` and `context/compact` then fail with
+`model_unavailable` until `session/setModel` commits a complete selection the
+catalog admits; nothing falls back to a default.
+
 ## Session configuration adoption eligibility (v39)
 
 Whether a Session could adopt a prepared configuration *now* is runtime state,

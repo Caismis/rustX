@@ -23,9 +23,9 @@ function Control() {
 const running = (): RuntimeClientSnapshot => ({ ...snapshot(), attempt: { attempt_id: 'native-attempt', phase: { type: 'running' }, turn: 1, execution_settings: { resource_revision: '1', approval_mode: 'policy' } } });
 function modelFixture() {
  const model = cfg3Effective().effective_model;
- model.configured.model = model.effective.model = 'exact/model';
- model.effective.profile = 'deliberate';
- const catalog: CatalogModelView[] = ['exact/model', 'other'].map(id => ({ model: id, protocol: 'openai_responses', contextWindow: 128000, maxOutputTokens: 8192, declaredCapabilities: model.effective.declaredCapabilities, effectiveCapabilities: model.effective.capabilities, credentialSource: { type: 'literal' }, profiles: id === 'other' ? [] : [{ id: 'deliberate', reasoningEnabled: true }, { id: 'brief', reasoningEnabled: true }], defaultProfile: id === 'other' ? null : 'deliberate' }));
+ model.configured.model = model.effective!.model = 'exact/model';
+ model.effective!.profile = 'deliberate';
+ const catalog: CatalogModelView[] = ['exact/model', 'other'].map(id => ({ model: id, protocol: 'openai_responses', contextWindow: 128000, maxOutputTokens: 8192, declaredCapabilities: model.effective!.declaredCapabilities, effectiveCapabilities: model.effective!.capabilities, credentialSource: { type: 'literal' }, profiles: id === 'other' ? [] : [{ id: 'deliberate', reasoningEnabled: true }, { id: 'brief', reasoningEnabled: true }], defaultProfile: id === 'other' ? null : 'deliberate' }));
  server.snapshots.set('A', { ...snapshot(), model });
  server.handlers.set('session/models', () => ({ type: 'models', catalog: { models: catalog } }));
  server.handlers.set('session/model', () => ({ type: 'model', model: server.snapshots.get('A')!.model! }));
@@ -33,8 +33,8 @@ function modelFixture() {
    if (request.method !== 'session/setModel') throw new Error('wrong request');
    const next = structuredClone(server.snapshots.get('A')!);
    next.model!.configured = request.params.config;
-   next.model!.effective.model = request.params.config.model;
-   next.model!.effective.profile = request.params.config.profile;
+   next.model!.effective!.model = request.params.config.model;
+   next.model!.effective!.profile = request.params.config.profile;
    server.snapshots.set('A', next);
    return { type: 'model', model: next.model! };
  });
@@ -271,7 +271,7 @@ it('slash model/profile choices retain native order and membership across locale
  fireEvent.change(input, { target: { value: '/' } }); fireEvent.change(input, { target: { value: '/model' } });
  await act(async () => fireEvent.click(screen.getByRole('option', { name: 'exact/model / Model default profile (deliberate)' })));
  expect(count('session/setModel')).toBe(0); expect(input.value).toBe(''); expect(document.activeElement).toBe(input);
- expect(server.client.getSnapshot().views.A.snapshot?.model?.effective.profile).toBe('deliberate');
+ expect(server.client.getSnapshot().views.A.snapshot?.model?.effective?.profile).toBe('deliberate');
 });
 it('slash keyboard profile selection on the current model waits for acknowledgement and authoritative reread', async () => {
  const input = await slashFixture(); server.held.add('session/setModel'); server.held.add('session/snapshot');
@@ -283,10 +283,10 @@ it('slash keyboard profile selection on the current model waits for acknowledgem
  await expect(server.client.send('A', 'too early')).rejects.toThrow('Reread');
  expect(input.value).toBe('/model');
  await act(async () => server.reply(mutation)); const reread = await server.waitFor('session/snapshot', 1);
- expect(server.client.getSnapshot().views.A.snapshot?.model?.effective.profile).toBe('deliberate');
+ expect(server.client.getSnapshot().views.A.snapshot?.model?.effective?.profile).toBe('deliberate');
  await expect(server.client.send('A', 'still too early')).rejects.toThrow('Reread');
  await act(async () => server.reply(reread));
- expect(server.client.getSnapshot().views.A.snapshot?.model?.effective.profile).toBe('brief');
+ expect(server.client.getSnapshot().views.A.snapshot?.model?.effective?.profile).toBe('brief');
  expect(input.value).toBe(''); expect(document.activeElement).toBe(input);
  await server.client.send('A', 'after confirmation'); expect(count('turn/start')).toBe(1); expect(count('session/setModel')).toBe(1);
 });
@@ -307,8 +307,8 @@ it.each(['refused', 'unknown'] as const)('slash profile mutation %s preserves th
 function profileFixture(configured: import('../../protocol/app-server/v39').SessionModelConfig, models = ['example/chat'], profiles = ['balanced', 'fast']) {
   const state = { profiles, defaultProfile: profiles.length ? 'balanced' : undefined as string | undefined, revision: 1 };
   const base = cfg3Effective().effective_model;
-  const resolve = (config: typeof configured) => ({ ...base, configured: config, effective: { ...base.effective, model: config.model, profile: config.profile ?? state.defaultProfile ?? null } });
-  const catalog = () => models.map(id => ({ model: id, protocol: 'openai_responses' as const, contextWindow: 128000, maxOutputTokens: 8192, declaredCapabilities: base.effective.declaredCapabilities, effectiveCapabilities: base.effective.capabilities, credentialSource: { type: 'literal' as const }, profiles: state.profiles.map(id => ({ id, reasoningEnabled: false })), defaultProfile: state.defaultProfile ?? null }));
+  const resolve = (config: typeof configured) => ({ ...base, configured: config, effective: { ...base.effective!, model: config.model, profile: config.profile ?? state.defaultProfile ?? null } });
+  const catalog = () => models.map(id => ({ model: id, protocol: 'openai_responses' as const, contextWindow: 128000, maxOutputTokens: 8192, declaredCapabilities: base.effective!.declaredCapabilities, effectiveCapabilities: base.effective!.capabilities, credentialSource: { type: 'literal' as const }, profiles: state.profiles.map(id => ({ id, reasoningEnabled: false })), defaultProfile: state.defaultProfile ?? null }));
   const resources = () => ({ revision: String(state.revision), inspection: { definitions: [], resource_diagnostics: [], agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] } });
   server.snapshots.set('A', { ...snapshot(), resources: resources(), model: resolve(configured) });
   server.handlers.set('session/models', () => ({ type: 'models', catalog: { models: catalog() } }));
@@ -386,7 +386,7 @@ it('the Session menu distinguishes following the Model default from pinning a Pr
   menu = await profileMenu();
   await chooseRow('balanced');
   expect(configuredProfile()).toBe('balanced');
-  expect(server.client.getSnapshot().views.A.snapshot?.model?.effective.profile).toBe('balanced');
+  expect(server.client.getSnapshot().views.A.snapshot?.model?.effective?.profile).toBe('balanced');
   menu = await profileMenu();
   expect(menu.current('balanced')).toBe(true);
   expect(menu.current('Model default profile (balanced)')).toBe(false);
@@ -410,7 +410,7 @@ it('choosing the selected Model keeps a pinned Profile; the default action clear
   await chooseRow('Model default profile (balanced)');
   expect(sent()).toEqual([{ model: 'example/chat', maxOutputTokens: 256 }]);
   expect(configuredProfile()).toBeUndefined();
-  expect(server.client.getSnapshot().views.A.snapshot?.model?.effective.profile).toBe('balanced');
+  expect(server.client.getSnapshot().views.A.snapshot?.model?.effective?.profile).toBe('balanced');
   menu = await profileMenu();
   expect(menu.current('Model default profile (balanced)')).toBe(true);
   expect(menu.trigger()).toContain('balanced');
@@ -509,6 +509,25 @@ it('a pinned Profile a Model without Profiles no longer declares is identified a
   expect(unavailable('fast')).toBe(false);
   expect(menu.trigger()).not.toContain('fast');
   expect(sent()).toHaveLength(1);
+});
+
+it('a published catalog that removes the pinned Profile leaves it configured and unavailable; a published Profile recovers it with the Summary policy kept', async () => {
+  // Issue #459: native publishes the catalog anyway and reports the pin
+  // unavailable, keeping the invocation it last resolved as a display fact.
+  const independent = { model: 'example/chat', summaryModel: { mode: 'explicit' as const, model: 'example/summary' } };
+  const fixture = profileFixture({ ...independent, profile: 'fast' }, ['example/chat'], ['balanced', 'fast', 'deep']); await server.attached('A'); render(<Control/>);
+  server.snapshots.set('A', { ...server.snapshots.get('A')!, model: { ...server.snapshots.get('A')!.model!, unavailable: 'model example/chat declares no profile "fast"' } });
+  await act(async () => fixture.publish(['balanced', 'deep'], 'balanced'));
+  const menu = await profileMenu();
+  expect(unavailable('fast')).toBe(true);
+  expect(menu.trigger()).toContain('fast');
+  // Nothing is presented as in effect in its place.
+  expect(menu.current('Model default profile (balanced)')).toBe(false);
+  expect(menu.current('deep')).toBe(false);
+  await chooseRow('deep');
+  expect(sent()).toEqual([{ ...independent, profile: 'deep' }]);
+  expect(server.client.getSnapshot().views.A.snapshot?.model?.unavailable).toBeUndefined();
+  expect(unavailable('fast')).toBe(false);
 });
 
 it('a catalog revision that drops a pinned Profile offers recovery while mounted, and an obsolete catalog read cannot restore it', async () => {

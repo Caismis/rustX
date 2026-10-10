@@ -168,23 +168,25 @@ async fn the_initialize_snapshot_carries_the_redacted_session_model() {
     let model = snapshot.model.as_ref().unwrap();
     assert_eq!(model.configured.model, model_ref("alpha/model-a"));
     assert_eq!(
-        model.effective.protocol,
+        model.effective.as_ref().unwrap().protocol,
         ModelProtocol::OpenAiChatCompletions
     );
-    assert_eq!(model.effective.context_window, 128_000);
-    assert_eq!(model.effective.max_output_tokens, 4_096);
+    assert_eq!(model.effective.as_ref().unwrap().context_window, 128_000);
+    assert_eq!(model.effective.as_ref().unwrap().max_output_tokens, 4_096);
     assert_eq!(
-        model.effective.profile,
+        model.effective.as_ref().unwrap().profile,
         Some(ModelProfileId::new("on")),
         "the model's declared default profile is selected"
     );
-    assert!(model.effective.reasoning_enabled);
-    assert_eq!(model.summary, SummaryModelView::Session);
+    assert!(model.effective.as_ref().unwrap().reasoning_enabled);
+    assert_eq!(model.summary, Some(SummaryModelView::Session));
 
     // The effective capabilities are the intersection, not the raw claim.
     assert!(
         model
             .effective
+            .as_ref()
+            .unwrap()
             .declared_capabilities
             .input_modalities
             .contains(&rustx::model::Modality::Image),
@@ -193,6 +195,8 @@ async fn the_initialize_snapshot_carries_the_redacted_session_model() {
     assert!(
         model
             .effective
+            .as_ref()
+            .unwrap()
             .capabilities
             .input_modalities
             .contains(&rustx::model::Modality::Image),
@@ -202,11 +206,11 @@ async fn the_initialize_snapshot_carries_the_redacted_session_model() {
     // The effective request parameters are provider-owned config and carry no
     // credential material.
     assert_eq!(
-        model.effective.request_params["temperature"],
+        model.effective.as_ref().unwrap().request_params["temperature"],
         serde_json::json!(0.2)
     );
     assert_eq!(
-        model.effective.request_params["thinking"],
+        model.effective.as_ref().unwrap().request_params["thinking"],
         serde_json::json!({"type": "enabled"})
     );
 
@@ -326,19 +330,19 @@ async fn a_valid_update_publishes_exactly_one_coherent_change() {
     };
     let model = *model;
     assert_eq!(model.configured, desired);
-    assert_eq!(model.effective.max_output_tokens, 1_000);
-    assert!(!model.effective.reasoning_enabled);
+    assert_eq!(model.effective.as_ref().unwrap().max_output_tokens, 1_000);
+    assert!(!model.effective.as_ref().unwrap().reasoning_enabled);
     assert_eq!(
-        model.effective.request_params["thinking"],
+        model.effective.as_ref().unwrap().request_params["thinking"],
         serde_json::json!({"type": "disabled"}),
         "the selected profile's parameters replaced the previous profile's"
     );
     assert_eq!(
-        model.effective.request_params["top_k"],
+        model.effective.as_ref().unwrap().request_params["top_k"],
         serde_json::json!(40)
     );
     assert_eq!(
-        model.effective.request_params["temperature"],
+        model.effective.as_ref().unwrap().request_params["temperature"],
         serde_json::json!(0.2),
         "the selected profile is a complete preset under the session overlay"
     );
@@ -387,7 +391,7 @@ async fn model_get_returns_the_authoritative_session_state() {
 
     let before = read(1);
     assert_eq!(before.configured.model, model_ref("alpha/model-a"));
-    assert_eq!(before.effective.context_window, 128_000);
+    assert_eq!(before.effective.as_ref().unwrap().context_window, 128_000);
 
     let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
         id: RequestId::new(2),
@@ -398,15 +402,17 @@ async fn model_get_returns_the_authoritative_session_state() {
     let after = read(3);
     assert_eq!(after.configured.model, model_ref("beta/model-b"));
     assert_eq!(
-        after.effective.context_window, 32_000,
+        after.effective.as_ref().unwrap().context_window,
+        32_000,
         "the context window follows the selected model"
     );
-    assert_eq!(after.effective.max_output_tokens, 2_048);
+    assert_eq!(after.effective.as_ref().unwrap().max_output_tokens, 2_048);
     assert_eq!(
-        after.effective.profile, None,
+        after.effective.as_ref().unwrap().profile,
+        None,
         "a model that declares no profiles selects none"
     );
-    assert!(!after.effective.reasoning_enabled);
+    assert!(!after.effective.as_ref().unwrap().reasoning_enabled);
 }
 
 /// The TUI `/model X` operation sends a complete replacement: primary
@@ -454,11 +460,14 @@ async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_
     };
 
     assert_eq!(model.configured, selected);
-    assert_eq!(model.effective.model, model_ref("beta/model-b"));
-    assert_eq!(model.effective.profile, None);
-    assert_eq!(model.effective.max_output_tokens, 2_048);
-    assert!(model.effective.request_params.is_empty());
-    let SummaryModelView::Explicit(summary) = model.summary else {
+    assert_eq!(
+        model.effective.as_ref().unwrap().model,
+        model_ref("beta/model-b")
+    );
+    assert_eq!(model.effective.as_ref().unwrap().profile, None);
+    assert_eq!(model.effective.as_ref().unwrap().max_output_tokens, 2_048);
+    assert!(model.effective.as_ref().unwrap().request_params.is_empty());
+    let Some(SummaryModelView::Explicit(summary)) = model.summary else {
         panic!("the explicit summary policy survives the primary switch");
     };
     assert_eq!(summary.model, model_ref("summary/summary-model"));
@@ -472,7 +481,7 @@ async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_
     assert_eq!(snapshot.model.as_ref().unwrap().configured, selected);
     assert_eq!(
         snapshot.model.as_ref().unwrap().summary,
-        SummaryModelView::Explicit(summary)
+        Some(SummaryModelView::Explicit(summary))
     );
 }
 
@@ -491,8 +500,8 @@ async fn runtime_client_reports_always_on_reasoning_without_a_profile() {
     let Some(RuntimeClientResult::ModelSet { model }) = response.result else {
         panic!("model_set returns the session model: {response:?}");
     };
-    assert_eq!(model.effective.profile, None);
-    assert!(model.effective.reasoning_enabled);
+    assert_eq!(model.effective.as_ref().unwrap().profile, None);
+    assert!(model.effective.as_ref().unwrap().reasoning_enabled);
 
     let catalog_response = attachment.handle_request(RuntimeClientRequest::ModelCatalogGet {
         id: RequestId::new(2),
@@ -542,11 +551,25 @@ async fn a_reconnecting_client_recovers_model_state_from_the_snapshot() {
     };
     assert_eq!(snapshot.model.as_ref().unwrap().configured, desired);
     assert_eq!(
-        snapshot.model.as_ref().unwrap().effective.max_output_tokens,
+        snapshot
+            .model
+            .as_ref()
+            .unwrap()
+            .effective
+            .as_ref()
+            .unwrap()
+            .max_output_tokens,
         777
     );
     assert_eq!(
-        snapshot.model.as_ref().unwrap().effective.context_window,
+        snapshot
+            .model
+            .as_ref()
+            .unwrap()
+            .effective
+            .as_ref()
+            .unwrap()
+            .context_window,
         32_000
     );
 }

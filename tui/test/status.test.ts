@@ -27,6 +27,7 @@ import {
   workingStatus,
 } from "../src/ui/components/status.ts";
 import { plainText } from "../src/ui/theme.ts";
+import { renderModel } from "../src/commands/dispatcher.ts";
 import type { InteractionRequest } from "../src/protocol/app-server.ts";
 import {
   DEFAULT_PREVIEW_CHARS,
@@ -872,13 +873,30 @@ it("absent metadata is omitted and footer never reads transcript history", () =>
   }
 });
 
+it("an unavailable selection is named as configured, never shown through a fallback", () => {
+  // Issue #459: the published catalog no longer admits the configured Model.
+  const retained = stateOf({ model: { ...sessionModel("gone/model"), unavailable: "unknown model gone/model" } });
+  const loaded = stateOf({ model: { ...sessionModel("gone/model"), effective: undefined, summary: undefined, unavailable: "unknown model gone/model" } });
+  for (const state of [retained, loaded]) {
+    const rendered = plainText(footer(state, "connected"));
+    assert.match(rendered, /gone\/model unavailable/);
+    assert.doesNotMatch(rendered, /eff |cfg /);
+    const startup = plainText(renderStartup(state));
+    assert.match(startup, /gone\/model unavailable/);
+    assert.doesNotMatch(startup, /provider /);
+    const model = renderModel(state);
+    assert.match(model, /- effective: unavailable — unknown model gone\/model/);
+    assert.doesNotMatch(model, /context window|capabilities:/);
+  }
+});
+
 it("unknown context window is omitted and snapshot replacement rebuilds approval/model truth", () => {
   const before = stateOf({ model: sessionModel("old/model"), effective_approval_mode: "policy" });
   const after = stateOf({ model: sessionModel("new/model"), effective_approval_mode: "full_access" });
   assert.match(footer(before, "connected"), /approval POLICY/);
   assert.match(footer(after, "connected"), /new\/model.*approval FULL ACCESS/);
   assert.doesNotMatch(footer(after, "connected"), /old\/model|next attempt/);
-  const noWindow = stateOf({ model: { ...sessionModel("new/model"), effective: { ...sessionModel("new/model").effective, contextWindow: 0 } } });
+  const noWindow = stateOf({ model: { ...sessionModel("new/model"), effective: { ...sessionModel("new/model").effective!, contextWindow: 0 } } });
   assert.equal(contextLabel(noWindow), "context unreported");
   assert.match(footer(noWindow, "connected"), /context unreported/);
 });

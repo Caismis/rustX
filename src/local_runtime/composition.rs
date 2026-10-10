@@ -1162,7 +1162,10 @@ impl LocalConversationCore {
                 .map_err(|detail| LocalRuntimeError::Capability { detail })?;
             let project_context_files = paths.project_context_files.clone();
             SessionModelState::new(registry.clone(), runtime_config.initial_model().clone())?;
-            let model = SessionModelState::new(
+            // A persisted selection the catalog no longer admits composes an
+            // unavailable Session: it loads, advertises this catalog and admits
+            // nothing until a valid selection is committed.
+            let model = SessionModelState::restore(
                 registry.clone(),
                 session_state
                     .model
@@ -3381,15 +3384,16 @@ enabled = true
 
         let model = core.runtime().model_view();
         assert_eq!(
-            model.effective.model, spec.resolved.model.primary.model,
+            model.effective.as_ref().unwrap().model,
+            spec.resolved.model.primary.model,
             "the child runs exactly the model its parent froze"
         );
         assert_eq!(
-            model.effective.protocol,
+            model.effective.as_ref().unwrap().protocol,
             spec.resolved.model.primary.protocol
         );
         assert_eq!(
-            model.effective.context_window,
+            model.effective.as_ref().unwrap().context_window,
             spec.resolved.model.primary.context_window
         );
         assert_eq!(

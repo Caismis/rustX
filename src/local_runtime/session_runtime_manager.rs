@@ -927,7 +927,7 @@ impl SessionRuntimeManager {
         let capture = tokio::task::spawn_blocking(move || {
             applications
                 .lock()
-                .initial_binding(&configuration, &input, &credentials)
+                .initial_binding(&configuration, &input, &credentials, false)
         })
         .await
         .map_err(|error| super::session::SessionError::Catalog {
@@ -1082,7 +1082,9 @@ impl SessionRuntimeManager {
                 Ok(())
             })?;
             drop(catalog);
-            let input = owner.configuration.capture_application(&retained.input);
+            let input = owner
+                .configuration
+                .capture_session_application(&retained.input);
             application.record_source(&retained.input.cwd, &input);
             application.capture_binding(session.to_string(), input);
             owner.applications.notify(&application);
@@ -1201,7 +1203,7 @@ impl SessionRuntimeManager {
             application.capture(
                 session.to_string(),
                 &input.cwd,
-                self.configuration.capture_application(&input),
+                self.configuration.capture_session_application(&input),
             );
         }
     }
@@ -1574,7 +1576,7 @@ impl SessionRuntimeManager {
             } else {
                 let paths = applications
                     .lock()
-                    .initial_binding(&configuration, &access.settings.input(), &credentials)
+                    .initial_binding(&configuration, &access.settings.input(), &credentials, true)
                     .map_err(error)?;
                 bindings
                     .lock()

@@ -1353,6 +1353,52 @@ export type ServerLifecycle = 'Accepting' | 'Draining' | 'Terminated';
  */
 export type ResidencyState = 'Unloaded' | 'Loading' | 'Loaded' | 'Unloading';
 /**
+ * The redacted client-facing projection of a summary policy.
+ */
+export type SummaryModelView =
+  | {
+      mode: 'session';
+    }
+  | {
+      /**
+       * An authored Model identity. Its spelling has no provider or wire semantics.
+       */
+      model: string;
+      /**
+       * The model interaction protocol an adapter must speak.
+       */
+      protocol: 'openai_chat_completions' | 'openai_responses' | 'anthropic_messages';
+      /**
+       * The model's context window in tokens.
+       */
+      contextWindow: number;
+      /**
+       * The model's configured maximum output tokens.
+       */
+      modelMaxOutputTokens: number;
+      /**
+       * The effective output budget.
+       */
+      maxOutputTokens: number;
+      /**
+       * The selected Model Profile, when the model declares any.
+       */
+      profile?: ModelProfileId | null;
+      /**
+       * Whether reasoning is semantically enabled.
+       */
+      reasoningEnabled: boolean;
+      /**
+       * The effective opaque provider request parameters.
+       */
+      requestParams?: {
+        [k: string]: unknown;
+      };
+      capabilities: ModelCapabilities2;
+      declaredCapabilities: ModelCapabilities3;
+      mode: 'explicit';
+    };
+/**
  * Identifies one turn within an attempt.
  */
 export type TurnId = string;
@@ -2844,6 +2890,10 @@ export type ErrorData =
   | {
       rejection: AdoptionError;
       kind: 'configuration_adoption';
+    }
+  | {
+      diagnostic: string;
+      kind: 'model_unavailable';
     }
   | {
       reason: SessionArchivePrepareError;
@@ -4653,53 +4703,24 @@ export interface TransportDiagnostics {
  */
 export interface SessionModelView {
   configured: SessionModelConfig1;
-  effective: ModelInvocationView;
   /**
-   * The resolved summary policy.
+   * The effective primary invocation last resolved for `configured`.
+   * Absent only when the Session was loaded with an already unavailable
+   * selection.
    */
-  summary:
-    | {
-        mode: 'session';
-      }
-    | {
-        /**
-         * An authored Model identity. Its spelling has no provider or wire semantics.
-         */
-        model: string;
-        /**
-         * The model interaction protocol an adapter must speak.
-         */
-        protocol: 'openai_chat_completions' | 'openai_responses' | 'anthropic_messages';
-        /**
-         * The model's context window in tokens.
-         */
-        contextWindow: number;
-        /**
-         * The model's configured maximum output tokens.
-         */
-        modelMaxOutputTokens: number;
-        /**
-         * The effective output budget.
-         */
-        maxOutputTokens: number;
-        /**
-         * The selected Model Profile, when the model declares any.
-         */
-        profile?: ModelProfileId | null;
-        /**
-         * Whether reasoning is semantically enabled.
-         */
-        reasoningEnabled: boolean;
-        /**
-         * The effective opaque provider request parameters.
-         */
-        requestParams?: {
-          [k: string]: unknown;
-        };
-        capabilities: ModelCapabilities2;
-        declaredCapabilities: ModelCapabilities3;
-        mode: 'explicit';
-      };
+  effective?: ModelInvocationView | null;
+  /**
+   * The summary policy last resolved for `configured`, absent exactly
+   * when `effective` is.
+   */
+  summary?: SummaryModelView | null;
+  /**
+   * Why the Session's published Model Catalog does not admit
+   * `configured`. While present, `effective` and `summary` are display
+   * facts only: no new Attempt is admitted until a valid selection is
+   * committed, and nothing falls back to a default.
+   */
+  unavailable?: string | null;
 }
 /**
  * The authoritative mutable model configuration of one conversation
@@ -4761,7 +4782,13 @@ export interface SessionModelConfig1 {
       };
 }
 /**
- * The resolved effective primary invocation.
+ * The redacted client-facing projection of one resolved model invocation.
+ *
+ * It carries no credential, no adapter object, no provider HTTP client, and
+ * no synchronization identity. The effective request parameters *are*
+ * exposed: they are provider-owned configuration a model-control client
+ * needs, and they can never contain credential material because a
+ * credential is never a request parameter.
  */
 export interface ModelInvocationView {
   /**
@@ -8832,7 +8859,7 @@ export interface InFlightAssistantMessage {
 export interface AttemptModelView {
   primary: ModelInvocationView1;
   /**
-   * The attempt's frozen summary policy.
+   * The redacted client-facing projection of a summary policy.
    */
   summary:
     | {
@@ -8879,7 +8906,13 @@ export interface AttemptModelView {
       };
 }
 /**
- * The attempt's frozen primary invocation.
+ * The redacted client-facing projection of one resolved model invocation.
+ *
+ * It carries no credential, no adapter object, no provider HTTP client, and
+ * no synchronization identity. The effective request parameters *are*
+ * exposed: they are provider-owned configuration a model-control client
+ * needs, and they can never contain credential material because a
+ * credential is never a request parameter.
  */
 export interface ModelInvocationView1 {
   /**
@@ -9546,6 +9579,12 @@ export interface EffectiveConfiguration {
   process_bindings?: AppServerPolicy | null;
   application?: ConfigurationApplication | null;
   adopted_binding: string;
+  /**
+   * The source manifest the adopted context generation was resolved from.
+   * Independently published units — execution policy, shared capacity and
+   * the Model Catalog — may be newer; `document` and `provenance` carry
+   * their values, and `application` says which revision each applied.
+   */
   source_revisions: {
     [k: string]: string;
   };
@@ -10830,51 +10869,22 @@ export interface RuntimeClientResourcesView1 {
  */
 export interface SessionModelView1 {
   configured: SessionModelConfig1;
-  effective: ModelInvocationView;
   /**
-   * The resolved summary policy.
+   * The effective primary invocation last resolved for `configured`.
+   * Absent only when the Session was loaded with an already unavailable
+   * selection.
    */
-  summary:
-    | {
-        mode: 'session';
-      }
-    | {
-        /**
-         * An authored Model identity. Its spelling has no provider or wire semantics.
-         */
-        model: string;
-        /**
-         * The model interaction protocol an adapter must speak.
-         */
-        protocol: 'openai_chat_completions' | 'openai_responses' | 'anthropic_messages';
-        /**
-         * The model's context window in tokens.
-         */
-        contextWindow: number;
-        /**
-         * The model's configured maximum output tokens.
-         */
-        modelMaxOutputTokens: number;
-        /**
-         * The effective output budget.
-         */
-        maxOutputTokens: number;
-        /**
-         * The selected Model Profile, when the model declares any.
-         */
-        profile?: ModelProfileId | null;
-        /**
-         * Whether reasoning is semantically enabled.
-         */
-        reasoningEnabled: boolean;
-        /**
-         * The effective opaque provider request parameters.
-         */
-        requestParams?: {
-          [k: string]: unknown;
-        };
-        capabilities: ModelCapabilities2;
-        declaredCapabilities: ModelCapabilities3;
-        mode: 'explicit';
-      };
+  effective?: ModelInvocationView | null;
+  /**
+   * The summary policy last resolved for `configured`, absent exactly
+   * when `effective` is.
+   */
+  summary?: SummaryModelView | null;
+  /**
+   * Why the Session's published Model Catalog does not admit
+   * `configured`. While present, `effective` and `summary` are display
+   * facts only: no new Attempt is admitted until a valid selection is
+   * committed, and nothing falls back to a default.
+   */
+  unavailable?: string | null;
 }

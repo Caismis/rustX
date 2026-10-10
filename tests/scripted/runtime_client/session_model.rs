@@ -1264,9 +1264,9 @@ async fn always_on_reasoning_is_preserved_by_session_resolution() {
     let state = session_model(&[&always_on], SessionModelConfig::of(always_on.reference()));
 
     let view = state.view();
-    assert_eq!(view.effective.profile, None);
-    assert!(view.effective.reasoning_enabled);
-    let snapshot = state.snapshot();
+    assert_eq!(view.effective.as_ref().unwrap().profile, None);
+    assert!(view.effective.as_ref().unwrap().reasoning_enabled);
+    let snapshot = state.snapshot().unwrap();
     assert_eq!(snapshot.primary().profile(), None);
     assert!(snapshot.primary().reasoning_enabled());
 }

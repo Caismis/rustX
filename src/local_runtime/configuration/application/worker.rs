@@ -210,10 +210,17 @@ impl ConfigurationApplications {
             if !state.current(scope, identity) {
                 return;
             }
+            // Catalog-only publication: nothing an Attempt freezes changes,
+            // or the Session's own selection is one the new catalog no longer
+            // admits. The latter is published too — the catalog is what the
+            // replacement is chosen from — and never prepared, because there
+            // is no invocation to construct from a removed selection.
             if let Some(adopted) = &adopted
                 && capture.same_capabilities(adopted)
                 && capture.same_context(adopted)
-                && capture.same_provider(adopted)
+                && capture.same_agent_models(adopted)
+                && (capture.same_session_model(adopted)
+                    || capture.selection_unavailable().is_some())
             {
                 if let Err(diagnostic) =
                     state.make_available(scope, identity, &capture, &manager.credentials)
@@ -233,18 +240,38 @@ impl ConfigurationApplications {
                 }
                 // Invocation equivalence settles adoption, not discovery: the
                 // valid catalog still reaches this Session's future selection.
-                if capture.same_catalog(adopted)
-                    || Self::publish_catalog(&mut state, manager, &session, &capture)
-                {
-                    for unit in [
-                        ApplyUnit::Capabilities,
-                        ApplyUnit::Instructions,
-                        ApplyUnit::Provider,
-                    ] {
-                        state.publish(scope, identity, unit, || UnitApplication::Applied);
+                let published = if capture.same_catalog(adopted) {
+                    Ok(true)
+                } else {
+                    Self::publish_catalog(&mut state, manager, &session, &capture)
+                };
+                match published {
+                    Ok(true) => {
+                        for unit in [
+                            ApplyUnit::Capabilities,
+                            ApplyUnit::Instructions,
+                            ApplyUnit::Provider,
+                        ] {
+                            state.publish(scope, identity, unit, || UnitApplication::Applied);
+                        }
+                        self.notify(&state);
+                        return;
                     }
-                    self.notify(&state);
-                    return;
+                    Ok(false) => {}
+                    Err(diagnostic) => {
+                        drop(state);
+                        self.fail_units(
+                            scope,
+                            identity,
+                            &[
+                                ApplyUnit::Capabilities,
+                                ApplyUnit::Instructions,
+                                ApplyUnit::Provider,
+                            ],
+                            diagnostic,
+                        );
+                        return;
+                    }
                 }
             }
         }
@@ -623,31 +650,32 @@ impl ConfigurationApplications {
         self.notify(&state);
     }
 
-    /// Publish a validated catalog to one Session whose every frozen invocation
-    /// is unchanged, under the application fence. A resident runtime commits
-    /// its selection authority and the retained binding in one critical
-    /// section. A cold Session defers to residency: its rebind takes this
-    /// fence after the runtime is resident and republishes against it, so a
-    /// load that composed from the older binding never keeps that catalog.
-    /// Returns `false` when the live invocation would change; that change
-    /// needs preparation and adoption.
+    /// Publish a validated catalog to one Session under the application
+    /// fence: every invocation it would freeze is unchanged, or its own
+    /// selection is one the catalog no longer admits. A resident runtime
+    /// commits its selection authority and the retained binding in one
+    /// critical section, all or nothing. A cold Session defers to residency:
+    /// its rebind takes this fence after the runtime is resident and
+    /// republishes against it, so a load that composed from the older binding
+    /// never keeps that catalog. Returns `Ok(false)` when the live invocation
+    /// would change; that change needs preparation and adoption.
     fn publish_catalog(
         state: &mut super::ApplicationState,
         manager: &SessionRuntimeManager,
         session: &SessionId,
         capture: &crate::local_runtime::configuration::ProspectiveSessionConfig,
-    ) -> bool {
-        let Some(models) = capture
+    ) -> Result<bool, String> {
+        let models = capture
             .models
             .resolve(&manager.credentials)
-            .ok()
-            .and_then(|catalog| crate::model::invocation::ModelBindingRegistry::new(catalog).ok())
-        else {
-            return false;
-        };
+            .map_err(|error| error.to_string())
+            .and_then(|catalog| {
+                crate::model::invocation::ModelBindingRegistry::new(catalog)
+                    .map_err(|error| error.to_string())
+            })?;
         let Some(runtime) = manager.configuration_runtime(session) else {
             state.deferred.insert(session.to_string());
-            return true;
+            return Ok(true);
         };
         runtime.publish_model_catalog(capture, models, |revision| {
             let mut bindings = manager
@@ -655,9 +683,11 @@ impl ConfigurationApplications {
                 .configuration_bindings
                 .lock()
                 .expect("Session configuration bindings");
-            if let Some(retained) = bindings.get_mut(session) {
-                *retained = retained.with_published_catalog(capture, revision);
-            }
+            let retained = bindings
+                .get_mut(session)
+                .ok_or("the resident Session has no retained configuration binding")?;
+            *retained = retained.with_published_catalog(capture, revision);
+            Ok(())
         })
     }
 

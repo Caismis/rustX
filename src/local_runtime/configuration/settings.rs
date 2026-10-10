@@ -191,6 +191,10 @@ pub struct EffectiveConfiguration {
     pub process_bindings: Option<super::super::app_server_policy::AppServerPolicy>,
     pub application: Option<super::application::ConfigurationApplication>,
     pub adopted_binding: u64,
+    /// The source manifest the adopted context generation was resolved from.
+    /// Independently published units — execution policy, shared capacity and
+    /// the Model Catalog — may be newer; `document` and `provenance` carry
+    /// their values, and `application` says which revision each applied.
     pub source_revisions: BTreeMap<PathBuf, String>,
     pub generation: crate::runtime::identity::RuntimeResourceRevision,
     pub document: SourceDocumentView,

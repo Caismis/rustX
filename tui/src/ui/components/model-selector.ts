@@ -297,7 +297,8 @@ export class ModelSelector implements PopupContent, Focusable {
    */
   #rolesOf(model: ModelRef): string[] {
     const configured = this.#sessionModel.configured.model;
-    const effective = this.#sessionModel.effective.model;
+    // An unavailable selection has no effective model for new work.
+    const effective = this.#sessionModel.unavailable == null ? this.#sessionModel.effective?.model : undefined;
     const attempt = this.#attempt?.model?.primary.model;
     const unified =
       configured === effective && (attempt === undefined || attempt === effective);
@@ -327,16 +328,20 @@ export class ModelSelector implements PopupContent, Focusable {
   #renderContext(): string[] {
     const session = this.#sessionModel;
     const configured = session.configured.model;
-    const effective = session.effective.model;
+    const effective = session.unavailable == null ? session.effective : undefined;
     const lines: string[] = [];
-    if (configured === effective) {
+    if (effective == null) {
+      // The published catalog no longer admits the selection; choosing one
+      // it does is the only way forward, and nothing was chosen for the user.
+      lines.push(role.warning(`configured  ${configured} · unavailable: ${session.unavailable ?? "not in the published catalog"}`));
+    } else if (configured === effective.model) {
       lines.push(role.meta(`configured · effective  ${configured}`));
     } else {
       // Two distinct runtime facts, so two distinct lines. Collapsing them
       // into one "current" would hide that the session cannot use what it
       // asked for.
       lines.push(role.meta(`configured  ${configured}`));
-      lines.push(role.meta(`effective   ${effective}`));
+      lines.push(role.meta(`effective   ${effective.model}`));
     }
 
     const attempt = this.#attempt;
@@ -358,12 +363,14 @@ export class ModelSelector implements PopupContent, Focusable {
         `configured profile  ${describeConfiguredProfile(session.configured)}`,
       ),
     );
-    lines.push(
-      role.meta(`effective profile   ${describeProfile(session.effective)}`),
-    );
-    lines.push(
-      role.meta(`reasoning           ${describeReasoning(session.effective)}`),
-    );
+    if (effective != null) {
+      lines.push(
+        role.meta(`effective profile   ${describeProfile(effective)}`),
+      );
+      lines.push(
+        role.meta(`reasoning           ${describeReasoning(effective)}`),
+      );
+    }
     return lines;
   }
 }
