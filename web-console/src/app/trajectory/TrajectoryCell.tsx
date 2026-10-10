@@ -5,7 +5,7 @@ import type { ReactNode } from 'react';
 import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v44';
 import { IconSettingsOutline16, IconSparkle16, IconUserOutline16 } from '../../presentation/primitives/icons';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
-import type { InspectableDisplayItem } from './layout';
+import { recordLabel, type InspectableDisplayItem } from './layout';
 import { trajectoryPreviewText } from './preview';
 import css from './Trajectory.module.css';
 
@@ -86,7 +86,8 @@ function attachmentSummary(tx: Translate, record: TraceRecord): string {
 
 function compactionText(tx: Translate, record: TraceRecord): string {
   if (record.state === 'running') return tx('trajectory:layout.compacting');
-  if (record.state !== 'completed') return tx('trajectory:layout.compaction-failed');
+  if (record.state === 'failed') return tx('trajectory:layout.compaction-failed');
+  if (record.state !== 'completed') return recordLabel(tx, record);
   return record.preview?.text ? trajectoryPreviewText(record.preview.text) : tx('trajectory:layout.compacted');
 }
 

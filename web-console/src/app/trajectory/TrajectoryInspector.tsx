@@ -632,7 +632,7 @@ export function TrajectoryInspector({ item, facet, onFacet, detail, loading, err
           <div><dt>{tx('trajectory:timing.duration')}</dt><dd>{formatDurationMillis(tx, wireCount(record.timing.duration_ms))}</dd></div>
           <div><dt>{tx('trajectory:usage.tokens')}</dt><dd>—</dd></div>
         </dl>
-        {(blocks?.length || fallback) && <div className={`${css.compactedSummary} ${css.summaryScrollRegion}`} data-summary-scroll-region="">{content(true)}</div>}
+        {(pending || blocks?.length || fallback) && <div className={`${css.compactedSummary} ${css.summaryScrollRegion}`} data-summary-scroll-region="">{content(true)}</div>}
       </>;
     }
     const markdown = record.kind !== 'tool';

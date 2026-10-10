@@ -2598,6 +2598,47 @@ impl RuntimeInner {
         execution.run().await
     }
 
+    /// Persists maintenance lifecycle evidence before exposing it to clients.
+    /// Completion uses the atomic compaction commit instead of this path.
+    fn publish_manual_compaction_event(
+        &self,
+        state: &mut CoordinatorState,
+        request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
+        event: RuntimeEvent,
+    ) -> Result<(), ManualCompactionError> {
+        let envelope = crate::events::types::RuntimeEventEnvelope {
+            schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
+            event_id: crate::runtime::identity::EventId::new(""),
+            sequence: 0,
+            conversation_id: self.conversation_id.clone(),
+            attempt_id: None,
+            turn_id: None,
+            timestamp: chrono::Utc::now(),
+            event,
+        };
+        match self.store.append_event(envelope) {
+            Ok(persisted) => {
+                self.observe(ConversationObservation::Published {
+                    journal_sequence: persisted.sequence,
+                    observation: Box::new(ConversationObservation::ManualCompactionEvent {
+                        request_id,
+                        event: persisted.event,
+                    }),
+                });
+                Ok(())
+            }
+            Err(error) => {
+                let message = format!("manual compaction event could not be persisted: {error}");
+                self.record_durability_failure(
+                    state,
+                    DurableOperation::EventJournal,
+                    message.clone(),
+                );
+                Err(ManualCompactionError::Durable { message })
+            }
+        }
+    }
+
     /// Runs one manual compaction over the conversation state checked out by
     /// the coordinator. This is runtime-owned work: the task continues to
     /// settlement even if the requesting attachment disappears.
@@ -2715,15 +2756,15 @@ impl RuntimeInner {
                     });
                     Ok(success.outcome)
                 }
-                Err(error) => {
-                    self.observe(ConversationObservation::ManualCompactionEvent {
+                Err(error) => self
+                    .publish_manual_compaction_event(
+                        &mut state,
                         request_id,
-                        event: RuntimeEvent::CompactionFailed {
+                        RuntimeEvent::CompactionFailed {
                             error: error.to_string(),
                         },
-                    });
-                    Err(error)
-                }
+                    )
+                    .and(Err(error)),
             };
         }
         self.settlement.notify_waiters();
@@ -4885,6 +4926,11 @@ impl ConversationRuntime {
                         format!("the frozen capability system guidance is invalid: {error}"),
                     ))
                 })?;
+            self.inner.publish_manual_compaction_event(
+                &mut state,
+                request_id.clone(),
+                RuntimeEvent::CompactionStarted,
+            )?;
             let conversation = state
                 .conversation
                 .take()
@@ -4893,11 +4939,6 @@ impl ConversationRuntime {
             state.manual_compaction = Some(CurrentManualCompaction {
                 cancellation: cancellation.clone(),
             });
-            self.inner
-                .observe(ConversationObservation::ManualCompactionEvent {
-                    request_id: request_id.clone(),
-                    event: RuntimeEvent::CompactionStarted,
-                });
             let admission = self
                 .inner
                 .lifecycle
@@ -8509,6 +8550,29 @@ mod tests {
         }));
         assert_eq!(model.requests().len(), 2, "turn plus summary request");
 
+        let trace =
+            crate::runtime_client::trace::TraceProjection::new(runtime.inner.store.as_ref())
+                .expect("durable trace");
+        let row = trace
+            .page(None, 32)
+            .unwrap()
+            .records
+            .into_iter()
+            .find(|record| record.kind == crate::runtime_client::trace::TraceKind::Compaction)
+            .expect("manual compaction is retained in the trajectory");
+        assert_eq!(
+            row.state,
+            crate::runtime_client::trace::TraceState::Completed
+        );
+        assert_eq!(row.message_id, Some(outcome.summary_message_id.clone()));
+        assert!(row.location.attempt_id.is_none());
+        assert_eq!(
+            row.preview.as_ref().unwrap().text,
+            "compact factual summary"
+        );
+        let detail = trace.detail(&row.id).unwrap().unwrap();
+        assert_eq!(detail.messages.len(), 1);
+
         // The released compaction admission restores eligibility on the
         // worker's schedule; the semantic completion is still the last fact.
         let observations: Vec<_> = pending
@@ -8685,6 +8749,18 @@ mod tests {
             })
         ));
         assert!(runtime.coordinator_ledger().is_some());
+        let trace =
+            crate::runtime_client::trace::TraceProjection::new(runtime.inner.store.as_ref())
+                .expect("durable trace");
+        let row = trace
+            .page(None, 32)
+            .unwrap()
+            .records
+            .into_iter()
+            .find(|record| record.kind == crate::runtime_client::trace::TraceKind::Compaction)
+            .expect("failed maintenance keeps its own trajectory row");
+        assert_eq!(row.state, crate::runtime_client::trace::TraceState::Failed);
+        assert!(row.message_id.is_none());
         runtime
             .submit_inbound(text_content("works after rejected compaction"))
             .expect("accepted after failure");

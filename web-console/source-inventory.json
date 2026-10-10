@@ -720,7 +720,7 @@
           "treatment": "Details header (role tag, section/group location, icon close) adapted."
         }
       ],
-      "local_sha256": "5c9785514dd19e60dd463f9ab9e0a41326a04de82c3bde133c1d0da0cfd86972"
+      "local_sha256": "0aab4503706fb026db7468eceb01b84f4c9dd571c2057feffad3a372b8aee653"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -2653,6 +2653,7 @@
       "retained_dependencies": [
         "../../protocol/app-server/v44",
         "../src/app/trajectory/Trajectory",
+        "../src/app/trajectory/TrajectoryCell",
         "../src/app/trajectory/layout",
         "../src/app/trajectory/search",
         "../src/app/trajectory/timeline",
@@ -2682,7 +2683,7 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "c8a6dea92dd93e18b9ced9f47f048e3e9f3c18eacfa53ea969cb4fdddd3fcae1"
+      "local_sha256": "08ac09c13abe33b865ffdbafc41f8397669d72674367c3ff0825cf7487cd4e5f"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
@@ -2785,7 +2786,7 @@
           "treatment": "Issue #421 semantic ledger adaptation; exact rustX native ownership replaces Harness runtime relationships."
         }
       ],
-      "local_sha256": "669da5c3fb0822064d87baaf83ca80cbe5a75f5492cb166cb81f786a7e40feee"
+      "local_sha256": "737387e48b4fcaade06300e702efd9784cc388ca6fdd2723284f322fb88089df"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",

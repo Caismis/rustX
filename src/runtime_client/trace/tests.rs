@@ -986,6 +986,21 @@ fn compaction_uses_the_next_boundary_even_far_back_in_history() {
     let store = store("conv_96847128-a59a-7bfa-8bf9-526873a32546");
     for index in 0..140 {
         append(&store, E::CompactionStarted, index * 2);
+        if index == 0 {
+            let read = TraceProjection::new(&store).unwrap();
+            let active = read.page(None, 1).unwrap().records.remove(0);
+            assert!(
+                active.has_detail,
+                "detail remains available through lifecycle repair"
+            );
+            assert!(
+                read.detail(&active.id)
+                    .unwrap()
+                    .unwrap()
+                    .messages
+                    .is_empty()
+            );
+        }
         append(
             &store,
             E::CompactionFailed {

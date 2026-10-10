@@ -70,6 +70,17 @@ and control capacity. The real App Server with a gated scripted provider covers 
 continued input, questionnaire settlement, automatic overflow compaction and
 final response in both locales at desktop and narrow viewport widths.
 
+The trajectory was also checked against this reference's
+`packages/client/ui-trajectory/src/client/trajectory-compaction-definition.ts`,
+`layout.ts`, and `TrajectoryTable.tsx`: completed compaction has a summary result
+with rendered Markdown and raw output. Manual maintenance now persists its
+start/failure boundaries, making that result reachable in the native trajectory
+both live and after reconnect. The inspector shows detail loading/errors, and
+an incomplete operation is no longer mislabeled as a failure. Native summary
+content remains the authority; unrecorded provider usage is not synthesized.
+Docker browser tests inspect the summary during completion and after reconnect
+in English/Chinese on desktop/mobile.
+
 ## #439 Composer keyboard policy
 
 Approved read-only reference: `deepseek-ai/deepseek-harness` at

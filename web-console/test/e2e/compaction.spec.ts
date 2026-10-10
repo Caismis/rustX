@@ -76,7 +76,20 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
         await expect(message).toHaveValue(draft);
         await expect(page.getByText('Compacting context…', { exact: true })).toBeVisible();
       }
+      await page.getByRole('tab', { name: copy('Trajectory', '轨迹'), exact: true }).click();
+      const compactionRows = page.locator('[data-display-type="RecordRow"][data-kind="compaction"]');
+      await expect(compactionRows).toHaveCount(2);
+      const compactionRow = compactionRows.last();
+      await compactionRow.click();
       await fixture.release('manual-summary');
+      const traceInspector = page.getByRole('complementary', { name: copy('Event details', '事件详情'), exact: true });
+      await expect(traceInspector.getByText('The user supplied compaction-evidence-435. Preserve that fact.', { exact: true })).toBeVisible();
+      await traceInspector.getByRole('tab', { name: copy('Raw Output', '原始输出'), exact: true }).click();
+      await expect(traceInspector.getByText('The user supplied compaction-evidence-435. Preserve that fact.', { exact: true })).toBeVisible();
+      await traceInspector.getByRole('tab', { name: copy('Summary', '概述'), exact: true }).click();
+      await page.screenshot({ path: `/tmp/rustx-compaction-trajectory-${locale}-${theme}.png` });
+      await traceInspector.getByRole('button', { name: copy('Close details', '关闭详情'), exact: true }).click();
+      await page.getByRole('tab', { name: copy('Chat', '对话'), exact: true }).click();
       await expect(page.locator('[data-compaction-marker]')).toBeVisible();
       await expect(dock.getByRole('button', { name: /(% of context used$|^上下文已用 )/ })).toBeVisible();
       const compactedOccupancy = dock.getByRole('button', { name: /(% of context used$|^上下文已用 )/ });
@@ -120,6 +133,11 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
         await marker.click();
         await expect(page.getByText('The user supplied compaction-evidence-435. Preserve that fact.', { exact: true })).toBeVisible();
         await marker.click();
+        await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
+        await compactionRow.click();
+        await expect(traceInspector.getByText('The user supplied compaction-evidence-435. Preserve that fact.', { exact: true })).toBeVisible();
+        await traceInspector.getByRole('button', { name: 'Close details', exact: true }).click();
+        await page.getByRole('tab', { name: 'Chat', exact: true }).click();
         // Composer drafts are browser-memory state; restore the fixture's
         // continuation input after creating a fresh page.
         await message.fill(draft);
@@ -141,6 +159,11 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
       await marker.last().click();
       await expect(page.getByText("Preserve compaction-evidence-435 and the user's instruction to continue.", { exact: true })).toBeVisible();
       await page.screenshot({ path: `/tmp/rustx-compaction-${locale}-${theme}.png` });
+      await page.getByRole('tab', { name: copy('Trajectory', '轨迹'), exact: true }).click();
+      await compactionRow.click();
+      await expect(traceInspector.getByText("Preserve compaction-evidence-435 and the user's instruction to continue.", { exact: true })).toBeVisible();
+      await traceInspector.getByRole('button', { name: copy('Close details', '关闭详情'), exact: true }).click();
+      await page.getByRole('tab', { name: copy('Chat', '对话'), exact: true }).click();
       await expect(page.getByText(copy('Assistant recovery details', '助手恢复详情'), { exact: true })).toHaveCount(0);
       expect(errors).toEqual([]);
       await expect(page.getByRole('region', { name: copy('Questionnaire', '问卷'), exact: true })).toHaveCount(0);

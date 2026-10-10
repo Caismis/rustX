@@ -1,3 +1,4 @@
+import { recordText } from '../src/app/trajectory/TrajectoryCell';
 import { traceStateLabel } from '../src/bindings/status-labels';
 import { localeController } from '../src/locale/controller';
 import { translator } from '../src/locale/translation';
@@ -302,6 +303,7 @@ it.each(['en', 'zh'] as const)('T1-08 Calls summary localizes in %s and leaves n
   for (const state of ['incomplete', 'failed', 'completed'] as const) {
     const item = flattenTrajectory(tx, projectTrajectory(tx, [traceRecord(21, { kind: 'compaction', request: null, state })])).find(item => item.type === 'RecordRow')!;
     expect(item.label).toBe(state === 'completed' ? tx('trajectory:compacted') : tx('trajectory:copy.compaction-value', { p0: traceStateLabel(tx, state) }));
+    if (state === 'incomplete') expect(recordText(tx, item.record)).toBe(item.label);
   }
 });
 
@@ -1553,4 +1555,15 @@ it('child returns and runtime notices retain their position after the delegating
   const headers = items.filter(item => item.type === 'GroupHeader');
   expect(headers.map(item => item.label)).toEqual(['Message', 'Step 1', 'Message', 'Step 2']);
   expect(new Set(headers.map(item => item.display_key)).size).toBe(headers.length);
+});
+
+it('compaction summary exposes loading and read errors before detail arrives', () => {
+  const record = traceRecord(0, { kind: 'compaction', request: null, preview: null, has_detail: true });
+  const cache = cacheOf([record]);
+  const view = show(cache);
+  fireEvent.click(row('RecordRow'));
+  expect(screen.getByText('Loading details…')).not.toBeNull();
+  const failed = { ...cache, details: { [record.id]: { epoch: cache.epoch, error: 'Summary read failed' } } };
+  view.rerender(<Trajectory cache={failed} loadEarlier={noop} onSelect={noop} onLoadDetail={noop} />);
+  expect(screen.getByRole('alert').textContent).toBe('Summary read failed');
 });
