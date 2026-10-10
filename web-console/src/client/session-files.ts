@@ -3,7 +3,7 @@ import { validateRaster } from './raster';
 import type { AppServerClient } from './app-server';
 import { sameTarget } from './app-server';
 import { ArtifactResources, isTextMime, safeArtifactMime } from './artifacts';
-import type { SessionFileReference } from '../../../protocol/app-server/v43';
+import type { SessionFileReference } from '../../../protocol/app-server/v44';
 import type { ProductHostWorkspaces } from '../workspaces/host';
 import { settlementFailureKind } from '../workspaces/host';
 import type { WorkspaceAuthority } from '../workspaces/authority';

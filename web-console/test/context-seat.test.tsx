@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { ContextSeat } from '../src/app/agent/ContextSeat';
 import { Server, snapshot } from './fixture';
-import type { RuntimeClientContextView } from '../../protocol/app-server/v43';
+import type { RuntimeClientContextView } from '../../protocol/app-server/v44';
 let server: Server;
 beforeEach(async () => { server = new Server(); await server.attached('A'); });
 afterEach(() => { cleanup(); server.client.disconnect(); });

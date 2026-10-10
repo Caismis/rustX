@@ -1,9 +1,7 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness; see PROVENANCE.md. */
 import { useCallback, useMemo, useState } from 'react'
 import clsx from 'clsx'
-type AnsiLine = { text: string; style?: import('react').CSSProperties }[];
-// Native bounded text is displayed verbatim. No ANSI interpreter is imported.
-const parseAnsiLines = (text: string): AnsiLine[] => text.split('\n').map(text => [{ text }]);
+import { parseAnsiLines, type AnsiLine } from './ansi'
 import { headTailCap } from './head-tail-cap.ts'
 import { useCopyFeedback } from './use-copy-feedback.ts'
 import { Pill } from './Pill.tsx'

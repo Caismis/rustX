@@ -264,7 +264,8 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// Version 64 adds child turn directories and cut-bound transcript windows.
 /// Version 65 carries native transcript checkpoint counts and replaces the last
 /// request-only context seat with a measured-or-compacted `occupancy` reading.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 65;
+/// Version 66 adds exact Tool-occurrence navigation in child Trace domains.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 66;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -548,6 +549,11 @@ pub enum RuntimeClientRequest {
         agent_id: crate::runtime::identity::AgentId,
         record_id: String,
     },
+    AgentTraceLocateTool {
+        id: RequestId,
+        agent_id: crate::runtime::identity::AgentId,
+        locator: super::trace::TraceToolLocator,
+    },
     AgentTranscript {
         id: RequestId,
         agent_id: crate::runtime::identity::AgentId,
@@ -616,6 +622,7 @@ impl RuntimeClientRequest {
             | Self::AgentInterrupt { id, .. }
             | Self::AgentTrace { id, .. }
             | Self::AgentTraceDetail { id, .. }
+            | Self::AgentTraceLocateTool { id, .. }
             | Self::AgentTranscript { id, .. }
             | Self::AgentTurns { id, .. }
             | Self::SubagentWorkspaceDispose { id, .. }
@@ -654,6 +661,7 @@ impl RuntimeClientRequest {
             Self::AgentInterrupt { .. } => "agent_interrupt",
             Self::AgentTrace { .. } => "agent_trace",
             Self::AgentTraceDetail { .. } => "agent_trace_detail",
+            Self::AgentTraceLocateTool { .. } => "agent_trace_locate_tool",
             Self::AgentTranscript { .. } => "agent_transcript",
             Self::AgentTurns { .. } => "agent_turns",
             Self::SubagentWorkspaceDispose { .. } => "subagent_workspace_dispose",
@@ -671,6 +679,7 @@ impl RuntimeClientRequest {
                 | Self::AgentConversation { .. }
                 | Self::AgentTrace { .. }
                 | Self::AgentTraceDetail { .. }
+                | Self::AgentTraceLocateTool { .. }
                 | Self::CompactContext { .. }
                 | Self::InteractionRespond { .. }
                 | Self::JobWait { .. }
@@ -806,6 +815,9 @@ pub enum RuntimeClientResult {
     /// `None` when that identity names no record at the read cut.
     TraceDetail {
         detail: Option<Box<super::trace::TraceDetail>>,
+    },
+    TraceToolLocation {
+        location: Option<super::trace::TraceToolLocation>,
     },
     TranscriptWindow {
         window: super::snapshot::ConversationWindow,
@@ -1128,7 +1140,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 65);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 66);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

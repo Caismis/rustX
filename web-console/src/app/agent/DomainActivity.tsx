@@ -1,14 +1,15 @@
+import { useToolInspection } from './tool-inspection';
 import { useState } from 'react';
 import { DisclosureRow } from '../../presentation/primitives/DisclosureRow';
-import { IconAgentPresetOutline16, IconInspectOutline12 } from '../../presentation/primitives/icons';
+import { IconAgentPresetOutline16 } from '../../presentation/primitives/icons';
 import { subagentToolDetails } from './subagent-tool-details';
 import detailsCss from './AgentToolDetails.module.css';
 import { useSubagents } from './subagent-context';
 import css from '../../presentation/agent/Tool.module.css';
 import { useTranslation } from '../../locale/react';
 import type { TranslationKey } from '../../locale/translation';
-import type { ForegroundToolExecution } from '../../../../protocol/app-server/v43';
-import { ToolCard } from '../../presentation/agent/ToolCard';
+import type { ForegroundToolExecution } from '../../../../protocol/app-server/v44';
+import { ToolCard, ToolInspectionButton } from '../../presentation/agent/ToolCard';
 import { toolCard } from '../../bindings/tools';
 
 const names: Record<string, { domain: 'job' | 'agent'; title: TranslationKey }> = {
@@ -28,19 +29,20 @@ export function domainActivity(tool: ForegroundToolExecution) {
   return names[tool.tool_id];
 }
 export function DomainActivity({ tool }: { tool: ForegroundToolExecution }) {
-  const tx = useTranslation(), [expanded, setExpanded] = useState(false), [raw, setRaw] = useState(false), scope = useSubagents();
+  const inspect = useToolInspection(tool);
+  const tx = useTranslation(), [expanded, setExpanded] = useState(false), scope = useSubagents();
   const domain = domainActivity(tool)!;
   const view = toolCard(tool);
   if (domain.domain === 'agent') {
     const details = subagentToolDetails(tool);
     const target = details.target, task = details.task;
     const agent = scope?.agents.find(agent => agent.agent_id === target);
-    return <div data-activity-domain="agent" data-tool-call-id={tool.call_id}>
+    return <div className={css.root} data-activity-domain="agent" data-tool-call-id={tool.call_id}>
       <DisclosureRow icon={<IconAgentPresetOutline16 size={14}/>} title={tx(domain.title)} open={expanded} expandable expandOnRowClick keepContentWhenOpen onToggle={() => setExpanded(value => !value)}
         collapsedContent={<><span className={css.sep}/><span className={css.summary}>{details.count !== undefined ? tx('common:subagents.count', { count: details.count }) : task ?? agent?.agent ?? target ?? tx('common:subagents.list')}</span></>}>
         <div className={detailsCss.root}>
-          <div className={detailsCss.caption}><span>{tx('common:subagents.result')}</span><button type="button" aria-expanded={raw} onClick={() => setRaw(value => !value)}><IconInspectOutline12 size={12}/>{tx('common:subagents.inspect')}</button></div>
-          {raw ? <pre className={detailsCss.raw}>{view.output || view.input}</pre> : <ul className={detailsCss.list}>
+          <div className={detailsCss.caption}><span>{tx('common:subagents.result')}</span>{inspect && <ToolInspectionButton inspect={inspect}/>}</div>
+          <ul className={detailsCss.list}>
             {details.items.map((item, index) => {
               const child = scope?.agents.find(agent => agent.agent_id === item.agentId);
               const name = item.name ?? child?.agent ?? item.agentId;
@@ -55,7 +57,7 @@ export function DomainActivity({ tool }: { tool: ForegroundToolExecution }) {
             {details.count === 0 && <li className={detailsCss.item}>{tx('common:subagents.empty')}</li>}
             {!details.items.length && details.count === undefined && <li className={detailsCss.item}><div className={detailsCss.text}>{task ?? (view.state === 'success' ? tx('common:state.success') : view.output || view.input)}</div></li>}
             {details.truncated && <li className={detailsCss.item}>{tx('common:subagents.truncated', details.truncated)}</li>}
-          </ul>}
+          </ul>
         </div>
       </DisclosureRow>
     </div>;
@@ -63,6 +65,6 @@ export function DomainActivity({ tool }: { tool: ForegroundToolExecution }) {
   let target: string | undefined;
   try { const input = JSON.parse(tool.state.arguments); if (typeof input?.job_id === 'string') target = input.job_id; }
   catch { /* Partial streaming arguments. */ }
-  return <div data-activity-domain={domain.domain}><ToolCard tool={{ ...view, title: tx(domain.title),
+  return <div data-activity-domain={domain.domain}><ToolCard inspect={inspect} tool={{ ...view, title: tx(domain.title),
     summary: target ?? tx('common:activity.finite-tool') }}/></div>;
 }

@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { AssistantContentBlock, RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v43';
+import type { AssistantContentBlock, RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v44';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { stepGroups } from '../src/bindings/step-groups';
 import { localeController } from '../src/locale/controller';

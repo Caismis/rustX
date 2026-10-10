@@ -1,10 +1,11 @@
+import { ToolInspectionContext, useToolTraceNavigation } from '../agent/tool-inspection';
 import { AgentConversationContext } from '../agent/subagent-context';
 import { StateDot } from '../../presentation/primitives/StateDot';
 import { displayText, message as uiMessage, type DisplayText } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
 import { createPortal } from 'react-dom';
-import { useEffect, useLayoutEffect, useContext, useMemo, useState, useSyncExternalStore } from 'react';
-import type { AgentStatistics, RuntimeClientAgent, RuntimeClientJob, MethodResult, WorkflowRunView, WorkflowRunId } from '../../../../protocol/app-server/v43';
+import { useEffect, useLayoutEffect, useContext, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import type { AgentStatistics, RuntimeClientAgent, RuntimeClientJob, MethodResult, WorkflowRunView, WorkflowRunId } from '../../../../protocol/app-server/v44';
 import type { Observation } from '../../client/session-lifecycle/port';
 import { AppServerClient, RpcFailure } from '../../client/app-server';
 import { json } from '../../bindings/projection';
@@ -17,7 +18,7 @@ import css from './ActivityCards.module.css';
 import { SubagentChat } from '../agent/SubagentChat';
 import { ConversationStats } from '../agent/UsageStats';
 import { agentDot, agentRunning, agentStatus } from '../agent/subagent-state';
-import { SubagentTrajectory } from '../agent/SubagentTrajectory';
+import { SubagentTrajectory, type SubagentTraceHandle } from '../agent/SubagentTrajectory';
 import { ComposerSeat } from '../agent/ComposerSeat';
 import { AgentComposer } from '../agent/AgentComposer';
 import { ArtifactResources } from '../../client/artifacts';
@@ -64,8 +65,9 @@ function useActivityRequest({ client, sessionId }: Controls) {
 }
 
 /** Durable identity is the React key; the selected transcript survives resume. */
-export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible = true, embedded = false, ...controls }: { agent: RuntimeClientAgent; metrics?: AgentStatistics; metricsError?: string; mode?: 'chat' | 'trajectory'; visible?: boolean; embedded?: boolean } & Controls) {
+export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible = true, embedded = false, onMode, ...controls }: { agent: RuntimeClientAgent; metrics?: AgentStatistics; metricsError?: string; mode?: 'chat' | 'trajectory'; visible?: boolean; embedded?: boolean; onMode?: (mode: 'chat' | 'trajectory') => void } & Controls) {
   const tx = useTranslation();
+  const trace = useRef<SubagentTraceHandle>(null);
   const [headerHost, setHeaderHost] = useState<HTMLElement | null>(null);
   useLayoutEffect(() => { setHeaderHost(visible && !embedded ? document.getElementById('subagent-header-actions') : null); }, [visible, embedded, agent.agent_id]);
   const request = useActivityRequest(controls);
@@ -84,6 +86,7 @@ export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible
   const { client, sessionId } = controls;
   const admission = useSyncExternalStore(client?.subscribe ?? noSubscription, () => sessionId ? client?.getSnapshot().views[sessionId]?.attachmentObservation : undefined);
   useEffect(() => { if (admission) { setConversation(undefined); } }, [admission]);
+  const inspect = useToolTraceNavigation(locator => trace.current?.locate(locator) ?? Promise.resolve(false), onMode, visible && mode === 'chat' && !!client && !!sessionId, `child:${sessionId}:${agent.agent_id}:${admission?.target.attachment_id}`);
   const artifacts = useMemo(() => client && sessionId && admission ? new ArtifactResources(client, sessionId, agent.agent_id) : undefined, [client, sessionId, admission, agent.agent_id]);
   useEffect(() => () => artifacts?.dispose(), [artifacts]);
   const scopedPreview = useMemo(() => preview ? {
@@ -113,15 +116,15 @@ export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible
   const unavailable = agent.state === 'unavailable';
   const acceptsMessage = agent.state === 'active' || agent.state === 'inactive';
   return <AgentConversationContext.Provider value={agent}><ArtifactContext.Provider value={artifacts}><PreviewContext.Provider value={scopedPreview}><section className={css.agentConversation} data-agent-id={agent.agent_id} data-agent-state={agent.state} data-view={mode} data-activation-id={agent.current_activation ?? undefined} aria-label={tx('common:activity.agent-label', { name: agent.agent })}>
-    <div hidden={mode !== 'chat'} className={css.agentChat}><SubagentChat client={client} sessionId={sessionId} admission={admission} agent={agent} snapshot={conversation?.snapshot} visible={visible}>
+    <div hidden={mode !== 'chat'} className={css.agentChat}><ToolInspectionContext value={inspect}><SubagentChat client={client} sessionId={sessionId} admission={admission} agent={agent} snapshot={conversation?.snapshot} visible={visible && mode === 'chat'}>
       {transcriptLoading && !conversation && <p role="status">{tx('common:activity.reading')}</p>}
       {metricsError && <p role="alert">{metricsError}</p>}
       {transcriptError && <p role="alert">{transcriptError}</p>}
       {agent.detail && <p>{detail(agent.detail)}</p>}
       {settledActivation && settledActivation.proof === admission && <small role="status">{settledActivation.outcome ? tx(`common:state.${settledActivation.outcome}`) : tx('common:activity.observed-inactive')}</small>}
       {[request.error, waitRequest.error, interruptRequest.error].filter(Boolean).map((error, index) => <p role="alert" key={index}>{displayText(tx, error!)}</p>)}
-    </SubagentChat></div>
-    {client && sessionId && <div hidden={mode !== 'trajectory'} className={css.agentTrace}><SubagentTrajectory agent={agent} client={client} sessionId={sessionId} visible={visible && mode === 'trajectory'}/></div>}
+    </SubagentChat></ToolInspectionContext></div>
+    {client && sessionId && <div hidden={mode !== 'trajectory'} className={css.agentTrace}><SubagentTrajectory ref={trace} agent={agent} client={client} sessionId={sessionId} visible={visible && mode === 'trajectory'}/></div>}
     {visible && headerHost && client && createPortal(<div className={css.agentActions}>
       <span className={css.headerStatus} role="status"><StateDot state={agentDot(agent)}/>{agentStatus(agent, tx)}{request.pending && <span>{tx('common:activity.waiting-runtime')}</span>}</span>
       <button type="button" aria-label={tx('common:activity.transcript')} title={tx('common:activity.transcript')} disabled={request.disabled} onClick={() => refreshTranscript(value => value + 1)}><IconRefreshOutline14/></button>

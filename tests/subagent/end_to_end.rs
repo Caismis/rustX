@@ -816,6 +816,56 @@ async fn subagent_process_stack(alias_root: bool) {
     let Ok(MethodResult::TranscriptWindow { window }) = transcript else {
         panic!("durable child history must be readable: {transcript:?}");
     };
+    let root_locator = reopened_snapshot
+        .messages
+        .iter()
+        .find_map(|message| {
+            let rustx::message::types::MessageBlock::Assistant(assistant) = message else {
+                return None;
+            };
+            assistant
+                .content
+                .iter()
+                .enumerate()
+                .find_map(|(index, block)| {
+                    let rustx::message::types::AssistantContentBlock::ToolCall(call) = block else {
+                        return None;
+                    };
+                    Some(rustx::runtime_client::trace::TraceToolLocator {
+                        occurrence: rustx::message::types::ToolCallOccurrenceRef::new(
+                            assistant.id.clone(),
+                            rustx::message::types::ContentBlockIndex::new(
+                                u32::try_from(index).unwrap(),
+                            ),
+                        ),
+                        call_id: call.id.clone(),
+                        tool_id: call.tool_id.clone(),
+                    })
+                })
+        })
+        .expect("delegation has a canonical Tool occurrence");
+    let located = reopened
+        .call(Method::TraceLocateTool {
+            target: reopened.target(),
+            locator: root_locator.clone(),
+        })
+        .await;
+    let Ok(MethodResult::TraceToolLocation {
+        location: Some(located),
+    }) = located
+    else {
+        panic!("reopened root tool navigation: {located:?}");
+    };
+    let selected = located
+        .page
+        .records
+        .iter()
+        .find(|record| record.id == located.record_id)
+        .unwrap();
+    assert_eq!(
+        selected.tool.as_ref().unwrap().call_id,
+        root_locator.call_id
+    );
     let page = serde_json::to_string(&window.page).unwrap();
     let trace = reopened
         .call(Method::AgentTrace {
@@ -843,6 +893,32 @@ async fn subagent_process_stack(alias_root: bool) {
     assert_eq!(
         request.state,
         rustx::runtime_client::trace::TraceState::Completed
+    );
+    let no_child_call = reopened
+        .call(Method::AgentTraceLocateTool {
+            target: reopened.target(),
+            agent_id: agent_id.clone(),
+            locator: rustx::runtime_client::trace::TraceToolLocator {
+                occurrence: rustx::message::types::ToolCallOccurrenceRef::new(
+                    request
+                        .request
+                        .as_ref()
+                        .unwrap()
+                        .assistant_message_id
+                        .clone(),
+                    rustx::message::types::ContentBlockIndex::new(0),
+                ),
+                call_id: root_locator.call_id.clone(),
+                tool_id: root_locator.tool_id.clone(),
+            },
+        })
+        .await;
+    assert!(
+        matches!(
+            no_child_call,
+            Ok(MethodResult::TraceToolLocation { location: None })
+        ),
+        "a child's plain report cannot substitute for a parent's tool: {no_child_call:?}"
     );
     let request_id = request.id.clone();
     let trace_text = serde_json::to_string(&trace).unwrap();

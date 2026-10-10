@@ -1,4 +1,4 @@
-import type { AttachmentTarget, SessionFileReference } from '../../protocol/app-server/v43.ts';
+import type { AttachmentTarget, SessionFileReference } from '../../protocol/app-server/v44.ts';
 
 export type DocumentKind = 'pdf' | 'docx' | 'pptx' | 'xlsx' | 'html';
 export function documentKind(name: string): DocumentKind | undefined {

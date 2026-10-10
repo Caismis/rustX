@@ -147,6 +147,11 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                 capabilities: ServerCapabilities::default(),
             },
         }))),
+        ProtocolMessage::Response(Response::Success(Box::new(Success {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("tool-without-execution".into()),
+            result: MethodResult::TraceToolLocation { location: None },
+        }))),
         ProtocolMessage::Response(Response::Failure(Failure {
             jsonrpc: JsonRpcVersion::V2,
             id: None,
@@ -287,6 +292,29 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                 serde_json::from_str("\"trace:9007199254740993\"").expect("Trace cursor fixture"),
             ),
             limit: 32,
+        },
+        Method::TraceLocateTool {
+            target: target.clone(),
+            locator: crate::runtime_client::trace::TraceToolLocator {
+                occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                    crate::runtime::identity::MessageId::new("assistant-fixture"),
+                    crate::message::types::ContentBlockIndex::new(2),
+                ),
+                call_id: crate::runtime::identity::ToolCallId::new("call-fixture"),
+                tool_id: crate::runtime::identity::ToolId::new("tool-bash"),
+            },
+        },
+        Method::AgentTraceLocateTool {
+            target: target.clone(),
+            agent_id: crate::runtime::identity::AgentId::new("agent-fixture"),
+            locator: crate::runtime_client::trace::TraceToolLocator {
+                occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                    crate::runtime::identity::MessageId::new("assistant-fixture"),
+                    crate::message::types::ContentBlockIndex::new(2),
+                ),
+                call_id: crate::runtime::identity::ToolCallId::new("call-fixture"),
+                tool_id: crate::runtime::identity::ToolId::new("tool-bash"),
+            },
         },
         Method::Transcript {
             target: target.clone(),
@@ -825,9 +853,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v43.schema.json", "v43.ts"]);
+        assert_eq!(generations, ["v44.schema.json", "v44.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v43.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v44.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

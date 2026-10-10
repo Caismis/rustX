@@ -1,4 +1,4 @@
-import type { RuntimeClientAgent, AgentStatistics } from '../../../../protocol/app-server/v43';
+import type { RuntimeClientAgent, AgentStatistics } from '../../../../protocol/app-server/v44';
 import type { useTranslation } from '../../locale/react';
 import type { StateDotState } from '../../presentation/primitives/StateDot';
 

@@ -2,7 +2,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { autoUpdate, flip, offset, shift, size, useFloating } from '@floating-ui/react-dom';
-import type { RuntimeClientAgent } from '../../../../protocol/app-server/v43';
+import type { RuntimeClientAgent } from '../../../../protocol/app-server/v44';
 import { useTranslation } from '../../locale/react';
 import { StateDot } from '../../presentation/primitives/StateDot';
 import { Tooltip } from '../../presentation/primitives/Tooltip';

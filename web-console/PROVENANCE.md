@@ -1983,8 +1983,8 @@ file/artifact access resolves the owned child conversation and workspace.
 
 WebUI reuses AgentComposer and AttachmentIntake, scopes both conversation and
 trajectory preview resources to the Agent, and retires native observation reads
-when navigation changes. No child model settings are introduced. App Server v43,
-Runtime Client v65, child IPC v30 and Product Host file-read v3 are synchronized.
+when navigation changes. No child model settings are introduced. App Server v44,
+Runtime Client v66, child IPC v30 and Product Host file-read v3 are synchronized.
 The Browser plugin is unavailable; the repository's pinned Playwright browser
 validates real native child processes and deterministic provider streams.
 
@@ -2061,3 +2061,38 @@ Pending/failed compaction preserves occupancy; success replaces it with the
 committed primary context estimate. The panel marks that estimate with `~` while
 reported cumulative billing remains unchanged. Native runtime ownership replaces
 Harness projection/plugin wiring; obsolete protocol imports are removed.
+
+## Tool detail surfaces and native Inspect navigation
+
+Compared with Harness `5badb15009ae1756c3afe0ae0cef1faafc290ccc`:
+`ui-tool/src/client/tool/components/ToolRow.tsx` and its stylesheet,
+`toolviews/bash-sample.tsx`, `GenericToolCard.tsx`, and
+`ui-primitives/src/TerminalBlock.tsx`, its stylesheet and `ansi.ts`.
+The expanded Bash surface retains all returned lines, separate command/output
+scrollers, 150px/224px bounds, the 11px code font with 18px minimum line seats,
+16px radius, 4px flow indentation, sticky raw-output copy and copied feedback.
+ANSI styles use upstream Anser 2.3.5 and safe React spans; source markup is text.
+Generic IN/OUT sections scroll independently with a full-width divider. Business
+icons remain stable on failure, summaries use native failure/stopped tones and
+lifecycle announcements are visually hidden. Keyboard expansion and running copy
+visibility follow the upstream flow.
+
+The Inspect pill is pure presentation. App Server v44 / Runtime Client v66 native
+readers locate the canonical occurrence across the complete indexed Journal,
+including historical and exited child stores. RustX supplies bounded continuous
+windows, exact record IDs and lifecycle repairs, replacing Harness runtime/store
+wiring. The browser preserves that landing until Return to latest, loads exact
+heavy detail, and fences attachment, navigation and visible-Conversation ownership.
+Resident hidden chats suppress portal chrome, so their floating navigation cannot
+escape into the active chat or Trajectory. Special Agent, present, question and
+Goal rows use the same native Inspect authority.
+
+Browser-plugin capabilities are not available in this session. Rendered QA uses
+the repository's immutable Playwright 1.63 Linux image, fixtures on loopback port
+5174 and the production preview on 5173. Light/dark tool detail views at desktop
+and 390px verify independent scrolling, uncapped middle lines, exact full-output
+copy, running transitions and keyboard expansion. Real native child-capabilities
+QA verifies child and parent Inspect RPCs, selected rows, exact detail reads and
+Return to latest; resident child Trajectory paging is checked at 1440px and 390px.
+Screenshots are retained under `/tmp/rustx-tool-details-*` and
+`/tmp/rustx-native-tool-inspect-{child,root}.png`.

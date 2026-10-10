@@ -3,7 +3,7 @@ import { translator } from '../src/locale/translation';
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import type { RuntimeClientAgent, RuntimeClientJob } from '../../protocol/app-server/v43';
+import type { RuntimeClientAgent, RuntimeClientJob } from '../../protocol/app-server/v44';
 import { RpcFailure } from '../src/client/app-server';
 import { RuntimeFacts as OtherActivity } from '../src/app/agent/Activity';
 import { AgentCard } from '../src/app/components/ActivityCards';

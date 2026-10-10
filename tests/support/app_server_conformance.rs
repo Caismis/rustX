@@ -164,6 +164,18 @@ pub async fn representative_scenario(
     );
 
     for call in [
+        Method::AgentTraceLocateTool {
+            target: a.clone(),
+            agent_id: child_id.clone(),
+            locator: rustx::runtime_client::trace::TraceToolLocator {
+                occurrence: rustx::message::types::ToolCallOccurrenceRef::new(
+                    rustx::runtime::identity::MessageId::new("missing-assistant"),
+                    rustx::message::types::ContentBlockIndex::new(0),
+                ),
+                call_id: rustx::runtime::identity::ToolCallId::new("call"),
+                tool_id: rustx::runtime::identity::ToolId::new("tool-bash"),
+            },
+        },
         Method::AgentTrace {
             target: a.clone(),
             agent_id: child_id.clone(),

@@ -7,6 +7,34 @@ use crate::runtime::identity::AgentId;
 use std::sync::Arc;
 
 impl ClientInner {
+    pub(crate) async fn agent_trace_locate_tool(
+        self: &Arc<Self>,
+        id: &AgentId,
+        locator: super::trace::TraceToolLocator,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        let owner = Arc::clone(self);
+        let id = id.clone();
+        tokio::task::spawn_blocking(move || {
+            owner.read_agent_trace(&id, |projection, agent| {
+                let mut location = projection.locate_tool(&locator)?;
+                if let Some(location) = &mut location {
+                    let positions = location
+                        .page
+                        .records
+                        .iter()
+                        .map(|record| record.position.clone())
+                        .collect::<Vec<_>>();
+                    location.page.updates = projection.refresh_agent(&positions, agent)?;
+                }
+                Ok(RuntimeClientResult::TraceToolLocation { location })
+            })
+        })
+        .await
+        .map_err(|_| RuntimeClientError::RuntimeFailure {
+            message: "Agent Trace locator failed".into(),
+        })?
+    }
+
     pub(crate) async fn agent_trace(
         self: &Arc<Self>,
         id: &AgentId,

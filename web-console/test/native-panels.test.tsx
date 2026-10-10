@@ -6,7 +6,7 @@ import { RightPanel } from '../src/presentation/right-panel/RightPanel';
 import { ArtifactPreview } from '../src/presentation/right-panel/ArtifactPreview';
 import { readTheme, applyTheme } from '../src/app/appearance';
 import { goalActivityLabel } from '../src/app/agent/GoalActivity';
-import type { ForegroundToolExecution } from '../../protocol/app-server/v43';
+import type { ForegroundToolExecution } from '../../protocol/app-server/v44';
 import { useState } from 'react';
 import type { PreviewViewState } from '../src/presentation/right-panel/preview-view-state';
 afterEach(() => { cleanup(); localStorage.clear(); document.body.removeAttribute('data-ds-dark-theme'); });

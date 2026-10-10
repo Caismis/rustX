@@ -364,6 +364,7 @@ impl RuntimeAttachment {
             RuntimeClientRequest::AgentConversation { .. }
             | RuntimeClientRequest::AgentStatistics { .. }
             | RuntimeClientRequest::AgentTrace { .. }
+            | RuntimeClientRequest::AgentTraceLocateTool { .. }
             | RuntimeClientRequest::AgentTraceDetail { .. } => {
                 unreachable!("Agent statistics are read asynchronously")
             }
@@ -456,6 +457,13 @@ impl RuntimeAttachment {
                 record_id,
                 ..
             } => Some(inner.agent_trace_detail(agent_id, record_id.clone()).await),
+            RuntimeClientRequest::AgentTraceLocateTool {
+                agent_id, locator, ..
+            } => Some(
+                inner
+                    .agent_trace_locate_tool(agent_id, locator.clone())
+                    .await,
+            ),
             RuntimeClientRequest::JobWait { job_id, .. } => {
                 Some(inner.job_wait(job_id, false).await)
             }

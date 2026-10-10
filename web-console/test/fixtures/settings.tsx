@@ -4,7 +4,7 @@ import { App } from '../../src/app/App';
 import { Server, endpoint, snapshot } from '../fixture';
 import { cfg3Application, cfg3Effective, cfg3Source } from '../cfg3-data';
 import { RpcFailure } from '../../src/client/app-server';
-import type { ConfigurationApplication, RuntimeClientEvent, SourceMutation } from '../../../protocol/app-server/v43';
+import type { ConfigurationApplication, RuntimeClientEvent, SourceMutation } from '../../../protocol/app-server/v44';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';

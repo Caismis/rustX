@@ -1322,6 +1322,7 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
         | Method::SessionUploadStatus { target, .. }
         | Method::Trace { target, .. }
         | Method::TraceDetail { target, .. }
+        | Method::TraceLocateTool { target, .. }
         | Method::Transcript { target, .. }
         | Method::ConversationTurns { target, .. }
         | Method::Goal { target, .. }
@@ -1338,6 +1339,7 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
         | Method::AgentInterrupt { target, .. }
         | Method::AgentTrace { target, .. }
         | Method::AgentTraceDetail { target, .. }
+        | Method::AgentTraceLocateTool { target, .. }
         | Method::AgentTranscript { target, .. }
         | Method::AgentTurns { target, .. }
         | Method::SubagentDispose { target, .. }
@@ -1435,6 +1437,9 @@ async fn dispatch_runtime(
             target: _,
             record_id,
         } => native_result(authority.trace_detail(record_id)),
+        Method::TraceLocateTool { locator, .. } => {
+            native_result(authority.trace_locate_tool(locator).await)
+        }
         Method::Transcript {
             target: _,
             at,
@@ -1524,6 +1529,9 @@ async fn dispatch_runtime(
             record_id,
             ..
         } => native_result(authority.agent_trace_detail(&agent_id, record_id).await),
+        Method::AgentTraceLocateTool {
+            agent_id, locator, ..
+        } => native_result(authority.agent_trace_locate_tool(&agent_id, locator).await),
         Method::AgentTranscript {
             agent_id,
             at,
@@ -1661,6 +1669,10 @@ fn deletion(result: crate::local_runtime::session::deletion::SessionDeleteResult
         result: crate::app_server::session_deletion::project(result),
     }
 }
+#[allow(
+    clippy::too_many_lines,
+    reason = "Keep the single native-result carrier mapping together"
+)]
 fn native_result(
     result: Result<RuntimeClientResult, RuntimeClientError>,
 ) -> Result<MethodResult, RpcError> {
@@ -1675,6 +1687,9 @@ fn native_result(
         RuntimeClientResult::ContextCompacted { context } => MethodResult::Context { context },
         RuntimeClientResult::TracePage { page } => MethodResult::Trace { page },
         RuntimeClientResult::TraceDetail { detail } => MethodResult::TraceDetail { detail },
+        RuntimeClientResult::TraceToolLocation { location } => {
+            MethodResult::TraceToolLocation { location }
+        }
         RuntimeClientResult::TranscriptPage { .. } => {
             unreachable!("App Server transcript reads use cut-bound windows")
         }

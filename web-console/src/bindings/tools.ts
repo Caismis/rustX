@@ -1,4 +1,4 @@
-import type { ForegroundToolExecution } from '../../../protocol/app-server/v43';
+import type { ForegroundToolExecution } from '../../../protocol/app-server/v44';
 import type { ToolCardView } from '../presentation/agent/ToolCard';
 import { json } from './projection';
 const variants: Record<string, ToolCardView['variant']> = { 'tool-bash': 'bash', 'tool-read': 'read', 'tool-read-image': 'image', 'tool-write': 'write', 'tool-edit': 'edit', 'tool-glob': 'search', 'tool-grep': 'search' };
@@ -6,7 +6,8 @@ const variants: Record<string, ToolCardView['variant']> = { 'tool-bash': 'bash',
 export function toolCard(tool: ForegroundToolExecution): ToolCardView {
   const variant = variants[tool.tool_id] ?? 'generic';
   let args: Record<string, unknown> = {};
-  try { const value = JSON.parse(tool.state.arguments); if (value && typeof value === 'object' && !Array.isArray(value)) args = value; } catch { /* A streaming argument fragment is shown verbatim. */ }
+  let formattedInput = tool.state.arguments;
+  try { const value = JSON.parse(tool.state.arguments); formattedInput = json(value); if (value && typeof value === 'object' && !Array.isArray(value)) args = value; } catch { /* A streaming argument fragment is shown verbatim. */ }
   const result = tool.state.type === 'settled' ? tool.state.result : undefined;
   const status = result?.status.type;
   const state = status === 'outcome_unknown' ? 'uncertain' : status === 'success' ? 'success' : status === 'cancelled' ? 'cancelled' : status ? 'failure' : tool.state.type === 'running' ? 'running' : 'assembled';
@@ -17,6 +18,6 @@ export function toolCard(tool: ForegroundToolExecution): ToolCardView {
   return { id: tool.call_id, path: string('path'), exitCode: result?.exit_code, truncated: result?.truncation?.truncated,
     diffs: variant === 'edit' ? edits.map(edit => ({ path: string('path') ?? '', oldText: edit.oldText, newText: edit.newText })) : variant === 'write' && string('content') !== undefined ? [{ path: string('path') ?? '', oldText: null, newText: string('content')! }] : undefined, nativeName: tool.name, title: tool.name, variant, state,
     summary: (variant === 'bash' ? string('description') : undefined) ?? detail ?? string(variant === 'bash' ? 'command' : variant === 'search' ? 'pattern' : 'path') ?? tool.call_id,
-    input: variant === 'bash' ? string('command') ?? tool.state.arguments : tool.state.arguments,
+    input: variant === 'bash' ? string('command') ?? tool.state.arguments : formattedInput,
     output: [detail, output].filter(Boolean).join('\n') || undefined };
 }

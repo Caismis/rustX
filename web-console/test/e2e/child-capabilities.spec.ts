@@ -91,6 +91,18 @@ test('native child live cuts, independent title, active and file-only resume upl
     await expect(child.locator('img')).toBeVisible();
     await expect.poll(() => child.locator('img').evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth > 0)).toBe(true);
     expect(wire.requests.some(request => request.method === 'agent/artifactRead' && request.params.agent_id === id)).toBe(true);
+    // The native locator, not the currently loaded Trace page, owns Inspect.
+    await tool.getByRole('button', { name: 'Inspect', exact: true }).click();
+    await expect(child).toHaveAttribute('data-view', 'trajectory');
+    await expect.poll(() => wire.responses.filter(row => row.method === 'agent/traceLocateTool').length).toBe(1);
+    const childLocation = wire.responses.find(row => row.method === 'agent/traceLocateTool')!.result.location;
+    expect(childLocation.record_id).toBeTruthy();
+    expect(wire.requests.find(row => row.method === 'agent/traceLocateTool')!.params).toMatchObject({ agent_id: id, locator: { call_id: 'child-image' } });
+    await expect(child.locator(`[data-trace-id="${childLocation.record_id}"][data-selected]`)).toBeVisible();
+    await expect.poll(() => wire.requests.filter(row => row.method === 'agent/traceDetail' && row.params.record_id === childLocation.record_id).length).toBeGreaterThan(0);
+    await expect(child.getByRole('complementary', { name: 'Event details' })).toBeVisible();
+    await page.screenshot({ path: '/tmp/rustx-native-tool-inspect-child.png' });
+    await page.getByRole('tab', { name: 'Chat', exact: true }).click();
     // An empty text field with an attachment resumes the same native Agent.
     await child.getByLabel('Attach files', { exact: true }).setInputFiles({ name: 'resume.txt', mimeType: 'text/plain', buffer: Buffer.from('Resume child attachment') });
     await child.getByRole('button', { name: 'Send', exact: true }).click();
@@ -114,6 +126,22 @@ test('native child live cuts, independent title, active and file-only resume upl
     await page.getByRole('button', { name: parentTitle, exact: true }).click();
     await fixture.release(`child-first-${parentGate}`); await fixture.release(`child-second-${parentGate}`);
     await expect(page.getByText('Parent and child remain independent.', { exact: true })).toBeVisible();
+    const parentProcess = page.locator('[data-turn-process][aria-expanded]:visible').last();
+    if (await parentProcess.getAttribute('aria-expanded') === 'false') await parentProcess.click();
+    const parentTool = page.locator('[data-tool-call-id="child-capabilities-create"]');
+    const parentStep = page.locator('[data-step-process]:visible').filter({ has: parentTool }).last().locator(':scope > button');
+    if (await parentStep.isVisible() && await parentStep.getAttribute('aria-expanded') === 'false') await parentStep.click();
+    await parentTool.getByRole('button', { expanded: false }).first().click();
+    await parentTool.getByRole('button', { name: 'Inspect', exact: true }).click();
+    await expect(page.getByRole('tab', { name: 'Trajectory', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await expect.poll(() => wire.responses.filter(row => row.method === 'session/traceLocateTool').length).toBe(1);
+    const rootLocation = wire.responses.find(row => row.method === 'session/traceLocateTool')!.result.location;
+    expect(wire.requests.find(row => row.method === 'session/traceLocateTool')!.params.locator.call_id).toBe('child-capabilities-create');
+    await expect(page.locator(`[data-trace-id="${rootLocation.record_id}"][data-selected]:visible`)).toBeVisible();
+    await expect.poll(() => wire.requests.filter(row => row.method === 'session/traceDetail' && row.params.record_id === rootLocation.record_id).length).toBeGreaterThan(0);
+    await page.screenshot({ path: '/tmp/rustx-native-tool-inspect-root.png' });
+    await page.getByRole('button', { name: 'Return to latest', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Return to latest', exact: true })).toHaveCount(0);
     expect(errors).toEqual([]); passed = true;
   } catch (error) { await page.screenshot({ path: '/tmp/rustx-native-child-failure.png' }).catch(() => {}); console.error(await page.locator('body').innerText().catch(() => 'Page closed')); console.error(fixture.diagnostics()); throw error; }
   finally { await page.close(); await fixture.stop(passed); }

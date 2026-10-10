@@ -1,5 +1,5 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v43.js';
+import type {ProtocolMessage} from './v44.js';
 export const fixtures = [
   {
     "jsonrpc": "2.0",
@@ -115,7 +115,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 43,
+      "protocol_version": 44,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -133,7 +133,7 @@ export const fixtures = [
     "result": {
       "type": "initialized",
       "authority_id": "fixture-app-server-authority",
-      "protocol_version": 43,
+      "protocol_version": 44,
       "capabilities": {
         "upload_policy": {
           "max_file_bytes": 2097152,
@@ -150,6 +150,14 @@ export const fixtures = [
         "delivery_access": false,
         "experimental_methods": []
       }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "tool-without-execution",
+    "result": {
+      "type": "trace_tool_location",
+      "location": null
     }
   },
   {
@@ -398,6 +406,49 @@ export const fixtures = [
       "records": [],
       "before": "trace:9007199254740993",
       "limit": 32
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "method": "session/traceLocateTool",
+    "params": {
+      "target": {
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "locator": {
+        "occurrence": {
+          "assistant_message_id": "assistant-fixture",
+          "block_index": 2
+        },
+        "call_id": "call-fixture",
+        "tool_id": "tool-bash"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "method": "agent/traceLocateTool",
+    "params": {
+      "target": {
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "agent_id": "agent-fixture",
+      "locator": {
+        "occurrence": {
+          "assistant_message_id": "assistant-fixture",
+          "block_index": 2
+        },
+        "call_id": "call-fixture",
+        "tool_id": "tool-bash"
+      }
     }
   },
   {

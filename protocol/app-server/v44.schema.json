@@ -452,6 +452,35 @@
           "properties": {
             "method": {
               "type": "string",
+              "const": "session/traceLocateTool"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "locator": {
+                  "$ref": "#/$defs/TraceToolLocator"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "locator"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
               "const": "session/transcript"
             },
             "params": {
@@ -1123,6 +1152,39 @@
                 "target",
                 "agent_id",
                 "record_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "agent/traceLocateTool"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "agent_id": {
+                  "$ref": "#/$defs/AgentId"
+                },
+                "locator": {
+                  "$ref": "#/$defs/TraceToolLocator"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "agent_id",
+                "locator"
               ]
             }
           },
@@ -2556,6 +2618,61 @@
     },
     "TraceCursor": {
       "description": "Opaque Trace-only exclusive boundary, valid only in its conversation.\n\nIt is not a live cursor, a transcript cursor, an Event Journal sequence,\na Request ID, or an artifact ID. Clients order by it and page with it;\nthey never parse it.",
+      "type": "string"
+    },
+    "TraceToolLocator": {
+      "description": "The occurrence, rather than a globally ambiguous provider call ID, owns navigation.",
+      "type": "object",
+      "properties": {
+        "occurrence": {
+          "$ref": "#/$defs/ToolCallOccurrenceRef"
+        },
+        "call_id": {
+          "$ref": "#/$defs/ToolCallId"
+        },
+        "tool_id": {
+          "$ref": "#/$defs/ToolId"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "occurrence",
+        "call_id",
+        "tool_id"
+      ]
+    },
+    "ToolCallOccurrenceRef": {
+      "description": "Exact rustX canonical ownership of a Tool call, independent of provider IDs.\nMessage identity is remapped by lineage; the canonical content position stays fixed.",
+      "type": "object",
+      "properties": {
+        "assistant_message_id": {
+          "description": "The canonical Assistant that issued the call.",
+          "$ref": "#/$defs/MessageId"
+        },
+        "block_index": {
+          "description": "The `ToolCall` block within that Assistant's content.",
+          "$ref": "#/$defs/ContentBlockIndex"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "assistant_message_id",
+        "block_index"
+      ]
+    },
+    "ContentBlockIndex": {
+      "description": "A stable index identifying one content block within the ordered content\nlist of the canonical message being assembled.\n\nStreaming facts (text deltas, reasoning deltas, provider continuation\nstate, tool-call content) reference the block they belong to by this\nindex, so interleaved and multiple blocks remain unambiguous without\nexposing any provider-specific block id type.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "ToolCallId": {
+      "description": "Provider/model-issued opaque correlation string, scoped to a request/publication.\nNot a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.",
+      "type": "string"
+    },
+    "ToolId": {
+      "description": "Identifies a tool definition in the capability set.",
       "type": "string"
     },
     "ConversationWindowAt": {
@@ -6239,6 +6356,29 @@
         {
           "type": "object",
           "properties": {
+            "location": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TraceToolLocation"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "trace_tool_location"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "conversation_id": {
               "$ref": "#/$defs/ConversationId"
             },
@@ -8138,10 +8278,6 @@
         "origin"
       ]
     },
-    "ToolId": {
-      "description": "Identifies a tool definition in the capability set.",
-      "type": "string"
-    },
     "ToolExecutionPolicy": {
       "description": "Who owns one execution of a tool.\n\nThis axis decides ownership and settlement, never scheduling:\n\n- `ForegroundOnly` — every invocation settles before the current agent\n  attempt may continue past that tool result. The execution is\n  attempt-owned and observable attempt cancellation physically reaches\n  it.\n- `BackgroundOnly` — every invocation is detached from the current\n  attempt after successful background dispatch; the conversation owns the\n  execution.\n- `ModelSelectable` — the model must explicitly choose foreground or\n  background execution for each invocation through the required\n  `execution_mode` invocation field. That field is reserved by the\n  runtime only under this policy; registration rejects a `ModelSelectable`\n  tool whose canonical schema already defines it.\n\nForeground/background is orthogonal to sequential/parallel scheduling\n([`ToolConcurrencyPolicy`]).",
       "oneOf": [
@@ -9783,10 +9919,6 @@
         "tool_id",
         "started"
       ]
-    },
-    "ToolCallId": {
-      "description": "Provider/model-issued opaque correlation string, scoped to a request/publication.\nNot a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.",
-      "type": "string"
     },
     "TraceToolCall": {
       "description": "One canonical `ToolCall` the model proposed.\n\nA proposal proves that the generation assembled a call. It never proves\nthat execution started: a started Tool record is separate evidence.",
@@ -11910,6 +12042,23 @@
         "truncated"
       ]
     },
+    "TraceToolLocation": {
+      "description": "A contiguous native history window ending at the selected execution.",
+      "type": "object",
+      "properties": {
+        "record_id": {
+          "type": "string"
+        },
+        "page": {
+          "$ref": "#/$defs/TracePage"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "record_id",
+        "page"
+      ]
+    },
     "ConversationWindow": {
       "type": "object",
       "properties": {
@@ -12795,13 +12944,6 @@
         "state"
       ]
     },
-    "ContentBlockIndex": {
-      "description": "A stable index identifying one content block within the ordered content\nlist of the canonical message being assembled.\n\nStreaming facts (text deltas, reasoning deltas, provider continuation\nstate, tool-call content) reference the block they belong to by this\nindex, so interleaved and multiple blocks remain unambiguous without\nexposing any provider-specific block id type.",
-      "type": "integer",
-      "format": "uint32",
-      "minimum": 0,
-      "maximum": 4294967295
-    },
     "ForegroundToolState": {
       "description": "The externally meaningful state of one foreground tool execution.",
       "oneOf": [
@@ -13633,25 +13775,6 @@
       "required": [
         "id",
         "content"
-      ]
-    },
-    "ToolCallOccurrenceRef": {
-      "description": "Exact rustX canonical ownership of a Tool call, independent of provider IDs.\nMessage identity is remapped by lineage; the canonical content position stays fixed.",
-      "type": "object",
-      "properties": {
-        "assistant_message_id": {
-          "description": "The canonical Assistant that issued the call.",
-          "$ref": "#/$defs/MessageId"
-        },
-        "block_index": {
-          "description": "The `ToolCall` block within that Assistant's content.",
-          "$ref": "#/$defs/ContentBlockIndex"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "assistant_message_id",
-        "block_index"
       ]
     },
     "ToolMessageBlock": {

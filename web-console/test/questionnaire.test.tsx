@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { ForegroundToolExecution, QuestionSpecification, QuestionnaireSubmission } from '../../protocol/app-server/v43';
+import type { ForegroundToolExecution, QuestionSpecification, QuestionnaireSubmission } from '../../protocol/app-server/v44';
 import { Questionnaire } from '../src/app/agent/Questionnaire';
 import { askUserRow } from '../src/bindings/ask-user';
 import { QuestionRow } from '../src/presentation/agent/QuestionRow';

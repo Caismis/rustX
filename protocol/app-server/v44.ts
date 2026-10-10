@@ -111,6 +111,13 @@ export type Request1 =
       };
     }
   | {
+      method: 'session/traceLocateTool';
+      params: {
+        target: AttachmentTarget;
+        locator: TraceToolLocator;
+      };
+    }
+  | {
       method: 'session/transcript';
       params: {
         target: AttachmentTarget;
@@ -268,6 +275,14 @@ export type Request1 =
         target: AttachmentTarget;
         agent_id: AgentId;
         record_id: string;
+      };
+    }
+  | {
+      method: 'agent/traceLocateTool';
+      params: {
+        target: AttachmentTarget;
+        agent_id: AgentId;
+        locator: TraceToolLocator;
       };
     }
   | {
@@ -611,6 +626,15 @@ export type SessionNodeId = string;
  * they never parse it.
  */
 export type TraceCursor = string;
+/**
+ * Provider/model-issued opaque correlation string, scoped to a request/publication.
+ * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
+ */
+export type ToolCallId = string;
+/**
+ * Identifies a tool definition in the capability set.
+ */
+export type ToolId = string;
 /**
  * Bounded windows positioned by native Turn identity or by a captured read cut.
  * Append-only live growth preserves a cut; mutation invalidates it.
@@ -1205,6 +1229,10 @@ export type MethodResult =
       type: 'trace_detail';
     }
   | {
+      location?: TraceToolLocation | null;
+      type: 'trace_tool_location';
+    }
+  | {
       conversation_id: ConversationId;
       window: ConversationWindow;
       type: 'session_history';
@@ -1584,15 +1612,6 @@ export type TraceContextKind =
   | 'runtime_tool_observation'
   | 'extension_environment'
   | 'agent_status';
-/**
- * Provider/model-issued opaque correlation string, scoped to a request/publication.
- * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
- */
-export type ToolCallId = string;
-/**
- * Identifies a tool definition in the capability set.
- */
-export type ToolId = string;
 /**
  * Truthful admission source. Client controls have no model `ToolCall` identity.
  */
@@ -3914,6 +3933,28 @@ export interface UploadMetadata {
   size: number;
 }
 /**
+ * The occurrence, rather than a globally ambiguous provider call ID, owns navigation.
+ */
+export interface TraceToolLocator {
+  occurrence: ToolCallOccurrenceRef;
+  call_id: ToolCallId;
+  tool_id: ToolId;
+}
+/**
+ * Exact rustX canonical ownership of a Tool call, independent of provider IDs.
+ * Message identity is remapped by lineage; the canonical content position stays fixed.
+ */
+export interface ToolCallOccurrenceRef {
+  /**
+   * Identifies a committed canonical message block.
+   */
+  assistant_message_id: string;
+  /**
+   * The `ToolCall` block within that Assistant's content.
+   */
+  block_index: number;
+}
+/**
  * Inclusive Journal/transcript bounds a read was captured at, plus its semantic mutation epoch.
  */
 export interface ConversationReadCut {
@@ -5153,7 +5194,7 @@ export interface CapabilityView {
  */
 export interface RuntimeClientTool {
   /**
-   * The canonical tool identity.
+   * Identifies a tool definition in the capability set.
    */
   id: string;
   /**
@@ -6405,6 +6446,13 @@ export interface TraceMessageDetail {
   blocks: TraceContentBlock[];
   truncated: boolean;
 }
+/**
+ * A contiguous native history window ending at the selected execution.
+ */
+export interface TraceToolLocation {
+  record_id: string;
+  page: TracePage;
+}
 export interface ConversationWindow {
   cut: ConversationReadCut;
   page: RuntimeClientTranscriptPage;
@@ -7171,7 +7219,7 @@ export interface ToolMessageBlock {
    * Identifies a committed canonical message block.
    */
   id: string;
-  occurrence: ToolCallOccurrenceRef;
+  occurrence: ToolCallOccurrenceRef1;
   /**
    * Provider/model-issued opaque correlation string, scoped to a request/publication.
    * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
@@ -7184,9 +7232,10 @@ export interface ToolMessageBlock {
   result: ToolExecutionResult2;
 }
 /**
- * Exact native canonical owner of this result.
+ * Exact rustX canonical ownership of a Tool call, independent of provider IDs.
+ * Message identity is remapped by lineage; the canonical content position stays fixed.
  */
-export interface ToolCallOccurrenceRef {
+export interface ToolCallOccurrenceRef1 {
   /**
    * Identifies a committed canonical message block.
    */

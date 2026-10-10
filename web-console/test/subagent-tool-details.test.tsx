@@ -1,6 +1,7 @@
-import { cleanup, fireEvent, render } from '@testing-library/react';
-import { afterEach, expect, it } from 'vitest';
-import type { ForegroundToolExecution } from '../../protocol/app-server/v43';
+import { ToolInspectionContext } from '../src/app/agent/tool-inspection';
+import { cleanup, fireEvent, render, waitFor } from '@testing-library/react';
+import { afterEach, expect, it, vi } from 'vitest';
+import type { ForegroundToolExecution } from '../../protocol/app-server/v44';
 import { subagentToolDetails } from '../src/app/agent/subagent-tool-details';
 import { DomainActivity } from '../src/app/agent/DomainActivity';
 afterEach(cleanup);
@@ -29,17 +30,23 @@ it('message acceptance is a delivery receipt and incomplete arguments invent no 
   const tool = call('subagent', {}, {}); tool.state = { type: 'assembled', arguments: '{' };
   expect(subagentToolDetails(tool)).toEqual({ target: undefined, task: undefined, items: [] });
 });
-it('expanded list has human details and exposes raw JSON only on explicit inspection', () => {
+it('expanded list keeps human details and delegates Inspect to the native occurrence owner', async () => {
   const tool = call('list_agents', {}, { returned: 1, matched: 1, truncated: false, agents: [{ agent_id: 'a', agent: 'explore', title: 'Research', state: 'active' }] });
-  const ui = render(<DomainActivity tool={tool}/>);
+  const inspect = vi.fn(async () => {});
+  const ui = render(<ToolInspectionContext value={inspect}><DomainActivity tool={tool}/></ToolInspectionContext>);
   fireEvent.click(ui.getByRole('button', { name: /Agents/ }));
   expect(ui.getByText('Research')).toBeTruthy();
   expect(ui.getByText('Running')).toBeTruthy();
+  fireEvent.click(ui.getByRole('button', { name: 'Inspect' }));
+  expect(inspect).toHaveBeenCalledExactlyOnceWith({ occurrence: { assistant_message_id: 'message', block_index: 0 }, call_id: 'call', tool_id: 'tool-list_agents' });
+  await waitFor(() => expect(ui.getByRole('button', { name: 'Inspect' }).getAttribute('aria-busy')).toBe('false'));
   expect(ui.container.querySelector('pre')).toBeNull();
-  fireEvent.click(ui.getByRole('button', { name: 'View' }));
-  expect(ui.container.querySelector('pre')?.textContent).toContain('"agents"');
-  fireEvent.click(ui.getByRole('button', { name: 'View' }));
-  expect(ui.container.querySelector('pre')).toBeNull();
+});
+it('a standalone result without native navigation authority does not offer a misleading Inspect action', () => {
+  const ui = render(<DomainActivity tool={call('list_agents', {}, { returned: 0, agents: [] })}/>);
+  fireEvent.click(ui.getByRole('button', { name: /Agents/ }));
+  expect(ui.queryByRole('button', { name: 'Inspect' })).toBeNull();
+  expect(ui.queryByRole('button', { name: 'View' })).toBeNull();
 });
 it('empty list is shown explicitly', () => {
   const ui = render(<DomainActivity tool={call('list_agents', {}, { returned: 0, matched: 0, truncated: false, agents: [] })}/>);

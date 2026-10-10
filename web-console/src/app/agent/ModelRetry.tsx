@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted ModelRetryItem; see PROVENANCE.md. */
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import type { RuntimeClientSnapshot, RuntimeClientTranscriptEntry } from '../../../../protocol/app-server/v43';
+import type { RuntimeClientSnapshot, RuntimeClientTranscriptEntry } from '../../../../protocol/app-server/v44';
 import type { AppServerClient } from '../../client/app-server';
 import { useClientSelector } from '../../client/selectors';
 import { modelRetryPlacements, type ModelRetryNotice } from '../../bindings/model-retry';

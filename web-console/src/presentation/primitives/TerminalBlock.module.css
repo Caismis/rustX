@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness; see PROVENANCE.md. */
 .block {
-  --dsl-terminal-radius: 12px;
+  --dsl-terminal-radius: var(--dsw-radius-lg);
   --dsl-terminal-line-height: 22px;
   /* Rebindable by consumers (CodeBlock's --dsl-code-block-content-font
      pattern): a surface wanting the smaller code size rebinds this together
@@ -111,15 +111,14 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
-/* `pre`, not `nowrap`: the prompt row renders the command verbatim, and
-   `nowrap` collapses the repeated spaces, tabs, and alignment of an indented
-   continuation. Both hold the single row and the ellipsis. */
+/* Preserve command indentation; hosts may opt into wrapping as in Harness. */
 .command {
   min-width: 0;
   color: var(--dsw-alias-label-primary);
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: pre;
+  white-space: var(--dsl-terminal-command-whitespace, pre);
+  overflow-wrap: anywhere;
 }
 
 /* Capped to the prompt's line height (Pill's own 24px height would exceed a
@@ -177,10 +176,11 @@
   margin: 6px;
 }
 
-/* No wrapping, no word-break: alignment is the payload of terminal output. */
+/* Terminal alignment is retained unless a host explicitly opts into wrapping. */
 .line {
   min-height: var(--dsl-terminal-line-height);
-  white-space: pre;
+  white-space: var(--dsl-terminal-line-whitespace, pre);
+  overflow-wrap: anywhere;
 }
 
 .expand {

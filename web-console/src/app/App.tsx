@@ -22,7 +22,7 @@ import { WorkspaceSessionNavigation } from '../workspaces/navigation';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useActorRef } from '@xstate/react';
 import type { AppServerClient } from '../client/app-server';
-import type { CompletedResponseView, SourceTarget, UserInputBlock } from '../../../protocol/app-server/v43';
+import type { CompletedResponseView, SourceTarget, UserInputBlock } from '../../../protocol/app-server/v44';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
 import { CommandSession, type ResponseAction } from './commands/native';
 import { available, commands } from './commands/registry';
@@ -277,7 +277,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     if (owner.kind === 'user') openSettings(userSettingsTarget);
     else navigationActor.send({ type: 'OPEN.OWNER', directory: owner.directory });
   };
-  return <SubagentScope client={client} sessionId={view?.id} openAside={agent => { previewOwner.showWorkbench(); fileWorkbench.current?.openAgent(agent.agent_id, agent.title); }}><PreviewContext value={{ openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><AppFrame sidebar={geometry => <SidebarRoot {...geometry} startSession={() => createInWorkspace(workspace)}
+  return <SubagentScope onMode={setConversationMode} client={client} sessionId={view?.id} openAside={agent => { previewOwner.showWorkbench(); fileWorkbench.current?.openAgent(agent.agent_id, agent.title); }}><PreviewContext value={{ openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><AppFrame sidebar={geometry => <SidebarRoot {...geometry} startSession={() => createInWorkspace(workspace)}
     panels={[]}
     browser={(wide, expand) => <WorkspaceNavigation associations={associations} key={state.authorityRevision ?? 0} wide={wide} expand={expand} host={workspaceHost} client={client} state={state} endpoint={endpoint} navigation={navigation}
       metadataChanged={removed => { if (removed) setCenter(value => value.kind === 'new-conversation' && value.workspaceId === removed ? { kind: 'new-conversation' } : value); }}
@@ -338,7 +338,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
       <section className={`conversation-panel ${agentCss.body}`} id="conversation-view" role={view && displayPreferences.codingView ? 'tabpanel' : undefined} aria-labelledby={view && displayPreferences.codingView ? `view-tab-${conversationMode}` : undefined} tabIndex={0}>
       <ConversationWidthControls active={!!view && conversationMode === 'chat'}/>
       <ArtifactContext.Provider value={artifacts}><SubagentSurface mode={conversationMode}><div className={agentCss.scrollBody} data-conversation-scroll>
-      <ConversationLive client={client} sessionId={view?.id} mode={conversationMode} disabled={commandOpen || transitioning === view?.id} onHistorical={transitionResponse}/>
+      <ConversationLive onMode={setConversationMode} client={client} sessionId={view?.id} mode={conversationMode} disabled={commandOpen || transitioning === view?.id} onHistorical={transitionResponse}/>
       <ConversationSeat client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} sessionId={view?.id}
         initialWorkspace={workspace ?? (center.kind === 'new-conversation' ? center.workspaceId : undefined)}
         workspacePicked={id => { if (newConversationCurrent()) setCenter({ kind: 'new-conversation', workspaceId: id }); }}

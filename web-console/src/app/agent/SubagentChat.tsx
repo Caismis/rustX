@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import type { RuntimeClientAgent, RuntimeClientSnapshot } from '../../../../protocol/app-server/v43';
+import type { RuntimeClientAgent, RuntimeClientSnapshot } from '../../../../protocol/app-server/v44';
 import type { AppServerClient } from '../../client/app-server';
 import type { Observation } from '../../client/session-lifecycle/port';
 import { AgentReading, type AgentReadingState } from '../../client/agent-reading';
@@ -30,7 +30,7 @@ export function SubagentChat({ client, sessionId, admission, agent, snapshot, vi
   const currentId = useMemo(() => snapshot?.attempt && snapshot.attempt.phase.type !== 'settled' ? {
     conversation_id: snapshot.conversation_id, attempt_id: snapshot.attempt.attempt_id,
   } : undefined, [snapshot?.conversation_id, snapshot?.attempt?.attempt_id, snapshot?.attempt?.phase.type]);
-  return <ChatViewport ref={viewport} latestLabel={tx('agent:agent-transcript.return-to-latest')}
+  return <ChatViewport chromeVisible={visible} ref={viewport} latestLabel={tx('agent:agent-transcript.return-to-latest')}
     historical={!!reading.history?.window} onLatest={() => reader?.returnToLatest()} onActiveTurn={setActive}
     latestTurn={currentId && turnAnchor(currentId)}
     overlay={reader && <TurnNavigation page={reading.outline} currentId={currentId} location={currentTurnLocation(snapshot)}

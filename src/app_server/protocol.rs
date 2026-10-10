@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v43 envelope and method vocabulary.
+//! Rust authority for the App Server v44 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 43;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 44;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -176,6 +176,11 @@ pub enum Method {
         #[schemars(length(max = 256))]
         record_id: String,
     },
+    #[serde(rename = "session/traceLocateTool")]
+    TraceLocateTool {
+        target: AttachmentTarget,
+        locator: crate::runtime_client::trace::TraceToolLocator,
+    },
     #[serde(rename = "session/transcript")]
     Transcript {
         target: AttachmentTarget,
@@ -281,6 +286,12 @@ pub enum Method {
         target: AttachmentTarget,
         agent_id: crate::runtime::identity::AgentId,
         record_id: String,
+    },
+    #[serde(rename = "agent/traceLocateTool")]
+    AgentTraceLocateTool {
+        target: AttachmentTarget,
+        agent_id: crate::runtime::identity::AgentId,
+        locator: crate::runtime_client::trace::TraceToolLocator,
     },
     /// Read the exact child's bounded canonical history; never accepts a child path.
     #[serde(rename = "agent/transcript")]
@@ -660,6 +671,9 @@ pub enum MethodResult {
         /// because inspection detail is by far the largest result: keeping it
         /// off the shared enum keeps every other response cheap to move.
         detail: Option<Box<crate::runtime_client::trace::TraceDetail>>,
+    },
+    TraceToolLocation {
+        location: Option<crate::runtime_client::trace::TraceToolLocation>,
     },
     SessionHistory {
         conversation_id: ConversationId,

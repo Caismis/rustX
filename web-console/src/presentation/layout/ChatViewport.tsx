@@ -9,6 +9,8 @@ interface ViewportProps {
   children: ReactNode;
   overlay?: ReactNode;
   latestLabel?: string;
+  /** Resident hidden chats must not portal floating chrome into a visible sibling. */
+  chromeVisible?: boolean;
   historical?: boolean;
   onLatest?: () => void;
   latestTurn?: string;
@@ -213,7 +215,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     this.frame = undefined;
   }
   render() {
-    const chrome = <>{this.props.overlay}{this.props.latestLabel && (this.state.detached || this.props.historical) && <button type="button" data-chat-latest className="chat-return-latest" aria-label={this.props.latestLabel} title={this.props.latestLabel} onClick={this.returnToBottom}><IconChevronDownOutline14 size={16}/></button>}</>;
+    const chrome = this.props.chromeVisible === false ? null : <>{this.props.overlay}{this.props.latestLabel && (this.state.detached || this.props.historical) && <button type="button" data-chat-latest className="chat-return-latest" aria-label={this.props.latestLabel} title={this.props.latestLabel} onClick={this.returnToBottom}><IconChevronDownOutline14 size={16}/></button>}</>;
     return <div className="chat-reading-surface">
       <div ref={this.viewport} className="conversation-scroll" style={{ overflowAnchor: 'none' }}>
         <div ref={this.content}>{this.props.children}</div>

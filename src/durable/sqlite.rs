@@ -5302,6 +5302,7 @@ fn presentation_statements(
                 FactScope::Subagent(value) => ("subagent_id", value),
                 FactScope::Workflow(value) => ("run_id", value),
                 FactScope::Interaction(value) => ("interaction_id", value),
+                FactScope::Message(value) => ("message_id", value),
                 FactScope::All
                 | FactScope::Step(..)
                 | FactScope::Attempt(..)
@@ -5312,7 +5313,7 @@ fn presentation_statements(
         }
     };
     let index = match query.scope {
-        FactScope::All => "events_kind_idx",
+        FactScope::All | FactScope::Message(..) => "events_kind_idx",
         FactScope::Attempt(..) => "events_attempt_kind_idx",
         FactScope::Step(..) => "events_step_kind_idx",
         FactScope::Request(..) => "events_request_id_kind_idx",
@@ -15002,6 +15003,7 @@ mod tests {
                 "events_step_kind_idx",
             ),
             (FactScope::Request("r".into()), "events_request_id_kind_idx"),
+            (FactScope::Message("m".into()), "events_kind_idx"),
             (
                 FactScope::ToolCall {
                     call_id: "c".into(),

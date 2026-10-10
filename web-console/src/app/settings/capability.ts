@@ -1,5 +1,5 @@
 import type { Translate } from '../../locale/translation';
-import type { ResourceFamily } from '../../../../protocol/app-server/v43';
+import type { ResourceFamily } from '../../../../protocol/app-server/v44';
 import type { ExtensionFamily } from './projection';
 
 /** What the native App Server actually lets a client do to one resource family.

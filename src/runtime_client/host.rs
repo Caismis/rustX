@@ -1149,6 +1149,47 @@ impl ClientInner {
         Ok(RuntimeClientResult::TracePage { page })
     }
 
+    /// Locate an exact Tool occurrence through the complete native history.
+    pub(crate) async fn trace_locate_tool(
+        self: &Arc<Self>,
+        locator: super::trace::TraceToolLocator,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        let owner = Arc::clone(self);
+        // The complete-history scan cannot occupy an async transport worker.
+        tokio::task::spawn_blocking(move || {
+            let (current, _, through) = owner
+                .state
+                .lock()
+                .expect("runtime client host lock poisoned")
+                .projection
+                .snapshot_cut()?;
+            let projection = if owner.runtime.is_some() {
+                super::trace::TraceProjection::through(owner.store.as_ref(), through)
+            } else {
+                super::trace::TraceProjection::new(owner.store.as_ref()).map_err(|error| {
+                    RuntimeClientError::RuntimeFailure {
+                        message: error.to_string(),
+                    }
+                })?
+            };
+            let mut location = projection.locate_tool(&locator).map_err(|error| {
+                RuntimeClientError::InvalidRequest {
+                    message: error.to_string(),
+                }
+            })?;
+            if owner.runtime.is_some()
+                && let Some(location) = &mut location
+            {
+                super::trace::repair_records(&mut location.page.records, &current);
+            }
+            Ok(RuntimeClientResult::TraceToolLocation { location })
+        })
+        .await
+        .map_err(|_| RuntimeClientError::RuntimeFailure {
+            message: "Trace tool locator failed".into(),
+        })?
+    }
+
     /// Reads the heavy detail of one exact Trace record identity.
     ///
     /// Detail is a pure historical read at the same kind of cut a page uses:

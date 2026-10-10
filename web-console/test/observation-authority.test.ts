@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import type { Request, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v43';
+import type { Request, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v44';
 import { Server, snapshot } from './fixture';
 import { traceRecord, requestDetail } from './trace-fixture';
 const servers: Server[] = [];

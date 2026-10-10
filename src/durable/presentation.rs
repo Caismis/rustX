@@ -13,6 +13,8 @@ pub enum FactScope {
         attempt: Option<AttemptId>,
         turn: Option<TurnId>,
     },
+    /// Canonical commit correlation; kind and sequence own bounded native ordering.
+    Message(String),
     Execution(String),
     Subagent(String),
     Workflow(String),
