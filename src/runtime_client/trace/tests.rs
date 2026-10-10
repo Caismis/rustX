@@ -4219,6 +4219,8 @@ fn adopted_agent_messages_expose_sender_without_mislabeling_human_or_mixed_batch
             agent_id: sender.clone(),
         }],
         vec![UserSource::Human],
+        vec![UserSource::Runtime],
+        vec![UserSource::Human; 12],
         vec![
             UserSource::Agent {
                 agent_id: sender.clone(),
@@ -4249,12 +4251,23 @@ fn adopted_agent_messages_expose_sender_without_mislabeling_human_or_mixed_batch
     let records: Vec<_> = page(&store)
         .records
         .into_iter()
-        .filter(|record| record.kind == TraceKind::User)
+        .filter(|record| matches!(record.kind, TraceKind::User | TraceKind::Context))
         .collect();
-    assert_eq!(records.len(), 3);
+    assert_eq!(records.len(), 5);
+    assert_eq!(
+        records.iter().map(|record| record.kind).collect::<Vec<_>>(),
+        vec![
+            TraceKind::Context,
+            TraceKind::User,
+            TraceKind::Context,
+            TraceKind::User,
+            TraceKind::Context
+        ]
+    );
     assert_eq!(records[0].agent_id.as_ref(), Some(&sender));
     assert!(records[1].agent_id.is_none());
     assert!(records[2].agent_id.is_none());
+    assert!(records[3].agent_id.is_none());
 }
 
 #[test]

@@ -1,0 +1,19 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned ToolDetails.module.css; see PROVENANCE.md. */
+.root { margin: 4px 0 4px 4px; border: .5px solid var(--dsw-alias-border-l1); border-radius: 12px; background: var(--dsw-alias-markdown-code-block); color: var(--dsw-alias-label-secondary); font: var(--dsw-font-xs-13); overflow: hidden; }
+.caption { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 14px 6px; color: var(--dsw-alias-label-caption); font-size: 12px; }
+.caption button { display: inline-flex; align-items: center; gap: 4px; border: .5px solid var(--dsw-alias-border-l1); border-radius: 999px; padding: 2px 8px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.list { list-style: none; padding: 0; margin: 0; max-height: 320px; overflow-y: auto; }
+.item { padding: 10px 14px; }
+.item + .item { border-top: .5px solid var(--dsw-alias-border-l2); }
+.heading { display: flex; align-items: baseline; gap: 8px; }
+.text { flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.status { margin-inline-start: auto; display: inline-flex; align-items: center; gap: 4px; flex: none; font-size: 12px; white-space: nowrap; }
+.status[data-tone='ongoing'] { color: var(--dsw-alias-state-business-primary); }
+.status[data-tone='done'] { color: var(--dsw-alias-state-success-primary); }
+.status[data-tone='warning'] { color: var(--dsw-alias-state-warn-primary); }
+.status[data-tone='error'] { color: var(--dsw-alias-state-error-primary); }
+.status::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.link { border: 0; padding: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; text-align: start; }
+.link:hover { text-decoration: underline; }
+.subtitle { margin-top: 6px; color: var(--dsw-alias-label-caption); overflow-wrap: anywhere; }
+.raw { padding: 10px 14px; margin: 0; max-height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }

@@ -5,7 +5,7 @@ import { Server, snapshot } from '../fixture';
 import { cfg3Source, cfg3Effective } from '../cfg3-data';
 import { traceRecord, traceTool, requestDetail, toolDetail } from '../trace-fixture';
 import { RpcFailure } from '../../src/client/app-server';
-import type { Request } from '../../../protocol/app-server/v39';
+import type { Request } from '../../../protocol/app-server/v40';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -58,6 +58,18 @@ if (new URL(location.href).searchParams.has('subagents')) {
   const saved = server.snapshots.get('A')!;
   saved.agents = ['Research sources', 'Verify findings', 'Write report'].map((agent, index) => ({ agent, agent_id: `child-${index}`, parent_agent_id: 'root', child_conversation_id: `child-conversation-${index}`, activation_id: `activation-${index}`, current_activation: index === 0 ? 'activation-0' : null, state: index === 0 ? 'active' : 'inactive', activation_state: index === 0 ? 'running' : 'succeeded', definition_digest: 'definition', profile_digest: 'profile', started_at: '2026-10-08T08:00:00Z', observation: { attempt_id: null, revision: '1', activity: { type: 'awaiting_activity' }, counters: { model_requests: 3, model_retries: 0, tool_executions: 2 } }, workspace: { logical_workspace: '/workspace/A', isolation: { type: 'shared' }, resource_state: 'none' } }));
   saved.transcript.entries!.push({ cursor: '21', item: { type: 'message', message: { role: 'user', id: 'agent-report', source: { agent: { agent_id: 'child-1' } }, content: [{ type: 'text', text: 'Verified report: the original sources agree.\n\n**Evidence**\n\n- Source one\n- Source two' }] } } });
+  if (new URL(location.href).searchParams.has('subagent-details')) {
+    const task = 'Inspect the original sources, verify the claims and return a concise report with evidence.';
+    const invocations = [
+      { name: 'subagent', arguments: { agent: 'Verify findings', task }, result: { agent_id: 'child-1', activation_id: 'activation-1', state: 'active', agent: 'Verify findings' } },
+      { name: 'list_agents', arguments: {}, result: { returned: saved.agents.length, matched: saved.agents.length, truncated: false, limit: 64, agents: saved.agents.map(agent => ({ agent_id: agent.agent_id, agent: agent.agent, state: agent.state })) } },
+      { name: 'wait_agent', arguments: { agent_id: 'child-1' }, result: { agent_id: 'child-1', activation_id: 'activation-1', outcome: 'succeeded' } },
+    ];
+    saved.transcript.entries!.push({ cursor: '22', item: { type: 'message', message: { role: 'assistant', id: 'delegation', content: [
+      { type: 'text', text: 'I will delegate the source verification and review the evidence when it returns.' },
+      ...invocations.map((invocation, index) => ({ type: 'tool_call' as const, id: `agent-call-${index}`, tool_id: `tool-${invocation.name}`, name: invocation.name, arguments: invocation.arguments })),
+    ] } }, tool_calls: invocations.map((invocation, index) => ({ message_id: 'delegation', block_index: index + 1, call_id: `agent-call-${index}`, tool_id: `tool-${invocation.name}`, name: invocation.name, state: { type: 'settled', arguments: JSON.stringify(invocation.arguments), result: { status: { type: 'success' }, content: [{ type: 'json', value: invocation.result }], duration_ms: 100 } } })) });
+  }
   server.handlers.set('agent/statistics', () => ({ type: 'agent_statistics', metrics: agentMetrics }));
   if (new URL(location.href).searchParams.has('nested-subagents')) saved.agents.push({ ...saved.agents[1]!, agent: 'Verify original documents', agent_id: 'grandchild', parent_agent_id: 'child-1', child_conversation_id: 'grandchild-conversation' });
   server.handlers.set('agent/sendMessage', request => {

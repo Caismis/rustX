@@ -9095,6 +9095,11 @@
           "description": "Canonical inbound accepted as a turn this conversation owes an answer for.",
           "type": "string",
           "const": "user"
+        },
+        {
+          "description": "Adopted input from runtime, Agent or mixed sources; never a human row.",
+          "type": "string",
+          "const": "context"
         }
       ]
     },

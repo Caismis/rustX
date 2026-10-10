@@ -1,6 +1,6 @@
 import { message } from '../../locale/translation';
 import { useTranslation, useNotice } from '../../locale/react';
-import type { ToolExecutionResult } from '../../../../protocol/app-server/v39';
+import type { ToolExecutionResult } from '../../../../protocol/app-server/v40';
 import { createContext, useContext, useEffect, useState } from 'react';
 import type { ArtifactResources } from '../../client/artifacts';
 import { PreviewContext } from './ArtifactPreview';
@@ -44,7 +44,7 @@ export function ToolDeliveries({ messageId, result }: { messageId: string; resul
     name: delivery.file.name, image: delivery.file.mime_type.startsWith('image/'), mimeType: delivery.file.mime_type });
   return <PresentedFiles files={deliveries.map(delivery => ({ key: delivery.key, name: delivery.file.name, path: delivery.file.path, description: delivery.file.description }))}
     card={view => { const delivery = deliveries.find(item => item.key === view.key)!;
-      return <PresentedFileCard file={view} onPreview={() => preview?.openPreview(intent(delivery))} actions={preview &&
+      return <PresentedFileCard file={view} onPreview={preview ? () => preview.openPreview(intent(delivery)) : undefined} actions={preview &&
         <button type="button" className={cardCss.action} aria-label={`${tx('artifacts:attachment-card.download')} ${delivery.file.name}`}
           title={tx('artifacts:attachment-card.download')} onClick={() => preview.download(intent(delivery))}><IconDownloadOutline16 size={14}/></button>}/>; }}/>;
 }

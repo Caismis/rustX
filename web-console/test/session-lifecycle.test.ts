@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import type { AttachmentTarget, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v39';
+import type { AttachmentTarget, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v40';
 import { SessionLifecycles } from '../src/client/session-lifecycle/system';
 import { controlCurrent, type LifecycleContext } from '../src/client/session-lifecycle/machine';
 import type { Admission, Attached, FailureKind, SessionLifecyclePort } from '../src/client/session-lifecycle/port';

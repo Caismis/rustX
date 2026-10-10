@@ -2117,6 +2117,37 @@ impl ConversationStore for SqliteConversationStore {
         load_head(&transaction)
     }
 
+    fn messages_are_human_inputs(&self, ids: &[MessageId]) -> Result<bool, ConversationStoreError> {
+        let connection = self.lock()?;
+        let mut query = connection
+            .prepare_cached(
+                "SELECT json_extract(message_json, '$.id'),
+                    json_extract(message_json, '$.role') = 'user'
+                    AND json_extract(message_json, '$.source') = 'human'
+                    AND json_extract(message_json, '$.kind') = 'message'
+             FROM message_ledger WHERE message_id = ?1",
+            )
+            .map_err(|error| storage(format!("Ledger input authorship: {error}")))?;
+        for id in ids {
+            let (stored_id, human): (String, bool) = query
+                .query_row([id.as_str()], |row| Ok((row.get(0)?, row.get(1)?)))
+                .optional()
+                .map_err(|error| storage(format!("Ledger input authorship: {error}")))?
+                .ok_or_else(|| {
+                    ConversationStoreError::InvalidReference(format!("message {id} is unavailable"))
+                })?;
+            if stored_id != id.as_str() {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "Ledger row for {id} contains a different message identity"
+                )));
+            }
+            if !human {
+                return Ok(false);
+            }
+        }
+        Ok(!ids.is_empty())
+    }
+
     fn load_messages(
         &self,
         ids: &[MessageId],

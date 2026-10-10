@@ -47,9 +47,9 @@ test('native interrupt and wait capture one activation; the same Agent resumes w
     await expect(agent).toHaveAttribute('data-agent-state', 'active');
     const agentId = await agent.getAttribute('data-agent-id');
     const first = await agent.getAttribute('data-activation-id');
-    await agent.getByRole('button', { name: 'Transcript', exact: true }).click();
+    await page.getByRole('button', { name: 'Transcript', exact: true }).click();
     await expect(agent.getByText('WEB_AGENT_CHILD: review the workspace', { exact: true })).toBeVisible();
-    await agent.getByRole('button', { name: 'Wait for activation', exact: true }).click();
+    await page.getByRole('button', { name: 'Wait for activation', exact: true }).click();
     await agent.getByRole('button', { name: 'Interrupt', exact: true }).click();
     await expect(agent).toHaveAttribute('data-agent-state', 'inactive');
     await expect(agent.getByRole('status').filter({ hasText: /^cancelled$/ })).toBeVisible();
@@ -64,13 +64,13 @@ test('native interrupt and wait capture one activation; the same Agent resumes w
     await agent.getByRole('button', { name: 'Send message', exact: true }).click();
     await fixture.gate('agent-resumed');
     await resumeAcknowledged;
-    await agent.getByRole('button', { name: 'Transcript', exact: true }).click();
+    await page.getByRole('button', { name: 'Transcript', exact: true }).click();
     await expect(agent.getByText('WEB_AGENT_RESUME: continue the same review', { exact: true })).toBeVisible();
     await expect(agent).toHaveAttribute('data-agent-id', agentId!);
     await expect(agent).toHaveAttribute('data-agent-state', 'active');
     const second = await agent.getAttribute('data-activation-id');
     expect(second).not.toBe(first);
-    await agent.getByRole('button', { name: 'Wait for activation', exact: true }).click();
+    await page.getByRole('button', { name: 'Wait for activation', exact: true }).click();
     await fixture.release('agent-resumed');
     await expect(agent.getByRole('status').filter({ hasText: /^succeeded$/ })).toBeVisible();
     await expect(agent.getByText('Resumed canonical child report.', { exact: true })).toBeVisible();

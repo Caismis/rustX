@@ -47,7 +47,7 @@ impl TraceProjection<'_> {
             id,
             position,
             location,
-            kind,
+            mut kind,
             state,
             timing,
             mut preview,
@@ -104,13 +104,13 @@ impl TraceProjection<'_> {
                 let messages = self
                     .store
                     .load_messages(&message_ids[..message_ids.len().min(ADOPTED_MESSAGE_LIMIT)])?;
+                // Input role is model-facing; the native authorship decides the ledger role.
+                kind = adopted_kind(self.store, message_ids)?;
                 let (sender, overflow) = adopted_sender(&messages, message_ids.len());
                 agent_id = sender;
                 truncated |= overflow;
-                for message in messages {
-                    if preview.is_none() {
-                        preview = message_preview(&message);
-                    }
+                if preview.is_none() {
+                    preview = messages.iter().find_map(message_preview);
                 }
             }
             E::CompactionStarted => {
@@ -386,6 +386,18 @@ pub(super) fn bound_record(record: &mut TraceRecord) {
         record.tool = None;
         record.attachments.clear();
     }
+}
+
+/// Authorship applies to the complete batch, independent of bounded previews.
+fn adopted_kind(
+    store: &dyn crate::durable::ConversationStore,
+    ids: &[crate::runtime::identity::MessageId],
+) -> Result<super::types::TraceKind, ConversationStoreError> {
+    Ok(if store.messages_are_human_inputs(ids)? {
+        super::types::TraceKind::User
+    } else {
+        super::types::TraceKind::Context
+    })
 }
 
 /// A sender is evidence only when the complete adopted batch agrees.

@@ -6,7 +6,7 @@ import { ArtifactContext } from '../../src/app/components/Artifact';
 import { ArtifactResources } from '../../src/client/artifacts';
 import { AgentCard } from '../../src/app/components/ActivityCards';
 import { RuntimeFacts } from '../../src/app/agent/Activity';
-import type { RuntimeClientAgent } from '../../../protocol/app-server/v39';
+import type { RuntimeClientAgent } from '../../../protocol/app-server/v40';
 import { Server, snapshot } from '../fixture';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -41,6 +41,6 @@ await server.attached('A');
 const artifacts = new ArtifactResources(server.client, 'A');
 function Fixture() {
   const state = useSyncExternalStore(server.client.subscribe, server.client.getSnapshot);
-  return <div style={{ maxWidth: 760, margin: '24px auto', padding: 16 }}><h1>Jobs and Agents</h1><ArtifactContext.Provider value={artifacts}><Tool tool={{ message_id: "image-message", block_index: 0, call_id: "read-image", tool_id: "tool-read-image", name: "read_image", state: { type: "settled", arguments: '{"path":"sample.png"}', result: { status: { type: "success" }, duration_ms: 1, content: [{ type: "image", artifact_id: "artifact_1" }] } } }}/></ArtifactContext.Provider><AgentCard agent={state.views.A.snapshot!.agents![0]} client={server.client} sessionId="A"/><RuntimeFacts snapshot={state.views.A.snapshot!} client={server.client} sessionId="A"/></div>;
+  return <div style={{ maxWidth: 760, margin: '24px auto', padding: 16 }}><h1>Jobs and Agents</h1><div id="subagent-header-actions"/><ArtifactContext.Provider value={artifacts}><Tool tool={{ message_id: "image-message", block_index: 0, call_id: "read-image", tool_id: "tool-read-image", name: "read_image", state: { type: "settled", arguments: '{"path":"sample.png"}', result: { status: { type: "success" }, duration_ms: 1, content: [{ type: "image", artifact_id: "artifact_1" }] } } }}/></ArtifactContext.Provider><AgentCard agent={state.views.A.snapshot!.agents![0]} client={server.client} sessionId="A"/><RuntimeFacts snapshot={state.views.A.snapshot!} client={server.client} sessionId="A"/></div>;
 }
 createRoot(document.getElementById('root')!).render(<Fixture/>);

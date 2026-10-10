@@ -2,7 +2,7 @@ import type { Translate } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness TrajectoryTable.tsx semantic cells; see PROVENANCE.md. */
 import type { ReactNode } from 'react';
-import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v39';
+import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v40';
 import { IconSettingsOutline16, IconSparkle16, IconUserOutline16 } from '../../presentation/primitives/icons';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
 import type { InspectableDisplayItem } from './layout';
@@ -13,7 +13,7 @@ import css from './Trajectory.module.css';
 export type CellKind = TraceKind | 'system' | 'context';
 
 export function cellKind(item: InspectableDisplayItem): CellKind {
-  return item.type === 'SystemPromptCell' ? 'system' : item.type === 'ContextRow' || item.record.kind === 'user' && !!item.record.agent_id ? 'context' : item.record.kind;
+  return item.type === 'SystemPromptCell' ? 'system' : item.type === 'ContextRow' ? 'context' : item.record.kind;
 }
 
 /** Harness role labels; a compaction record is shown as its Compacted result. */

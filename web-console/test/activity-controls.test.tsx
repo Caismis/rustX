@@ -2,8 +2,8 @@ import { localeController } from '../src/locale/controller';
 import { translator } from '../src/locale/translation';
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
-import { afterEach, expect, it } from 'vitest';
-import type { RuntimeClientAgent, RuntimeClientJob } from '../../protocol/app-server/v39';
+import { afterEach, beforeEach, expect, it } from 'vitest';
+import type { RuntimeClientAgent, RuntimeClientJob } from '../../protocol/app-server/v40';
 import { RpcFailure } from '../src/client/app-server';
 import { RuntimeFacts as OtherActivity } from '../src/app/agent/Activity';
 import { AgentCard } from '../src/app/components/ActivityCards';
@@ -11,7 +11,8 @@ import type { ComponentProps } from 'react';
 function RuntimeFacts(props: ComponentProps<typeof OtherActivity>) { return <><OtherActivity {...props}/>{props.snapshot.agents?.map(agent => <AgentCard key={agent.agent_id} agent={agent} client={props.client} sessionId={props.sessionId}/>)}</>; }
 import { Server, snapshot } from './fixture';
 import { Tool } from '../src/app/agent/Tool';
-afterEach(cleanup);
+beforeEach(() => { const host = document.createElement('div'); host.id = 'subagent-header-actions'; document.body.append(host); });
+afterEach(() => { cleanup(); document.getElementById('subagent-header-actions')?.remove(); });
 const servers: Server[] = [];
 afterEach(() => { for (const server of servers.splice(0)) server.client.disconnect(); });
 export const agentFixture = (): RuntimeClientAgent => ({

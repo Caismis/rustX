@@ -1740,6 +1740,10 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// materializing historical revisions.
     fn load_head(&self) -> Result<DurableConversationHead, ConversationStoreError>;
 
+    /// Prove that every exact Ledger identity is an ordinary human input.
+    /// Reads authorship metadata only; content is not part of this projection.
+    fn messages_are_human_inputs(&self, ids: &[MessageId]) -> Result<bool, ConversationStoreError>;
+
     /// Resolves the requested `MessageIds` through keyed Ledger reads.
     fn load_messages(&self, ids: &[MessageId])
     -> Result<Vec<MessageBlock>, ConversationStoreError>;

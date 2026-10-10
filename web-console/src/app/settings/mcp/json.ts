@@ -1,4 +1,4 @@
-import type { McpWrite } from '../../../../../protocol/app-server/v39';
+import type { McpWrite } from '../../../../../protocol/app-server/v40';
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 /** Import only native-supported fields. Never silently drop foreign options. */
 export function parseMcpJson(text: string): Record<string, McpWrite> {

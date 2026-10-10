@@ -7,7 +7,7 @@ import { RuntimeFacts } from '../src/app/agent/Activity';
 import { agentDuration, SubagentScope, SubagentHeader, SubagentSurface } from '../src/app/agent/Subagents';
 import { cellKind } from '../src/app/trajectory/TrajectoryCell';
 import { Server, snapshot } from './fixture';
-import type { RuntimeClientAgent, MessageBlock } from '../../protocol/app-server/v39';
+import type { RuntimeClientAgent, MessageBlock } from '../../protocol/app-server/v40';
 const servers: Server[] = [];
 afterEach(() => { cleanup(); for (const server of servers.splice(0)) server.client.disconnect(); });
 const agent: RuntimeClientAgent = { agent_id: 'child', agent: 'Research', parent_agent_id: 'root', child_conversation_id: 'child-conversation', activation_id: 'activation', state: 'inactive', activation_state: 'succeeded', definition_digest: 'd', profile_digest: 'p', started_at: '2026-10-08T00:00:00Z', observation: { attempt_id: null, revision: '1', activity: { type: 'awaiting_activity' }, counters: { model_requests: 1, model_retries: 0, tool_executions: 0 } }, workspace: { logical_workspace: '/workspace', isolation: { type: 'shared' }, resource_state: 'none' } };
@@ -40,7 +40,7 @@ it('agents move out of the message footer and open through the header without lo
   expect((ui.getByRole('textbox', { name: 'Root draft' }) as HTMLInputElement).value).toBe('keep me');
 });
 it('trajectory classifies native agent inbound records as context', () => {
-  expect(cellKind({ type: 'RecordRow', record: { kind: 'user', agent_id: 'child' } } as Parameters<typeof cellKind>[0])).toBe('context');
+  expect(cellKind({ type: 'RecordRow', record: { kind: 'context', agent_id: 'child' } } as Parameters<typeof cellKind>[0])).toBe('context');
 });
 
 it('native active clocks freeze when inactive and exclude idle time', () => {

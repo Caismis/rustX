@@ -260,7 +260,8 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// publishes it. Version 57 clients are rejected without a compatibility path.
 /// Version 59 refreshes retained Trace records with their resolved native location.
 /// Version 61 adds child-owned Trace reads and exact current Attempt activity.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 61;
+/// Version 62 distinguishes native non-human and mixed Trace input.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 62;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1098,7 +1099,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 61);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 62);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

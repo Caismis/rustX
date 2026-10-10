@@ -30,10 +30,9 @@
 .metrics > :first-child { line-height: 17px; }
 .ancestor { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
 .childSurface[hidden] { display: none; }
-.composerStatus { display: inline-flex; align-items: center; gap: 6px; min-width: 0; padding: 0 6px; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; }
-.composerStatus > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 @media (prefers-reduced-motion: reduce) { .trigger > svg { transition: none; } }
 
 .interrupt { display: grid; place-items: center; flex: none; width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--dsw-radius-sm); background: transparent; color: var(--dsw-alias-label-tertiary); cursor: pointer; }
 .interrupt:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
 .interrupt:disabled { opacity: 0.4; cursor: default; }
+.toolbar { justify-content: flex-end; }

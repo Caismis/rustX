@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import type { SessionModelConfig } from '../../../protocol/app-server/v39';
+import type { SessionModelConfig } from '../../../protocol/app-server/v40';
 import { type AppServerClient, sameTarget } from '../client/app-server';
 
 const KEY = 'rustx-new-session-model-v1';

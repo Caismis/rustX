@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import { DisclosureRow } from '../../presentation/primitives/DisclosureRow';
-import { IconAgentPresetOutline16 } from '../../presentation/primitives/icons';
-import { Button } from '../../presentation/primitives/Button';
+import { IconAgentPresetOutline16, IconInspectOutline12 } from '../../presentation/primitives/icons';
+import { subagentToolDetails } from './subagent-tool-details';
+import detailsCss from './AgentToolDetails.module.css';
 import { useSubagents } from './subagent-context';
 import css from '../../presentation/agent/Tool.module.css';
-import own from './InboundMessage.module.css';
 import { useTranslation } from '../../locale/react';
 import type { TranslationKey } from '../../locale/translation';
-import type { ForegroundToolExecution } from '../../../../protocol/app-server/v39';
+import type { ForegroundToolExecution } from '../../../../protocol/app-server/v40';
 import { ToolCard } from '../../presentation/agent/ToolCard';
 import { toolCard } from '../../bindings/tools';
 
@@ -28,37 +28,41 @@ export function domainActivity(tool: ForegroundToolExecution) {
   return names[tool.tool_id];
 }
 export function DomainActivity({ tool }: { tool: ForegroundToolExecution }) {
-  const tx = useTranslation(), [expanded, setExpanded] = useState(false), scope = useSubagents();
+  const tx = useTranslation(), [expanded, setExpanded] = useState(false), [raw, setRaw] = useState(false), scope = useSubagents();
   const domain = domainActivity(tool)!;
   const view = toolCard(tool);
-  let target: string | undefined;
-  let task: string | undefined;
-  try {
-    const input = JSON.parse(tool.state.arguments);
-    target = domain.domain === 'job' ? input.job_id : input.agent_id;
-    task = [input.description, input.prompt, input.task, input.message].find(value => typeof value === 'string');
-    if (typeof target !== 'string') target = undefined;
-  } catch { /* Streaming arguments remain in the disclosure. */ }
   if (domain.domain === 'agent') {
-    if (!target && tool.tool_id === 'tool-subagent' && tool.state.type === 'settled' && tool.state.result.status.type === 'success') {
-      for (const block of tool.state.result.content ?? []) {
-        if (block.type === 'json' && block.value && typeof block.value === 'object' && !Array.isArray(block.value) && typeof block.value.agent_id === 'string') { target = block.value.agent_id; break; }
-      }
-    }
+    const details = subagentToolDetails(tool);
+    const target = details.target, task = details.task;
     const agent = scope?.agents.find(agent => agent.agent_id === target);
     return <div data-activity-domain="agent" data-tool-call-id={tool.call_id}>
       <DisclosureRow icon={<IconAgentPresetOutline16 size={14}/>} title={tx(domain.title)} open={expanded} expandable expandOnRowClick keepContentWhenOpen onToggle={() => setExpanded(value => !value)}
-        collapsedContent={<><span className={css.sep}/><span className={css.summary}>{task ?? agent?.agent ?? target ?? tx('common:subagents.list')}</span></>}>
-        <div className={own.body}>
-          {agent && <Button size="sm" onClick={() => scope?.open(agent.agent_id)}>{tx('common:subagents.view')}</Button>}
-          <small>{tx('common:subagents.result')} · {tx(`common:state.${view.state}`)}</small>
-          {task && <p className={css.ioText}>{task}</p>}
-          {view.output && <pre className={css.ioText}>{view.output}</pre>}
-          {!task && !view.output && <pre className={css.ioText}>{view.input}</pre>}
+        collapsedContent={<><span className={css.sep}/><span className={css.summary}>{details.count !== undefined ? tx('common:subagents.count', { count: details.count }) : task ?? agent?.agent ?? target ?? tx('common:subagents.list')}</span></>}>
+        <div className={detailsCss.root}>
+          <div className={detailsCss.caption}><span>{tx('common:subagents.result')}</span><button type="button" aria-expanded={raw} onClick={() => setRaw(value => !value)}><IconInspectOutline12 size={12}/>{tx('common:subagents.inspect')}</button></div>
+          {raw ? <pre className={detailsCss.raw}>{view.output || view.input}</pre> : <ul className={detailsCss.list}>
+            {details.items.map((item, index) => {
+              const child = scope?.agents.find(agent => agent.agent_id === item.agentId);
+              const name = item.name ?? child?.agent ?? item.agentId;
+              return <li className={detailsCss.item} key={item.agentId ?? index}>
+                <div className={detailsCss.heading}><div className={detailsCss.text}>{item.text ?? (child ? <button className={detailsCss.link} type="button" onClick={() => scope?.open(child.agent_id)}>{name}</button> : name)}</div>
+                  {item.status && <span className={detailsCss.status} data-tone={item.tone}>{tx(item.status)}</span>}
+                </div>
+                {item.text && child && <button className={`${detailsCss.link} ${detailsCss.subtitle}`} type="button" onClick={() => scope?.open(child.agent_id)}>{name}</button>}
+                {tool.tool_id === 'tool-list_agents' && <div className={detailsCss.subtitle}>{item.agentId}</div>}
+              </li>;
+            })}
+            {details.count === 0 && <li className={detailsCss.item}>{tx('common:subagents.empty')}</li>}
+            {!details.items.length && details.count === undefined && <li className={detailsCss.item}><div className={detailsCss.text}>{task ?? (view.state === 'success' ? tx('common:state.success') : view.output || view.input)}</div></li>}
+            {details.truncated && <li className={detailsCss.item}>{tx('common:subagents.truncated', details.truncated)}</li>}
+          </ul>}
         </div>
       </DisclosureRow>
     </div>;
   }
+  let target: string | undefined;
+  try { const input = JSON.parse(tool.state.arguments); if (typeof input?.job_id === 'string') target = input.job_id; }
+  catch { /* Partial streaming arguments. */ }
   return <div data-activity-domain={domain.domain}><ToolCard tool={{ ...view, title: tx(domain.title),
-    summary: target ?? (domain.domain === 'job' ? tx('common:activity.finite-tool') : tx('common:activity.durable-child')) }}/></div>;
+    summary: target ?? tx('common:activity.finite-tool') }}/></div>;
 }

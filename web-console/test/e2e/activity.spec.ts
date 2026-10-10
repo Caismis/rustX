@@ -9,7 +9,7 @@ test('durable Agent detail remains selected through interruption and resume; Job
   await expect(page).toHaveTitle('rustX Jobs and Agents');
   const agent = page.locator('[data-agent-id="agent-worker"]');
   await expect(agent).toHaveAttribute('data-activation-id', 'activation-a');
-  await agent.getByRole('button', { name: 'Transcript', exact: true }).click();
+  await page.getByRole('button', { name: 'Transcript', exact: true }).click();
   await expect(agent.getByRole('heading', { name: 'Final report' })).toBeVisible();
   await agent.getByRole('button', { name: 'Interrupt', exact: true }).click();
   await expect(agent).toHaveAttribute('data-agent-state', 'inactive');

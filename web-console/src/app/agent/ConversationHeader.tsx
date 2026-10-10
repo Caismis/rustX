@@ -7,7 +7,7 @@ import type { WorkspaceAuthority } from '../../workspaces/authority';
 import { useTranslation } from '../../locale/react';
 import { useState, type ReactNode } from 'react';
 import type { AppServerClient, SessionView } from '../../client/app-server';
-import type { SourceTarget } from '../../../../protocol/app-server/v39';
+import type { SourceTarget } from '../../../../protocol/app-server/v40';
 import { useClientSelector, sameValue } from '../../client/selectors';
 import { Menu } from '../../presentation/primitives/Menu';
 import { Button } from '../../presentation/primitives/Button';
@@ -38,6 +38,7 @@ export function ConversationHeader({ host, authority, client, view, workspaceId,
           <SubagentHeader title={view ? sessionDisplayTitle(tx, view.summary) : 'rustX'}/>
         </div>
         <div className={agentCss.headerUtilities}>
+          {subagents?.selected && <div id="subagent-header-actions"/>}
           {view?.summary && <OpenWorkspace client={client} host={host} authority={authority} target={{ session_id: view.id, active_node: view.summary.active_node }} disabled={!connected || !!view.deleting}/>}
           {view && !subagents?.selected && <SessionActions client={client} sessionId={view.id} connected={connected} attached={attached} commandOpen={commandOpen} settings={() => setSessionSettingsOpen(value => !value)} tree={() => invokeCommand({ id: 'tree' })} exportSession={exportSession}/>}
           <Button size="sm" className={agentCss.iconButton} aria-label={tx('agent:conversation-header.toggle-inspector')} aria-expanded={inspectorOpen} onClick={toggleInspector}><IconInspectOutline12 /></Button>
@@ -51,7 +52,7 @@ export function ConversationHeader({ host, authority, client, view, workspaceId,
       {error && <p role="alert">{error}</p>}
       </header>;
 }
-function LiveAgentControls({ client, sessionId, coldSource }: { client: AppServerClient; sessionId: string; coldSource?: import('../../../../protocol/app-server/v39').SourceSettings }) {
+function LiveAgentControls({ client, sessionId, coldSource }: { client: AppServerClient; sessionId: string; coldSource?: import('../../../../protocol/app-server/v40').SourceSettings }) {
   useClientSelector(client, state => {
     const view = state.views[sessionId];
     return { generation: state.generation, target: view?.target, attachment: view?.attachment, intent: view?.attachmentIntent,

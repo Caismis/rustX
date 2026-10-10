@@ -1465,7 +1465,8 @@ export type TraceKind =
       | 'workflow'
       | 'interaction'
     )
-  | 'user';
+  | 'user'
+  | 'context';
 /**
  * Identifies one actual provider-neutral model request.
  *

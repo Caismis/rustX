@@ -1934,3 +1934,26 @@ statistics, without presentation-local caching or estimated streaming tokens.
 Browser plugin not available; regular Playwright verifies the production App's
 context ring during running snapshots, subsequent measurement and invalidation
 on desktop and mobile. Reference pin unchanged.
+
+### Subagent call details and input roles (2026-10-10)
+
+Studied Harness `5badb15009ae1756c3afe0ae0cef1faafc290ccc`,
+`ui-tool/src/client/tool/{components/ToolDetails,models/control-details-model,toolviews/details-row}`
+and `ui-subagent` composer/lineage. The expandable result caption, bounded list,
+divided rows, status placement and explicit raw inspection follow that reference.
+`AgentToolDetails.module.css` adapts its ToolDetails styling. The rustX-only adapter
+reads recorded native ToolResult JSON: create and message operations display
+receipts, lists retain recorded Agent states, and waits display their captured
+activation outcomes. The live roster supplies navigation only. Manual refresh and
+wait controls move to the child header; the input retains its native send/interrupt
+controls and the shared composer geometry. No child model, permission, attachment,
+one-shot closure, per-task title or live text stream capability is invented.
+Child file preview/download also lacks a child-scoped native read API.
+File cards without a Preview owner show metadata with a disabled preview action,
+so absence of native access is not presented as a working click target. Child transcript
+reads expose committed history; independent Trace and statistics remain available.
+Native adopted inputs now distinguish human messages from runtime/Agent/mixed
+context; late context keeps its chronological position within its native Attempt.
+Browser tests use the production App and fixture transport at 1440 and 390 pixels.
+The Browser plugin is unavailable in this session, so verification uses the
+project's installed Playwright. Screenshots are fixture evidence, not a live model run.

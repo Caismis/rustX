@@ -3,8 +3,9 @@ import { ChatViewport } from '../../presentation/layout/ChatViewport';
 import { StateDot } from '../../presentation/primitives/StateDot';
 import { displayText, message as uiMessage, type DisplayText } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
-import { useEffect, useState, useSyncExternalStore } from 'react';
-import type { AgentStatistics, RuntimeClientAgent, RuntimeClientJob, RuntimeClientTranscriptPage, MethodResult, WorkflowRunView, WorkflowRunId } from '../../../../protocol/app-server/v39';
+import { createPortal } from 'react-dom';
+import { useEffect, useLayoutEffect, useState, useSyncExternalStore } from 'react';
+import type { AgentStatistics, RuntimeClientAgent, RuntimeClientJob, RuntimeClientTranscriptPage, MethodResult, WorkflowRunView, WorkflowRunId } from '../../../../protocol/app-server/v40';
 import type { Observation } from '../../client/session-lifecycle/port';
 import { AppServerClient, RpcFailure } from '../../client/app-server';
 import { json } from '../../bindings/projection';
@@ -65,6 +66,8 @@ function useActivityRequest({ client, sessionId }: Controls) {
 /** Durable identity is the React key; the selected transcript survives resume. */
 export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible = true, ...controls }: { agent: RuntimeClientAgent; metrics?: AgentStatistics; metricsError?: string; mode?: 'chat' | 'trajectory'; visible?: boolean } & Controls) {
   const tx = useTranslation();
+  const [headerHost, setHeaderHost] = useState<HTMLElement | null>(null);
+  useLayoutEffect(() => { setHeaderHost(visible ? document.getElementById('subagent-header-actions') : null); }, [visible, agent.agent_id]);
   const request = useActivityRequest(controls);
   const waitRequest = useActivityRequest(controls);
   const interruptRequest = useActivityRequest(controls);
@@ -119,19 +122,20 @@ export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible
       {[request.error, waitRequest.error, interruptRequest.error].filter(Boolean).map((error, index) => <p role="alert" key={index}>{displayText(tx, error!)}</p>)}
     </div></ChatViewport></div>
     {client && sessionId && mode === 'trajectory' && <div className={css.agentTrace}><SubagentTrajectory agent={agent} client={client} sessionId={sessionId} visible={visible && mode === 'trajectory'}/></div>}
+    {visible && headerHost && client && createPortal(<div className={css.agentActions}>
+      <span className={css.headerStatus} role="status"><StateDot state={agentDot(agent)}/>{agentStatus(agent, tx)}{request.pending && <span>{tx('common:activity.waiting-runtime')}</span>}</span>
+      <button type="button" aria-label={tx('common:activity.transcript')} title={tx('common:activity.transcript')} disabled={request.disabled} onClick={() => refreshTranscript(value => value + 1)}><IconRefreshOutline14/></button>
+      <button type="button" aria-label={tx('common:activity.wait-activation')} title={tx('common:activity.wait-activation')} disabled={waitRequest.disabled || unavailable} onClick={() => void waitRequest.run(async (client, target, current) => { const result = await client.request({ method: 'agent/wait', params: { target, agent_id: agent.agent_id } }, 'agent_wait', undefined, current); if (current()) observeSettlement(result, current); })}><IconClockOutline16/></button>
+    </div>, headerHost)}
     <ComposerSeat>
       {!client && <div role="status"><StateDot state={agentDot(agent)}/>{agentStatus(agent, tx)}</div>}
       {client && <SubagentComposer name={agent.agent} value={message} onChange={setMessage}
-        disabled={request.disabled || !acceptsMessage} pending={request.pending} inactive={agent.state === 'inactive'}
+        disabled={request.disabled || !acceptsMessage} pending={request.pending}
         send={() => { const submitted = message; void request.run(async (client, target, current) => { await client.request({ method: 'agent/sendMessage', params: { target, agent_id: agent.agent_id, message: submitted } }, 'agent_message', undefined, current); if (current()) { setMessage(value => current() && value === submitted ? '' : value); refreshTranscript(value => current() ? value + 1 : value); } }); }}
         running={agentRunning(agent)}
         interruptDisabled={interruptRequest.disabled || unavailable || agent.state === 'inactive'}
         interrupt={() => void interruptRequest.run(async (client, target, current) => { const result = await client.request({ method: 'agent/interrupt', params: { target, agent_id: agent.agent_id } }, 'agent_wait', undefined, current); if (current()) observeSettlement(result, current); })}
-        status={<><StateDot state={agentDot(agent)}/><span>{agentStatus(agent, tx)}</span>{request.pending && <span>{tx('common:activity.waiting-runtime')}</span>}</>}
-        actions={<div className={css.agentActions}>
-          <button type="button" aria-label={tx('common:activity.transcript')} title={tx('common:activity.transcript')} disabled={request.disabled} onClick={() => refreshTranscript(value => value + 1)}><IconRefreshOutline14/></button>
-          <button type="button" aria-label={tx('common:activity.wait-activation')} title={tx('common:activity.wait-activation')} disabled={waitRequest.disabled || unavailable} onClick={() => void waitRequest.run(async (client, target, current) => { const result = await client.request({ method: 'agent/wait', params: { target, agent_id: agent.agent_id } }, 'agent_wait', undefined, current); if (current()) observeSettlement(result, current); })}><IconClockOutline16/></button>
-        </div>}/>}
+        />}
       <ConversationStats statistics={metrics?.statistics} occupancy={metrics?.occupancy}/>
     </ComposerSeat>
   </section>;

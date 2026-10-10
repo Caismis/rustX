@@ -11,7 +11,7 @@ import { prependTrace, beginTraceDetail, completeTraceDetail, refreshTrace, repl
 import { ledgerFocusTargets, ledgerRows, matchedRecordIds, isInspectable, projectTrajectory, trajectoryItems as flattenTrajectory, visibleItems, matchingCalls, preferredItem, systemPresentation, type InspectableDisplayItem, type TurnStructure } from '../src/app/trajectory/layout';
 import { searchItems } from '../src/app/trajectory/search';
 import { stepLessRecords, manyStepRecords, orderedStepRecords, structuralSearchRecords, requestDetail, toolDetail, traceRecord, traceTool } from './trace-fixture';
-import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v39';
+import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v40';
 
 beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(360);
@@ -1538,4 +1538,19 @@ it('keeps question Tool records but excludes interaction audits from every traje
   show(cache);
   expect(screen.queryByText('INTERACT')).toBeNull();
   expect(screen.getByText('ask_user')).toBeTruthy();
+});
+
+it('child returns and runtime notices retain their position after the delegating Step', () => {
+  const records = [
+    traceRecord(1, { kind: 'user', request: null, location: { attempt_id: 'a' } }),
+    traceRecord(2, { kind: 'tool', request: null, location: { attempt_id: 'a', step_id: 'create' } }),
+    traceRecord(3, { kind: 'context', request: null, location: { attempt_id: 'a' } }),
+    traceRecord(4, { kind: 'context', agent_id: 'child', request: null, location: { attempt_id: 'a' } }),
+    traceRecord(5, { kind: 'assistant', request: null, location: { attempt_id: 'a', step_id: 'report' } }),
+  ];
+  const items = flattenTrajectory(translator('en'), projectTrajectory(translator('en'), records));
+  expect(items.filter(item => item.type === 'RecordRow').map(item => item.owner_record_id)).toEqual(records.map(record => record.id));
+  const headers = items.filter(item => item.type === 'GroupHeader');
+  expect(headers.map(item => item.label)).toEqual(['Message', 'Step 1', 'Message', 'Step 2']);
+  expect(new Set(headers.map(item => item.display_key)).size).toBe(headers.length);
 });
