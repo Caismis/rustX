@@ -58,6 +58,17 @@ pub(super) fn read(
             .is_none_or(|id| referenced.contains(id))
     });
     let completed_responses = responses(connection, conversation, read_cut.journal, &canonical)?;
+    let mut checkpoints = BTreeMap::new();
+    for message in &canonical {
+        if let MessageBlock::User(user) = message
+            && user.kind.is_compaction_summary()
+        {
+            checkpoints.insert(
+                user.id.clone(),
+                super::load_compaction_checkpoint(connection, &user.id, read_cut.journal)?.0,
+            );
+        }
+    }
     Ok(LineageReadCut {
         read_cut,
         conversation_id: conversation.clone(),
@@ -65,6 +76,7 @@ pub(super) fn read(
         messages,
         canonical,
         surface_history,
+        checkpoints,
         completed_responses,
         turns,
     })

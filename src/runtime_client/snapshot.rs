@@ -263,6 +263,9 @@ pub struct RuntimeClientTranscriptPage {
 /// One derived transcript item and its stable durable cursor.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RuntimeClientTranscriptEntry {
+    /// Native facts of a canonical compaction checkpoint, including copied lineage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compaction: Option<super::compaction::CompactionMarker>,
     /// Exact native Attempt process membership, derived by native owners.
     /// Absence is not permission for a client to infer a process boundary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -496,6 +499,7 @@ fn transcript_entry_view(
         }
     };
     Ok(RuntimeClientTranscriptEntry {
+        compaction: None,
         turn_process: None,
         completed_response: None,
         response_pending: false,
@@ -614,9 +618,9 @@ pub struct RuntimeClientContextView {
     /// Latest pre-commit diagnostic; cleared when the next compaction starts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compaction_error: Option<String>,
-    /// Last prepared request occupancy from the Context owner; absent after compaction until measured again.
+    /// Latest native measured request or committed compacted-context estimate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_request_occupancy: Option<crate::context::occupancy::ContextOccupancy>,
+    pub occupancy: Option<crate::context::occupancy::ContextOccupancy>,
     /// Whether the runtime currently owns a context-compaction operation.
     /// This is live operation state, not inferred from token usage.
     pub compaction_in_progress: bool,
@@ -963,6 +967,7 @@ pub struct RuntimeClientWorkspaceHandoff {
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub struct RuntimeClientAgent {
+    pub title: String,
     pub parent_agent_id: crate::runtime::identity::AgentId,
     /// The most recently admitted finite activation identity.
     pub activation_id: crate::runtime::identity::SubagentId,

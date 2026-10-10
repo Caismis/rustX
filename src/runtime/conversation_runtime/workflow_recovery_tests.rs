@@ -18,11 +18,13 @@ async fn finish_finite_workflow_child(
     let node = crate::runtime::workflow::test_instance("finite_recovery", "child");
     let spec = SubagentStartSpec {
         authority: DurableAgentAuthority {
+            title: "Explore task".to_owned(),
             execution_policy: InheritedExecutionPolicy::default(),
             resolved: test_resolved_subagent("reviewer"),
             approval_mode: ApprovalMode::Policy,
         },
         admission: ActivationAdmission {
+            attachments: Vec::new(),
             task: "finite structured child".into(),
             context: None,
             origin: AgentActivationOrigin::Workflow {

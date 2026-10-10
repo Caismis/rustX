@@ -1,3 +1,4 @@
+import { recordText } from '../src/app/trajectory/TrajectoryCell';
 import { traceStateLabel } from '../src/bindings/status-labels';
 import { localeController } from '../src/locale/controller';
 import { translator } from '../src/locale/translation';
@@ -11,7 +12,7 @@ import { prependTrace, beginTraceDetail, completeTraceDetail, refreshTrace, repl
 import { ledgerFocusTargets, ledgerRows, matchedRecordIds, isInspectable, projectTrajectory, trajectoryItems as flattenTrajectory, visibleItems, matchingCalls, preferredItem, systemPresentation, type InspectableDisplayItem, type TurnStructure } from '../src/app/trajectory/layout';
 import { searchItems } from '../src/app/trajectory/search';
 import { stepLessRecords, manyStepRecords, orderedStepRecords, structuralSearchRecords, requestDetail, toolDetail, traceRecord, traceTool } from './trace-fixture';
-import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v38';
+import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v44';
 
 beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(360);
@@ -302,6 +303,7 @@ it.each(['en', 'zh'] as const)('T1-08 Calls summary localizes in %s and leaves n
   for (const state of ['incomplete', 'failed', 'completed'] as const) {
     const item = flattenTrajectory(tx, projectTrajectory(tx, [traceRecord(21, { kind: 'compaction', request: null, state })])).find(item => item.type === 'RecordRow')!;
     expect(item.label).toBe(state === 'completed' ? tx('trajectory:compacted') : tx('trajectory:copy.compaction-value', { p0: traceStateLabel(tx, state) }));
+    if (state === 'incomplete') expect(recordText(tx, item.record)).toBe(item.label);
   }
 });
 
@@ -1538,4 +1540,30 @@ it('keeps question Tool records but excludes interaction audits from every traje
   show(cache);
   expect(screen.queryByText('INTERACT')).toBeNull();
   expect(screen.getByText('ask_user')).toBeTruthy();
+});
+
+it('child returns and runtime notices retain their position after the delegating Step', () => {
+  const records = [
+    traceRecord(1, { kind: 'user', request: null, location: { attempt_id: 'a' } }),
+    traceRecord(2, { kind: 'tool', request: null, location: { attempt_id: 'a', step_id: 'create' } }),
+    traceRecord(3, { kind: 'context', request: null, location: { attempt_id: 'a' } }),
+    traceRecord(4, { kind: 'context', agent_id: 'child', request: null, location: { attempt_id: 'a' } }),
+    traceRecord(5, { kind: 'assistant', request: null, location: { attempt_id: 'a', step_id: 'report' } }),
+  ];
+  const items = flattenTrajectory(translator('en'), projectTrajectory(translator('en'), records));
+  expect(items.filter(item => item.type === 'RecordRow').map(item => item.owner_record_id)).toEqual(records.map(record => record.id));
+  const headers = items.filter(item => item.type === 'GroupHeader');
+  expect(headers.map(item => item.label)).toEqual(['Message', 'Step 1', 'Message', 'Step 2']);
+  expect(new Set(headers.map(item => item.display_key)).size).toBe(headers.length);
+});
+
+it('compaction summary exposes loading and read errors before detail arrives', () => {
+  const record = traceRecord(0, { kind: 'compaction', request: null, preview: null, has_detail: true });
+  const cache = cacheOf([record]);
+  const view = show(cache);
+  fireEvent.click(row('RecordRow'));
+  expect(screen.getByText('Loading details…')).not.toBeNull();
+  const failed = { ...cache, details: { [record.id]: { epoch: cache.epoch, error: 'Summary read failed' } } };
+  view.rerender(<Trajectory cache={failed} loadEarlier={noop} onSelect={noop} onLoadDetail={noop} />);
+  expect(screen.getByRole('alert').textContent).toBe('Summary read failed');
 });

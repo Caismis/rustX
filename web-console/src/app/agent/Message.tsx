@@ -1,14 +1,14 @@
 import { InboundMessage } from './InboundMessage';
 import { useConversationPreferences } from '../conversation-preferences';
 import { useTranslation } from '../../locale/react';
-import type { MessageBlock, UserContentBlock, AssistantContentBlock, InFlightBlock } from '../../../../protocol/app-server/v38';
+import type { CompactionMarker, MessageBlock, UserContentBlock, AssistantContentBlock, InFlightBlock } from '../../../../protocol/app-server/v44';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 import { Artifact } from '../components/Artifact';
 import { UserMessage, AssistantMessage, CompactionMessage } from '../../presentation/agent/Message';
 import { Reasoning } from '../../presentation/agent/Reasoning';
 import { Tool } from './Tool';
-import type { ForegroundToolExecution } from '../../../../protocol/app-server/v38';
+import type { ForegroundToolExecution } from '../../../../protocol/app-server/v44';
 import type { ReactNode } from 'react';
 
 export function Content({ blocks, markdown = false, streaming = false, tools = [], reasoningHidden = false, include }: { reasoningHidden?: boolean; tools?: ForegroundToolExecution[]; markdown?: boolean; streaming?: boolean; blocks: (UserContentBlock | AssistantContentBlock | InFlightBlock)[]; include?: readonly number[] }) {
@@ -30,10 +30,17 @@ export function Content({ blocks, markdown = false, streaming = false, tools = [
     return null;
   });
 }
-export function Message({ message, tools = [], actions, streaming = false, blocks, reasoningHidden = false, include }: { reasoningHidden?: boolean; message: MessageBlock; tools?: ForegroundToolExecution[]; actions?: ReactNode; streaming?: boolean; blocks?: InFlightBlock[]; include?: readonly number[] }) {
+export function Message({ message, compaction, tools = [], actions, streaming = false, blocks, reasoningHidden = false, include }: { compaction?: CompactionMarker | null; reasoningHidden?: boolean; message: MessageBlock; tools?: ForegroundToolExecution[]; actions?: ReactNode; streaming?: boolean; blocks?: InFlightBlock[]; include?: readonly number[] }) {
   const tx = useTranslation();
   if (message.role === 'tool') return null; // Results belong to the native call projection, never paired here.
-  if (message.role === 'user' && typeof message.kind === 'object' && 'compaction_summary' in message.kind) return <CompactionMessage title={tx('agent:context.succeeded')} summary={tx('agent:context.expand')}><Content blocks={message.content} markdown/></CompactionMessage>;
+  if (message.role === 'user' && typeof message.kind === 'object' && 'compaction_summary' in message.kind) {
+    if (!compaction) return <Content blocks={message.content} markdown/>;
+    const checkpoint = compaction;
+    return <CompactionMessage title={checkpoint.manual === true ? tx('agent:context.command-title') : tx('agent:context.succeeded')}
+      summary={tx('agent:context.completed', { items: checkpoint.retired_messages, tokens: checkpoint.retired_tokens })}>
+      <Content blocks={message.content} markdown/>
+    </CompactionMessage>;
+  }
   if (message.role === 'user' && message.kind && message.kind !== 'message') return <details><summary>{tx('agent:message.context')}{' '}{Object.keys(message.kind)[0]}</summary><Content blocks={message.content} markdown/></details>;
   if (message.role === 'user' && message.source !== 'human') return <InboundMessage message={message}/>;
   return message.role === 'user' ? <UserMessage label={tx('agent:message.your-message')} actions={actions}><Content blocks={message.content}/></UserMessage>

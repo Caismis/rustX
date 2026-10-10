@@ -1,7 +1,7 @@
 import { traceStateLabel } from '../../bindings/status-labels';
 import type { Translate } from '../../locale/translation';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/layout.ts; see PROVENANCE.md. */
-import type { TraceContextKind, TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v38';
+import type { TraceContextKind, TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v44';
 
 /** The Harness detail tab identities. Labels follow the locale; ids never do. */
 export type TrajectoryFacet = 'overview' | 'rendered' | 'raw' | 'source' | 'input' | 'output' | 'schema' | 'timing' | 'options' | 'usage' | 'system-prompt' | 'tools' | 'diff';
@@ -148,16 +148,16 @@ export function projectTrajectory(tx: Translate, records: readonly TraceRecord[]
     turn.records.push(record);
     if (record.kind === 'attempt') continue;
     const key = displayKey(attempt, step);
-    let group = groups.get(key);
+    let group = step == null ? turn.groups.at(-1) : groups.get(key);
+    if (step == null && group?.kind !== 'message') group = undefined;
     if (!group) {
       group = step == null
         ? { kind: 'message', label: tx('trajectory:group.message'), records: [], cells: [] }
         : { kind: 'step', nativeStepId: step, label: tx('trajectory:group.step', { n: turn.groups.filter(group => group.kind === 'step').length + 1 }), records: [], cells: [] };
-      groups.set(key, group);
-      // Attempt-only inputs form the Message group; request-owned prompt/context
+      if (step != null) groups.set(key, group);
+      // Attempt-only inputs keep their arrival position; request-owned prompt/context
       // cells retain their exact Step, including an initial prompt.
-      if (group.kind === 'message') turn.groups.unshift(group);
-      else turn.groups.push(group);
+      turn.groups.push(group);
     }
     group.records.push(record);
     group.cells.push(...cellsOf(tx, record));
@@ -178,7 +178,7 @@ export function trajectoryItems(tx: Translate, projection: TrajectoryProjection,
       ordinal: section.displayOrdinal, label: tx('trajectory:copy.turn-value', { p0: section.displayOrdinal }), preview: '', ...(native ? { native_record: native } : {}) });
     for (const group of section.groups) {
       const native = group.records.find(record => record.kind === 'step');
-      items.push({ type: 'GroupHeader', kind: group.kind, display_key: displayKey('group', attempt, group.nativeStepId), attempt_id: attempt,
+      items.push({ type: 'GroupHeader', kind: group.kind, display_key: displayKey('group', attempt, group.nativeStepId ?? group.records[0]!.id), attempt_id: attempt,
         ...(group.nativeStepId === undefined ? {} : { step_id: group.nativeStepId }),
         anchor_record_id: group.records[0]!.id, record_ids: group.records.map(record => record.id),
         label: group.label, preview: '', ...(native ? { native_record: native } : {}) });

@@ -3,10 +3,11 @@ import { useTranslation } from '../../locale/react';
 import type { Theme } from '../appearance';
 import { useState, type ReactNode } from 'react';
 import { McpIcon } from './mcp/McpIcon';
+import { useMcpProbes } from './mcp/useMcpProbes';
 import { McpPage } from './mcp/McpPage';
 import { SettingsScopeMenu } from './SettingsScopeMenu';
 import { shallowEqual, useSelector } from '@xstate/react';
-import type { SourceScope } from '../../../../protocol/app-server/v38';
+import type { SourceScope } from '../../../../protocol/app-server/v44';
 import type { AppServerClient } from '../../client/app-server';
 import { Button } from '../../presentation/primitives/Button';
 import { UnitForm } from './forms/bridge';
@@ -22,6 +23,7 @@ import {
 } from '../../presentation/primitives/icons';
 import type { ConnectionController } from '../../connection/controller';
 import { ConnectionSettings } from './ConnectionSettings';
+import type { WorkspaceAssociations } from '../../workspaces/associations';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
 import { GeneralPage } from './general/GeneralPage';
 import { ModelsPage } from './models/ModelsPage';
@@ -39,7 +41,7 @@ import {
 } from './machines/navigation';
 
 export interface SettingsProps {
-  client: AppServerClient; host?: ProductHostWorkspaces;
+  client: AppServerClient; host?: ProductHostWorkspaces; associations?: WorkspaceAssociations;
   theme?: Theme; setTheme?: (theme: Theme) => void;
   /** The client-owned connection, rendered only where navigation admits the
    * Connection surface. Its presence authorizes nothing. */
@@ -104,7 +106,7 @@ export function Settings(props: SettingsProps) {
   return view.page && <SettingsDialog key={settingsTargetKey(view.target)} {...props} target={view.target} page={view.page} focus={view.focus} />;
 }
 
-function SettingsDialog({ client, host, theme = 'system', setTheme, connection, navigation, target, page: current, focus }: SettingsProps & {
+function SettingsDialog({ client, host, associations, theme = 'system', setTheme, connection, navigation, target, page: current, focus }: SettingsProps & {
   target: SettingsTarget; page: SettingsPage; focus: FocusMap;
 }) {
   const tx = useTranslation();
@@ -124,6 +126,7 @@ function SettingsDialog({ client, host, theme = 'system', setTheme, connection, 
   // and authoring stays closed until that read is adopted.
   const observed = useSelector(actor, snapshot => snapshot.context.observation);
   const source = useSelector(actor, snapshot => snapshot.context.observation ?? snapshot.context.staleObservation);
+  const mcpProbes = useMcpProbes(client, host, activeTarget, observed, current === 'mcp' && !focus.mcp, associations);
   const readError = useSelector(actor, snapshot => snapshot.context.readError);
   const convergenceError = useSelector(actor, snapshot => snapshot.context.convergenceError);
   const reconciling = useSelector(actor, snapshot => snapshot.matches({ maintenance: 'reconciling' }));
@@ -176,8 +179,8 @@ function SettingsDialog({ client, host, theme = 'system', setTheme, connection, 
         about the MCP or named-Agent documents, each of which is its own
         authority and reports its own state. */}
     {current === 'mcp' && <McpPage source={source} scope={scope} revision={structured ? config.revision : undefined}
-      focus={focus.mcp} onFocus={onFocus} refresh={() => actor.send({type:'REFRESH'})} refreshing={busy || reconciling}
-      scopeControl={<SettingsScopeMenu target={mcpTarget} host={host} onSelect={next => { onFocus(undefined); setMcpTarget(next); }}/>} />}
+      focus={focus.mcp} onFocus={onFocus} probeStates={mcpProbes.states} testConnection={mcpProbes.testConnection} probeAvailable={mcpProbes.available} refresh={() => actor.send({type:'REFRESH'})} refreshing={busy || reconciling}
+      scopeControl={<SettingsScopeMenu disabled={!!focus.mcp?.name} userLabel={tx('settings:mcp.user')} target={mcpTarget} host={host} onSelect={next => { onFocus(undefined); setMcpTarget(next); }}/>} />}
     {current === 'extensions' && <ExtensionsPage source={source} scope={scope}
       revision={structured ? config.revision : undefined} models={models} focus={focus.extensions} onFocus={onFocus}
       filter={extensionFilter} onFilter={setExtensionFilter} refresh={() => actor.send({type:'RECONCILE'})} refreshing={busy || reconciling}

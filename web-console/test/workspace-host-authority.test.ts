@@ -24,7 +24,7 @@ const native = vi.hoisted(() => {
       const request = message as ObservedRequest;
       state.requests.push(request);
       for (const waiter of state.waiters.splice(0)) waiter();
-      if (request.method === 'initialize') queueMicrotask(() => this.deliver({ jsonrpc: '2.0', id: request.id, result: { type: 'initialized', authority_id: 'fixture-app-server-authority', protocol_version: 38, capabilities: nativeCapabilities } }));
+      if (request.method === 'initialize') queueMicrotask(() => this.deliver({ jsonrpc: '2.0', id: request.id, result: { type: 'initialized', authority_id: 'fixture-app-server-authority', protocol_version: 44, capabilities: nativeCapabilities } }));
       return Promise.resolve();
     }
     onMessage(listener: (record: unknown) => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
@@ -138,4 +138,27 @@ it('a queued metadata removal checks Host scope only when its registration lane 
   expect(await removal).toMatchObject({ kind: 'authority_replaced', uncertain: false });
   expect((await host.listWorkspaces()).workspaces).toEqual(baseline.workspaces);
   expect(readFileSync(config.metadataFile, 'utf8')).toContain(alpha.id);
+});
+
+it('MCP probes hold the authorized registration lane until native cleanup acknowledges',async()=>{
+  const {host,config,endpoint}=fixture();
+  const [alpha]=(await host.listWorkspaces()).workspaces;
+  const operation=host.configureWorkspace(alpha.id,endpoint,{kind:'mcp_probe',id:'exa',expected_revision:'mcp-revision'});
+  const [request]=await awaitMethod('mcp/probe');
+  expect(request.params).toEqual({target:{kind:'workspace',directory:config.roots[0].cwd},id:'exa',expected_revision:'mcp-revision'});
+  let removed=false;
+  const removal=host.removeWorkspace(await host.listWorkspaces(),alpha.id).then(()=>{removed=true;});
+  await tick();expect(removed).toBe(false);
+  const result={id:'exa',revision:'mcp-revision',outcome:'reachable' as const};
+  native.state.transport!.deliver({jsonrpc:'2.0',id:request.id,result:{type:'mcp_probe',result}});
+  await expect(operation).resolves.toEqual({kind:'mcp_probe',result});
+  await removal;expect(removed).toBe(true);
+  expect(native.state.requests.some(request=>request.method==='configuration/sourceWrite')).toBe(false);
+});
+it('revoked registrations cannot start queued MCP probes',async()=>{
+  const {host,endpoint}=fixture();const [alpha]=(await host.listWorkspaces()).workspaces;
+  const removal=host.removeWorkspace(await host.listWorkspaces(),alpha.id);
+  const operation=host.configureWorkspace(alpha.id,endpoint,{kind:'mcp_probe',id:'exa',expected_revision:'mcp-revision'});
+  await removal;await expect(operation).rejects.toThrow('Unknown Workspace registration');
+  expect(native.state.requests).toHaveLength(0);
 });

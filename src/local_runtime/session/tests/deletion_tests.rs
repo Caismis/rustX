@@ -28,6 +28,7 @@ pub(crate) fn admit_agent(
     {
         *admitted_authority = Some(child_agent_id.clone());
         let authority = crate::runtime::subagent::DurableAgentAuthority {
+            title: "Explore task".to_owned(),
             resolved: crate::runtime::subagent::ResolvedSubagentSpec {
                 environment: Vec::new(),
                 generation: crate::runtime::identity::RuntimeResourceRevision::new(1),

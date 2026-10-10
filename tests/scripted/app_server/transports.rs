@@ -62,7 +62,7 @@ async fn initialize(client: &impl AppServerConformanceDriver) {
         client,
         0,
         Method::Initialize(InitializeParams {
-            protocol_version: 38,
+            protocol_version: 44,
             client: ClientIdentity {
                 name: "transport".into(),
                 version: "1".into(),
@@ -292,7 +292,7 @@ async fn blocked_websocket_overflows_with_controlled_duplex_capacity() {
         let mut request = "ws://localhost/".into_client_request().unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.app-server.v38, rustx-token.{}", driver::TOKEN)
+            format!("rustx.app-server.v44, rustx-token.{}", driver::TOKEN)
                 .parse()
                 .unwrap(),
         );
@@ -641,7 +641,7 @@ async fn authenticated_websocket_capacity_is_released_after_client_reaping() {
         let mut request = url.as_str().into_client_request().unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.app-server.v38, rustx-token.{}", driver::TOKEN)
+            format!("rustx.app-server.v44, rustx-token.{}", driver::TOKEN)
                 .parse()
                 .unwrap(),
         );
@@ -789,7 +789,7 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
             client,
             0,
             Method::Initialize(InitializeParams {
-                protocol_version: 38,
+                protocol_version: 44,
                 client: ClientIdentity {
                     name: "rustx-product-host".into(),
                     version: "1".into(),
@@ -839,11 +839,11 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
         ));
         let token = driver::TOKEN;
         for offered in [
-            format!("rustx.app-server.v38, rustx-delivery-access.{DELIVERY}"),
-            format!("rustx.app-server.v38, rustx-token.{token}, rustx-delivery-access.{PRODUCT_HOST}"),
-            format!("rustx.app-server.v38, rustx-token.{token}, rustx-delivery-access.{token}"),
-            format!("rustx.app-server.v38, rustx-token.{token}, rustx-delivery-access.wrong"),
-            format!("rustx.app-server.v38, rustx-token.{token}, rustx-product-host.{PRODUCT_HOST}, rustx-delivery-access."),
+            format!("rustx.app-server.v44, rustx-delivery-access.{DELIVERY}"),
+            format!("rustx.app-server.v44, rustx-token.{token}, rustx-delivery-access.{PRODUCT_HOST}"),
+            format!("rustx.app-server.v44, rustx-token.{token}, rustx-delivery-access.{token}"),
+            format!("rustx.app-server.v44, rustx-token.{token}, rustx-delivery-access.wrong"),
+            format!("rustx.app-server.v44, rustx-token.{token}, rustx-product-host.{PRODUCT_HOST}, rustx-delivery-access."),
         ] {
             assert!(driver::try_socket(&url, &offered).await.is_err(), "{offered}");
         }
@@ -853,7 +853,7 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
         // A Product Host secret offered on the ordinary lane is not delivery access.
         let ordinary = driver::websocket_offering(
             &url,
-            &format!("rustx.app-server.v38, rustx-token.{token}, rustx-product-host.{PRODUCT_HOST}"),
+            &format!("rustx.app-server.v44, rustx-token.{token}, rustx-product-host.{PRODUCT_HOST}"),
         )
         .await;
         assert!(!delivery_access(&ordinary).await);
@@ -863,7 +863,7 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
         ordinary.close().await;
         let granted = driver::websocket_offering(
             &url,
-            &format!("rustx.app-server.v38, rustx-token.{token}, rustx-delivery-access.{DELIVERY}"),
+            &format!("rustx.app-server.v44, rustx-token.{token}, rustx-delivery-access.{DELIVERY}"),
         )
         .await;
         assert!(delivery_access(&granted).await);
@@ -880,7 +880,7 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
         assert!(
             driver::try_socket(
                 &url,
-                &format!("rustx.app-server.v38, rustx-token.{token}, rustx-delivery-access.{DELIVERY}"),
+                &format!("rustx.app-server.v44, rustx-token.{token}, rustx-delivery-access.{DELIVERY}"),
             )
             .await
             .is_err()
@@ -1142,7 +1142,7 @@ async fn delivery_publication_linearizes_at_the_transports_first_accepted_byte()
     };
     use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-    bounded(async {
+    bounded(Box::pin(async {
         let f = Fixture::with_tool(Some("present")).await;
         let tool = committed_delivery(&f).await;
         let probe = f.host.file_read_probe();
@@ -1322,7 +1322,7 @@ async fn delivery_publication_linearizes_at_the_transports_first_accepted_byte()
             connection.close();
         }
         f.close().await;
-    })
+    }))
     .await;
 }
 
@@ -1351,7 +1351,7 @@ async fn delivery_revocation_overlapping_a_hand_off_is_ordered_after_its_accepta
     };
     use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-    bounded(async {
+    bounded(Box::pin(async {
         let f = Fixture::with_tool(Some("present")).await;
         let tool = committed_delivery(&f).await;
         let probe = f.host.file_read_probe();
@@ -1484,7 +1484,7 @@ async fn delivery_revocation_overlapping_a_hand_off_is_ordered_after_its_accepta
             connection.close();
         }
         f.close().await;
-    })
+    }))
     .await;
 }
 
@@ -1505,7 +1505,7 @@ async fn websocket_writer_stages_nothing_while_the_reader_holds_the_stream() {
         WebSocketStream,
         tungstenite::{Message, protocol::Role},
     };
-    bounded(async {
+    bounded(Box::pin(async {
         let f = Fixture::with_tool(Some("present")).await;
         let tool = committed_delivery(&f).await;
         let permits = f.host.file_reads();
@@ -1593,7 +1593,7 @@ async fn websocket_writer_stages_nothing_while_the_reader_holds_the_stream() {
         assert_eq!(permits.available_permits(), SESSION_FILE_MAX_READS);
         connection.close();
         f.close().await;
-    })
+    }))
     .await;
 }
 
@@ -1612,7 +1612,7 @@ async fn websocket_delivery_publication_is_decided_when_tungstenite_takes_the_fr
     use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
     use futures_util::StreamExt;
     use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
-    bounded(async {
+    bounded(Box::pin(async {
         const DELIVERY: &str = "delivery-secret-000000000000000000000000000000000000";
         let f = Fixture::with_tool(Some("present")).await;
         let tool = committed_delivery(&f).await;
@@ -1639,7 +1639,7 @@ async fn websocket_delivery_publication_is_decided_when_tungstenite_takes_the_fr
             request.headers_mut().insert(
                 "sec-websocket-protocol",
                 format!(
-                    "rustx.app-server.v38, rustx-token.{}, rustx-delivery-access.{DELIVERY}",
+                    "rustx.app-server.v44, rustx-token.{}, rustx-delivery-access.{DELIVERY}",
                     driver::TOKEN
                 )
                 .parse()
@@ -1715,7 +1715,7 @@ async fn websocket_delivery_publication_is_decided_when_tungstenite_takes_the_fr
             let _ = serving.await.unwrap();
         }
         f.close().await;
-    })
+    }))
     .await;
 }
 
@@ -1788,7 +1788,7 @@ async fn delivery_websocket(
     request.headers_mut().insert(
         "sec-websocket-protocol",
         format!(
-            "rustx.app-server.v38, rustx-token.{}, rustx-delivery-access.{credential}",
+            "rustx.app-server.v44, rustx-token.{}, rustx-delivery-access.{credential}",
             driver::TOKEN
         )
         .parse()
@@ -1832,7 +1832,7 @@ async fn delivery_credential_rotation_is_one_transition_ordered_against_publicat
         DELIVERED, committed_delivery, delivered_bytes, delivery_request, failed_with,
     };
     use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
-    bounded(async {
+    bounded(Box::pin(async {
         let f = Fixture::with_tool(Some("present")).await;
         let tool = committed_delivery(&f).await;
         let permits = f.host.file_reads();
@@ -1905,7 +1905,7 @@ async fn delivery_credential_rotation_is_one_transition_ordered_against_publicat
             let _ = serving.await.unwrap();
         }
         f.close().await;
-    })
+    }))
     .await;
 }
 
@@ -1923,7 +1923,7 @@ async fn product_host_credential_rotation_is_one_transition_ordered_against_publ
     use base64::Engine;
     use futures_util::StreamExt;
     use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
-    bounded(async {
+    bounded(Box::pin(async {
         let f = Fixture::with_tool(Some("present")).await;
         let tool = committed_delivery(&f).await;
         let permits = f.host.file_reads();
@@ -1954,7 +1954,7 @@ async fn product_host_credential_rotation_is_one_transition_ordered_against_publ
             .unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.product-host.file-read.v2, rustx-product-host.{ROTATION_A}")
+            format!("rustx.product-host.file-read.v3, rustx-product-host.{ROTATION_A}")
                 .parse()
                 .unwrap(),
         );
@@ -1970,6 +1970,7 @@ async fn product_host_credential_rotation_is_one_transition_ordered_against_publ
                 serde_json::to_string(&crate::app_server::product_host::FileRead {
                     target: target.clone(),
                     source: crate::app_server::product_host::ReadSource::SessionFile {
+                        agent_id: None,
                         message_id: tool,
                         delivery_index: 0,
                     },
@@ -2026,7 +2027,7 @@ async fn product_host_credential_rotation_is_one_transition_ordered_against_publ
         assert_eq!(permits.available_permits(), SESSION_FILE_MAX_READS);
         browser.close();
         f.close().await;
-    })
+    }))
     .await;
 }
 
@@ -2044,7 +2045,7 @@ async fn overlapping_delivery_credential_rotations_take_one_total_order() {
         DELIVERED, committed_delivery, delivered_bytes, delivery_request, failed_with,
     };
     use crate::tools::session_files::SessionFileReadFailure;
-    bounded(async {
+    bounded(Box::pin(async {
         let f = Fixture::with_tool(Some("present")).await;
         let tool = committed_delivery(&f).await;
         let probe = f.host.file_read_probe();
@@ -2121,7 +2122,7 @@ async fn overlapping_delivery_credential_rotations_take_one_total_order() {
         client.close().await;
         let _ = serving.await.unwrap();
         f.close().await;
-    })
+    }))
     .await;
 }
 

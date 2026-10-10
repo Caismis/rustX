@@ -1,4 +1,5 @@
 //! Real standalone process, pipe and network boundaries; shared semantic authority.
+use super::app_server_readiness::websocket_startup;
 use futures_util::{SinkExt, StreamExt};
 use nix::{
     sys::signal::{Signal, kill},
@@ -126,25 +127,15 @@ impl Fixture {
             .kill_on_drop(true);
         command
     }
-    async fn ws(&self) -> (Child, String) {
+    async fn ws(&self) -> (Child, String, BufReader<tokio::process::ChildStderr>) {
         let mut child = self
             .command("ws://127.0.0.1:0")
             .arg("--token-file")
             .arg(self.root.path().join("token"))
             .spawn()
             .unwrap();
-        let line = BufReader::new(child.stderr.as_mut().unwrap())
-            .lines()
-            .next_line()
-            .await
-            .unwrap()
-            .unwrap();
-        (
-            child,
-            line.strip_prefix("rustx app-server listening ")
-                .unwrap_or_else(|| panic!("server startup: {line}"))
-                .to_owned(),
-        )
+        let (endpoint, stderr) = websocket_startup(&mut child).await;
+        (child, endpoint, stderr)
     }
 }
 async fn bounded<T>(future: impl Future<Output = T>) -> T {
@@ -170,7 +161,7 @@ async fn detach_then_shutdown(child: &mut Child) {
     terminate(child);
 }
 
-const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":38,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
+const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":44,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
 
 #[tokio::test]
 async fn app_server_stdio_real_process_shared_conformance() {
@@ -190,7 +181,7 @@ async fn app_server_stdio_real_process_shared_conformance() {
 async fn app_server_websocket_real_process_shared_conformance_and_listener_survives() {
     bounded(async {
         let f = Fixture::new().await;
-        let (mut child, url) = f.ws().await;
+        let (mut child, url, _stderr) = f.ws().await;
         let client = driver::websocket(&url).await;
         app_server_conformance::representative_scenario(&client, f.sessions.clone()).await;
         client.close().await;
@@ -228,13 +219,13 @@ async fn json_response(socket: &mut Socket) -> serde_json::Value {
 async fn app_server_websocket_authentication_framing_and_protocol_errors() {
     bounded(async {
         let f = Fixture::new().await;
-        let (mut child, url) = f.ws().await;
+        let (mut child, url, _stderr) = f.ws().await;
         let old_offer = format!("rustx.app-server.v9, rustx-token.{}", driver::TOKEN);
         for offer in [
             None,
-            Some("rustx.app-server.v38"),
+            Some("rustx.app-server.v44"),
             Some(old_offer.as_str()),
-            Some("rustx.app-server.v38, rustx-token.wrong"),
+            Some("rustx.app-server.v44, rustx-token.wrong"),
         ] {
             let mut request = url.as_str().into_client_request().unwrap();
             if let Some(offer) = offer {
@@ -455,15 +446,11 @@ async fn app_server_explicit_user_config_are_authoritative_for_both_transports()
                     command.arg("--token-file").arg(f.root.path().join("token"));
                 }
                 let mut child = command.spawn().unwrap();
+                let mut _startup_stderr = None;
                 let client = if ws {
-                    let line = BufReader::new(child.stderr.take().unwrap())
-                        .lines()
-                        .next_line()
-                        .await
-                        .unwrap()
-                        .unwrap();
-                    driver::websocket(line.strip_prefix("rustx app-server listening ").unwrap())
-                        .await
+                    let (endpoint, stderr) = websocket_startup(&mut child).await;
+                    _startup_stderr = Some(stderr);
+                    driver::websocket(&endpoint).await
                 } else {
                     driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap())
                 };
@@ -656,7 +643,7 @@ async fn app_server_websocket_drain_supervises_active_root_and_cold_resume() {
                 .unwrap()
                 .database_path;
             drop(controller);
-            let (mut child, url) = f.ws().await;
+            let (mut child, url, stderr) = f.ws().await;
             let client = driver::websocket(&url).await;
             initialize_client(&client).await;
             let a = attach(&client, f.sessions[0].clone(), 2).await;
@@ -681,7 +668,7 @@ async fn app_server_websocket_drain_supervises_active_root_and_cold_resume() {
             let database = rusqlite::Connection::open(database).unwrap();
             database.execute_batch("BEGIN IMMEDIATE").unwrap();
             terminate(&child);
-            let mut lines = BufReader::new(child.stderr.as_mut().unwrap()).lines();
+            let mut lines = stderr.lines();
             let line = lines.next_line().await.unwrap().unwrap();
             assert!(
                 line.contains("Draining; new semantic admission closed"),
@@ -705,11 +692,18 @@ async fn app_server_websocket_drain_supervises_active_root_and_cold_resume() {
                 "settlement not yet proven"
             );
             if forced {
-                let output = child.wait_with_output().await.unwrap();
-                assert_eq!(output.status.code(), Some(3));
-                assert!(
-                    String::from_utf8_lossy(&output.stderr).contains("runtime settlement unproven")
+                // Startup transferred stderr to this persistent reader. Drain
+                // it alongside child exit, including any buffered read-ahead.
+                let mut stderr = lines.into_inner();
+                let mut diagnostics = String::new();
+                let (output, drained) = tokio::join!(
+                    child.wait_with_output(),
+                    stderr.read_to_string(&mut diagnostics)
                 );
+                let output = output.unwrap();
+                drained.unwrap();
+                assert_eq!(output.status.code(), Some(3));
+                assert!(diagnostics.contains("runtime settlement unproven"));
                 database.execute_batch("ROLLBACK").unwrap();
             } else {
                 database.execute_batch("ROLLBACK").unwrap();
@@ -717,7 +711,7 @@ async fn app_server_websocket_drain_supervises_active_root_and_cold_resume() {
             }
             drop(request);
             client.close().await;
-            let (mut replacement, url) = f.ws().await;
+            let (mut replacement, url, _stderr) = f.ws().await;
             let client = driver::websocket(&url).await;
             initialize_client(&client).await;
             attach(&client, f.sessions[0].clone(), 6).await;
@@ -744,14 +738,8 @@ async fn app_server_process_exits_with_cancelled_blocked_presentation_read() {
             .env("RUSTX_TEST_PRESENTATION_READ_BLOCK", "1")
             .spawn()
             .unwrap();
-        let line = BufReader::new(child.stderr.as_mut().unwrap())
-            .lines()
-            .next_line()
-            .await
-            .unwrap()
-            .unwrap();
-        let url = line.strip_prefix("rustx app-server listening ").unwrap();
-        let client = driver::websocket(url).await;
+        let (url, stderr) = websocket_startup(&mut child).await;
+        let client = driver::websocket(&url).await;
         initialize_client(&client).await;
         let target = attach(&client, f.sessions[0].clone(), 2).await;
         assert!(matches!(
@@ -768,7 +756,7 @@ async fn app_server_process_exits_with_cancelled_blocked_presentation_read() {
             .await,
             Response::Success(_)
         ));
-        let mut lines = BufReader::new(child.stderr.take().unwrap()).lines();
+        let mut lines = stderr.lines();
         loop {
             let line = lines.next_line().await.unwrap().unwrap();
             if line == "rustx presentation read blocked at connection admission" {
@@ -892,7 +880,7 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
         };
         let f = Fixture::new().await;
         use_emulator(&f, &provider);
-        let (mut child, url) = f.ws().await;
+        let (mut child, url, _stderr) = f.ws().await;
         let pid = child.id();
         let client = driver::websocket(&url).await;
         initialize_client(&client).await;
@@ -1034,7 +1022,7 @@ async fn app_server_current_sources_and_persisted_selection_survive_process_reco
         use_emulator(&f, &provider);
         let source = f.root.path().join("home/rustx/rustx.toml");
         let initial = std::fs::read_to_string(&source).unwrap();
-        let (mut child, url) = f.ws().await;
+        let (mut child, url, _stderr) = f.ws().await;
         let client = driver::websocket(&url).await;
         initialize_client(&client).await;
         let a = attach(&client, f.sessions[0].clone(), 2).await;
@@ -1097,7 +1085,7 @@ async fn app_server_current_sources_and_persisted_selection_survive_process_reco
         client.close().await;
         terminate(&child);
         assert!(child.wait().await.unwrap().success());
-        let (mut child, url) = f.ws().await;
+        let (mut child, url, _stderr) = f.ws().await;
         let client = driver::websocket(&url).await;
         initialize_client(&client).await;
         let cold = attach(&client, a.session_id.clone(), 4).await;
@@ -1147,6 +1135,7 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         let Some(pa) = provider_emulator::ProviderEmulator::start("app_server_user_a").await else { return };
         let Some(pb) = provider_emulator::ProviderEmulator::start("app_server_user_b").await else { return };
         let users = [("a", Fixture::new().await, &pa), ("b", Fixture::new().await, &pb)];
+        let mut startup_stderr = Vec::new();
         let mut processes = Vec::new();
         let mut clients = Vec::new();
         let mut targets = Vec::new();
@@ -1173,9 +1162,9 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
                 .arg("--token-file").arg(user.root.path().join("token"))
                 .env("TEST_KEY", format!("fake-{identity}"))
                 .env("RUSTX_HOST_MARKER", identity).spawn().unwrap();
-            let line = BufReader::new(child.stderr.as_mut().unwrap()).lines().next_line().await.unwrap().unwrap();
-            let endpoint = line.strip_prefix("rustx app-server listening ").unwrap();
-            let client = driver::websocket(endpoint).await;
+            let (endpoint, stderr) = websocket_startup(&mut child).await;
+            startup_stderr.push(stderr);
+            let client = driver::websocket(&endpoint).await;
             initialize_client(&client).await;
             let MethodResult::SessionTransition { session, .. } = result(&client, Method::SessionCreate {
                 settings: SessionPersistentState::from_input(&SessionConfigInput::new(user.root.path().join("a")))
@@ -1237,7 +1226,7 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         pb.release_gate("host-result").await;
         assert!(processes[0].try_wait().unwrap().is_none());
         assert_eq!(processes[0].id(), a_pid);
-        let (mut replacement, url) = users[1].1.ws().await;
+        let (mut replacement, url, _stderr) = users[1].1.ws().await;
         let recovered = driver::websocket(&url).await;
         initialize_client(&recovered).await;
         assert_eq!(diagnostics(&recovered).await.loaded, 0);
@@ -1622,23 +1611,14 @@ async fn app_server_delivery_access_is_explicit_transport_composition() {
             .arg(&delivery)
             .spawn()
             .unwrap();
-        let line = BufReader::new(child.stderr.as_mut().unwrap())
-            .lines()
-            .next_line()
-            .await
-            .unwrap()
-            .unwrap();
-        let url = line
-            .strip_prefix("rustx app-server listening ")
-            .unwrap()
-            .to_owned();
+        let (url, _stderr) = websocket_startup(&mut child).await;
         let ordinary = driver::websocket(&url).await;
         assert!(!granted(&ordinary).await);
         ordinary.close().await;
         let trusted = driver::websocket_offering(
             &url,
             &format!(
-                "rustx.app-server.v38, rustx-token.{}, rustx-delivery-access.{secret}",
+                "rustx.app-server.v44, rustx-token.{}, rustx-delivery-access.{secret}",
                 driver::TOKEN
             ),
         )
@@ -1648,7 +1628,7 @@ async fn app_server_delivery_access_is_explicit_transport_composition() {
         assert!(
             driver::try_socket(
                 &url,
-                &format!("rustx.app-server.v38, rustx-delivery-access.{secret}")
+                &format!("rustx.app-server.v44, rustx-delivery-access.{secret}")
             )
             .await
             .is_err(),

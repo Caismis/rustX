@@ -497,11 +497,20 @@ builtin = ["read", "read_image", "bash"]
 
 ### MCP settings observation
 
-Settings opening, closing, scope switching and refresh only inspect sources.
-They never connect, reconnect or disconnect an MCP server. The existing native
-capability generation owner remains the only runtime connection owner. Native
-prospective preparation and Root selection are separate from admitted runtime
-state; absent live connection evidence is explicitly not observed.
+The MCP settings list is passive: opening, switching scope, searching and Refresh
+only inspect configuration. An explicit per-definition Test connection action
+starts a finite native `mcp/probe` diagnostic rather than a Session connection.
+Each check captures one exact
+source document revision, performs initialization and `tools/list`, then awaits
+transport/process cleanup before returning. No business tool is called. The
+indicator describes the last configuration connectivity check, not live Agent
+availability. Missing transport evidence stays unknown.
+
+User and Workspace rows use the same diagnostic contract. Each check reads only
+the selected source, including a shadowed User definition; it does not resolve a
+same-name definition from another scope. Workspace checks pass through the
+Product Host registration lane. Source reads remain inert. Runtime capability
+ownership and running Session resources are unchanged.
 
 Ordinary `configuration/sourceWrite` rejects new literal MCP environment/header
 values. Use `sensitive_env` / `sensitive_headers` environment references instead.

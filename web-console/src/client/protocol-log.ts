@@ -1,4 +1,4 @@
-import type { Request1 } from '../../../protocol/app-server/v38';
+import type { Request1 } from '../../../protocol/app-server/v44';
 
 export interface WireContext { method?: Request1['method']; sessionId?: string }
 export interface WireEntry {
@@ -37,8 +37,8 @@ export class ProtocolLog {
         kind = 'id' in envelope ? ('method' in envelope ? 'request' : 'response') : 'notification';
         method = envelope.method ?? method;
         if (method === 'session/uploadPrepare' && envelope.result?.transfer) envelope.result.transfer.path = '[upload capability omitted]';
-        if (method === 'artifact/read' && envelope.result?.data) envelope.result.data = '[artifact bytes omitted]';
-        if (method === 'session/uploadPrepare' || method?.startsWith('artifact/')) raw = JSON.stringify(envelope);
+        if ((method === 'artifact/read' || method === 'agent/artifactRead') && envelope.result?.data) envelope.result.data = '[artifact bytes omitted]';
+        if (method === 'session/uploadPrepare' || method?.startsWith('artifact/') || method === 'agent/artifactRead') raw = JSON.stringify(envelope);
         // Authoring payloads are not general-purpose protocol diagnostics,
         // including rejected requests sent by a non-UI caller.
         if (method === 'configuration/sourceWrite' && envelope.params?.mutation) {

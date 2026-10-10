@@ -986,6 +986,21 @@ fn compaction_uses_the_next_boundary_even_far_back_in_history() {
     let store = store("conv_96847128-a59a-7bfa-8bf9-526873a32546");
     for index in 0..140 {
         append(&store, E::CompactionStarted, index * 2);
+        if index == 0 {
+            let read = TraceProjection::new(&store).unwrap();
+            let active = read.page(None, 1).unwrap().records.remove(0);
+            assert!(
+                active.has_detail,
+                "detail remains available through lifecycle repair"
+            );
+            assert!(
+                read.detail(&active.id)
+                    .unwrap()
+                    .unwrap()
+                    .messages
+                    .is_empty()
+            );
+        }
         append(
             &store,
             E::CompactionFailed {
@@ -4219,6 +4234,8 @@ fn adopted_agent_messages_expose_sender_without_mislabeling_human_or_mixed_batch
             agent_id: sender.clone(),
         }],
         vec![UserSource::Human],
+        vec![UserSource::Runtime],
+        vec![UserSource::Human; 12],
         vec![
             UserSource::Agent {
                 agent_id: sender.clone(),
@@ -4249,10 +4266,207 @@ fn adopted_agent_messages_expose_sender_without_mislabeling_human_or_mixed_batch
     let records: Vec<_> = page(&store)
         .records
         .into_iter()
-        .filter(|record| record.kind == TraceKind::User)
+        .filter(|record| matches!(record.kind, TraceKind::User | TraceKind::Context))
         .collect();
-    assert_eq!(records.len(), 3);
+    assert_eq!(records.len(), 5);
+    assert_eq!(
+        records.iter().map(|record| record.kind).collect::<Vec<_>>(),
+        vec![
+            TraceKind::Context,
+            TraceKind::User,
+            TraceKind::Context,
+            TraceKind::User,
+            TraceKind::Context
+        ]
+    );
     assert_eq!(records[0].agent_id.as_ref(), Some(&sender));
     assert!(records[1].agent_id.is_none());
     assert!(records[2].agent_id.is_none());
+    assert!(records[3].agent_id.is_none());
+}
+
+#[test]
+fn child_lifecycle_repair_uses_exact_attempt_and_request_and_never_revives_terminal() {
+    use crate::runtime::subagent::{AgentState, SubagentActivity};
+    let store = store("conv_00000000-0000-7000-8000-000000000002");
+    start(&store);
+    let request = request(&store, 0);
+    let mut agent: crate::runtime_client::snapshot::RuntimeClientAgent = serde_json::from_value(serde_json::json!({
+        "title": "Child task", "parent_agent_id": "parent", "agent_id": "child", "child_conversation_id": "conv_00000000-0000-7000-8000-000000000002",
+        "activation_id": "activation", "current_activation": "activation", "agent": "worker", "definition_digest": "d", "profile_digest": "p",
+        "state": "active", "activation_state": "running", "started_at": "2026-10-10T00:00:00Z",
+        "observation": { "revision": 1, "attempt_id": "attempt-a", "activity": { "type": "model", "request_id": request.request_id, "retry": 0 }, "counters": { "model_requests": 1, "model_retries": 0, "tool_executions": 0 } },
+        "workspace": { "logical_workspace": "/workspace", "isolation": { "type": "shared" }, "resource_state": "none" }
+    })).unwrap();
+    let original = page(&store).records;
+    let mut records = original.clone();
+    repair_agent_records(&mut records, &agent);
+    assert!(
+        records
+            .iter()
+            .filter(|record| matches!(record.kind, TraceKind::Attempt | TraceKind::Request))
+            .all(|record| record.state == TraceState::Running)
+    );
+    let projection = TraceProjection::new(&store).unwrap();
+    let updates = projection
+        .refresh_agent(
+            &records
+                .iter()
+                .map(|record| record.position.clone())
+                .collect::<Vec<_>>(),
+            &agent,
+        )
+        .unwrap();
+    assert_eq!(updates.len(), records.len());
+    for update in updates {
+        assert_eq!(
+            update.state,
+            records
+                .iter()
+                .find(|record| record.id == update.id)
+                .unwrap()
+                .state
+        );
+    }
+    agent.observation.activity = SubagentActivity::Model {
+        request_id: RequestId::new("different-request"),
+        retry: 0,
+    };
+    records = original.clone();
+    repair_agent_records(&mut records, &agent);
+    assert_eq!(records.last().unwrap().state, TraceState::Incomplete);
+    agent.observation.attempt_id = Some(AttemptId::new("later-attempt"));
+    records = original.clone();
+    repair_agent_records(&mut records, &agent);
+    assert!(
+        records
+            .iter()
+            .all(|record| record.state != TraceState::Running)
+    );
+    agent.observation.attempt_id = Some(AttemptId::new("attempt-a"));
+    agent.state = AgentState::Unavailable;
+    records = original.clone();
+    repair_agent_records(&mut records, &agent);
+    assert!(
+        records
+            .iter()
+            .all(|record| record.state != TraceState::Running)
+    );
+    agent.state = AgentState::Active;
+    records = original;
+    records.last_mut().unwrap().state = TraceState::Failed;
+    repair_agent_records(&mut records, &agent);
+    assert_eq!(records.last().unwrap().state, TraceState::Failed);
+}
+
+fn reused_tool_history() -> (SqliteConversationStore, u64, ToolCall) {
+    let store = store("conv_1c21f5be-5204-7123-aabd-32d315c81672");
+    start(&store);
+    let call = bash_call("reused-call");
+    let mut first_cut = 0;
+    for index in 0..160 {
+        let message_id = MessageId::new(format!("assistant-{index}"));
+        let mut committed = event(
+            &store,
+            E::AssistantMessageCommitted {
+                message_id: message_id.clone(),
+            },
+            index + 4,
+        );
+        committed.turn_id = Some(TurnId::new(format!("step-{index}")));
+        store
+            .append_canonical_with_event(
+                &MessageBlock::Assistant(AssistantMessageBlock {
+                    id: message_id,
+                    content: vec![
+                        AssistantContentBlock::Text(TextBlock {
+                            text: "reasoning".into(),
+                        }),
+                        AssistantContentBlock::ToolCall(call.clone()),
+                    ],
+                }),
+                committed,
+            )
+            .unwrap();
+        if index == 0 {
+            first_cut = store.presentation_frontier().unwrap();
+        }
+        append_in_step(
+            &store,
+            E::ToolExecutionStarted {
+                tool_call_id: call.id.clone(),
+                tool_id: call.tool_id.clone(),
+            },
+            index + 5,
+            &format!("step-{index}"),
+        );
+    }
+    (store, first_cut, call)
+}
+
+#[test]
+fn tool_locator_searches_complete_history_and_disambiguates_reused_call_ids() {
+    let (store, first_cut, call) = reused_tool_history();
+    let locator = TraceToolLocator {
+        occurrence: ToolCallOccurrenceRef::new(
+            MessageId::new("assistant-0"),
+            ContentBlockIndex::new(1),
+        ),
+        call_id: call.id.clone(),
+        tool_id: call.tool_id.clone(),
+    };
+    assert!(
+        TraceProjection::through(&store, first_cut)
+            .locate_tool(&locator)
+            .unwrap()
+            .is_none(),
+        "a proposal is not an execution at the captured cut"
+    );
+    let projection = TraceProjection::new(&store).unwrap();
+    let latest = projection.page(None, TRACE_PAGE_LIMIT).unwrap();
+    let location = projection.locate_tool(&locator).unwrap().unwrap();
+    assert!(
+        !latest
+            .records
+            .iter()
+            .any(|record| record.id == location.record_id),
+        "the located call was never in the latest page"
+    );
+    assert_eq!(location.page.records.last().unwrap().id, location.record_id);
+    assert!(location.page.records.len() <= TRACE_PAGE_LIMIT);
+    let record = location.page.records.last().unwrap();
+    assert_eq!(record.location.step_id, Some(TurnId::new("step-0")));
+    let detail = projection.detail(&location.record_id).unwrap().unwrap();
+    assert_eq!(
+        detail.tool.unwrap().arguments.unwrap().value["command"],
+        call.arguments["command"]
+    );
+    let wrong_block = TraceToolLocator {
+        occurrence: ToolCallOccurrenceRef::new(
+            MessageId::new("assistant-0"),
+            ContentBlockIndex::new(0),
+        ),
+        ..locator.clone()
+    };
+    assert!(projection.locate_tool(&wrong_block).unwrap().is_none());
+    let wrong_tool = TraceToolLocator {
+        tool_id: ToolId::new("tool-read"),
+        ..locator.clone()
+    };
+    assert!(projection.locate_tool(&wrong_tool).unwrap().is_none());
+    let second = projection
+        .locate_tool(&TraceToolLocator {
+            occurrence: ToolCallOccurrenceRef::new(
+                MessageId::new("assistant-159"),
+                ContentBlockIndex::new(1),
+            ),
+            ..locator
+        })
+        .unwrap()
+        .unwrap();
+    assert_ne!(second.record_id, location.record_id);
+    assert_eq!(
+        second.page.records.last().unwrap().location.step_id,
+        Some(TurnId::new("step-159"))
+    );
 }

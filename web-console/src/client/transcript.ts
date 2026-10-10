@@ -1,4 +1,4 @@
-import type { ConversationReadCut, ConversationWindow, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v38';
+import type { ConversationReadCut, ConversationWindow, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v44';
 
 export const HISTORY_PAGE_SIZE = 64;
 export const HISTORY_LIMIT = 256;

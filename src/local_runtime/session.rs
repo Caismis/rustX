@@ -2806,6 +2806,7 @@ fn lineage_cut(
         destination,
         &canonical,
         &retained,
+        &source.checkpoints,
         &source.completed_responses,
         &source
             .turns
@@ -2862,6 +2863,7 @@ pub(crate) fn remap_seed(
     destination: &ConversationId,
     canonical: &[MessageBlock],
     surface_history: &[SurfaceOp],
+    source_checkpoints: &BTreeMap<MessageId, crate::durable::inbox::CompactionCheckpointStatistics>,
     completed_responses: &[crate::durable::response::CompletedResponseProvenance],
     turns: &[crate::durable::reading::TurnReadingProvenance],
 ) -> Result<LineageSeed, SessionError> {
@@ -2949,7 +2951,11 @@ pub(crate) fn remap_seed(
             Some(copied)
         })
         .collect();
-    LineageSeed::replayed(canonical, surface_history)
+    let checkpoints = source_checkpoints
+        .iter()
+        .filter_map(|(id, stats)| message_ids.get(id).map(|mapped| (mapped.clone(), *stats)))
+        .collect();
+    LineageSeed::replayed(canonical, surface_history, checkpoints)
         .and_then(|seed| seed.with_completed_responses(responses))
         .and_then(|seed| seed.with_turns(turns))
         .map_err(|error| SessionError::Seed {
@@ -7339,6 +7345,7 @@ model = "provider/model"
                 attempt_id: None,
                 turn_id: None,
                 timestamp: Utc.with_ymd_and_hms(2026, 8, 21, 12, 0, 0).unwrap(),
+                occupancy: None,
             })
             .expect("real compaction commit");
         let retained = lineage_at(&source_store, &source_conversation, retained_revision);
@@ -7538,6 +7545,7 @@ model = "provider/model"
                 attempt_id: None,
                 turn_id: None,
                 timestamp: Utc.with_ymd_and_hms(2026, 8, 26, 12, 0, 0).unwrap(),
+                occupancy: None,
             })
             .expect("real compaction commit");
         let compacted = source_store.load_head().expect("compacted head");
@@ -7638,6 +7646,7 @@ model = "provider/model"
                 attempt_id: None,
                 turn_id: None,
                 timestamp: Utc.with_ymd_and_hms(2026, 8, 26, 12, 0, 0).unwrap(),
+                occupancy: None,
             })
             .expect("real compaction commit");
 
@@ -7696,6 +7705,7 @@ model = "provider/model"
                 attempt_id: None,
                 turn_id: None,
                 timestamp: Utc.with_ymd_and_hms(2026, 8, 26, 12, 0, 0).unwrap(),
+                occupancy: None,
             })
             .expect("real compaction commit");
         store.load_head().expect("compacted head").revision
@@ -7793,6 +7803,24 @@ model = "provider/model"
             )
             .expect("clone the compacted source");
         let clone_store = store_for(catalog, &clone.session_id, &clone.conversation_id);
+        let source_facts = source_store
+            .read_lineage_cut(compacted)
+            .unwrap()
+            .checkpoints;
+        let copied_facts = clone_store
+            .read_lineage_cut(clone_store.load_head().unwrap().revision)
+            .unwrap()
+            .checkpoints;
+        assert_eq!(
+            copied_facts.values().collect::<Vec<_>>(),
+            source_facts.values().collect::<Vec<_>>()
+        );
+        for id in copied_facts.keys() {
+            assert_eq!(
+                clone_store.compaction_checkpoint(id, u64::MAX).unwrap().1,
+                None
+            );
+        }
         (
             source_store,
             source_conversation,

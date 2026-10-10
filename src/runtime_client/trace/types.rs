@@ -84,6 +84,8 @@ pub enum TraceKind {
     Step,
     /// Canonical inbound accepted as a turn this conversation owes an answer for.
     User,
+    /// Adopted input from runtime, Agent or mixed sources; never a human row.
+    Context,
     Request,
     Assistant,
     Tool,

@@ -1,6 +1,8 @@
+import { ToolInspectionButton } from '../../presentation/agent/ToolCard';
+import toolCss from '../../presentation/agent/Tool.module.css';
 import type { Translate } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
-import type { ForegroundToolExecution } from '../../../../protocol/app-server/v38';
+import type { ForegroundToolExecution } from '../../../../protocol/app-server/v44';
 import css from './GoalActivity.module.css';
 
 /** Historical execution evidence only. The Goal dock owns current state. */
@@ -15,12 +17,12 @@ export function goalActivityLabel(tx: Translate, tool: ForegroundToolExecution):
   return success && action === 'complete' ? tx('agent:copy.goal-completed') : success && action === 'blocked' ? tx('agent:copy.goal-blocked') : tx('agent:copy.updating-goal');
 }
 
-export function GoalActivity({ tool, label }: { tool: ForegroundToolExecution; label: string }) {
+export function GoalActivity({ tool, label, inspect }: { tool: ForegroundToolExecution; label: string; inspect?: () => Promise<void> }) {
   const tx = useTranslation();
   const status = tool.state.type === 'settled' ? tool.state.result.status.type : tool.state.type;
   return <div className={css.activity} data-goal-activity data-tool-call-id={tool.call_id}>
     <span aria-hidden="true">◇</span><span>{label}</span>
-    <details><summary>{tx('agent:goal-activity.execution-details')}</summary><pre>{JSON.stringify(tool, null, 2)}</pre></details>
+    <details className={toolCss.root}><summary>{tx('agent:goal-activity.execution-details')}</summary><pre>{JSON.stringify(tool, null, 2)}</pre>{inspect && <ToolInspectionButton inspect={inspect}/>}</details>
     {status !== 'success' && <small aria-label={tx('agent:goal-activity.goal-activity-status')}>{tx(`common:state.${status}`)}</small>}
   </div>;
 }

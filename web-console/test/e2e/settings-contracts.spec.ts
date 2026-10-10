@@ -94,18 +94,15 @@ reasoning = { default_profile = "deep", profiles = { deep = { enabled = true }, 
       await expect(settings).not.toContainText('fixture-header-secret');
       await expect(settings).not.toContainText('fixture-env-secret');
       await settings.getByRole('button', { name: 'JSON', exact: true }).click();
-      const editor = settings.getByLabel('MCP configuration JSON');
+      const editor = settings.getByLabel('Complete configuration');
       const config = JSON.parse(await editor.inputValue());
-      if (transport === 'http') {
-        expect(config.retained_headers).toContain('Authorization');
-        config.definition.url = 'https://example.invalid/edited';
-      } else {
-        expect(config.retained_env).toContain('TOKEN');
-        config.definition.cwd = fixture.workspaceA;
-      }
+      const definition = config[`implicit-${transport}`];
+      expect(config).not.toHaveProperty('retained_headers');
+      expect(config).not.toHaveProperty('retained_env');
+      if (transport === 'http') definition.url = 'https://example.invalid/edited';
+      else definition.cwd = fixture.workspaceA;
       await editor.fill(JSON.stringify(config));
-      await settings.getByRole('button', { name: 'Use configuration', exact: true }).click();
-      await settings.getByRole('button', { name: `Save MCP implicit-${transport}`, exact: true }).click();
+      await settings.getByRole('button', { name: 'Save', exact: true }).click();
       await expect(settings.getByRole('listitem', { name: `implicit-${transport}`, exact: true })).toBeVisible();
     }
     const mcp = readFileSync(mcpFile, 'utf8');

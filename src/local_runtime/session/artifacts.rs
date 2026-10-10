@@ -112,10 +112,12 @@ pub(super) fn materialize(
             );
         }
         references(&mut canonical, |id| *id = remapped[id].clone());
-        Ok(
-            LineageSeed::replayed(canonical, seed.surface_history().to_vec())?
-                .with_completed_responses(seed.completed_responses().to_vec())?,
-        )
+        Ok(LineageSeed::replayed(
+            canonical,
+            seed.surface_history().to_vec(),
+            seed.checkpoints().clone(),
+        )?
+        .with_completed_responses(seed.completed_responses().to_vec())?)
     };
     copy().map_err(|e| SessionError::Io {
         path: root.into(),

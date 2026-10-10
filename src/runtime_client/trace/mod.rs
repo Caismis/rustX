@@ -66,6 +66,7 @@ mod content;
 mod detail;
 mod lifecycle;
 mod live;
+mod locate;
 mod record;
 mod request;
 mod summary;
@@ -76,6 +77,7 @@ pub use bounds::{
     TRACE_DETAIL_BYTES, TRACE_PAGE_BYTES, TRACE_RECORD_BYTES, TRACE_SUMMARY_CONTEXT,
     TRACE_SUMMARY_CONTEXT_BYTES, TraceJson, TracePreview, TraceText,
 };
+pub use locate::{TraceToolLocation, TraceToolLocator};
 pub use types::{
     TraceArtifact, TraceContentBlock, TraceContextKind, TraceContextPresentation,
     TraceContextSource, TraceCursor, TraceDetail, TraceGeneration, TraceGenerationTimeline,
@@ -290,6 +292,31 @@ impl<'a> TraceProjection<'a> {
             .filter(|event| event.sequence == sequence))
     }
 
+    /// Child refresh resolves only lifecycle facts, then exact live activity.
+    pub(crate) fn refresh_agent(
+        &self,
+        records: &[TraceCursor],
+        agent: &super::snapshot::RuntimeClientAgent,
+    ) -> Result<Vec<TraceLifecycle>, ConversationStoreError> {
+        if records.len() > TRACE_RECORD_LIMIT {
+            return Err(ConversationStoreError::InvalidReference(
+                "too many Trace records".into(),
+            ));
+        }
+        records
+            .iter()
+            .map(|cursor| {
+                let Some(anchor) = self.anchor_at(cursor)? else {
+                    return Ok(None);
+                };
+                let mut facts = self.anchor_facts(&anchor)?;
+                live::repair_agent_anchor(&mut facts, agent);
+                Ok(Some(facts.lifecycle()))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(|updates| updates.into_iter().flatten().collect())
+    }
+
     /// Refreshes loaded records' mutable lifecycle at this cut.
     ///
     /// Only the facts a [`TraceLifecycle`] transmits are resolved. The
@@ -329,7 +356,7 @@ impl<'a> TraceProjection<'a> {
     }
 }
 
-pub(crate) use live::{repair_live, repair_records};
+pub(crate) use live::{repair_agent_records, repair_live, repair_records};
 
 #[cfg(test)]
 mod tests;

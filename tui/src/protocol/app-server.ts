@@ -2,7 +2,7 @@
  * The App Server protocol as this client sees it.
  *
  * There is no wire transcription here. Every type below is either re-exported
- * from `protocol/app-server/v38.ts` — generated from the authoritative Rust DTOs
+ * from `protocol/app-server/v44.ts` — generated from the authoritative Rust DTOs
  * in `src/app_server/protocol.rs` — or **derived from one of those generated
  * types** with an indexed access. A derivation cannot drift: if the Rust DTO
  * changes shape, regeneration changes the type this file names, and every use
@@ -11,9 +11,9 @@
  * ```text
  * src/app_server/protocol.rs      (Rust authority)
  *        | schemars
- * protocol/app-server/v38.schema.json
+ * protocol/app-server/v44.schema.json
  *        | json-schema-to-typescript
- * protocol/app-server/v38.ts       (generated)
+ * protocol/app-server/v44.ts       (generated)
  *        | re-export + indexed access
  * this file                       (the only names the TUI spells)
  * ```
@@ -56,7 +56,7 @@ import type {
   SessionSummary,
   SessionUserMessageBoundary,
   Success,
-} from "../../../protocol/app-server/v38.ts";
+} from "../../../protocol/app-server/v44.ts";
 
 export type {
   ConfigurationApplication,
@@ -134,7 +134,7 @@ export type {
   WorkflowDependencyFailure,
   WorkflowInspection,
   WorkflowState,
-} from "../../../protocol/app-server/v38.ts";
+} from "../../../protocol/app-server/v44.ts";
 
 // ---------------------------------------------------------------------------
 // Envelope helpers
@@ -518,6 +518,8 @@ export function describeRpcError(error: RpcError): string {
       return "the connection has not completed initialize";
     case "already_initialized":
       return "the connection has already completed initialize";
+    case "observation_cancelled":
+      return "the child conversation observation was cancelled";
     case "delivery_cancelled":
       return "the delivery request was cancelled before publication";
     case "stale_attachment":

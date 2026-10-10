@@ -49,6 +49,15 @@ files/batches are never overwritten.
 Uploads remain ordinary mutable files; edits after commit are intentional workspace
 semantics. They may appear in VCS status. rustX never edits ignore files.
 
+## Child conversations
+
+Child inputs use the same Session-owned upload transfer and receipt validation.
+`agent/sendMessage` accepts text plus receipts, or receipts without text. Native
+routing validates Session ownership before passing canonical `UploadedFileRef`
+values through active guidance or resumed admission. The child model resolver is
+bound to the owning Session rather than assuming that its Conversation is a root
+Session node. No duplicate child upload store or client-supplied path is used.
+
 ## Canonical metadata and model projection
 
 Turn input contains user text plus completed server receipt references. The
@@ -127,7 +136,7 @@ another Session's root.
 
 ## Protocol and schema boundaries
 
-App Server v38 is mandatory (`rustx.app-server.v38`). Session catalog schema 15
+App Server v44 is mandatory (`rustx.app-server.v44`). Session catalog schema 15
 retains native upload operation correlation and known pre-ready failures alongside
 each allocation, and adds the execution-ownership generation described in
 [the App Server contract](app-server-protocol.md). SQLite schema 49 is unchanged.

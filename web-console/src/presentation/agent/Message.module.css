@@ -71,7 +71,8 @@
   border: none;
   border-radius: 6px;
   background: none;
-  color: inherit;
+  color: var(--dsw-alias-label-tertiary);
+  transition: color 100ms ease;
   font: inherit;
   text-align: left;
 }
@@ -113,6 +114,10 @@
 
 .compactionButton:not(:disabled) {
   cursor: pointer;
+}
+
+.compactionButton:hover {
+  color: var(--dsw-alias-label-secondary);
 }
 
 .compactionButton:not(:disabled):hover {
@@ -162,7 +167,7 @@
   flex: none;
   font-size: var(--dsh-content-font-size-secondary, 13px);
   line-height: calc(24px + var(--dsh-content-font-delta, 0px));
-  color: var(--dsw-alias-label-primary-dimmed);
+  color: inherit;
 }
 
 .compactionSep {
@@ -178,7 +183,7 @@
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
-  color: var(--dsw-alias-label-tertiary);
+  color: inherit;
   font-size: var(--dsh-content-font-size-secondary, 13px);
   line-height: calc(24px + var(--dsh-content-font-delta, 0px));
   text-overflow: ellipsis;

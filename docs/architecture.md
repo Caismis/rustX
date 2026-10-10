@@ -6917,15 +6917,20 @@ The parent's addressed runtime resolves an exact AgentId through its native
 registry to the owned child Conversation. Existing allocation access and an
 identity-validated read-only store feed the shared Runtime Client durable
 transcript projector and completed-response decorator. App Server
-`agent/transcript` translates this bounded read only; it never reconstructs
-messages, creates child Sessions or grants a child controller. The child Ledger,
+`agent/turns` supplies a bounded page of the complete child Attempt directory
+across activations. `agent/transcript` locates a Turn at its child-owned read cut
+or pages older/newer windows at that cut. Parent and child windows share the
+native projector and completion decorators. These reads never reconstruct
+messages, create child Sessions or grant a child controller. WebUI keeps an
+independent live tail beside the bounded historical window and uses the same
+Harness navigation rail in both parent and child views. The child Ledger,
 Surface and Journal remain the sole canonical authorities. Terminal lifecycle
 and retained workspace facts do not manufacture transcript completion facts.
 
 The TUI has one disposable child page, fenced by parent attachment epoch and
 child selection/read generation. Reconnect reconstructs from current authority;
 Esc closes presentation without runtime mutation. Child HITL remains routed to
-the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-agent-conversations-v38).
+the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-agent-conversations-v44).
 
 ## Image Tool and Bash presentation (#412)
 
@@ -6941,7 +6946,7 @@ and image context cost are shared; adapters own only encoding and placement.
 Model declarations remain explicit. Endpoint incompatibility is a provider error,
 without placement capability splits, provider-name checks or synthetic User fallback.
 
-### Child Agent meters (Runtime Client 60 / App Server 38)
+### Child Agent meters (Runtime Client 61 / App Server 39)
 
 `agent/statistics` resolves a stable Agent identity exclusively through its
 parent registry and opens the existing child store read-only. It returns the
@@ -7070,3 +7075,11 @@ current model or its effective profile preserves the configured choice and sends
 no mutation. Both controls use the existing Session model mutation/confirmation
 owner; a cold choice is only local intent until native acknowledgement and the
 authoritative reread. Unknown outcomes remain visible and are never replayed.
+
+### Per-input attachment admission
+
+`message::content::MAX_INPUT_ATTACHMENTS` owns the generic eight-file input
+limit. Session uploads advertise that same limit while independently owning
+transport/storage bounds and receipt resolution into trusted references. The
+Subagent registry validates it before guidance admission or activation
+reservation; Runtime does not depend on Session upload policy.

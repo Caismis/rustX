@@ -457,6 +457,13 @@
   );
 }
 
+/* Only an overflowing reader moves this seat between sticky and flow origins.
+   Keep that fade's raster local rather than letting promotion depend on its
+   earlier scroll/paint history. Non-scrolling seats retain their normal paint. */
+.composerSeat[data-sticky-overflow] {
+  transform: translateZ(0);
+}
+
 /* An open @/slash menu (data-trigger-menu, ui-input-trigger) renders inside
    the input card, so the seat's stacking context caps its z-index; lift the
    seat above the back-to-bottom control (z-index 8, ui-chat ChatView) while

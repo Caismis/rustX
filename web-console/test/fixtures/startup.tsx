@@ -1,11 +1,12 @@
+import { childNavigation } from './child-navigation';
 import { agentMetrics } from '../agent-statistics-fixture';
 import { createRoot } from 'react-dom/client';
 import { App } from '../../src/app/App';
-import { Server, snapshot } from '../fixture';
+import { Server, snapshot, childConversation } from '../fixture';
 import { cfg3Source, cfg3Effective } from '../cfg3-data';
-import { traceRecord } from '../trace-fixture';
+import { traceRecord, traceTool, requestDetail, toolDetail } from '../trace-fixture';
 import { RpcFailure } from '../../src/client/app-server';
-import type { Request } from '../../../protocol/app-server/v38';
+import type { Request } from '../../../protocol/app-server/v44';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -56,14 +57,47 @@ if (new URL(location.href).searchParams.has('trajectory')) {
 }
 if (new URL(location.href).searchParams.has('subagents')) {
   const saved = server.snapshots.get('A')!;
-  saved.agents = ['Research sources', 'Verify findings', 'Write report'].map((agent, index) => ({ agent, agent_id: `child-${index}`, parent_agent_id: 'root', child_conversation_id: `child-conversation-${index}`, activation_id: `activation-${index}`, current_activation: index === 0 ? 'activation-0' : null, state: index === 0 ? 'active' : 'inactive', activation_state: index === 0 ? 'running' : 'succeeded', definition_digest: 'definition', profile_digest: 'profile', started_at: '2026-10-08T08:00:00Z', observation: { revision: '1', activity: { type: 'awaiting_activity' }, counters: { model_requests: 3, model_retries: 0, tool_executions: 2 } }, workspace: { logical_workspace: '/workspace/A', isolation: { type: 'shared' }, resource_state: 'none' } }));
+  saved.agents = ['Research sources', 'Verify findings', 'Write report'].map((agent, index) => ({ title: agent, agent, agent_id: `child-${index}`, parent_agent_id: 'root', child_conversation_id: `child-conversation-${index}`, activation_id: `activation-${index}`, current_activation: index === 0 ? 'activation-0' : null, state: index === 0 ? 'active' : 'inactive', activation_state: index === 0 ? 'running' : 'succeeded', definition_digest: 'definition', profile_digest: 'profile', started_at: '2026-10-08T08:00:00Z', observation: { attempt_id: null, revision: '1', activity: { type: 'awaiting_activity' }, counters: { model_requests: 3, model_retries: 0, tool_executions: 2 } }, workspace: { logical_workspace: '/workspace/A', isolation: { type: 'shared' }, resource_state: 'none' } }));
   saved.transcript.entries!.push({ cursor: '21', item: { type: 'message', message: { role: 'user', id: 'agent-report', source: { agent: { agent_id: 'child-1' } }, content: [{ type: 'text', text: 'Verified report: the original sources agree.\n\n**Evidence**\n\n- Source one\n- Source two' }] } } });
+  if (new URL(location.href).searchParams.has('subagent-details')) {
+    const task = 'Inspect the original sources, verify the claims and return a concise report with evidence.';
+    const invocations = [
+      { name: 'subagent', arguments: { agent: 'explore', title: 'Verify findings', task }, result: { agent_id: 'child-1', activation_id: 'activation-1', state: 'active', agent: 'Verify findings' } },
+      { name: 'list_agents', arguments: {}, result: { returned: saved.agents.length, matched: saved.agents.length, truncated: false, limit: 64, agents: saved.agents.map(agent => ({ agent_id: agent.agent_id, title: agent.title, agent: agent.agent, state: agent.state })) } },
+      { name: 'wait_agent', arguments: { agent_id: 'child-1' }, result: { agent_id: 'child-1', activation_id: 'activation-1', outcome: 'succeeded' } },
+    ];
+    saved.transcript.entries!.push({ cursor: '22', item: { type: 'message', message: { role: 'assistant', id: 'delegation', content: [
+      { type: 'text', text: 'I will delegate the source verification and review the evidence when it returns.' },
+      ...invocations.map((invocation, index) => ({ type: 'tool_call' as const, id: `agent-call-${index}`, tool_id: `tool-${invocation.name}`, name: invocation.name, arguments: invocation.arguments })),
+    ] } }, tool_calls: invocations.map((invocation, index) => ({ message_id: 'delegation', block_index: index + 1, call_id: `agent-call-${index}`, tool_id: `tool-${invocation.name}`, name: invocation.name, state: { type: 'settled', arguments: JSON.stringify(invocation.arguments), result: { status: { type: 'success' }, content: [{ type: 'json', value: invocation.result }], duration_ms: 100 } } })) });
+  }
   server.handlers.set('agent/statistics', () => ({ type: 'agent_statistics', metrics: agentMetrics }));
-  server.handlers.set('agent/transcript', request => {
-    if (request.method !== 'agent/transcript') throw Error('Wrong method');
-    return { type: 'transcript', page: { entries: [{ cursor: '1', item: { type: 'message', message: { role: 'assistant', id: `${request.params.agent_id}-reply`, content: [{ type: 'text', text: `# Child research report\n\nSelected agent: ${request.params.agent_id}\n\nSources have been checked.\n\n` + 'Detailed findings and supporting evidence. '.repeat(120) }] } } }] } };
+  if (new URL(location.href).searchParams.has('nested-subagents')) saved.agents.push({ ...saved.agents[1]!, title: 'Verify original documents', agent: 'Verify original documents', agent_id: 'grandchild', parent_agent_id: 'child-1', child_conversation_id: 'grandchild-conversation' });
+  server.handlers.set('agent/sendMessage', request => {
+    if (request.method !== 'agent/sendMessage') throw Error('Wrong method');
+    return { type: 'agent_message', agent_id: request.params.agent_id, activation_id: 'resumed-activation', resumed: true };
+  });
+  server.handlers.set('agent/trace', request => {
+    if (request.method !== 'agent/trace') throw Error('Wrong method');
+    const { agent_id, before, limit } = request.params;
+    const records = Array.from({ length: 70 }, (_, n) => n % 3 === 0
+      ? traceTool(n + 1, { preview: { text: `${agent_id} tool ${n + 1}`, truncated: false } })
+      : traceRecord(n + 1, { preview: { text: `${agent_id} request ${n + 1}`, truncated: false } }));
+    const end = before ? records.findIndex(record => record.position === before) : records.length;
+    const start = Math.max(0, end - limit);
+    return { type: 'trace', page: { records: records.slice(start, end), next_cursor: start > 0 ? records[start]!.position : null } };
+  });
+  server.handlers.set('agent/traceDetail', request => {
+    if (request.method !== 'agent/traceDetail') throw Error('Wrong method');
+    const n = Number(request.params.record_id.slice(6));
+    return { type: 'trace_detail', detail: ((n - 1) % 3 === 0 ? toolDetail : requestDetail)(n, { messages: [{ message_id: `${request.params.agent_id}-evidence`, role: 'assistant', blocks: [{ type: 'text', text: { text: `${request.params.agent_id} independent evidence`, truncated: false } }], truncated: false }] }) };
+  });
+  server.handlers.set('agent/conversation', request => {
+    if (request.method !== 'agent/conversation') throw Error('Wrong method');
+    return childConversation({ entries: [{ cursor: '1', item: { type: 'message', message: { role: 'assistant', id: `${request.params.agent_id}-reply`, content: [{ type: 'text', text: `# Child research report\n\nSelected agent: ${request.params.agent_id}\n\nSources have been checked.\n\n` + 'Detailed findings and supporting evidence. '.repeat(120) }] } } }] }, request.params.agent_id, 'activation-a', saved.agents!.find(agent => agent.agent_id === request.params.agent_id)!.child_conversation_id);
   });
 }
+if (new URL(location.href).searchParams.has('child-turn-navigation')) childNavigation(server);
 let nativeDefault = 'fixture/native';
 server.handlers.set('session/create', request => {
   if (request.method !== 'session/create') throw Error('Wrong method');
@@ -80,6 +114,15 @@ render();
 const handled = new Set<Request>(server.requests.filter(row => row.request.method === 'initialize' || row.request.method === 'session/list').map(row => row.request));
 (window as any).startupFixture = {
   requests: () => server.requests.map(({ request }) => request),
+  async contextReading(input: number | null, running = false) {
+    const next = { ...server.snapshots.get('A')! };
+    next.context = { compaction_count: 0, compaction_in_progress: false, occupancy: input === null ? null : { estimated: false,
+      input_tokens: input, context_window_tokens: 100000, model: 'measured/model',
+      breakdown: { system_tokens: 1000, tool_tokens: 2000, message_tokens: input - 3000 },
+    } };
+    next.attempt = running ? { attempt_id: 'attempt-A', phase: { type: 'running' }, turn: 1, execution_settings: { resource_revision: '1', approval_mode: 'policy' } } : null;
+    await server.update('A', next);
+  },
   async appendSavedReply() {
     const entry = server.snapshots.get('A')!.transcript.entries!.at(-1)!;
     if (entry.item.type !== 'message' || entry.item.message.role !== 'assistant') throw Error('Expected saved reply');

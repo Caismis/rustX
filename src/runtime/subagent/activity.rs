@@ -82,6 +82,8 @@ pub struct SubagentObservation {
     /// The child-owned projection revision; strictly increasing per applied
     /// transition.
     pub revision: u64,
+    /// Exact child-owned current Attempt; absent before start and after settlement.
+    pub attempt_id: Option<crate::runtime::identity::AttemptId>,
     /// What the child is observably doing right now.
     pub activity: SubagentActivity,
     /// When the latest applied transition was folded (child-side clock).
@@ -97,6 +99,7 @@ impl Default for SubagentObservation {
     fn default() -> Self {
         Self {
             revision: 0,
+            attempt_id: None,
             activity: SubagentActivity::AwaitingActivity,
             last_activity_at: None,
             counters: SubagentActivityCounters::default(),
@@ -111,6 +114,7 @@ impl SubagentObservation {
     /// projects a stale in-flight activity. Counters and the last-activity
     /// timestamp are kept as the final record of what the child did.
     pub(crate) fn settle_neutral(&mut self) {
+        self.attempt_id = None;
         self.activity = SubagentActivity::AwaitingActivity;
         self.revision += 1;
     }
@@ -239,6 +243,18 @@ impl SubagentObservationProjector {
     /// Folds one canonical runtime event of the child's attempt.
     fn fold_event(&mut self, event: &RuntimeEvent) -> bool {
         match event {
+            RuntimeEvent::AttemptStarted { attempt_id } => {
+                self.observation.attempt_id = Some(attempt_id.clone());
+                true
+            }
+            RuntimeEvent::AttemptCompleted { .. }
+            | RuntimeEvent::AttemptFailed { .. }
+            | RuntimeEvent::AttemptCancelled { .. }
+            | RuntimeEvent::AttemptTimedOut { .. }
+            | RuntimeEvent::AttemptLimitExceeded { .. } => {
+                self.observation.attempt_id = None;
+                true
+            }
             RuntimeEvent::ModelRequestStarted { request_id, .. } => {
                 // The retry ordinal of THIS request: whatever retry the
                 // scheduler armed, consumed exactly once. A later turn's

@@ -2,7 +2,7 @@ import { ResourceAvailability } from './ResourceAvailability';
 import type { ReactNode } from 'react';
 import { useState } from 'react';
 import { useTranslation } from '../../../locale/react';
-import type { ResourceFamily, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v38';
+import type { ResourceFamily, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v44';
 import { Button } from '../../../presentation/primitives/Button';
 import { IconAgentPresetOutline16, IconCodeOutline16 } from '../../../presentation/primitives/icons';
 import { NativeFacts } from '../../components/NativeFacts';

@@ -191,6 +191,7 @@ impl Lab {
         .expect("the child plane implements read");
         SubagentStartSpec {
             authority: crate::runtime::subagent::DurableAgentAuthority {
+                title: "Explore task".to_owned(),
                 execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
                 resolved: ResolvedSubagentSpec {
                     environment: Vec::new(),
@@ -226,6 +227,7 @@ impl Lab {
                 approval_mode: crate::runtime::ApprovalMode::Policy,
             },
             admission: crate::runtime::subagent::ActivationAdmission {
+                attachments: Vec::new(),
                 task: "inspect the repository".to_owned(),
                 context: None,
                 origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {

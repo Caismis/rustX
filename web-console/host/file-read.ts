@@ -1,6 +1,6 @@
 /** Node-only native seam. Never imported by browser code or its protocol log. */
 import type { DeliveryBytes, DeliveryRead } from '../src/workspaces/host.ts';
-import type { AttachmentTarget, RpcError } from '../../protocol/app-server/v38.ts';
+import type { AttachmentTarget, RpcError } from '../../protocol/app-server/v44.ts';
 import { WorkspaceHostError } from '../src/workspaces/host.ts';
 
 export class NativeFileReadError extends Error {
@@ -9,7 +9,7 @@ export class NativeFileReadError extends Error {
 }
 
 export function readNativeDelivery(endpoint: string, credential: string, read: DeliveryRead, roots: string[], signal: AbortSignal): Promise<DeliveryBytes> {
-  return readNativeSource(endpoint, credential, read.target, { kind: 'session_file', message_id: read.message_id, delivery_index: read.delivery_index }, roots, signal) as Promise<DeliveryBytes>;
+  return readNativeSource(endpoint, credential, read.target, { kind: 'session_file', message_id: read.message_id, delivery_index: read.delivery_index, agent_id: read.agent_id }, roots, signal) as Promise<DeliveryBytes>;
 }
 export function readNativeSource(endpoint: string, credential: string, target: AttachmentTarget, source: import('../shared/documents.ts').DocumentSource, roots: string[], signal: AbortSignal): Promise<{ data: string; file?: DeliveryBytes['file'] }> {
   signal.throwIfAborted();
@@ -17,7 +17,7 @@ export function readNativeSource(endpoint: string, credential: string, target: A
   if (url.pathname !== '/' || url.search || url.hash || url.username || url.password) throw new Error('Invalid Product Host native endpoint');
   url.pathname = '/product-host/file-read';
   // Secret is handshake-only, never reflected in the selected subprotocol.
-  const socket = new WebSocket(url, ['rustx.product-host.file-read.v2', `rustx-product-host.${credential}`]);
+  const socket = new WebSocket(url, ['rustx.product-host.file-read.v3', `rustx-product-host.${credential}`]);
   return new Promise((resolve, reject) => {
     let settled = false, dispatched = false, closing = false;
     let requestedError: Error | undefined;

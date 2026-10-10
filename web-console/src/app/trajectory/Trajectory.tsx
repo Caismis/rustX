@@ -33,13 +33,14 @@ function defaultToolRequestWidth(splitWidth: number): number {
 
 export interface TrajectoryProps {
   cache: TraceCache;
+  onLatest?: () => void;
   loadEarlier: () => void;
   onSelect: (id?: string) => void;
   onLoadDetail: (id: string) => void;
 }
 
 /** Native owner selection stays in the read cache; display/facet lives locally. */
-export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail }: TrajectoryProps) {
+export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLatest }: TrajectoryProps) {
   const tx = useTranslation();
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<TrajectoryTimelineMode>('sequence');
@@ -57,7 +58,7 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail }: Traje
   const tabHistory = useRef<TrajectoryFacet[]>(['overview']);
   const ledger = useRef<LedgerHandle>(null);
   const focusedDisplay = useRef<string | undefined>(undefined);
-  const [pendingFocus, setPendingFocus] = useState<string | undefined>();
+  const [pendingFocus, setPendingFocus] = useState<string | undefined>(() => selection?.display_key);
   const records = cache.page.records;
   const projection = useMemo(() => projectTrajectory(tx, records), [tx, records]);
   const allItems = useMemo(() => trajectoryItems(tx, projection, cache.page.next_cursor), [tx, projection, cache.page.next_cursor]);
@@ -104,6 +105,16 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail }: Traje
     tabHistory.current = [...tabHistory.current.filter(tab => tab !== facet), facet];
     setSelection(current => current ? { ...current, facet } : current);
   };
+
+  // A native tool landing can arrive while a resident child Trace is hidden.
+  const landingEpoch = useRef<number | undefined>(undefined);
+  useLayoutEffect(() => {
+    if (!cache.located || !cache.selection || landingEpoch.current === cache.epoch) return;
+    landingEpoch.current = cache.epoch;
+    const item = preferredItem(allItems, cache.selection.id);
+    setQuery(''); setCollapsedTurns(new Set()); setCalls(new Set()); setFocus(null);
+    if (item) { setSelection(selectionOf(item)); setPendingFocus(item.display_key); }
+  }, [cache.epoch, cache.located, cache.selection, allItems]);
 
   // Selection migration only follows semantic regrouping, never a detail reply.
   useLayoutEffect(() => {
@@ -162,6 +173,7 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail }: Traje
   }}>
     <div className={css.toolbar} role="toolbar" aria-label={tx('trajectory:toolbar.aria')}>
       <div className={css.toolbarActions}>
+        {cache.located && onLatest && <button type="button" className={css.action} onClick={() => { select(); onLatest(); }}>{tx('agent:agent-transcript.return-to-latest')}</button>}
         <button type="button" className={css.toggle} aria-label={tx('trajectory:toolbar.use-actual-duration')} aria-pressed={mode === 'duration'}
           title={mode === 'duration' ? tx('trajectory:toolbar.use-equal-width') : tx('trajectory:toolbar.use-actual-duration')}
           onClick={() => { setMode(mode === 'duration' ? 'sequence' : 'duration'); setRange(null); }}>

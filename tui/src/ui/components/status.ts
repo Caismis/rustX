@@ -341,9 +341,9 @@ export function startupVisible(state: PresentationState): boolean {
  * model. With no published usage yet, the numerator stays unknown.
  */
 export function contextLabel(state: PresentationState): string {
-  const occupancy = state.context.last_request_occupancy;
+  const occupancy = state.context.occupancy;
   if (occupancy == null) return "context unreported";
-  return `last context ${compact(occupancy.input_tokens)}/${compact(occupancy.context_window_tokens)}`;
+  return `${occupancy.estimated ? "context ~" : "last context "}${compact(occupancy.input_tokens)}/${compact(occupancy.context_window_tokens)}`;
 }
 
 /** The model's display provider, derived from the published model reference. */

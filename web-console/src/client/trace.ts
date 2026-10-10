@@ -1,4 +1,4 @@
-import type { TraceDetail, TracePage, TraceRecord, TraceLifecycle } from '../../../protocol/app-server/v38';
+import type { TraceDetail, TracePage, TraceRecord, TraceLifecycle } from '../../../protocol/app-server/v44';
 
 /** Most summary records the browser retains for one Trace interval. */
 export const TRACE_LIMIT = 512;
@@ -35,6 +35,8 @@ export interface TraceDetailEntry {
  * the interval it described no longer applies.
  */
 export interface TraceCache {
+  /** A native tool landing retains its historical interval until explicitly released. */
+  located?: true;
   page: TracePage;
   epoch: number;
   /** Retained separately so a rebase cannot close the open inspector. */
@@ -156,6 +158,7 @@ export function refreshTrace(previous: TraceCache | undefined, page: TracePage, 
       tool: record.tool && update.tool ? { ...record.tool, ...update.tool } : record.tool,
     };
   };
+  if (previous.located) page = { ...previous.page, records: previous.page.records.map(repair) };
   const selection = previous.selection
     ? repair(page.records.find(record => record.id === previous.selection!.id) ?? previous.selection)
     : undefined;

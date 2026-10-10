@@ -34,7 +34,8 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
     };
     const openMcp = async () => {
       await openSettingsPage(page, 'MCP servers');
-      if (await settings.getByRole('button', { name: 'MCP servers', exact: true }).isVisible()) await settings.getByRole('button', { name: 'MCP servers', exact: true }).click();
+      const back = settings.getByRole('button', { name: '← MCP servers', exact: true });
+      if (await back.isVisible()) await back.click();
       await openSettingsPage(page, 'MCP servers');
     };
     await openModel();
@@ -58,15 +59,15 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
     await openMcp();
     await settings.getByRole('button', { name: '＋ New', exact: true }).click();
     await settings.getByLabel('Name', { exact: true }).fill('loss-fixture');
-    await settings.getByLabel('MCP command', { exact: true }).fill('inert-fixture');
+    await settings.getByLabel('Command', { exact: true }).fill('inert-fixture');
     wire.loseNext('configuration/sourceWrite');
-    await settings.getByRole('button', { name: 'Save MCP loss-fixture', exact: true }).click();
+    await settings.getByRole('button', { name: 'Save', exact: true }).click();
     await expect.poll(wire.lost).toBe(2);
     expect(readFileSync(join(fixture.directory, 'home/rustx/.agents/mcp.toml'), 'utf8')).toContain('inert-fixture');
     await reconnect();
     await openMcp();
     await settings.getByRole('button', { name: 'MCP loss-fixture', exact: true }).click();
-    await expect(settings.getByLabel('MCP command', { exact: true })).toHaveValue('inert-fixture');
+    await expect(settings.getByLabel('Command', { exact: true })).toHaveValue('inert-fixture');
     expect(writes()).toHaveLength(3);
     wire.loseNext('configuration/reconcile');
     await openSettingsPage(page, 'Advanced');
@@ -78,14 +79,14 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
     // A User draft remains User-owned across Session focus changes.
     await openMcp();
     await settings.getByRole('button', { name: 'MCP loss-fixture', exact: true }).click();
-    await settings.getByLabel('MCP command', { exact: true }).fill('unsaved-draft');
+    await settings.getByLabel('Command', { exact: true }).fill('unsaved-draft');
     await openEmptySession(page, fixture, 'Workspace B');
     await expect(page.getByLabel('Session location', { exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     expect(await selectedSettingsPage(page)).toBe('General');
     await openMcp();
     await settings.getByRole('button', { name: 'MCP loss-fixture', exact: true }).click();
-    await expect(settings.getByLabel('MCP command', { exact: true })).toHaveValue('unsaved-draft');
+    await expect(settings.getByLabel('Command', { exact: true })).toHaveValue('unsaved-draft');
     expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toMatch(/250000|loss-fixture|unsaved-draft/);
   } finally { await page.close(); const report = await fixture.stop(false); expect(report.requestCount).toBe(0); }
 });

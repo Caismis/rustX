@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { ContextSeat } from '../src/app/agent/ContextSeat';
 import { Server, snapshot } from './fixture';
-import type { RuntimeClientContextView } from '../../protocol/app-server/v38';
+import type { RuntimeClientContextView } from '../../protocol/app-server/v44';
 let server: Server;
 beforeEach(async () => { server = new Server(); await server.attached('A'); });
 afterEach(() => { cleanup(); server.client.disconnect(); });
@@ -72,15 +72,15 @@ it('observes native operations and preserves the exact pre-commit diagnostic', a
   expect(screen.getByRole('status').textContent).toContain('Summary provider rejected model fixture/exact');
   expect(count()).toBe(0);
 });
-it.each([undefined, { input_tokens: 25, context_window_tokens: 100, model: 'frozen/model', breakdown: { system_tokens: 5, tool_tokens: 10, message_tokens: 10 } }])('an idle seat renders nothing and never discloses request occupancy: %j', async occupancy => {
+it.each([undefined, { estimated: false, input_tokens: 25, context_window_tokens: 100, model: 'frozen/model', breakdown: { system_tokens: 5, tool_tokens: 10, message_tokens: 10 } }])('an idle seat renders nothing and never discloses request occupancy: %j', async occupancy => {
   const view = render(<ContextSeat client={server.client} sessionId="A"/>);
-  await observe({ ...base, last_request_occupancy: occupancy });
+  await observe({ ...base, occupancy: occupancy });
   expect(view.container.innerHTML).toBe('');
-  await observe({ ...base, compaction_in_progress: true, last_request_occupancy: occupancy });
+  await observe({ ...base, compaction_in_progress: true, occupancy: occupancy });
   expect(screen.getByRole('status').textContent).toBe('Compacting context…');
   expect(view.container.querySelector('meter')).toBeNull();
   expect(view.container.textContent).not.toMatch(/Last request context|frozen\/model/);
-  await observe({ ...base, last_request_occupancy: occupancy });
+  await observe({ ...base, occupancy: occupancy });
   expect(view.container.innerHTML).toBe('');
 });
 
@@ -149,4 +149,23 @@ it('real acknowledgement frees the gesture guard before its held read repair', a
   expect(b.status).toBe('submitting');
   expect(server.client.compact('A')).toBe(false);
   expect(count()).toBe(2);
+});
+
+it('a committed checkpoint owns the completed notice even outside the loaded history window', async () => {
+  server.held.add('context/compact');
+  const view = render(<ContextSeat client={server.client} sessionId="A"/>);
+  compact(); await server.waitFor('context/compact', 1);
+  const requestId = server.client.getSnapshot().views.A.compactionRequest!.requestId;
+  await observe({ ...base, compaction_count: 1,
+    manual_compaction: { request_id: requestId, released: true, error: null },
+    latest_compaction: { generation: '1', summary_message_id: 'checkpoint-outside-window', surface_revision: '4',
+      tokens_before: { input_tokens: 100, source: 'provider_reported' }, estimated_tokens_after: 20 },
+  });
+  expect(server.client.getSnapshot().views.A.compactionRequest?.status).toBe('succeeded');
+  expect(view.container.innerHTML).toBe('');
+  // A new mounting (as after navigating back to this conversation) cannot
+  // turn the immutable historical checkpoint into a composer status again.
+  view.unmount();
+  const again = render(<ContextSeat client={server.client} sessionId="A"/>);
+  expect(again.container.innerHTML).toBe('');
 });

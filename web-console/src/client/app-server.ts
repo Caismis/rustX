@@ -9,13 +9,13 @@ import { FirstSubmissions } from '../app/new-conversation/first-submit';
 import { SessionExportController } from "./session-export";
 import { TRACE_LIMIT, TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterests, type TraceCache } from './trace';
 import type {
-  ConfigurationApplication, PendingInboundRef, PendingMutationOutcome, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
+  TraceToolLocator, ConfigurationApplication, PendingInboundRef, PendingMutationOutcome, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot,
   SessionPersistentState, SessionSummary, ServerCapabilities, UserInputBlock, UploadReceipt, UploadedFile,
-} from '../../../protocol/app-server/v38';
+} from '../../../protocol/app-server/v44';
 import { transferUpload, uploadOperationId } from '../../../protocol/app-server/upload';
 import { HISTORY_PAGE_SIZE, sameReadCut, extendTranscriptWindow, installTranscriptWindow, prependTranscript, refreshTranscript, replaceTranscript, turnKey, type TranscriptCache } from './transcript';
-import type { ConversationTurn, ConversationTurnPage } from '../../../protocol/app-server/v38';
+import type { ConversationTurn, ConversationTurnPage } from '../../../protocol/app-server/v44';
 import { ProtocolLog, type WireContext } from './protocol-log';
 
 interface OutlineDemand {
@@ -71,7 +71,7 @@ export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentI
   history?: TranscriptCache;
   /** Read-only durable history, never an execution snapshot or control claim. */
   preview?: { conversationId: string; history: TranscriptCache };
-  statisticsPreview?: { conversationId: string; statistics: import('../../../protocol/app-server/v38').ConversationStatistics; occupancy?: import('../../../protocol/app-server/v38').ContextOccupancy | null };
+  statisticsPreview?: { conversationId: string; statistics: import('../../../protocol/app-server/v44').ConversationStatistics; occupancy?: import('../../../protocol/app-server/v44').ContextOccupancy | null };
   tracePreview?: { conversationId: string; cache: TraceCache };
   turnOutline?: { paging: OutlinePagingIntent; page?: ConversationTurnPage; loading?: boolean; error?: string };
   turnNavigation?: { intent: number; pending?: string; error?: string };
@@ -81,7 +81,7 @@ export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentI
   /** Current-generation turn/start or turn/steer requests awaiting an outcome.
    * Transport ownership only, including unsent requests in the bounded pipeline. */
   inboundRequests?: number;
-  modelIntent?: { config: import('../../../protocol/app-server/v38').SessionModelConfig; phase: 'waiting' | 'applying' | 'failed'; error?: string };
+  modelIntent?: { config: import('../../../protocol/app-server/v44').SessionModelConfig; phase: 'waiting' | 'applying' | 'failed'; error?: string };
   modelMutation?: { generation: number; status: 'in-flight' | 'acknowledged' | 'uncertain' };
   cancellation?: { attemptId: string; status: 'in-flight' | 'acknowledged' | 'uncertain' };
   error?: string;
@@ -222,24 +222,27 @@ function goalRefusal(error: unknown) {
   return error.message;
 }
 const READS = new Set<Request1['method']>([
-  'session/turns', 'session/uploadStatus',
+  'session/traceLocateTool', 'agent/traceLocateTool', 'agent/trace', 'agent/traceDetail',
+  'agent/conversationCancel', 'agent/conversation', 'agent/artifactRead', 'agent/deliveryRead', 'agent/deliveryLocate', 'session/turns', 'session/uploadStatus',
   'artifact/read', 'initialize', 'server/info', 'session/list', 'session/read', 'session/summary', 'session/tree', 'session/deletePreview',
   'session/history', 'session/statistics', 'session/traceHistory', 'session/traceHistoryDetail', 'session/configuration', 'session/snapshot', 'session/transcript', 'session/trace', 'session/traceDetail', 'session/settings', 'session/model', 'session/models',
-  'configuration/sourcesRead', 'session/effectiveConfiguration', 'resources/read', 'job/status', 'job/list', 'job/wait', 'agent/status', 'agent/list', 'agent/wait', 'agent/transcript', 'agent/statistics', 'session/boundaries',
+  'configuration/sourcesRead', 'session/effectiveConfiguration', 'resources/read', 'job/status', 'job/list', 'job/wait', 'agent/status', 'agent/list', 'agent/wait', 'agent/transcript', 'agent/turns', 'agent/statistics', 'session/boundaries',
 ]);
 /** Domain settlement has no RPC response deadline. Separate bounded lanes keep
  * observation/admission from occupying the slots needed to stop or inspect work. */
-function requestLane(method: Request1['method']): 'wait' | 'admission' | 'control' | 'rpc' {
+function requestLane(method: Request1['method']): 'wait' | 'admission' | 'control' | 'observation' | 'rpc' {
   switch (method) {
     // Compaction awaits native summary generation and release, just like other
     // long-lived domain waits. It must not expire the shared socket's RPC clock.
-    case 'context/compact': case 'agent/wait': case 'job/wait': return 'wait';
+    case 'mcp/probe': case 'context/compact': case 'agent/wait': case 'job/wait': return 'wait';
+    case 'agent/conversation': return 'observation';
+    case 'agent/conversationCancel': return 'control';
     case 'agent/sendMessage': return 'admission';
     case 'agent/interrupt': case 'job/cancel': case 'turn/cancel': return 'control';
     default: return 'rpc';
   }
 }
-const DOMAIN_CAPACITY = { wait: 4, admission: 2, control: 2 } as const;
+const DOMAIN_CAPACITY = { wait: 4, admission: 2, control: 2, observation: 2 } as const;
 const RPC_CAPACITY = 8;
 /** Operation-admission validations reserve ordinary RPC slots so the final check
  * stays adjacent to send, but at most two at once: a stalled Product Host read
@@ -510,7 +513,7 @@ export class AppServerClient {
     // Ownership commits after close/retirement, before attempting the new transport.
     committed?.();
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v38', `rustx-token.${token}`]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v44', `rustx-token.${token}`]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -528,12 +531,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 38, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 44, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (!hello.authority_id || hello.protocol_version !== 38 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v38 with native multi-Session, headless interactions, and single-controller admission is required.');
+      if (!hello.authority_id || hello.protocol_version !== 44 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v44 with native multi-Session, headless interactions, and single-controller admission is required.');
       }
       if (this.state.authorityId && this.state.authorityId !== hello.authority_id) {
         try { this.admitAuthorityReplacement(); }
@@ -638,7 +641,7 @@ export class AppServerClient {
     }
   }
   /** Correlation only. No call is ever retried. Every payload is a generated union. */
-  async request<T extends MethodResult['type']>(operation: Request1, expected: T, acknowledged?: (result: Extract<MethodResult, { type: T }>) => void, dispatchCurrent?: (() => boolean) | OperationAdmission): Promise<Extract<MethodResult, { type: T }>> {
+  async request<T extends MethodResult['type']>(operation: Request1, expected: T, acknowledged?: (result: Extract<MethodResult, { type: T }>) => void, dispatchCurrent?: (() => boolean) | OperationAdmission, observationSignal?: AbortSignal): Promise<Extract<MethodResult, { type: T }>> {
     if (!this.socket || (!this.initialized && operation.method !== 'initialize')) throw new RequestNotDispatched('Connect and initialize first.');
     if (['session/attach', 'session/detach', 'session/switchNode', 'session/delete', 'session/recoverDeletion'].includes(operation.method)
       && (typeof dispatchCurrent !== 'object' || !this.lifecycleAdmissions.delete(dispatchCurrent))) throw new RequestNotDispatched('Session lifecycle operations require actor admission.');
@@ -655,9 +658,9 @@ export class AppServerClient {
       if (!current()) throw new RequestNotDispatched('Attachment control authority was revoked.');
       authority = current;
     }
-    if (operation.method.startsWith('artifact/') && [...this.pending.values()].filter(item => item.request.method.startsWith('artifact/')).length >= 2) throw new RequestNotDispatched('Artifact transfer capacity reached. Retry after current transfers finish.');
+    if ((operation.method.startsWith('artifact/') || operation.method === 'agent/artifactRead') && [...this.pending.values()].filter(item => (item.request.method.startsWith('artifact/') || item.request.method === 'agent/artifactRead')).length >= 2) throw new RequestNotDispatched('Artifact transfer capacity reached. Retry after current transfers finish.');
     const lane = requestLane(operation.method);
-    if (lane !== 'rpc' && [...this.pending.values()].filter(item => requestLane(item.request.method) === lane).length >= DOMAIN_CAPACITY[lane]) {
+    if (lane !== 'rpc' && lane !== 'observation' && [...this.pending.values()].filter(item => requestLane(item.request.method) === lane).length >= DOMAIN_CAPACITY[lane]) {
       throw new RequestNotDispatched(`Client ${lane} capacity reached. Inspect current operations before issuing another.`);
     }
     if (this.pending.size >= 64) throw new RequestAdmissionDeferred(this.admissionRevision);
@@ -669,14 +672,26 @@ export class AppServerClient {
     try {
       if (new TextEncoder().encode(JSON.stringify(request)).length > 1_048_576) throw new Error('Request exceeds the App Server 1 MiB limit.');
     } catch (cause) { throw new RequestNotDispatched(cause); }
-    const result = await new Promise<MethodResult>((resolve, reject) => {
+    let abortObservation = () => {};
+    const work = new Promise<MethodResult>((resolve, reject) => {
       const params = operation.params;
       const context = { method: operation.method,
         sessionId: 'target' in params && 'session_id' in params.target ? params.target.session_id : 'session_id' in params ? params.session_id : undefined };
       this.pending.set(id, { request, context, mutation: !READS.has(operation.method), sent: false, expected, resolve, reject, dispatchCurrent, authority, acknowledged: result => acknowledged?.(result as Extract<MethodResult, { type: T }>) });
+      abortObservation = () => {
+        if (operation.method !== 'agent/conversation') return;
+        const pending = this.pending.get(id);
+        if (!pending) return;
+        if (!pending.sent) { this.refuse(pending, new Error('Observation retired before dispatch')); this.pump(); }
+        else void this.request({method:'agent/conversationCancel',params:{request_id:id}},'agent_conversation_cancelled').catch(() => {});
+      };
+      observationSignal?.addEventListener('abort', abortObservation, {once:true});
+      if (observationSignal?.aborted) abortObservation();
+
       if (operation.method === 'turn/start' || operation.method === 'turn/steer') this.publishInbound(operation.params.target.session_id);
       this.pump();
     });
+    const result = observationSignal ? await work.finally(() => observationSignal.removeEventListener('abort', abortObservation)) : await work;
     if (!this.current(generation)) throw new Error('Obsolete connection response; inspect the current authoritative state.');
     if (result.type !== expected) {
       this.lose(this.state.generation);
@@ -695,16 +710,18 @@ export class AppServerClient {
     // An obsolete proof releases its reservation now, never after its Host read.
     for (const pending of this.pending.values()) if (pending.validation && !this.dispatchAllowed(pending)) this.refuse(pending);
     let occupied = [...this.pending.values()].filter(p => (p.sent || p.validation) && requestLane(p.request.method) === 'rpc').length;
+    let observing = [...this.pending.values()].filter(p => p.sent && requestLane(p.request.method) === 'observation').length;
     let validating = [...this.pending.values()].filter(p => p.validation).length;
     for (const pending of this.pending.values()) {
       if (!this.socket) break;
       const lane = requestLane(pending.request.method);
-      if (pending.sent || pending.validation || (lane === 'rpc' && occupied >= RPC_CAPACITY)) continue;
+      if (pending.sent || pending.validation || (lane === 'rpc' && occupied >= RPC_CAPACITY) || (lane === 'observation' && observing >= DOMAIN_CAPACITY.observation)) continue;
       if (!this.dispatchAllowed(pending)) { this.refuse(pending); continue; }
       const proof = typeof pending.dispatchCurrent === 'object' ? pending.dispatchCurrent : undefined;
       // A waiting validation holds nothing, so later requests are never blocked behind it.
       if (proof && validating >= VALIDATION_CAPACITY) continue;
       if (lane === 'rpc') occupied++;
+      if (lane === 'observation') observing++;
       if (proof) {
         validating++;
         // Reserve the same bounded RPC slot while the operation owner revalidates.
@@ -1304,6 +1321,31 @@ export class AppServerClient {
       throw error;
     }
   }
+  /** Locate the canonical Tool occurrence across the native Journal, never the loaded browser window. */
+  async locateToolTrace(id: string, locator: TraceToolLocator): Promise<boolean> {
+    const observation = this.lifecycles.observe(id);
+    if (!observation) return false;
+    const previous = this.state.views[id]?.trace;
+    this.setSession(id, { trace: this.supersedeTrace(id, previous ?? replaceTrace({ records: [], next_cursor: null })) });
+    const authority = this.traceAuthorities.get(id);
+    const current = () => observation.current() && this.traceAuthorities.get(id) === authority;
+    const result = await this.request({ method: 'session/traceLocateTool', params: { target: observation.target, locator } }, 'trace_tool_location', undefined, current);
+    if (!current()) return false;
+    if (!result.location) throw new Error('This tool occurrence has no native execution record.');
+    const cache = replaceTrace(result.location.page, this.state.views[id]?.trace);
+    this.setSession(id, { trace: selectTrace({ ...cache, located: true }, result.location.record_id) });
+    return true;
+  }
+  async returnToLatestTrace(id: string) {
+    const trace = this.state.views[id]?.trace, observation = this.lifecycles.observe(id);
+    if (!trace || !observation) return;
+    this.setSession(id, { trace: this.supersedeTrace(id, replaceTrace({ records: [], next_cursor: null }, trace)) });
+    const authority = this.traceAuthorities.get(id);
+    try { await this.refreshTraceDomain(id); }
+    catch (cause) {
+      if (observation.current() && this.traceAuthorities.get(id) === authority) this.setSession(id, { trace: { ...this.state.views[id].trace!, error: String(cause), loading: false } });
+    }
+  }
   selectTrace(id: string, record?: string) {
     const preview = this.state.views[id]?.tracePreview;
     if (this.state.views[id]?.attachment === 'attaching' && preview) { this.setSession(id, { tracePreview: { ...preview, cache: selectTrace(preview.cache, record) } }); return; }
@@ -1493,7 +1535,7 @@ export class AppServerClient {
     return this.readHistoryPage(id, { type: 'older', before: history.page.next_cursor, cut: history.window?.cut ?? null });
   }
   /** One gesture, one read. Navigation intent fences both page and anchor reads. */
-  private async readHistoryPage(id: string, at: import('../../../protocol/app-server/v38').ConversationWindowAt) {
+  private async readHistoryPage(id: string, at: import('../../../protocol/app-server/v44').ConversationWindowAt) {
     const history = this.state.views[id]?.history;
     const observation = this.lifecycles.observe(id);
     if (!history || !observation) return;
@@ -1710,10 +1752,10 @@ export class AppServerClient {
     if (observed && view?.snapshot) this.setSession(id, { history: replaceTranscript(view.snapshot.transcript, view.history) });
     return observed;
   }
-  private modelPreparations = new Map<string, { work: Promise<import('../../../protocol/app-server/v38').SessionModelConfig>; retire: () => void }>();
+  private modelPreparations = new Map<string, { work: Promise<import('../../../protocol/app-server/v44').SessionModelConfig>; retire: () => void }>();
   /** Client-owned selection while native resources initialize. Last unsent choice
    * wins; the existing native mutation and authoritative reread still own apply. */
-  prepareAgentModel(id: string, config: import('../../../protocol/app-server/v38').SessionModelConfig) {
+  prepareAgentModel(id: string, config: import('../../../protocol/app-server/v44').SessionModelConfig) {
     const view = this.state.views[id];
     if (view?.attachment !== 'attaching' || view.attachmentIntent !== 'wanted' || view.deleting)
       return Promise.reject(new Error('Conversation is no longer connecting.'));
@@ -1751,7 +1793,7 @@ export class AppServerClient {
   }
   /** Transport continuation guard, not Session model authority. A successful
    * mutation response alone cannot enable a dependent Send. */
-  async setAgentModel(id: string, config: import('../../../protocol/app-server/v38').SessionModelConfig) {
+  async setAgentModel(id: string, config: import('../../../protocol/app-server/v44').SessionModelConfig) {
     const target = this.target(id), generation = this.state.generation;
     if (this.state.views[id].modelMutation) throw new Error('Reread native model state before another mutation.');
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);

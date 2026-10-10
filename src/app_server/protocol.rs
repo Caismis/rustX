@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v38 envelope and method vocabulary.
+//! Rust authority for the App Server v44 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 38;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 44;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -78,6 +78,28 @@ pub use crate::local_runtime::session::uploads::UserInputBlock;
 #[serde(tag = "method", content = "params", deny_unknown_fields)]
 #[allow(clippy::large_enum_variant)] // Wire commands are short-lived and bounded by the transport frame.
 pub enum Method {
+    #[serde(rename = "agent/artifactRead")]
+    AgentArtifactRead {
+        target: AttachmentTarget,
+        agent_id: crate::runtime::identity::AgentId,
+        artifact_id: crate::runtime::identity::ArtifactId,
+    },
+    #[serde(rename = "agent/deliveryRead")]
+    AgentDeliveryRead {
+        target: AttachmentTarget,
+        agent_id: crate::runtime::identity::AgentId,
+        message_id: MessageId,
+        #[schemars(range(max = 7))]
+        delivery_index: usize,
+    },
+    #[serde(rename = "agent/deliveryLocate")]
+    AgentDeliveryLocate {
+        target: AttachmentTarget,
+        agent_id: crate::runtime::identity::AgentId,
+        message_id: MessageId,
+        #[schemars(range(max = 7))]
+        delivery_index: usize,
+    },
     #[serde(rename = "artifact/read")]
     ArtifactRead {
         target: AttachmentTarget,
@@ -154,6 +176,11 @@ pub enum Method {
         #[schemars(length(max = 256))]
         record_id: String,
     },
+    #[serde(rename = "session/traceLocateTool")]
+    TraceLocateTool {
+        target: AttachmentTarget,
+        locator: crate::runtime_client::trace::TraceToolLocator,
+    },
     #[serde(rename = "session/transcript")]
     Transcript {
         target: AttachmentTarget,
@@ -214,6 +241,14 @@ pub enum Method {
     },
     #[serde(rename = "agent/list")]
     AgentList { target: AttachmentTarget },
+    #[serde(rename = "agent/conversationCancel")]
+    AgentConversationCancel { request_id: RequestId },
+    #[serde(rename = "agent/conversation")]
+    AgentConversation {
+        target: AttachmentTarget,
+        agent_id: crate::runtime::identity::AgentId,
+        after: Option<crate::runtime_client::agent_conversation::AgentConversationCursor>,
+    },
     #[serde(rename = "agent/statistics")]
     AgentStatistics {
         target: AttachmentTarget,
@@ -221,6 +256,7 @@ pub enum Method {
     },
     #[serde(rename = "agent/sendMessage")]
     AgentSendMessage {
+        attachments: Vec<crate::local_runtime::session::uploads::UploadReceipt>,
         target: AttachmentTarget,
         agent_id: crate::runtime::identity::AgentId,
         message: String,
@@ -235,11 +271,44 @@ pub enum Method {
         target: AttachmentTarget,
         agent_id: crate::runtime::identity::AgentId,
     },
+    /// Independent child-owned Trace read domain; no parent records are used.
+    #[serde(rename = "agent/trace")]
+    AgentTrace {
+        target: AttachmentTarget,
+        agent_id: crate::runtime::identity::AgentId,
+        before: Option<crate::runtime_client::trace::TraceCursor>,
+        limit: usize,
+        #[serde(default)]
+        records: Vec<crate::runtime_client::trace::TraceCursor>,
+    },
+    #[serde(rename = "agent/traceDetail")]
+    AgentTraceDetail {
+        target: AttachmentTarget,
+        agent_id: crate::runtime::identity::AgentId,
+        record_id: String,
+    },
+    #[serde(rename = "agent/traceLocateTool")]
+    AgentTraceLocateTool {
+        target: AttachmentTarget,
+        agent_id: crate::runtime::identity::AgentId,
+        locator: crate::runtime_client::trace::TraceToolLocator,
+    },
+    /// Read the exact child's bounded canonical history; never accepts a child path.
     #[serde(rename = "agent/transcript")]
     AgentTranscript {
         target: AttachmentTarget,
         agent_id: crate::runtime::identity::AgentId,
-        before: Option<crate::runtime_client::snapshot::RuntimeClientTranscriptCursor>,
+        at: crate::durable::reading::ConversationWindowAt,
+        #[schemars(range(min = 1, max = 64))]
+        limit: usize,
+    },
+    /// All turns across the Agent's activations, in native start order.
+    #[serde(rename = "agent/turns")]
+    AgentTurns {
+        target: AttachmentTarget,
+        agent_id: crate::runtime::identity::AgentId,
+        offset: Option<usize>,
+        #[schemars(range(min = 1, max = 64))]
         limit: usize,
     },
     #[serde(rename = "subagent/disposeWorkspace")]
@@ -395,6 +464,13 @@ pub enum Method {
     SourcesRead {
         target: crate::local_runtime::configuration::settings::SourceTarget,
     },
+    /// Finite configuration connectivity check; never an Agent connection.
+    #[serde(rename = "mcp/probe")]
+    McpProbe {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        id: crate::runtime::identity::McpServerId,
+        expected_revision: String,
+    },
     #[serde(rename = "configuration/sourceWrite")]
     SourcesWrite {
         target: crate::local_runtime::configuration::settings::SourceTarget,
@@ -495,6 +571,7 @@ pub enum ErrorData {
     AlreadyInitialized,
     /// The client cancelled this delivery request before publication.
     DeliveryCancelled,
+    ObservationCancelled,
     StaleAttachment,
     StaleRuntime,
     ControllerInUse,
@@ -595,8 +672,8 @@ pub enum MethodResult {
         /// off the shared enum keeps every other response cheap to move.
         detail: Option<Box<crate::runtime_client::trace::TraceDetail>>,
     },
-    Transcript {
-        page: crate::runtime_client::snapshot::RuntimeClientTranscriptPage,
+    TraceToolLocation {
+        location: Option<crate::runtime_client::trace::TraceToolLocation>,
     },
     SessionHistory {
         conversation_id: ConversationId,
@@ -636,6 +713,12 @@ pub enum MethodResult {
     },
     Agent {
         agent: Box<crate::runtime_client::snapshot::RuntimeClientAgent>,
+    },
+    AgentConversationCancelled {
+        accepted: bool,
+    },
+    AgentConversation {
+        conversation: crate::runtime_client::agent_conversation::AgentConversation,
     },
     AgentStatistics {
         metrics: crate::runtime_client::agent_statistics::AgentStatistics,
@@ -731,6 +814,9 @@ pub enum MethodResult {
     },
     EffectiveConfiguration {
         projection: Box<crate::local_runtime::configuration::settings::EffectiveConfiguration>,
+    },
+    McpProbe {
+        result: crate::local_runtime::mcp_probe::McpProbeResult,
     },
     SourceSettings {
         projection: Box<crate::local_runtime::configuration::settings::SourceSettings>,

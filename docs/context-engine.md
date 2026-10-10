@@ -990,14 +990,31 @@ independently of the still-pending RPC. A new explicit invocation receives a new
 old transport callbacks cannot change it. A confirmed successful
 RPC remains successful if the following read repair fails.
 
-`last_request_occupancy` (shown by the TUI status line and the Web composer's
+`occupancy` (shown by the TUI status line and the Web composer's
 context ring) carries input tokens, capacity, provider-facing model and an
 estimated breakdown, all frozen in the same native RequestSnapshot. The breakdown
 prices the Effective System Prompt and Tool definitions with the default
 `ceil(bytes / 4)` estimator; messages are the measured remainder, saturating at
 zero. Desired model
-selection cannot change its denominator. The latest prepared request must have its
-own reported usage; a newer unmeasured request invalidates the previous value.
-Compaction invalidates occupancy until a later request measurement. Zero is a real
+selection cannot change its denominator. The most recent provider measurement remains available while newer requests stream
+or finish without usage. A new measurement replaces it using its own frozen snapshot.
+Pending or failed compaction preserves that reading. A successful compaction atomically
+records the rebuilt primary context estimate, capacity and model; `estimated` marks
+its provenance. This reading replaces the preceding request measurement and survives
+attachment/restart, without contributing to cumulative provider usage. Transcript checkpoint metadata consumes the immutable per-summary replaced
+canonical-message count and history-only estimate committed by the native
+replacement transaction, including retired checkpoints and copied lineage. Summary prose contributes no facts. Zero is a real
 measurement; absence or invalid capacity is unavailable, never zero. Paging does
 not change measurement authority and navigation does not generate requests.
+
+Compaction checkpoint statistics are immutable Ledger facts, committed atomically
+with the exact Surface replacement and its completion Journal fact. The native
+commit estimates only the selected canonical retired span once with the default
+history estimator; System Prompt, tools, billing and Context occupancy remain
+independent. Each summary keeps its own count and estimate, including when a
+later checkpoint retires that summary. Lineage copies retain those values and
+omit local completion correlation. Transcript decoration uses one keyed Ledger
+lookup and at most one keyed local Journal lookup per requested summary; it never
+reconstructs the retired Surface, hydrates retired messages, or scans the Journal.
+Missing or malformed checkpoint facts are explicit read errors. SQLite schema 51
+requires these facts; older development stores are refused without migration.

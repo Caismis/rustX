@@ -1,0 +1,35 @@
+import { test, expect } from '@playwright/test';
+const origin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
+for (const width of [1440, 390]) test(`subagent receipts, list, inspection and child composer at ${width}px`, async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  await page.setViewportSize({ width, height: 1000 });
+  await page.addInitScript(() => localStorage.setItem('rustx-locale-v1', 'en'));
+  await page.goto(`${origin}/test/fixtures/startup.html?existing&models&subagents&subagent-details`);
+  await page.waitForFunction(() => (window as any).startupFixture);
+  await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.allow('session/attach'); f.resumeCatalog(); });
+  if (width < 600) await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
+  await page.locator('button[data-session-id="A"]').click();
+  if (width < 600) await page.getByRole('button', { name: 'Collapse Sidebar', exact: true }).click();
+  const calls = page.locator('[data-activity-domain="agent"]');
+  await expect(calls).toHaveCount(3);
+  for (const call of await calls.all()) await call.getByRole('button').first().click();
+  await expect(calls.nth(0)).toContainText('Started');
+  await expect(calls.nth(1)).toContainText('Running');
+  await expect(calls.nth(1)).toContainText('Inactive');
+  await expect(calls.nth(2)).toContainText('succeeded');
+  await expect(calls.locator('pre')).toHaveCount(0);
+  // Detailed execution evidence now opens the native Trace inspector; the
+  // receipt no longer duplicates it as a raw JSON disclosure.
+  await expect(calls.nth(0).getByRole('button', { name: 'Inspect', exact: true })).toBeVisible();
+  await page.screenshot({ path: `/tmp/rustx-subagent-details-${width}.png`, fullPage: true });
+  await calls.nth(0).getByRole('button', { name: 'Verify findings', exact: true }).click();
+  const composer = page.locator('[data-agent-id="child-1"] [data-composer-card]');
+  await expect(composer.getByRole('textbox')).toHaveAttribute('placeholder', 'Send a message to resume…');
+  await expect(composer.getByRole('status')).toHaveCount(0);
+  await expect(composer.getByRole('button', { name: 'Transcript' })).toHaveCount(0);
+  await expect(composer.getByRole('button', { name: 'Wait for activation' })).toHaveCount(0);
+  await expect(page.locator('#subagent-header-actions').getByRole('button', { name: 'Transcript' })).toBeVisible();
+  await page.locator('[data-conversation-scroll]:visible').first().evaluate(element => { element.scrollTop = element.scrollHeight; });
+  await page.screenshot({ path: `/tmp/rustx-subagent-child-${width}.png`, fullPage: true });
+  expect(errors).toEqual([]);
+});

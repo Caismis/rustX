@@ -26,6 +26,7 @@ pub(crate) fn admit_agent(
     {
         *admitted_authority = Some(child_agent_id.clone());
         let authority = rustx::runtime::subagent::DurableAgentAuthority {
+            title: "Explore task".to_owned(),
             resolved: rustx::runtime::subagent::ResolvedSubagentSpec {
                 environment: Vec::new(),
                 generation: rustx::runtime::identity::RuntimeResourceRevision::new(1),

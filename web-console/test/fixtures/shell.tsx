@@ -32,6 +32,7 @@ server.workspaceHost.classifyLocations = async cwds => { await associationGate; 
 server.workspaceHost.configureWorkspace = async (_id, _endpoint, operation) => {
   const projection = { ...cfg3Source(), target: { kind: 'workspace' as const, directory: '/workspace' } };
   if (operation.kind === 'write') return { kind: 'write', commit: { acknowledgement: projection, reread: { status: 'observed', projection } } };
+  if (operation.kind === 'mcp_probe') return {kind:'mcp_probe',result:{id:operation.id,revision:operation.expected_revision,outcome:'reachable'}};
   return { kind: operation.kind, projection };
 };
 const cold = new URL(location.href).searchParams.get('initial') === 'cold';

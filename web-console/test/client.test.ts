@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { RuntimeClientSnapshot } from '../../protocol/app-server/v38';
+import type { RuntimeClientSnapshot } from '../../protocol/app-server/v44';
 import { interactionKey, OutcomeUncertain, RequestNotDispatched, RpcFailure } from '../src/client/app-server';
 import { conversation } from '../src/bindings/projection';
 import { deriveSessionProductState } from '../src/bindings/session-product';
@@ -14,7 +14,7 @@ describe('native App Server connection', () => {
     const s = server(); await s.connect();
     expect(s.client.getSnapshot().connection).toBe('connected');
     expect(s.client.getSnapshot().capabilities).toEqual(capabilities);
-    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 38 } });
+    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 44 } });
     expect(JSON.stringify(s.client.log.getSnapshot())).not.toContain(TOKEN);
   });
   it('rejects incompatible versions and missing native capabilities', async () => {
@@ -794,4 +794,16 @@ it.each(['session/detach', 'session/switchNode'] as const)('terminal unsent Open
   expect(s.requests.filter(({ request }) => request.method === 'session/attach')).toHaveLength(1);
   expect(s.requests.filter(({ request }) => request.method === method)).toHaveLength(1);
   expect(s.claims()).toEqual([]);
+});
+
+it('MCP diagnostic settlement does not expire the shared RPC transport',async()=>{
+  const s=server();await s.connect();s.held.add('mcp/probe');
+  vi.useFakeTimers();
+  const check=s.client.request({method:'mcp/probe',params:{target:{kind:'user'},id:'exa',expected_revision:'mcp-1'}},'mcp_probe');
+  await vi.advanceTimersByTimeAsync(120_000);
+  expect(s.client.getSnapshot().connection).toBe('connected');
+  const requests=s.requests.filter(row=>row.request.method==='mcp/probe');
+  expect(requests).toHaveLength(1);
+  s.socket.success(requests[0].request,{type:'mcp_probe',result:{id:'exa',revision:'mcp-1',outcome:'timed_out'}});
+  await expect(check).resolves.toMatchObject({result:{outcome:'timed_out'}});
 });

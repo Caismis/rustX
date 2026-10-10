@@ -1,9 +1,10 @@
+import { ToolInspectionButton } from './ToolCard';
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
 // Adapted from DeepSeek Harness ui-deliverables PresentRow: the call row whose
 // collapsed summary is the delivery status plus the declared paths, and whose
 // expansion is the recorded result text. Harness's preparing/started split,
-// Cordis tool-view props and Inspect pill have no rustX counterpart; the rustX
+// Cordis tool-view props are excluded; native Trace navigation owns Inspect; the rustX
 // adapter (bindings/present.ts) supplies the native lifecycle phase.
 import { useState } from 'react';
 import { DisclosureRow } from '../primitives/DisclosureRow';
@@ -22,7 +23,7 @@ export interface PresentRowView {
   readonly details: string;
 }
 
-export function PresentRow({ row }: { row: PresentRowView }) {
+export function PresentRow({ row, inspect }: { row: PresentRowView; inspect?: () => Promise<void> }) {
   const tx = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const expandable = row.details !== '';
@@ -36,7 +37,7 @@ export function PresentRow({ row }: { row: PresentRowView }) {
           <span className={present.status}>{tx(`tools:present.${row.phase}`)}</span>
           {row.phase !== 'preparing' && <span className={present.paths}>{row.paths}</span>}
         </span></>}>
-        {expanded && expandable && <div className={css.bodyWrap}><pre className={present.output}>{row.details}</pre></div>}
+        {expanded && expandable && <div className={css.bodyWrap}><pre className={present.output}>{row.details}</pre>{inspect && <ToolInspectionButton inspect={inspect}/>}</div>}
       </DisclosureRow>
     </div>
   </div>;

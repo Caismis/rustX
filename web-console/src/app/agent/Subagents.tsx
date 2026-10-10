@@ -1,26 +1,19 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Header layout adapted from ui-subagent/SubagentHeaderLineage; see PROVENANCE.md. */
-import { useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
-import type { RuntimeClientAgent, AgentStatistics } from '../../../../protocol/app-server/v38';
+import { useLayoutEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
+import type { RuntimeClientAgent, AgentStatistics } from '../../../../protocol/app-server/v44';
 import type { AppServerClient } from '../../client/app-server';
 import { useClientSelector } from '../../client/selectors';
 import { useTranslation } from '../../locale/react';
-import { Menu } from '../../presentation/primitives/Menu';
-import { StateDot, type StateDotState } from '../../presentation/primitives/StateDot';
-import { IconChevronDownOutline14, IconChevronRightOutline14 } from '../../presentation/primitives/icons';
+import { SubagentMenu } from './SubagentCatalog';
 import { AgentCard } from '../components/ActivityCards';
 import css from './Subagents.module.css';
 import conversationCss from '../../presentation/agent/Conversation.module.css';
 
-import { formatDuration, formatTokens } from './token-format';
 import { SubagentContext as Context, useSubagents } from './subagent-context';
 import { meterDemand, type MeterScope } from '../../client/agent-meters';
 
-export function agentDuration(metrics: AgentStatistics, now: number) {
-  const { settled_ms, active } = metrics.duration;
-  return Number(settled_ms) + (active ? Math.max(0, (active.running ? now : Date.parse(active.observed_at)) - Date.parse(active.started_at)) : 0);
-}
 const NO_AGENTS: RuntimeClientAgent[] = [];
-export function SubagentScope({ client, sessionId, children }: { client: AppServerClient; sessionId?: string; children: ReactNode }) {
+export function SubagentScope({ client, sessionId, children, openAside, onMode }: { client: AppServerClient; sessionId?: string; children: ReactNode; onMode?: (mode: 'chat' | 'trajectory') => void; openAside?: (agent: RuntimeClientAgent) => void }) {
   const tx = useTranslation();
   const agents = useClientSelector(client, state => sessionId ? state.views[sessionId]?.snapshot?.agents : undefined) ?? NO_AGENTS;
   const generation = useClientSelector(client, state => state.generation);
@@ -33,9 +26,9 @@ export function SubagentScope({ client, sessionId, children }: { client: AppServ
     current: () => !!sessionId && client.isAttachmentObservationCurrent(sessionId, admission),
     inventory: () => (sessionId ? client.getSnapshot().views[sessionId]?.snapshot?.agents : undefined) ?? [],
   }), [client, owner, admission]);
-  const [selection, setSelection] = useState<{ owner: string; id?: string }>();
+  const [selection, setSelection] = useState<{ owner: string; id?: string; opened: string[] }>();
   const id = selection?.owner === owner ? selection.id : undefined;
-  const open = (id?: string) => setSelection({ owner, id });
+  const open = (id?: string) => setSelection(previous => ({ owner, id, opened: [...new Set([...(previous?.owner === owner ? previous.opened : []), ...(id ? [id] : [])])] }));
   const attached = useClientSelector(client, state => sessionId ? state.views[sessionId]?.attachment : undefined);
   const deleting = useClientSelector(client, state => sessionId ? state.views[sessionId]?.deleting : undefined);
   useLayoutEffect(() => () => client.agentMeters.retire(scope), [client, scope]);
@@ -49,40 +42,43 @@ export function SubagentScope({ client, sessionId, children }: { client: AppServ
       if (reading.error) metricErrors[agent.agent_id] = reading.error;
     } else if (readings.blocked) metricErrors[agent.agent_id] = tx('agent:usage.reads-unresolved');
   }
-  return <Context value={{ client, sessionId, agents, metrics, metricErrors, selected: agents.find(agent => agent.agent_id === id), open }}>{children}</Context>;
-}
-export function agentDot(agent: RuntimeClientAgent): StateDotState {
-  if (agent.state === 'unavailable') return 'error';
-  if (agent.state === 'active' || agent.state === 'admitting' || agent.state === 'stopping') return agent.observation.activity.type === 'waiting' ? 'warning' : 'ongoing';
-  return agent.activation_state === 'failed' ? 'error' : agent.activation_state === 'succeeded' ? 'done' : agent.activation_state === 'cancelled' ? 'warning' : 'idle';
+  return <Context value={{ client, sessionId, onMode, agents, metrics, metricErrors, selected: agents.find(agent => agent.agent_id === id), openAside: openAside ? (id: string) => { const agent = agents.find(agent => agent.agent_id === id); if (agent) openAside(agent); } : undefined, opened: agents.filter(agent => selection?.owner === owner && selection.opened.includes(agent.agent_id)), open }}>{children}</Context>;
 }
 export function SubagentHeader({ title }: { title: string }) {
-  const tx = useTranslation(), scope = useSubagents(), [expanded, setExpanded] = useState(false);
-  const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    if (!expanded) return;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [expanded]);
+  const tx = useTranslation(), scope = useSubagents();
   if (!scope) return <span id="session-title">{title}</span>;
   const { selected, agents, open } = scope;
-  const stateLabel = (agent: RuntimeClientAgent) => agent.state === 'inactive' ? tx(`common:state.${agent.activation_state}`) : tx(`common:activity.${agent.state === 'active' ? 'working' : agent.state === 'admitting' ? 'admitting' : agent.state === 'stopping' ? 'stopping' : 'unavailable'}`);
+  const ancestors: RuntimeClientAgent[] = [];
+  let parent = selected && agents.find(agent => agent.agent_id === selected.parent_agent_id);
+  while (parent && !ancestors.includes(parent)) { ancestors.unshift(parent); parent = agents.find(agent => agent.agent_id === parent!.parent_agent_id); }
+  const siblings = selected ? agents.filter(agent => agent.parent_agent_id === selected.parent_agent_id) : agents.filter(agent => !agents.some(parent => parent.agent_id === agent.parent_agent_id));
+  const children = selected ? agents.filter(agent => agent.parent_agent_id === selected.agent_id) : [];
   return <div className={css.lineage}>
-    {selected ? <><button className={css.parent} onClick={() => open()}>{title}</button><span className={css.separator}>/</span></> : <span id="session-title" aria-label={tx(scope.sessionId ? 'agent:conversation-header.session-title' : 'agent:conversation-header.product-title')} className={css.title}>{title}</span>}
-    {!!agents.length && <Menu open={expanded} onClose={() => setExpanded(false)} className={css.menu} selection="fill" selectedId={selected?.agent_id} autoFocus
-      anchor={<button id={selected ? 'session-title' : undefined} className={css.trigger} aria-label={tx('common:subagents.list')} aria-haspopup="menu" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>
-        {(selected ? selected.state === 'active' || selected.state === 'admitting' : agents.some(agent => agent.state === 'active' || agent.state === 'admitting')) && <StateDot state="ongoing"/>}
-        <span>{selected?.agent ?? tx('common:subagents.count', { count: agents.length })}</span><IconChevronDownOutline14/>
-      </button>}
-      items={agents.map(agent => ({ id: agent.agent_id, label: <span className={css.row} data-agent-id={agent.agent_id} data-agent-state={agent.state}>
-        <StateDot state={agentDot(agent)} size={7}/><span className={css.content}><span className={css.name}>{agent.agent}</span><span className={css.secondary}>{stateLabel(agent)}{agent.observation.activity.type === 'tool' ? ` · ${agent.observation.activity.tool_id.replace(/^tool-/, '')}` : ''}</span></span><span className={css.metrics}>{scope.metrics[agent.agent_id]?.statistics.reported_usage && <span>{tx('agent:usage.count', { count: formatTokens(scope.metrics[agent.agent_id].statistics.reported_usage!.total_tokens, tx) })}</span>}{scope.metrics[agent.agent_id] && <span>{formatDuration(agentDuration(scope.metrics[agent.agent_id], now), tx)}</span>}</span><IconChevronRightOutline14/>
-      </span> }))} onSelect={id => { open(id); setExpanded(false); }}/>}
+    {selected ? <><button className={css.parent} onClick={() => open()}>{title}</button><span className={css.separator}>/</span>
+      {ancestors.map(agent => <span key={agent.agent_id} className={css.ancestor}><SubagentMenu agents={agents.filter(sibling => sibling.parent_agent_id === agent.parent_agent_id)} selected={agent.agent_id} label={agent.title} openTitle={() => open(agent.agent_id)} openChild={open}/><span className={css.separator}>/</span></span>)}
+      <SubagentMenu agents={siblings} selected={selected.agent_id} label={selected.title} openChild={open}/>
+      {!!children.length && <SubagentMenu agents={children} label={tx('common:subagents.count', { count: children.length })} openChild={open}/>}</>
+      : <><span id="session-title" aria-label={tx(scope.sessionId ? 'agent:conversation-header.session-title' : 'agent:conversation-header.product-title')} className={css.title}>{title}</span>
+        {!!siblings.length && <SubagentMenu agents={siblings} label={tx('common:subagents.count', { count: siblings.length })} openChild={open}/>}</>}
   </div>;
 }
-/** Keep the parent mounted so returning restores its reading position and draft. */
-export function SubagentSurface({ children }: { children: ReactNode }) {
+/** Retain each visited child's draft and reading position, like a resident DSH conversation. */
+export function SubagentSurface({ children, mode = 'chat' }: { children: ReactNode; mode?: 'chat' | 'trajectory' }) {
   const scope = useSubagents();
   return <><div className={css.parentSurface} hidden={!!scope?.selected}>{children}</div>
-    {scope?.selected && <div className={conversationCss.scrollBody} data-conversation-scroll><AgentCard key={`${scope.sessionId}:${scope.selected.agent_id}`} agent={scope.selected} metrics={scope.metrics[scope.selected.agent_id]} metricsError={scope.metricErrors[scope.selected.agent_id]} client={scope.client} sessionId={scope.sessionId}/></div>}</>;
+    {scope?.opened.map(agent => <div key={`${scope.sessionId}:${agent.agent_id}`} hidden={scope.selected?.agent_id !== agent.agent_id} className={`${conversationCss.scrollBody} ${css.childSurface}`} data-conversation-scroll>
+      <AgentCard onMode={scope.onMode} mode={mode} visible={scope.selected?.agent_id === agent.agent_id} agent={agent} metrics={scope.metrics[agent.agent_id]} metricsError={scope.metricErrors[agent.agent_id]} client={scope.client} sessionId={scope.sessionId}/>
+    </div>)}</>;
+}
+
+/** Sidebar chat uses the same native Agent conversation and resident composer. */
+export function SubagentAside({ id, visible }: { id: string; visible: boolean }) {
+  const scope = useSubagents(), tx = useTranslation();
+  const [mode, setMode] = useState<'chat' | 'trajectory'>('chat');
+  const agent = scope?.agents.find(agent => agent.agent_id === id);
+  if (!scope || !agent) return <p role="status">{tx('common:activity.unavailable')}</p>;
+  return <section className={`conversation-panel ${conversationCss.body} ${conversationCss.embeddedBody}`} data-content-phase="active">
+    <div className={conversationCss.tabs} role="tablist" aria-label={tx('agent:conversation-header.conversation-view')}>{(['chat', 'trajectory'] as const).map(value => <button type="button" key={value} role="tab" aria-selected={value === mode} className={`${conversationCss.tab} ${value === mode ? conversationCss.tabActive : ''}`} onClick={() => setMode(value)}>{tx(value === 'chat' ? 'agent:conversation-header.chat' : 'agent:conversation-header.trajectory')}</button>)}</div>
+    <div className={`${conversationCss.scrollBody} ${css.aside}`} data-conversation-scroll><AgentCard onMode={setMode} mode={mode} embedded visible={visible} agent={agent} metrics={scope.metrics[id]} metricsError={scope.metricErrors[id]} client={scope.client} sessionId={scope.sessionId}/></div>
+  </section>;
 }

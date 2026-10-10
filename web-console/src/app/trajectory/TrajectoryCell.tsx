@@ -2,10 +2,10 @@ import type { Translate } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness TrajectoryTable.tsx semantic cells; see PROVENANCE.md. */
 import type { ReactNode } from 'react';
-import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v38';
+import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v44';
 import { IconSettingsOutline16, IconSparkle16, IconUserOutline16 } from '../../presentation/primitives/icons';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
-import type { InspectableDisplayItem } from './layout';
+import { recordLabel, type InspectableDisplayItem } from './layout';
 import { trajectoryPreviewText } from './preview';
 import css from './Trajectory.module.css';
 
@@ -13,7 +13,7 @@ import css from './Trajectory.module.css';
 export type CellKind = TraceKind | 'system' | 'context';
 
 export function cellKind(item: InspectableDisplayItem): CellKind {
-  return item.type === 'SystemPromptCell' ? 'system' : item.type === 'ContextRow' || item.record.kind === 'user' && !!item.record.agent_id ? 'context' : item.record.kind;
+  return item.type === 'SystemPromptCell' ? 'system' : item.type === 'ContextRow' ? 'context' : item.record.kind;
 }
 
 /** Harness role labels; a compaction record is shown as its Compacted result. */
@@ -86,7 +86,8 @@ function attachmentSummary(tx: Translate, record: TraceRecord): string {
 
 function compactionText(tx: Translate, record: TraceRecord): string {
   if (record.state === 'running') return tx('trajectory:layout.compacting');
-  if (record.state !== 'completed') return tx('trajectory:layout.compaction-failed');
+  if (record.state === 'failed') return tx('trajectory:layout.compaction-failed');
+  if (record.state !== 'completed') return recordLabel(tx, record);
   return record.preview?.text ? trajectoryPreviewText(record.preview.text) : tx('trajectory:layout.compacted');
 }
 

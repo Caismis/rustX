@@ -12,7 +12,7 @@ import { useTranslation } from '../../locale/react';
  */
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { structuredPatch } from 'diff';
-import type { TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition } from '../../../../protocol/app-server/v38';
+import type { TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition } from '../../../../protocol/app-server/v44';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { JsonTree, type JsonTreeLabels } from '../../presentation/primitives/JsonTree';
 import { IconCheckOutline16, IconChevronRightOutline14, IconCopyOutline16, IconWrapLinesOutline16 } from '../../presentation/primitives/icons';
@@ -632,7 +632,7 @@ export function TrajectoryInspector({ item, facet, onFacet, detail, loading, err
           <div><dt>{tx('trajectory:timing.duration')}</dt><dd>{formatDurationMillis(tx, wireCount(record.timing.duration_ms))}</dd></div>
           <div><dt>{tx('trajectory:usage.tokens')}</dt><dd>—</dd></div>
         </dl>
-        {(blocks?.length || fallback) && <div className={`${css.compactedSummary} ${css.summaryScrollRegion}`} data-summary-scroll-region="">{content(true)}</div>}
+        {(pending || blocks?.length || fallback) && <div className={`${css.compactedSummary} ${css.summaryScrollRegion}`} data-summary-scroll-region="">{content(true)}</div>}
       </>;
     }
     const markdown = record.kind !== 'tool';

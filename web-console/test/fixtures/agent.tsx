@@ -6,7 +6,7 @@ import { createRoot } from 'react-dom/client';
 import { RpcFailure } from '../../src/client/app-server';
 import { App } from '../../src/app/App';
 import { Server, interaction, snapshot, endpoint } from '../fixture';
-import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v38';
+import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v44';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -46,7 +46,7 @@ if (mode === 'settled') {
  s.transcript.entries[1].completed_response = { closing_message_id: 'answer-1', origin: { conversation_id: 'origin-conversation', closing_message_id: 'answer-1', attempt_id: 'attempt-1' }, surface_revision: '2', retry_message_id: 'user-1', completed_at: '2026-09-18T11:59:00Z', usage: { input_tokens: 15000, output_tokens: 800, total_tokens: 15800, details: { cached_input_tokens: 12000 } }, models: ['native/coder'] };
  s.transcript.statistics = { turns: '12', steps: '34', completed_responses: '1', model_requests: '2', requests_with_usage: '2', reported_usage: s.transcript.entries[1].completed_response.usage,
    timing: { model_ms: 20500, tool_ms: 9652000, mean_ttft_ms: 3100, output_tokens_per_second: 49 } };
- s.context = { compaction_count: 0, compaction_in_progress: false, last_request_occupancy: { input_tokens: 15000, context_window_tokens: 128000, model: 'native/coder', breakdown: { system_tokens: 1900, tool_tokens: 6000, message_tokens: 7100 } } };
+ s.context = { compaction_count: 0, compaction_in_progress: false, occupancy: { estimated: false, input_tokens: 15000, context_window_tokens: 128000, model: 'native/coder', breakdown: { system_tokens: 1900, tool_tokens: 6000, message_tokens: 7100 } } };
 }
 if (mode !== 'settled' && mode !== 'composer') s.attempt = { attempt_id: 'attempt-1', phase: { type: 'running' }, turn: 1, execution_settings: { resource_revision: '1', approval_mode: 'policy' } };
 if (mode === 'streaming') {
@@ -102,7 +102,7 @@ if (mode === 'composer') {
   };
 }
 declare global {
-  interface Window { composerFixture: { running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; busyEnter(value: 'queue' | 'steer'): void; cancellations(): import('../../../protocol/app-server/v38').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
+  interface Window { composerFixture: { running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; busyEnter(value: 'queue' | 'steer'): void; cancellations(): import('../../../protocol/app-server/v44').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
 }
 
 function RestoredComposerFixture() {

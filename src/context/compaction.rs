@@ -172,6 +172,15 @@ pub(crate) async fn execute_compaction(
             expected_revision,
             tokens_before: plan.estimated_before,
             estimated_tokens_after: projection.estimated_input.input_tokens,
+            occupancy: Some(crate::context::occupancy::estimate(
+                // The validated primary request also includes staged context
+                // and any unresolved-output carryover, not only its Surface.
+                exact_after,
+                context.engine.config().context_window_tokens,
+                &context.primary_model,
+                &projection.effective_system_prompt,
+                tools,
+            )),
             attempt_id: attribution.attempt_id,
             turn_id: attribution.turn_id,
             timestamp: Utc::now(),

@@ -37,21 +37,22 @@ it('scope menu preserves the resource category and keeps definition drafts bound
   await screen.findByRole('heading', { name: 'Workspace Settings — A' });
   expect(screen.getByRole('tab', { name: 'MCP servers', selected: true })).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Configuration scope' }));
-  fireEvent.click(await screen.findByRole('menuitem', { name: 'User (global)' }));
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'User' }));
   await screen.findByRole('heading', { name: 'User Settings' });
   await openResourceRow('search');
   expect((screen.getByLabelText('MCP command') as HTMLInputElement).value).toBe('unsaved-server');
   expect(writes(s)).toHaveLength(0);
 });
 
-it('partial MCP grants stay in the detailed selection editor', async () => {
+it('partial MCP grants are preserved by a disabled list toggle without an extra selection editor', async () => {
   const s = cfg3Client();
   s.source.user.authored!.agent = { tools: { sources: { search: ['lookup'] } } };
   await catalog(s);
   const card = within(screen.getByRole('listitem', { name: 'search' }));
-  expect(card.queryByRole('switch')).toBeNull();
-  fireEvent.click(card.getByRole('button', { name: 'Manage selection' }));
-  expect(screen.getByRole('form', { name: 'Source search' })).toBeTruthy();
+  expect(card.queryByRole('button', { name: 'Manage selection' })).toBeNull();
+  const toggle = card.getByRole('switch') as HTMLButtonElement;
+  expect(toggle.disabled).toBe(true);
+  fireEvent.click(toggle);
   expect(writes(s)).toHaveLength(0);
 });
 
@@ -69,25 +70,29 @@ it.each(['skill', 'agent'] as const)('%s quick selection preserves other names a
   expect(writes(s)[0]).toMatchObject({ target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'workspace-1', mutation: { kind: 'config', mutation: { unit, authored: ['existing', 'helper'] } } });
 });
 
-it('a rejected quick write exposes its retained draft through detail rather than retrying', async () => {
+it('a rejected MCP toggle exposes the failure and cannot blindly retry', async () => {
   const s = cfg3Client(async op => { if (op.method === 'configuration/sourceWrite') throw new Error('catalog rejected'); });
   await catalog(s);
   fireEvent.click(within(screen.getByRole('listitem', { name: 'search' })).getByRole('switch'));
-  fireEvent.click(await screen.findByRole('button', { name: 'Manage selection' }));
   await screen.findByText(/catalog rejected/);
+  expect((within(screen.getByRole('listitem', {name:'search'})).getByRole('switch') as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.queryByRole('button', {name:'Manage selection'})).toBeNull();
   expect(writes(s)).toHaveLength(1);
 });
 
-it('MCP observation stays unknown and navigation and refresh only read configuration', async () => {
+it('MCP navigation, search and refresh stay passive; Test connection executes one definition', async () => {
   const s = cfg3Client();
-  s.source.user.authored!.agent = {tools:{sources:{search:'all'}}};
   await catalog(s);
-  await screen.findByRole('img', {name:/MCP server status is not yet available/});
+  expect(s.request.mock.calls.some(([op]) => op.method === 'mcp/probe')).toBe(false);
   await openSettingsPage('MCP servers');
+  fireEvent.change(screen.getByRole('searchbox'), {target:{value:'search'}});
   fireEvent.click(screen.getByRole('button', {name:'Refresh'}));
   await settingsReady();
   await openSettingsPage('General');
   await openSettingsPage('MCP servers');
-  expect([...new Set(s.request.mock.calls.map(([op]) => op.method))]).toEqual(['configuration/sourcesRead']);
+  expect(s.request.mock.calls.some(([op]) => op.method === 'mcp/probe')).toBe(false);
+  fireEvent.click(screen.getByRole('button', {name:'Test connection search'}));
+  await screen.findByRole('img', {name:/Connection test succeeded/});
+  expect(s.request.mock.calls.filter(([op]) => op.method === 'mcp/probe')).toHaveLength(1);
   expect(writes(s)).toHaveLength(0);
 });

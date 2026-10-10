@@ -1,9 +1,10 @@
+import { ToolInspectionButton } from './ToolCard';
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
 // Adapted from DeepSeek Harness ui-tool AskQuestionRow, QuestionToolRow and
 // AskQuestionCard: one row whose summary is the interaction verdict and whose
 // expansion is the read-only question/answer record. Harness's timed-question
-// panel actions and the trajectory Inspect pill have no rustX counterpart.
+// panel actions are excluded; native Trace navigation owns the Inspect pill.
 import { useState } from 'react';
 import { DisclosureRow } from '../primitives/DisclosureRow';
 import { IconQuestionOutline14 } from '../primitives/icons';
@@ -17,7 +18,7 @@ export type QuestionRowView =
   | { readonly id: string; readonly verdict: 'answered'; readonly answered: number; readonly total: number; readonly questions: readonly { readonly question: string; readonly answers: readonly string[] }[] }
   | { readonly id: string; readonly verdict: 'cancelled' | 'interrupted'; readonly questions: readonly string[] };
 
-export function QuestionRow({ row }: { row: QuestionRowView }) {
+export function QuestionRow({ row, inspect }: { row: QuestionRowView; inspect?: () => Promise<void> }) {
   const tx = useTranslation();
   const [open, setOpen] = useState(false);
   const summary = row.verdict === 'waiting' ? tx('tools:ask.waiting')
@@ -43,7 +44,8 @@ export function QuestionRow({ row }: { row: QuestionRowView }) {
           </dl> : <div className={card.card}>
             <p className={card.verdict}>{tx(`tools:ask.${row.verdict}-detail`)}</p>
             <ul className={card.questionList}>{row.questions.map((question, index) => <li className={card.unansweredQuestion} key={index}>{question}</li>)}</ul>
-          </div>}
+            {inspect && <ToolInspectionButton inspect={inspect}/>}
+        </div>}
         </div>}
       </DisclosureRow>
     </div>

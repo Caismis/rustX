@@ -71,7 +71,7 @@ import {
 } from "./transport.ts";
 
 /** The protocol version this client speaks. Independent of every other version. */
-export const APP_SERVER_PROTOCOL_VERSION = 38;
+export const APP_SERVER_PROTOCOL_VERSION = 44;
 
 /** How this client identifies itself in `initialize`. */
 export const CLIENT_IDENTITY: ClientIdentity = {
@@ -144,8 +144,13 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   "session/traceHistoryDetail": "read",
   "session/turns": "read",
   "agent/transcript": "read",
+  "agent/turns": "read",
+  "agent/trace": "read",
+  "agent/traceLocateTool": "read",
+  "agent/traceDetail": "read",
   "agent/statistics": "read",
   "session/trace": "read",
+  "session/traceLocateTool": "read",
   // Inspection detail is a pure historical read: it advances no cursor,
   // consumes no pending work, and settles nothing, so a lost response is
   // safely retryable.
@@ -159,6 +164,7 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   "session/uploadPrepare": "side_effecting",
   "session/uploadStatus": "read",
   "configuration/sourcesRead": "read",
+  "mcp/probe": "side_effecting",
   "session/effectiveConfiguration": "read",
   "configuration/sourceWrite": "side_effecting",
   "session/model": "read",
@@ -171,6 +177,11 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   "job/list": "read",
   "job/wait": "read",
   "agent/list": "read",
+  "agent/conversation": "read",
+  "agent/conversationCancel": "connection_local",
+  "agent/artifactRead": "read",
+  "agent/deliveryRead": "read",
+  "agent/deliveryLocate": "read",
   "agent/sendMessage": "side_effecting",
   // A retry could capture a later activation, so a lost wait is never replayed.
   "agent/wait": "side_effecting",
@@ -238,7 +249,7 @@ interface PendingRequest {
 const REQUEST_CAPACITY = { wait: 4, admission: 2, control: 2, rpc: 7, cancel: 1 } as const;
 function requestLane(method: MethodName): keyof typeof REQUEST_CAPACITY {
   switch (method) {
-    case "agent/wait": case "job/wait": return "wait";
+    case "mcp/probe": case "agent/wait": case "job/wait": return "wait";
     case "agent/sendMessage": return "admission";
     case "agent/interrupt": case "job/cancel": case "turn/cancel":
     case "interaction/respond": case "interaction/cancel": return "control";
@@ -468,7 +479,7 @@ export class AppServerClient {
 
     const record = decodeProtocolMessage(untrusted);
     if (record === undefined) {
-      this.#fail("invalid App Server v38 protocol message");
+      this.#fail("invalid App Server v44 protocol message");
       return;
     }
 

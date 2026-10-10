@@ -1,11 +1,11 @@
 import { useTranslation } from '../../locale/react';
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { sameTarget, type AppServerClient } from '../../client/app-server';
 import { useClientSelector, sameValue, transportSelection } from '../../client/selectors';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
 import type { WorkspaceAuthority } from '../../workspaces/authority';
 import type { WorkspaceAssociations } from '../../workspaces/associations';
-import type { UserInputBlock } from '../../../../protocol/app-server/v38';
+import type { UserInputBlock } from '../../../../protocol/app-server/v44';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 import { goalDock } from '../../bindings/composer-context';
 import { deriveSessionProductState, type SessionRecovery } from '../../bindings/session-product';
@@ -15,7 +15,7 @@ import { ConversationDocks, ConversationTotals } from './ConversationLive';
 import { ContextSeat } from './ContextSeat';
 import { Interactions } from './Interactions';
 import type { CommandId } from '../commands/registry';
-import css from '../../presentation/agent/Conversation.module.css';
+import { ComposerSeat } from './ComposerSeat';
 
 export function ConversationStatus({ client, sessionId, recover }: { client: AppServerClient; sessionId: string; recover: (action: SessionRecovery) => void }) {
   const tx = useTranslation();
@@ -31,15 +31,6 @@ export function ConversationSeat({ client, host, authority, associations, sessio
   restored?: { conversation: string; content: UserInputBlock[] }; opened: (id: string) => (() => boolean) | void;
   onCommand: (id: CommandId) => void;
 }) {
-  const seat = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    const element = seat.current!, body = element.closest<HTMLElement>('.conversation-panel')!;
-    const measure = () => body.style.setProperty('--dsh-composer-height', `${element.getBoundingClientRect().height}px`);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    return () => { observer.disconnect(); body.style.removeProperty('--dsh-composer-height'); };
-  }, []);
   const state = useClientSelector(client, state => ({ ...transportSelection(state), composer: composerFacts(sessionId ? state.views[sessionId] : undefined) }), sameValue);
   const view = sessionId ? client.getSnapshot().views[sessionId] : undefined;
   const owner = JSON.stringify([state.generation, sessionId, binding]);
@@ -50,7 +41,7 @@ export function ConversationSeat({ client, host, authority, associations, sessio
   const error = failure?.owner === owner ? failure.message : undefined;
   const attached = state.connection === 'connected' && !!view && client.isAttachmentControlCurrent(view.id, view.attachmentObservation);
   const disabled = !attached || !!view?.modelMutation || !!view?.snapshot?.shutting_down || !!view?.snapshot?.durability_failure;
-  return <div ref={seat} className={css.composerSeat} data-composer-seat="">
+  return <ComposerSeat>
     <div hidden={!!view?.snapshot?.pending_interactions?.length}>
       <ConversationComposer client={client} host={host} authority={authority} associations={associations} initialWorkspace={initialWorkspace} workspacePicked={workspacePicked} binding={binding} activeView={view} current={current} consumed={consumed} opened={opened}
         context={view && <><ContextSeat client={client} sessionId={view.id}/><ConversationDocks key={view.id} client={client} sessionId={view.id} disabled={disabled}/></>}
@@ -73,7 +64,7 @@ export function ConversationSeat({ client, host, authority, associations, sessio
       {view && <ConversationTotals client={client} sessionId={view.id}/>}
     </div>
     {sessionId && <LiveInteractions key={owner} client={client} sessionId={sessionId}/>}
-  </div>;
+  </ComposerSeat>;
 }
 function composerFacts(view: ReturnType<AppServerClient['getSnapshot']>['views'][string] | undefined) {
   if (!view) return undefined;

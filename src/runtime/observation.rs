@@ -149,8 +149,8 @@ pub(crate) enum ConversationObservation {
     /// Manual compaction is runtime maintenance: completion still names the
     /// atomic durable `RuntimeEvent::CompactionCompleted` fact, but its live
     /// publication is delayed until coordinator ownership is restored. Start
-    /// and failure are live operation observations. Only compaction event
-    /// variants are legal in this lane.
+    /// and failure are also persisted before publication. Only compaction
+    /// event variants are legal in this lane.
     ManualCompactionEvent {
         /// Client correlation, retained only for this runtime incarnation.
         request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,

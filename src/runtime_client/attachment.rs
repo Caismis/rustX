@@ -88,7 +88,28 @@ impl RuntimeAttachment {
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.access(false)?.agent_statistics(id).await
     }
-    native_control!(agent_transcript_page, false, id: &crate::runtime::identity::AgentId, before: Option<super::snapshot::RuntimeClientTranscriptCursor>, limit: usize);
+    /// Read a child's complete native turn directory in bounded pages.
+    /// # Errors
+    /// Rejects closed attachments, unknown children and invalid page bounds.
+    pub fn agent_turns(
+        &self,
+        id: &crate::runtime::identity::AgentId,
+        offset: Option<usize>,
+        limit: usize,
+    ) -> Result<crate::durable::reading::ConversationTurnPage, RuntimeClientError> {
+        self.access(false)?.agent_turns(id, offset, limit)
+    }
+    /// Locate one child Turn or page around its captured native cut.
+    /// # Errors
+    /// Rejects foreign identities, invalid cuts and unavailable history.
+    pub fn agent_transcript_window(
+        &self,
+        id: &crate::runtime::identity::AgentId,
+        at: &crate::durable::reading::ConversationWindowAt,
+        limit: usize,
+    ) -> Result<super::snapshot::ConversationWindow, RuntimeClientError> {
+        self.access(false)?.agent_transcript_window(id, at, limit)
+    }
 
     /// Wait for this exact finite Job's physical settlement.
     /// # Errors
@@ -108,6 +129,16 @@ impl RuntimeAttachment {
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.access(true)?.job_wait(id, true).await
     }
+    /// Read a coherent child-owned conversation cut, waiting after its cursor.
+    /// # Errors
+    /// Closed attachments, unknown Agents and unavailable live endpoints reject.
+    pub async fn agent_conversation(
+        &self,
+        id: &crate::runtime::identity::AgentId,
+        after: Option<super::agent_conversation::AgentConversationCursor>,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.access(false)?.agent_conversation(id, after).await
+    }
     /// Deliver to the active child or atomically admit its next activation.
     /// # Errors
     /// Read-only attachments, unknown Agents and stopping Agents are rejected.
@@ -115,8 +146,11 @@ impl RuntimeAttachment {
         &self,
         id: &crate::runtime::identity::AgentId,
         message: String,
+        attachments: Vec<crate::message::content::UploadedFileRef>,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.access(true)?.agent_send_message(id, message).await
+        self.access(true)?
+            .agent_send_message(id, message, attachments)
+            .await
     }
     /// Capture and wait for the activation current at owner admission.
     /// # Errors
@@ -327,15 +361,29 @@ impl RuntimeAttachment {
             RuntimeClientRequest::JobList { .. } => Ok(inner.job_list()),
             RuntimeClientRequest::AgentStatus { agent_id, .. } => inner.agent_status(&agent_id),
             RuntimeClientRequest::AgentList { .. } => inner.agent_list(),
-            RuntimeClientRequest::AgentStatistics { .. } => {
+            RuntimeClientRequest::AgentConversation { .. }
+            | RuntimeClientRequest::AgentStatistics { .. }
+            | RuntimeClientRequest::AgentTrace { .. }
+            | RuntimeClientRequest::AgentTraceLocateTool { .. }
+            | RuntimeClientRequest::AgentTraceDetail { .. } => {
                 unreachable!("Agent statistics are read asynchronously")
             }
             RuntimeClientRequest::AgentTranscript {
                 agent_id,
-                before,
+                at,
                 limit,
                 ..
-            } => inner.agent_transcript_page(&agent_id, before, limit),
+            } => inner
+                .agent_transcript_window(&agent_id, &at, limit)
+                .map(|window| RuntimeClientResult::TranscriptWindow { window }),
+            RuntimeClientRequest::AgentTurns {
+                agent_id,
+                offset,
+                limit,
+                ..
+            } => inner
+                .agent_turns(&agent_id, offset, limit)
+                .map(|page| RuntimeClientResult::ConversationTurns { page }),
             RuntimeClientRequest::JobWait { .. }
             | RuntimeClientRequest::JobCancel { .. }
             | RuntimeClientRequest::AgentSendMessage { .. }
@@ -387,9 +435,35 @@ impl RuntimeAttachment {
         }
 
         let domain_result = match &request {
+            RuntimeClientRequest::AgentConversation {
+                agent_id, after, ..
+            } => Some(inner.agent_conversation(agent_id, after.clone()).await),
             RuntimeClientRequest::AgentStatistics { agent_id, .. } => {
                 Some(inner.agent_statistics(agent_id).await)
             }
+            RuntimeClientRequest::AgentTrace {
+                agent_id,
+                before,
+                limit,
+                records,
+                ..
+            } => Some(
+                inner
+                    .agent_trace(agent_id, before.clone(), *limit, records.clone())
+                    .await,
+            ),
+            RuntimeClientRequest::AgentTraceDetail {
+                agent_id,
+                record_id,
+                ..
+            } => Some(inner.agent_trace_detail(agent_id, record_id.clone()).await),
+            RuntimeClientRequest::AgentTraceLocateTool {
+                agent_id, locator, ..
+            } => Some(
+                inner
+                    .agent_trace_locate_tool(agent_id, locator.clone())
+                    .await,
+            ),
             RuntimeClientRequest::JobWait { job_id, .. } => {
                 Some(inner.job_wait(job_id, false).await)
             }
@@ -397,8 +471,15 @@ impl RuntimeAttachment {
                 Some(inner.job_wait(job_id, true).await)
             }
             RuntimeClientRequest::AgentSendMessage {
-                agent_id, message, ..
-            } => Some(inner.agent_send_message(agent_id, message.clone()).await),
+                agent_id,
+                message,
+                attachments,
+                ..
+            } => Some(
+                inner
+                    .agent_send_message(agent_id, message.clone(), attachments.clone())
+                    .await,
+            ),
             RuntimeClientRequest::AgentWait { agent_id, .. } => {
                 Some(inner.agent_wait(agent_id, false).await)
             }

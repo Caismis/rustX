@@ -123,8 +123,8 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
           });
         });
         expect(labels).toEqual([
-          { text:'native/coder', x:119, y:271, width:70.8125, height:20, fontSize:'13px', fontWeight:'500', lineHeight:'20px', color:'rgb(207, 211, 214)', transform:'none' },
-          { text:'deliberate', x:193.8125, y:271, width:50.6875, height:20, fontSize:'13px', fontWeight:'500', lineHeight:'20px', color:'rgb(129, 133, 140)', transform:'none' },
+          { text:'native/coder', x:143.453125, y:271, width:70.78125, height:20, fontSize:'13px', fontWeight:'500', lineHeight:'20px', color:'rgb(207, 211, 214)', transform:'none' },
+          { text:'deliberate', x:218.234375, y:271, width:20.78125, height:20, fontSize:'13px', fontWeight:'500', lineHeight:'20px', color:'rgb(129, 133, 140)', transform:'none' },
         ]);
       }
       await expectStableScreenshot(stack, `composer-${state}-${theme}-${width}.png`);
@@ -159,6 +159,29 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
     await (await chooser).setFiles({ name: 'review.txt', mimeType: 'text/plain', buffer: Buffer.from('Review notes') });
     await expect(page.getByText('Uploaded', { exact: true })).toBeVisible();
     await input.fill('Review these notes.'); await shot('attachment');
+    if (width === 390) {
+      const reader = page.locator('[data-conversation-scroll]').first();
+      const seat = page.locator('[data-composer-seat]');
+      const paint = () => page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      const geometry = await stack.boundingBox();
+      const before = await stack.screenshot({ animations: 'disabled', caret: 'hide', scale: 'css' });
+      await reader.evaluate(element => { element.scrollTop = 0; });
+      await paint();
+      // Invalidate the fade in the sticky pose, then restore the identical
+      // reading pose. Compare real pixels, never a retry against a baseline.
+      await seat.evaluate(element => { element.style.backgroundImage = 'linear-gradient(red, red)'; });
+      await paint();
+      await seat.evaluate(element => { element.style.removeProperty('background-image'); });
+      await paint();
+      await reader.evaluate(element => { element.scrollTop = element.scrollHeight; });
+      await paint();
+      expect(await stack.boundingBox()).toEqual(geometry);
+      const after = await stack.screenshot({ animations: 'disabled', caret: 'hide', scale: 'css' });
+      const comparison = compareScreenshot({ expected: decodePng(before), actual: decodePng(after), referenceName: 'composer-fade-sticky-repaint', noisePolicy: [] });
+      await test.info().attach('composer-before-sticky-repaint', { body: before, contentType: 'image/png' });
+      await test.info().attach('composer-after-sticky-repaint', { body: after, contentType: 'image/png' });
+      expect(comparison.totalChanged, comparison.report).toBe(0);
+    }
     await page.getByRole('button', { name: 'Remove review.txt' }).click();
     await expect(input).toHaveValue('Review these notes.');
     await page.evaluate(() => window.composerFixture.docks(true));

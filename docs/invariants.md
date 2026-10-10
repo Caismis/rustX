@@ -418,7 +418,7 @@ spine; clients merge live and older pages by durable transcript cursor. Entry
 identity only detects the same durable fact, and page reads do not move the
 live event cursor.
 
-App Server v38 navigation adds native Turn-relative finite windows at a captured
+App Server v44 navigation adds native Turn-relative finite windows at a captured
 `ConversationReadCut`. It owns positioning and mutation rejection. Web presentation
 retains at most 256 historical entries / 8 MiB plus the independent finite live
 snapshot; it never walks from a distant Turn to the live tail. New navigation,
@@ -7658,3 +7658,11 @@ Conversation-owned immutable PNG snapshots. See [image reading](image-reading.md
   evidence. Retained evidence grants no operation authority. See
   [Workspace ownership](../web-console/WORKSPACES.md) and
   [connection ownership](../web-console/CONNECTION.md) for bounds and precedence.
+
+### Attachment input admission
+
+An over-limit attachment input is rejected before guidance tickets, mailbox
+writes, activation identity/reservations, preparation or accepted/delivered facts.
+The shared message-domain limit is eight attachments per input; attachment-only
+input remains valid. Session receipt ownership and upload storage checks precede
+conversion into trusted references and remain separate from Runtime admission.

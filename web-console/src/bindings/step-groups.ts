@@ -1,4 +1,4 @@
-import type { RuntimeClientTranscriptEntry, TurnProcessOutcome } from '../../../protocol/app-server/v38';
+import type { RuntimeClientTranscriptEntry, TurnProcessOutcome } from '../../../protocol/app-server/v44';
 import type { StepActivity, StepCounts } from '../presentation/agent/StepGroup';
 
 /** One member of a step group: an Assistant message's listed blocks, or a whole bodied entry. */
@@ -39,9 +39,10 @@ const SETTLED: ReadonlySet<TurnProcessOutcome> = new Set(['completed', 'cancelle
  * message closes it. Groups never cross an Attempt and never reorder entries.
  * @param entries - the loaded transcript page in canonical order.
  * @param bodied - whether a non-message entry renders a body of its own.
+ * @param independentBefore - an independent annotation before this entry closes the preceding group.
  * @returns each entry's in-place pieces; an entry absent from the map renders unchanged.
  */
-export function stepGroups(entries: readonly RuntimeClientTranscriptEntry[], bodied: (entry: RuntimeClientTranscriptEntry) => boolean) {
+export function stepGroups(entries: readonly RuntimeClientTranscriptEntry[], bodied: (entry: RuntimeClientTranscriptEntry) => boolean, independentBefore: (entry: RuntimeClientTranscriptEntry) => boolean = () => false) {
   const pieces = new Map<string, StepPiece[]>();
   let owner: string | undefined;
   let pending: { members: StepMember[]; calls: Map<string, StepActivity>; seat: StepPiece[] } | undefined;
@@ -64,6 +65,7 @@ export function stepGroups(entries: readonly RuntimeClientTranscriptEntry[], bod
   };
   let ownerAttempt: string | undefined;
   for (const entry of entries) {
+    if (independentBefore(entry)) flush();
     const process = entry.turn_process;
     const item = entry.item;
     // Interaction audits carry their Attempt but no process membership; they stay

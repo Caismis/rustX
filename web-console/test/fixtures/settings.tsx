@@ -4,7 +4,7 @@ import { App } from '../../src/app/App';
 import { Server, endpoint, snapshot } from '../fixture';
 import { cfg3Application, cfg3Effective, cfg3Source } from '../cfg3-data';
 import { RpcFailure } from '../../src/client/app-server';
-import type { ConfigurationApplication, RuntimeClientEvent, SourceMutation } from '../../../protocol/app-server/v38';
+import type { ConfigurationApplication, RuntimeClientEvent, SourceMutation } from '../../../protocol/app-server/v44';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -89,6 +89,7 @@ if (variant.get('conversation') === 'ready') {
 server.workspaceHost.configureWorkspace = async (_id, _endpoint, operation) => {
   const projection = { ...source, target: { kind: 'workspace' as const, directory: '/workspace' } };
   if (operation.kind === 'write') return { kind: 'write', commit: { acknowledgement: projection, reread: { status: 'observed', projection } } };
+  if (operation.kind === 'mcp_probe') return {kind:'mcp_probe',result:{id:operation.id,revision:operation.expected_revision,outcome:variant.get('scenario') === 'mcp-probe' && operation.id === 'broken' ? 'connection_failed' : 'reachable'}};
   return { kind: operation.kind, projection };
 };
 // MCP catalog browser QA: deterministic save/delete acknowledgements with native-style redaction.
@@ -174,6 +175,21 @@ server.handlers.set('session/effectiveConfiguration', () => ({ type: 'effective_
 // A blocked banner is the runtime's own published Busy eligibility, never a
 // configuration application fact.
 if (session === 'blocked') server.snapshots.set('A', { ...snapshot('A'), configuration_adoption_eligibility: { status: 'busy' } });
+
+if (variant.get('scenario') === 'mcp-probe') {
+  for (const scope of ['user', 'workspace'] as const) {
+    source[scope]!.authored!.agent = {tools:{sources:{exa:'all',broken:'all'}}};
+    source[scope === 'user' ? 'user_mcp' : 'workspace_mcp']!.authored = {
+      exa:{definition:{url:'https://example.invalid/mcp'},retained_env:[],retained_headers:[]},
+      broken:{definition:{command:'missing-mcp'},retained_env:[],retained_headers:[]},
+    };
+  }
+  server.handlers.set('mcp/probe', request => {
+    if(request.method !== 'mcp/probe') throw new Error('Expected probe');
+    return {type:'mcp_probe',result:{id:request.params.id,revision:request.params.expected_revision,outcome:request.params.id === 'exa' ? 'reachable' : 'connection_failed'}};
+  });
+}
+
 await server.attached('A');
 localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
 createRoot(document.getElementById('root')!).render(<App client={server.client} workspaceHost={server.workspaceHost} />);

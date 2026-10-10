@@ -1,4 +1,4 @@
-import type { RuntimeClientContextView } from '../../../../protocol/app-server/v38';
+import type { RuntimeClientContextView } from '../../../../protocol/app-server/v44';
 import type { AppServerClient, CompactionRequestEvidence } from '../../client/app-server';
 import { useClientSelector, sameValue } from '../../client/selectors';
 import { useTranslation } from '../../locale/react';
@@ -21,16 +21,13 @@ export function ContextSeat({ client, sessionId }: { client: AppServerClient; se
   const tx = useTranslation();
   const facts = useClientSelector(client, state => {
     const view = state.views[sessionId];
-    const latest = view?.snapshot?.context?.latest_compaction?.summary_message_id;
-    const entries = view?.history?.page.entries ?? view?.snapshot?.transcript.entries ?? [];
-    const summaryVisible = !!latest && entries.some(entry => entry.item.type === 'message' && entry.item.message.id === latest);
-    return { summaryVisible, context: view?.snapshot?.context, request: view?.compactionRequest,
+    return { context: view?.snapshot?.context, request: view?.compactionRequest,
       current: state.connection === 'connected' && view?.attachment === 'attached' };
   }, sameValue);
   const presentation = compactionPresentation(facts.current ? facts.context : undefined, facts.request);
-  // The durable transcript owns the completed marker, as in Harness. Keep
-  // the temporary acknowledgement only until that exact summary is loaded.
-  if (!presentation || presentation.state === 'succeeded' && facts.summaryVisible) return null;
+  // A committed checkpoint owns its notice at its immutable transcript position,
+  // even when the user is viewing a historical window without that summary.
+  if (!presentation || presentation.state === 'succeeded' && facts.context?.latest_compaction) return null;
   return <div className={css.root} data-context-seat="">
     <div role="status" aria-live="polite">
       <span>{tx(`agent:context.${presentation.state}`)}</span>

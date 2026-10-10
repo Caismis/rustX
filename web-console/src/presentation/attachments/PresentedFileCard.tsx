@@ -26,19 +26,19 @@ export interface PresentedFileView {
   readonly description?: string | null | undefined;
 }
 
-export function PresentedFileCard({ file, onPreview, actions }: { file: PresentedFileView; onPreview: () => void; actions: ReactNode }) {
+export function PresentedFileCard({ file, onPreview, actions }: { file: PresentedFileView; onPreview?: () => void; actions: ReactNode }) {
   const tx = useTranslation();
   const metadata = fileExtension(file.name).toUpperCase() || tx('artifacts:presented.file');
   return <div className={css.file} data-presented-file data-delivery-card role="group" aria-label={file.name}>
     <button type="button" className={css.cardPreview} title={file.path}
-      aria-label={tx('artifacts:presented.preview-card', { name: file.name })} onClick={onPreview}/>
+      aria-label={tx('artifacts:presented.preview-card', { name: file.name })} disabled={!onPreview} onClick={onPreview}/>
     <span className={css.fileIcon}><FileTypeIcon path={file.name} size={20}/></span>
     <div className={css.fileBody}>
       <div className={css.details}>
         <span className={css.fileName} data-presented-name>{file.name}</span>
         <span className={css.description} data-presented-description>
           <span className={css.secondaryText}>{cardDescription(file.description, metadata)}</span>
-          <span className={css.previewHint}>{tx('artifacts:presented.preview')}</span>
+          {onPreview && <span className={css.previewHint}>{tx('artifacts:presented.preview')}</span>}
         </span>
       </div>
       <div className={css.actions}>{actions}</div>

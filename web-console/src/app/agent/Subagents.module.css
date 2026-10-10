@@ -1,20 +1,13 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from ui-subagent/SubagentHeaderLineage.module.css. */
 .lineage { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .title, .parent { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 360px; }
-.parent, .trigger { display: inline-flex; align-items: center; gap: 6px; min-width: 0; min-height: 28px; padding: 3px 2px; border: 0; background: transparent; color: var(--dsw-alias-label-tertiary); cursor: pointer; }
-.parent { font-size: 14px; }
-.parent:hover, .trigger:hover { color: var(--dsw-alias-label-primary); }
-.trigger { font-size: 12px; line-height: 18px; }
-.trigger span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.parent { display: inline-flex; align-items: center; min-width: 0; min-height: 28px; padding: 3px 2px; border: 0; background: transparent; color: var(--dsw-alias-label-tertiary); cursor: pointer; font-size: 14px; }
+.parent:hover { color: var(--dsw-alias-label-primary); }
 .separator { color: var(--dsw-alias-label-tertiary); }
-.menu { min-width: 0; }
-.row { display: flex; align-items: center; gap: 8px; min-height: 32px; width: 300px; max-width: calc(100vw - 64px); font-size: 12px; line-height: 17px; }
-.row > svg, .row > :first-child { flex: none; }
-.content { display: flex; flex-direction: column; min-width: 0; flex: 1; }
-.name, .secondary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.secondary { color: var(--dsw-alias-label-tertiary); font-size: 10px; line-height: 15px; }
+.ancestor { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
+.childSurface[hidden] { display: none; }
+.aside { position: relative; height: 100%; min-height: 0; }
+
 .parentSurface { display: contents; }
 .parentSurface[hidden] { display: none; }
 @media (max-width: 640px) { .title, .parent { max-width: 150px; } }
-
-.metrics { display: flex; flex-direction: column; align-items: flex-end; flex: none; color: var(--dsw-alias-label-tertiary); font-size: 10px; line-height: 15px; }

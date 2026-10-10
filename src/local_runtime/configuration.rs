@@ -63,7 +63,7 @@ pub struct UserConfigSources {
 /// borrow mutable manager state. The manager has no process launch directory.
 #[derive(Debug, Clone)]
 pub struct UserConfigManager {
-    sources: UserConfigSources,
+    pub(super) sources: UserConfigSources,
     runtime_root_origin: Origin,
     #[cfg(test)]
     pub(crate) test_hooks: ConfigurationHooks,

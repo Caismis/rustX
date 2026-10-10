@@ -155,6 +155,23 @@ pub struct AppServerConnection {
     delivery_access: Option<tokio_util::sync::CancellationToken>,
     /// This connection's in-flight delivery requests, by exact request id.
     deliveries: Arc<super::delivery_access::Operations>,
+    observation_reads: Arc<Mutex<Vec<(RequestId, tokio_util::sync::CancellationToken)>>>,
+}
+
+/// Read cancellation owns only a disposable observation, never child work.
+struct ObservationRead {
+    id: RequestId,
+    token: tokio_util::sync::CancellationToken,
+    reads: Arc<Mutex<Vec<(RequestId, tokio_util::sync::CancellationToken)>>>,
+}
+impl Drop for ObservationRead {
+    fn drop(&mut self) {
+        self.token.cancel();
+        self.reads
+            .lock()
+            .expect("observation reads mutex")
+            .retain(|(id, _)| *id != self.id);
+    }
 }
 
 /// One response and, for a delivery request, the owner of its publication
@@ -234,6 +251,7 @@ impl AppServerConnection {
             next_route: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             delivery_access: None,
             deliveries: Arc::default(),
+            observation_reads: Arc::default(),
         }
     }
 
@@ -346,6 +364,14 @@ impl AppServerConnection {
             route.external.release();
             route.capacity.release();
         }
+        for (_, token) in self
+            .observation_reads
+            .lock()
+            .expect("observation reads mutex")
+            .iter()
+        {
+            token.cancel();
+        }
         self.changed.notify_one();
     }
 
@@ -435,6 +461,50 @@ impl AppServerConnection {
             return Reply::plain(failure(None, domain(ErrorData::InvalidParams)));
         }
         let (result, publication) = match request.call {
+            call @ Method::AgentConversation { .. } => {
+                let token = tokio_util::sync::CancellationToken::new();
+                let reads = self.observation_reads.clone();
+                reads
+                    .lock()
+                    .expect("observation reads mutex")
+                    .push((id.clone(), token.clone()));
+                let _read = ObservationRead {
+                    id: id.clone(),
+                    token: token.clone(),
+                    reads,
+                };
+                (self.dispatch(call, Some(token)).await, None)
+            }
+            Method::AgentDeliveryRead {
+                target,
+                agent_id,
+                message_id,
+                delivery_index,
+            } => {
+                self.delivery(
+                    &id,
+                    &target,
+                    message_id,
+                    delivery_index,
+                    super::delivery_access::Access::AgentBytes(agent_id),
+                )
+                .await
+            }
+            Method::AgentDeliveryLocate {
+                target,
+                agent_id,
+                message_id,
+                delivery_index,
+            } => {
+                self.delivery(
+                    &id,
+                    &target,
+                    message_id,
+                    delivery_index,
+                    super::delivery_access::Access::AgentLocation(agent_id),
+                )
+                .await
+            }
             Method::DeliveryRead {
                 target,
                 message_id,
@@ -496,11 +566,11 @@ impl AppServerConnection {
                 | Method::AdoptConfiguration { .. }
         ) {
             let connection = self.clone();
-            tokio::spawn(async move { Box::pin(connection.dispatch(call)).await })
+            tokio::spawn(async move { Box::pin(connection.dispatch(call, None)).await })
                 .await
                 .unwrap_or_else(|_| Err(domain(ErrorData::OperationFailed)))
         } else {
-            Box::pin(self.dispatch(call)).await
+            Box::pin(self.dispatch(call, None)).await
         }
     }
 
@@ -516,7 +586,11 @@ impl AppServerConnection {
     }
 
     #[allow(clippy::too_many_lines)]
-    async fn dispatch(&self, method: Method) -> Result<MethodResult, RpcError> {
+    async fn dispatch(
+        &self,
+        method: Method,
+        observation_cancel: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<MethodResult, RpcError> {
         if self.routes.lock().expect("routes mutex").closed {
             return Err(domain(ErrorData::StaleAttachment));
         }
@@ -550,6 +624,22 @@ impl AppServerConnection {
         if matches!(method, Method::ServerDiagnostics {}) {
             return Ok(MethodResult::Diagnostics {
                 snapshot: self.host.diagnostics(),
+            });
+        }
+        if let Method::AgentConversationCancel { request_id } = method {
+            let reads = self
+                .observation_reads
+                .lock()
+                .expect("observation reads mutex");
+            let token = reads
+                .iter()
+                .find(|(id, _)| *id == request_id)
+                .map(|(_, token)| token);
+            if let Some(token) = token {
+                token.cancel();
+            }
+            return Ok(MethodResult::AgentConversationCancelled {
+                accepted: token.is_some(),
             });
         }
         if let Method::DeliveryCancel { request_id } = method {
@@ -595,6 +685,7 @@ impl AppServerConnection {
                                     sessions,
                                     manager,
                                     upload_host,
+                                    observation_cancel,
                                 )
                                 .await
                             }
@@ -614,9 +705,12 @@ impl AppServerConnection {
         match method {
             Method::Initialize(_)
             | Method::ServerDiagnostics {}
+            | Method::AgentDeliveryRead { .. }
+            | Method::AgentDeliveryLocate { .. }
             | Method::DeliveryRead { .. }
             | Method::DeliveryLocate { .. }
-            | Method::DeliveryCancel { .. } => unreachable!(),
+            | Method::DeliveryCancel { .. }
+            | Method::AgentConversationCancel { .. } => unreachable!(),
             Method::SessionDetach { target } => {
                 // Removing a connection relationship needs no live-runtime lease.
                 let route = self.route(&target)?;
@@ -933,6 +1027,19 @@ impl AppServerConnection {
                     projection: Box::new(projection),
                 })
             }
+            Method::McpProbe {
+                target,
+                id,
+                expected_revision,
+            } => {
+                let result = self
+                    .host
+                    .manager()
+                    .probe_mcp(target, id, expected_revision)
+                    .await
+                    .map_err(source_error)?;
+                Ok(MethodResult::McpProbe { result })
+            }
             Method::SourcesWrite {
                 target,
                 expected_revision,
@@ -1209,11 +1316,13 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
         | Method::ModelCatalog { target, .. }
         | Method::ModelSet { target, .. }
         | Method::Capability { target, .. }
+        | Method::AgentArtifactRead { target, .. }
         | Method::ArtifactRead { target, .. }
         | Method::SessionUploadPrepare { target, .. }
         | Method::SessionUploadStatus { target, .. }
         | Method::Trace { target, .. }
         | Method::TraceDetail { target, .. }
+        | Method::TraceLocateTool { target, .. }
         | Method::Transcript { target, .. }
         | Method::ConversationTurns { target, .. }
         | Method::Goal { target, .. }
@@ -1223,11 +1332,16 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
         | Method::JobCancel { target, .. }
         | Method::AgentStatus { target, .. }
         | Method::AgentList { target, .. }
+        | Method::AgentConversation { target, .. }
         | Method::AgentStatistics { target, .. }
         | Method::AgentSendMessage { target, .. }
         | Method::AgentWait { target, .. }
         | Method::AgentInterrupt { target, .. }
+        | Method::AgentTrace { target, .. }
+        | Method::AgentTraceDetail { target, .. }
+        | Method::AgentTraceLocateTool { target, .. }
         | Method::AgentTranscript { target, .. }
+        | Method::AgentTurns { target, .. }
         | Method::SubagentDispose { target, .. }
         | Method::CompactContext { target, .. }
         | Method::SessionBoundaries { target, .. }
@@ -1244,7 +1358,7 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
     }
 }
 
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)] // Explicit native operation owners.
 async fn dispatch_runtime(
     method: Method,
     route: Arc<Route>,
@@ -1253,6 +1367,7 @@ async fn dispatch_runtime(
     sessions: SessionController,
     manager: crate::local_runtime::session_runtime_manager::SessionRuntimeManager,
     upload_host: AppServerHost,
+    observation_cancel: Option<tokio_util::sync::CancellationToken>,
 ) -> Result<MethodResult, RpcError> {
     match method {
         Method::ConfigurationGet { target } => {
@@ -1263,6 +1378,15 @@ async fn dispatch_runtime(
                 projection: Box::new(projection),
             })
         }
+        Method::AgentArtifactRead {
+            agent_id,
+            artifact_id,
+            ..
+        } => Ok(MethodResult::ArtifactBytes {
+            data: authority
+                .agent_artifact_read(&agent_id, &artifact_id)
+                .map_err(client_error)?,
+        }),
         Method::ArtifactRead {
             target: _,
             artifact_id,
@@ -1313,6 +1437,9 @@ async fn dispatch_runtime(
             target: _,
             record_id,
         } => native_result(authority.trace_detail(record_id)),
+        Method::TraceLocateTool { locator, .. } => {
+            native_result(authority.trace_locate_tool(locator).await)
+        }
         Method::Transcript {
             target: _,
             at,
@@ -1336,11 +1463,47 @@ async fn dispatch_runtime(
         Method::JobList { .. } => native_result(Ok(authority.job_list())),
         Method::JobWait { job_id, .. } => native_result(authority.job_wait(&job_id, false).await),
         Method::JobCancel { job_id, .. } => native_result(authority.job_wait(&job_id, true).await),
+        Method::AgentConversation {
+            agent_id, after, ..
+        } => {
+            let read = authority.agent_conversation(&agent_id, after);
+            if let Some(cancel) = observation_cancel {
+                tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => Err(domain(ErrorData::ObservationCancelled)),
+                    result = read => native_result(result),
+                }
+            } else {
+                native_result(read.await)
+            }
+        }
         Method::AgentStatus { agent_id, .. } => native_result(authority.agent_status(&agent_id)),
         Method::AgentList { .. } => native_result(authority.agent_list()),
         Method::AgentSendMessage {
-            agent_id, message, ..
-        } => native_result(authority.agent_send_message(&agent_id, message).await),
+            target,
+            agent_id,
+            message,
+            attachments,
+        } => {
+            authority.agent_status(&agent_id).map_err(client_error)?;
+            let uploads = manager
+                .session_controller()
+                .uploaded_content(&target.session_id, &attachments)
+                .await
+                .map_err(|_| domain(ErrorData::InvalidParams))?;
+            let references = uploads
+                .into_iter()
+                .filter_map(|block| match block {
+                    crate::message::types::UserContentBlock::UploadedFile(file) => Some(file),
+                    _ => None,
+                })
+                .collect();
+            native_result(
+                authority
+                    .agent_send_message(&agent_id, message, references)
+                    .await,
+            )
+        }
         Method::AgentWait { agent_id, .. } => {
             native_result(authority.agent_wait(&agent_id, false).await)
         }
@@ -1350,16 +1513,50 @@ async fn dispatch_runtime(
         Method::AgentStatistics { agent_id, .. } => {
             native_result(authority.agent_statistics(&agent_id).await)
         }
-        Method::AgentTranscript {
+        Method::AgentTrace {
             agent_id,
             before,
             limit,
+            records,
             ..
-        } => match authority.agent_transcript_page(&agent_id, before, limit) {
+        } => native_result(
+            authority
+                .agent_trace(&agent_id, before, limit, records)
+                .await,
+        ),
+        Method::AgentTraceDetail {
+            agent_id,
+            record_id,
+            ..
+        } => native_result(authority.agent_trace_detail(&agent_id, record_id).await),
+        Method::AgentTraceLocateTool {
+            agent_id, locator, ..
+        } => native_result(authority.agent_trace_locate_tool(&agent_id, locator).await),
+        Method::AgentTranscript {
+            agent_id,
+            at,
+            limit,
+            ..
+        } => match authority.agent_transcript_window(&agent_id, &at, limit) {
             Err(RuntimeClientError::RuntimeFailure { .. }) => {
                 Err(domain(ErrorData::AgentHistoryUnavailable { agent_id }))
             }
-            result => native_result(result),
+            result => result
+                .map(|window| MethodResult::TranscriptWindow { window })
+                .map_err(client_error),
+        },
+        Method::AgentTurns {
+            agent_id,
+            offset,
+            limit,
+            ..
+        } => match authority.agent_turns(&agent_id, offset, limit) {
+            Err(RuntimeClientError::RuntimeFailure { .. }) => {
+                Err(domain(ErrorData::AgentHistoryUnavailable { agent_id }))
+            }
+            result => result
+                .map(|page| MethodResult::ConversationTurns { page })
+                .map_err(client_error),
         },
         Method::SubagentDispose {
             target: _,
@@ -1472,6 +1669,10 @@ fn deletion(result: crate::local_runtime::session::deletion::SessionDeleteResult
         result: crate::app_server::session_deletion::project(result),
     }
 }
+#[allow(
+    clippy::too_many_lines,
+    reason = "Keep the single native-result carrier mapping together"
+)]
 fn native_result(
     result: Result<RuntimeClientResult, RuntimeClientError>,
 ) -> Result<MethodResult, RpcError> {
@@ -1486,7 +1687,16 @@ fn native_result(
         RuntimeClientResult::ContextCompacted { context } => MethodResult::Context { context },
         RuntimeClientResult::TracePage { page } => MethodResult::Trace { page },
         RuntimeClientResult::TraceDetail { detail } => MethodResult::TraceDetail { detail },
-        RuntimeClientResult::TranscriptPage { page } => MethodResult::Transcript { page },
+        RuntimeClientResult::TraceToolLocation { location } => {
+            MethodResult::TraceToolLocation { location }
+        }
+        RuntimeClientResult::TranscriptPage { .. } => {
+            unreachable!("App Server transcript reads use cut-bound windows")
+        }
+        RuntimeClientResult::TranscriptWindow { window } => {
+            MethodResult::TranscriptWindow { window }
+        }
+        RuntimeClientResult::ConversationTurns { page } => MethodResult::ConversationTurns { page },
         RuntimeClientResult::Goal { view } => MethodResult::Goal { view },
         RuntimeClientResult::Job { job } => MethodResult::Job { job },
         RuntimeClientResult::Jobs {
@@ -1505,6 +1715,9 @@ fn native_result(
         RuntimeClientResult::Agent { agent } => MethodResult::Agent {
             agent: Box::new(agent),
         },
+        RuntimeClientResult::AgentConversation { conversation } => {
+            MethodResult::AgentConversation { conversation }
+        }
         RuntimeClientResult::AgentStatistics { metrics } => {
             MethodResult::AgentStatistics { metrics }
         }
@@ -1656,6 +1869,7 @@ pub(super) fn domain(data: ErrorData) -> RpcError {
                 "Session file read failed"
             }
         },
+        ErrorData::ObservationCancelled => "Child conversation observation was cancelled",
         ErrorData::DeliveryCancelled => "Delivery request was cancelled before publication",
         ErrorData::AgentNotDelivered { .. } => "Agent input was not delivered",
         ErrorData::AgentDeliveryUnknown { .. } => {

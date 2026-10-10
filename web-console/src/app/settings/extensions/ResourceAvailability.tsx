@@ -1,7 +1,7 @@
-import type { SourceMutation, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v38';
+import type { SourceMutation, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v44';
 import { useTranslation } from '../../../locale/react';
 import { Switch } from '../../../presentation/primitives/Switch';
-import { useUnitEditing } from '../forms/bridge';
+import { UnitOutcomeNotice, useUnitEditing } from '../forms/bridge';
 import { toolSourceId } from '../capability';
 import css from './ResourceCatalog.module.css';
 
@@ -9,7 +9,7 @@ type Selection = 'all' | string[];
 /** Quick selection edits the same semantic unit as the full permission editor. */
 export function ResourceAvailability({ family, name, valid, source, scope, revision, inspect }: {
   family: 'mcp' | 'skill' | 'agent'; name: string; valid: boolean | undefined;
-  source: SourceSettings; scope: SourceScope; revision: string; inspect: () => void;
+  source: SourceSettings; scope: SourceScope; revision: string; inspect?: () => void;
 }) {
   const tx = useTranslation();
   const agent = (scope === 'user' ? source.user : source.workspace)?.authored?.agent;
@@ -26,11 +26,12 @@ export function ResourceAvailability({ family, name, valid, source, scope, revis
   // Skill wildcard with a different permission policy through a binary toggle.
   const review = unit.draft || unit.reviewNeeded || (family === 'skill' && unit.displayed === 'all')
     || (family === 'mcp' && names.length > 0);
-  if (review && !unit.busy) return <button type="button" className={css.manage} onClick={inspect}>{tx('settings:catalog.review-selection')}</button>;
+  if (review && !unit.busy && inspect) return <button type="button" className={css.manage} onClick={inspect}>{tx('settings:catalog.review-selection')}</button>;
   return <div className={css.availability}>
     <Switch label={tx('settings:catalog.enable', { name })} checked={selected}
-      disabled={!unit.writable || !unit.admitted || unit.busy || valid === false}
+      disabled={!!review || !unit.writable || !unit.admitted || unit.busy || valid === false}
       onChange={enabled => unit.apply(family === 'mcp' ? enabled ? 'all' : [] : enabled ? [...new Set([...names, name])] : names.filter(item => item !== name))}/>
-    {unit.busy && <span role="status" className={css.count}>{tx('settings:catalog.saving')}</span>}
+    {inspect && unit.busy && <span role="status" className={css.count}>{tx('settings:catalog.saving')}</span>}
+    {!inspect && <UnitOutcomeNotice title={name} outcome={unit.outcome}/>}
   </div>;
 }

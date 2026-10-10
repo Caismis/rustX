@@ -1,6 +1,6 @@
 import { createActor } from 'xstate';
 import { observationCurrent, controlCurrent, sessionLifecycleMachine, type Command, type LifecycleActor, type LifecycleContext, type LifecycleEvent } from './machine';
-import type { AttachmentTarget, RuntimeClientSessionDeletionResult } from '../../../../protocol/app-server/v38';
+import type { AttachmentTarget, RuntimeClientSessionDeletionResult } from '../../../../protocol/app-server/v44';
 import { emptyFacts, type Observation, type SessionLifecyclePort } from './port';
 
 /** Registry and work bound only. All Session decisions belong to the machine. */

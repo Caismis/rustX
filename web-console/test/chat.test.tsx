@@ -66,10 +66,10 @@ it('Job result galleries retain finite identities, including duplicate tool name
 });
 it('Subagent and Workflow cards bind native identities and lifecycle facts without debug dumps', () => {
   const s = snapshot();
-  s.agents = ['child-1', 'child-2'].map(activation_id => ({
+  s.agents = ['child-1', 'child-2'].map(activation_id => ({ title: 'Same agent',
     activation_id, agent_id: `agent-${activation_id}`, parent_agent_id: 'parent-agent', current_activation: activation_id, activation_state: 'running', child_conversation_id: `conv-${activation_id}`, agent: 'Same agent',
     definition_digest: 'private-digest', profile_digest: 'private-profile', state: 'active', started_at: '2026-09-15T00:00:00Z',
-    observation: { revision: '1', activity: { type: 'waiting', on: { type: 'approval', tool_id: 'bash' } }, counters: { model_requests: 1, model_retries: 0, tool_executions: 0 } },
+    observation: { attempt_id: null, revision: '1', activity: { type: 'waiting', on: { type: 'approval', tool_id: 'bash' } }, counters: { model_requests: 1, model_retries: 0, tool_executions: 0 } },
     workspace: { logical_workspace: '/private/workspace', isolation: { type: 'shared' }, resource_state: 'none' },
   }));
   s.workflows.runs = ['1', '2'].map(invocation => ({
@@ -104,11 +104,11 @@ it('Subagent and Workflow cards bind native identities and lifecycle facts witho
 
 it('one Agent row survives inactive settlement and a later activation, including reconnect replacement', () => {
   const s = snapshot();
-  const agent = {
+  const agent = { title: 'Worker',
     agent_id: 'durable-child', parent_agent_id: 'parent-agent', activation_id: 'activation-a', current_activation: 'activation-a',
     child_conversation_id: 'child-conversation', agent: 'Worker', state: 'active' as const, activation_state: 'running' as const,
     definition_digest: 'definition', profile_digest: 'profile', started_at: '2026-09-15T00:00:00Z',
-    observation: { revision: '1', activity: { type: 'awaiting_activity' as const }, counters: { model_requests: 0, model_retries: 0, tool_executions: 0 } },
+    observation: { attempt_id: null, revision: '1', activity: { type: 'awaiting_activity' as const }, counters: { model_requests: 0, model_retries: 0, tool_executions: 0 } },
     workspace: { logical_workspace: '/workspace', isolation: { type: 'shared' as const }, resource_state: 'none' as const },
   };
   s.agents = [agent];
@@ -117,7 +117,7 @@ it('one Agent row survives inactive settlement and a later activation, including
   expect(row?.getAttribute('data-activation-id')).toBe('activation-a');
   ui.rerender(<RuntimeFacts snapshot={{ ...s, agents: [{ ...agent, state: 'inactive', activation_state: 'succeeded', current_activation: null, detail: 'Final report committed' }] }}/>);
   expect(ui.container.querySelector('[data-agent-id="durable-child"]')).toBe(row);
-  expect(row?.textContent).toContain('succeeded');
+  expect(row?.textContent).toContain('Completed');
   expect(row?.textContent).toContain('Final report committed');
   expect(row?.hasAttribute('data-activation-id')).toBe(false);
   const resumed = { ...s, agents: [{ ...agent, activation_id: 'activation-b', current_activation: 'activation-b' }] };
@@ -150,13 +150,13 @@ it('compaction summaries keep one native transcript position and disclose Markdo
   s.messages = [summary];
   s.transcript = { entries: [
     { cursor: '1', item: { type: 'message', message: { role: 'user', id: 'before', source: 'human', content: [{ type: 'text', text: 'Earlier question' }] } } },
-    { cursor: '2', item: { type: 'message', message: summary } },
+    { cursor: '2', compaction: { retired_messages: '26', retired_tokens: '9183', manual: true }, item: { type: 'message', message: summary } },
     { cursor: '3', item: { type: 'message', message: { role: 'user', id: 'after', source: 'human', content: [{ type: 'text', text: 'Next question' }] } } },
   ] };
   const ui = render(<AgentTranscript snapshot={s}/>);
   expect([...ui.container.querySelectorAll('[data-chat-anchor-key]')].map(node => node.getAttribute('data-chat-anchor-key')))
     .toEqual(['message:before', 'message:summary', 'message:after']);
-  const marker = ui.getByRole('button', { name: 'Context compacted · View compaction summary' });
+  const marker = ui.getByRole('button', { name: 'compact · Compacted 26 history items (~9183 tokens)' });
   expect(marker.getAttribute('aria-expanded')).toBe('false');
   expect(ui.queryByRole('heading', { name: 'Preserved context' })).toBeNull();
   expect(ui.container.textContent).not.toContain('compaction_summary');
