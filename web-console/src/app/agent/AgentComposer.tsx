@@ -19,6 +19,7 @@ import { StopSequence, type StopScope } from '../composer/stop-sequence';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 import { Button } from '../../presentation/primitives/Button';
 import css from '../../presentation/agent/Composer.module.css';
+import { observeControlRow } from '../../presentation/agent/control-row-layout';
 const emptyContent: UserInputBlock[] = [];
 export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, modelPicker, onRetainedRemove, onRetainedRecover, intakeOwner, uploadPolicy, onReconcile, binding = 'default', firstSubmission, disabled, submitDisabled = false, busy, active, onSend, onUpload, onCancel, onCommand, commandAvailable, hasGoal = false, lineageSwitchSafe = false, initialContent = emptyContent, consumed, model, permission, onDraftSend, cancellationAvailable = !disabled, cancellationScope }: {
   placeholder?: string; messageLabel?: string; busyEnterBehavior?: import('../composer/preferences').BusyEnterBehavior;
@@ -71,6 +72,8 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
     setDraft(current => current === invoked.draft ? '' : current);
   }, [consumed]);
   const [restored, setRestored] = useState(() => restoreSupported ? initialContent.flatMap(block => block.type === 'upload' ? [block] : []) : []);
+  const row = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => observeControlRow(row.current!), []);
   const picker = useRef<HTMLInputElement>(null);
   const input = useRef<HTMLTextAreaElement>(null), root = useRef<HTMLDivElement>(null);
   const pastedCaret = useRef<{ binding: string; caret: number } | undefined>(undefined);
@@ -207,7 +210,7 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
             }
           }} />
       </div>
-      <div className={css.row}>
+      <div ref={row} className={css.row} data-composer-controls>
         <div className={css.tools}>
           <button type="button" className={css.add} aria-label={tx('commands:menu.add')} title={tx('commands:menu.add')} aria-haspopup="listbox" aria-expanded={!!menu} disabled={disabled || busy} onMouseDown={event => event.preventDefault()} onClick={trigger.toggle}>+</button>
           <input ref={picker} type="file" hidden multiple aria-label={tx('agent:agent-composer.attach-files')} disabled={disabled || busy} onChange={event => { pick(Array.from(event.target.files ?? []).map(file => ({ file }))); event.target.value = ''; }}/>

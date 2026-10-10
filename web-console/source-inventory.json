@@ -27,6 +27,7 @@
         "../../locale/react",
         "../../locale/translation",
         "../../presentation/agent/Composer.module.css",
+        "../../presentation/agent/control-row-layout",
         "../../presentation/attachments/AttachmentCard",
         "../../presentation/primitives/Button",
         "../commands/CommandMenu",
@@ -47,7 +48,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "be09ec9b01166fecbbccc4d38b4a821204c1a558a2f0c2892c0c3fa291fc8b5b",
+      "local_sha256": "9ece098f80d67cfd73c9e950ff166bb7cf590529e66054f32da1244ad1bacafa",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
@@ -945,7 +946,7 @@
       "destination": "web-console/src/presentation/agent/Composer.module.css",
       "upstream_sha256": "dda4354ed278a20a2eda4e18fcde289d9c9ba21d2c039bc400f84237cd7ac2a1",
       "classification": "A",
-      "treatment": "Harness card width, 22px radius, elevation, 36px floor and toolbar rhythm retained. Native textarea alone owns measured growth and capped overflow; subdued file accessory and bounded responsive control groups. #439: quiet 24px preference footer and keyboard focus treatment using existing visual primitives. UI repair: busy-Enter Queue/Steer preference moved from below the Composer card to the General Settings row, matching Harness composer-enter. Card and send circle rasterize on their own compositing layers (opacity / transform hint), so partial repaints never re-antialias their rounded edges.",
+      "treatment": "Harness card width, 22px radius, elevation, 36px floor and toolbar rhythm retained. Native textarea alone owns measured growth and capped overflow; subdued file accessory and bounded responsive control groups. #439: quiet 24px preference footer and keyboard focus treatment using existing visual primitives. UI repair: busy-Enter Queue/Steer preference moved from below the Composer card to the General Settings row, matching Harness composer-enter. Card and send circle rasterize on their own compositing layers (opacity / transform hint), so partial repaints never re-antialias their rounded edges. Pane-resize repair: toolbar query container restored, viewport caps removed, measured model collapse and container-relative spacing follow current Harness. The card rasterizes at an explicit zero transform; its native selectors portal and editor menus anchor to the card.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -954,7 +955,15 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "5dfb3f0f8ea3a1a5eb8cf5b27cbf2db5c1e71e4a2f41e11b13049dec3b534570"
+      "local_sha256": "9bea383f3d90d3babf25b3b88e3e49e5cd764ab05ba08036db472e2469031901",
+      "additional_sources": [
+        {
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.module.css",
+          "upstream_sha256": "3728d67da4e1d1c2dd102d66f42f0c129a5c1e17e6a1167d738c999d0d87f60b",
+          "treatment": "Restore pane-relative toolbar sizing and expanded-demand model collapse from the current local Harness reference."
+        }
+      ]
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -1045,7 +1054,7 @@
       "destination": "web-console/src/presentation/agent/ModelSelect.module.css",
       "upstream_sha256": "0c3385a4ffa34b2a534b70a326193f441d5f8ffb0de471bcdf145844dfbe94fa",
       "classification": "A",
-      "treatment": "Pinned Harness styles; rustX flex-column sizing removes the inline baseline gap so centered model controls retain their glyph origin across sticky repaints; mutation errors remain below the control.",
+      "treatment": "Pinned Harness styles; rustX flex-column sizing removes the inline baseline gap so centered model controls retain their glyph origin across sticky repaints; mutation errors remain below the control. Pane-resize repair: toolbar query container restored, viewport caps removed, measured model collapse and container-relative spacing follow current Harness.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -1054,7 +1063,15 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "062920f816304f3867fced4fafd2ee13aa7a99c27fcc72f0f754a2aa24b36d8d"
+      "local_sha256": "124a64784b4706a7b10ee752f8f5343a3f5171284dc60463ad78cf3e6742ed17",
+      "additional_sources": [
+        {
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream": "packages/client/ui-model-selection/src/client/ModelSelect.module.css",
+          "upstream_sha256": "7754687bfd5b18693e326f29367bf96a5ecf2906f0a00da82290406c9f12f80b",
+          "treatment": "Restore pane-relative toolbar sizing and expanded-demand model collapse from the current local Harness reference."
+        }
+      ]
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -1077,7 +1094,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "0a0fb4c46e2e5c2f85315d44deb21bb5573ef4696d2fd1bf5b248dd962100543",
+      "local_sha256": "b2b24ff840b51185767d38375207a0ffac48d6a2c8da0b8468380f680ccd27b9",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-model-selection/src/client/ModelSelect.tsx",
@@ -2875,7 +2892,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "c51739d288f3c782c1d7ed23f51897ef701cbf006ff719e001153610ec68cc19",
+      "local_sha256": "b95aa1450e2be8e9e081a7b917e71718e4e6476a783cac2cb62eaff46116db5f",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-primitives/src/RiskConfirmation.tsx",
@@ -5824,6 +5841,18 @@
       "excluded_dependencies": [],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "local_sha256": "0a5e95b9753d239e2c46e4906e2e1302ce37a60377dbb98b43c702b709bbc5cc"
+    },
+    {
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream": "packages/client/ui-conversation/src/client/skeleton/control-row-layout.ts",
+      "destination": "web-console/src/presentation/agent/control-row-layout.ts",
+      "upstream_sha256": "4d8e50b98ed790259f0c33e44fcc3406676369544a2fe75f1efb44401a4b87ed",
+      "classification": "A",
+      "treatment": "Adapt Harness expanded-demand measurement for leading/trailing composer controls. Pane, content and font changes update DOM geometry without React state. Resize deliveries coalesce in a cancellable animation frame to prevent resizing observed children inside their own delivery.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [],
+      "local_sha256": "ad5a5f46defeb64c64241afb4922e883e847157b25817012ef03ff046e4350e7"
     }
   ],
   "inspected_only": [

@@ -2016,3 +2016,21 @@ parent and child conversations. The native child reader and `SubagentChat`
 composition are rustX-owned: `agent/turns` supplies the complete paged directory,
 and `agent/transcript` resolves native Turn identities at child-owned read cuts.
 The child watch remains independent of the bounded historical reading window.
+
+## Composer layout inside shrinking conversation panes
+
+Reference: Harness `5badb15009ae1756c3afe0ae0cef1faafc290ccc`,
+`ui-conversation/src/client/skeleton/{InputBar.module.css,control-row-layout.ts}`,
+`ui-model-selection/src/client/ModelSelect.module.css` and
+`ui-permission-presets/src/client/PermissionSelect.module.css`.
+The shared composer restores an anonymous inline-size control-row container,
+row-relative model width, 560px compact spacing and 460px permission-label cut.
+Harness's expanded-demand observer collapses model text only when the controls
+cannot share a line, reacting to pane, content and font changes without React
+state. Resize deliveries coalesce in an animation frame to avoid changing
+observed child sizes inside their own resize delivery. Full labels remain available through trigger titles. Model and permission
+menus already portal to the document, so the obsolete containment override and
+viewport-based model wrapper caps are removed. Existing sticky seat measurement
+continues to reserve draft, toolbar and statistics height for main and child chats.
+The rounded card uses an explicit zero transform for its raster layer; native
+selector menus are document portals and editor menus are card-relative.
