@@ -761,6 +761,7 @@ impl AdmittedSessionConfig {
         capture.input.model = Some(selection);
         capture
     }
+
     /// This binding at `binding_revision` with `published`'s catalog and its
     /// own selection, context and capabilities retained.
     pub(crate) fn with_published_catalog(
