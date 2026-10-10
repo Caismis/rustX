@@ -75,6 +75,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     // before a queued layout correction gets a chance to overwrite it.
     this.onScroll();
     const floor = Math.max(0, el.scrollHeight - el.clientHeight);
+    el.querySelector('[data-composer-seat]')?.toggleAttribute('data-sticky-overflow', floor > 0);
     let desired = el.scrollTop;
     const navigation = this.navigation;
     this.navigation = undefined;
@@ -205,6 +206,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     this.markLayoutDirty();
   }
   componentWillUnmount() {
+    this.scroller()?.querySelector('[data-composer-seat]')?.removeAttribute('data-sticky-overflow');
     this.scroller()?.removeEventListener('scroll', this.onScroll);
     this.scroller()?.removeEventListener('beforeinput', this.onComposerBeforeInput, true);
     this.scroller()?.removeEventListener('input', this.onComposerInput);

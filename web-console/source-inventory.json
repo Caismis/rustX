@@ -980,7 +980,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "0c8eb2f423659bb0c50280645345823f5cb2ad723e66afc63c91bf2ed32221cb",
+      "local_sha256": "ea54728ab26dbc01cb657cb8badd55867c2fe819714097a2f9f1ee190e1172e7",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css",
@@ -1333,7 +1333,7 @@
         "Harness attachment identity and storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "0bf301a2df5d24a15302b3b44505f67a1d87feaab21acad22df028684677f6b1",
+      "local_sha256": "a92942b0ecd22376763ccfb54021b9b9c934d484368669ac3b7a2bdd00dac7fe",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/ChatView.tsx",

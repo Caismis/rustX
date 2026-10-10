@@ -2045,6 +2045,12 @@ viewport-based model wrapper caps are removed. Existing sticky seat measurement
 continues to reserve draft, toolbar and statistics height for main and child chats.
 The rounded card uses an explicit zero transform for its raster layer; native
 selector menus are document portals and editor menus are card-relative.
+The existing ChatViewport layout capture also identifies scroll overflow. Only
+an overflowing composer's sticky seat owns a local compositing plane, keeping
+its fade independent of Chromium's earlier scroll/paint promotion while
+non-scrolling seats retain their normal raster. Narrow light/dark browser
+regressions invalidate the fade in the sticky pose and compare exact pixels
+after returning to the same reading pose; references and noise policy are unchanged.
 
 ## Single-row composer statistics
 
