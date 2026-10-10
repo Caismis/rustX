@@ -3275,7 +3275,7 @@
           "treatment": "Compaction checkpoint disclosure and bilingual summary wording adapted to native Ledger messages; no Harness runtime or command authority."
         }
       ],
-      "local_sha256": "9fc114c54b8cb383a6f0fa900f349b3b1df4030fe9a244709061460703d6de23"
+      "local_sha256": "c5748ade3bc2d9551d9e402d738bf31cac93fbed1898a66d5a0c3692e72f760a"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",
@@ -3371,7 +3371,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "b5e7790847f6dd979a40f1a575d86007f2117cd5dcea43ef2cd9a0d820589d9d"
+      "local_sha256": "c68fb83e68e14f93bcdb8b5afb6cbda9dc1ce827611bb133b302325d43994e34"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -3395,7 +3395,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "98e30ab061ec7c953774012c97d02baa4a85f37498bc25677961ad1e491d5504"
+      "local_sha256": "6c7aa162dd7b2d125a2d5411897c8103973f721d67e21ba4dbe140c6456e2278"
     },
     {
       "upstream": "packages/client/ui-workspace/src/client/locales.ts",
