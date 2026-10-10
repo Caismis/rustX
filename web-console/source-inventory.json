@@ -1317,7 +1317,7 @@
         "Harness attachment identity and storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "bbf7eb5d80025bbfa22cc402e8d9e8fe260ce25f3f109a365cfae9d23b3a0530",
+      "local_sha256": "c7712805ec184a3ff7b9f81c5bfea8d133722672380486fc38ebccffd205841c",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/ChatView.tsx",
@@ -5646,7 +5646,7 @@
       "upstream": "packages/client/ui-subagent/src/client/SubagentHeaderLineage.tsx",
       "destination": "web-console/src/app/agent/Subagents.tsx",
       "classification": "B",
-      "treatment": "Compact header catalog, status dots, two-line entries and parent breadcrumb adapted to native durable Agent roster and agent/transcript; Harness session runtime and metrics projection excluded.",
+      "treatment": "Subagent header, exact sibling-switcher SVG, hover preview and current-item presentation adapted to native rustX agent identities, parent lineage and scoped child menus. Visited child conversations remain mounted to retain drafts and reading position.",
       "upstream_sha256": "a071eba1e77ee78bc4d7d90e0fd774f7242c200b4b39aa88f7424df41a95db4b",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
@@ -5662,23 +5662,24 @@
         "../components/ActivityCards",
         "./Subagents.module.css",
         "./subagent-context",
+        "./subagent-state",
         "./token-format",
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "a9809a22c6e8b9e9191e4ef92060b8d101e9dc148368bd4d6ac142dfbf426b4d"
+      "local_sha256": "e28850ec160da90eddc23219decd6b551902ba581a761841d3f3570e8273d2b7"
     },
     {
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream": "packages/client/ui-subagent/src/client/SubagentHeaderLineage.module.css",
       "destination": "web-console/src/app/agent/Subagents.module.css",
       "classification": "B",
-      "treatment": "Compact header catalog, status dots, two-line entries and parent breadcrumb adapted to native durable Agent roster and agent/transcript; Harness session runtime and metrics projection excluded.",
+      "treatment": "Harness compact subagent header/menu typography, activity slots, metrics and current-item styling adapted to rustX theme primitives and native parent navigation.",
       "upstream_sha256": "888a73eb6014ee29cc2dd9f4e9692fb4719cfd62e8798af3009f1b2ec3d82609",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [],
-      "local_sha256": "71a34428e36706458fb6b8c69a253670d3b491adfe4478a7da4a3b662863f2a2"
+      "local_sha256": "95150633a68ab6c5f58de5375d06d334ac3a0e75b53e3d8c337162b6ff60a15f"
     },
     {
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",

@@ -68,7 +68,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
   private commitLayout = () => {
     this.frame = undefined;
     const el = this.scroller();
-    if (!this.mounted || !el) return;
+    if (!this.mounted || !el || el.closest('[hidden]')) return;
     // Native scrolling can precede its scroll event. Adopt reader movement
     // before a queued layout correction gets a chance to overwrite it.
     this.onScroll();
@@ -127,6 +127,9 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
   };
   private onScroll = () => {
     const el = this.scroller()!;
+    // Resident conversations disappear from layout while a sibling is open.
+    // Their zero geometry is not a scroll gesture or a new reading position.
+    if (el.closest('[hidden]')) return;
     const floor = Math.max(0, el.scrollHeight - el.clientHeight);
     const previous = Math.min(this.writtenTop, floor);
     if (el.scrollTop < previous || Math.abs(el.scrollTop - previous) > 0.5) {
@@ -183,12 +186,14 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     }
   }
   getSnapshotBeforeUpdate() {
+    if (this.scroller()?.closest('[hidden]')) return {};
     // Preserve the original anchor across multiple commits before the frame.
     const position = this.position();
     if (!this.following && this.frame === undefined) this.reading = position;
     return { first: this.rows()[0]?.dataset.chatAnchorKey, position };
   }
   componentDidUpdate(_previous: Readonly<ViewportProps>, _state: unknown, before: { first?: string; position?: ReadingPosition }) {
+    if (this.scroller()?.closest('[hidden]')) return;
     const rows = this.rows();
     if (!this.explicitLatest && before.first && rows[0]?.dataset.chatAnchorKey !== before.first && rows.some(row => row.dataset.chatAnchorKey === before.first)) {
       if (this.following) this.reading = before.position;

@@ -16,6 +16,10 @@ import { PreviewContext } from './ArtifactPreview';
 import css from './ActivityCards.module.css';
 import { AgentTranscript } from '../agent/AgentTranscript';
 import { ConversationStats } from '../agent/UsageStats';
+import { agentDot, agentRunning, agentStatus } from '../agent/subagent-state';
+import { ComposerSeat } from '../agent/ComposerSeat';
+import { SubagentComposer } from '../agent/SubagentComposer';
+import { IconRefreshOutline14, IconClockOutline16 } from '../../presentation/primitives/icons';
 
 const detail = (value: string) => value.length > 1024 ? `${value.slice(0, 1024)}…` : value;
 export const workflowKey = (id: WorkflowRunId) => JSON.stringify([id.conversation_id, id.attempt_id, id.invocation]);
@@ -102,15 +106,6 @@ export function AgentCard({ agent, metrics, metricsError, ...controls }: { agent
     if (current()) { setTranscript(previous => !current() ? previous : before && previous ? { ...result.page, entries: [...(result.page.entries ?? []), ...(previous.entries ?? [])] } : result.page); }
   });
   return <section className={css.agentConversation} data-agent-id={agent.agent_id} data-agent-state={agent.state} data-activation-id={agent.current_activation ?? undefined} aria-label={tx('common:activity.agent-label', { name: agent.agent })}>
-    <div className={css.agentToolbar}>
-      <StateDot state={unavailable || agent.activation_state === 'failed' ? 'error' : agent.state === 'active' || agent.state === 'admitting' ? 'ongoing' : agent.activation_state === 'succeeded' ? 'done' : 'idle'}/>
-      <span>{agent.state === 'active' ? agent.observation.activity.type === 'waiting' ? tx('common:activity.waiting-for', { state: tx(`common:state.${agent.observation.activity.on.type}`) }) : tx('common:activity.working') : agent.state === 'admitting' ? tx('common:activity.admitting') : agent.state === 'stopping' ? tx('common:activity.stopping') : unavailable ? tx('common:activity.unavailable') : tx(`common:state.${agent.activation_state}`)}</span>
-      <div className={css.agentActions}>
-        <Button size="sm" disabled={request.disabled} onClick={() => refreshTranscript(value => value + 1)}>{tx('common:activity.transcript')}</Button>
-        <Button size="sm" disabled={waitRequest.disabled || unavailable} onClick={() => void waitRequest.run(async (client, target, current) => { const result = await client.request({ method: 'agent/wait', params: { target, agent_id: agent.agent_id } }, 'agent_wait', undefined, current); if (current()) observeSettlement(result, current); })}>{tx('common:activity.wait-activation')}</Button>
-        <Button size="sm" disabled={interruptRequest.disabled || unavailable || agent.state === 'inactive'} onClick={() => void interruptRequest.run(async (client, target, current) => { const result = await client.request({ method: 'agent/interrupt', params: { target, agent_id: agent.agent_id } }, 'agent_wait', undefined, current); if (current()) observeSettlement(result, current); })}>{tx('common:activity.interrupt')}</Button>
-      </div>
-    </div>
     <ChatViewport latestLabel={tx('agent:agent-transcript.return-to-latest')}><div className={chatCss.column}>
       {transcript?.next_cursor && <Button size="sm" disabled={request.disabled} onClick={() => void readTranscript(transcript.next_cursor!)}>{tx('common:activity.older')}</Button>}
       <ArtifactContext.Provider value={undefined}><PreviewContext.Provider value={undefined}>{transcript && <AgentTranscript snapshot={{ conversation_id: agent.child_conversation_id, messages: [], statuses: [], attempt: null, transcript }} historicalDisabled/>}</PreviewContext.Provider></ArtifactContext.Provider>
@@ -122,11 +117,20 @@ export function AgentCard({ agent, metrics, metricsError, ...controls }: { agent
       {settledActivation && settledActivation.proof === admission && <small role="status">{settledActivation.outcome ? tx(`common:state.${settledActivation.outcome}`) : tx('common:activity.observed-inactive')}</small>}
       {[request.error, waitRequest.error, interruptRequest.error].filter(Boolean).map((error, index) => <p role="alert" key={index}>{displayText(tx, error!)}</p>)}
     </div></ChatViewport>
-    {client && <form className={css.agentComposer} onSubmit={event => { event.preventDefault(); if (!acceptsMessage || !message.trim()) return; const submitted = message; void request.run(async (client, target, current) => { await client.request({ method: 'agent/sendMessage', params: { target, agent_id: agent.agent_id, message: submitted } }, 'agent_message', undefined, current); if (current()) { setMessage(value => current() && value === submitted ? '' : value); refreshTranscript(value => current() ? value + 1 : value); } }); }}>
-      <textarea aria-label={tx('common:activity.message-label', { name: agent.agent })} placeholder={agent.state === 'inactive' ? tx('common:activity.resume') : tx('common:activity.message')} value={message} onChange={event => setMessage(event.target.value)} disabled={request.disabled || !acceptsMessage}/>
-      <div><small>{request.pending ? tx('common:activity.waiting-runtime') : agent.agent}</small><Button size="sm" type="submit" disabled={request.disabled || !acceptsMessage || !message.trim()}>{tx('common:activity.send')}</Button></div>
-    </form>}
-    <ConversationStats statistics={metrics?.statistics} occupancy={metrics?.occupancy}/>
+    <ComposerSeat>
+      {client && <SubagentComposer name={agent.agent} value={message} onChange={setMessage}
+        disabled={request.disabled || !acceptsMessage} pending={request.pending} inactive={agent.state === 'inactive'}
+        send={() => { const submitted = message; void request.run(async (client, target, current) => { await client.request({ method: 'agent/sendMessage', params: { target, agent_id: agent.agent_id, message: submitted } }, 'agent_message', undefined, current); if (current()) { setMessage(value => current() && value === submitted ? '' : value); refreshTranscript(value => current() ? value + 1 : value); } }); }}
+        running={agentRunning(agent)}
+        interruptDisabled={interruptRequest.disabled || unavailable || agent.state === 'inactive'}
+        interrupt={() => void interruptRequest.run(async (client, target, current) => { const result = await client.request({ method: 'agent/interrupt', params: { target, agent_id: agent.agent_id } }, 'agent_wait', undefined, current); if (current()) observeSettlement(result, current); })}
+        status={<><StateDot state={agentDot(agent)}/><span>{agentStatus(agent, tx)}</span>{request.pending && <span>{tx('common:activity.waiting-runtime')}</span>}</>}
+        actions={<div className={css.agentActions}>
+          <button type="button" aria-label={tx('common:activity.transcript')} title={tx('common:activity.transcript')} disabled={request.disabled} onClick={() => refreshTranscript(value => value + 1)}><IconRefreshOutline14/></button>
+          <button type="button" aria-label={tx('common:activity.wait-activation')} title={tx('common:activity.wait-activation')} disabled={waitRequest.disabled || unavailable} onClick={() => void waitRequest.run(async (client, target, current) => { const result = await client.request({ method: 'agent/wait', params: { target, agent_id: agent.agent_id } }, 'agent_wait', undefined, current); if (current()) observeSettlement(result, current); })}><IconClockOutline16/></button>
+        </div>}/>}
+      <ConversationStats statistics={metrics?.statistics} occupancy={metrics?.occupancy}/>
+    </ComposerSeat>
   </section>;
 }
 

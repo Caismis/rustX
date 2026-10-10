@@ -1890,3 +1890,20 @@ remains the sole owner of automatic scroll corrections. Harness's Lexical editor
 and its transport are not imported. Regression checks use actual multiline
 keystrokes, pasted capped drafts, shrinking, width reflow and detached reading in
 the production App with a fixture transport, at desktop and mobile widths.
+
+Subagent UI alignment (2026-10-10): inspected pinned local Harness
+`ui-subagent/src/client/{SubagentHeaderLineage,SubagentReadOnlyComposer}` and
+its client entry point and sidebar-chat integration. The header reuses the
+sibling-switcher SVG and compact metrics presentation; native parent identities
+supply ancestor and direct-child navigation. Hover opens after 150ms; the existing
+shared Menu supplies its 200ms pointer-leave grace and keyboard/outside dismissal.
+Visited native child views retain drafts and reading positions. Their input uses
+the already inventoried conversation composer styling, shared sticky-seat height
+observation, Enter/Shift+Enter and IME handling, native interrupt admission, and
+real child statistics. Agent return events keep their native activity rendering.
+No Harness session controller, Lexical editor or sidebar runtime is imported.
+Native rustX does not expose child model mutation, independent child trajectory,
+or Harness's explicit one-shot mode projection, so those controls are not inferred
+from parent configuration. Browser validation exercises the production App with
+fixture agent identities and statistics, not a live model run or pixel-baseline
+claim.

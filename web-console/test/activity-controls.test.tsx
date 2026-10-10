@@ -187,7 +187,8 @@ it('owner Unavailable differs from terminal Inactive and disables impossible set
   ui.rerender(<RuntimeFacts snapshot={{ ...s, agents: [unavailable] }} client={server.client} sessionId="A"/>);
   expect(ui.getByText('Unavailable')).toBeTruthy();
   expect(ui.queryByText('Inactive')).toBeNull();
-  for (const name of ['Send message', 'Wait for activation', 'Interrupt']) expect((ui.getByRole('button', { name }) as HTMLButtonElement).disabled).toBe(true);
+  expect(ui.queryByRole('button', { name: 'Interrupt' })).toBeNull();
+  for (const name of ['Send message', 'Wait for activation']) expect((ui.getByRole('button', { name }) as HTMLButtonElement).disabled).toBe(true);
   expect((ui.getByRole('button', { name: 'Transcript' }) as HTMLButtonElement).disabled).toBe(false);
   expect((ui.getByRole('textbox', { name: 'Message Agent Worker' }) as HTMLInputElement).value).toBe('Preserved draft');
   expect(server.requests.filter(row => row.request.method === 'agent/sendMessage')).toHaveLength(1);
@@ -199,7 +200,9 @@ it('Starting activation uses authoritative Admitting owner state', async () => {
   const ui = render(<RuntimeFacts snapshot={s} client={server.client} sessionId="A"/>);
   expect(ui.getByText('Admitting…')).toBeTruthy();
   expect(ui.queryByText('Stopping…')).toBeNull();
-  expect((ui.getByRole('button', { name: 'Send message' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(ui.queryByRole('button', { name: 'Send message' })).toBeNull();
+  expect((ui.getByRole('textbox', { name: 'Message Agent Worker' }) as HTMLTextAreaElement).disabled).toBe(true);
+  expect((ui.getByRole('button', { name: 'Interrupt' }) as HTMLButtonElement).disabled).toBe(false);
 });
 
 it.each(['job/wait', 'job/cancel'] as const)('%s finishes with native publication failure and preserves owner state', async method => {

@@ -59,6 +59,11 @@ if (new URL(location.href).searchParams.has('subagents')) {
   saved.agents = ['Research sources', 'Verify findings', 'Write report'].map((agent, index) => ({ agent, agent_id: `child-${index}`, parent_agent_id: 'root', child_conversation_id: `child-conversation-${index}`, activation_id: `activation-${index}`, current_activation: index === 0 ? 'activation-0' : null, state: index === 0 ? 'active' : 'inactive', activation_state: index === 0 ? 'running' : 'succeeded', definition_digest: 'definition', profile_digest: 'profile', started_at: '2026-10-08T08:00:00Z', observation: { revision: '1', activity: { type: 'awaiting_activity' }, counters: { model_requests: 3, model_retries: 0, tool_executions: 2 } }, workspace: { logical_workspace: '/workspace/A', isolation: { type: 'shared' }, resource_state: 'none' } }));
   saved.transcript.entries!.push({ cursor: '21', item: { type: 'message', message: { role: 'user', id: 'agent-report', source: { agent: { agent_id: 'child-1' } }, content: [{ type: 'text', text: 'Verified report: the original sources agree.\n\n**Evidence**\n\n- Source one\n- Source two' }] } } });
   server.handlers.set('agent/statistics', () => ({ type: 'agent_statistics', metrics: agentMetrics }));
+  if (new URL(location.href).searchParams.has('nested-subagents')) saved.agents.push({ ...saved.agents[1]!, agent: 'Verify original documents', agent_id: 'grandchild', parent_agent_id: 'child-1', child_conversation_id: 'grandchild-conversation' });
+  server.handlers.set('agent/sendMessage', request => {
+    if (request.method !== 'agent/sendMessage') throw Error('Wrong method');
+    return { type: 'agent_message', agent_id: request.params.agent_id, activation_id: 'resumed-activation', resumed: true };
+  });
   server.handlers.set('agent/transcript', request => {
     if (request.method !== 'agent/transcript') throw Error('Wrong method');
     return { type: 'transcript', page: { entries: [{ cursor: '1', item: { type: 'message', message: { role: 'assistant', id: `${request.params.agent_id}-reply`, content: [{ type: 'text', text: `# Child research report\n\nSelected agent: ${request.params.agent_id}\n\nSources have been checked.\n\n` + 'Detailed findings and supporting evidence. '.repeat(120) }] } } }] } };
