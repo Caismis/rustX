@@ -233,7 +233,10 @@ async fn unsupported_protocol_version_is_a_correlated_typed_error() {
     let response = adapter.exchange(r#"{"method":"initialize","id":61,"protocol_version":61}"#);
     assert!(response.get("result").is_none());
     assert_eq!(response["error"]["type"], "unsupported_protocol_version");
-    assert_eq!(response["error"]["supported"], RUNTIME_CLIENT_PROTOCOL_VERSION);
+    assert_eq!(
+        response["error"]["supported"],
+        RUNTIME_CLIENT_PROTOCOL_VERSION
+    );
     assert_eq!(response["error"]["requested"], 61);
     assert_eq!(adapter.endpoint.attachment_id(), None);
 
