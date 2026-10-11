@@ -7732,3 +7732,8 @@ async fn switch_residency_settlement_survives_failure_and_lost_acknowledgement()
     })
     .await;
 }
+
+mod child_delivery {
+    use super::*;
+    include!("child_delivery.rs");
+}
