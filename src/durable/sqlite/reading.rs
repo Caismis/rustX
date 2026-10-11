@@ -26,16 +26,28 @@ pub(super) fn cut(
     })
 }
 
-fn require_cut(
-    actual: &ConversationReadCut,
-    expected: Option<&ConversationReadCut>,
-) -> Result<(), ConversationStoreError> {
-    if expected.is_some_and(|expected| !expected.reconstructible_from(actual)) {
+fn window_cut(
+    connection: &Connection,
+    conversation: &ConversationId,
+    at: &ConversationWindowAt,
+) -> Result<ConversationReadCut, ConversationStoreError> {
+    let actual = cut(connection, conversation)?;
+    let expected = match at {
+        ConversationWindowAt::Latest => None,
+        ConversationWindowAt::Older { cut, .. } | ConversationWindowAt::Message { cut, .. } => {
+            cut.as_ref()
+        }
+        ConversationWindowAt::Newer { cut, .. } | ConversationWindowAt::Turn { cut, .. } => {
+            Some(cut)
+        }
+    };
+
+    if expected.is_some_and(|expected| !expected.reconstructible_from(&actual)) {
         return Err(ConversationStoreError::InvalidReference(
             "stale conversation read cut; reload the turn outline".into(),
         ));
     }
-    Ok(())
+    Ok(expected.cloned().unwrap_or(actual))
 }
 
 // Bootstrap order is immutable native provenance order. Local Attempt starts
@@ -400,7 +412,6 @@ fn require_message_target(
         ))
     }
 }
-#[allow(clippy::too_many_lines)] // All selectors resolve under one native read cut.
 pub(super) fn window(
     connection: &Connection,
     conversation: &ConversationId,
@@ -410,18 +421,7 @@ pub(super) fn window(
     if limit == 0 || limit > TURN_PAGE_MAX {
         return Err(storage("conversation window limit must be 1 to 64"));
     }
-    let actual = cut(connection, conversation)?;
-    let expected = match at {
-        ConversationWindowAt::Latest => None,
-        ConversationWindowAt::Older { cut, .. } | ConversationWindowAt::Message { cut, .. } => {
-            cut.as_ref()
-        }
-        ConversationWindowAt::Newer { cut, .. } | ConversationWindowAt::Turn { cut, .. } => {
-            Some(cut)
-        }
-    };
-    require_cut(&actual, expected)?;
-    let cut = expected.cloned().unwrap_or(actual);
+    let cut = window_cut(connection, conversation, at)?;
     let mut target = None;
     let mut target_cursor = None;
     let before = match at {
