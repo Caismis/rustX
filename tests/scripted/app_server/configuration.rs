@@ -5117,9 +5117,11 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
         // The selected Profile's parameters change while an Attempt is
         // admitted: the Attempt keeps its frozen invocation on the wire, and
         // the change is adopted for the next Attempt.
+        let mut eligibility = EligibilityStream::open(&fixture, &id);
         let settlement = runtime.settlement_signal();
         runtime.submit_inbound(input("request-A frozen")).unwrap();
         fixture.gates[0].wait_entered().await;
+        eligibility.until(AdoptionEligibility::Busy).await;
         let balanced_edited = ("balanced", None, json!({"temperature": 0.25, "seed": 7}));
         write(
             &fixture,
@@ -5148,6 +5150,9 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
         );
         fixture.gates[0].release();
         settlement.notified().await;
+        // Semantic settlement precedes release of the owning Attempt task.
+        // Adoption needs the authoritative idle eligibility transition.
+        eligibility.until(AdoptionEligibility::Eligible).await;
         let frozen: serde_json::Value =
             serde_json::from_str(&fixture.provider.request_body(0)).unwrap();
         assert_eq!(frozen["temperature"], json!(0.5));
@@ -5159,8 +5164,10 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
         let settlement = runtime.settlement_signal();
         runtime.submit_inbound(input("request-A adopted")).unwrap();
         fixture.gates[0].wait_entered().await;
+        eligibility.until(AdoptionEligibility::Busy).await;
         fixture.gates[0].release();
         settlement.notified().await;
+        eligibility.until(AdoptionEligibility::Eligible).await;
         let next: serde_json::Value =
             serde_json::from_str(&fixture.provider.request_body(1)).unwrap();
         assert_eq!(

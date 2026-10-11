@@ -2749,6 +2749,7 @@ pub(crate) mod tests {
     /// The fixture retains the transport until that late frame is written;
     /// successful cancellation may otherwise close it before the parent writes.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)] // complete FIFO cancellation and transport-drain fixture
     async fn cancel_during_close_admission_is_absorbing_and_preserves_guidance() {
         use crate::durable::ConversationStore;
         use crate::runtime::subagent::ipc::{GuidanceFrame, read_child_frame, write_parent_frame};
@@ -2796,6 +2797,14 @@ pub(crate) mod tests {
                 None,
             )
             .await;
+            // Consume the deliberately stale frame at the transport boundary,
+            // after semantic serving has returned. A completed parent write
+            // alone does not prove the reader drained the socket; closing it
+            // with unread bytes can reset the peer instead of producing EOF.
+            assert!(matches!(
+                dispatcher.next_event().await,
+                Some(ChildControlEvent::SealGranted)
+            ));
             // Keep only the fixture transport alive until the parent has
             // sent both FIFO frames and observed the terminal result.
             // Dropping the sender on assertion failure also releases cleanup.

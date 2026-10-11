@@ -1730,3 +1730,6 @@ impl LiveInspector {
 
 #[path = "continuation.rs"]
 mod continuation;
+
+#[path = "shared_native_tools.rs"]
+mod shared_native_tools;

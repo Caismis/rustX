@@ -3150,10 +3150,15 @@ enabled = true
         // Bash, is rooted at exactly the frozen Session binding.
         assert_eq!(
             core.runtime().tool_runtime().workspace().root(),
-            dir.path()
-                .join("checkouts/feature")
+            child_spec
+                .workspace
                 .canonicalize()
                 .expect("canonical binding")
+        );
+        assert_ne!(
+            core.runtime().tool_runtime().workspace().root(),
+            dir.path().canonicalize().expect("canonical ancestor"),
+            "the ancestor cannot substitute for the frozen nested binding"
         );
     }
 
