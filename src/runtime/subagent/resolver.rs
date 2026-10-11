@@ -56,7 +56,6 @@ use super::catalog::{
 };
 use super::invocation::{SubagentInvocationOverride, SubagentOverrideError};
 use crate::capabilities::selection::AgentToolSelection;
-use crate::runtime::workspace::WorkspacePolicy;
 
 /// One frozen capability identity of a resolved child.
 ///
@@ -229,9 +228,6 @@ pub struct ResolvedSubagentSpec {
     /// resolution. The registry starts its monotonic countdown only after
     /// durable ownership commits.
     pub execution_deadline: Option<SubagentExecutionDeadline>,
-    /// The definition-level project workspace policy resolved before any
-    /// child process or lease is staged.
-    pub workspace_policy: WorkspacePolicy,
     /// The exact child instruction document, composed as the child's
     /// request-time `AgentProfile` System section.
     pub instructions: String,
@@ -303,7 +299,7 @@ pub struct ResolvedSubagentSpec {
 /// at all. So `definition_digest` is deliberately **not** in this preimage,
 /// even though [`ResolvedSubagentSpec`] carries it as independent source
 /// provenance. Every behavior-affecting field it summarizes — instructions,
-/// deadline, workspace policy, project instruction chain, the effective tool
+/// deadline, project instruction chain, the effective tool
 /// and Skill selections, the effective extension composition — is framed here
 /// directly, as its final frozen value.
 ///
@@ -313,7 +309,6 @@ pub struct ResolvedSubagentSpec {
 /// agent name                 the named role identity the child runs as
 /// instructions               the exact child instruction document
 /// execution deadline         the frozen whole-lifecycle bound
-/// workspace policy           shared workspace vs Git worktree + its flag
 /// frozen model decision      the complete non-binding semantics of the
 ///                            primary invocation (see
 ///                            `frame_frozen_model_invocation`)
@@ -408,6 +403,10 @@ pub struct SubagentExecutionProfileDigest(String);
 ///           verbatim rather than being re-derived from `version_id`), and
 ///           stops letting a DISABLED Time contributor's timezone
 ///           distinguish two behaviorally identical profiles.
+///
+/// v3 -> v4  (#462) removes the retired workspace policy. Every child runs
+///           in the invoking Session's execution binding, which is an
+///           execution identity, not a profile field.
 /// ```
 ///
 /// Both `v2 -> v3` corrections change what an existing preimage means: the
@@ -417,7 +416,7 @@ pub struct SubagentExecutionProfileDigest(String);
 /// visibly a different framing rather than silently reinterpreted under the
 /// corrected rules — so the version moves even though `v2` never shipped and
 /// no compatibility mode exists.
-pub const SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION: &str = "rustx-subagent-profile-v3";
+pub const SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION: &str = "rustx-subagent-profile-v4";
 
 impl SubagentExecutionProfileDigest {
     /// The stable textual form `sha256:<64 lowercase hex characters>`.
@@ -474,7 +473,6 @@ impl ResolvedSubagentSpec {
                 inherit: false,
                 files: self.project_instructions.clone(),
             },
-            workspace_policy: self.workspace_policy,
             diagnostics: self.selection.diagnostics.clone(),
         }
     }
@@ -526,7 +524,6 @@ impl ResolvedSubagentSpec {
             // identity. See `SubagentExecutionProfileDigest`.
             definition_digest: _,
             execution_deadline,
-            workspace_policy,
             instructions,
             model,
             tools,
@@ -540,7 +537,6 @@ impl ResolvedSubagentSpec {
         compute_profile_digest(&ProfileFraming {
             agent,
             execution_deadline: *execution_deadline,
-            workspace_policy: *workspace_policy,
             instructions,
             model,
             tools,
@@ -776,7 +772,6 @@ impl FrozenAgentComposition {
             agent: definition.name().clone(),
             definition_digest: definition.digest().clone(),
             execution_deadline: definition.execution_deadline(),
-            workspace_policy: definition.workspace_policy(),
             instructions: definition.instructions().to_owned(),
             model: resolve_model(definition, attempt_model, models)?,
             tools: self.tools.clone(),
@@ -1206,7 +1201,6 @@ fn resolve_project_instructions(
 struct ProfileFraming<'a> {
     agent: &'a SubagentName,
     execution_deadline: Option<SubagentExecutionDeadline>,
-    workspace_policy: WorkspacePolicy,
     instructions: &'a str,
     model: &'a FrozenModelSpec,
     tools: &'a [ResolvedSubagentTool],
@@ -1247,13 +1241,6 @@ fn compute_profile_digest(framing: &ProfileFraming<'_>) -> SubagentExecutionProf
             &format!("millis:{}", deadline.as_millis()),
         ),
     }
-    let workspace = match framing.workspace_policy {
-        WorkspacePolicy::SharedWorkspace => "shared".to_owned(),
-        WorkspacePolicy::GitWorktree {
-            require_clean_parent,
-        } => format!("git_worktree:require_clean_parent={require_clean_parent}"),
-    };
-    field(&mut hasher, "workspace_policy", &workspace);
     // The frozen model *decision*, never the provider binding. `configured`
     // is excluded with it: it is the descriptive record of what was asked
     // for, and the resolved invocations below are the authority.
@@ -1674,7 +1661,6 @@ mod tests {
     };
     use crate::runtime::identity::{McpServerId, ToolId};
     use crate::runtime::subagent::catalog::{AgentCatalog, NamedAgentDefinition, SubagentName};
-    use crate::runtime::workspace::WorkspacePolicy;
     use crate::tools::types::{
         ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin,
         ToolReplayPolicy,
@@ -1826,7 +1812,6 @@ mod tests {
                         inherit: true,
                         files: Vec::new(),
                     },
-                workspace_policy: WorkspacePolicy::SharedWorkspace,
                 extensions: crate::extensions::NativeAgentExtensions::with_agent_status(
                     crate::context::AgentStatusConfig::default(),
                 )
@@ -2114,7 +2099,6 @@ mod tests {
                         inherit: true,
                         files: Vec::new(),
                     },
-                workspace_policy: WorkspacePolicy::SharedWorkspace,
                 extensions,
                 agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
@@ -2191,7 +2175,6 @@ mod tests {
                             inherit: true,
                             files: Vec::new(),
                         },
-                    workspace_policy: WorkspacePolicy::SharedWorkspace,
                     extensions: crate::extensions::NativeAgentExtensions::with_agent_status(
                         crate::context::AgentStatusConfig::default(),
                     )
@@ -2216,7 +2199,6 @@ mod tests {
                             inherit: true,
                             files: Vec::new(),
                         },
-                    workspace_policy: WorkspacePolicy::SharedWorkspace,
                     extensions: crate::extensions::NativeAgentExtensions::with_agent_status(
                         crate::context::AgentStatusConfig::default(),
                     )
@@ -2289,7 +2271,6 @@ mod tests {
             agent: definition.name().clone(),
             definition_digest: definition.digest().clone(),
             execution_deadline: None,
-            workspace_policy: WorkspacePolicy::SharedWorkspace,
             instructions: "instructions".to_owned(),
             model: FrozenModelSpec {
                 configured: SessionModelConfig::of(
@@ -2324,7 +2305,7 @@ mod tests {
             }], skills: crate::runtime::agent_profile::AgentSkillSelection::Exact(vec!["some-skill".to_owned()]), project_instructions: crate::runtime::agent_profile::AgentProjectInstructionPolicy {
                 inherit: true,
                 files: Vec::new(),
-            }, workspace_policy: WorkspacePolicy::SharedWorkspace, extensions: crate::extensions::NativeAgentExtensions::with_agent_status(crate::context::AgentStatusConfig::default()).and_todo(), agents: std::collections::BTreeSet::default(), workflows: std::collections::BTreeSet::default() }, std::path::PathBuf::from("/w/reviewer.md"))
+            }, extensions: crate::extensions::NativeAgentExtensions::with_agent_status(crate::context::AgentStatusConfig::default()).and_todo(), agents: std::collections::BTreeSet::default(), workflows: std::collections::BTreeSet::default() }, std::path::PathBuf::from("/w/reviewer.md"))
         .expect("definition");
 
         let mut relabelled = spec.clone();
@@ -2360,18 +2341,6 @@ mod tests {
         deadlined.execution_deadline =
             Some(SubagentExecutionDeadline::from_millis(60_000).expect("deadline"));
         variants.push(deadlined);
-
-        let mut worktree = base.clone();
-        worktree.workspace_policy = WorkspacePolicy::GitWorktree {
-            require_clean_parent: true,
-        };
-        variants.push(worktree);
-
-        let mut dirty_worktree = base.clone();
-        dirty_worktree.workspace_policy = WorkspacePolicy::GitWorktree {
-            require_clean_parent: false,
-        };
-        variants.push(dirty_worktree);
 
         let mut with_tool = base.clone();
         with_tool.tools = vec![ResolvedSubagentTool::Builtin {
@@ -2605,7 +2574,7 @@ mod tests {
     fn sub258_the_profile_framing_is_versioned() {
         assert_eq!(
             super::SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION,
-            "rustx-subagent-profile-v3",
+            "rustx-subagent-profile-v4",
             "the corrected framing is not one of the readings it replaced"
         );
         assert!(

@@ -388,8 +388,19 @@ async fn a_child_may_select_a_capability_that_is_available_but_inactive_for_the_
     assert_eq!(
         active,
         // `todo` is the parent's extension-provided Tool, which ordinary
-        // `agent.tools.builtin` narrowing does not reach (Issue #259).
-        vec!["read".to_owned(), "subagent".to_owned()],
+        // `agent.tools.builtin` narrowing does not reach (Issue #259). The
+        // five Agent controls are composed together because the Root admits
+        // an Agent (Issue #462).
+        [
+            "interrupt_agent",
+            "list_agents",
+            "read",
+            "send_message",
+            "subagent",
+            "wait_agent",
+        ]
+        .map(str::to_owned)
+        .to_vec(),
         "the parent's active ordinary projection is deliberately narrow"
     );
     assert!(
@@ -795,9 +806,7 @@ fn the_committed_identity_survives_a_durable_round_trip() {
             definition_digest: "sha256:d1".to_owned(),
             profile_digest: "sha256:profile".to_owned(),
             ownership: rustx::events::types::SubagentOwnershipKind::Normal,
-            workspace: rustx::runtime::workspace::WorkspaceSnapshot::shared(
-                std::path::PathBuf::from("<shared-workspace>"),
-            ),
+            workspace: std::path::PathBuf::from("/shared-workspace"),
         },
     };
     let (committed, authority) = crate::agent_authority::admit_agent(committed);
@@ -839,9 +848,7 @@ fn the_committed_identity_survives_a_durable_round_trip() {
 #[test]
 fn the_runtime_client_projection_carries_the_named_identity() {
     use rustx::runtime::identity::{AgentId, ConversationId, SubagentId, ToolCallId};
-    use rustx::runtime::subagent::{
-        SubagentSnapshot, SubagentState, SubagentWorkspaceResourceState,
-    };
+    use rustx::runtime::subagent::{SubagentSnapshot, SubagentState};
     use rustx::runtime_client::snapshot::RuntimeClientAgent;
 
     let snapshot = SubagentSnapshot {
@@ -856,11 +863,7 @@ fn the_runtime_client_projection_carries_the_named_identity() {
         agent: "explore".to_owned(),
         definition_digest: "sha256:d1".to_owned(),
         profile_digest: "sha256:p1".to_owned(),
-        workspace: rustx::runtime::workspace::WorkspaceSnapshot::shared(std::path::PathBuf::from(
-            "<shared-workspace>",
-        )),
-        handoff: None,
-        workspace_resource_state: SubagentWorkspaceResourceState::None,
+        workspace: std::path::PathBuf::from("/shared-workspace"),
         state: SubagentState::Running,
         cancel_reason: None,
         detail: None,
@@ -884,13 +887,7 @@ fn the_runtime_client_projection_carries_the_named_identity() {
         observation: snapshot.observation.clone(),
         execution_profile: None,
         started_at: snapshot.started_at,
-        workspace: rustx::runtime_client::snapshot::RuntimeClientAgentWorkspace {
-            borrowed_from: None,
-            logical_workspace: snapshot.workspace.logical_workspace.clone(),
-            isolation: rustx::runtime_client::snapshot::RuntimeClientWorkspaceIsolation::Shared,
-            resource_state: snapshot.workspace_resource_state,
-            handoff: None,
-        },
+        workspace: snapshot.workspace.clone(),
     };
     let wire = serde_json::to_value(&view).expect("serialize the projection");
     assert_eq!(wire["agent"], "explore");
@@ -902,6 +899,19 @@ fn the_runtime_client_projection_carries_the_named_identity() {
     assert!(
         wire.get("profile").is_none(),
         "the obsolete profile field is absent from the wire shape: {wire}"
+    );
+    // Issue #462: the Agent's workspace is the frozen Session execution
+    // binding, a plain path. The retired isolation/handoff object is refused.
+    assert_eq!(wire["workspace"], "/shared-workspace");
+    let mut retired = wire.clone();
+    retired["workspace"] = serde_json::json!({
+        "logical_workspace": "/shared-workspace",
+        "isolation": {"type": "shared"},
+        "resource_state": "none"
+    });
+    assert!(
+        serde_json::from_value::<RuntimeClientAgent>(retired).is_err(),
+        "the retired Agent workspace object is refused at the wire boundary"
     );
 
     // The obsolete profile-shaped payload is rejected outright rather than

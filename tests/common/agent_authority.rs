@@ -20,7 +20,6 @@ pub(crate) fn admit_agent(
         ownership: rustx::events::types::SubagentOwnershipKind::Normal,
         agent,
         definition_digest,
-        workspace,
         ..
     } = &mut envelope.event
     {
@@ -35,13 +34,6 @@ pub(crate) fn admit_agent(
                 definition_digest: serde_json::from_value(serde_json::json!(definition_digest))
                     .unwrap(),
                 execution_deadline: None,
-                workspace_policy: if workspace.is_isolated() {
-                    rustx::runtime::workspace::WorkspacePolicy::GitWorktree {
-                        require_clean_parent: true,
-                    }
-                } else {
-                    rustx::runtime::workspace::WorkspacePolicy::SharedWorkspace
-                },
                 instructions: "fixture".into(),
                 model: frozen_model(
                     serde_json::from_value(serde_json::json!("local/model")).unwrap(),

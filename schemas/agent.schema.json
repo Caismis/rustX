@@ -60,23 +60,6 @@
       },
       "type": "object"
     },
-    "AgentWorktreeDocument": {
-      "additionalProperties": false,
-      "description": "The resource representation of a named subagent's optional Git worktree\nisolation. An omitted or disabled value is the existing shared-workspace\nbehavior; there is no model-facing per-call override.\n\nIssue #188: when enabled, isolation runs the child from the committed\nparent `HEAD` snapshot. `require_clean_parent` defaults to `true`\n(strict): the parent source workspace must be clean, otherwise the child\nis rejected rather than silently dropping parent-local changes. Only an\nexplicit `\"require_clean_parent\": false` permits a dirty parent while the\nchild still receives exactly the committed snapshot.",
-      "properties": {
-        "enabled": {
-          "default": false,
-          "description": "Whether this named definition uses an isolated Git worktree.",
-          "type": "boolean"
-        },
-        "require_clean_parent": {
-          "default": true,
-          "description": "Whether acquisition rejects a dirty parent workspace/index.\n\nThis is the one authoritative strictness switch, normalized at the\nconfiguration boundary: it defaults to `true` whenever isolation is\nenabled, and an explicit `false` is the intentional opt-out that runs\nfrom the captured committed `HEAD` while excluding dirty parent bytes.",
-          "type": "boolean"
-        }
-      },
-      "type": "object"
-    },
     "AllTools": {
       "enum": [
         "all"
@@ -358,7 +341,7 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "Strict Agent Profile authoring shared by root and named Agents.\n\nComplete selected intent resolves against admitted resources. Execution\nscope controls child lifecycle/worktree applicability. Dynamic child\ninvocations may replace only Tools, Skills and Extensions within their\nfrozen delegation ceiling; the other dimensions remain authored defaults.",
+  "description": "Strict Agent Profile authoring shared by root and named Agents.\n\nComplete selected intent resolves against admitted resources. Execution\nscope controls child lifecycle applicability. Dynamic child\ninvocations may replace only Tools, Skills and Extensions within their\nfrozen delegation ceiling; the other dimensions remain authored defaults.",
   "properties": {
     "agents": {
       "default": [],
@@ -442,14 +425,6 @@
         "$ref": "#/$defs/WorkflowId"
       },
       "type": "array"
-    },
-    "worktree": {
-      "$ref": "#/$defs/AgentWorktreeDocument",
-      "default": {
-        "enabled": false,
-        "require_clean_parent": true
-      },
-      "description": "The bounded project-workspace policy of this agent."
     }
   },
   "title": "AgentProfileDocument",

@@ -46,8 +46,6 @@ fn wrap(block: WorkflowBlock, count: usize) -> WorkflowBlock {
 
 fn compile_block_fixture(block: WorkflowBlock) -> Result<WorkflowProgram, WorkflowCompileError> {
     compile_test(WorkflowDefinition {
-        workspace: None,
-
         timeout_ms: 600_000,
         description: "scoped test".into(),
         block,
@@ -106,11 +104,11 @@ fn typed_constructions_predicates_and_malformed_syntax_are_closed() {
     assert_eq!(
         evaluate_value(
             &constructed,
-            &json!({"flag":true,"name":"input"}).into(),
+            &json!({"flag":true,"name":"input"}),
             &BTreeMap::new()
         )
         .unwrap(),
-        json!({"flag":true,"names":["input","fixed"]}).into()
+        json!({"flag":true,"names":["input","fixed"]})
     );
     let predicate = WorkflowPredicate::And {
         predicates: vec![
@@ -129,12 +127,9 @@ fn typed_constructions_predicates_and_malformed_syntax_are_closed() {
     assert!(
         evaluate_predicate(
             &predicate,
-            &json!({"flag":true,"name":"input"}).into(),
+            &json!({"flag":true,"name":"input"}),
             &BTreeMap::new()
         )
-        .unwrap()
-        .value
-        .as_bool()
         .unwrap()
     );
     for invalid in [
@@ -214,8 +209,6 @@ fn nested_program_and_expression_limits_are_aggregate() {
     };
     assert!(value_schema(&bad_reference, &SchemaMap::default(), "reference", 0).is_err());
     let mut definition = WorkflowDefinition {
-        workspace: None,
-
         timeout_ms: 600_000,
         description: "large aggregate".into(),
         block: wrap(empty_block(), 32),
@@ -291,17 +284,17 @@ async fn repeated_outer_tool_correlation_does_not_reuse_run_identity() {
 #[test]
 fn oversized_runtime_construction_is_atomic() {
     let input = json!({"text":"x".repeat(MAX_VALUE_BYTES / 2)});
-    let values = BTreeMap::from([("already".into(), json!({"committed":true}).into())]);
+    let values = BTreeMap::from([("already".into(), json!({"committed":true}))]);
     let expression = WorkflowValue::Object {
         fields: BTreeMap::from([
             ("first".into(), reference("args.text")),
             ("second".into(), reference("args.text")),
         ]),
     };
-    assert!(evaluate_value(&expression, &input.into(), &values).is_err());
+    assert!(evaluate_value(&expression, &input, &values).is_err());
     assert_eq!(
         values,
-        BTreeMap::from([("already".into(), json!({"committed":true}).into())])
+        BTreeMap::from([("already".into(), json!({"committed":true}))])
     );
 }
 

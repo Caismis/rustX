@@ -50,7 +50,9 @@ impl Drop for ReconciliationCompletion {
 }
 
 impl super::RegistryState {
-    fn has_recovery_obligation_for(&self, agent_id: &super::AgentId) -> bool {
+    /// Whether any exact activation, reservation or unreserved allocation of
+    /// this Agent still awaits native physical proof.
+    pub(super) fn has_recovery_obligation_for(&self, agent_id: &super::AgentId) -> bool {
         let agent = &self.agents[agent_id];
         self.recovery_pending.iter().any(|id| {
             self.recovery_unreserved.get(id) == Some(&agent.conversation_id)
@@ -103,13 +105,6 @@ impl SubagentRegistry {
         activation: &super::SubagentId,
     ) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(agent) = state
-            .agents
-            .values()
-            .find(|agent| agent.conversation_id == *conversation)
-        {
-            agent.workspace.await_recovered_physical_proof();
-        }
         state
             .recovery_unreserved
             .insert(activation.clone(), conversation.clone());
@@ -302,9 +297,7 @@ impl SubagentRegistry {
         state.recovery_inflight.remove(activation);
         self.state_version.send_modify(|version| *version += 1);
         if let Some((agent_id, index)) = agent_id.zip(index) {
-            let agent = &state.agents[agent_id];
             if !state.has_recovery_obligation_for(agent_id) {
-                agent.workspace.prove_recovered_physical_settlement();
                 super::publish_snapshot(&mut state, &self.state_version, index);
             }
         } else {
@@ -344,7 +337,7 @@ impl SubagentRegistry {
 
     /// A bounded reconciliation pass at startup, Goal idle and runtime drain.
     /// Missing evidence leaves the concrete obligation available for the next
-    /// pass/reopen. No inspection of a PID or clean Git tree substitutes for it.
+    /// pass/reopen. No inspection of a PID or workspace state substitutes for it.
     pub(crate) fn reconcile_recovered_settlements(&self) {
         let obligations = self.capture_recovery_obligations();
         let _pass = RecoveryPass {
@@ -432,17 +425,12 @@ impl SubagentRegistry {
             }
             state.recovery_pending.remove(&activation);
             state.recovery_inflight.remove(&activation);
-            if let Some(agent) = state.agents.get(&agent_id)
-                && !state.has_recovery_obligation_for(&agent_id)
-            {
-                agent.workspace.prove_recovered_physical_settlement();
-            }
             publish_committed_snapshot(&mut state, &self.state_version, index, committed.sequence);
             // A physical proof creates no new inbound message. Explicitly wake
             // the existing idle coordinator so an active Goal can re-evaluate.
             self.config.mailbox.wake().notify_one();
             // Retain the immutable authority as exact recovery evidence until
-            // Session deletion. It grants no execution or workspace authority.
+            // Session deletion. It grants no execution authority.
         }
     }
 }

@@ -136,7 +136,7 @@ mod tests {
                 .all(|location| location.scope == SourceScope::User)
         );
         crate::tools::python::PACKAGE_PARSE_COUNT.with(|count| assert_eq!(count.get(), 1));
-        assert_eq!(effects, [0; 12]);
+        assert_eq!(effects, [0; 11]);
         assert_eq!(discover(Some(&root), &user).unwrap().packages().len(), 2);
     }
 
@@ -166,7 +166,7 @@ mod tests {
         let (catalog, effects) = crate::local_runtime::static_effects::measure(|| {
             discover(Some(&workspace), &workspace.join("user/.agents")).unwrap()
         });
-        assert_eq!(effects, [0; 12]);
+        assert_eq!(effects, [0; 11]);
         crate::tools::python::PACKAGE_PARSE_COUNT.with(|count| assert_eq!(count.get(), 2));
         assert_eq!(
             catalog

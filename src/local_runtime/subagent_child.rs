@@ -341,14 +341,9 @@ async fn run_child_inner(
     spec: SubagentChildSpec,
     lifetime: &mut ChildPhysicalLifetime,
 ) -> Result<(), ChildExit> {
-    if let Err(error) = spec.workspace_snapshot.validate() {
-        return Err(ChildExit::Startup(format!(
-            "the child workspace snapshot is invalid: {error}"
-        )));
-    }
-    if spec.resolved.workspace_policy.is_isolated() != spec.workspace_snapshot.is_isolated() {
+    if !spec.workspace.is_absolute() {
         return Err(ChildExit::Startup(
-            "the child workspace policy and immutable workspace snapshot disagree".to_owned(),
+            "the child execution workspace binding is not absolute".to_owned(),
         ));
     }
     let Some(core) = Box::pin(compose_cancellably(dispatcher, handle, &spec, lifetime)).await?
@@ -1876,7 +1871,6 @@ pub(crate) mod tests {
                 ))
                 .expect("digest"),
                 execution_deadline: None,
-                workspace_policy: crate::runtime::workspace::WorkspacePolicy::SharedWorkspace,
                 instructions: "frozen child instructions".to_owned(),
                 model: crate::model::frozen::test_frozen_model_spec(
                     serde_json::from_value(serde_json::json!("local/model")).expect("model ref"),
@@ -1896,9 +1890,7 @@ pub(crate) mod tests {
                 keep_recent_tokens: 0,
                 summary_output_cap: None,
             },
-            workspace_snapshot: crate::runtime::workspace::WorkspaceSnapshot::shared(
-                workspace.clone(),
-            ),
+            workspace: workspace.clone(),
             incarnation: "incarnation-test".to_owned(),
             terminal: crate::runtime::subagent::ipc::ChildTerminalMode::Normal,
         };

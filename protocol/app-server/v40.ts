@@ -221,13 +221,6 @@ export type Request1 =
       };
     }
   | {
-      method: 'subagent/disposeWorkspace';
-      params: {
-        target: AttachmentTarget;
-        subagent_id: SubagentId;
-      };
-    }
-  | {
       method: 'initialize';
       params: InitializeParams;
     }
@@ -630,16 +623,6 @@ export type AgentId = string;
  * The cursor domain of durable transcript paging.
  */
 export type RuntimeClientTranscriptCursor = string;
-/**
- * Identifies one finite activation owned by an Agent, or one finite
- * Workflow child execution.
- *
- * Repeated native Agent activations have distinct `SubagentId`s while
- * retaining the same durable `AgentId`. This is not an OS pid: process
- * identity or PID reuse can never establish durable ownership or proof
- * of physical settlement.
- */
-export type SubagentId = string;
 /**
  * The identity of one exact historical Conversation Surface state.
  *
@@ -1192,12 +1175,6 @@ export type MethodResult =
       type: 'agent_wait';
     }
   | {
-      subagent_id: SubagentId;
-      workspace: RuntimeClientAgentWorkspace1;
-      outcome: RuntimeClientAgentWorkspaceDisposalOutcome;
-      type: 'workspace_disposed';
-    }
-  | {
       /**
        * Opaque process-owner identity, stable across transport reconnects. Not permission.
        */
@@ -1539,6 +1516,16 @@ export type ToolCallId = string;
  * Identifies a tool definition in the capability set.
  */
 export type ToolId = string;
+/**
+ * Identifies one finite activation owned by an Agent, or one finite
+ * Workflow child execution.
+ *
+ * Repeated native Agent activations have distinct `SubagentId`s while
+ * retaining the same durable `AgentId`. This is not an OS pid: process
+ * identity or PID reuse can never establish durable ownership or proof
+ * of physical settlement.
+ */
+export type SubagentId = string;
 /**
  * Truthful admission source. Client controls have no model `ToolCall` identity.
  */
@@ -2193,17 +2180,10 @@ export type PublicationAuditBlock =
       complete: boolean;
       kind: 'proposed_tool_call';
     };
-export type ReviewSubject =
-  | {
-      content: unknown;
-      candidate?: CandidateReference | null;
-      type: 'plan';
-    }
-  | {
-      reference: CandidateReference;
-      inspection_path: string;
-      type: 'candidate';
-    };
+export type ReviewSubject = {
+  content: unknown;
+  type: 'plan';
+};
 /**
  * Caller correlation for one native invocation. Capability source is
  * independently represented by [`ToolOrigin`].
@@ -2252,11 +2232,6 @@ export type SubagentState =
   | 'cancelled'
   | 'interrupted';
 /**
- * The public result of disposing a retained subagent workspace.
- */
-export type RuntimeClientAgentWorkspaceDisposalOutcome =
-  'disposed' | 'already_disposed' | 'disposal_pending' | 'no_retained_workspace';
-/**
  * Bounded external outcomes shared by App Server and local presentation.
  */
 export type RuntimeClientSessionDeletionResult =
@@ -2295,10 +2270,6 @@ export type RuntimeClientSessionDeletionResult =
 export type RuntimeClientSessionDeletionBlocker =
   | {
       kind: 'resource_conflict';
-    }
-  | {
-      resource_count: number;
-      kind: 'workspace';
     }
   | {
       kind: 'invalid_ownership';
@@ -2354,14 +2325,7 @@ export type WorkflowState =
       type: 'settled';
     };
 export type WorkflowWait =
-  | 'tool'
-  | 'agent'
-  | 'capacity'
-  | 'workspace'
-  | 'questionnaire'
-  | 'approval'
-  | 'review'
-  | 'settlement';
+  'tool' | 'agent' | 'capacity' | 'questionnaire' | 'approval' | 'review' | 'settlement';
 /**
  * Bounded block/node observation; live state stays in the executor.
  */
@@ -3372,9 +3336,6 @@ export type RuntimeClientEvent =
        * The exact terminal rendezvous outcome.
        */
       outcome:
-        | {
-            type: 'review_invalidated';
-          }
         | {
             kind: ToolDeadlineKind;
             type: 'deadline_expired';
@@ -4424,7 +4385,7 @@ export interface AppServerPolicy {
  * Strict Agent Profile authoring shared by root and named Agents.
  *
  * Complete selected intent resolves against admitted resources. Execution
- * scope controls child lifecycle/worktree applicability. Dynamic child
+ * scope controls child lifecycle applicability. Dynamic child
  * invocations may replace only Tools, Skills and Extensions within their
  * frozen delegation ceiling; the other dimensions remain authored defaults.
  */
@@ -4456,7 +4417,6 @@ export interface AgentProfileDocument {
    */
   skills?: AgentSkillSelection | null;
   agents_md?: AgentProjectInstructionsDocument1;
-  worktree?: AgentWorktreeDocument;
   plugins?: NativeAgentExtensionsDocument;
 }
 /**
@@ -4483,24 +4443,6 @@ export interface AgentProjectInstructionsDocument1 {
    * configuration document's directory at launch resolution.
    */
   files?: string[];
-}
-/**
- * The bounded project-workspace policy of this agent.
- */
-export interface AgentWorktreeDocument {
-  /**
-   * Whether this named definition uses an isolated Git worktree.
-   */
-  enabled?: boolean;
-  /**
-   * Whether acquisition rejects a dirty parent workspace/index.
-   *
-   * This is the one authoritative strictness switch, normalized at the
-   * configuration boundary: it defaults to `true` whenever isolation is
-   * enabled, and an explicit `false` is the intentional opt-out that runs
-   * from the captured committed `HEAD` while excluding dirty parent bytes.
-   */
-  require_clean_parent?: boolean;
 }
 /**
  * Closed native Extension composition. Omission selects none. Root
@@ -6563,9 +6505,6 @@ export interface RuntimeClientTranscriptEntry {
               type: 'reviewed';
             }
           | {
-              type: 'review_invalidated';
-            }
-          | {
               kind: ToolDeadlineKind;
               type: 'deadline_expired';
             }
@@ -7255,19 +7194,10 @@ export interface PublicationAudit {
 export interface ReviewSpecification {
   instance: WorkflowNodeInstance;
   subject: ReviewSubject;
-  context: ReviewFact[];
-}
-/**
- * Historical source identity. Possession of this value grants no access.
- */
-export interface CandidateReference {
-  run: WorkflowRunId;
-  version: string;
-  content: string;
-}
-export interface ReviewFact {
-  value: unknown;
-  candidate?: CandidateReference | null;
+  /**
+   * Bounded committed Workflow values presented beside the subject.
+   */
+  context: unknown[];
 }
 /**
  * The canonical identity of the tool that asked. Durable evidence of
@@ -7556,7 +7486,10 @@ export interface RuntimeClientAgent {
    * When the ownership committed; clients derive elapsed time from it.
    */
   started_at: string;
-  workspace: RuntimeClientAgentWorkspace;
+  /**
+   * The Session execution binding this Agent froze at creation.
+   */
+  workspace: string;
 }
 /**
  * The latest live activity projection reported by the child (Issue
@@ -7686,99 +7619,6 @@ export interface SubagentExecutionProfile {
    */
   reasoning_enabled: boolean;
 }
-/**
- * The model-independent project workspace facts.
- */
-export interface RuntimeClientAgentWorkspace {
-  /**
-   * Present when the Workflow run, rather than this child, owns the lease.
-   */
-  borrowed_from?: WorkflowRunId | null;
-  /**
-   * The authoritative logical project workspace used by the child.
-   */
-  logical_workspace: string;
-  /**
-   * The closed shared/isolated execution facts.
-   */
-  isolation:
-    | {
-        type: 'shared';
-      }
-    | {
-        /**
-         * The canonical source repository root.
-         */
-        source_repository_root: string;
-        /**
-         * The logical project scope relative to the source repository root.
-         */
-        repository_relative_workspace: string;
-        /**
-         * The runtime-owned physical worktree root.
-         */
-        physical_worktree_root: string;
-        /**
-         * The exact committed source snapshot selected before ownership.
-         */
-        base_commit: string;
-        /**
-         * The runtime-created branch/ref.
-         */
-        branch: string;
-        /**
-         * Whether the parent had uncommitted changes at selection time.
-         */
-        parent_had_uncommitted_changes: boolean;
-        type: 'git_worktree';
-      };
-  /**
-   * The post-terminal physical-resource lifecycle, independent of the
-   * child's absorbing logical terminal state.
-   */
-  resource_state:
-    | 'none'
-    | 'retained'
-    | 'preserved_unresolved'
-    | 'disposal_in_progress'
-    | 'worktree_removed'
-    | 'disposed';
-  /**
-   * Retained child work-product facts, if the worktree was handed off.
-   */
-  handoff?: RuntimeClientWorkspaceHandoff | null;
-}
-/**
- * The Git facts needed to recover a preserved child worktree.
- */
-export interface RuntimeClientWorkspaceHandoff {
-  /**
-   * The child's preserved logical project scope.
-   */
-  logical_workspace: string;
-  /**
-   * The preserved physical Git worktree root.
-   */
-  physical_worktree_root: string;
-  /**
-   * The runtime-created branch/ref.
-   */
-  branch: string;
-  /**
-   * The selected source commit.
-   */
-  base_commit: string;
-  /**
-   * The final child `HEAD`.
-   */
-  head_commit: string;
-  /**
-   * Whether ordinary tracked/index/untracked-non-ignored child state is
-   * dirty. A changed child `HEAD` is reported independently by
-   * `head_commit` and `base_commit`.
-   */
-  dirty: boolean;
-}
 export interface AgentStatistics {
   statistics: ConversationStatistics;
   occupancy?: ContextOccupancy | null;
@@ -7804,70 +7644,6 @@ export interface AgentActiveInterval {
    * Authoritative live lifecycle, never inferred from a missing terminal.
    */
   running: boolean;
-}
-/**
- * User-recoverable facts about the project workspace authority of one
- * subagent. Acquisition and settlement policy remain native runtime
- * responsibilities; this is only a read-model projection.
- */
-export interface RuntimeClientAgentWorkspace1 {
-  /**
-   * Present when the Workflow run, rather than this child, owns the lease.
-   */
-  borrowed_from?: WorkflowRunId | null;
-  /**
-   * The authoritative logical project workspace used by the child.
-   */
-  logical_workspace: string;
-  /**
-   * The closed shared/isolated execution facts.
-   */
-  isolation:
-    | {
-        type: 'shared';
-      }
-    | {
-        /**
-         * The canonical source repository root.
-         */
-        source_repository_root: string;
-        /**
-         * The logical project scope relative to the source repository root.
-         */
-        repository_relative_workspace: string;
-        /**
-         * The runtime-owned physical worktree root.
-         */
-        physical_worktree_root: string;
-        /**
-         * The exact committed source snapshot selected before ownership.
-         */
-        base_commit: string;
-        /**
-         * The runtime-created branch/ref.
-         */
-        branch: string;
-        /**
-         * Whether the parent had uncommitted changes at selection time.
-         */
-        parent_had_uncommitted_changes: boolean;
-        type: 'git_worktree';
-      };
-  /**
-   * The post-terminal physical-resource lifecycle, independent of the
-   * child's absorbing logical terminal state.
-   */
-  resource_state:
-    | 'none'
-    | 'retained'
-    | 'preserved_unresolved'
-    | 'disposal_in_progress'
-    | 'worktree_removed'
-    | 'disposed';
-  /**
-   * Retained child work-product facts, if the worktree was handed off.
-   */
-  handoff?: RuntimeClientWorkspaceHandoff | null;
 }
 export interface ServerCapabilities {
   upload_policy: UploadPolicy;
@@ -8512,13 +8288,6 @@ export interface WorkflowRunView {
   steps_consumed: number;
   steps_max: number;
   agents_consumed: number;
-  candidate?: CandidateReference | null;
-  /**
-   * Admitted candidate users, including serialized workspace waiters.
-   * While nonzero no historical check certifies the mutable workspace.
-   */
-  candidate_users: number;
-  handoff?: WorkflowHandoff | null;
 }
 export interface WorkflowInstanceView {
   block: WorkflowBlockInstance;
@@ -8533,14 +8302,8 @@ export interface WorkflowInstanceView {
   iteration?: number | null;
   iterations_max?: number | null;
   loop_exit?: WorkflowLoopExit | null;
-  candidate?: CandidateReference | null;
   checks_passed?: boolean | null;
   review_accepted?: boolean | null;
-}
-export interface WorkflowHandoff {
-  state: string;
-  path: string;
-  truncated: boolean;
 }
 /**
  * The client-visible durable-authority failure state of a conversation
@@ -10146,9 +9909,6 @@ export interface RuntimeClientTranscriptInteractionSettled {
         type: 'reviewed';
       }
     | {
-        type: 'review_invalidated';
-      }
-    | {
         kind: ToolDeadlineKind;
         type: 'deadline_expired';
       }
@@ -10755,7 +10515,10 @@ export interface RuntimeClientAgent1 {
    * When the ownership committed; clients derive elapsed time from it.
    */
   started_at: string;
-  workspace: RuntimeClientAgentWorkspace;
+  /**
+   * The Session execution binding this Agent froze at creation.
+   */
+  workspace: string;
 }
 /**
  * The deterministic capability projection.

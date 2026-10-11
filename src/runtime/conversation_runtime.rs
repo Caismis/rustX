@@ -3856,26 +3856,10 @@ impl ConversationRuntime {
             test_pre_tool_policy: Mutex::new(None),
         });
         // Recovery has already durably terminalized every orphaned child.
-        // Restore only terminal read-model records and their durable
-        // workspace resource facts (proven handoffs or unresolved ownership);
-        // no child process, policy, or frozen resource is reconstructed from
-        // current configuration.
+        // Restore only durable Agent and activation records; no child
+        // process, policy, or frozen resource is reconstructed from current
+        // configuration.
         if let Some(subagents) = &inner.subagents {
-            for handoff in inner.recovery.settled_subagent_handoffs() {
-                subagents.restore_recovered_handoff(handoff);
-            }
-            for handoff in &inner.recovery.reconciliation().subagent_handoffs {
-                subagents.restore_recovered_handoff(handoff);
-            }
-            for unresolved in inner.recovery.settled_subagent_unresolved() {
-                subagents.restore_recovered_unresolved(unresolved);
-            }
-            for unresolved in &inner.recovery.reconciliation().subagent_unresolved {
-                subagents.restore_recovered_unresolved(unresolved);
-            }
-            for disposal in inner.recovery.settled_subagent_disposals() {
-                subagents.restore_recovered_disposal(disposal);
-            }
             subagents
                 .restore_agents(inner.store.as_ref())
                 .map_err(|error| ConversationRuntimeError::Storage(error.to_string()))?;
@@ -6057,33 +6041,6 @@ impl ConversationRuntime {
             .and_then(|subagents| subagents.cancel(subagent_id, CancellationReason::UserRequested))
     }
 
-    /// Disposes the exact retained workspace of one terminal subagent through
-    /// the registry/workspace resource lifecycle. The logical subagent state
-    /// remains terminal; resource disposal never adds a logical `Disposed`
-    /// state.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed disposal error when the subagent is unknown, non-terminal,
-    /// has no proven retained resource, or the workspace backend cannot prove or
-    /// remove the retained resource.
-    pub async fn subagent_workspace_dispose(
-        &self,
-        subagent_id: &crate::runtime::identity::SubagentId,
-    ) -> Result<
-        crate::runtime::subagent::SubagentWorkspaceDisposal,
-        crate::runtime::subagent::SubagentWorkspaceDisposalError,
-    > {
-        let Some(subagents) = self.inner.subagents.as_ref() else {
-            return Err(
-                crate::runtime::subagent::SubagentWorkspaceDisposalError::UnknownSubagent {
-                    subagent_id: subagent_id.clone(),
-                },
-            );
-        };
-        subagents.dispose_retained_workspace(subagent_id).await
-    }
-
     /// Inspects one background execution through the authoritative
     /// registry.
     #[must_use]
@@ -6865,10 +6822,6 @@ impl crate::runtime::subagent::SubagentObserver for RuntimeObserver {
         });
     }
 
-    fn on_workspace(&self, snapshot: &crate::runtime::subagent::SubagentSnapshot) {
-        self.push(ConversationObservation::SubagentWorkspace(snapshot.clone()));
-    }
-
     fn on_activity(&self, snapshot: &crate::runtime::subagent::SubagentSnapshot) {
         self.push(ConversationObservation::SubagentActivity(snapshot.clone()));
     }
@@ -7098,7 +7051,6 @@ mod tests {
             ))
             .expect("digest"),
             execution_deadline: None,
-            workspace_policy: crate::runtime::workspace::WorkspacePolicy::SharedWorkspace,
             instructions: "instructions".to_owned(),
             model: crate::model::frozen::test_frozen_model_spec(
                 serde_json::from_value(serde_json::json!("local/model")).expect("model reference"),
@@ -7767,10 +7719,7 @@ mod tests {
                     )
                     .expect("product root"),
                 },
-                workspace: crate::runtime::workspace::WorkspaceManager::new(
-                    &workspace,
-                    dir.path().join("subagents"),
-                ),
+                workspace: std::path::PathBuf::from(&workspace),
                 max_active: 4,
             },
         );
@@ -7886,10 +7835,7 @@ mod tests {
                     )
                     .expect("product root"),
                 },
-                workspace: crate::runtime::workspace::WorkspaceManager::new(
-                    &workspace,
-                    dir.path().join("subagents"),
-                ),
+                workspace: std::path::PathBuf::from(&workspace),
                 max_active: 4,
             },
         );

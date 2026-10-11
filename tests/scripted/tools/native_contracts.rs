@@ -603,7 +603,6 @@ fn selection_registry(fixture: &common::NativeFixture) -> rustx::tools::executor
                 inherit: false,
                 files: vec![],
             },
-            workspace_policy: rustx::runtime::workspace::WorkspacePolicy::default(),
             extensions: rustx::extensions::NativeAgentExtensionsDocument::default().resolve(),
             agents: std::collections::BTreeSet::default(),
             workflows: std::collections::BTreeSet::default(),

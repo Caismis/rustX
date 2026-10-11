@@ -241,10 +241,6 @@ pub(crate) enum ConversationObservation {
         agent: Option<Box<crate::runtime::subagent::AgentSnapshot>>,
         snapshot: SubagentSnapshot,
     },
-    /// One reliable retained-workspace resource transition. This is separate
-    /// from the logical lifecycle lane: disposing a handoff updates only the
-    /// resource projection and never creates another terminal transition.
-    SubagentWorkspace(SubagentSnapshot),
     /// One subagent live-activity snapshot (Issue #178). **Disposable**:
     /// latest-value, coalescing, keyed by subagent identity — a push
     /// overwrites the previous unpublished snapshot of the same subagent,
@@ -613,12 +609,6 @@ impl PendingObservations {
                     .reliable
                     .push_back(ConversationObservation::SubagentLifecycle { agent, snapshot });
             }
-            ConversationObservation::SubagentWorkspace(snapshot) => {
-                state.latest_activity.remove(&snapshot.subagent_id);
-                state
-                    .reliable
-                    .push_back(ConversationObservation::SubagentWorkspace(snapshot));
-            }
             // Reliable; a tool settlement fact retires the call's pending
             // live progress: a settled call leaves no stale live report
             // behind.
@@ -941,13 +931,6 @@ fn trace_fact_requires_publication(event: &RuntimeEvent) -> bool {
         | RuntimeEvent::ToolExecutionCancellationRequested { .. }
         | RuntimeEvent::ToolExecutionSettlementObserved { .. }
         | RuntimeEvent::ToolExecutionSettlementControlFailed { .. }
-        | RuntimeEvent::SubagentWorkspaceDisposalStarted { .. }
-        | RuntimeEvent::SubagentWorkspaceDisposalSettled { .. }
-        | RuntimeEvent::WorkflowWorkspaceOwned { .. }
-        | RuntimeEvent::WorkflowWorkspaceSettled { .. }
-        | RuntimeEvent::WorkflowCandidateInvocation { .. }
-        | RuntimeEvent::WorkflowWorkspaceDisposalStarted { .. }
-        | RuntimeEvent::WorkflowWorkspaceDisposalSettled { .. }
         | RuntimeEvent::WorkflowBlockStarted { .. }
         | RuntimeEvent::WorkflowLoopIterationAdmitted { .. }
         | RuntimeEvent::WorkflowLoopIterationSettled { .. }
@@ -967,10 +950,7 @@ fn trace_fact_requires_publication(event: &RuntimeEvent) -> bool {
 mod tests {
     use super::*;
     use crate::runtime::identity::{AgentId, ConversationId, ToolCallId};
-    use crate::runtime::subagent::{
-        SubagentObservation, SubagentState, SubagentWorkspaceResourceState,
-    };
-    use crate::runtime::workspace::WorkspaceSnapshot;
+    use crate::runtime::subagent::{SubagentObservation, SubagentState};
 
     #[test]
     fn unpublished_earlier_commit_cannot_be_overtaken_by_a_later_owner() {
@@ -1038,9 +1018,7 @@ mod tests {
             agent: "explore".to_owned(),
             definition_digest: "sha256:d1".to_owned(),
             profile_digest: "sha256:p1".to_owned(),
-            workspace: WorkspaceSnapshot::shared(std::path::PathBuf::from("<shared>")),
-            handoff: None,
-            workspace_resource_state: SubagentWorkspaceResourceState::None,
+            workspace: std::path::PathBuf::from("<shared>"),
             state: SubagentState::Running,
             cancel_reason: None,
             detail: None,

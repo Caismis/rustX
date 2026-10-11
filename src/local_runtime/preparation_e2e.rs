@@ -164,7 +164,7 @@ impl Lab {
                 program: wrapper,
                 product_root: product.clone(),
             },
-            workspace: crate::runtime::workspace::WorkspaceManager::new(&workspace, &runtime_root),
+            workspace: std::path::PathBuf::from(&workspace),
             max_active: 4,
         });
         let child_runtime_group =
@@ -204,7 +204,6 @@ impl Lab {
                     ))
                     .expect("digest"),
                     execution_deadline: None,
-                    workspace_policy: crate::runtime::workspace::WorkspacePolicy::SharedWorkspace,
                     instructions: "frozen child instructions".to_owned(),
                     model: crate::model::frozen::test_frozen_model_spec(
                         serde_json::from_value(serde_json::json!("local/model"))

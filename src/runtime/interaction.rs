@@ -302,8 +302,6 @@ pub(crate) enum InteractionControl {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub enum InteractionOutcome {
-    /// Native source interference invalidated the pending business subject.
-    ReviewInvalidated,
     /// A native ancestor deadline won the rendezvous.
     DeadlineExpired {
         kind: crate::tools::deadline::ToolDeadlineKind,
@@ -571,7 +569,6 @@ pub(crate) fn interaction_settled_event_id(interaction_id: &InteractionId) -> Ev
 /// for a prompt a user could have seen.
 fn audit_settlement(outcome: &InteractionOutcome) -> InteractionSettlement {
     match outcome {
-        InteractionOutcome::ReviewInvalidated => InteractionSettlement::ReviewInvalidated,
         InteractionOutcome::Responded { response } => match response {
             InteractionResponse::Review { response } => InteractionSettlement::Reviewed {
                 response: response.clone(),
@@ -973,8 +970,6 @@ impl Drop for WaiterPayload {
 }
 
 struct PendingInteraction {
-    /// Optional workspace-owned freeze; this coordinator never owns a writer.
-    candidate: Option<Arc<crate::runtime::workspace::CandidateFreeze>>,
     request: InteractionRequest,
     /// The exact durable audit subject that was committed before this prompt
     /// was released. Response validation and the settled fact both resolve
@@ -1407,7 +1402,6 @@ impl InteractionCoordinator {
         request: InteractionRequest,
         subject: InteractionSubject,
         cancellation: &ExecutionCancellation,
-        candidate: Option<Arc<crate::runtime::workspace::CandidateFreeze>>,
     ) -> Result<InteractionTicket, InteractionFailure> {
         // Reject malformed facts before asking the root authority for a
         // permit. A permit is the publication frontier, so no post-permit
@@ -1435,26 +1429,7 @@ impl InteractionCoordinator {
         } else {
             false
         };
-        let freeze = candidate.clone();
-        let commit = || {
-            self.publish_inner(
-                request,
-                subject,
-                cancellation,
-                publication_admitted,
-                candidate,
-            )
-        };
-        let published = if let Some(freeze) = freeze {
-            freeze
-                .with_current(|valid| {
-                    valid.map_err(|_| InteractionFailure::Invalid)?;
-                    commit()
-                })
-                .await?
-        } else {
-            commit()?
-        };
+        let published = self.publish_inner(request, subject, cancellation, publication_admitted)?;
         if let Some(route) = route
             && let Err(error) = route
                 .publish(InteractionRouteEvent::Requested(published.request.clone()))
@@ -1511,8 +1486,7 @@ impl InteractionCoordinator {
         } else {
             false
         };
-        let published =
-            self.publish_inner(request, subject, cancellation, publication_admitted, None)?;
+        let published = self.publish_inner(request, subject, cancellation, publication_admitted)?;
         if let Some(route) = route
             && let Err(error) =
                 route.try_publish(InteractionRouteEvent::Requested(published.request.clone()))
@@ -1531,7 +1505,6 @@ impl InteractionCoordinator {
         subject: InteractionSubject,
         cancellation: &ExecutionCancellation,
         publication_admitted: bool,
-        candidate: Option<Arc<crate::runtime::workspace::CandidateFreeze>>,
     ) -> Result<PublishedInteraction, InteractionFailure> {
         #[cfg(test)]
         crate::local_runtime::static_effects::observe(
@@ -1558,7 +1531,6 @@ impl InteractionCoordinator {
                 let previous = state.pending.insert(
                     id.clone(),
                     PendingInteraction {
-                        candidate,
                         request,
                         subject,
                         cancellation: cancellation.clone(),
@@ -1614,8 +1586,7 @@ impl InteractionCoordinator {
     ) -> Result<InteractionTicket, InteractionFailure> {
         let id = self.allocate_id(&attempt_id)?;
         let (request, subject) = facts.into_published(self.conversation_id.clone(), attempt_id, id);
-        self.publish_async(request, subject, cancellation, None)
-            .await
+        self.publish_async(request, subject, cancellation).await
     }
 
     async fn publish_questionnaire_async(
@@ -1626,8 +1597,7 @@ impl InteractionCoordinator {
     ) -> Result<InteractionTicket, InteractionFailure> {
         let id = self.allocate_id(&attempt_id)?;
         let (request, subject) = facts.into_published(self.conversation_id.clone(), attempt_id, id);
-        self.publish_async(request, subject, cancellation, None)
-            .await
+        self.publish_async(request, subject, cancellation).await
     }
 
     pub(crate) async fn request_review(
@@ -1635,16 +1605,9 @@ impl InteractionCoordinator {
         review: crate::events::review::ReviewSpecification,
         turn: u32,
         cancellation: ExecutionCancellation,
-        candidate: Option<Arc<crate::runtime::workspace::CandidateFreeze>>,
     ) -> Result<InteractionOutcome, InteractionFailure> {
         let attempt_id = review.instance.block.run.attempt_id.clone();
         if review.instance.block.run.conversation_id != self.conversation_id {
-            return Err(InteractionFailure::Invalid);
-        }
-        let expected = review
-            .candidate()
-            .map_err(|_| InteractionFailure::Invalid)?;
-        if expected != candidate.as_ref().map(|freeze| freeze.reference()) {
             return Err(InteractionFailure::Invalid);
         }
         let id = self.allocate_id(&attempt_id)?;
@@ -1661,9 +1624,7 @@ impl InteractionCoordinator {
                 review,
             },
         };
-        let ticket = self
-            .publish_async(request, subject, &cancellation, candidate)
-            .await?;
+        let ticket = self.publish_async(request, subject, &cancellation).await?;
         self.wait_result(ticket, cancellation).await
     }
 
@@ -1833,34 +1794,7 @@ impl InteractionCoordinator {
                 validate_response_for(&pending.subject, &response)?;
             }
         }
-        let candidate = self
-            .state
-            .lock()
-            .expect("interaction state")
-            .pending
-            .get(interaction_id)
-            .and_then(|pending| pending.candidate.clone());
-        let delivery = if let Some(candidate) = candidate {
-            candidate
-                .with_current(|valid| {
-                    if valid.is_err() {
-                        self.begin_settle(
-                            interaction_id,
-                            InteractionOutcome::ReviewInvalidated,
-                            true,
-                        )
-                    } else {
-                        self.begin_settle(interaction_id, outcome, true)
-                    }
-                })
-                .await?
-        } else {
-            self.begin_settle(interaction_id, outcome, true)?
-        };
-        let invalidated = matches!(
-            delivery.payload.outcome,
-            InteractionOutcome::ReviewInvalidated
-        );
+        let delivery = self.begin_settle(interaction_id, outcome, true)?;
         let transition = delivery.transition;
         let delivery_result = self.deliver_async(delivery).await;
         if transition.cancellation_won {
@@ -1879,11 +1813,6 @@ impl InteractionCoordinator {
                 | InteractionFailure::PublicationFailed => InteractionError::ControlLost {
                     interaction_id: interaction_id.clone(),
                 },
-            });
-        }
-        if invalidated {
-            return Err(InteractionError::InvalidResponse {
-                message: "Review candidate changed".into(),
             });
         }
         if !transition.audit_committed {
@@ -2916,33 +2845,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn candidate_bound_review_cannot_publish_without_matching_native_freeze() {
+    async fn review_for_a_foreign_conversation_cannot_publish() {
         let (owner, audit) = audited_coordinator();
         owner.set_provider_available(true);
         let mut instance = crate::runtime::workflow::test_instance("review", "human");
         instance.block.run.conversation_id =
-            ConversationId::new("conv_8b34dbc2-c05e-74d7-825d-48efeace8245");
-        let candidate = crate::runtime::workspace::CandidateReference {
-            run: instance.block.run.clone(),
-            version: 1,
-            content: "a".repeat(64),
-        };
+            ConversationId::new("conv_0f3f0cba-1d5b-7e19-8c43-5c7a7d4e9a10");
         let review = crate::events::review::ReviewSpecification {
             instance: Box::new(instance),
             subject: crate::events::review::ReviewSubject::Plan {
                 content: serde_json::json!({"plan":"P"}),
-                candidate: None,
             },
-            context: vec![crate::events::review::ReviewFact {
-                value: serde_json::json!({"passed":true}),
-                candidate: Some(candidate),
-            }],
+            context: vec![serde_json::json!({"passed":true})],
         };
         let cancellation =
             crate::agent::cancellation::AgentCancellation::new(CancellationReason::UserRequested);
         assert!(matches!(
             owner
-                .request_review(review, 1, cancellation.execution_cancellation(), None)
+                .request_review(review, 1, cancellation.execution_cancellation())
                 .await,
             Err(InteractionFailure::Invalid)
         ));
@@ -2961,7 +2881,6 @@ mod tests {
             let review = crate::events::review::ReviewSpecification {
                 instance: Box::new(instance),
                 subject: crate::events::review::ReviewSubject::Plan {
-                    candidate: None,
                     content: serde_json::json!({"plan":"A"}),
                 },
                 context: vec![],
@@ -2976,12 +2895,8 @@ mod tests {
             let cancellation = crate::agent::cancellation::AgentCancellation::new(
                 CancellationReason::UserRequested,
             );
-            let mut wait = Box::pin(first.request_review(
-                review,
-                1,
-                cancellation.execution_cancellation(),
-                None,
-            ));
+            let mut wait =
+                Box::pin(first.request_review(review, 1, cancellation.execution_cancellation()));
             assert!(futures_util::poll!(&mut wait).is_pending());
             let id = first.pending_snapshot()[0].id.clone();
             if accepted {

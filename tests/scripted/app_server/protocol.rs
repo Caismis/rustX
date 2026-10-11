@@ -3991,7 +3991,7 @@ async fn archive_preflight_failures_reach_the_protocol_without_private_diagnosti
             &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
             &serde_json::from_value(serde_json::json!(format!("sha256:{}", "a".repeat(64)))).unwrap(),
             crate::events::types::SubagentOwnershipKind::Normal,
-            &crate::runtime::workspace::WorkspaceSnapshot::shared(f.workspaces[0].clone()), chrono::Utc::now(),
+            &f.workspaces[0].clone(), chrono::Utc::now(),
         ));
         store.append_agent_admission(event, &authority).unwrap(); // Required child deliberately has no allocation.
         let session = &f.sessions[1];

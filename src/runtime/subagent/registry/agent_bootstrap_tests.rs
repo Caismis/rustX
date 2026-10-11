@@ -112,17 +112,16 @@ async fn proven_child_loss_has_identical_resume_authority_before_and_after_reope
     let recovered = SubagentRegistry::new(plane.registry.config.clone());
     recovered.restore_sequence_watermark(1);
     recovered.restore_agents(plane.store.as_ref()).unwrap();
-    // The same committed settlement grants both resident and recovered owners
-    // workspace admission; this inspection performs no activation side effect.
+    // The same committed settlement makes both resident and recovered owners
+    // resumable; this inspection performs no activation side effect.
     for registry in [&plane.registry, &recovered] {
-        let workspace = registry.state.lock().unwrap().agents[&admitted.child_agent_id]
-            .workspace
-            .clone();
-        workspace
-            .acquire(&CancellationSignal::new())
-            .await
-            .expect("proven settlement admits another physical lease")
-            .settle();
+        assert_eq!(
+            registry
+                .agent_snapshot(&admitted.child_agent_id)
+                .unwrap()
+                .state,
+            AgentState::Inactive
+        );
     }
     let recovered_plane = TestPlane {
         registry: recovered,

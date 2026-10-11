@@ -307,7 +307,11 @@ def workflow_reference_parallel() -> Scenario:
 
 
 def workflow_reference_repair(exhausted: bool = False, tampered: bool = False) -> Scenario:
-    """Real native writes/checks; the provider never supplies check findings."""
+    """Real native writes/checks in the shared Session workspace.
+
+    The provider never supplies check findings: the frozen Bash checker runs
+    natively and its structured result alone drives the repair Loop.
+    """
     import json
     plan = {"summary": "Fix greeting.py", "steps": ["Implement the two fixed cases"]}
     def terminal():
@@ -346,8 +350,8 @@ def workflow_reference_repair(exhausted: bool = False, tampered: bool = False) -
         ])
     steps.append(Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=WORKFLOW_MODEL,
                              tools_include=("implement_and_review",),
-                             body_contains=(("needs_revision" if exhausted else "accepted"),), body_excludes=("PRIVATE CLAIM", "PRIVATE CHILD QUESTION")),
-                      Stream(Text("Candidate ready for inspection."), Finish("stop"))))
+                             body_contains=(("needs_revision" if exhausted else "implemented"),), body_excludes=("PRIVATE CLAIM", "PRIVATE CHILD QUESTION")),
+                      Stream(Text("Implementation finished."), Finish("stop"))))
     return Scenario("workflow_reference_tampering" if tampered else "workflow_reference_exhaustion" if exhausted else "workflow_reference_repair", *steps)
 
 

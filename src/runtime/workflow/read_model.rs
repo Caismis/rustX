@@ -14,7 +14,6 @@ use super::{
     WorkflowLoopExit, WorkflowNodeInstance, WorkflowNodeProgram, WorkflowRunId,
 };
 use crate::runtime::identity::{SubagentId, ToolCallId};
-use crate::runtime::workspace::CandidateReference;
 
 pub const MAX_PROJECTED_RUNS: usize = 8;
 pub const MAX_PROJECTED_INSTANCES: usize = 512;
@@ -54,41 +53,6 @@ pub struct WorkflowRunView {
     pub steps_consumed: usize,
     pub steps_max: usize,
     pub agents_consumed: usize,
-    pub candidate: Option<CandidateReference>,
-    /// Admitted candidate users, including serialized workspace waiters.
-    /// While nonzero no historical check certifies the mutable workspace.
-    pub candidate_users: usize,
-    pub handoff: Option<WorkflowHandoff>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub struct WorkflowHandoff {
-    pub state: String,
-    pub path: String,
-    pub truncated: bool,
-}
-
-impl From<&crate::runtime::workspace::WorkspaceSettlement> for WorkflowHandoff {
-    fn from(value: &crate::runtime::workspace::WorkspaceSettlement) -> Self {
-        use crate::runtime::workspace::WorkspaceSettlementDisposition as D;
-        let state = match value.disposition {
-            D::AgentRetained => "agent_retained",
-            D::Borrowed => "borrowed",
-            D::Shared => "shared",
-            D::Removed => "removed",
-            D::Retained { .. } => "retained",
-            D::PreservedUnresolved { .. } => "preserved_unresolved",
-        };
-        let path = value.snapshot.logical_workspace.to_string_lossy();
-        let truncated = path.len() > 1024;
-        Self {
-            state: state.into(),
-            path: super::bound_workflow_diagnostic(path.into_owned()),
-            truncated,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -109,7 +73,6 @@ pub enum WorkflowWait {
     Tool,
     Agent,
     Capacity,
-    Workspace,
     Questionnaire,
     Approval,
     Review,
@@ -146,7 +109,6 @@ pub struct WorkflowInstanceView {
     pub iteration: Option<u32>,
     pub iterations_max: Option<u32>,
     pub loop_exit: Option<WorkflowLoopExit>,
-    pub candidate: Option<CandidateReference>,
     pub checks_passed: Option<bool>,
     pub review_accepted: Option<bool>,
 }
@@ -166,7 +128,6 @@ impl WorkflowInstanceView {
             iteration: None,
             iterations_max: None,
             loop_exit: None,
-            candidate: None,
             checks_passed: None,
             review_accepted: None,
         }
@@ -463,9 +424,6 @@ mod tests {
             steps_consumed: 0,
             steps_max: 4096,
             agents_consumed: 0,
-            candidate_users: 0,
-            candidate: None,
-            handoff: None,
         }
     }
 

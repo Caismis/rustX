@@ -1236,7 +1236,6 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
         | Method::AgentWait { target, .. }
         | Method::AgentInterrupt { target, .. }
         | Method::AgentTranscript { target, .. }
-        | Method::SubagentDispose { target, .. }
         | Method::CompactContext { target, .. }
         | Method::SessionBoundaries { target, .. }
         | Method::SessionSnapshot { target, .. }
@@ -1369,10 +1368,6 @@ async fn dispatch_runtime(
             }
             result => native_result(result),
         },
-        Method::SubagentDispose {
-            target: _,
-            subagent_id,
-        } => native_result(authority.subagent_workspace_dispose(&subagent_id).await),
         Method::CompactContext {
             target: _,
             request_id,
@@ -1544,15 +1539,6 @@ fn native_result(
             activation_id,
             outcome,
             agent: Box::new(agent),
-        },
-        RuntimeClientResult::SubagentWorkspaceDisposed {
-            subagent_id,
-            workspace,
-            outcome,
-        } => MethodResult::WorkspaceDisposed {
-            subagent_id,
-            workspace,
-            outcome,
         },
         RuntimeClientResult::Snapshot { snapshot, cursor } => MethodResult::Snapshot {
             snapshot: Box::new(snapshot),

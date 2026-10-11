@@ -361,7 +361,6 @@ mod tests {
                         inherit: true,
                         files: Vec::new(),
                     },
-                workspace_policy: crate::runtime::workspace::WorkspacePolicy::SharedWorkspace,
                 extensions,
                 agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),

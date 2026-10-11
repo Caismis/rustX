@@ -792,18 +792,7 @@
               "omitted_instances": 0,
               "steps_consumed": 1,
               "steps_max": 10,
-              "agents_consumed": 0,
-              "candidate": {
-                "run": {
-                  "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
-                  "attempt_id": "attempt-fixture",
-                  "invocation": "9007199254740993"
-                },
-                "version": "9007199254740993",
-                "content": "content-fixture"
-              },
-              "candidate_users": 0,
-              "handoff": null
+              "agents_consumed": 0
             }
           ],
           "omitted_runs": 0

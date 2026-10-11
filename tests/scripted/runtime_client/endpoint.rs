@@ -160,30 +160,6 @@ async fn initialize_alone_establishes_the_attachment() {
     );
 }
 
-/// Retained-workspace disposal is an explicit asynchronous Runtime Client
-/// operation. The endpoint receives only the authoritative subagent identity;
-/// physical paths and refs are not part of the request or presentation layer.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn retained_workspace_disposal_uses_the_typed_client_boundary() {
-    let host = host("conv_d4327a4c-3131-790b-bf58-3841b09ab786", Vec::new()).await;
-    let adapter = FramingAdapter::new(&host);
-    let initialized = adapter.exchange(r#"{"method":"initialize","id":1,"protocol_version":62}"#);
-    assert!(initialized.get("error").is_none());
-
-    let response = adapter
-        .exchange_async(
-            r#"{"method":"subagent_workspace_dispose","id":2,"subagent_id":"conv_d4327a4c-3131-790b-bf58-3841b09ab786-subagent-1"}"#,
-        )
-        .await;
-    assert_eq!(response["id"], 2);
-    assert!(response.get("result").is_none());
-    assert_eq!(response["error"]["type"], "unknown_subagent");
-    assert_eq!(
-        response["error"]["subagent_id"],
-        "conv_d4327a4c-3131-790b-bf58-3841b09ab786-subagent-1"
-    );
-}
-
 /// An unsupported protocol version fails with the correlated typed error
 /// and admits nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

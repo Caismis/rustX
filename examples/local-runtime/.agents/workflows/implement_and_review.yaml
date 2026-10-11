@@ -1,7 +1,6 @@
-description: Implement greeting.py in one retained candidate, execute real checks up to three times, and request
-  human acceptance.
+description: Plan greeting.py, gate implementation on human plan acceptance, then implement and run real checks in
+  the shared Session workspace up to three times.
 timeout_ms: 1800000
-workspace: {require_clean_parent: true}
 block:
   input:
     type: object
@@ -14,7 +13,7 @@ block:
     properties:
       status:
         type: string
-        enum: [accepted, rejected, needs_revision, unanswered]
+        enum: [implemented, rejected, needs_revision, unanswered]
       feedback: {type: string}
     required: [status, feedback]
     additionalProperties: false
@@ -241,7 +240,7 @@ block:
                   source = Path("greeting.py")
                   if source.stat().st_size > 4096:
                       raise ValueError("greeting.py exceeds the 4096-byte source limit")
-                  # Candidate stdout cannot forge the checker's exact output contract.
+                  # Implementation stdout cannot forge the checker's exact output contract.
                   with contextlib.redirect_stdout(sys.stderr):
                       greeting = runpy.run_path(str(source))["greeting"]
                       actual = [greeting("Ada"), greeting("")]
@@ -291,32 +290,13 @@ block:
         fields:
           plan: {type: reference, path: [result, plan]}
           feedback: {type: reference, path: [result, feedback]}
-    review_candidate:
-      type: review
-      subject:
-        type: candidate
-        value: {type: reference, path: [repair]}
-      context:
-      - {type: reference, path: [repair]}
-    candidate_accepted:
-      type: branch
-      condition:
-        type: boolean
-        value: {type: reference, path: [review_candidate, accepted]}
-    accepted:
+    implemented:
       type: return
       output:
         type: object
         fields:
-          status: {type: literal, value: accepted}
-          feedback: {type: reference, path: [review_candidate, feedback]}
-    rejected_candidate:
-      type: return
-      output:
-        type: object
-        fields:
-          status: {type: literal, value: rejected}
-          feedback: {type: reference, path: [review_candidate, feedback]}
+          status: {type: literal, value: implemented}
+          feedback: {type: reference, path: [repair, result, feedback]}
     rejected_plan:
       type: return
       output:
@@ -344,8 +324,5 @@ block:
   - {from: review_plan, to: plan_accepted}
   - {from: plan_accepted, to: repair, port: 'true'}
   - {from: plan_accepted, to: rejected_plan, port: 'false'}
-  - {from: repair, to: review_candidate, port: satisfied}
+  - {from: repair, to: implemented, port: satisfied}
   - {from: repair, to: exhausted, port: exhausted}
-  - {from: review_candidate, to: candidate_accepted}
-  - {from: candidate_accepted, to: accepted, port: 'true'}
-  - {from: candidate_accepted, to: rejected_candidate, port: 'false'}

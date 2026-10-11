@@ -265,7 +265,7 @@ fn cli08_production_static_dispatch_has_zero_prohibited_effects() {
                 args.iter().map(ToString::to_string),
             ))
         });
-        assert_eq!(effects, [0; 12], "{args:?}");
+        assert_eq!(effects, [0; 11], "{args:?}");
     }
     assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
 }

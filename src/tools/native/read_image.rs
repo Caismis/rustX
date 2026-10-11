@@ -42,9 +42,6 @@ pub(super) fn registration() -> NativeToolRegistration {
 }
 struct ReadImage;
 impl ToolExecutor for ReadImage {
-    fn workspace_use(&self) -> crate::tools::executor::WorkspaceUse {
-        crate::tools::executor::WorkspaceUse::ConsumesProvided
-    }
     fn start<'a>(
         &'a self,
         invocation: ToolInvocation,

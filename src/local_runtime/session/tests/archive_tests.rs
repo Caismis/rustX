@@ -565,9 +565,7 @@ fn claim_child(parent: &SqliteConversationStore, child: &ConversationId) {
             &serde_json::from_value(serde_json::json!(format!("sha256:{}", "a".repeat(64))))
                 .unwrap(),
             crate::events::types::SubagentOwnershipKind::Normal,
-            &crate::runtime::workspace::WorkspaceSnapshot::shared(std::path::PathBuf::from(
-                "/authored/workspace",
-            )),
+            &std::path::PathBuf::from("/authored/workspace"),
             Utc::now(),
         ),
     );
@@ -667,48 +665,10 @@ async fn archive_tool_status_diagnostics_are_excluded_but_canonical_tool_history
     let (directory, catalog, _) = open_catalog();
     let (conversation, session, _) = append_history(&catalog, &history);
     let store = store_for(&catalog, &session, &conversation);
-    let mut node = crate::runtime::workflow::test_instance("archive-test", "candidate");
+    let mut node = crate::runtime::workflow::test_instance("archive-test", "implement");
     node.block.run.conversation_id = conversation.clone();
-    let input = crate::runtime::workspace::CandidateReference {
-        run: node.block.run.clone(),
-        version: 1,
-        content: "c".repeat(64),
-    };
-    // Candidate events require an existing durable run-owned workspace fact.
-    let workspace = crate::runtime::workspace::WorkspaceSnapshot {
-        borrowed_from: None,
-        logical_workspace: directory.path().join("workspaces/candidate"),
-        isolation: crate::runtime::workspace::WorkspaceIsolation::GitWorktree(
-            crate::runtime::workspace::GitWorktreeSnapshot {
-                source_repository_root: directory.path().join("project"),
-                repository_relative_workspace: std::path::PathBuf::new(),
-                physical_worktree_root: directory.path().join("workspaces/candidate"),
-                base_commit: "a".repeat(40),
-                branch: "rustx/candidate".into(),
-                parent_had_uncommitted_changes: false,
-            },
-        ),
-    };
-    store
-        .append_event(RuntimeEventEnvelope {
-            schema_version: EVENT_SCHEMA_VERSION,
-            event_id: crate::runtime::workspace::workflow_resource_event_id(
-                &node.block.run,
-                "owned",
-            ),
-            sequence: 0,
-            conversation_id: conversation.clone(),
-            attempt_id: None,
-            turn_id: None,
-            timestamp: Utc::now(),
-            event: RuntimeEvent::WorkflowWorkspaceOwned {
-                run_id: node.block.run.clone(),
-                workspace,
-            },
-        })
-        .unwrap();
     let mut markers = vec!["ARCHIVE_WORKFLOW_OUTER_DIAGNOSTIC".to_owned()];
-    for family in ["NATIVE", "CANDIDATE", "WORKFLOW_FAILED", "TOOL_COMPLETED"] {
+    for family in ["NATIVE", "WORKFLOW_FAILED", "TOOL_COMPLETED"] {
         for kind in ["FAILED", "DENIED", "UNKNOWN"] {
             let marker = format!("ARCHIVE_{family}_{kind}_DIAGNOSTIC");
             let status = match kind {
@@ -731,12 +691,6 @@ async fn archive_tool_status_diagnostics_are_excluded_but_canonical_tool_history
                     },
                     tool_id: ToolId::new("tool-test"),
                     fact: NativeInvocationFact::Completed { status },
-                },
-                "CANDIDATE" => RuntimeEvent::WorkflowCandidateInvocation {
-                    node: node.clone(),
-                    input: input.clone(),
-                    result: status,
-                    candidate_unchanged: true,
                 },
                 "WORKFLOW_FAILED" => RuntimeEvent::WorkflowFailed {
                     workflow_id: node.block.definition.workflow_id.clone(),
@@ -799,12 +753,6 @@ async fn archive_tool_status_diagnostics_are_excluded_but_canonical_tool_history
         let event = &envelope["event"];
         let status = match event["type"].as_str().unwrap() {
             "native_tool_invocation" => &event["fact"]["status"],
-            "workflow_candidate_invocation" => {
-                assert_eq!(event["node"], serde_json::json!(node));
-                assert_eq!(event["input"], serde_json::json!(input));
-                assert_eq!(event["candidate_unchanged"], true);
-                &event["result"]
-            }
             "workflow_failed" => {
                 assert_eq!(event["run_id"], serde_json::json!(node.block.run));
                 assert!(event.get("diagnostic").is_none());
@@ -825,7 +773,7 @@ async fn archive_tool_status_diagnostics_are_excluded_but_canonical_tool_history
         statuses.push(status["type"].as_str().unwrap().to_owned());
     }
     for kind in ["failed", "denied", "outcome_unknown"] {
-        assert_eq!(statuses.iter().filter(|s| s.as_str() == kind).count(), 4);
+        assert_eq!(statuses.iter().filter(|s| s.as_str() == kind).count(), 3);
     }
 }
 

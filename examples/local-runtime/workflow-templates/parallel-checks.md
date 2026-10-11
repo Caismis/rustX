@@ -26,4 +26,4 @@ The booleans shown are illustrative; static explanation does not predict them.
 These are model assessments, not executable test evidence. The configured
 60000 ms Workflow timeout includes waits; two Agent runs are a conservative
 bound. `maxConcurrent` controls native child capacity; it does not change the
-Workflow Tool's Sequential outer sibling policy. No Git candidate is requested.
+Workflow Tool's Sequential outer sibling policy. No Git repository is required.

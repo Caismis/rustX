@@ -29,7 +29,9 @@ use crate::runtime::local_storage::ProductRoot;
 const LEASE: &str = "physical-owner";
 const RECEIPT: &str = "physical-settlement.json";
 const EVIDENCE: &str = "physical-settlement";
-const CONTINUATIONS: &str = "continuations";
+/// A retired parent-command continuation namespace. It is never produced;
+/// an allocation that still carries one is refused rather than proven.
+const RETIRED_CONTINUATIONS: &str = "continuations";
 const ALLOCATION_OWNER: &str = ".allocation-owner";
 const PRIVATE: &str = ".pending-";
 const ABANDONED: &str = ".abandoned-";
@@ -226,50 +228,6 @@ impl ParentPhysicalLease {
         self.0.lock.try_clone()
     }
 
-    /// Parent-owned workspace commands have independent settlement owners.
-    /// A child receipt cannot acknowledge work that starts after child drain.
-    pub(crate) fn reserve_continuation(&self) -> std::io::Result<ParentPhysicalContinuation> {
-        let directory = self.0.path.join(CONTINUATIONS);
-        std::fs::create_dir_all(&directory)?;
-        File::open(&self.0.path)?.sync_all()?;
-        let identity = uuid::Uuid::now_v7().to_string();
-        let pending = directory.join(format!(".pending-{identity}"));
-        let published = directory.join(&identity);
-        std::fs::create_dir(&pending)?;
-        let lock = OpenOptions::new()
-            .create_new(true)
-            .read(true)
-            .write(true)
-            .open(pending.join(LEASE))?;
-        lock.try_lock()?;
-        let mut lease = PhysicalLease {
-            lock,
-            path: pending.clone(),
-            activation: self.0.activation.clone(),
-            conversation: self.0.conversation.clone(),
-        };
-        lease.publish(Phase::Unstarted)?;
-        // Only a returned, published authority can be passed to a supervisor.
-        // An interrupted .pending allocation durably denotes no spawn permit.
-        std::fs::rename(&pending, &published)?;
-        File::open(&directory)?.sync_all()?;
-        lease.path = published;
-        Ok(ParentPhysicalContinuation(lease))
-    }
-
-    /// The parent lock excludes new allocation while the caller proves all
-    /// helpers started during pre-admission verification. Retain the returned
-    /// locks through the durable admission or rollback decision.
-    pub(crate) fn prove_continuations(&self) -> std::io::Result<Option<RecoveredPhysicalProof>> {
-        prove_continuations_at(
-            &self.0.path,
-            &self.0.conversation,
-            &self.0.activation,
-            ProofLock::AfterSupervision,
-            RecoveredPhysicalProof { locks: Vec::new() },
-        )
-    }
-
     #[cfg(test)]
     pub(crate) fn duplicate_lock_for_test(&self) -> std::io::Result<File> {
         self.0.lock.try_clone()
@@ -277,72 +235,6 @@ impl ParentPhysicalLease {
 
     /// Only the staging/driver owner after its explicit full resource drain
     /// may assert this. An error or absent child alone never calls it.
-    pub(crate) fn publish_quiescent(&self) -> std::io::Result<()> {
-        self.0.publish(Phase::Quiescent)
-    }
-}
-
-/// A parent-side command is a separate physical lifetime from the child.
-/// The trusted command supervisor inherits this authority before it can spawn.
-#[derive(Debug)]
-pub(crate) struct ParentPhysicalContinuation(PhysicalLease);
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct PhysicalContinuationSpec {
-    pub(crate) path: PathBuf,
-    pub(crate) activation: SubagentId,
-    pub(crate) conversation: ConversationId,
-}
-
-impl ParentPhysicalContinuation {
-    /// The parent may consume the supervisor's explicit complete containment
-    /// result when emergency settlement proved the entire owned group empty.
-    pub(crate) fn publish_quiescent(&self) -> std::io::Result<()> {
-        self.0.publish(Phase::Quiescent)
-    }
-
-    pub(crate) fn spec(&self) -> PhysicalContinuationSpec {
-        PhysicalContinuationSpec {
-            path: self.0.path.clone(),
-            activation: self.0.activation.clone(),
-            conversation: self.0.conversation.clone(),
-        }
-    }
-
-    pub(crate) fn inherited_file(&self) -> std::io::Result<File> {
-        self.0.lock.try_clone()
-    }
-}
-
-/// Lives only in the trusted outer supervisor, outside its killable group.
-/// An abnormal supervisor exit leaves Running, never fabricated quiescence.
-pub(crate) struct ChildPhysicalContinuation(PhysicalLease);
-
-impl ChildPhysicalContinuation {
-    pub(crate) fn acquire(spec: &PhysicalContinuationSpec) -> std::io::Result<Self> {
-        let inherited = File::from(std::io::stderr().as_fd().try_clone_to_owned()?);
-        let expected = std::fs::metadata(spec.path.join(LEASE))?;
-        let actual = inherited.metadata()?;
-        if expected.dev() != actual.dev() || expected.ino() != actual.ino() {
-            return Err(std::io::Error::other(
-                "continuation authority descriptor mismatch",
-            ));
-        }
-        let diagnostics = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(spec.path.join("diagnostics.log"))?;
-        nix::unistd::dup2_stderr(&diagnostics).map_err(std::io::Error::other)?;
-        let child = ChildPhysicalLease::acquire_inherited(
-            spec.path.clone(),
-            inherited,
-            spec.activation.clone(),
-            spec.conversation.clone(),
-        )?;
-        Ok(Self(child.0))
-    }
-
     pub(crate) fn publish_quiescent(&self) -> std::io::Result<()> {
         self.0.publish(Phase::Quiescent)
     }
@@ -451,7 +343,12 @@ impl ChildPhysicalLease {
 /// Retains the exclusive inode until the durable fact consumes the proof.
 #[derive(Debug)]
 pub(crate) struct RecoveredPhysicalProof {
-    locks: Vec<File>,
+    /// Retained exclusively for its kernel lock lifetime.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "held only for its kernel lock lifetime")
+    )]
+    lock: File,
 }
 
 #[cfg(test)]
@@ -459,11 +356,7 @@ impl RecoveredPhysicalProof {
     /// Retain only this proof's open-file descriptions after its original owner drops.
     pub(crate) fn duplicate_for_test(&self) -> std::io::Result<Self> {
         Ok(Self {
-            locks: self
-                .locks
-                .iter()
-                .map(File::try_clone)
-                .collect::<std::io::Result<Vec<_>>>()?,
+            lock: self.lock.try_clone()?,
         })
     }
 }
@@ -480,7 +373,6 @@ pub(crate) fn prove(
 #[derive(Clone, Copy)]
 enum ProofLock {
     Try,
-    AfterSupervision,
     #[cfg(test)]
     AwaitRelease,
 }
@@ -524,7 +416,7 @@ fn prove_with_lock(
     match locking {
         #[cfg(test)]
         ProofLock::AwaitRelease => allocation.lock()?,
-        ProofLock::Try | ProofLock::AfterSupervision => match allocation.try_lock() {
+        ProofLock::Try => match allocation.try_lock() {
             Ok(()) => {}
             Err(TryLockError::WouldBlock) => return Ok(None),
             Err(TryLockError::Error(error)) => return Err(error),
@@ -543,49 +435,19 @@ fn prove_with_lock(
         // Repeat the barrier after uncertain acknowledgement of an earlier seal.
         File::open(parent)?.sync_all()?;
         return Ok(Some(RecoveredPhysicalProof {
-            locks: vec![allocation],
+            lock: allocation,
         }));
     }
     // Published names always require the exact lease and receipt. Private
     // evidence cannot excuse missing/corrupt evidence in this namespace.
-    let Some(proof) = prove_at(&path, conversation, activation, locking)? else {
-        return Ok(None);
-    };
-    prove_continuations_at(&path, conversation, activation, locking, proof)
-}
-
-fn prove_continuations_at(
-    path: &Path,
-    conversation: &ConversationId,
-    activation: &SubagentId,
-    locking: ProofLock,
-    mut proof: RecoveredPhysicalProof,
-) -> std::io::Result<Option<RecoveredPhysicalProof>> {
-    // Holding the parent authority excludes any further continuation allocation
-    // or spawn. Each published helper has its own explicit durable lifetime;
-    // the already-quiescent child does not prove these later commands settled.
-    let entries = match std::fs::read_dir(path.join(CONTINUATIONS)) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Some(proof)),
-        Err(error) => return Err(error),
-    };
-    for entry in entries {
-        let entry = entry?;
-        if entry.file_name().to_string_lossy().starts_with(".pending-") {
-            // reserve_continuation never exposes an unpublished spawn permit.
-            continue;
-        }
-        if !entry.file_type()?.is_dir() {
-            return Err(std::io::Error::other(
-                "invalid physical continuation authority",
-            ));
-        }
-        let Some(continuation) = prove_at(&entry.path(), conversation, activation, locking)? else {
-            return Ok(None);
-        };
-        proof.locks.extend(continuation.locks);
+    if path.join(RETIRED_CONTINUATIONS).try_exists()? {
+        // Parent-owned helper lifetimes belonged to the retired Git workspace
+        // manager. Their absence of a current owner is never proof.
+        return Err(std::io::Error::other(
+            "physical allocation carries retired parent continuation authority",
+        ));
     }
-    Ok(Some(proof))
+    prove_at(&path, conversation, activation, locking)
 }
 
 fn prove_at(
@@ -603,17 +465,8 @@ fn prove_at(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
-    // After the caller joined native supervision, a Quiescent receipt proves
-    // the helper finished. A concurrent fork can still temporarily retain a
-    // CLOEXEC duplicate until exec. Await that exact descriptor release, then
-    // re-read and validate under the lock; no PID/elapsed-time inference is used.
     let await_release = match locking {
         ProofLock::Try => false,
-        ProofLock::AfterSupervision => read_receipt(&path.join(RECEIPT))?.is_some_and(|receipt| {
-            receipt.activation == *activation
-                && receipt.conversation == *conversation
-                && receipt.phase == Phase::Quiescent
-        }),
         #[cfg(test)]
         ProofLock::AwaitRelease => true,
     };
@@ -644,7 +497,7 @@ fn prove_at(
         }
         Phase::Quiescent => {}
     }
-    Ok(Some(RecoveredPhysicalProof { locks: vec![file] }))
+    Ok(Some(RecoveredPhysicalProof { lock: file }))
 }
 
 fn evidence_path(
@@ -859,73 +712,6 @@ mod inheritance_tests {
                     .is_err()
             );
         }
-    }
-
-    #[test]
-    fn child_quiescence_does_not_acknowledge_a_parent_continuation() {
-        let directory = tempfile::tempdir().unwrap();
-        let product = ProductRoot::create(directory.path()).unwrap();
-        let (session, conversation, activation) = identities();
-        let parent =
-            ParentPhysicalLease::reserve(&product, &session, &conversation, &activation).unwrap();
-        parent.publish_quiescent().unwrap();
-        let continuation = parent.reserve_continuation().unwrap();
-        let spec = continuation.spec();
-        let child = ChildPhysicalLease::acquire_inherited(
-            spec.path,
-            continuation.inherited_file().unwrap(),
-            activation.clone(),
-            conversation.clone(),
-        )
-        .unwrap();
-        drop(continuation);
-        drop(parent);
-        assert!(
-            prove(&product, &session, &conversation, &activation)
-                .unwrap()
-                .is_none()
-        );
-        child.publish_quiescent().unwrap();
-        // Even a durable helper receipt is not consumable until its inherited
-        // authority has closed: no next resource can race the snapshot.
-        assert!(
-            prove(&product, &session, &conversation, &activation)
-                .unwrap()
-                .is_none()
-        );
-        drop(child);
-        assert!(
-            prove_after_release(&product, &session, &conversation, &activation)
-                .unwrap()
-                .is_some()
-        );
-    }
-
-    #[test]
-    fn abandoned_running_continuation_cannot_borrow_child_quiescence() {
-        let directory = tempfile::tempdir().unwrap();
-        let product = ProductRoot::create(directory.path()).unwrap();
-        let (session, conversation, activation) = identities();
-        let parent =
-            ParentPhysicalLease::reserve(&product, &session, &conversation, &activation).unwrap();
-        parent.publish_quiescent().unwrap();
-        let continuation = parent.reserve_continuation().unwrap();
-        let spec = continuation.spec();
-        let child = ChildPhysicalLease::acquire_inherited(
-            spec.path,
-            continuation.inherited_file().unwrap(),
-            activation.clone(),
-            conversation.clone(),
-        )
-        .unwrap();
-        drop(child);
-        drop(continuation);
-        drop(parent);
-        assert!(
-            prove(&product, &session, &conversation, &activation)
-                .unwrap()
-                .is_none()
-        );
     }
 
     #[tokio::test]

@@ -129,7 +129,6 @@ use crate::runtime::subagent::{
     ResolvedSubagentTool, SubagentResolver, child_conversation_store_path,
 };
 use crate::runtime::workflow::{WorkflowCatalog, WorkflowOutputLatch, WorkflowRuntime};
-use crate::runtime::workspace::WorkspaceManager;
 use crate::runtime_client::endpoint::RuntimeClientEndpoint;
 use crate::runtime_client::host::{
     HostConstructionError, RuntimeClientHost, RuntimeClientHostConfig,
@@ -1279,10 +1278,9 @@ impl LocalConversationCore {
                             &conversation_access,
                         ),
                     },
-                    workspace: WorkspaceManager::for_local_conversation(
-                        tool_runtime.workspace().root(),
-                        conversation_access,
-                    ),
+                    // The Session's authorized execution binding. Children
+                    // share it; no Git or isolated resource is derived from it.
+                    workspace: tool_runtime.workspace().root().to_path_buf(),
                     // Generation-owned capacity belongs to the live registry;
                     // safe-boundary publication replaces capacity when no child owns it.
                     max_active: runtime_config.subagents.max_concurrent,
@@ -1590,7 +1588,7 @@ impl LocalConversationCore {
                     .map_err(CurrentRuntimeConfigError::Environment)
                     .map_err(LocalRuntimeError::RuntimeConfig)?;
             let mut runtime_config = crate::tools::runtime::ConversationRuntimeConfig::new(
-                &spec.workspace_snapshot.logical_workspace,
+                &spec.workspace,
                 child_conversation_store_path(
                     lifecycle.root(),
                     &spec.session_id,
@@ -2397,7 +2395,6 @@ chat_reasoning_replay = "omit"
                 definition_digest: serde_json::from_value(serde_json::json!("sha256:frozen"))
                     .expect("digest"),
                 execution_deadline: None,
-                workspace_policy: crate::runtime::workspace::WorkspacePolicy::SharedWorkspace,
                 instructions: "frozen child instructions".to_owned(),
                 model: crate::model::frozen::test_frozen_model_spec(
                     serde_json::from_value(serde_json::json!("local/model-a")).expect("model ref"),
@@ -2417,9 +2414,7 @@ chat_reasoning_replay = "omit"
                 keep_recent_tokens: 0,
                 summary_output_cap: None,
             },
-            workspace_snapshot: crate::runtime::workspace::WorkspaceSnapshot::shared(
-                root.join("workspace"),
-            ),
+            workspace: root.join("workspace"),
             incarnation: "incarnation-test".to_owned(),
             terminal: crate::runtime::subagent::ipc::ChildTerminalMode::Normal,
         }
@@ -3104,20 +3099,16 @@ enabled = true
         );
     }
 
-    /// Issue #146: changing the physical project root does not change the
-    /// project-instruction authority. The unrelated AGENTS.md is deliberately
-    /// above the worktree-shaped path; the child still consumes only the
-    /// parent-frozen chain carried in its typed specification.
-    ///
-    /// The isolated policy here is an explicit synthetic fixture (no
-    /// acquisition runs): it models a permissive capture whose parent was
-    /// dirty (`parent_had_uncommitted_changes: true`), matching the
-    /// Issue #188 explicit opt-out rather than the strict default.
+    /// Issue #146: the execution binding is not project-instruction
+    /// authority. The unrelated AGENTS.md is deliberately above a nested
+    /// binding (for example an externally created Git worktree); the child
+    /// still consumes only the parent-frozen chain carried in its typed
+    /// specification.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_worktree_child_never_discovers_ancestor_project_instructions() {
+    async fn a_nested_binding_child_never_discovers_ancestor_project_instructions() {
         let dir = lab();
-        let worktree = dir.path().join("runtime/worktrees/child");
-        std::fs::create_dir_all(&worktree).expect("worktree-shaped workspace");
+        let binding = dir.path().join("checkouts/feature");
+        std::fs::create_dir_all(&binding).expect("nested workspace binding");
         std::fs::write(
             dir.path().join("AGENTS.md"),
             "unrelated ancestor instructions\n",
@@ -3132,24 +3123,7 @@ enabled = true
             }],
             Vec::new(),
         );
-        child_spec.resolved.workspace_policy =
-            crate::runtime::workspace::WorkspacePolicy::GitWorktree {
-                require_clean_parent: false,
-            };
-        child_spec.workspace_snapshot = crate::runtime::workspace::WorkspaceSnapshot {
-            borrowed_from: None,
-            logical_workspace: worktree.clone(),
-            isolation: crate::runtime::workspace::WorkspaceIsolation::GitWorktree(
-                crate::runtime::workspace::GitWorktreeSnapshot {
-                    source_repository_root: dir.path().to_path_buf(),
-                    repository_relative_workspace: std::path::PathBuf::new(),
-                    physical_worktree_root: worktree,
-                    base_commit: "1111111111111111111111111111111111111111".to_owned(),
-                    branch: "rustx/subagent/frozen".to_owned(),
-                    parent_had_uncommitted_changes: true,
-                },
-            ),
-        };
+        child_spec.workspace = binding;
 
         let core = LocalConversationCore::compose_subagent_child(
             &child_spec,
@@ -3157,7 +3131,7 @@ enabled = true
             &ChildPreparation::detached(),
         )
         .await
-        .expect("the worktree child composes");
+        .expect("the nested-binding child composes");
         let resources = core.runtime().runtime_resources();
         assert_eq!(
             resources.project_context_files(),
@@ -3165,7 +3139,7 @@ enabled = true
                 path: dir.path().join("frozen/AGENTS.md"),
                 content: "frozen parent chain".to_owned(),
             }],
-            "the worktree path is not project-instruction authority"
+            "the execution binding is not project-instruction authority"
         );
         assert_eq!(
             resources.project_instructions(),
@@ -4475,7 +4449,6 @@ mod source_demand_tests {
                             inherit: false,
                             files: Vec::new(),
                         },
-                    workspace_policy: crate::runtime::workspace::WorkspacePolicy::default(),
                     extensions: crate::extensions::NativeAgentExtensions::none(),
                     agents: std::collections::BTreeSet::default(),
                     workflows: std::collections::BTreeSet::default(),

@@ -4,7 +4,3 @@ instructions = "Plan the fixed greeting change from explicit inputs. Do not edit
 [tools]
 builtin = []
 
-
-[worktree]
-enabled = true
-require_clean_parent = true

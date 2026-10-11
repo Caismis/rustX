@@ -4,6 +4,3 @@ instructions = "Use only the supplied inputs and fixed task. Return the declared
 [tools]
 builtin = []
 
-
-[worktree]
-enabled = false

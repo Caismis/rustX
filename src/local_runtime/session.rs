@@ -202,7 +202,7 @@ pub(crate) mod create_profile {
 /// The persisted native session-catalog schema.
 ///
 /// Version 5 reserves node allocations exclusively for Conversation-private
-/// state; retained workspaces live in the separate product workspace domain.
+/// state.
 /// Version 4 allocations cannot prove this boundary and are refused.
 ///
 /// The version gates *meaning*, not layout. Version 4 is the first catalog

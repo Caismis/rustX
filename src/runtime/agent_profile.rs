@@ -9,7 +9,6 @@ use crate::model::session::SessionModelConfig;
 use crate::runtime::resources::ProjectContextFile;
 use crate::runtime::subagent::{SubagentExecutionDeadline, SubagentName};
 use crate::runtime::workflow::WorkflowId;
-use crate::runtime::workspace::WorkspacePolicy;
 use crate::skills::SkillSnapshot;
 use crate::tools::types::{ToolDefinition, ToolOrigin};
 
@@ -112,7 +111,6 @@ pub struct AgentProfile {
     pub agents: BTreeSet<SubagentName>,
     pub workflows: BTreeSet<WorkflowId>,
     pub project_instructions: AgentProjectInstructionPolicy,
-    pub workspace_policy: WorkspacePolicy,
 }
 impl AgentProfile {
     /// Lower strict authoring with project files already captured by their resource owner.
@@ -150,7 +148,6 @@ impl AgentProfile {
                 inherit: document.agents_md.inherit,
                 files,
             },
-            workspace_policy: document.worktree.to_policy(),
         })
     }
 }
@@ -243,7 +240,7 @@ impl AgentProfileDiagnostic {
     }
 }
 
-/// Finite semantic decision. Source bindings, worktree acquisition and frozen
+/// Finite semantic decision. Source bindings and frozen
 /// child model invocation remain owned by `ResolvedSubagentSpec`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedAgentProfile {
@@ -259,7 +256,6 @@ pub struct ResolvedAgentProfile {
     pub agents: BTreeSet<SubagentName>,
     pub workflows: BTreeSet<WorkflowId>,
     pub project_instructions: AgentProjectInstructionPolicy,
-    pub workspace_policy: WorkspacePolicy,
     pub diagnostics: Vec<AgentProfileDiagnostic>,
 }
 
@@ -426,7 +422,6 @@ pub fn resolve_agent_profile(
         agents,
         workflows,
         project_instructions: profile.project_instructions.clone(),
-        workspace_policy: profile.workspace_policy,
         diagnostics,
     }
 }
@@ -716,7 +711,7 @@ mod composition_tests {
             ))
             .expect_err("an authored Agent control is invalid");
             assert!(
-                error.to_string().contains("composed automatically"),
+                error.contains("composed automatically"),
                 "{control}: {error}"
             );
             // The shared profile boundary refuses it for either kind.

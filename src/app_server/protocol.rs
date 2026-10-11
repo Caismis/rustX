@@ -242,11 +242,6 @@ pub enum Method {
         before: Option<crate::runtime_client::snapshot::RuntimeClientTranscriptCursor>,
         limit: usize,
     },
-    #[serde(rename = "subagent/disposeWorkspace")]
-    SubagentDispose {
-        target: AttachmentTarget,
-        subagent_id: crate::runtime::identity::SubagentId,
-    },
     #[serde(rename = "initialize")]
     Initialize(InitializeParams),
     #[serde(rename = "server/info")]
@@ -663,11 +658,6 @@ pub enum MethodResult {
         activation_id: Option<crate::runtime::identity::SubagentId>,
         outcome: Option<crate::runtime::subagent::SubagentState>,
         agent: Box<crate::runtime_client::snapshot::RuntimeClientAgent>,
-    },
-    WorkspaceDisposed {
-        subagent_id: crate::runtime::identity::SubagentId,
-        workspace: crate::runtime_client::snapshot::RuntimeClientAgentWorkspace,
-        outcome: crate::runtime_client::types::RuntimeClientAgentWorkspaceDisposalOutcome,
     },
     Initialized {
         /// Opaque process-owner identity, stable across transport reconnects. Not permission.

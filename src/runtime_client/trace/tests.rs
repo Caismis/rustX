@@ -1911,9 +1911,6 @@ fn older_records_are_repaired_and_settle_by_identity() {
         steps_consumed: 0,
         steps_max: 10,
         agents_consumed: 0,
-        candidate: None,
-        candidate_users: 0,
-        handoff: None,
     });
     let projection = TraceProjection::new(&store).unwrap();
     snapshot.trace = projection.page(None, 32).unwrap();
@@ -3082,11 +3079,7 @@ fn tool_owned_domains_carry_their_exact_originating_tool_call() {
             admitted_authority: None,
             parent_agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
             ownership: crate::events::types::SubagentOwnershipKind::Normal,
-            workspace: crate::runtime::workspace::WorkspaceSnapshot {
-                borrowed_from: None,
-                logical_workspace: std::path::PathBuf::from("/workspace"),
-                isolation: crate::runtime::workspace::WorkspaceIsolation::Shared,
-            },
+            workspace: std::path::PathBuf::from("/workspace"),
         },
         3,
     );

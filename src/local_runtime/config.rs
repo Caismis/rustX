@@ -22,7 +22,6 @@ use crate::runtime::ApprovalMode;
 use crate::runtime::identity::{AgentId, McpServerId};
 use crate::runtime::subagent::{SubagentExecutionDeadline, SubagentName};
 use crate::runtime::workflow::WorkflowId;
-use crate::runtime::workspace::WorkspacePolicy;
 use crate::tools::environment::{ToolEnvironment, ToolEnvironmentError};
 use crate::tools::mcp::{McpServerBinding, McpServerBindings, McpTransportConfig};
 use crate::tools::native::NativeToolPolicies;
@@ -120,7 +119,7 @@ pub const MAX_MAX_CONCURRENT_SUBAGENTS: usize = 64;
 /// Strict Agent Profile authoring shared by root and named Agents.
 ///
 /// Complete selected intent resolves against admitted resources. Execution
-/// scope controls child lifecycle/worktree applicability. Dynamic child
+/// scope controls child lifecycle applicability. Dynamic child
 /// invocations may replace only Tools, Skills and Extensions within their
 /// frozen delegation ceiling; the other dimensions remain authored defaults.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -160,9 +159,6 @@ pub struct AgentProfileDocument {
     /// The project-instruction policy of this agent.
     #[serde(default)]
     pub agents_md: AgentProjectInstructionsDocument,
-    /// The bounded project-workspace policy of this agent.
-    #[serde(default)]
-    pub worktree: AgentWorktreeDocument,
     /// Closed native Extension composition. Omission selects none. Root
     /// product defaults are an explicit lower-priority authoring layer,
     /// independent of this complete document's semantics.
@@ -205,62 +201,6 @@ impl Default for AgentProjectInstructionsDocument {
         Self {
             inherit: true,
             files: Vec::new(),
-        }
-    }
-}
-
-/// The resource representation of a named subagent's optional Git worktree
-/// isolation. An omitted or disabled value is the existing shared-workspace
-/// behavior; there is no model-facing per-call override.
-///
-/// Issue #188: when enabled, isolation runs the child from the committed
-/// parent `HEAD` snapshot. `require_clean_parent` defaults to `true`
-/// (strict): the parent source workspace must be clean, otherwise the child
-/// is rejected rather than silently dropping parent-local changes. Only an
-/// explicit `"require_clean_parent": false` permits a dirty parent while the
-/// child still receives exactly the committed snapshot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields, default)]
-#[derive(schemars::JsonSchema)]
-pub struct AgentWorktreeDocument {
-    /// Whether this named definition uses an isolated Git worktree.
-    pub enabled: bool,
-    /// Whether acquisition rejects a dirty parent workspace/index.
-    ///
-    /// This is the one authoritative strictness switch, normalized at the
-    /// configuration boundary: it defaults to `true` whenever isolation is
-    /// enabled, and an explicit `false` is the intentional opt-out that runs
-    /// from the captured committed `HEAD` while excluding dirty parent bytes.
-    pub require_clean_parent: bool,
-}
-
-impl Default for AgentWorktreeDocument {
-    /// The derived default kept both booleans `false`, which made an omitted
-    /// `"require_clean_parent"` silently mean “allow a dirty parent”. The two
-    /// booleans now have independent defaults (Issue #188): isolation stays
-    /// disabled, while the clean-parent requirement is strict whenever
-    /// isolation is enabled.
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            require_clean_parent: true,
-        }
-    }
-}
-
-impl AgentWorktreeDocument {
-    /// Resolves the configuration document into the bounded runtime policy.
-    ///
-    /// The resolved policy is the single normalized value the runtime
-    /// consumes; no runtime call site re-interprets an omitted field.
-    #[must_use]
-    pub const fn to_policy(self) -> WorkspacePolicy {
-        if self.enabled {
-            WorkspacePolicy::GitWorktree {
-                require_clean_parent: self.require_clean_parent,
-            }
-        } else {
-            WorkspacePolicy::SharedWorkspace
         }
     }
 }
@@ -466,10 +406,9 @@ impl CurrentRuntimeConfig {
             Vec::new(),
         )
         .map_err(|detail| CurrentRuntimeConfigError::Invalid { detail })?;
-        if self.agent.worktree.enabled || self.agent.timeout_ms.is_some() {
+        if self.agent.timeout_ms.is_some() {
             return Err(CurrentRuntimeConfigError::Invalid {
-                detail: "root scope cannot acquire a child worktree or child lifecycle deadline"
-                    .into(),
+                detail: "root scope cannot declare a child lifecycle deadline".into(),
             });
         }
         self.agent
@@ -1319,62 +1258,41 @@ model = "p/m"
         );
     }
 
-    /// Issue #188: an enabled isolated worktree is strict by default. An
-    /// omitted `"require_clean_parent"` resolves to `true`, exactly like an
-    /// explicit `true`; only an explicit `false` retains the committed-
-    /// snapshot permissive path, and disabled/omitted isolation keeps the
-    /// shared-workspace policy unchanged. The normalization lives at this
-    /// configuration/domain boundary: `enabled` stays `false` by default
-    /// while `require_clean_parent` becomes `true` by default.
+    /// Issue #462 B1/D02: Agent Git Worktree authoring is retired. Strict
+    /// parsing refuses the old Profile table and its nested fields for Root
+    /// and named Agents; no ignored or default-disabled legacy mode remains.
     #[test]
-    fn named_subagent_worktree_policy_is_bounded_and_definition_scoped() {
-        use crate::runtime::workspace::WorkspacePolicy as Policy;
-
-        fn policy(worktree: &str) -> Policy {
+    fn retired_agent_worktree_authoring_is_refused() {
+        for worktree in [
+            r#"{"enabled": true}"#,
+            r#"{"enabled": false}"#,
+            r#"{"require_clean_parent": true}"#,
+            "{}",
+        ] {
             let mut document =
                 serde_json::json!({"description":"worker", "instructions":"Worker instructions"});
-            if !worktree.is_empty() {
-                document["worktree"] = serde_json::from_str(worktree).unwrap();
-            }
-            crate::local_runtime::agent_resources::parse(&toml::to_string(&document).unwrap())
-                .expect("valid Agent")
-                .worktree
-                .to_policy()
+            document["worktree"] = serde_json::from_str(worktree).unwrap();
+            let error =
+                crate::local_runtime::agent_resources::parse(&toml::to_string(&document).unwrap())
+                    .expect_err("a named Agent cannot author worktree");
+            assert!(error.contains("worktree"), "{error}");
+            let root = MINIMAL.replace(
+                r#"agent_id = "agent-a""#,
+                &format!(
+                    "agent_id = \"agent-a\"\n[agent.worktree]\n{}",
+                    serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(worktree)
+                        .unwrap()
+                        .iter()
+                        .map(|(key, value)| format!("{key} = {value}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                ),
+            );
+            assert!(
+                CurrentRuntimeConfig::from_toml_slice(root.as_bytes()).is_err(),
+                "{root}"
+            );
         }
-
-        // `enabled: true` with an omitted `require_clean_parent` resolves to
-        // the strict clean-parent policy.
-        assert_eq!(
-            policy(r#"{"enabled": true}"#),
-            Policy::GitWorktree {
-                require_clean_parent: true,
-            }
-        );
-        // An explicit `require_clean_parent: true` is the same strict policy.
-        assert_eq!(
-            policy(r#"{"enabled": true, "require_clean_parent": true}"#),
-            Policy::GitWorktree {
-                require_clean_parent: true,
-            }
-        );
-        // An explicit `require_clean_parent: false` is the committed-snapshot
-        // opt-out.
-        assert_eq!(
-            policy(r#"{"enabled": true, "require_clean_parent": false}"#),
-            Policy::GitWorktree {
-                require_clean_parent: false,
-            }
-        );
-        // Disabled or omitted worktree isolation keeps the shared-workspace
-        // policy unchanged.
-        assert_eq!(policy(""), Policy::SharedWorkspace);
-        assert_eq!(policy(r#"{"enabled": false}"#), Policy::SharedWorkspace);
-        // The two document booleans default independently: `enabled` stays
-        // false while `require_clean_parent` is true.
-        let default_document = super::AgentWorktreeDocument::default();
-        assert!(!default_document.enabled);
-        assert!(default_document.require_clean_parent);
-        assert_eq!(default_document.to_policy(), Policy::SharedWorkspace);
     }
 
     /// The one shared timeout policy is current runtime state and accepts

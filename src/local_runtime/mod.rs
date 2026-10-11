@@ -64,8 +64,8 @@ pub use composition::{
     LocalRuntimeDependencies, LocalRuntimeError, StartupSession,
 };
 pub use config::{
-    AgentWorktreeDocument, CURRENT_RUNTIME_SCHEMA_VERSION, CurrentRuntimeConfig,
-    CurrentRuntimeConfigError, McpServerDocument, McpTransportType, ModelTimeoutPolicyDocument,
+    CURRENT_RUNTIME_SCHEMA_VERSION, CurrentRuntimeConfig, CurrentRuntimeConfigError,
+    McpServerDocument, McpTransportType, ModelTimeoutPolicyDocument,
 };
 pub use launch::{HostEnvironment, LaunchRequest, resolve};
 pub use process::run_process;

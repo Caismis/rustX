@@ -53,7 +53,6 @@ use crate::runtime::identity::{AgentId, ConversationId, ProcessUnitId, SubagentI
 use crate::runtime::types::{ApprovalMode, CancellationReason};
 
 use super::resolver::ResolvedSubagentSpec;
-use crate::runtime::workspace::WorkspaceSnapshot;
 
 /// The only subagent control protocol version this build speaks.
 ///
@@ -105,7 +104,11 @@ use crate::runtime::workspace::WorkspaceSnapshot;
 /// the child clones it before composition and restores stderr to diagnostics.
 /// Version 30 freezes the selected general Model Profile, replacing the
 /// reasoning profile, in the child model specification (#456).
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 30;
+/// Version 31 (#462) replaces the workspace snapshot and Git isolation facts
+/// with the invoking Session's frozen execution binding, and removes the
+/// workspace policy from the frozen resolved specification. A version 30
+/// peer is refused at Hello, before composition.
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 31;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -201,11 +204,10 @@ pub(crate) struct SubagentChildSpec {
     pub tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy,
     /// The session context policy of the child.
     pub context: SessionContextPolicy,
-    /// The authoritative logical project workspace and runtime-owned
-    /// isolation facts selected by the parent. In worktree mode the nested
-    /// facts separately carry the physical checkout root, repository-relative
-    /// scope, exact committed base, and runtime-created ref.
-    pub workspace_snapshot: WorkspaceSnapshot,
+    /// The invoking Session's execution workspace binding, frozen by the
+    /// parent at creation. The child uses exactly this directory; it never
+    /// resolves a default workspace or falls back to its process CWD.
+    pub workspace: PathBuf,
     /// The name of the already-reserved private incarnation beneath the child's
     /// identity-derived allocation. Never an absolute path or a grouping path.
     pub incarnation: String,
@@ -956,7 +958,6 @@ mod tests {
             definition_digest: serde_json::from_value(serde_json::json!("sha256:abc"))
                 .expect("digest"),
             execution_deadline: None,
-            workspace_policy: crate::runtime::workspace::WorkspacePolicy::SharedWorkspace,
             instructions: "instructions".to_owned(),
             model: crate::model::frozen::test_frozen_model_spec(
                 serde_json::from_value(serde_json::json!("local/model")).expect("model ref"),
@@ -1170,7 +1171,7 @@ mod tests {
                 keep_recent_tokens: 2,
                 summary_output_cap: None,
             },
-            workspace_snapshot: WorkspaceSnapshot::shared(PathBuf::from("/tmp/ws")),
+            workspace: PathBuf::from("/tmp/ws"),
             incarnation: "incarnation-test".to_owned(),
             product_root: PathBuf::from("/tmp"),
             terminal: ChildTerminalMode::Normal,
