@@ -1040,7 +1040,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "af7bb52d9b0bd37717054c28b4349582f5b20ed022f925c5db1ee99bca1cc3a8",
+      "local_sha256": "6dab465cb86640d15edd173b05b71543e24047e0707351f529bbda0cd3974cd9",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/CompactionItem.tsx",

@@ -4,12 +4,13 @@ import { Message } from '../src/app/agent/Message';
 afterEach(cleanup);
 
 it('renders canonical compaction as an accessible collapsed card with intact Markdown', () => {
-  const ui = render(<Message message={{ role: 'user', id: 'summary', source: 'runtime', timestamp: '2026-10-07T00:00:00Z',
+  const ui = render(<Message compaction={{ retired_messages: '26', retired_tokens: '9183' }} message={{ role: 'user', id: 'summary', source: 'runtime', timestamp: '2026-10-07T00:00:00Z',
     kind: { compaction_summary: {} }, content: [{ type: 'text', text: '## Earlier work\n\nKeep  the English words.\n\n- Continue here' }] }} />);
-  const trigger = ui.getByRole('button', { name: 'Context compacted · View compaction summary' });
+  const trigger = ui.getByRole('button', { name: 'Context compacted · Compacted 26 history items (~9183 tokens)' });
   expect(trigger.getAttribute('aria-expanded')).toBe('false');
   expect(ui.queryByRole('heading', { name: 'Earlier work' })).toBeNull();
   expect(trigger.textContent).toContain('Keep the English words.');
+  expect(trigger.textContent).toContain('Compacted 26 history items (~9183 tokens)');
   expect(trigger.textContent).not.toContain('##');
   fireEvent.click(trigger);
   expect(trigger.getAttribute('aria-expanded')).toBe('true');

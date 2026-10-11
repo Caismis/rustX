@@ -1017,7 +1017,7 @@ other pre-1.0 schema changes, older stores are refused explicitly; no migration
 or compatibility representation is introduced.
 
 Native Runtime Client version 37 introduced the mandatory pending revision and
-`pending_inbound_changed` event. Current version 66 retains both with no
+`pending_inbound_changed` event. Current version 67 retains both with no
 compatibility decoder.
 
 Snapshot/attachment reads also reconcile Pending Inbound directly from durable
@@ -1596,7 +1596,7 @@ location, bounds and paging semantics.
 
 Transcript pages expose `inherited_through`, the final native cursor in the
 immutable lineage seed (zero for an empty prefix). It includes terminal-only
-inherited turns and remains unchanged by local appends or compaction. Clients
+inherited turns and remains unchanged by local appends or compaction. Native readers cache this immutable boundary once per connection after bootstrap, so each bounded page or snapshot does not rescan the inherited prefix. Clients
 combine this position with the attached node's `SessionNodeOrigin::Fork` to
 place a fork separator; different origin Conversation IDs alone do not prove
 a Session fork. Turn navigation locates the destination's own transcript,

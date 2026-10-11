@@ -74,7 +74,7 @@ if (mode === 'compaction') {
  const summary = { role: 'user' as const, id: 'summary-1', source: 'runtime' as const, kind: { compaction_summary: {} },
    content: [{ type: 'text' as const, text: '## 已完成的工作\n\n保留 fork 前的历史预览，并整理上下文摘要的显示。\n\n- 历史仍由原生会话数据提供\n- Continue with the original conversation context.\n\n### 下一步\n\n检查窄屏布局与键盘操作。' }] };
  s.messages.push(summary);
- s.transcript.entries.push({ cursor: '3', item: { type: 'message', message: summary } });
+ s.transcript.entries.push({ cursor: '3', compaction: { retired_messages: '26', retired_tokens: '9183' }, item: { type: 'message', message: summary } });
 }
 if (mode === 'fork') {
  s.attempt = null;

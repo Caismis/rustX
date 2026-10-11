@@ -24,7 +24,7 @@ export function CompactionMessage({ title, summary, preview, description, childr
    </span>
    <span className={css.compactionTitle}>{title}</span>
    <span className={css.compactionSep} aria-hidden="true"/>
-   <span className={css.compactionSummary}>{preview}</span>
+   <span className={css.compactionSummary}>{summary}{' · '}{preview}</span>
   </button>
   {open && <div className={css.compactionBody} data-compaction-body=""><p className={css.compactionDescription}>{description}</p>{children}</div>}
  </div>;

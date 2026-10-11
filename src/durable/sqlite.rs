@@ -1459,7 +1459,13 @@ impl ConversationStore for SqliteConversationStore {
         let transaction = connection
             .unchecked_transaction()
             .map_err(|error| storage(error.to_string()))?;
-        reading::window(&transaction, &self.conversation_id, at, limit, &self.conn.inherited_boundary)
+        reading::window(
+            &transaction,
+            &self.conversation_id,
+            at,
+            limit,
+            &self.conn.inherited_boundary,
+        )
     }
     fn load_agent_authority(
         &self,
@@ -2640,7 +2646,12 @@ impl ConversationStore for SqliteConversationStore {
                 .map(|id| load_message(&transaction, id))
                 .collect::<Result<_, _>>()?,
             canonical: load_canonical_rows(&transaction)?,
-            transcript: load_transcript_page(&transaction, None, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT, &self.conn.inherited_boundary)?,
+            transcript: load_transcript_page(
+                &transaction,
+                None,
+                TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT,
+                &self.conn.inherited_boundary,
+            )?,
             journal_through: journal_prefix(&transaction)?,
         })
     }
@@ -2740,7 +2751,10 @@ impl ConversationStore for SqliteConversationStore {
         let next_cursor = more.then(|| entries.last().unwrap().cursor);
         entries.reverse();
         Ok(TranscriptPage {
-            inherited_through: inherited_transcript_through(&connection, &self.conn.inherited_boundary)?,
+            inherited_through: inherited_transcript_through(
+                &connection,
+                &self.conn.inherited_boundary,
+            )?,
             entries,
             next_cursor,
         })
@@ -7063,9 +7077,13 @@ fn inherited_transcript_through(
     if let Some(boundary) = cache.get() {
         return Ok(*boundary);
     }
-    let initialized: bool = connection.query_row(
-        "SELECT bootstrap_initialized FROM rustx_store WHERE id=1", [], |row| row.get(0),
-    ).map_err(|error| storage(format!("inherited boundary bootstrap: {error}")))?;
+    let initialized: bool = connection
+        .query_row(
+            "SELECT bootstrap_initialized FROM rustx_store WHERE id=1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| storage(format!("inherited boundary bootstrap: {error}")))?;
     if !initialized {
         return Ok(TranscriptCursor::new(0));
     }

@@ -796,25 +796,52 @@ fn message_windows_reject_foreign_future_and_mutated_cuts() {
 
 #[test]
 fn inherited_boundary_repeated_page_work_does_not_grow_with_seed() {
-    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
     fn work(size: usize) -> usize {
         let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
-        let seed = LineageSeed::history((0..size).map(|n| message(&format!("seed-{n}"), "inherited")).collect());
+        let seed = LineageSeed::history(
+            (0..size)
+                .map(|n| message(&format!("seed-{n}"), "inherited"))
+                .collect(),
+        );
         store.initialize_lineage(&seed).unwrap();
         // Immutable seed discovery is paid once per connection, not per page.
-        assert_eq!(store.load_transcript_page(None, 64).unwrap().inherited_through.get(), size as u64);
+        assert_eq!(
+            store
+                .load_transcript_page(None, 64)
+                .unwrap()
+                .inherited_through
+                .get(),
+            size as u64
+        );
         let steps = Arc::new(AtomicUsize::new(0));
         let observed = steps.clone();
-        store.conn.lock().unwrap().progress_handler(1, Some(move || { observed.fetch_add(1, Ordering::Relaxed); false }));
+        store.conn.lock().unwrap().progress_handler(
+            1,
+            Some(move || {
+                observed.fetch_add(1, Ordering::Relaxed);
+                false
+            }),
+        );
         for _ in 0..3 {
             let page = store.load_transcript_page(None, 64).unwrap();
             assert_eq!(page.entries.len(), 64);
             assert_eq!(page.inherited_through.get(), size as u64);
         }
-        store.conn.lock().unwrap().progress_handler(0, None::<fn() -> bool>);
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .progress_handler(0, None::<fn() -> bool>);
         steps.load(Ordering::Relaxed)
     }
     let small = work(128);
     let large = work(8192);
-    assert!(large <= small + 100, "fixed pages grew from {small} to {large} VM steps");
+    assert!(
+        large <= small + 100,
+        "fixed pages grew from {small} to {large} VM steps"
+    );
 }
