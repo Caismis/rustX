@@ -181,7 +181,10 @@ pub(crate) fn decorate_window(
             _ => None,
         })
         .collect();
-    let mut attempts: BTreeSet<_> = store.transcript_attempts(&messages)?.into_iter().collect();
+    let mut attempts: BTreeSet<_> = store
+        .transcript_attempts(&messages, through)?
+        .into_iter()
+        .collect();
     attempts.extend(page.entries.iter().filter_map(|entry| match &entry.item {
         RuntimeClientTranscriptItem::AttemptTerminal { turn } => Some(turn.attempt_id.clone()),
         _ => None,

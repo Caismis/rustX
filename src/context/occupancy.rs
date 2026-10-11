@@ -28,6 +28,17 @@ pub struct ContextOccupancy {
     pub breakdown: ContextBreakdown,
 }
 
+impl ContextOccupancy {
+    pub(crate) fn validate(&self) -> Result<(), ConversationStoreError> {
+        if self.context_window_tokens == 0 {
+            return Err(ConversationStoreError::InvalidReference(
+                "an inherited occupancy reading has no valid context window".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Where one request's measured input went, priced by the provider-neutral
 /// `ceil(bytes / 4)` estimate. System prompt and Tool definitions are priced
 /// heuristically; messages are the remainder of the measured or estimated total.
@@ -79,47 +90,39 @@ pub(crate) fn read(
             },
         ) => measure(usage, &store.load_request_snapshot(request_id)?),
         Some(RuntimeEvent::CompactionCompleted { occupancy, .. }) => Ok(occupancy.clone()),
-        None => inherited(store),
+        None => store.load_inherited_occupancy(),
         Some(_) => Err(ConversationStoreError::InvalidReference(
             "context reading index returned non-qualifying Journal evidence".into(),
         )),
     }
 }
 
-/// Before its own first measurement, a lineage child reads the context its newest
-/// inherited request measured, as a Harness fork's copied prefix does, unless
-/// its retained Surface compacted after that turn's content.
-fn inherited(
-    store: &dyn ConversationStore,
-) -> Result<Option<ContextOccupancy>, ConversationStoreError> {
+/// Derive the immutable bootstrap reading once from a validated lineage seed.
+/// The newest inherited request Turn owns absence as well as measurement;
+/// a retained Surface replacement after its content suppresses the reading.
+pub(crate) fn inherit(
+    turns: &[crate::durable::reading::TurnReadingProvenance],
+    history: &[crate::conversation::SurfaceOp],
+) -> Option<ContextOccupancy> {
     use crate::conversation::SurfaceOp;
-    let Some(turn) = store
-        .load_inherited_turns()?
-        .into_iter()
-        .rev()
-        .find(|turn| {
-            turn.execution
-                .as_ref()
-                .is_some_and(|execution| execution.model_requests > 0)
-        })
-    else {
-        return Ok(None);
-    };
-    // Only the immutable selected seed decides whether inherited evidence was
-    // already compacted. Later local Surface operations can lie beyond `through`.
-    // A validated LineageSeed has exactly one Surface operation per canonical row.
-    let revision = store.load_bootstrap_surface_revision()?;
-    let history = store.load_surface_history(revision)?;
-    let appended = history.iter().rposition(|op| {
-        matches!(op, SurfaceOp::Append { message_id } if turn.process_message_ids.contains(message_id))
-    });
+    let turn = turns.iter().rev().find(|turn| {
+        turn.execution
+            .as_ref()
+            .is_some_and(|execution| execution.model_requests > 0)
+    })?;
+    let members: std::collections::BTreeSet<_> = turn.process_message_ids.iter().collect();
+    let appended = history.iter().rposition(
+        |op| matches!(op, SurfaceOp::Append { message_id } if members.contains(message_id)),
+    );
     let compacted = history
         .iter()
         .rposition(|op| matches!(op, SurfaceOp::Replace { .. }));
     if compacted > appended {
-        return Ok(None);
+        return None;
     }
-    Ok(turn.execution.and_then(|execution| execution.occupancy))
+    turn.execution
+        .as_ref()
+        .and_then(|execution| execution.occupancy.clone())
 }
 
 /// The occupancy one terminal reading measures for its own frozen request.

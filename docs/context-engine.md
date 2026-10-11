@@ -1016,7 +1016,7 @@ later checkpoint retires that summary. Lineage copies retain those values and
 omit local completion correlation. Transcript decoration uses one keyed Ledger
 lookup and at most one keyed local Journal lookup per requested summary; it never
 reconstructs the retired Surface, hydrates retired messages, or scans the Journal.
-Missing or malformed checkpoint facts are explicit read errors. SQLite schema 52
+Missing or malformed checkpoint facts are explicit read errors. SQLite schema 53
 requires these facts; older development stores are refused without migration.
 
 ## Indexed historical occupancy
@@ -1036,10 +1036,32 @@ the prior reading. Completed compaction replaces it, including with absence.
 Usage whose frozen context window is zero also yields absence without selecting
 an older request. Missing snapshots, malformed selected payloads and missing
 indexes fail explicitly. Provider usage remains measured; committed rebuilt
-context remains estimated. Inherited fallback reads only the validated immutable
-bootstrap Surface, so later local compaction cannot change an earlier cut. Its
-boundary uses the existing keyed `bootstrap_identity.message_count`, without
-hydrating canonical bodies or introducing a separate cached fact.
+context remains estimated. Inherited fallback performs a primary-key lookup of the compact immutable
+`bootstrap_identity.occupancy_json`, without loading Turn or Surface arrays.
+The Context Engine derives it once from the validated selected seed: the newest
+Turn with actual requests determines the reading, even when absent; a retained
+Surface replacement after that Turn's last member suppresses older occupancy.
+Clone, Fork and Tree therefore select their own cut, including subsequent lineage
+generations and Artifact remapping, without consulting current source state.
+
+SQLite writes the derivative, its history-bound integrity digest, and the
+bootstrap-initialized marker in the same transaction as canonical history,
+Surface operations, checkpoints and Turn provenance. Compact fields precede large
+provenance JSON in the SQLite record; schema validation enforces that ordering so
+cold lookups do not traverse history payload overflow pages. Initialization validates
+the supplied immutable evidence and rejects mismatched reinitialization. Runtime
+reads check the compact payload's integrity and shape; damaged or missing
+initialized metadata fails explicitly. The marker distinguishes an uninitialized
+store from a missing bootstrap identity. There is no independent update path.
+Later local events cannot change this immutable fallback at an earlier Journal
+cut. Schema 53 rejects obsolete development stores without migration.
+
+Finite transcript decoration seeks each unique selected Assistant identity using
+`events_message_id_kind_idx`, with the Journal cut in each SQL predicate, and
+deduplicates the resulting Attempt identities. An inherited message without a
+local commit does not acquire a destination Attempt. Query cost depends on the
+selected window and its directly relevant facts, not unrelated Assistant commits.
+
 
 The deterministic SQL regressions inspect the actual generated query plans and
 SQLite VM instruction counts before and after thousands of unrelated terminals

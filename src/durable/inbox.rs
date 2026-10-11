@@ -564,6 +564,13 @@ impl LineageSeed {
         let mut owners = std::collections::BTreeSet::new();
         let mut members = std::collections::BTreeSet::new();
         for turn in &turns {
+            if let Some(reading) = turn
+                .execution
+                .as_ref()
+                .and_then(|execution| execution.occupancy.as_ref())
+            {
+                reading.validate()?;
+            }
             let unique_owner =
                 owners.insert((turn.id.conversation_id.clone(), turn.id.attempt_id.clone()));
             let valid_members = turn.process_message_ids.iter().all(|id| {
@@ -1549,6 +1556,7 @@ pub trait ConversationStore: Send + Sync + 'static {
     fn transcript_attempts(
         &self,
         messages: &[MessageId],
+        through: u64,
     ) -> Result<Vec<AttemptId>, ConversationStoreError>;
     /// Only copied response provenance intersecting exact requested members.
     fn inherited_responses_for(
@@ -1777,13 +1785,7 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// # Errors
     ///
     /// The errors of [`ConversationStore::initialize_lineage`].
-    fn initialize(&self, messages: &[MessageBlock]) -> Result<(), ConversationStoreError> {
-        self.initialize_lineage(
-            &LineageSeed::history(messages.to_vec())
-                .with_completed_responses(self.load_inherited_responses()?)?
-                .with_turns(self.load_inherited_turns()?)?,
-        )
-    }
+    fn initialize(&self, messages: &[MessageBlock]) -> Result<(), ConversationStoreError>;
 
     /// Loads the immutable bootstrap history originally supplied to
     /// [`ConversationStore::initialize_lineage`] — its canonical part, which
@@ -1791,15 +1793,17 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// must validate against this prefix, not against its later canonical
     /// transcript, and not against the Surface projection the seed also
     /// carried: that projection is durable state the store already holds, so
-    /// a reopen does not re-supply Surface operations. `initialize` also retains
-    /// and validates the store's immutable response provenance.
+    /// a reopen does not re-supply Surface operations. `initialize` reconstructs
+    /// the immutable Surface prefix and validates inherited provenance and occupancy.
     fn load_bootstrap_history(&self) -> Result<Vec<MessageBlock>, ConversationStoreError> {
         self.load_canonical()
     }
 
-    /// Immutable bootstrap Surface boundary, read from identity metadata without
-    /// loading canonical bodies. A validated seed has one Surface op per message.
-    fn load_bootstrap_surface_revision(&self) -> Result<SurfaceRevision, ConversationStoreError>;
+    /// Immutable Context Engine derivative, committed atomically with the selected seed.
+    /// No local execution evidence or inherited history is loaded by this lookup.
+    fn load_inherited_occupancy(
+        &self,
+    ) -> Result<Option<crate::context::occupancy::ContextOccupancy>, ConversationStoreError>;
 
     /// Read immutable lineage-bootstrap response provenance, never execution events.
     fn load_inherited_responses(

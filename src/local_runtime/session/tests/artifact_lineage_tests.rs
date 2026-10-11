@@ -31,6 +31,52 @@ fn complete_turn(store: &SqliteConversationStore, conversation: &ConversationId,
             attempt_id: attempt.clone(),
         }))
         .unwrap();
+    let snapshot = RequestSnapshot::new(
+        RequestIdentity {
+            attempt_id: attempt.clone(),
+            turn: TurnId::new(format!("native-step-{index}")),
+            retry_number: 0,
+        },
+        store.load_head().unwrap().revision,
+        "frozen lineage context".into(),
+        Vec::new(),
+        crate::runtime::RuntimeResourceRevision::new(1),
+        ModelInvocationConfig {
+            model: "historical/model".into(),
+            protocol: ModelProtocol::OpenAiChatCompletions,
+            max_output_tokens: 128,
+            request_params: RequestParams::new(),
+            capabilities: ModelCapabilities::text_only(true, true),
+            compat: ModelCompat::default(),
+        },
+        4096,
+        None,
+        false,
+        Vec::new(),
+        CapabilityRevision::new(1),
+        crate::context::assembly::ContextGeneration {
+            id: 1,
+            contributors: Vec::new(),
+        },
+        None,
+        Vec::new(),
+    );
+    store
+        .commit_model_turn_start(&[], &snapshot, timestamp)
+        .unwrap();
+    let mut terminal = event(RuntimeEvent::ModelRequestCompleted {
+        request_id: snapshot.request_id,
+        finish_reason: ModelFinishReason::Stop,
+        usage: Some(crate::model::types::ModelUsage {
+            input_tokens: u64::from(index) * 32,
+            output_tokens: 4,
+            total_tokens: u64::from(index) * 32 + 4,
+            details: None,
+        }),
+        generation: None,
+    });
+    terminal.turn_id = Some(snapshot.identity.turn);
+    store.append_event(terminal).unwrap();
     let id = MessageId::new(format!("answer-{index}"));
     store
         .append_canonical_with_event(
@@ -203,6 +249,11 @@ fn verify_copy(copy: &PreparedLineage, expected: &LineageSeed, artifact: bool, c
                 .is_empty()
         );
         assert_eq!(store.presentation_frontier().unwrap(), 0);
+        assert_eq!(
+            crate::context::occupancy::read(&store, 0).unwrap(),
+            crate::context::occupancy::inherit(expected.turns(), expected.surface_history()),
+            "Artifact remapping must preserve the selected inherited occupancy"
+        );
         let directory = store.conversation_turns(0, 64).unwrap();
         assert_eq!(directory.total, count);
         assert_eq!(directory.turns.len(), count);
@@ -333,4 +384,48 @@ fn artifact_clone_preserves_complete_native_provenance_after_restart() {
 #[test]
 fn artifact_fork_preserves_only_selected_native_prefix_after_restart() {
     copy_history(true);
+}
+
+#[test]
+fn artifact_tree_preserves_selected_occupancy_and_native_history_after_restart() {
+    for artifact in [false, true] {
+        let (_root, catalog, _) = open_catalog();
+        let (store, cut) = source(&catalog, artifact);
+        let session_id = catalog.document.sessions.keys().next().unwrap().clone();
+        // The first cut predates the retained compaction and the newer request.
+        // Selecting source latest occupancy would give 64 instead of 32 tokens.
+        for count in [1, 2] {
+            let selected = if count == 1 {
+                store.read_lineage_cut(SurfaceRevision::new(2)).unwrap()
+            } else {
+                store.read_lineage_cut(cut.surface_revision).unwrap()
+            };
+            let (copy, draft) = catalog
+                .prepare_tree_node(
+                    &session_id,
+                    &state(),
+                    &selected,
+                    &MessageId::new(format!("answer-{count}")),
+                    super::super::LineageSide::After,
+                )
+                .unwrap();
+            assert!(draft.is_empty());
+            let expected = super::super::remap_seed(
+                &copy.conversation_id,
+                &selected.canonical,
+                &selected.surface_history,
+                &selected.checkpoints,
+                &selected.completed_responses,
+                &selected.turns,
+            )
+            .unwrap();
+            assert_eq!(
+                crate::context::occupancy::inherit(expected.turns(), expected.surface_history())
+                    .unwrap()
+                    .input_tokens,
+                count as u64 * 32
+            );
+            verify_copy(&copy, &expected, artifact, count);
+        }
+    }
 }

@@ -1003,7 +1003,11 @@ fn exact_window_decoration_keeps_attempt_tool_occurrences_and_response_identity(
         assistant(&store, attempt, &format!("{attempt}-final"));
         finish(&store, attempt);
     }
+    let expected = page(&store, Some(crate::durable::TranscriptCursor::new(5)), 4);
     let outline = store.conversation_turns(0, 64).unwrap();
+    for index in 0..2048 {
+        assistant(&store, "unrelated", &format!("unrelated-{index}"));
+    }
     // The four rows of Attempt a: the page before Attempt b's location.
     let read = store
         .conversation_window(
@@ -1016,7 +1020,6 @@ fn exact_window_decoration_keeps_attempt_tool_occurrences_and_response_identity(
         .unwrap();
     let mut window = crate::runtime_client::snapshot::transcript_page_view(read.page).unwrap();
     super::decorate_window(&store, &mut window, read.cut.journal).unwrap();
-    let expected = page(&store, Some(crate::durable::TranscriptCursor::new(5)), 4);
     assert_eq!(window.entries, expected.entries);
     assert_eq!(tails(&window)[0].origin.attempt_id, AttemptId::new("a"));
     assert!(window.entries.iter().all(|entry| {
@@ -1030,7 +1033,7 @@ fn exact_window_decoration_keeps_attempt_tool_occurrences_and_response_identity(
         expected.entries[0].tool_calls[0].state
     );
     assert!(window.statistics.is_none());
-    assert_eq!(store.conversation_read_cut().unwrap(), outline.cut);
+    assert!(store.conversation_read_cut().unwrap().journal > outline.cut.journal);
 }
 
 #[test]
@@ -1253,6 +1256,7 @@ fn occupancy_compaction_absence_invalid_window_and_failed_usage_are_boundaries()
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // One inherited window/occupancy cut sequence across reopen and local compaction.
 fn occupancy_reopens_and_inherits_without_local_requests_or_events() {
     let directory = tempfile::tempdir().unwrap();
     let id = ConversationId::generate();
@@ -1299,6 +1303,22 @@ fn occupancy_reopens_and_inherits_without_local_requests_or_events() {
         expected
     );
     assert_eq!(child.presentation_frontier().unwrap(), 0);
+    assert!(
+        child
+            .transcript_attempts(&[MessageId::new("response")], 0)
+            .unwrap()
+            .is_empty()
+    );
+    let selected_window = child
+        .conversation_window(&crate::durable::reading::ConversationWindowAt::Latest, 8)
+        .unwrap();
+    let mut copied_page = transcript_page_view(selected_window.page).unwrap();
+    super::decorate_window(&child, &mut copied_page, selected_window.cut.journal).unwrap();
+    assert_eq!(
+        tails(&copied_page)[0].origin.conversation_id,
+        source.conversation_id().clone()
+    );
+
     drop(child);
     let child = SqliteConversationStore::open(child_id, &child_path).unwrap();
     assert_eq!(
@@ -1375,5 +1395,50 @@ fn occupancy_thousands_of_unmeasured_terminal_requests_do_not_invent_a_reading()
             .unwrap()
             .input_tokens,
         100
+    );
+}
+
+#[test]
+fn window_decoration_empty_human_only_and_before_local_ownership_remain_exact() {
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    let read = store
+        .conversation_window(&crate::durable::reading::ConversationWindowAt::Latest, 8)
+        .unwrap();
+    let mut empty = transcript_page_view(read.page).unwrap();
+    super::decorate_window(&store, &mut empty, read.cut.journal).unwrap();
+    assert!(empty.entries.is_empty());
+    user(&store, "human-only");
+    let read = store
+        .conversation_window(&crate::durable::reading::ConversationWindowAt::Latest, 8)
+        .unwrap();
+    let mut human = transcript_page_view(read.page).unwrap();
+    super::decorate_window(&store, &mut human, read.cut.journal).unwrap();
+    assert!(human.entries[0].turn_process.is_none());
+    assert!(human.entries[0].completed_response.is_none());
+    append(
+        &store,
+        "later",
+        RuntimeEvent::AttemptStarted {
+            attempt_id: AttemptId::new("later"),
+        },
+    );
+    assistant(&store, "later", "later-answer");
+    finish(&store, "later");
+    let read = store
+        .conversation_window(&crate::durable::reading::ConversationWindowAt::Latest, 8)
+        .unwrap();
+    let mut historical = transcript_page_view(read.page).unwrap();
+    super::decorate_window(&store, &mut historical, 0).unwrap();
+    assert!(tails(&historical).is_empty());
+    assert!(
+        historical
+            .entries
+            .iter()
+            .all(|entry| entry.turn_process.is_none())
+    );
+    super::decorate_window(&store, &mut historical, read.cut.journal).unwrap();
+    assert_eq!(
+        tails(&historical)[0].origin.attempt_id,
+        AttemptId::new("later")
     );
 }
