@@ -184,7 +184,7 @@ mod tests {
         assert!(catalog.invalid_scopes.is_empty());
         assert_eq!(catalog.revisions.len(), 1);
         assert!(matches!(catalog.origins[&id], Origin::User { .. }));
-        assert_eq!(effects, [0; 12]);
+        assert_eq!(effects, [0; 11]);
         assert!(load(&user, Some(&root)).definitions[&id].is_err());
     }
 }

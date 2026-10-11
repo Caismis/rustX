@@ -186,10 +186,11 @@ impl ToolSelectionDocument {
         }
         names(&self.builtin)?;
         for name in &self.builtin {
-            if name == crate::tools::native::SUBAGENT_TOOL_NAME {
-                return Err(
-                    "subagent is selected through Agent Profile agents, not tools.builtin".into(),
-                );
+            if crate::tools::native::is_agent_control(name) {
+                return Err(format!(
+                    "{name} is composed automatically when the Agent Profile admits agents; \
+                     it cannot be selected through tools.builtin"
+                ));
             }
 
             if let Some(extension) = super::extension_provided_tool(name) {

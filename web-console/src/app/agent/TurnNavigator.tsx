@@ -57,12 +57,8 @@ export function TurnNavigator({ client, sessionId, onNavigate, active }: { clien
   const currentId = useMemo(() => view.running && view.conversation && view.attempt ? { conversation_id: view.conversation, attempt_id: view.attempt } : undefined,
     [view.running, view.conversation, view.attempt]);
   const page = view.outline?.page;
-  const readPreview = useCallback((ordinal: number) => {
-    // A newer navigation revokes a preview response already in flight.
-    const intent = client.getSnapshot().views[sessionId]?.turnNavigation?.intent;
-    void client.readTurns(sessionId, Math.floor((ordinal - 1) / HISTORY_PAGE_SIZE) * HISTORY_PAGE_SIZE,
-      () => client.getSnapshot().views[sessionId]?.turnNavigation?.intent === intent);
-  }, [client, sessionId]);
+  const readPreview = useCallback((ordinal: number, current: () => boolean) =>
+    client.previewTurns(sessionId, Math.floor((ordinal - 1) / HISTORY_PAGE_SIZE) * HISTORY_PAGE_SIZE, current), [client, sessionId, view.generation, view.target?.attachment_id]);
   const missingLocation = !!page && !!view.location && BigInt(page.cut.transcript) < BigInt(view.location);
   useEffect(() => { if (missingLocation && !view.outline?.loading && !view.outline?.error && view.attachment === 'attached') void client.refreshTurns(sessionId); },
     [client, sessionId, missingLocation, view.outline?.loading, view.outline?.error, view.attachment, page?.offset]);
@@ -76,40 +72,45 @@ export function TurnNavigator({ client, sessionId, onNavigate, active }: { clien
 export function TurnNavigation({ page, currentId, location, loading = false, pending, error, attached, active, onNavigate, onReload, readPreview }: {
   page?: ConversationTurnPage; currentId?: ConversationTurnId; location?: string; loading?: boolean;
   pending?: string; error?: string; attached: boolean; active?: string | null;
-  onNavigate: (turn: ConversationTurn | number) => void; onReload: () => void; readPreview?: (ordinal: number) => void;
+  onNavigate: (turn: ConversationTurn | number) => void; onReload: () => void; readPreview?: (ordinal: number, current: () => boolean) => Promise<ConversationTurnPage | undefined>;
 }) {
   const tx = useTranslation(), previewId = useId();
   const [previewKey, setPreviewKey] = useState<string | null>(null);
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
   const items = useMemo(() => turnRail(page, currentId, location), [page, currentId, location]);
-  const previewRead = useRef<string | null>(null);
-  useEffect(() => { previewRead.current = null; }, [readPreview]);
+  const [previewTurn, setPreviewTurn] = useState<ConversationTurn>();
+  const previewOwner = useRef(0);
   useEffect(() => {
-    if (!previewKey) { previewRead.current = null; return; }
+    const owner = ++previewOwner.current;
+    if (previewTurn) setPreviewTurn(undefined);
     const index = items.indexOfKey(previewKey), item = index === undefined ? undefined : items.item(index);
-    if (!readPreview || !item || item.turn || !attached || loading || pending) return;
-    const key = `${page?.cut.conversation_id}:${item.key}`;
-    if (previewRead.current === key) return;
-    const timer = setTimeout(() => { previewRead.current = key; readPreview(item.ordinal); }, 150);
-    return () => clearTimeout(timer);
-  }, [readPreview, items, previewKey, page?.cut.conversation_id, attached, loading, pending]);
+    if (!readPreview || !item || item.turn || !attached || pending) return;
+    const current = () => previewOwner.current === owner;
+    const timer = setTimeout(() => {
+      void readPreview(item.ordinal, current).then(page => {
+        if (current()) setPreviewTurn(page?.turns.find(turn => turn.ordinal === item.ordinal));
+      });
+    }, 150);
+    return () => { clearTimeout(timer); ++previewOwner.current; };
+  }, [readPreview, previewKey, attached, pending, page?.cut.mutation_revision]);
   const isActive = (item: TurnRailItem) => !!item.id && (active !== undefined ? active === `turn:${item.id}` : !!currentId && turnKey(currentId) === item.id);
   // The owning viewport starts its gesture immediately, before outline I/O.
-  const navigate = (item: TurnRailItem) => { setPreviewKey(null); onNavigate(item.turn ?? item.ordinal); };
+  const navigate = (item: TurnRailItem) => { ++previewOwner.current; onNavigate(item.turn ?? item.ordinal); };
   // No rail and nothing to recover: no slot layer over the reading surface.
   if (items.count < 2 && !error) return null;
   return <div className={css.slot} data-turn-navigator>
     <TurnRail navigationLabel={tx('agent:reading.turn-navigation')} loading={loading} items={items} activeId={active !== undefined ? active?.slice(5) : currentId && turnKey(currentId)} isActive={isActive}
       isBusy={item => pending === item.key || !!item.id && pending === item.id} attached={attached} onNavigate={navigate}
-      previewKey={previewKey} setPreviewKey={setPreviewKey} focusedKey={focusedKey} setFocusedKey={setFocusedKey} previewId={previewId}
+      previewKey={previewKey} previewTurn={previewTurn} setPreviewKey={setPreviewKey} focusedKey={focusedKey} setFocusedKey={setFocusedKey} previewId={previewId}
       label={item => item.ordinal === 0 ? tx('agent:reading.current-turn') : tx(item.turn ? 'agent:reading.jump-turn' : 'agent:reading.jump-load-turn', { n: item.ordinal })}
       title={item => item.turn?.prompt || (item.ordinal === 0 ? tx('agent:reading.current-turn') : tx('agent:reading.turn', { n: item.ordinal }))} />
     {error && <div className={css.feedback} role="alert"><p>{error}</p><button type="button" onClick={() => { onReload(); }}>{tx('agent:reading.reload-turns')}</button></div>}
   </div>;
 }
 
-function TurnRail({ navigationLabel, loading, items, activeId, isActive, isBusy, attached, onNavigate, previewKey, setPreviewKey, focusedKey, setFocusedKey, previewId, label, title }: {
+function TurnRail({ navigationLabel, loading, items, activeId, isActive, isBusy, attached, onNavigate, previewKey, previewTurn, setPreviewKey, focusedKey, setFocusedKey, previewId, label, title }: {
   navigationLabel: string; loading: boolean; items: ReturnType<typeof turnRail>; activeId?: string | null; isActive: (item: TurnRailItem) => boolean; isBusy: (item: TurnRailItem) => boolean; attached: boolean;
+  previewTurn?: ConversationTurn;
   onNavigate: (item: TurnRailItem) => void; previewKey: string | null; setPreviewKey: (key: string | null) => void;
   focusedKey: string | null; setFocusedKey: (key: string | null) => void; previewId: string;
   label: (item: TurnRailItem) => string; title: (item: TurnRailItem) => string;
@@ -160,6 +161,7 @@ function TurnRail({ navigationLabel, loading, items, activeId, isActive, isBusy,
   }, [activeAt, items.count, viewHeight, totalSize]);
   if (items.count < 2) return null;
   const preview = previewIndex === undefined ? undefined : items.item(previewIndex);
+  const previewContent = preview?.turn ?? (preview?.ordinal === previewTurn?.ordinal ? previewTurn : undefined);
   const previewPosition = virtualItems.find(item => item.index === previewIndex);
   const scroller = [css.scroller];
   if (scrollTop > 1) scroller.push(css.fadeTop);
@@ -214,8 +216,8 @@ function TurnRail({ navigationLabel, loading, items, activeId, isActive, isBusy,
     </div>
     {preview !== undefined && previewPosition !== undefined && <div id={previewId} role="tooltip" className={css.preview}
       style={{ '--turn-preview-center': `${previewPosition.start + previewPosition.size / 2 - scrollTop}px` } as CSSProperties}>
-      <div className={css.previewPrompt}>{title(preview)}</div>
-      {preview.turn?.response ? <div className={css.previewResponse}>{preview.turn.response}</div> : null}
+      <div className={css.previewPrompt}>{previewContent?.prompt || title(preview)}</div>
+      {previewContent?.response ? <div className={css.previewResponse}>{previewContent.response}</div> : null}
     </div>}
   </nav>;
 }

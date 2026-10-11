@@ -1496,7 +1496,7 @@ mod tests {
                 catalog.list_page(None, 0, 32).unwrap(),
             )
         });
-        assert_eq!(effects, [0; 12]);
+        assert_eq!(effects, [0; 11]);
         assert_eq!(reads.1.sessions.len(), 2);
         let bytes = std::fs::read(root.path().join("sessions/catalog.json")).unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();

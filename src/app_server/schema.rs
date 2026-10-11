@@ -582,13 +582,6 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                             steps_consumed: 1,
                             steps_max: 10,
                             agents_consumed: 0,
-                            candidate: Some(crate::runtime::workspace::CandidateReference {
-                                run,
-                                version: EXACT,
-                                content: "content-fixture".into(),
-                            }),
-                            candidate_users: 0,
-                            handoff: None,
                         }],
                         omitted_runs: 0,
                     },

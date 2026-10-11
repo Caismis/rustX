@@ -32,38 +32,16 @@ pub(crate) fn accepted_result(accepted: &SubagentAccepted) -> ToolExecutionResul
     }))
 }
 
-/// The model-facing projection of a failed subagent start.
-///
-/// This is the boundary at which an internal runtime failure becomes
-/// model-visible tool output, so it — and not the workspace/Git layer — owns
-/// the public configuration spelling and the actionable remediation. The
-/// workspace manager reports the typed execution fact
-/// (`WorkspaceAcquireError::DirtyParent`), the registry preserves its
-/// semantic identity ([`SubagentStartError::WorkspaceDirtyParent`]), and this
-/// function renders what the model can actually act on.
-///
-/// Every other start failure keeps its own bounded runtime diagnostic: this
-/// is one named translation, not a general error-presentation framework.
+/// The model-facing projection of a failed subagent start: its own bounded
+/// runtime diagnostic.
 fn start_failure_result(error: &SubagentStartError) -> ToolExecutionResult {
-    match error {
-        // Issue #188. The opt-out is described exactly: it runs the child
-        // from the committed HEAD snapshot and ignores the parent's local
-        // dirty bytes. No stash, commit, copy, or patch is implied, and no
-        // Git command detail is exposed.
-        SubagentStartError::WorkspaceDirtyParent { .. } => failed_result(
-            "the isolated subagent was not started because the parent workspace has \
-             uncommitted changes. Commit or clean those changes, or explicitly set \
-             worktree.require_clean_parent = false in the named Agent profile to run from the committed \
-             HEAD snapshot while intentionally ignoring the local changes.",
-        ),
-        other => failed_result(other.to_string()),
-    }
+    failed_result(error.to_string())
 }
 
 /// The canonical model-facing name of the intrinsic.
 pub const SUBAGENT_TOOL_NAME: &str = "subagent";
-pub(crate) fn tool_id() -> crate::runtime::identity::ToolId {
-    crate::runtime::identity::ToolId::new("tool-subagent")
+fn tool_id() -> crate::runtime::identity::ToolId {
+    super::agent_control_tool_id(SUBAGENT_TOOL_NAME)
 }
 
 /// The tool-owned registration of the `subagent` runtime intrinsic.
@@ -74,26 +52,22 @@ pub(crate) fn tool_id() -> crate::runtime::identity::ToolId {
 pub(super) fn registration(
     subagents: SubagentRegistry,
     catalog: &AgentCatalog,
-) -> Option<NativeToolRegistration> {
-    definition(catalog).map(|definition| {
-        NativeToolRegistration::new(
-            definition,
-            std::sync::Arc::new(SubagentExecutor { subagents }),
-        )
-    })
+) -> NativeToolRegistration {
+    NativeToolRegistration::new(
+        definition(catalog),
+        std::sync::Arc::new(SubagentExecutor { subagents }),
+    )
 }
 
-/// The canonical schema of the `subagent` intrinsic when this generation has
-/// at least one satisfiable route.
+/// The canonical schema of the `subagent` intrinsic for one nonempty
+/// admitted catalog.
 ///
-/// An empty catalog produces no definition: capability composition must never
-/// expose a model-facing Tool which every possible invocation is guaranteed
-/// to reject.
-pub(super) fn definition(catalog: &AgentCatalog) -> Option<ToolDefinition> {
-    if catalog.is_empty() {
-        return None;
-    }
-    Some(ToolDefinition {
+/// The Agent control composition never calls this for an empty catalog:
+/// capability composition must never expose a model-facing Tool which every
+/// possible invocation is guaranteed to reject.
+pub(super) fn definition(catalog: &AgentCatalog) -> ToolDefinition {
+    debug_assert!(!catalog.is_empty(), "an empty catalog composes no controls");
+    ToolDefinition {
         id: tool_id(),
         name: SUBAGENT_TOOL_NAME.to_owned(),
         description: format!(
@@ -117,7 +91,7 @@ pub(super) fn definition(catalog: &AgentCatalog) -> Option<ToolDefinition> {
         approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
-    })
+    }
 }
 
 /// The typed model-facing input contract of the `subagent` intrinsic.
@@ -308,7 +282,6 @@ impl ToolExecutor for SubagentExecutor {
 mod tests {
     use super::{SUBAGENT_TOOL_NAME, SubagentExecutor, SubagentInput, ToolInvocation, definition};
     use crate::runtime::subagent::catalog::{AgentCatalog, NamedAgentDefinition, SubagentName};
-    use crate::runtime::workspace::WorkspacePolicy;
     use crate::tools::types::{ToolExecutionStatus, ToolResultContent};
 
     fn catalog() -> AgentCatalog {
@@ -327,7 +300,6 @@ mod tests {
                             inherit: true,
                             files: Vec::new(),
                         },
-                    workspace_policy: WorkspacePolicy::SharedWorkspace,
                     extensions: crate::extensions::NativeAgentExtensionsDocument::default()
                         .resolve(),
                     agents: std::collections::BTreeSet::default(),
@@ -350,7 +322,6 @@ mod tests {
                             inherit: true,
                             files: Vec::new(),
                         },
-                    workspace_policy: WorkspacePolicy::SharedWorkspace,
                     extensions: crate::extensions::NativeAgentExtensionsDocument::default()
                         .resolve(),
                     agents: std::collections::BTreeSet::default(),
@@ -506,26 +477,8 @@ mod tests {
         );
     }
 
-    /// The real collaborators the `subagent` intrinsic needs to reach
-    /// workspace acquisition against a genuinely dirty Git parent.
-    ///
-    /// Everything the execution context borrows lives here so the context
-    /// itself can be built inside the test that drives the tool.
     #[cfg(unix)]
-    struct DirtyParentPlane {
-        _dir: tempfile::TempDir,
-        conversation_id: crate::runtime::identity::ConversationId,
-        subagents: crate::runtime::subagent::SubagentRegistry,
-        subagent_context: crate::runtime::subagent::AttemptSubagentContext,
-        workspace: crate::tools::workspace::Workspace,
-        artifacts: crate::tools::artifacts::ArtifactStore,
-        tool_output: crate::tools::managed_output::ManagedToolOutput,
-        environment: crate::tools::environment::ToolEnvironment,
-        runtime_root: std::path::PathBuf,
-    }
-
-    #[cfg(unix)]
-    const DIRTY_PARENT_MODELS: &str = r#"[providers.local]
+    const DELEGATION_MODELS: &str = r#"[providers.local]
 base_url = "http://127.0.0.1:9/v1"
 api_key = "test-only-secret"
 
@@ -545,176 +498,6 @@ reasoning = false
 [models."local/model".compat]
 chat_reasoning_replay = "omit"
 "#;
-
-    #[cfg(unix)]
-    fn git(cwd: &std::path::Path, args: &[&str]) {
-        let output = std::process::Command::new("git")
-            .arg("-C")
-            .arg(cwd)
-            .args(args)
-            .env("GIT_AUTHOR_NAME", "rustX tests")
-            .env("GIT_AUTHOR_EMAIL", "rustx-tests@example.invalid")
-            .env("GIT_COMMITTER_NAME", "rustX tests")
-            .env("GIT_COMMITTER_EMAIL", "rustx-tests@example.invalid")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .output()
-            .expect("git");
-        assert!(
-            output.status.success(),
-            "git {args:?}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    /// Builds a conversation whose only admitted agent asks for an isolated
-    /// worktree under the Issue #188 default (strict clean parent), over a
-    /// parent repository made dirty by an ordinary tracked modification.
-    #[cfg(unix)]
-    #[allow(clippy::too_many_lines)] // one cohesive real-collaborator fixture
-    fn dirty_parent_plane() -> DirtyParentPlane {
-        use std::collections::BTreeSet;
-        use std::sync::Arc;
-
-        use crate::capabilities::CapabilitySnapshot;
-
-        use crate::model::catalog::{MapCredentialEnvironment, ModelCatalog, ModelRef};
-        use crate::model::invocation::ModelBindingRegistry;
-        use crate::model::session::SessionModelConfig;
-        use crate::runtime::identity::{AgentId, CapabilityRevision, ConversationId};
-        use crate::runtime::inbound::ConversationInboundMailbox;
-        use crate::runtime::subagent::{
-            AttemptSubagentContext, SubagentRegistry, SubagentRegistryConfig, SubagentSpawnPlan,
-        };
-        use crate::runtime::types::{ApprovalMode, SystemClock};
-        use crate::runtime::workspace::WorkspaceManager;
-        use crate::skills::SkillSnapshot;
-        use crate::tools::environment::ToolEnvironment;
-        use crate::tools::mcp::McpRuntimeLeaseAuthority;
-
-        let dir = tempfile::tempdir().expect("temp dir");
-        let workspace_root = dir.path().join("workspace");
-        let runtime_root = dir.path().join("runtime");
-        std::fs::create_dir_all(&workspace_root).expect("workspace");
-        std::fs::create_dir_all(&runtime_root).expect("runtime root");
-
-        git(&workspace_root, &["init"]);
-        std::fs::write(workspace_root.join("tracked.txt"), "committed\n").expect("tracked file");
-        git(&workspace_root, &["add", "tracked.txt"]);
-        git(&workspace_root, &["commit", "-m", "initial"]);
-        std::fs::write(workspace_root.join("tracked.txt"), "dirty parent\n").expect("dirty file");
-
-        let conversation_id = ConversationId::new("conv_34a98c0b-66c1-78a0-8d50-8251107771ec");
-        let store = Arc::new(
-            crate::durable::SqliteConversationStore::in_memory(conversation_id.clone())
-                .expect("in-memory store"),
-        );
-        let subagents = SubagentRegistry::new(SubagentRegistryConfig {
-            conversation_id: conversation_id.clone(),
-            agent_id: AgentId::new("agent-parent"),
-            mailbox: ConversationInboundMailbox::over_store(store),
-            clock: Arc::new(SystemClock),
-            monotonic_clock: Arc::new(crate::runtime::ManualMonotonicClock::new()),
-            spawn: SubagentSpawnPlan {
-                session_id: crate::runtime::identity::SessionId::new(
-                    "ses_01900000-0000-7000-8000-000000000001",
-                ),
-
-                program: std::path::PathBuf::from("/nonexistent/rustx"),
-                product_root: crate::runtime::local_storage::ProductRoot::create(
-                    &runtime_root.clone(),
-                )
-                .expect("product root"),
-            },
-            workspace: WorkspaceManager::new(&workspace_root, &runtime_root),
-            max_active: 4,
-        });
-
-        let isolated = SubagentName::parse("isolated").expect("name");
-        let model = ModelRef::parse("local/model").expect("model");
-        let definition = NamedAgentDefinition::new(
-            isolated.clone(),
-            crate::runtime::agent_profile::AgentProfile {
-                description: "Isolated worktree agent.".to_owned(),
-                instructions: "instructions".to_owned(),
-                model: Some(SessionModelConfig::of(model.clone())),
-                execution_deadline: None,
-                tools: Vec::new(),
-                skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
-                project_instructions:
-                    crate::runtime::agent_profile::AgentProjectInstructionPolicy {
-                        inherit: false,
-                        files: Vec::new(),
-                    },
-                workspace_policy: WorkspacePolicy::GitWorktree {
-                    require_clean_parent: true,
-                },
-                extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
-                agents: std::collections::BTreeSet::default(),
-                workflows: std::collections::BTreeSet::default(),
-            },
-            workspace_root.join("isolated.md"),
-        )
-        .expect("definition");
-
-        let models = ModelBindingRegistry::new(
-            ModelCatalog::from_toml_slice(DIRTY_PARENT_MODELS.as_bytes())
-                .expect("model catalog")
-                .resolve(&MapCredentialEnvironment::default())
-                .expect("model resolution"),
-        )
-        .expect("model bindings");
-        let capabilities = Arc::new(CapabilitySnapshot::new(
-            conversation_id.clone(),
-            workspace_root.clone(),
-            CapabilityRevision::new(1),
-            Arc::new(crate::tools::executor::ToolRegistry::new()),
-            Arc::new(crate::capabilities::AvailableToolCatalog::default()),
-            Arc::new(SkillSnapshot::new(Vec::new())),
-            None,
-            None,
-            ToolEnvironment::new(),
-            Arc::new(McpRuntimeLeaseAuthority::empty()),
-            Arc::new(std::collections::BTreeMap::new()),
-        ));
-        let resources = Arc::new(
-            crate::runtime::RuntimeResourceSnapshot::new(
-                crate::runtime::identity::RuntimeResourceRevision::new(1),
-                Vec::new(),
-                None,
-                crate::context::ContextAssembly::new(),
-                capabilities,
-            )
-            .with_subagent_catalog(AgentCatalog::new([definition]).expect("catalog"))
-            .with_test_root_agents(BTreeSet::from([isolated])),
-        );
-
-        DirtyParentPlane {
-            subagent_context: AttemptSubagentContext::test_context(
-                crate::runtime::identity::AttemptId::new("native-subagent-test-attempt"),
-                resources,
-                SessionModelConfig::of(model),
-                models,
-                ApprovalMode::Policy,
-            ),
-            workspace: crate::tools::workspace::Workspace::new(&workspace_root).expect("workspace"),
-            artifacts: crate::tools::artifacts::ArtifactStore::new(
-                conversation_id.clone(),
-                dir.path().join("artifacts"),
-            )
-            .expect("artifact store"),
-            tool_output: crate::tools::managed_output::ManagedToolOutput::new(
-                conversation_id.clone(),
-                dir.path().join("tool-output"),
-            )
-            .expect("managed tool output"),
-            environment: ToolEnvironment::new(),
-            conversation_id,
-            subagents,
-            runtime_root,
-            _dir: dir,
-        }
-    }
 
     /// The real collaborators needed to prove that an unauthorized override
     /// is refused *before* anything physical is staged (Issue #258).
@@ -754,7 +537,6 @@ chat_reasoning_replay = "omit"
             AttemptSubagentContext, SubagentRegistry, SubagentRegistryConfig, SubagentSpawnPlan,
         };
         use crate::runtime::types::{ApprovalMode, SystemClock};
-        use crate::runtime::workspace::WorkspaceManager;
         use crate::skills::SkillSnapshot;
         use crate::tools::environment::ToolEnvironment;
         use crate::tools::executor::{
@@ -818,7 +600,7 @@ chat_reasoning_replay = "omit"
                 product_root: crate::runtime::local_storage::ProductRoot::create(&runtime_root)
                     .unwrap(),
             },
-            workspace: WorkspaceManager::new(&workspace_root, &runtime_root),
+            workspace: workspace_root.clone(),
             max_active: 4,
         });
 
@@ -840,7 +622,6 @@ chat_reasoning_replay = "omit"
                         inherit: false,
                         files: Vec::new(),
                     },
-                workspace_policy: WorkspacePolicy::SharedWorkspace,
                 extensions: crate::extensions::NativeAgentExtensions::none(),
                 agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
@@ -850,7 +631,7 @@ chat_reasoning_replay = "omit"
         .expect("definition");
 
         let models = ModelBindingRegistry::new(
-            ModelCatalog::from_toml_slice(DIRTY_PARENT_MODELS.as_bytes())
+            ModelCatalog::from_toml_slice(DELEGATION_MODELS.as_bytes())
                 .expect("model catalog")
                 .resolve(&MapCredentialEnvironment::default())
                 .expect("model resolution"),
@@ -1083,102 +864,9 @@ chat_reasoning_replay = "omit"
         assert!(plane.subagents.listing(false, 16).snapshots.is_empty());
     }
 
-    /// Issue #188 — the model-facing regression.
-    ///
-    /// This drives the real `subagent` intrinsic against a real registry and
-    /// a real dirty Git parent, so the assertion is made on the actual
-    /// `ToolExecutionResult` the model would see, not on any lower layer's
-    /// `Display`. The chain under test is:
-    ///
-    /// ```text
-    /// WorkspaceAcquireError::DirtyParent            (typed execution fact)
-    ///   -> SubagentStartError::WorkspaceDirtyParent (typed identity kept)
-    ///   -> ToolExecutionResult                      (actionable remediation)
-    /// ```
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn a_dirty_parent_renders_actionable_guidance_at_the_model_facing_boundary() {
-        use crate::tools::executor::{ProgressReporter, ToolExecutionContext, ToolExecutor};
-
-        struct NoProgress;
-        impl ProgressReporter for NoProgress {
-            fn report(&self, _progress: crate::tools::types::ToolProgress) {}
-        }
-
-        let plane = dirty_parent_plane();
-        let progress = NoProgress;
-        let context = ToolExecutionContext::new(
-            &plane.conversation_id,
-            None,
-            crate::runtime::cancellation::ExecutionCancellation::detached(
-                crate::runtime::cancellation::CancellationSignal::new(),
-                crate::runtime::types::CancellationReason::UserRequested,
-            ),
-            &plane.workspace,
-            &progress,
-            &plane.artifacts,
-            &plane.tool_output,
-            &plane.environment,
-        )
-        .with_subagent_context(plane.subagent_context.clone());
-
-        let executor = SubagentExecutor {
-            subagents: plane.subagents.clone(),
-        };
-        let result = executor
-            .start(
-                ToolInvocation {
-                    id: crate::tools::types::ToolInvocationId::Agent {
-                        call_id: crate::runtime::identity::ToolCallId::new("call-1"),
-                    },
-                    tool_id: crate::runtime::identity::ToolId::new("tool-subagent"),
-                    tool_name: SUBAGENT_TOOL_NAME.to_owned(),
-                    mode: crate::tools::types::ToolInvocationMode::Foreground,
-                    arguments: serde_json::json!({
-                        "agent": "isolated",
-                        "title": "Inspect workspace", "task": "inspect the isolated workspace",
-                    }),
-                },
-                context,
-            )
-            .completion
-            .await;
-
-        let ToolExecutionStatus::Failed { error } = &result.status else {
-            panic!("the dirty parent must fail the call: {:?}", result.status);
-        };
-        // The actionable contract the model receives.
-        for required in [
-            "isolated subagent was not started",
-            "uncommitted changes",
-            "Commit or clean",
-            "worktree.require_clean_parent = false",
-            "committed HEAD",
-            "ignoring the local changes",
-        ] {
-            assert!(
-                error.contains(required),
-                "the model-facing result must state {required:?}: {error}"
-            );
-        }
-        // And nothing the model cannot act on: no Git plumbing, no raw
-        // command output, and no implication that the runtime will move the
-        // parent's changes for it.
-        for leaked in ["rev-parse", "porcelain", "git ", "stash", "auto-commit"] {
-            assert!(
-                !error.contains(leaked),
-                "the model-facing result must not expose {leaked:?}: {error}"
-            );
-        }
-        assert!(
-            !plane.runtime_root.join("worktrees").exists(),
-            "the rejection happens before any physical worktree is created"
-        );
-    }
-
     #[test]
     fn the_tool_description_is_derived_from_the_admitted_catalog() {
-        let described = definition(&catalog()).expect("a non-empty catalog has a route");
+        let described = definition(&catalog());
         assert!(
             described
                 .description
@@ -1195,8 +883,13 @@ chat_reasoning_replay = "omit"
             described.description
         );
         assert!(
-            definition(&AgentCatalog::empty()).is_none(),
-            "an unsatisfiable subagent tool never enters the model-facing capability set"
+            crate::tools::native::definitions(
+                crate::tools::native::NativeToolPolicies::default(),
+                &AgentCatalog::empty(),
+            )
+            .iter()
+            .all(|(definition, _)| !crate::tools::native::is_agent_control(&definition.name)),
+            "an unsatisfiable Agent control group never enters the model-facing capability set"
         );
 
         // The schema stays small: exactly agent/task/context/override.
@@ -1231,7 +924,7 @@ chat_reasoning_replay = "omit"
     /// must not advertise a spelling the deserializer refuses.
     #[test]
     fn sub258_the_override_schema_exposes_exactly_three_dimensions() {
-        let described = definition(&catalog()).expect("a non-empty catalog has a route");
+        let described = definition(&catalog());
         let over = &described.input_schema["properties"]["override"];
         let mut names = over["properties"]
             .as_object()

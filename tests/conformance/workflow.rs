@@ -660,26 +660,8 @@ fn copy_reference(source: &std::path::Path, target: &std::path::Path) {
     }
 }
 
-fn reference_git(root: &std::path::Path, args: &[&str]) {
-    let output = std::process::Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .env("GIT_AUTHOR_NAME", "fixture")
-        .env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
-        .env("GIT_COMMITTER_NAME", "fixture")
-        .env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
 impl Driver {
-    async fn reference(emulator: &ProviderEmulator, git: bool) -> Self {
+    async fn reference(emulator: &ProviderEmulator) -> Self {
         let root = tempfile::tempdir().unwrap();
         let source =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/local-runtime");
@@ -710,11 +692,6 @@ impl Driver {
         // The copied example's authored configuration is now the bound User fixture;
         // leave Workspace resources intact and provide no duplicate authored override.
         std::fs::remove_file(workspace.join("rustx.toml")).unwrap();
-        if git {
-            reference_git(&workspace, &["init"]);
-            reference_git(&workspace, &["add", "."]);
-            reference_git(&workspace, &["commit", "-m", "reference baseline"]);
-        }
 
         let paths = LaunchFixture {
             config: root.path().join("rustx.toml"),
@@ -759,15 +736,20 @@ async fn shipped_repair_uses_real_writes_checks_and_root_human_decisions() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn shipped_repair_exhaustion_retains_dirty_work_without_another_body() {
+async fn shipped_repair_exhaustion_leaves_completed_writes_without_another_body() {
     reference_repair(true, false).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn shipped_repair_candidate_checker_tampering_cannot_redefine_frozen_verification() {
+async fn shipped_repair_checker_tampering_cannot_redefine_frozen_verification() {
     reference_repair(false, true).await;
 }
 
+/// Issue #462 C01/C05/C06/C07/C12: the shipped reference runs over a plain
+/// (non-Git) shared Session workspace. Implement -> Check failure -> Repair
+/// -> Check success follows the finite Loop; the frozen Bash checker observes
+/// the Implementer's writes in place; the outer result is exactly the
+/// declared output; and completed writes stay in place on every outcome.
 #[allow(clippy::too_many_lines)]
 async fn reference_repair(exhausted: bool, tampered: bool) {
     use rustx::events::review::{ReviewDecision, ReviewResponse};
@@ -783,8 +765,7 @@ async fn reference_repair(exhausted: bool, tampered: bool) {
     let Some(emulator) = ProviderEmulator::start(scenario).await else {
         return;
     };
-    let driver = Driver::reference(&emulator, true).await;
-    let original = std::fs::read(driver.root.path().join("workspace/greeting.py")).unwrap();
+    let driver = Driver::reference(&emulator).await;
     let (writer_started, mut writer_starts) = tokio::sync::watch::channel(0usize);
     driver.submit();
     let release_writers = async {
@@ -805,6 +786,8 @@ async fn reference_repair(exhausted: bool, tampered: bool) {
             if tampered && iteration == 2 {
                 // The second writer's provider gate is after the first native
                 // check's settlement and failed-finding commit, before repair.
+                // The forged checker the first writer left in the shared
+                // workspace did not redefine the frozen verification.
                 let (snapshot, _) = driver.runtime.host().snapshot().unwrap();
                 let run = &snapshot.workflows.runs[0];
                 let checks = run
@@ -815,10 +798,11 @@ async fn reference_repair(exhausted: bool, tampered: bool) {
                 assert_eq!(checks.len(), 1);
                 assert!(matches!(checks[0].state, WorkflowState::Settled { .. }));
                 assert!(
-                    !run.instances
-                        .iter()
-                        .any(|row| row.node.as_deref() == Some("review_candidate")
-                            && row.review_accepted == Some(true))
+                    driver
+                        .root
+                        .path()
+                        .join("workspace/checks/verify_greeting.py")
+                        .exists()
                 );
             }
             emulator
@@ -890,10 +874,10 @@ async fn reference_repair(exhausted: bool, tampered: bool) {
                             subject_digest,
                         } => {
                             reviews += 1;
-                            assert_eq!(
-                                emulator.requests().await.len(),
-                                if reviews == 1 { 2 } else { 7 }
-                            );
+                            // Only the plan is reviewed, before any writer
+                            // can start: the explicit Branch gates the Loop.
+                            assert_eq!(emulator.requests().await.len(), 2);
+                            assert_eq!(*writer_started.borrow(), 0);
                             InteractionResponse::Review {
                                 response: ReviewResponse {
                                     instance: review.instance,
@@ -950,7 +934,7 @@ async fn reference_repair(exhausted: bool, tampered: bool) {
             (questions, reviews, approvals),
             (
                 2,
-                if exhausted { 1 } else { 2 },
+                1,
                 u64::try_from(2 * iterations + usize::from(tampered)).unwrap()
             )
         );
@@ -970,9 +954,10 @@ async fn reference_repair(exhausted: bool, tampered: bool) {
     };
     tokio::join!(release_writers, interact);
     assert_eq!(emulator.requests().await.len(), 4 + 2 * iterations);
-    assert_eq!(
-        std::fs::read(driver.root.path().join("workspace/greeting.py")).unwrap(),
-        original
+    let workspace = driver.root.path().join("workspace");
+    assert!(
+        !workspace.join(".git").exists(),
+        "the reference needs no Git repository"
     );
     let (snapshot, _) = driver.runtime.host().snapshot().unwrap();
     let messages = serde_json::to_string(&snapshot.messages).unwrap();
@@ -985,10 +970,39 @@ async fn reference_repair(exhausted: bool, tampered: bool) {
             .count(),
         1
     );
-    assert!(messages.contains("handoff"), "{messages}");
+    let outer = snapshot
+        .messages
+        .iter()
+        .find_map(|m| match m {
+            rustx::message::types::MessageBlock::Tool(tool) => Some(tool),
+            _ => None,
+        })
+        .unwrap();
+    let [rustx::tools::types::ToolResultContent::Json { value: output }] =
+        outer.result.content.as_slice()
+    else {
+        panic!(
+            "the Workflow result is one JSON part: {:?}",
+            outer.result.content
+        )
+    };
+    assert_eq!(
+        *output,
+        if exhausted {
+            serde_json::json!({
+                "status": "needs_revision",
+                "feedback": "The checker ran successfully but greeting.py failed at least one fixed case. Repair greeting.py."
+            })
+        } else {
+            serde_json::json!({
+                "status": "implemented",
+                "feedback": "Both fixed greeting cases passed."
+            })
+        },
+        "the outer result is exactly the declared output"
+    );
     let run = &snapshot.workflows.runs[0];
     assert_eq!(run.agents_consumed, 1 + iterations);
-    assert_eq!(run.candidate_users, 0);
     assert_eq!(
         run.instances
             .iter()
@@ -1016,52 +1030,21 @@ async fn reference_repair(exhausted: bool, tampered: bool) {
             .filter(|row| row.child.is_some() || row.invocation.is_some())
             .all(|row| matches!(row.state, WorkflowState::Settled { .. }))
     );
-    let checks = run
-        .instances
-        .iter()
-        .filter(|row| row.node.as_deref() == Some("check"))
-        .collect::<Vec<_>>();
-    assert!(checks.iter().all(|row| row.candidate.is_some()));
-    if !exhausted {
-        assert_ne!(checks[0].candidate, checks[1].candidate);
-    }
-    assert_eq!(checks.last().unwrap().candidate, run.candidate);
-    if !exhausted {
-        let review = run
-            .instances
-            .iter()
-            .find(|row| row.node.as_deref() == Some("review_candidate"))
-            .unwrap();
-        assert_eq!(review.candidate, run.candidate);
-        assert_eq!(review.review_accepted, Some(true));
-    }
-    let handoff = run.handoff.as_ref().unwrap();
-    assert_eq!(handoff.state, "retained");
     if tampered {
         assert_eq!(
-            std::fs::read_to_string(
-                std::path::Path::new(&handoff.path).join("checks/verify_greeting.py")
-            )
-            .unwrap(),
-            "print(\"passed\", end=\"\")\n"
-        );
-        assert!(
-            !driver
-                .root
-                .path()
-                .join("workspace/checks/verify_greeting.py")
-                .exists()
+            std::fs::read_to_string(workspace.join("checks/verify_greeting.py")).unwrap(),
+            "print(\"passed\", end=\"\")\n",
+            "completed effects stay in place; they never redefine verification"
         );
     }
-    let changed =
-        std::fs::read_to_string(std::path::Path::new(&handoff.path).join("greeting.py")).unwrap();
     assert_eq!(
-        changed,
+        std::fs::read_to_string(workspace.join("greeting.py")).unwrap(),
         if exhausted {
             "def greeting(name):\n    return \"wrong\"\n"
         } else {
             "def greeting(name):\n    return 'Hello, ' + (name or 'friend') + '!'\n"
-        }
+        },
+        "the Implementer's writes land in the shared workspace with no rollback"
     );
 
     emulator.finish().await;
@@ -1072,7 +1055,7 @@ async fn shipped_parallel_reverses_completion_without_git_or_parent_orchestratio
     let Some(emulator) = ProviderEmulator::start("workflow_reference_parallel").await else {
         return;
     };
-    let driver = Driver::reference(&emulator, false).await;
+    let driver = Driver::reference(&emulator).await;
     driver.submit();
     emulator.await_gate("parallel-child-0").await;
     emulator.await_gate("parallel-child-1").await;
@@ -1111,8 +1094,6 @@ async fn shipped_parallel_reverses_completion_without_git_or_parent_orchestratio
     let (snapshot, _) = driver.runtime.host().snapshot().unwrap();
     let run = &snapshot.workflows.runs[0];
     assert_eq!(run.agents_consumed, 3);
-    assert!(run.candidate.is_none());
-    assert!(run.handoff.is_none());
     assert!(!driver.root.path().join("workspace/.git").exists());
     let history = serde_json::to_string(&snapshot.messages).unwrap();
     assert!(history.contains("quality") && history.contains("security"));

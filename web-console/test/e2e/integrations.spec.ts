@@ -76,7 +76,7 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     await settings.getByLabel('New Agent identity').fill('reviewer');
     await settings.getByRole('button', { name: 'Add Agent', exact: true }).click();
     await settings.getByLabel('Description', { exact: true }).fill('Independent review profile');
-    await settings.getByRole('button', { name: 'Extensions, worktree and guidance', exact: true }).click();
+    await settings.getByRole('button', { name: 'Extensions and guidance', exact: true }).click();
     await expect(settings.getByLabel('todo', { exact: true })).not.toBeChecked();
     await settings.getByLabel('Instructions', { exact: true }).fill('Review the requested change and report concrete findings.');
     await settings.getByLabel('read', { exact: true }).check();

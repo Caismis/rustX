@@ -206,7 +206,7 @@ focused Session header.
   finite admitted demand drive materialization. Use `test/e2e/web09-mcp.py` only
   as the local fixture when deliberately selecting that source.
 - Edit a named Agent as a complete profile, including description/instructions,
-  model inheritance, independent Tools/Skills/Plugins, timeout and worktree policy.
+  model inheritance, independent Tools/Skills/Plugins and timeout policy.
   Root's delegation allowlist is separate. Skill, Python and Workflow source
   editors are outside this UI; their native inventory remains available.
 - Save and confirm automatic policy application or native pending adoption. Adopt and

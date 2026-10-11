@@ -58,6 +58,8 @@
 }
 
 .sidebarCol {
+  grid-column: 1;
+  grid-row: 1;
   min-width: 0;
   overflow: hidden;
   background: var(--dsw-specific-sidebar-fill);

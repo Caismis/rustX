@@ -301,7 +301,7 @@ mod tests {
         assert_eq!(sources[&name].layer, "user");
         assert!(sources[&name].overridden.is_none());
         assert!(catalog.discovery_diagnostics.is_empty());
-        assert_eq!(effects, [0; 12]);
+        assert_eq!(effects, [0; 11]);
         let (workspace, _) = load_authorized(Some(&root), &user).unwrap();
         assert!(workspace.get(&name).is_none());
     }

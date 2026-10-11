@@ -1188,44 +1188,6 @@ fn commit_subagent_terminal_through(
     store.commit_subagent_terminal(event)
 }
 
-/// Commits the durable post-terminal retained-workspace disposal intent
-/// through a narrow mailbox capability. The store independently validates
-/// that the exact handoff belongs to the terminal child fact before this fact
-/// can authorize any physical mutation.
-fn commit_subagent_workspace_disposal_intent_through(
-    store: &(impl ConversationStore + ?Sized),
-    event: RuntimeEventEnvelope,
-) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
-    if !matches!(
-        event.event,
-        crate::events::types::RuntimeEvent::SubagentWorkspaceDisposalStarted { .. }
-    ) {
-        return Err(ConversationStoreError::InvalidReference(
-            "the subagent capability commits only a retained-workspace disposal intent".to_owned(),
-        ));
-    }
-    store.commit_subagent_workspace_disposal_intent(event)
-}
-
-/// Commits one durable post-terminal retained-workspace disposal settlement
-/// through the narrow mailbox capability. A settlement must name a matching
-/// durable intent; the store owns that ordering check.
-fn commit_subagent_workspace_disposal_settlement_through(
-    store: &(impl ConversationStore + ?Sized),
-    event: RuntimeEventEnvelope,
-) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
-    if !matches!(
-        event.event,
-        crate::events::types::RuntimeEvent::SubagentWorkspaceDisposalSettled { .. }
-    ) {
-        return Err(ConversationStoreError::InvalidReference(
-            "the subagent capability commits only a retained-workspace disposal settlement"
-                .to_owned(),
-        ));
-    }
-    store.commit_subagent_workspace_disposal_settlement(event)
-}
-
 /// Commits a successful Workflow Agent's validated value and its native child
 /// terminal lifecycle fact in one durable transaction. The two facts are
 /// deliberately a narrow compound transition: a Workflow child has no
@@ -1345,9 +1307,6 @@ pub trait ConversationInteractionAudit: Send + Sync + 'static {
 /// commit_subagent_terminal     -> SubagentTerminalSettled        (Workflow terminal commit)
 /// commit_workflow_agent_terminal -> SubagentTerminalSettled + WorkflowAgentOutputCommitted
 ///                                  (successful Workflow terminal commit)
-/// commit_subagent_workspace_disposal_intent -> SubagentWorkspaceDisposalStarted
-/// commit_subagent_workspace_disposal_settlement -> SubagentWorkspaceDisposalSettled
-///                                  (post-terminal resource lifecycle)
 /// ```
 ///
 /// Each is a typed single-purpose transition, never a generic event append.
@@ -1379,8 +1338,7 @@ pub trait ConversationInboundCapability: Send + Sync + 'static {
     /// durable authority for every normal `SubagentTerminalPublished` fact
     /// (Issue #192): on success, the runtime-authored terminal notice
     /// (the parent-model correlation projection naming the exact typed
-    /// execution handle, with the retained-workspace semantic fact folded
-    /// in when applicable), ordered first; then the terminal report; then
+    /// execution handle), ordered first; then the terminal report; then
     /// the dependent terminal fact — one transaction.
     ///
     /// Exactly a successful terminal carries the notice. The notice must be
@@ -1448,24 +1406,6 @@ pub trait ConversationInboundCapability: Send + Sync + 'static {
 
     /// Commits only a recovery owner's physical containment proof.
     fn commit_subagent_physical_settlement(
-        &self,
-        event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
-
-    /// Commits the post-terminal disposal intent of one retained subagent
-    /// workspace. This is a resource-lifecycle fact, not a subagent terminal
-    /// transition, and the payload must be a
-    /// [`RuntimeEvent::SubagentWorkspaceDisposalStarted`](crate::events::types::RuntimeEvent::SubagentWorkspaceDisposalStarted).
-    fn commit_subagent_workspace_disposal_intent(
-        &self,
-        event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
-
-    /// Commits one post-terminal physical settlement of an admitted retained
-    /// workspace. This fact never opens or closes the logical subagent
-    /// lifecycle; `WorktreeRemoved` keeps the resource lifecycle pending and
-    /// `Disposed` closes it.
-    fn commit_subagent_workspace_disposal_settlement(
         &self,
         event: RuntimeEventEnvelope,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
@@ -1657,8 +1597,7 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// durable authority for every normal `SubagentTerminalPublished` fact
     /// (Issue #192). On success: the runtime-authored terminal notice first
     /// (the parent-model correlation projection naming the exact typed
-    /// execution handle, with the retained-workspace semantic fact folded
-    /// in when applicable), then the child-authored terminal report, then
+    /// execution handle), then the child-authored terminal report, then
     /// the dependent terminal fact — one transaction, so a crash can never
     /// observe the report without its notice or the fact without either.
     /// A failed/cancelled/interrupted terminal carries no notice: its
@@ -2137,20 +2076,6 @@ pub trait ConversationStore: Send + Sync + 'static {
         event: RuntimeEventEnvelope,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
 
-    /// Commits the durable post-terminal retained-workspace disposal intent.
-    fn commit_subagent_workspace_disposal_intent(
-        &self,
-        event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
-
-    /// Commits one durable post-terminal retained-workspace disposal
-    /// settlement. This is a resource fact and never opens or closes the
-    /// logical subagent lifecycle.
-    fn commit_subagent_workspace_disposal_settlement(
-        &self,
-        event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
-
     /// Commits a successful Workflow Agent's structured value and its native
     /// `SubagentTerminalSettled` lifecycle fact in one durable transaction.
     /// This specialized transition is the Workflow terminal boundary: it
@@ -2385,20 +2310,6 @@ impl<T: ConversationStore + ?Sized> ConversationInboundCapability for T {
         commit_subagent_physical_settlement_through(self, event)
     }
 
-    fn commit_subagent_workspace_disposal_intent(
-        &self,
-        event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
-        commit_subagent_workspace_disposal_intent_through(self, event)
-    }
-
-    fn commit_subagent_workspace_disposal_settlement(
-        &self,
-        event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
-        commit_subagent_workspace_disposal_settlement_through(self, event)
-    }
-
     fn commit_workflow_agent_terminal(
         &self,
         terminal: RuntimeEventEnvelope,
@@ -2587,20 +2498,6 @@ impl ConversationInboundCapability for StoreInboundCapability {
         event: RuntimeEventEnvelope,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
         commit_subagent_physical_settlement_through(self.store.as_ref(), event)
-    }
-
-    fn commit_subagent_workspace_disposal_intent(
-        &self,
-        event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
-        commit_subagent_workspace_disposal_intent_through(self.store.as_ref(), event)
-    }
-
-    fn commit_subagent_workspace_disposal_settlement(
-        &self,
-        event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
-        commit_subagent_workspace_disposal_settlement_through(self.store.as_ref(), event)
     }
 
     fn commit_workflow_agent_terminal(

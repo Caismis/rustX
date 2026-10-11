@@ -19,44 +19,17 @@ struct ChildDelivery {
     message: MessageId,
 }
 impl ChildDelivery {
-    async fn new(isolated: bool) -> Self {
+    async fn new() -> Self {
         let fixture = Fixture::with_tool(Some("delivery-child")).await;
         let workspace = &fixture.workspaces[0];
         let profile = workspace.join(".agents/agents/reviewer.toml");
         std::fs::create_dir_all(profile.parent().unwrap()).unwrap();
-        std::fs::write(&profile, format!("description='Delivery child'\ninstructions='Inspect native delivery'\n[worktree]\nenabled={isolated}\n")).unwrap();
+        std::fs::write(&profile, "description='Delivery child'\ninstructions='Inspect native delivery'\n").unwrap();
         std::fs::write(
             workspace.join("rustx.toml"),
             "[agent]\nagents=['reviewer']\n",
         )
         .unwrap();
-        if isolated {
-            for args in [
-                vec!["init", "--quiet"],
-                vec!["add", "."],
-                vec![
-                    "-c",
-                    "user.name=Fixture",
-                    "-c",
-                    "user.email=fixture@example.test",
-                    "commit",
-                    "--quiet",
-                    "-m",
-                    "Freeze child source",
-                ],
-            ] {
-                let output = std::process::Command::new("git")
-                    .args(args)
-                    .current_dir(workspace)
-                    .output()
-                    .unwrap();
-                assert!(
-                    output.status.success(),
-                    "{}",
-                    String::from_utf8_lossy(&output.stderr)
-                );
-            }
-        }
         let connection = AppServerConnection::with_delivery_access(
             fixture.host.clone(),
             tokio_util::sync::CancellationToken::new(),
@@ -84,17 +57,7 @@ impl ChildDelivery {
         let registry = runtime.subagent_registry().unwrap();
         let (agent, _) = registry.list_agents(1).agents.into_iter().next().unwrap();
         let workspace = registry.agent_workspace(&agent.agent_id).unwrap();
-        assert_eq!(
-            matches!(
-                workspace.isolation,
-                crate::runtime::workspace::WorkspaceIsolation::GitWorktree(_)
-            ),
-            isolated
-        );
-        assert_eq!(
-            workspace.logical_workspace == fixture.workspaces[0],
-            !isolated
-        );
+        assert_eq!(workspace, fixture.workspaces[0]);
         // Fixture commits use a writer; the production inspection accessor is
         // intentionally read-only and must retain that contract.
         let store = crate::durable::SqliteConversationStore::open(
@@ -106,12 +69,12 @@ impl ChildDelivery {
         )
         .unwrap();
         std::fs::write(
-            workspace.logical_workspace.join("child-report.md"),
+            workspace.join("child-report.md"),
             DELIVERED,
         )
         .unwrap();
         let file = crate::tools::session_files::declare(
-            &workspace.logical_workspace,
+            &workspace,
             store.conversation_id(),
             "child-report.md",
             None,
@@ -123,7 +86,7 @@ impl ChildDelivery {
             connection,
             target,
             agent: agent.agent_id,
-            workspace: workspace.logical_workspace,
+            workspace,
             store,
             message,
         }
@@ -263,7 +226,7 @@ fn unauthorized() -> ErrorData {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn child_delivery_shared_owner_and_product_host_registration_are_exact() {
     Box::pin(bounded(async {
-        let child = ChildDelivery::new(false).await;
+        let child = ChildDelivery::new().await;
         let host = TrustedFileHost::new(&child.fixture).await;
         let before = child.evidence();
         let response = host.response(child.host_read()).await;
@@ -337,19 +300,15 @@ async fn child_delivery_shared_owner_and_product_host_registration_are_exact() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn child_delivery_product_host_rejects_isolated_root_but_native_owner_can_read() {
+async fn child_delivery_native_and_product_host_reads_use_the_same_frozen_root() {
     Box::pin(bounded(async {
-        let child = ChildDelivery::new(true).await;
+        let child = ChildDelivery::new().await;
         let host = TrustedFileHost::new(&child.fixture).await;
         let before = child.evidence();
-        assert_eq!(host.rejected(child.host_read()).await, unauthorized());
-        let mut directly_registered = child.host_read();
-        directly_registered.roots.push(child.workspace.clone());
-        assert_eq!(
-            host.rejected(directly_registered).await,
-            unauthorized(),
-            "the private lane has no isolated-child delegation policy"
-        );
+        assert_eq!(delivered_bytes(&host.response(child.host_read()).await), DELIVERED);
+        let mut unrelated_only = child.host_read();
+        unrelated_only.roots = vec![child.fixture.workspaces[1].clone()];
+        assert_eq!(host.rejected(unrelated_only).await, unauthorized());
         assert_eq!(
             delivered_bytes(
                 &child
@@ -369,7 +328,7 @@ async fn child_delivery_product_host_rejects_isolated_root_but_native_owner_can_
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn child_delivery_cancellation_revocation_and_detachment_hold_until_physical_settlement() {
     Box::pin(bounded(async {
-        let child = ChildDelivery::new(false).await;
+        let child = ChildDelivery::new().await;
         let host = TrustedFileHost::new(&child.fixture).await;
         let before = child.evidence();
         let probe = child.fixture.host.file_read_probe();
@@ -463,7 +422,7 @@ async fn child_delivery_cancellation_revocation_and_detachment_hold_until_physic
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn child_delivery_mapping_change_and_root_replacement_cannot_retarget_a_read() {
     Box::pin(bounded(async {
-        let child = ChildDelivery::new(false).await;
+        let child = ChildDelivery::new().await;
         let host = TrustedFileHost::new(&child.fixture).await;
         let before = child.evidence();
         let controller = &child.fixture.manager.sessions;

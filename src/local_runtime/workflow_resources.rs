@@ -229,7 +229,7 @@ mod tests {
         let id = crate::runtime::workflow::WorkflowId::parse("literal").unwrap();
         assert!(catalog.entries().contains_key(&id));
         assert!(catalog.invalid().is_empty());
-        assert_eq!(effects, [0; 12]);
+        assert_eq!(effects, [0; 11]);
         assert!(
             load(Some(&root), &user)
                 .unwrap()

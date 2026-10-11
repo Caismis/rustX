@@ -143,10 +143,6 @@ async fn recovered_physical_receipt_requires_owner_release_and_durable_proof() {
         incarnation.is_dir(),
         "inert physical evidence is retained until Session deletion"
     );
-    let workspace = recovered.state.lock().unwrap().agents[&admitted.child_agent_id]
-        .workspace
-        .clone();
-    workspace.acquire(&CancellationSignal::new()).await.unwrap().settle();
     assert_eq!(events(&plane).iter().filter(|event| matches!(event, crate::events::types::RuntimeEvent::SubagentPhysicalSettlementProven { subagent_id, .. } if *subagent_id == admitted.subagent_id)).count(), 1);
     assert_physical_receipt_retry_is_idempotent(&plane, &admitted);
     let reopened = SubagentRegistry::new(plane.registry.config.clone());
@@ -160,19 +156,10 @@ async fn recovered_physical_receipt_requires_owner_release_and_durable_proof() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn agent411_recovery_never_reopens_unproven_physical_containment() {
-    for isolated in [false, true] {
+    {
         let plane = plane(4);
-        if isolated {
-            make_clean_git_workspace(&plane);
-        }
         let child = stage_with_unresolved_anchor(&plane);
-        let mut authority = spec("recover unresolved durable Agent");
-        if isolated {
-            authority.authority.resolved.workspace_policy =
-                crate::runtime::workspace::WorkspacePolicy::GitWorktree {
-                    require_clean_parent: true,
-                };
-        }
+        let authority = spec("recover unresolved durable Agent");
         let accepted = start(&plane, &authority).await;
         child
             .complete(ChildResultStatus::Succeeded, Some("unproven answer"))
@@ -182,14 +169,6 @@ async fn agent411_recovery_never_reopens_unproven_physical_containment() {
             .wait_until_settled(&accepted.subagent_id)
             .await
             .unwrap();
-        assert_eq!(
-            terminal.workspace_resource_state,
-            if isolated {
-                SubagentWorkspaceResourceState::PreservedUnresolved
-            } else {
-                SubagentWorkspaceResourceState::None
-            }
-        );
         assert_eq!(terminal.state, SubagentState::Failed);
         assert!(!terminal.is_settled());
         assert!(
@@ -264,19 +243,10 @@ async fn agent411_unreconciled_orphan_cannot_recover_resume_authority() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn agent411_crash_reconciliation_cannot_invent_physical_resume_proof() {
-    for isolated in [false, true] {
+    {
         let plane = plane(4);
-        if isolated {
-            make_clean_git_workspace(&plane);
-        }
         let child = stage_exit0(&plane);
-        let mut authority = spec("unpublished terminal at crash boundary");
-        if isolated {
-            authority.authority.resolved.workspace_policy =
-                crate::runtime::workspace::WorkspacePolicy::GitWorktree {
-                    require_clean_parent: true,
-                };
-        }
+        let authority = spec("unpublished terminal at crash boundary");
         let accepted = start(&plane, &authority).await;
         // Physically settle the staged process without a committed terminal
         // fact. Recovery is intentionally given only the durable orphan
@@ -304,13 +274,6 @@ async fn agent411_crash_reconciliation_cannot_invent_physical_resume_proof() {
         assert_eq!(restored.0.state, super::agents::AgentState::Unavailable);
         assert_eq!(restored.1.state, SubagentState::Interrupted);
         assert_eq!(restored.0.conversation_id, accepted.child_conversation_id);
-        assert!(
-            !matches!(
-                restored.1.workspace_resource_state,
-                SubagentWorkspaceResourceState::PreservedUnresolved
-            ),
-            "clean Git/shared inspection alone lacks process containment proof"
-        );
         let error = recovered
             .send_message(
                 &accepted.child_agent_id,
@@ -438,18 +401,15 @@ async fn agent411_resume_reservation_recovery_requires_rollback_containment_proo
                 Err(super::agents::AgentControlError::Settlement)
             ));
         }
-        let workspace = recovered.state.lock().unwrap().agents[&admitted.child_agent_id]
-            .workspace
-            .clone();
-        let lease = workspace.acquire(&CancellationSignal::new()).await;
         assert_eq!(
-            lease.is_ok(),
+            !recovered
+                .state
+                .lock()
+                .unwrap()
+                .has_recovery_obligation_for(&admitted.child_agent_id),
             proof == Some(true),
-            "rollback proof {proof:?}"
+            "rollback proof {proof:?} gates the exact reserved activation"
         );
-        if let Ok(lease) = lease {
-            lease.settle();
-        }
         assert_eq!(
             recovered.all_snapshots().len(),
             1,
@@ -492,7 +452,7 @@ async fn agent411_resume_reservation_recovery_requires_rollback_containment_proo
                 assert!(state.recovery_inflight.is_empty(), "the failed probe released its claim");
                 let agent = &state.agents[&admitted.child_agent_id];
                 assert_eq!(agent.resuming.as_ref().unwrap().activation_id, reserved);
-                assert!(agent.workspace.is_poisoned());
+                assert!(state.has_recovery_obligation_for(&admitted.child_agent_id));
                 assert!(!state.goal_idle_committing);
                 assert!(state.ownership_committing.is_empty());
             }
@@ -513,7 +473,13 @@ async fn agent411_resume_reservation_recovery_requires_rollback_containment_proo
                 assert!(state.recovery_inflight.is_empty());
                 assert!(state.agents[&admitted.child_agent_id].resuming.is_none());
             }
-            assert!(!workspace.is_poisoned());
+            assert!(
+                !recovered
+                    .state
+                    .lock()
+                    .unwrap()
+                    .has_recovery_obligation_for(&admitted.child_agent_id)
+            );
             assert_eq!(events(&plane).iter().filter(|event| matches!(event,
                 crate::events::types::RuntimeEvent::AgentActivationAdmission {
                     activation_id, phase: AgentActivationAdmissionPhase::RolledBack { physical_settlement_proven: true }, ..
@@ -563,175 +529,6 @@ async fn agent411_resume_reservation_recovery_requires_rollback_containment_proo
                 2
             );
         }
-    }
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[allow(clippy::too_many_lines)] // One real crash, recovery and physical drain boundary.
-async fn recovered_verification_before_reserved_retains_physical_exclusion_after_parent_drop() {
-    use crate::runtime::subagent::physical_recovery::{ParentPhysicalLease, prove_after_release};
-    use std::io::{Read, Write};
-    use std::os::unix::fs::PermissionsExt;
-    for crash in [false, true] {
-    let plane = plane_with_storage(4, true);
-    make_clean_git_workspace(&plane);
-    let child = stage_exit0(&plane);
-    let mut authority = spec("durable isolated Agent");
-    authority.authority.resolved.workspace_policy = crate::runtime::workspace::WorkspacePolicy::GitWorktree {
-        require_clean_parent: true,
-    };
-    let admitted = start(&plane, &authority).await;
-    child.complete(ChildResultStatus::Succeeded, Some("done")).await;
-    plane.registry.wait_until_settled(&admitted.subagent_id).await.unwrap();
-    let mut config = plane.registry.config.clone();
-    config.workspace = WorkspaceManager::new(plane.dir.path().join("workspace"), &plane.runtime_root);
-    let recovered = SubagentRegistry::new(config.clone());
-    recovered.restore_agents(plane.store.as_ref()).unwrap();
-    let activation = SubagentId::for_conversation(&plane.conversation_id, 2);
-    let spawn = &plane.registry.config.spawn;
-    let ready = plane.dir.path().join("git-ready");
-    let release = plane.dir.path().join("git-release");
-    assert!(std::process::Command::new("mkfifo").args([&ready, &release]).status().unwrap().success());
-    let armed = plane.dir.path().join("git-armed");
-    std::fs::write(&armed, []).unwrap();
-    let hook = plane.dir.path().join("fsmonitor");
-    std::fs::write(&hook, format!(
-        "#!/bin/sh\nif [ -f '{}' ]; then\nrm '{}'\nprintf R > '{}'\nread release < '{}'\nfi\nprintf 'token\\0/\\0'\n",
-        armed.display(), armed.display(), ready.display(), release.display(),
-    )).unwrap();
-    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o700)).unwrap();
-    git(&plane.dir.path().join("workspace"), &["config", "core.fsmonitor", hook.to_str().unwrap()]);
-    let executing = tokio::task::spawn_blocking(move || {
-        let mut byte = [0];
-        std::fs::File::open(ready).unwrap().read_exact(&mut byte).unwrap();
-        assert_eq!(byte, [b'R']);
-    });
-    let mut send = Box::pin(recovered.send_message(&admitted.child_agent_id, "resume verification",
-        AgentActivationOrigin::ClientControl, CancellationSignal::new()));
-    assert!(futures_util::poll!(&mut send).is_pending());
-    executing.await.unwrap();
-    // Real recovered-workspace Git status is executing its fsmonitor helper,
-    // blocked on an explicit pipe. Reserved has not committed.
-    assert!(!events(&plane).iter().any(|event| matches!(event,
-        crate::events::types::RuntimeEvent::AgentActivationAdmission { activation_id, .. } if activation_id == &activation)));
-    if !crash {
-        let (retained, retained_lock) = tokio::sync::oneshot::channel();
-        recovered.state.lock().unwrap().resume_cleanup_hook = Some(Box::new(move |owner| {
-            retained.send(owner.duplicate_lock_for_test().unwrap()).unwrap();
-        }));
-        let mut interrupt = Box::pin(recovered.interrupt_agent(&admitted.child_agent_id));
-        assert!(futures_util::poll!(&mut interrupt).is_pending());
-        assert!(matches!(send.await, Err(AgentControlError::Start(SubagentStartError::Cancelled))));
-        let retained_lock = retained_lock.await.unwrap();
-        assert!(matches!(interrupt.await, Err(AgentControlError::Settlement)));
-        assert_eq!(recovered.agent_snapshot(&admitted.child_agent_id).unwrap().state, AgentState::Unavailable);
-        assert_eq!(recovered.unproven_settlements(), vec![activation.clone()]);
-        assert_eq!(recovered.with_goal_idle(|| true), None);
-        assert_eq!(recovered.state.lock().unwrap().next_ordinal, 3);
-        assert!(matches!(recovered.send_message(&admitted.child_agent_id, "cannot reuse",
-            AgentActivationOrigin::ClientControl, CancellationSignal::new()).await,
-            Err(AgentControlError::Settlement)));
-        assert_eq!(recovered.all_snapshots().len(), 1);
-        assert!(!events(&plane).iter().any(|event| matches!(event,
-            crate::events::types::RuntimeEvent::AgentActivationAdmission { activation_id, .. }
-            if activation_id == &activation)));
-        let (runtime, recovered) = crate::runtime::conversation_runtime::runtime_with_recovered_registry_for_test(
-            &plane.dir, &plane.conversation_id, &plane.registry.config.agent_id,
-            plane.store.clone(), recovered.clone(),
-        ).await;
-        assert!(runtime.settle_child_physical_lifetime(false).await.is_err());
-        assert!(runtime.shutdown().await.is_err());
-        assert!(!runtime.is_quiescent());
-        drop(retained_lock);
-        recovered.start_recovery_reconciliation();
-        recovered.wait_recovery_reconciliation().await;
-        assert!(recovered.unproven_settlements().is_empty());
-        assert_eq!(recovered.agent_snapshot(&admitted.child_agent_id).unwrap().state, AgentState::Inactive);
-        assert_eq!(recovered.with_goal_idle(|| true), Some(true));
-        let (settled_runtime, _) = crate::runtime::conversation_runtime::runtime_with_recovered_registry_for_test(
-            &plane.dir, &plane.conversation_id, &plane.registry.config.agent_id,
-            plane.store.clone(), recovered.clone(),
-        ).await;
-        settled_runtime.settle_child_physical_lifetime(false).await.unwrap();
-        settled_runtime.shutdown().await.unwrap();
-        assert!(settled_runtime.is_quiescent());
-        let store = Arc::new(crate::durable::SqliteConversationStore::open(
-            plane.conversation_id.clone(), &plane.dir.path().join("parent.sqlite"),
-        ).unwrap());
-        config.mailbox = ConversationInboundMailbox::over_store(store.clone());
-        let reopened = SubagentRegistry::new(config);
-        reopened.restore_agents(store.as_ref()).unwrap();
-        reopened.wait_recovery_reconciliation().await;
-        assert!(reopened.unproven_settlements().is_empty());
-        assert_eq!(reopened.agent_snapshot(&admitted.child_agent_id).unwrap().state, AgentState::Inactive);
-        assert_eq!(reopened.state.lock().unwrap().next_ordinal, 3);
-        assert_eq!(reopened.all_snapshots().len(), 1);
-        assert!(!events(&plane).iter().any(|event| matches!(event,
-            crate::events::types::RuntimeEvent::AgentActivationAdmission { activation_id, .. }
-            if activation_id == &activation)));
-        continue;
-    }
-    recovered.state.lock().unwrap().resume_owner_abort.take().unwrap().abort();
-    assert!(matches!(send.await, Err(AgentControlError::Admission(_))));
-    drop(recovered);
-    let store = Arc::new(crate::durable::SqliteConversationStore::open(
-        plane.conversation_id.clone(), &plane.dir.path().join("parent.sqlite"),
-    ).unwrap());
-    config.mailbox = ConversationInboundMailbox::over_store(store.clone());
-    config.workspace = WorkspaceManager::new(plane.dir.path().join("workspace"), &plane.runtime_root);
-    let reopened = SubagentRegistry::new(config);
-    reopened.restore_agents(store.as_ref()).unwrap();
-    let blocked = reopened.send_message(&admitted.child_agent_id, "blocked",
-        AgentActivationOrigin::ClientControl, CancellationSignal::new()).await;
-    assert!(matches!(blocked, Err(AgentControlError::Settlement)), "expected physical exclusion: {blocked:?}");
-    assert_eq!(reopened.state.lock().unwrap().next_ordinal, 3);
-    assert!(reopened.owns_idle_work());
-    assert_eq!(reopened.unproven_settlements(), vec![activation.clone()]);
-    assert_eq!(reopened.with_goal_idle(|| true), None);
-    assert_eq!(reopened.agent_snapshot(&admitted.child_agent_id).unwrap().state, AgentState::Unavailable);
-    let (runtime, reopened) = crate::runtime::conversation_runtime::runtime_with_recovered_registry_for_test(
-        &plane.dir, &plane.conversation_id, &plane.registry.config.agent_id,
-        store.clone(), reopened.clone(),
-    ).await;
-    // Awaiting the bounded reconciliation owner is deliberately not proof:
-    // the FIFO still owns the helper and no release byte has been sent.
-    assert!(runtime.settle_child_physical_lifetime(false).await.is_err());
-    assert!(runtime.shutdown().await.is_err());
-    assert!(!runtime.is_quiescent());
-    assert!(reopened.owns_idle_work());
-    assert_eq!(reopened.unproven_settlements(), vec![activation.clone()]);
-
-    std::fs::OpenOptions::new().write(true).open(release).unwrap().write_all(b"release\n").unwrap();
-    // The kernel lease release and exact supervisor receipts, never PID absence,
-    // establish the physical cut before reconciliation can release the workspace.
-    drop(prove_after_release(&spawn.product_root, &spawn.session_id,
-        &admitted.child_conversation_id, &activation).unwrap().unwrap());
-    // Shutdown joined the previous bounded owner while the helper was held.
-    // Join a fresh owner after release rather than assuming the next Try probe
-    // can reacquire a descriptor that a concurrent fork may still have inherited.
-    reopened.start_recovery_reconciliation();
-    reopened.wait_recovery_reconciliation().await;
-    assert_eq!(reopened.agent_snapshot(&admitted.child_agent_id).unwrap().state, AgentState::Inactive);
-    assert!(!reopened.owns_idle_work());
-    assert!(reopened.unproven_settlements().is_empty());
-    assert_eq!(reopened.with_goal_idle(|| true), Some(true));
-    let (settled_runtime, _) = crate::runtime::conversation_runtime::runtime_with_recovered_registry_for_test(
-        &plane.dir, &plane.conversation_id, &plane.registry.config.agent_id,
-        store.clone(), reopened.clone(),
-    ).await;
-    settled_runtime.settle_child_physical_lifetime(false).await.unwrap();
-    settled_runtime.shutdown().await.unwrap();
-    assert!(settled_runtime.is_quiescent());
-    assert_eq!(reopened.state.lock().unwrap().next_ordinal, 3);
-    let journal = events(&plane);
-    let version = *reopened.state_version.borrow();
-    reopened.reconcile_recovered_settlements();
-    assert_eq!(*reopened.state_version.borrow(), version);
-    assert_eq!(events(&plane), journal);
-    let workspace = reopened.state.lock().unwrap().agents[&admitted.child_agent_id].workspace.clone();
-    workspace.acquire(&CancellationSignal::new()).await.unwrap().settle();
-    assert!(ParentPhysicalLease::reserve(&spawn.product_root, &spawn.session_id,
-        &admitted.child_conversation_id, &activation).is_err());
     }
 }
 

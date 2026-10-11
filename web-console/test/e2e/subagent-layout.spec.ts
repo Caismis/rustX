@@ -28,7 +28,7 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
   const input = page.getByRole('textbox', { name: 'Message Agent Verify findings', exact: true });
   const scroller = page.locator('[data-conversation-scroll]:visible');
   const seat = selected.locator('[data-composer-seat]');
-  await expect(selected.locator('[data-composer-dock]')).toContainText('200 tok/s');
+  await expect(selected.locator('[data-composer-dock]')).toContainText('200 token/s');
   await expect(selected.locator('[data-composer-dock]')).toContainText('10%');
   const singleStatsRow = async () => {
     const dock = selected.locator('[data-composer-dock]');

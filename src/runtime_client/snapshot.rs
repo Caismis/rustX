@@ -893,73 +893,6 @@ pub struct RuntimeClientJob {
     pub result: Option<ToolExecutionResult>,
 }
 
-/// User-recoverable facts about the project workspace authority of one
-/// subagent. Acquisition and settlement policy remain native runtime
-/// responsibilities; this is only a read-model projection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub struct RuntimeClientAgentWorkspace {
-    /// Present when the Workflow run, rather than this child, owns the lease.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub borrowed_from: Option<crate::runtime::workflow::WorkflowRunId>,
-    /// The authoritative logical project workspace used by the child.
-    pub logical_workspace: std::path::PathBuf,
-    /// The closed shared/isolated execution facts.
-    pub isolation: RuntimeClientWorkspaceIsolation,
-    /// The post-terminal physical-resource lifecycle, independent of the
-    /// child's absorbing logical terminal state.
-    pub resource_state: crate::runtime::subagent::SubagentWorkspaceResourceState,
-    /// Retained child work-product facts, if the worktree was handed off.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub handoff: Option<RuntimeClientWorkspaceHandoff>,
-}
-
-/// The external read-model projection of a child workspace's isolation mode.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub enum RuntimeClientWorkspaceIsolation {
-    /// No runtime-owned physical checkout exists.
-    Shared,
-    /// A physical Git worktree backs the preserved logical project scope.
-    GitWorktree {
-        /// The canonical source repository root.
-        source_repository_root: std::path::PathBuf,
-        /// The logical project scope relative to the source repository root.
-        repository_relative_workspace: std::path::PathBuf,
-        /// The runtime-owned physical worktree root.
-        physical_worktree_root: std::path::PathBuf,
-        /// The exact committed source snapshot selected before ownership.
-        base_commit: String,
-        /// The runtime-created branch/ref.
-        branch: String,
-        /// Whether the parent had uncommitted changes at selection time.
-        parent_had_uncommitted_changes: bool,
-    },
-}
-
-/// The Git facts needed to recover a preserved child worktree.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub struct RuntimeClientWorkspaceHandoff {
-    /// The child's preserved logical project scope.
-    pub logical_workspace: std::path::PathBuf,
-    /// The preserved physical Git worktree root.
-    pub physical_worktree_root: std::path::PathBuf,
-    /// The runtime-created branch/ref.
-    pub branch: String,
-    /// The selected source commit.
-    pub base_commit: String,
-    /// The final child `HEAD`.
-    pub head_commit: String,
-    /// Whether ordinary tracked/index/untracked-non-ignored child state is
-    /// dirty. A changed child `HEAD` is reported independently by
-    /// `head_commit` and `base_commit`.
-    pub dirty: bool,
-}
-
 /// One durable child Agent, keyed by `agent_id` across every activation.
 ///
 /// The registry owns lifecycle arbitration. Journal ownership facts rebuild
@@ -1023,8 +956,8 @@ pub struct RuntimeClientAgent {
     pub execution_profile: Option<crate::runtime::subagent::SubagentExecutionProfile>,
     /// When the ownership committed; clients derive elapsed time from it.
     pub started_at: DateTime<Utc>,
-    /// The model-independent project workspace facts.
-    pub workspace: RuntimeClientAgentWorkspace,
+    /// The Session execution binding this Agent froze at creation.
+    pub workspace: std::path::PathBuf,
 }
 
 /// The bounded number of composed Agent Status observations one snapshot

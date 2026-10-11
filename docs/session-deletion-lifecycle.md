@@ -119,8 +119,8 @@ state, and recursive cleanup does not follow symlinks.
 
 Empty Session container directories may remain; they contain no Conversation
 source of truth and grant no identity. Projects, workspaces, environments, caches,
-configuration and credentials are outside cleanup. Retained worktrees require
-explicit disposal and continue to block deletion.
+configuration and credentials are outside cleanup. The shared Session workspace
+is never a cleanup target or deletion blocker.
 
 `session/recoverDeletion` is the explicit asynchronous recovery and retry
 boundary. It never activates a deleted Conversation, processes Pending Inbound, restores
@@ -167,7 +167,7 @@ pre-commit failures use a bounded protocol error without private storage paths.
 | --- | --- |
 | `preview` | Bounded confirmation metadata; no guards |
 | `stale` | Ownership changed; obtain a new preview |
-| `blocked` | Independent allocation/resource conflict, retained workspace, or invalid ownership |
+| `blocked` | Independent allocation/resource conflict or invalid ownership |
 | `committed_cleanup_pending` | Logically unavailable; frozen cleanup awaits retry |
 | `committed_durability_uncertain` | Publication durability unproven; recover before further cleanup/final success |
 | `deleted` | This finalization confirmed cleanup and durable record removal |
@@ -208,8 +208,8 @@ model-visible operation participates. See [TUI deletion help](../tui/README.md#d
 
 `session/deletePreview` describes the finite target; `session/delete` confirms
 that exact revision. A confirmed delete owns retirement even for the focused
-Session. No switch-away or unload prerequisite exists. Retained Workspaces remain
-explicit blockers; post-retirement external allocation conflicts are
+Session. No switch-away or unload prerequisite exists. Post-retirement external
+allocation conflicts are
 `resource_conflict`, never ordinary residency. The initiating client disables
 controls while deletion is pending, removes the view after authoritative deletion,
 and focuses an existing Session or the normal empty state without creating one.

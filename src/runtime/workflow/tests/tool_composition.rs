@@ -293,9 +293,13 @@ async fn fixed_admission_rejects_orchestration_background_and_composite_leaves()
     // capability, so a Workflow that names it is refused at compile time
     // (see `ext259_a_workflow_cannot_admit_an_extension_tool`) rather than
     // admitted and then rejected as ineligible here (Issue #259).
+    // Issue #462 A16: no Agent control is a Workflow Tool leaf.
     for name in [
         "subagent",
+        "list_agents",
         "send_message",
+        "wait_agent",
+        "interrupt_agent",
         "job_status",
         "background",
         "composite",
@@ -306,7 +310,7 @@ async fn fixed_admission_rejects_orchestration_background_and_composite_leaves()
         let mut leaf = definition();
         leaf.name = name.into();
         leaf.id = crate::runtime::identity::ToolId::new(format!("tool-{name}"));
-        if matches!(name, "send_message" | "job_status") {
+        if crate::tools::native::is_domain_control(name) {
             leaf.execution_policy = ToolExecutionPolicy::ForegroundOnly;
             leaf.concurrency_policy = crate::tools::types::ToolConcurrencyPolicy::Sequential;
         }

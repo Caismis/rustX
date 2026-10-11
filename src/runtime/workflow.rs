@@ -34,7 +34,6 @@ mod review;
 pub use review::WorkflowReviewSubject;
 mod expressions;
 mod tool;
-mod workspace;
 use expressions::{
     evaluate_predicate, evaluate_value, valid_local_key, validate_predicate, value_schema,
 };
@@ -296,9 +295,6 @@ impl std::error::Error for WorkflowIdError {}
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub struct WorkflowDefinition {
-    /// Explicit run-scoped candidate acquisition; absent means no Git resource.
-    #[serde(default)]
-    pub workspace: Option<WorkflowWorkspace>,
     /// The model-facing description of the workflow Tool.
     pub description: String,
     /// Trusted finite total foreground lifetime, including descendant waits.
@@ -306,16 +302,6 @@ pub struct WorkflowDefinition {
     pub timeout_ms: u64,
     /// The root lexical execution scope.
     pub block: WorkflowBlock,
-}
-
-/// A managed candidate always preserves isolation. Dirty-parent opt-out is
-/// explicit and retains the native committed-baseline/overlay semantics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub struct WorkflowWorkspace {
-    #[serde(default = "workspace::strict_parent")]
-    pub require_clean_parent: bool,
 }
 
 /// A fixed lexical graph shared by root, Parallel branches and Loop bodies.
@@ -554,7 +540,6 @@ pub struct WorkflowBranch {
 #[derive(Debug, Clone)]
 pub struct WorkflowProgram {
     digest: String,
-    workspace: Option<WorkflowWorkspace>,
     id: WorkflowId,
     description: String,
     block: WorkflowBlockProgram,
@@ -1045,7 +1030,6 @@ fn compile_program(
     }
     Ok(WorkflowProgram {
         digest,
-        workspace: definition.workspace,
         id,
         description: definition.description,
         tools: collect_tool_selectors(&block),
@@ -2191,7 +2175,6 @@ pub enum WorkflowTerminalState {
 /// not own model execution, tool execution, workspaces, or a second
 /// scheduler.
 pub struct WorkflowRun {
-    candidate: Option<crate::runtime::workspace::CandidateScope>,
     program: Arc<WorkflowProgram>,
     run_id: WorkflowRunId,
     budgets: std::sync::Mutex<execution::RunBudgets>,
@@ -2206,7 +2189,6 @@ impl fmt::Debug for WorkflowRun {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("WorkflowRun")
-            .field("candidate", &self.candidate)
             .field("program", &self.program.id())
             .field("run_id", &self.run_id)
             .field("budgets", &self.budgets)
@@ -2220,7 +2202,6 @@ impl WorkflowRun {
     fn new(program: Arc<WorkflowProgram>, run_id: WorkflowRunId) -> Self {
         let budgets = execution::RunBudgets::reserved(program.retained_bound);
         Self {
-            candidate: None,
             program,
             run_id,
             budgets: std::sync::Mutex::new(budgets),
@@ -2265,8 +2246,6 @@ pub struct WorkflowRuntime {
     #[cfg(test)]
     iteration_frontier: Arc<std::sync::Mutex<Option<execution::IterationFrontierHook>>>,
     #[cfg(test)]
-    pre_start: Arc<std::sync::Mutex<Option<execution::PreStartHook>>>,
-    #[cfg(test)]
     observations: tokio::sync::watch::Sender<Vec<RuntimeEvent>>,
 }
 
@@ -2287,15 +2266,6 @@ impl fmt::Debug for WorkflowRuntime {
 /// identities, so hashing it prevents distinct facts from colliding while
 /// keeping the event ID bounded.
 fn workflow_event_id(event: &RuntimeEvent) -> EventId {
-    match event {
-        RuntimeEvent::WorkflowWorkspaceOwned { run_id, .. } => {
-            return crate::runtime::workspace::workflow_resource_event_id(run_id, "owned");
-        }
-        RuntimeEvent::WorkflowWorkspaceSettled { run_id, .. } => {
-            return crate::runtime::workspace::workflow_resource_event_id(run_id, "settled");
-        }
-        _ => {}
-    }
     let encoded = serde_json::to_vec(event).expect("Workflow runtime events are serializable");
     let digest = Sha256::digest(encoded);
     EventId::new(format!("workflow-event:{digest:x}"))
@@ -2318,8 +2288,6 @@ impl WorkflowRuntime {
             node_frontier: Arc::new(std::sync::Mutex::new(None)),
             #[cfg(test)]
             iteration_frontier: Arc::new(std::sync::Mutex::new(None)),
-            #[cfg(test)]
-            pre_start: Arc::new(std::sync::Mutex::new(None)),
             #[cfg(test)]
             observations: tokio::sync::watch::Sender::new(Vec::new()),
         }
@@ -2350,7 +2318,7 @@ impl WorkflowRuntime {
     /// Returns a [`WorkflowRunError`] when input, child execution, control
     /// flow, output validation, or cancellation prevents successful
     /// settlement.
-    #[allow(clippy::too_many_lines)] // One admission and terminal resource-settlement protocol.
+    #[allow(clippy::too_many_lines)] // One admission and terminal settlement protocol.
     pub async fn run_foreground(
         &self,
         workflow: WorkflowId,
@@ -2368,15 +2336,6 @@ impl WorkflowRuntime {
         crate::local_runtime::static_effects::observe(
             crate::local_runtime::static_effects::Effect::WorkflowRun,
         );
-        // Candidate acquisition and final inspection are owned native work
-        // too. Outer cancellation must drain this resource before starting
-        // the composite settlement-control guard.
-        let _workspace_owner = program.workspace.and_then(|_| {
-            context
-                .native
-                .as_ref()
-                .map(|native| native.descendants.enter())
-        });
         if context.attempt_id().as_str().len() > MAX_RUN_ID_COMPONENT_BYTES
             || context.attempt_id().as_str().is_empty()
             || self.event_store.conversation_id().as_str().len() > MAX_RUN_ID_COMPONENT_BYTES
@@ -2416,9 +2375,6 @@ impl WorkflowRuntime {
             steps_consumed: 0,
             steps_max: program.execution_bound,
             agents_consumed: 0,
-            candidate: None,
-            handoff: None,
-            candidate_users: 0,
         });
         self.emit_observability(
             &run,
@@ -2428,53 +2384,28 @@ impl WorkflowRuntime {
                 run_id: run.run_id.clone(),
             },
         );
-        let (execution, workspace, candidate_reference) = {
+        let execution = {
             let id = run.run_id.clone();
             let execute = async {
-                let execution = {
-                    run.tools = program.frozen_tools.clone();
-                    let admission =
-                        match execution::validate_commit(&program.block.input_schema, &input) {
-                            Ok(()) => {
-                                if program.workspace.is_some() {
-                                    self.read_model.update(&run.run_id, |view| {
-                                        if !matches!(
-                                            view.state,
-                                            read_model::WorkflowState::Draining
-                                        ) {
-                                            view.state = read_model::WorkflowState::Waiting {
-                                                reason: read_model::WorkflowWait::Workspace,
-                                            };
-                                        }
-                                    });
-                                }
-                                self.prepare_workspace(&run, &context, &cancellation).await
-                            }
-                            Err(error) => Err(error),
-                        };
-                    match admission {
-                        Ok(candidate) => {
-                            run.candidate = candidate;
-                            self.read_model.update(&run.run_id, |view| {
-                                if !matches!(view.state, read_model::WorkflowState::Draining) {
-                                    view.state = read_model::WorkflowState::Running;
-                                }
-                            });
-                            self.execute_block(
+                run.tools = program.frozen_tools.clone();
+                // The run executes against the invoking Session's execution
+                // binding: there is no run-owned workspace to acquire, borrow
+                // or settle. Every node settles its own native work inline.
+                let execution =
+                    match execution::validate_commit(&program.block.input_schema, &input) {
+                        Ok(()) => self
+                            .execute_block(
                                 &run,
                                 &program.block,
                                 &context,
-                                input.into(),
-                                execution::Acceptance::default(),
+                                input,
                                 vec![0],
                                 &cancellation,
                             )
                             .await
-                            .map(|output| output.value.value.clone())
-                        }
+                            .map(|output| output.value),
                         Err(error) => Err(error),
-                    }
-                };
+                    };
                 self.read_model.update(&run.run_id, |view| {
                     if !matches!(view.state, read_model::WorkflowState::Draining) {
                         view.state = read_model::WorkflowState::Waiting {
@@ -2482,30 +2413,7 @@ impl WorkflowRuntime {
                         };
                     }
                 });
-                let workspace = match &run.candidate {
-                    Some(candidate) => Some(candidate.settle().await),
-                    None => None,
-                };
-                let candidate_reference = match &run.candidate {
-                    Some(candidate) => candidate.final_reference().await,
-                    None => None,
-                };
-                let recovery_guard = match &run.candidate {
-                    Some(candidate) => candidate.recovery_guard().await,
-                    None => None,
-                };
-                let execution = self.commit_workspace_settlement(
-                    &run,
-                    workspace.as_ref(),
-                    candidate_reference.as_ref(),
-                    recovery_guard.as_ref(),
-                    execution,
-                );
-                self.read_model.update(&run.run_id, |view| {
-                    view.candidate.clone_from(&candidate_reference);
-                    view.handoff = workspace.as_ref().map(Into::into);
-                });
-                (execution, workspace, candidate_reference)
+                execution
             };
             tokio::pin!(execute);
             tokio::select! {
@@ -2541,12 +2449,8 @@ impl WorkflowRuntime {
                         run_id: run.run_id.clone(),
                     },
                 );
-                Ok(match workspace {
-                    Some(workspace) => {
-                        serde_json::json!({"output": value, "workspace": workspace, "candidate": candidate_reference})
-                    }
-                    None => value,
-                })
+                // The semantic output is exactly the declared Return value.
+                Ok(value)
             }
             Err(error) => {
                 let terminal = match &error {
@@ -2580,14 +2484,7 @@ impl WorkflowRuntime {
                         },
                     ),
                 }
-                Err(match workspace {
-                    Some(workspace) => WorkflowRunError::WorkspaceSettlement {
-                        candidate: candidate_reference,
-                        error: Box::new(error),
-                        workspace: Box::new(workspace),
-                    },
-                    None => error,
-                })
+                Err(error)
             }
         }
     }
@@ -2627,24 +2524,17 @@ impl WorkflowRuntime {
     }
 
     #[allow(clippy::too_many_arguments)] // the explicit child admission boundary
-    #[allow(clippy::too_many_lines)] // Candidate admission precedes the single native child admission path.
+    #[allow(clippy::too_many_lines)] // the single native child admission path
     async fn admit_agent(
         &self,
         run: &WorkflowRun,
         context: &crate::runtime::subagent::AttemptSubagentContext,
-        input: &expressions::CommittedValue,
-        values: &BTreeMap<String, expressions::CommittedValue>,
+        input: &Value,
+        values: &BTreeMap<String, Value>,
         node_id: &WorkflowNodeInstance,
         agent: &WorkflowAgentProgram,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
-        admitted_access: &mut Option<crate::runtime::workspace::WorkspaceAccess>,
-    ) -> Result<
-        (
-            crate::runtime::identity::SubagentId,
-            Option<crate::runtime::workspace::CandidateReference>,
-        ),
-        WorkflowRunError,
-    > {
+    ) -> Result<crate::runtime::identity::SubagentId, WorkflowRunError> {
         let resolved = context
             .bind_workflow_agent(
                 agent
@@ -2664,24 +2554,8 @@ impl WorkflowRuntime {
             });
         }
         let mut bound = serde_json::Map::new();
-        let mut applicability = expressions::CommittedValue::from(Value::Null);
         for (key, binding) in &agent.input {
-            let value = evaluate_value(binding, input, values)?;
-            applicability.depend_on(&value)?;
-            bound.insert(key.clone(), value.value);
-        }
-        if let Some(access) = admitted_access.as_ref() {
-            if applicability
-                .candidate
-                .as_ref()
-                .is_some_and(|reference| reference != access.input())
-            {
-                return Err(WorkflowRunError::InvalidValue(
-                    "Agent input differs from accepted candidate".into(),
-                ));
-            }
-        } else {
-            applicability.assert_current(run).await?;
+            bound.insert(key.clone(), evaluate_value(binding, input, values)?);
         }
         let context_package = serde_json::json!({
             "workflow_node": node_id.node,
@@ -2716,53 +2590,17 @@ impl WorkflowRuntime {
             },
         };
         let child_cancellation = cancellation.child_signal();
-        if admitted_access.is_none()
-            && let Some(candidate) = &run.candidate
-        {
-            self.read_model.node(node_id, |view| {
-                view.state = read_model::WorkflowState::Waiting {
-                    reason: read_model::WorkflowWait::Workspace,
-                }
-            });
-            *admitted_access = Some(
-                candidate
-                    .borrow(
-                        node_id.clone(),
-                        applicability.candidate.as_ref(),
-                        &child_cancellation,
-                    )
-                    .await
-                    .map_err(|error| {
-                        if cancellation.is_cancelled() {
-                            WorkflowRunError::from_cancellation(cancellation)
-                        } else {
-                            WorkflowRunError::InvocationAuthority(error)
-                        }
-                    })?,
-            );
-        }
-        // Capture identity, not ownership, from the exact access transferred below.
-        let candidate_input = admitted_access
-            .as_ref()
-            .map(|access| access.input().clone());
-        if candidate_input
-            .as_ref()
-            .is_some_and(|input| input.run != run.run_id)
-        {
-            return Err(WorkflowRunError::InvalidValue(
-                "Agent candidate input belongs to another run".into(),
-            ));
-        }
-        // Preparation takes ownership only here. Every earlier error leaves
-        // the access in execute_block_body's explicit async cleanup scope.
         self.read_model.node(node_id, |view| {
             view.state = read_model::WorkflowState::Waiting {
                 reason: read_model::WorkflowWait::Capacity,
             }
         });
+        // The finite Workflow-owned AgentRun shares the native staged child
+        // supervision path and the invoking Session binding. Its terminal mode
+        // keeps it out of the ordinary durable Agent resume and mailbox API.
         let prepared = self
             .subagents
-            .prepare_in_workspace(&spec, &child_cancellation, admitted_access.take())
+            .prepare(&spec, &child_cancellation)
             .await
             .map_err(|error| match error {
                 crate::runtime::subagent::SubagentStartError::Cancelled => {
@@ -2805,7 +2643,7 @@ impl WorkflowRuntime {
                 profile: agent.profile.clone(),
             },
         );
-        Ok((accepted.subagent_id, candidate_input))
+        Ok(accepted.subagent_id)
     }
 
     async fn settle_agent(
@@ -2814,7 +2652,7 @@ impl WorkflowRuntime {
         node_id: &WorkflowNodeInstance,
         output_schema: &Value,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
-    ) -> Result<expressions::CommittedValue, WorkflowRunError> {
+    ) -> Result<Value, WorkflowRunError> {
         let mut wait = Box::pin(self.subagents.wait_until_settled(&subagent_id));
         let snapshot = tokio::select! {
             biased;
@@ -2861,7 +2699,7 @@ impl WorkflowRuntime {
         node_id: &WorkflowNodeInstance,
         output_schema: &Value,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
-    ) -> Result<expressions::CommittedValue, WorkflowRunError> {
+    ) -> Result<Value, WorkflowRunError> {
         use crate::runtime::subagent::{SubagentPhysicalSettlement, SubagentPublication};
         use crate::tools::types::{ToolCancellationPhase, ToolExecutionStatus as Status};
         let settlement_failure = match snapshot.settlement.publication {
@@ -2892,14 +2730,13 @@ impl WorkflowRuntime {
                 // The committed output value is the live Workflow result
                 // channel owned by the registry (Issue #178): the
                 // observation snapshot deliberately never carries it.
-                let content = self
+                let value = self
                     .subagents
                     .take_workflow_agent_output(subagent_id, node_id)
                     .ok_or_else(|| WorkflowRunError::ChildFailed {
                         node: node_id.to_string(),
                         detail: "workflow Agent completed without committed output".to_owned(),
                     })?;
-                let value = content.value;
                 // This validation is not redundant with
                 // `validate_workflow_candidate` in the registry: the registry
                 // revalidates the untrusted cross-process child wire frame
@@ -2925,10 +2762,7 @@ impl WorkflowRuntime {
                 // Do not append a second observability event here: the
                 // WorkflowRun consumes that durable handoff but is not a
                 // second Event Journal authority.
-                Ok(expressions::CommittedValue {
-                    value,
-                    candidate: content.candidate,
-                })
+                Ok(value)
             }
             crate::runtime::subagent::SubagentState::Cancelled => {
                 // The registry's first committed cause is immutable. Only
@@ -3010,11 +2844,6 @@ pub enum WorkflowRunError {
         node: String,
         failure: WorkflowChildSettlementFailure,
     },
-    WorkspaceSettlement {
-        candidate: Option<crate::runtime::workspace::CandidateReference>,
-        error: Box<WorkflowRunError>,
-        workspace: Box<crate::runtime::workspace::WorkspaceSettlement>,
-    },
     CapabilityNotAdmitted(String),
     IneligibleCapability(String),
     IdentityChanged(String),
@@ -3071,20 +2900,6 @@ impl WorkflowRunError {
     pub fn execution_status(&self) -> crate::tools::types::ToolExecutionStatus {
         use crate::tools::types::{ToolCancellationPhase, ToolExecutionStatus as Status};
         match self {
-            Self::WorkspaceSettlement {
-                error, workspace, ..
-            } => {
-                if workspace.unresolved_reason()
-                    == Some(crate::runtime::workspace::WorkspaceUnresolvedReason::NestedContainment)
-                {
-                    Status::OutcomeUnknown {
-                        detail: "candidate ownership could not reach proven physical settlement"
-                            .into(),
-                    }
-                } else {
-                    error.execution_status()
-                }
-            }
             Self::ToolFailed { status, .. } | Self::ChildOutcome { status, .. } => status.clone(),
             Self::ChildSettlement { failure, .. } => Status::OutcomeUnknown {
                 detail: failure.to_string(),
@@ -3134,7 +2949,6 @@ impl fmt::Display for WorkflowRunError {
                 "Workflow {workflow} is disabled: {}",
                 serde_json::to_string(diagnostics).expect("typed diagnostics serialize")
             ),
-            Self::WorkspaceSettlement { error, .. } => error.fmt(formatter),
             Self::LimitExceeded(limit) => {
                 write!(formatter, "Workflow run {limit:?} limit exceeded")
             }
@@ -3251,8 +3065,6 @@ mod tests {
     #[cfg(unix)]
     use crate::runtime::types::{ApprovalMode, CancellationReason, SystemClock};
     #[cfg(unix)]
-    use crate::runtime::workspace::{WorkspaceManager, WorkspacePolicy};
-    #[cfg(unix)]
     use crate::skills::SkillSnapshot;
     #[cfg(unix)]
     use crate::tools::environment::ToolEnvironment;
@@ -3350,8 +3162,6 @@ mod tests {
         output: Value,
     ) -> WorkflowDefinition {
         WorkflowDefinition {
-            workspace: None,
-
             timeout_ms: 600_000,
             description: "Test workflow".to_owned(),
             block: WorkflowBlock {
@@ -3444,7 +3254,7 @@ chat_reasoning_replay = "omit"
                 )
                 .expect("product root"),
             },
-            workspace: WorkspaceManager::new(&workspace, &runtime_root),
+            workspace: workspace.clone(),
             max_active,
         });
         WorkflowTestPlane {
@@ -3475,23 +3285,6 @@ chat_reasoning_replay = "omit"
         instructions: &str,
         workflow_catalog: WorkflowCatalog,
     ) -> crate::runtime::subagent::AttemptSubagentContext {
-        workflow_test_context_with_policy(
-            plane,
-            revision,
-            instructions,
-            workflow_catalog,
-            WorkspacePolicy::SharedWorkspace,
-        )
-    }
-
-    #[cfg(unix)]
-    fn workflow_test_context_with_policy(
-        plane: &WorkflowTestPlane,
-        revision: u64,
-        instructions: &str,
-        workflow_catalog: WorkflowCatalog,
-        workspace_policy: WorkspacePolicy,
-    ) -> crate::runtime::subagent::AttemptSubagentContext {
         let model_catalog = ModelCatalog::from_toml_slice(WORKFLOW_TEST_MODELS.as_bytes())
             .expect("workflow test model catalog");
         let models = ModelBindingRegistry::new(
@@ -3516,7 +3309,6 @@ chat_reasoning_replay = "omit"
                         inherit: false,
                         files: Vec::new(),
                     },
-                workspace_policy,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
                 agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
@@ -3686,8 +3478,6 @@ chat_reasoning_replay = "omit"
     fn snapshot_test_program(result_field: &str, description: &str) -> Arc<WorkflowProgram> {
         let branch_output = schema(json!({"summary": {"type": "string"}}), &["summary"]);
         let definition = WorkflowDefinition {
-            workspace: None,
-
             timeout_ms: 600_000,
             description: description.to_owned(),
             block: WorkflowBlock {
@@ -3737,8 +3527,6 @@ chat_reasoning_replay = "omit"
             WorkflowProgram::compile(
                 WorkflowId::parse("event_journal_workflow").expect("event workflow id"),
                 WorkflowDefinition {
-                    workspace: None,
-
                     timeout_ms: 600_000,
                     description: "Event journal test workflow".to_owned(),
                     block: WorkflowBlock {
@@ -4414,8 +4202,6 @@ chat_reasoning_replay = "omit"
             &["passed", "summary"],
         );
         let definition = WorkflowDefinition {
-            workspace: None,
-
             timeout_ms: 600_000,
             description: "Review".to_owned(),
             block: WorkflowBlock {
@@ -4461,8 +4247,6 @@ chat_reasoning_replay = "omit"
     #[test]
     fn rejects_branch_without_boolean_condition_or_complete_ports() {
         let definition = WorkflowDefinition {
-            workspace: None,
-
             timeout_ms: 600_000,
             description: "Branch".to_owned(),
             block: WorkflowBlock {
@@ -4580,8 +4364,6 @@ block:
             },
         };
         let missing_ports = WorkflowDefinition {
-            workspace: None,
-
             timeout_ms: 600_000,
             description: "Branch".to_owned(),
             block: WorkflowBlock {
@@ -4762,8 +4544,6 @@ block:
         ));
 
         let optional_input = WorkflowDefinition {
-            workspace: None,
-
             timeout_ms: 600_000,
             description: "Optional nested input".to_owned(),
             block: WorkflowBlock {
@@ -5108,9 +4888,7 @@ block:
         let input = json!({"task": "read this"});
         let binding = reference("args.task");
         assert_eq!(
-            evaluate_value(&binding, &input.into(), &BTreeMap::new())
-                .expect("reference")
-                .value,
+            evaluate_value(&binding, &input, &BTreeMap::new()).expect("reference"),
             json!("read this")
         );
     }

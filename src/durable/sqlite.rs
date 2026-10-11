@@ -317,7 +317,10 @@ fn count_conversation_store_open() {
 /// Version 52 requires identity-bearing message fact lookup and a qualifying
 /// context-reading expression index over immutable Journal evidence.
 /// Version 55 indexes reverse immutable Turn membership for exact validation.
-/// Version 56 persists the immutable inherited transcript boundary at bootstrap.
+/// Version 56 persists the immutable inherited transcript boundary and combines
+/// native child history/provenance with frozen shared
+/// Session workspace ownership and removes Candidate/worktree lifecycle facts.
+/// Earlier development stores are rejected without migration.
 pub const SQLITE_SCHEMA_VERSION: i64 = 56;
 
 /// One operation in a deterministic admission fault script.
@@ -573,12 +576,6 @@ impl SqliteConversationStore {
                 | RuntimeEvent::SubagentTerminalPublished { .. }
                 | RuntimeEvent::SubagentPhysicalSettlementProven { .. }
                 | RuntimeEvent::SubagentTerminalSettled { .. }
-                | RuntimeEvent::SubagentWorkspaceDisposalStarted { .. }
-                | RuntimeEvent::SubagentWorkspaceDisposalSettled { .. }
-                | RuntimeEvent::WorkflowWorkspaceOwned { .. }
-                | RuntimeEvent::WorkflowWorkspaceSettled { .. }
-                | RuntimeEvent::WorkflowWorkspaceDisposalStarted { .. }
-                | RuntimeEvent::WorkflowWorkspaceDisposalSettled { .. }
         ) {
             self.lifecycle
                 .as_ref()
@@ -2981,38 +2978,6 @@ impl ConversationStore for SqliteConversationStore {
         self.append_event_internal(event, None)
     }
 
-    fn commit_subagent_workspace_disposal_intent(
-        &self,
-        event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
-        if !matches!(
-            &event.event,
-            RuntimeEvent::SubagentWorkspaceDisposalStarted { .. }
-        ) {
-            return Err(ConversationStoreError::InvalidReference(
-                "the retained-workspace disposal intent transition accepts only a SubagentWorkspaceDisposalStarted fact"
-                    .to_owned(),
-            ));
-        }
-        commit_subagent_workspace_disposal_transition(self, event, "intent")
-    }
-
-    fn commit_subagent_workspace_disposal_settlement(
-        &self,
-        event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
-        if !matches!(
-            &event.event,
-            RuntimeEvent::SubagentWorkspaceDisposalSettled { .. }
-        ) {
-            return Err(ConversationStoreError::InvalidReference(
-                "the retained-workspace disposal settlement transition accepts only a SubagentWorkspaceDisposalSettled fact"
-                    .to_owned(),
-            ));
-        }
-        commit_subagent_workspace_disposal_transition(self, event, "settlement")
-    }
-
     fn commit_subagent_terminal(
         &self,
         event: RuntimeEventEnvelope,
@@ -3099,6 +3064,7 @@ impl ConversationStore for SqliteConversationStore {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("Workflow terminal transaction: {error}")))?;
+        validate_event_reference(&transaction, &output)?;
         let existing_terminal = find_event_by_id(&transaction, &terminal.event_id)?;
         let existing_output = find_event_by_id(&transaction, &output.event_id)?;
         match (existing_terminal, existing_output) {
@@ -3695,111 +3661,6 @@ impl ConversationStore for SqliteConversationStore {
         json.map(|json| decode(&json, "publication audit"))
             .transpose()
     }
-}
-
-fn commit_subagent_workspace_disposal_transition(
-    store: &SqliteConversationStore,
-    event: RuntimeEventEnvelope,
-    phase: &str,
-) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
-    let _ownership = store.ownership_transition(&event.event)?;
-    let mut connection = store.lock()?;
-    let transaction = connection
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|error| {
-            storage(format!(
-                "subagent workspace disposal {phase} transaction: {error}"
-            ))
-        })?;
-    if let Some(existing) = find_event_by_id(&transaction, &event.event_id)? {
-        if same_event_ignoring_sequence(&existing, &event) {
-            transaction.commit().map_err(|error| {
-                storage(format!(
-                    "subagent workspace disposal {phase} retry commit: {error}"
-                ))
-            })?;
-            return Ok(existing);
-        }
-        return Err(ConversationStoreError::TerminalViolation(format!(
-            "retained-workspace disposal {phase} retry conflicts with its durable fact"
-        )));
-    }
-    validate_subagent_workspace_disposal_order(&transaction, &event.event)?;
-    #[cfg(test)]
-    if SqliteConversationStore::consume(&store.fail_event_remaining) {
-        return Err(storage(format!(
-            "fault injected: subagent workspace disposal {phase} commit"
-        )));
-    }
-    let boundary = match phase {
-        "intent" => "before:subagent_workspace_disposal_intent",
-        "settlement" => "before:subagent_workspace_disposal_settlement",
-        _ => unreachable!("only disposal intent and settlement transitions exist"),
-    };
-    process_death::reach_event(boundary, &event.event);
-    let persisted = persist_event_tx(&transaction, &store.conversation_id, event)?;
-    transaction.commit().map_err(|error| {
-        storage(format!(
-            "subagent workspace disposal {phase} commit: {error}"
-        ))
-    })?;
-    let boundary = match phase {
-        "intent" => "after:subagent_workspace_disposal_intent",
-        "settlement" => "after:subagent_workspace_disposal_settlement",
-        _ => unreachable!("only disposal intent and settlement transitions exist"),
-    };
-    process_death::reach_event(boundary, &persisted.event.event);
-    Ok(persisted.event)
-}
-
-/// Enforces the monotonic ordering of the separate post-terminal workspace
-/// resource lifecycle. The generic lifecycle table prevents any new fact
-/// after `Disposed`, but `WorktreeRemoved` is intentionally non-terminal, so
-/// an intent replay after that partial phase needs this domain-specific check.
-fn validate_subagent_workspace_disposal_order(
-    transaction: &Transaction<'_>,
-    event: &RuntimeEvent,
-) -> Result<(), ConversationStoreError> {
-    match event {
-        RuntimeEvent::SubagentWorkspaceDisposalStarted { subagent_id, .. } => {
-            let partial_id = crate::runtime::subagent::workspace_disposal_settled_event_id(
-                subagent_id,
-                crate::events::types::SubagentWorkspaceDisposalSettlement::WorktreeRemoved,
-            );
-            let final_id = crate::runtime::subagent::workspace_disposal_settled_event_id(
-                subagent_id,
-                crate::events::types::SubagentWorkspaceDisposalSettlement::Disposed,
-            );
-            if find_event_by_id(transaction, &partial_id)?.is_some()
-                || find_event_by_id(transaction, &final_id)?.is_some()
-            {
-                return Err(ConversationStoreError::TerminalViolation(format!(
-                    "subagent {subagent_id} workspace disposal intent follows a settled resource phase"
-                )));
-            }
-        }
-        RuntimeEvent::SubagentWorkspaceDisposalSettled {
-            subagent_id,
-            settlement: crate::events::types::SubagentWorkspaceDisposalSettlement::WorktreeRemoved,
-            ..
-        } => {
-            let final_id = crate::runtime::subagent::workspace_disposal_settled_event_id(
-                subagent_id,
-                crate::events::types::SubagentWorkspaceDisposalSettlement::Disposed,
-            );
-            if find_event_by_id(transaction, &final_id)?.is_some() {
-                return Err(ConversationStoreError::TerminalViolation(format!(
-                    "subagent {subagent_id} workspace disposal cannot regress from Disposed to WorktreeRemoved"
-                )));
-            }
-        }
-        RuntimeEvent::SubagentWorkspaceDisposalSettled {
-            settlement: crate::events::types::SubagentWorkspaceDisposalSettlement::Disposed,
-            ..
-        } => {}
-        _ => unreachable!("only retained-workspace disposal facts use this validator"),
-    }
-    Ok(())
 }
 
 /// Reads one publication stream record, when it exists.
@@ -8354,9 +8215,10 @@ fn find_subagent_ownership(
 ) -> Result<
     (
         AgentId,
-        crate::runtime::workspace::WorkspaceSnapshot,
+        std::path::PathBuf,
         crate::events::types::SubagentOwnershipKind,
         String,
+        crate::runtime::subagent::AgentActivationOrigin,
     ),
     ConversationStoreError,
 > {
@@ -8373,8 +8235,9 @@ fn find_subagent_ownership(
             ownership,
             workspace,
             agent,
+            origin,
             ..
-        } if embedded == *subagent_id => Ok((child_agent_id, workspace, ownership, agent)),
+        } if embedded == *subagent_id => Ok((child_agent_id, workspace, ownership, agent, origin)),
         RuntimeEvent::SubagentOwnershipCommitted {
             subagent_id: embedded,
             ..
@@ -8401,12 +8264,9 @@ fn find_subagent_ownership(
 /// - the event names the committed child agent of a `Normal` ownership;
 /// - a successful report is authored by that child agent, every other
 ///   terminal by the runtime;
-/// - a success is impossible while the terminal workspace resource is
-///   unresolved (successful settlement is what proves the resource);
 /// - exactly a success carries the runtime-authored terminal notice, whose
-///   identity, correlation, provenance, and exact canonical text —
-///   including the retained-workspace semantic fact precisely when the
-///   terminal resource is `Retained` — are recomputed from durable facts.
+///   identity, correlation, provenance, and exact canonical text are
+///   recomputed from durable facts.
 #[allow(clippy::too_many_lines)] // one semantically closed validation boundary
 fn validate_subagent_terminal_publication(
     transaction: &Transaction<'_>,
@@ -8419,7 +8279,6 @@ fn validate_subagent_terminal_publication(
         child_agent_id,
         message_id,
         state,
-        workspace_resource,
         ..
     } = &event.event
     else {
@@ -8439,7 +8298,7 @@ fn validate_subagent_terminal_publication(
             event.event_id
         )));
     }
-    let (committed_child_agent_id, _workspace, ownership, agent) =
+    let (committed_child_agent_id, _workspace, ownership, agent, _) =
         find_subagent_ownership(transaction, subagent_id)?;
     if ownership != crate::events::types::SubagentOwnershipKind::Normal {
         return Err(ConversationStoreError::InvalidReference(format!(
@@ -8491,20 +8350,6 @@ fn validate_subagent_terminal_publication(
             "subagent {subagent_id} terminal report provenance does not match its terminal state"
         )));
     }
-    if success
-        && matches!(
-            workspace_resource,
-            crate::events::types::SubagentWorkspaceTerminalResource::PreservedUnresolved { .. }
-        )
-    {
-        return Err(ConversationStoreError::InvalidReference(format!(
-            "subagent {subagent_id} cannot succeed while its terminal workspace resource is unresolved"
-        )));
-    }
-    let retained = matches!(
-        workspace_resource,
-        crate::events::types::SubagentWorkspaceTerminalResource::Retained { .. }
-    );
     match (success, notice) {
         (true, Some(notice)) => {
             if notice.source != UserSource::Runtime || notice.kind != InboundKind::Message {
@@ -8526,12 +8371,8 @@ fn validate_subagent_terminal_publication(
                     "subagent {subagent_id} terminal notice does not carry the canonical producer correlation"
                 )));
             }
-            let expected = crate::runtime::subagent::terminal_notice_text(
-                child_agent_id,
-                subagent_id,
-                &agent,
-                retained,
-            );
+            let expected =
+                crate::runtime::subagent::terminal_notice_text(child_agent_id, subagent_id, &agent);
             if notice.content != [UserContentBlock::Text(TextBlock { text: expected })] {
                 return Err(ConversationStoreError::InvalidReference(format!(
                     "subagent {subagent_id} terminal notice is not the canonical runtime-authored terminal metadata"
@@ -8546,161 +8387,6 @@ fn validate_subagent_terminal_publication(
             "subagent {subagent_id} non-success terminal must not carry a successful-terminal notice"
         ))),
         (false, None) => Ok(()),
-    }
-}
-
-/// Resolves the exact terminal workspace resource fact for one child.
-/// Disposal is a post-terminal resource transition, so it is valid only when
-/// the durable terminal fact proves a retained handoff or explicitly records
-/// an unresolved physical resource that can later be re-proven.
-fn find_subagent_terminal_resource(
-    transaction: &Transaction<'_>,
-    subagent_id: &crate::runtime::identity::SubagentId,
-    ownership: crate::events::types::SubagentOwnershipKind,
-) -> Result<crate::events::types::SubagentWorkspaceTerminalResource, ConversationStoreError> {
-    // Read the terminal event identity from the lifecycle row rather than
-    // reconstructing an event id. Production builders use deterministic ids,
-    // but the lifecycle row is the durable authority for the exact terminal
-    // fact that closed this child and also keeps this proof correct for a
-    // valid event whose caller supplied a different id.
-    let event_id: Option<String> = transaction
-        .query_row(
-            "SELECT terminal_event_id FROM lifecycle_state WHERE lifecycle_key=?1",
-            [format!("subagent:{subagent_id}")],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|error| storage(format!("subagent terminal lifecycle probe: {error}")))?;
-    let Some(event_id) = event_id else {
-        return Err(ConversationStoreError::InvalidReference(format!(
-            "subagent {subagent_id} workspace disposal has no durable terminal fact"
-        )));
-    };
-    let event_id = crate::runtime::identity::EventId::new(event_id);
-    let envelope = find_event_by_id(transaction, &event_id)?.ok_or_else(|| {
-        ConversationStoreError::InvalidReference(format!(
-            "subagent {subagent_id} terminal lifecycle points to missing event {event_id}"
-        ))
-    })?;
-    let resource = match (ownership, envelope.event) {
-        (
-            crate::events::types::SubagentOwnershipKind::Normal,
-            RuntimeEvent::SubagentTerminalPublished {
-                subagent_id: embedded,
-                workspace_resource,
-                ..
-            },
-        ) if embedded == *subagent_id => workspace_resource,
-        (
-            crate::events::types::SubagentOwnershipKind::Workflow,
-            RuntimeEvent::SubagentTerminalSettled {
-                subagent_id: embedded,
-                workspace_resource,
-                ..
-            },
-        ) if embedded == *subagent_id => workspace_resource,
-        _ => {
-            return Err(ConversationStoreError::InvalidReference(format!(
-                "subagent {subagent_id} terminal event {event_id} is not the expected typed terminal fact"
-            )));
-        }
-    };
-    Ok(resource)
-}
-
-fn validate_subagent_terminal_resource(
-    subagent_id: &crate::runtime::identity::SubagentId,
-    workspace: &crate::runtime::workspace::WorkspaceSnapshot,
-    resource: &crate::events::types::SubagentWorkspaceTerminalResource,
-) -> Result<(), ConversationStoreError> {
-    match resource {
-        crate::events::types::SubagentWorkspaceTerminalResource::None => Ok(()),
-        crate::events::types::SubagentWorkspaceTerminalResource::Retained { handoff } => {
-            if workspace.matches_handoff(handoff) {
-                Ok(())
-            } else {
-                Err(ConversationStoreError::InvalidReference(format!(
-                    "subagent {subagent_id} terminal handoff does not match the owned workspace snapshot"
-                )))
-            }
-        }
-        crate::events::types::SubagentWorkspaceTerminalResource::PreservedUnresolved {
-            reason,
-            detail,
-        } => {
-            if !workspace.is_isolated() {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "subagent {subagent_id} cannot preserve an unresolved shared workspace"
-                )));
-            }
-            if detail.is_empty()
-                || detail.len() > crate::runtime::workspace::MAX_WORKSPACE_SETTLEMENT_DETAIL_BYTES
-            {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "subagent {subagent_id} unresolved workspace detail is outside its bounded shape"
-                )));
-            }
-            let _ = reason;
-            Ok(())
-        }
-    }
-}
-
-fn validate_unresolved_disposal_handoff(
-    subagent_id: &crate::runtime::identity::SubagentId,
-    workspace: &crate::runtime::workspace::WorkspaceSnapshot,
-    handoff: &crate::runtime::workspace::WorkspaceHandoff,
-    phase: &str,
-) -> Result<(), ConversationStoreError> {
-    let Some(worktree) = workspace.git_worktree() else {
-        return Err(ConversationStoreError::InvalidReference(format!(
-            "subagent {subagent_id} unresolved disposal {phase} has no isolated workspace"
-        )));
-    };
-    if handoff.head_commit != worktree.base_commit {
-        return Err(ConversationStoreError::InvalidReference(format!(
-            "subagent {subagent_id} unresolved disposal {phase} is not anchored at its immutable workspace base"
-        )));
-    }
-    Ok(())
-}
-
-#[allow(clippy::too_many_lines)] // Keeps all cross-domain reference checks at one transaction seam.
-fn validate_workflow_workspace_identity(
-    envelope: &RuntimeEventEnvelope,
-    run: &crate::runtime::workflow::WorkflowRunId,
-    phase: &str,
-) -> Result<(), ConversationStoreError> {
-    if run.conversation_id != envelope.conversation_id
-        || run.attempt_id.as_str().is_empty()
-        || run.invocation == 0
-        || envelope.event_id != crate::runtime::workspace::workflow_resource_event_id(run, phase)
-    {
-        return Err(ConversationStoreError::InvalidReference(
-            "invalid Workflow workspace resource identity".into(),
-        ));
-    }
-    Ok(())
-}
-
-fn find_workflow_workspace(
-    transaction: &Transaction<'_>,
-    run: &crate::runtime::workflow::WorkflowRunId,
-) -> Result<crate::runtime::workspace::WorkspaceSnapshot, ConversationStoreError> {
-    let event = find_event_by_id(
-        transaction,
-        &crate::runtime::workspace::workflow_resource_event_id(run, "owned"),
-    )?
-    .ok_or_else(|| {
-        ConversationStoreError::InvalidReference("missing Workflow workspace lease".into())
-    })?;
-    match event.event {
-        RuntimeEvent::WorkflowWorkspaceOwned { run_id, workspace } if run_id == *run => {
-            Ok(workspace)
-        }
-        _ => Err(ConversationStoreError::InvalidReference(
-            "wrong Workflow workspace owner".into(),
-        )),
     }
 }
 
@@ -8777,140 +8463,6 @@ fn validate_event_reference(
     envelope: &RuntimeEventEnvelope,
 ) -> Result<(), ConversationStoreError> {
     match &envelope.event {
-        RuntimeEvent::WorkflowWorkspaceOwned { run_id, workspace } => {
-            validate_workflow_workspace_identity(envelope, run_id, "owned")?;
-            workspace
-                .validate()
-                .map_err(ConversationStoreError::InvalidReference)?;
-            if !workspace.is_isolated() || workspace.borrowed_from.is_some() {
-                return Err(ConversationStoreError::InvalidReference(
-                    "run must own one isolated workspace".into(),
-                ));
-            }
-        }
-        RuntimeEvent::WorkflowWorkspaceSettled {
-            run_id,
-            workspace,
-            candidate,
-            recovery_guard,
-        } => {
-            validate_workflow_workspace_identity(envelope, run_id, "settled")?;
-            if candidate
-                .as_ref()
-                .into_iter()
-                .chain(recovery_guard.as_ref().map(|guard| &guard.reference))
-                .any(|reference| {
-                    reference.run != *run_id
-                        || reference.content.len() != 64
-                        || !reference.content.bytes().all(|b| b.is_ascii_hexdigit())
-                })
-            {
-                return Err(ConversationStoreError::InvalidReference(
-                    "invalid candidate content proof identity".into(),
-                ));
-            }
-            if (workspace.unresolved_reason().is_some() && candidate.is_some())
-                || (recovery_guard.is_some()
-                    && workspace.unresolved_reason() != Some(crate::runtime::workspace::WorkspaceUnresolvedReason::PhysicalSettlement))
-            {
-                return Err(ConversationStoreError::InvalidReference(
-                    "final candidate and recovery guard have distinct settlement authority".into(),
-                ));
-            }
-            let owned = find_workflow_workspace(transaction, run_id)?;
-            if owned != workspace.snapshot
-                || matches!(
-                    workspace.disposition,
-                    crate::runtime::workspace::WorkspaceSettlementDisposition::Shared
-                        | crate::runtime::workspace::WorkspaceSettlementDisposition::Borrowed
-                )
-            {
-                return Err(ConversationStoreError::InvalidReference(
-                    "run workspace settlement differs from acquisition ownership".into(),
-                ));
-            }
-            if let Some(handoff) = workspace.handoff()
-                && !owned.matches_handoff(handoff)
-            {
-                return Err(ConversationStoreError::InvalidReference(
-                    "run handoff differs from acquisition ownership".into(),
-                ));
-            }
-        }
-        RuntimeEvent::WorkflowCandidateInvocation { node, input, .. } => {
-            let _ = find_workflow_workspace(transaction, &node.block.run)?;
-            if input.run != node.block.run
-                || input.content.len() != 64
-                || !input.content.bytes().all(|b| b.is_ascii_hexdigit())
-            {
-                return Err(ConversationStoreError::InvalidReference(
-                    "candidate invocation has invalid source/run identity".into(),
-                ));
-            }
-        }
-        RuntimeEvent::WorkflowWorkspaceDisposalStarted { run_id, handoff } => {
-            validate_workflow_workspace_identity(envelope, run_id, "disposal-started")?;
-            let snapshot = find_workflow_workspace(transaction, run_id)?;
-            let terminal = find_event_by_id(
-                transaction,
-                &crate::runtime::workspace::workflow_resource_event_id(run_id, "settled"),
-            )?
-            .ok_or_else(|| {
-                ConversationStoreError::InvalidReference(
-                    "cannot dispose unsettled candidate".into(),
-                )
-            })?;
-            let RuntimeEvent::WorkflowWorkspaceSettled {
-                workspace,
-                candidate,
-                recovery_guard,
-                ..
-            } = terminal.event
-            else {
-                return Err(ConversationStoreError::InvalidReference(
-                    "wrong candidate terminal fact".into(),
-                ));
-            };
-            let eligible = match workspace.disposition {
-                crate::runtime::workspace::WorkspaceSettlementDisposition::Retained { handoff: retained, .. } => candidate.is_some() && retained == *handoff,
-                crate::runtime::workspace::WorkspaceSettlementDisposition::PreservedUnresolved { reason: crate::runtime::workspace::WorkspaceUnresolvedReason::PhysicalSettlement, .. } => recovery_guard.is_some() && snapshot.git_worktree().is_some_and(|tree| tree.base_commit == handoff.head_commit),
-                _ => false,
-            };
-            if !eligible || !snapshot.matches_handoff(handoff) {
-                return Err(ConversationStoreError::InvalidReference(
-                    "candidate disposal lacks settled ownership".into(),
-                ));
-            }
-        }
-        RuntimeEvent::WorkflowWorkspaceDisposalSettled { run_id, settlement } => {
-            let phase = match settlement {
-                crate::runtime::workspace::WorkspaceDisposalSettlement::WorktreeRemoved {
-                    ..
-                } => "disposal-worktree-removed",
-                crate::runtime::workspace::WorkspaceDisposalSettlement::Disposed
-                | crate::runtime::workspace::WorkspaceDisposalSettlement::AlreadyDisposed => {
-                    "disposal-disposed"
-                }
-                crate::runtime::workspace::WorkspaceDisposalSettlement::NothingRemoved {
-                    ..
-                } => {
-                    return Err(ConversationStoreError::InvalidReference(
-                        "no physical disposal transition".into(),
-                    ));
-                }
-            };
-            validate_workflow_workspace_identity(envelope, run_id, phase)?;
-            if find_event_by_id(
-                transaction,
-                &crate::runtime::workspace::workflow_resource_event_id(run_id, "disposal-started"),
-            )?
-            .is_none()
-            {
-                return Err(ConversationStoreError::InvalidReference(
-                    "candidate disposal lacks durable intent".into(),
-                ));
-            }
-        }
         RuntimeEvent::ContextContributionEmitted {
             producer,
             request_id,
@@ -9127,21 +8679,22 @@ fn validate_event_reference(
             ownership,
             ..
         } => {
-            workspace.validate().map_err(|detail| {
-                ConversationStoreError::InvalidReference(format!(
-                    "subagent {subagent_id} has an invalid workspace snapshot: {detail}"
-                ))
-            })?;
-            if let Some(run) = &workspace.borrowed_from {
-                let mut actual = workspace.clone();
-                actual.borrowed_from = None;
-                if *ownership != crate::events::types::SubagentOwnershipKind::Workflow
-                    || find_workflow_workspace(transaction, run)? != actual
-                {
-                    return Err(ConversationStoreError::InvalidReference(
-                        "borrowed child workspace has no matching run ownership".into(),
-                    ));
-                }
+            match (ownership, origin) {
+                (crate::events::types::SubagentOwnershipKind::Workflow,
+                 crate::runtime::subagent::AgentActivationOrigin::Workflow { node_id })
+                    if node_id.block.run.conversation_id == envelope.conversation_id => {}
+                (crate::events::types::SubagentOwnershipKind::Normal,
+                 crate::runtime::subagent::AgentActivationOrigin::CreationTool { .. }
+                 | crate::runtime::subagent::AgentActivationOrigin::MessageTool { .. }
+                 | crate::runtime::subagent::AgentActivationOrigin::ClientControl) => {}
+                _ => return Err(ConversationStoreError::InvalidReference(
+                    "subagent ownership kind and origin must agree and name the admitting Workflow Conversation".into(),
+                )),
+            }
+            if !workspace.is_absolute() {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "subagent {subagent_id} has a non-absolute execution workspace binding"
+                )));
             }
             if let Some(tool_call_id) = origin.tool_call_id() {
                 record_tool_proposal_dependency(
@@ -9449,7 +9002,6 @@ fn validate_event_reference(
             child_agent_id,
             message_id,
             state,
-            workspace_resource,
             ..
         } => {
             let expected_event_id = crate::runtime::subagent::terminal_event_id(subagent_id);
@@ -9471,7 +9023,7 @@ fn validate_event_reference(
                     crate::runtime::subagent::terminal_message_id(subagent_id)
                 )));
             }
-            let (committed_child_agent_id, workspace, ownership, agent) =
+            let (committed_child_agent_id, _workspace, ownership, agent, _) =
                 find_subagent_ownership(transaction, subagent_id)?;
             if ownership != crate::events::types::SubagentOwnershipKind::Normal {
                 return Err(ConversationStoreError::InvalidReference(format!(
@@ -9506,13 +9058,9 @@ fn validate_event_reference(
             }
             // A successful publication commits with its runtime-authored
             // terminal notice (Issue #192): the exact canonical notice of
-            // this subagent, this named agent, and this workspace
-            // settlement must already be durable in the same transaction.
+            // this subagent and this named agent must already be durable in
+            // the same transaction.
             if *state == crate::events::types::SubagentTerminalState::Succeeded {
-                let retained = matches!(
-                    workspace_resource,
-                    crate::events::types::SubagentWorkspaceTerminalResource::Retained { .. }
-                );
                 let notice = load_user_notification_tx(
                     transaction,
                     &crate::runtime::subagent::terminal_notice_message_id(subagent_id),
@@ -9522,7 +9070,6 @@ fn validate_event_reference(
                     child_agent_id,
                     subagent_id,
                     &agent,
-                    retained,
                 );
                 let notice_text_ok = notice.source == UserSource::Runtime
                     && notice.kind == InboundKind::Message
@@ -9536,7 +9083,6 @@ fn validate_event_reference(
                     )));
                 }
             }
-            validate_subagent_terminal_resource(subagent_id, &workspace, workspace_resource)?;
         }
         RuntimeEvent::SubagentPhysicalSettlementProven {
             subagent_id,
@@ -9551,7 +9097,7 @@ fn validate_event_reference(
                     "invalid physical settlement proof identity".into(),
                 ));
             }
-            let (owner, _, ownership, _) = find_subagent_ownership(transaction, subagent_id)?;
+            let (owner, _, ownership, _, _) = find_subagent_ownership(transaction, subagent_id)?;
             let terminal_id = match ownership {
                 crate::events::types::SubagentOwnershipKind::Normal => {
                     crate::runtime::subagent::terminal_event_id(subagent_id)
@@ -9596,7 +9142,6 @@ fn validate_event_reference(
         RuntimeEvent::SubagentTerminalSettled {
             subagent_id,
             child_agent_id,
-            workspace_resource,
             ..
         } => {
             let expected_event_id =
@@ -9607,7 +9152,7 @@ fn validate_event_reference(
                     envelope.event_id
                 )));
             }
-            let (committed_child_agent_id, workspace, ownership, _agent) =
+            let (committed_child_agent_id, _workspace, ownership, _agent, _) =
                 find_subagent_ownership(transaction, subagent_id)?;
             if ownership != crate::events::types::SubagentOwnershipKind::Workflow {
                 return Err(ConversationStoreError::InvalidReference(format!(
@@ -9619,149 +9164,11 @@ fn validate_event_reference(
                     "Workflow subagent {subagent_id} terminal claims child agent {child_agent_id}, but durable ownership committed {committed_child_agent_id}"
                 )));
             }
-            validate_subagent_terminal_resource(subagent_id, &workspace, workspace_resource)?;
-        }
-        RuntimeEvent::SubagentWorkspaceDisposalStarted {
-            subagent_id,
-            workspace_handoff,
-        } => {
-            let expected_event_id =
-                crate::runtime::subagent::workspace_disposal_started_event_id(subagent_id);
-            if envelope.event_id != expected_event_id {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "subagent workspace disposal intent identity {} does not match the canonical identity {expected_event_id}",
-                    envelope.event_id
-                )));
-            }
-            if envelope.attempt_id.is_some() || envelope.turn_id.is_some() {
-                return Err(ConversationStoreError::InvalidReference(
-                    "subagent workspace disposal intent must not carry an attempt or turn envelope"
-                        .to_owned(),
-                ));
-            }
-            workspace_handoff.validate().map_err(|detail| {
-                ConversationStoreError::InvalidReference(format!(
-                    "subagent {subagent_id} disposal intent has an invalid workspace handoff: {detail}"
-                ))
-            })?;
-            let (_, workspace, ownership, _) = find_subagent_ownership(transaction, subagent_id)?;
-            if !workspace.matches_handoff(workspace_handoff) {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "subagent {subagent_id} disposal intent handoff does not match its durable workspace ownership"
-                )));
-            }
-            match find_subagent_terminal_resource(transaction, subagent_id, ownership)? {
-                crate::events::types::SubagentWorkspaceTerminalResource::Retained {
-                    handoff: terminal_handoff,
-                } if terminal_handoff == *workspace_handoff => {}
-                crate::events::types::SubagentWorkspaceTerminalResource::PreservedUnresolved {
-                    reason: crate::runtime::workspace::WorkspaceUnresolvedReason::PhysicalSettlement,
-                    ..
-                } => {
-                    // This handoff was derived only after the later exact
-                    // Git re-proof. Its binding to the immutable ownership
-                    // snapshot was checked above. Since the unresolved
-                    // terminal fact has no durable terminal HEAD, the
-                    // re-proof is only allowed to derive a disposal handoff
-                    // while the worktree and branch still name the immutable
-                    // acquisition commit.
-                    validate_unresolved_disposal_handoff(
-                        subagent_id,
-                        &workspace,
-                        workspace_handoff,
-                        "intent",
-                    )?;
-                }
-                crate::events::types::SubagentWorkspaceTerminalResource::PreservedUnresolved {
-                    reason: crate::runtime::workspace::WorkspaceUnresolvedReason::NestedContainment,
-                    ..
-                } => {
-                    return Err(ConversationStoreError::InvalidReference(format!(
-                        "subagent {subagent_id} cannot dispose a workspace with unresolved nested containment"
-                    )));
-                }
-                _ => {
-                    return Err(ConversationStoreError::InvalidReference(format!(
-                        "subagent {subagent_id} disposal intent does not match its durable terminal workspace resource"
-                    )));
-                }
-            }
-        }
-        RuntimeEvent::SubagentWorkspaceDisposalSettled {
-            subagent_id,
-            workspace_handoff,
-            settlement,
-        } => {
-            let expected_event_id = crate::runtime::subagent::workspace_disposal_settled_event_id(
-                subagent_id,
-                *settlement,
-            );
-            if envelope.event_id != expected_event_id {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "subagent workspace disposal settlement identity {} does not match the canonical identity {expected_event_id}",
-                    envelope.event_id
-                )));
-            }
-            if envelope.attempt_id.is_some() || envelope.turn_id.is_some() {
-                return Err(ConversationStoreError::InvalidReference(
-                    "subagent workspace disposal settlement must not carry an attempt or turn envelope"
-                        .to_owned(),
-                ));
-            }
-            workspace_handoff.validate().map_err(|detail| {
-                ConversationStoreError::InvalidReference(format!(
-                    "subagent {subagent_id} disposal settlement has an invalid workspace handoff: {detail}"
-                ))
-            })?;
-            let (_, workspace, ownership, _) = find_subagent_ownership(transaction, subagent_id)?;
-            if !workspace.matches_handoff(workspace_handoff) {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "subagent {subagent_id} disposal settlement handoff does not match its durable workspace ownership"
-                )));
-            }
-            match find_subagent_terminal_resource(transaction, subagent_id, ownership)? {
-                crate::events::types::SubagentWorkspaceTerminalResource::Retained {
-                    handoff: terminal_handoff,
-                } if terminal_handoff == *workspace_handoff => {}
-                crate::events::types::SubagentWorkspaceTerminalResource::PreservedUnresolved {
-                    reason: crate::runtime::workspace::WorkspaceUnresolvedReason::PhysicalSettlement,
-                    ..
-                } => {
-                    validate_unresolved_disposal_handoff(
-                        subagent_id,
-                        &workspace,
-                        workspace_handoff,
-                        "settlement",
-                    )?;
-                }
-                _ => {
-                    return Err(ConversationStoreError::InvalidReference(format!(
-                        "subagent {subagent_id} disposal settlement does not match its durable terminal workspace resource"
-                    )));
-                }
-            }
-            let intent_id =
-                crate::runtime::subagent::workspace_disposal_started_event_id(subagent_id);
-            let Some(intent) = find_event_by_id(transaction, &intent_id)? else {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "subagent {subagent_id} disposal settlement has no durable disposal intent"
-                )));
-            };
-            match intent.event {
-                RuntimeEvent::SubagentWorkspaceDisposalStarted {
-                    subagent_id: intent_subagent_id,
-                    workspace_handoff: intent_handoff,
-                } if intent_subagent_id == *subagent_id && intent_handoff == *workspace_handoff => {
-                }
-                _ => {
-                    return Err(ConversationStoreError::InvalidReference(format!(
-                        "subagent {subagent_id} disposal settlement is not bound to its exact durable intent"
-                    )));
-                }
-            }
         }
         RuntimeEvent::WorkflowAgentOutputCommitted {
             subagent_id,
+            workflow_id,
+            run_id,
             node_id,
             output,
             ..
@@ -9789,6 +9196,12 @@ fn validate_event_reference(
                     "Workflow output event has an invalid node identity".to_owned(),
                 ));
             }
+            if &node_id.block.run != run_id || &node_id.block.definition.workflow_id != workflow_id
+            {
+                return Err(ConversationStoreError::InvalidReference(
+                    "Workflow output run and definition disagree with its node identity".to_owned(),
+                ));
+            }
             let encoded = serde_json::to_vec(output)
                 .map_err(|error| storage(format!("Workflow output event encoding: {error}")))?;
             if encoded.len() > crate::runtime::subagent::MAX_RESULT_CONTENT_BYTES {
@@ -9796,11 +9209,18 @@ fn validate_event_reference(
                     "Workflow output event exceeds the bounded value size".to_owned(),
                 ));
             }
-            let (_, _, ownership, _) = find_subagent_ownership(transaction, subagent_id)?;
+            let (_, _, ownership, _, origin) = find_subagent_ownership(transaction, subagent_id)?;
             if ownership != crate::events::types::SubagentOwnershipKind::Workflow {
                 return Err(ConversationStoreError::InvalidReference(format!(
                     "subagent {subagent_id} normal ownership cannot commit a Workflow output"
                 )));
+            }
+            if !matches!(origin, crate::runtime::subagent::AgentActivationOrigin::Workflow { node_id: owned } if owned.as_ref() == node_id)
+            {
+                return Err(ConversationStoreError::InvalidReference(
+                    "Workflow output node differs from the committed child ownership origin"
+                        .to_owned(),
+                ));
             }
         }
         _ => {}
@@ -9862,8 +9282,6 @@ fn requires_specialized_transition(event: &RuntimeEvent) -> bool {
             | RuntimeEvent::BackgroundTerminalPublished { .. }
             | RuntimeEvent::SubagentTerminalPublished { .. }
             | RuntimeEvent::SubagentTerminalSettled { .. }
-            | RuntimeEvent::SubagentWorkspaceDisposalStarted { .. }
-            | RuntimeEvent::SubagentWorkspaceDisposalSettled { .. }
             | RuntimeEvent::WorkflowAgentOutputCommitted { .. }
             | RuntimeEvent::InteractionRequested { .. }
             | RuntimeEvent::InteractionSettled { .. }
@@ -10080,61 +9498,8 @@ fn ledger_message_exists(
         .map_err(|error| storage(format!("event Ledger reference: {error}")))
 }
 
-fn workflow_workspace_lifecycle(event: &RuntimeEventEnvelope) -> Option<(String, bool)> {
-    match &event.event {
-        RuntimeEvent::WorkflowWorkspaceDisposalStarted { run_id, .. } => {
-            return Some((
-                crate::runtime::workspace::workflow_resource_event_id(run_id, "disposal-lifecycle")
-                    .to_string(),
-                false,
-            ));
-        }
-        RuntimeEvent::WorkflowWorkspaceDisposalSettled { run_id, settlement } => {
-            return Some((
-                crate::runtime::workspace::workflow_resource_event_id(run_id, "disposal-lifecycle")
-                    .to_string(),
-                matches!(
-                    settlement,
-                    crate::runtime::workspace::WorkspaceDisposalSettlement::Disposed
-                        | crate::runtime::workspace::WorkspaceDisposalSettlement::AlreadyDisposed
-                ),
-            ));
-        }
-        _ => {}
-    }
-    match &event.event {
-        RuntimeEvent::WorkflowWorkspaceOwned { run_id, .. }
-        | RuntimeEvent::WorkflowCandidateInvocation {
-            node:
-                crate::runtime::workflow::WorkflowNodeInstance {
-                    block: crate::runtime::workflow::WorkflowBlockInstance { run: run_id, .. },
-                    ..
-                },
-            ..
-        } => {
-            return Some((
-                crate::runtime::workspace::workflow_resource_event_id(run_id, "lifecycle")
-                    .to_string(),
-                false,
-            ));
-        }
-        RuntimeEvent::WorkflowWorkspaceSettled { run_id, .. } => {
-            return Some((
-                crate::runtime::workspace::workflow_resource_event_id(run_id, "lifecycle")
-                    .to_string(),
-                true,
-            ));
-        }
-        _ => {}
-    }
-    None
-}
-
 #[allow(clippy::too_many_lines)] // Closed mapping from durable facts to exact terminal domains.
 fn lifecycle_keys(event: &RuntimeEventEnvelope) -> Vec<(String, bool)> {
-    if let Some(lifecycle) = workflow_workspace_lifecycle(event) {
-        return vec![lifecycle];
-    }
     // The detached-execution lifecycle is opened by the ownership commit and
     // closed exactly once by the terminal publication. Recording the open
     // state durably is what lets a restart tell "owned and unsettled" from
@@ -10188,27 +9553,6 @@ fn lifecycle_keys(event: &RuntimeEventEnvelope) -> Vec<(String, bool)> {
     }
     if let RuntimeEvent::SubagentTerminalSettled { subagent_id, .. } = &event.event {
         return vec![(format!("subagent:{subagent_id}"), true)];
-    }
-    // Retained-workspace disposal is a separate post-terminal resource
-    // lifecycle. The intent opens it, an explicit WorktreeRemoved settlement
-    // keeps it pending, and Disposed closes it. It never touches the logical
-    // `subagent:{id}` terminal lifecycle above.
-    if let RuntimeEvent::SubagentWorkspaceDisposalStarted { subagent_id, .. } = &event.event {
-        return vec![(format!("subagent-workspace:{subagent_id}"), false)];
-    }
-    if let RuntimeEvent::SubagentWorkspaceDisposalSettled {
-        subagent_id,
-        settlement,
-        ..
-    } = &event.event
-    {
-        return vec![(
-            format!("subagent-workspace:{subagent_id}"),
-            matches!(
-                settlement,
-                crate::events::types::SubagentWorkspaceDisposalSettlement::Disposed
-            ),
-        )];
     }
     // The interaction lifecycle (Issue #109) is the same shape: opened by the
     // requested fact — which commits before the prompt reaches a client — and
@@ -13009,9 +12353,7 @@ mod tests {
                     definition_digest: "sha256:definition".into(),
                     profile_digest: "sha256:profile".into(),
                     ownership: crate::events::types::SubagentOwnershipKind::Normal,
-                    workspace: crate::runtime::workspace::WorkspaceSnapshot::shared(
-                        directory.path().to_path_buf(),
-                    ),
+                    workspace: directory.path().to_path_buf(),
                 },
             ));
         authority.resolved.model.primary.binding.credential =
@@ -13234,9 +12576,7 @@ mod tests {
                     definition_digest: "sha256:definition".into(),
                     profile_digest: "sha256:profile".into(),
                     ownership: crate::events::types::SubagentOwnershipKind::Normal,
-                    workspace: crate::runtime::workspace::WorkspaceSnapshot::shared(
-                        std::path::PathBuf::from("<shared-workspace>"),
-                    ),
+                    workspace: std::path::PathBuf::from("/shared-workspace"),
                 },
             )
         };
@@ -13254,7 +12594,6 @@ mod tests {
                 &SubagentId::for_conversation(&conversation, sequence),
                 &agent,
                 "done",
-                &crate::events::types::SubagentWorkspaceTerminalResource::None,
             );
             store
                 .accept_subagent_terminal(Some(notice), report, event)
@@ -13353,19 +12692,17 @@ mod tests {
             store,
             subagent_id,
             child_agent_id,
-            crate::runtime::workspace::WorkspaceSnapshot::shared(std::path::PathBuf::from(
-                "<shared-workspace>",
-            )),
+            std::path::PathBuf::from("/shared-workspace"),
         );
     }
 
-    /// Commits the canonical Normal-ownership fact over an explicit
-    /// workspace snapshot.
+    /// Commits the canonical Normal-ownership fact over an explicit frozen
+    /// Session workspace binding.
     fn own_normal_subagent_with_workspace(
         store: &SqliteConversationStore,
         subagent_id: &crate::runtime::identity::SubagentId,
         child_agent_id: &AgentId,
-        workspace: crate::runtime::workspace::WorkspaceSnapshot,
+        workspace: std::path::PathBuf,
     ) {
         let event = envelope(
             store.conversation_id(),
@@ -13421,13 +12758,8 @@ mod tests {
         subagent_id: &crate::runtime::identity::SubagentId,
         child_agent_id: &AgentId,
         report_text: &str,
-        workspace_resource: &crate::events::types::SubagentWorkspaceTerminalResource,
     ) -> (InboundDraft, InboundDraft, RuntimeEventEnvelope) {
         let timestamp = Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap();
-        let retained = matches!(
-            workspace_resource,
-            crate::events::types::SubagentWorkspaceTerminalResource::Retained { .. }
-        );
         let (report, event) = crate::runtime::subagent::terminal_publication(
             store.conversation_id(),
             subagent_id,
@@ -13436,7 +12768,6 @@ mod tests {
             vec![UserContentBlock::Text(TextBlock {
                 text: report_text.to_owned(),
             })],
-            workspace_resource,
             true,
             timestamp,
         );
@@ -13444,7 +12775,6 @@ mod tests {
             child_agent_id,
             subagent_id,
             &crate::runtime::subagent::SubagentName::parse("explore").expect("canonical name"),
-            retained,
             timestamp,
         );
         (notice, report, event)
@@ -13458,7 +12788,6 @@ mod tests {
         child_agent_id: &AgentId,
         state: SubagentTerminalState,
         text: &str,
-        workspace_resource: &crate::events::types::SubagentWorkspaceTerminalResource,
     ) -> (InboundDraft, RuntimeEventEnvelope) {
         crate::runtime::subagent::terminal_publication(
             store.conversation_id(),
@@ -13468,7 +12797,6 @@ mod tests {
             vec![UserContentBlock::Text(TextBlock {
                 text: text.to_owned(),
             })],
-            workspace_resource,
             true,
             Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap(),
         )
@@ -13498,7 +12826,6 @@ mod tests {
             &child_agent_id,
             SubagentTerminalState::Failed,
             "subagent failed: boom",
-            &crate::events::types::SubagentWorkspaceTerminalResource::None,
         );
 
         // The obsolete generic path can no longer publish a normal subagent
@@ -13541,7 +12868,6 @@ mod tests {
             &child_agent_id,
             SubagentTerminalState::Failed,
             "a different diagnostic",
-            &crate::events::types::SubagentWorkspaceTerminalResource::None,
         );
         assert!(matches!(
             store.accept_subagent_terminal(None, conflicting_report, event),
@@ -13560,7 +12886,6 @@ mod tests {
             &other_child,
             SubagentTerminalState::Failed,
             "subagent failed: boom",
-            &crate::events::types::SubagentWorkspaceTerminalResource::None,
         );
         wrong_report.source = UserSource::Agent {
             agent_id: other_child,
@@ -13574,8 +12899,7 @@ mod tests {
 
     /// The Issue #192 pair publication: a successful terminal commits the
     /// runtime-authored terminal notice (the parent-model execution
-    /// correlation, with the retained-workspace semantic fact folded in
-    /// when applicable) and the child-authored report in one transaction —
+    /// correlation) and the child-authored report in one transaction —
     /// notice first, report (the terminal result) last, the event
     /// committed once.
     #[test]
@@ -13589,13 +12913,8 @@ mod tests {
         own_normal_subagent(&store, &subagent_id, &child_agent_id);
         let notice_id = crate::runtime::subagent::terminal_notice_message_id(&subagent_id);
         let report_id = crate::runtime::subagent::terminal_message_id(&subagent_id);
-        let (notice, report, event) = success_publication(
-            &store,
-            &subagent_id,
-            &child_agent_id,
-            "the final report",
-            &crate::events::types::SubagentWorkspaceTerminalResource::None,
-        );
+        let (notice, report, event) =
+            success_publication(&store, &subagent_id, &child_agent_id, "the final report");
 
         let (notice, report, persisted) = store
             .accept_subagent_terminal(Some(notice), report, event)
@@ -13618,20 +12937,11 @@ mod tests {
             notice_text.contains(&format!("Agent {child_agent_id} activation {subagent_id}")),
             "the notice separately names the durable Agent and finite activation: {notice_text}"
         );
-        assert!(
-            !notice_text.contains("retained"),
-            "no retained-workspace claim without a retained settlement: {notice_text}"
-        );
 
         // The retry of the identical pair is an idempotent no-op on both
         // sides and never re-commits the event.
-        let (notice, report, event) = success_publication(
-            &store,
-            &subagent_id,
-            &child_agent_id,
-            "the final report",
-            &crate::events::types::SubagentWorkspaceTerminalResource::None,
-        );
+        let (notice, report, event) =
+            success_publication(&store, &subagent_id, &child_agent_id, "the final report");
         let (notice_retry, report_retry, persisted_retry) = store
             .accept_subagent_terminal(Some(notice), report, event)
             .unwrap();
@@ -13645,13 +12955,8 @@ mod tests {
         let other = crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 2);
         let other_child = crate::runtime::identity::AgentId::new("agent-other");
         own_normal_subagent(&store, &other, &other_child);
-        let (mut child_authored_notice, other_report, other_event) = success_publication(
-            &store,
-            &other,
-            &other_child,
-            "the other report",
-            &crate::events::types::SubagentWorkspaceTerminalResource::None,
-        );
+        let (mut child_authored_notice, other_report, other_event) =
+            success_publication(&store, &other, &other_child, "the other report");
         child_authored_notice.source = UserSource::Agent {
             agent_id: other_child.clone(),
         };
@@ -13682,9 +12987,7 @@ mod tests {
                 definition_digest: "sha256:definition".to_owned(),
                 profile_digest: "sha256:profile".to_owned(),
                 ownership: crate::events::types::SubagentOwnershipKind::Normal,
-                workspace: crate::runtime::workspace::WorkspaceSnapshot::shared(
-                    std::path::PathBuf::from("<shared-workspace>"),
-                ),
+                workspace: std::path::PathBuf::from("/shared-workspace"),
             },
         );
         assert!(matches!(
@@ -13709,15 +13012,8 @@ mod tests {
             crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 1);
         let child_agent_id = crate::runtime::identity::AgentId::new(format!("agent-{subagent_id}"));
         own_normal_subagent(&store, &subagent_id, &child_agent_id);
-        let publication = || {
-            success_publication(
-                &store,
-                &subagent_id,
-                &child_agent_id,
-                "the final report",
-                &crate::events::types::SubagentWorkspaceTerminalResource::None,
-            )
-        };
+        let publication =
+            || success_publication(&store, &subagent_id, &child_agent_id, "the final report");
 
         store.arm_fail_event_times(1);
         let (notice, report, event) = publication();
@@ -13752,7 +13048,6 @@ mod tests {
     fn subagent_terminal_transition_rejects_semantically_unreachable_states() {
         let store = store();
         let conversation_id = store.conversation_id().clone();
-        let none = crate::events::types::SubagentWorkspaceTerminalResource::None;
         let owned = |ordinal: u64| {
             let subagent_id =
                 crate::runtime::identity::SubagentId::for_conversation(&conversation_id, ordinal);
@@ -13775,15 +13070,14 @@ mod tests {
 
         // A success without its runtime-authored terminal notice.
         let (subagent_id, child) = owned(1);
-        let (_, report, event) = success_publication(&store, &subagent_id, &child, "report", &none);
+        let (_, report, event) = success_publication(&store, &subagent_id, &child, "report");
         reject(store.accept_subagent_terminal(None, report, event), 0);
 
         // A success whose notice names a different subagent.
         let (subagent_id, child) = owned(2);
         let (other_id, other_child) = owned(22);
-        let (wrong_notice, _, _) =
-            success_publication(&store, &other_id, &other_child, "other", &none);
-        let (_, report, event) = success_publication(&store, &subagent_id, &child, "report", &none);
+        let (wrong_notice, _, _) = success_publication(&store, &other_id, &other_child, "other");
+        let (_, report, event) = success_publication(&store, &subagent_id, &child, "report");
         reject(
             store.accept_subagent_terminal(Some(wrong_notice), report, event),
             0,
@@ -13793,7 +13087,7 @@ mod tests {
         // A success with a non-canonical report message identity.
         let (subagent_id, child) = owned(3);
         let (notice, mut report, event) =
-            success_publication(&store, &subagent_id, &child, "report", &none);
+            success_publication(&store, &subagent_id, &child, "report");
         report.message_id = Some(MessageId::new("subagent-3-not-the-terminal"));
         reject(
             store.accept_subagent_terminal(Some(notice), report, event),
@@ -13803,7 +13097,7 @@ mod tests {
         // A success with the wrong report producer correlation.
         let (subagent_id, child) = owned(4);
         let (notice, mut report, event) =
-            success_publication(&store, &subagent_id, &child, "report", &none);
+            success_publication(&store, &subagent_id, &child, "report");
         report.correlation = Some("subagent-terminal:someone-else".to_owned());
         reject(
             store.accept_subagent_terminal(Some(notice), report, event),
@@ -13813,7 +13107,7 @@ mod tests {
         // A success whose notice carries the wrong producer correlation.
         let (subagent_id, child) = owned(5);
         let (mut notice, report, event) =
-            success_publication(&store, &subagent_id, &child, "report", &none);
+            success_publication(&store, &subagent_id, &child, "report");
         notice.correlation = Some("subagent-terminal-notice:someone-else".to_owned());
         reject(
             store.accept_subagent_terminal(Some(notice), report, event),
@@ -13823,7 +13117,7 @@ mod tests {
         // A success whose notice has an invalid inbound kind.
         let (subagent_id, child) = owned(6);
         let (mut notice, report, event) =
-            success_publication(&store, &subagent_id, &child, "report", &none);
+            success_publication(&store, &subagent_id, &child, "report");
         notice.kind =
             InboundKind::Context(crate::message::types::ContextKind::RuntimeToolObservation);
         reject(
@@ -13834,7 +13128,7 @@ mod tests {
         // A terminal event referencing the wrong report message.
         let (subagent_id, child) = owned(7);
         let (notice, report, mut event) =
-            success_publication(&store, &subagent_id, &child, "report", &none);
+            success_publication(&store, &subagent_id, &child, "report");
         let RuntimeEvent::SubagentTerminalPublished { message_id, .. } = &mut event.event else {
             panic!("terminal event");
         };
@@ -13844,42 +13138,20 @@ mod tests {
             0,
         );
 
-        // A success over an unresolved workspace resource is impossible:
-        // successful settlement is what proves the terminal resource.
-        let (subagent_id, child) = owned(8);
-        let unresolved =
-            crate::events::types::SubagentWorkspaceTerminalResource::PreservedUnresolved {
-                reason: crate::runtime::workspace::WorkspaceUnresolvedReason::PhysicalSettlement,
-                detail: "the final workspace inspection was unavailable".to_owned(),
-            };
-        let (notice, report, event) =
-            success_publication(&store, &subagent_id, &child, "report", &unresolved);
-        reject(
-            store.accept_subagent_terminal(Some(notice), report, event),
-            0,
-        );
-
         // A non-success terminal must not carry the successful-terminal
-        // notice (the retained fact folds into its runtime-authored message).
+        // notice.
         for (ordinal, state) in [
             (9, SubagentTerminalState::Failed),
             (10, SubagentTerminalState::Cancelled),
             (11, SubagentTerminalState::Interrupted),
         ] {
             let (subagent_id, child) = owned(ordinal);
-            let (report, event) = non_success_publication(
-                &store,
-                &subagent_id,
-                &child,
-                state,
-                "runtime terminal",
-                &none,
-            );
+            let (report, event) =
+                non_success_publication(&store, &subagent_id, &child, state, "runtime terminal");
             let notice = crate::runtime::subagent::terminal_notice(
                 &child,
                 &subagent_id,
                 &crate::runtime::subagent::SubagentName::parse("explore").expect("canonical name"),
-                false,
                 Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap(),
             );
             reject(
@@ -13891,7 +13163,7 @@ mod tests {
         // A non-canonical event identity.
         let (subagent_id, child) = owned(12);
         let (notice, report, mut event) =
-            success_publication(&store, &subagent_id, &child, "report", &none);
+            success_publication(&store, &subagent_id, &child, "report");
         event.event_id = EventId::new("not-the-canonical-terminal-event");
         reject(
             store.accept_subagent_terminal(Some(notice), report, event),
@@ -13901,91 +13173,12 @@ mod tests {
         // An attempt/turn envelope is not a publication fact's shape.
         let (subagent_id, child) = owned(13);
         let (notice, report, mut event) =
-            success_publication(&store, &subagent_id, &child, "report", &none);
+            success_publication(&store, &subagent_id, &child, "report");
         event.attempt_id = Some(AttemptId::new("attempt-13"));
         reject(
             store.accept_subagent_terminal(Some(notice), report, event),
             0,
         );
-    }
-
-    /// The notice's retained-workspace semantic fact and the terminal
-    /// event's workspace resource are one bound fact (Issue #192): a notice
-    /// claiming retention over a `None` resource and a `Retained` resource
-    /// without the retained semantic fact are both rejected.
-    #[test]
-    fn subagent_terminal_notice_and_workspace_resource_must_agree() {
-        let store = store();
-        let conversation_id = store.conversation_id().clone();
-        let subagent_id =
-            crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 1);
-        let child_agent_id = crate::runtime::identity::AgentId::new(format!("agent-{subagent_id}"));
-        own_normal_subagent(&store, &subagent_id, &child_agent_id);
-        let none = crate::events::types::SubagentWorkspaceTerminalResource::None;
-
-        // The event claims no retained workspace but the notice claims
-        // retention.
-        let (_, report, event) =
-            success_publication(&store, &subagent_id, &child_agent_id, "report", &none);
-        let retained_notice = crate::runtime::subagent::terminal_notice(
-            &child_agent_id,
-            &subagent_id,
-            &crate::runtime::subagent::SubagentName::parse("explore").expect("canonical name"),
-            true,
-            Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap(),
-        );
-        assert!(matches!(
-            store.accept_subagent_terminal(Some(retained_notice), report, event),
-            Err(ConversationStoreError::InvalidReference(_))
-        ));
-        assert_eq!(store.load_pending().unwrap().len(), 0);
-
-        // The event retains a workspace but the notice omits the retained
-        // semantic fact. The handoff must match the (shared) ownership
-        // workspace, so use the shared snapshot's own handoff shape: a
-        // shared workspace cannot retain, so bind an isolated child.
-        let isolated_id =
-            crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 2);
-        let isolated_child = crate::runtime::identity::AgentId::new(format!("agent-{isolated_id}"));
-        let workspace = crate::runtime::workspace::WorkspaceSnapshot {
-            borrowed_from: None,
-            logical_workspace: std::path::PathBuf::from("/tmp/rustx-worktree-9/backend"),
-            isolation: crate::runtime::workspace::WorkspaceIsolation::GitWorktree(
-                crate::runtime::workspace::GitWorktreeSnapshot {
-                    source_repository_root: std::path::PathBuf::from("/tmp/rustx-repository"),
-                    repository_relative_workspace: std::path::PathBuf::from("backend"),
-                    physical_worktree_root: std::path::PathBuf::from("/tmp/rustx-worktree-9"),
-                    base_commit: "1111111111111111111111111111111111111111".to_owned(),
-                    branch: "rustx/subagent/xyz".to_owned(),
-                    parent_had_uncommitted_changes: false,
-                },
-            ),
-        };
-        let handoff = crate::runtime::workspace::WorkspaceHandoff {
-            logical_workspace: workspace.logical_workspace.clone(),
-            physical_worktree_root: std::path::PathBuf::from("/tmp/rustx-worktree-9"),
-            branch: "rustx/subagent/xyz".to_owned(),
-            base_commit: "1111111111111111111111111111111111111111".to_owned(),
-            head_commit: "2222222222222222222222222222222222222222".to_owned(),
-            dirty: true,
-        };
-        own_normal_subagent_with_workspace(&store, &isolated_id, &isolated_child, workspace);
-        let retained =
-            crate::events::types::SubagentWorkspaceTerminalResource::Retained { handoff };
-        let (_, report, event) =
-            success_publication(&store, &isolated_id, &isolated_child, "report", &retained);
-        let bare_notice = crate::runtime::subagent::terminal_notice(
-            &isolated_child,
-            &isolated_id,
-            &crate::runtime::subagent::SubagentName::parse("explore").expect("canonical name"),
-            false,
-            Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap(),
-        );
-        assert!(matches!(
-            store.accept_subagent_terminal(Some(bare_notice), report, event),
-            Err(ConversationStoreError::InvalidReference(_))
-        ));
-        assert_eq!(store.load_pending().unwrap().len(), 0);
     }
 
     /// The notice/report pair is one atomic publication: a retry that finds
@@ -13996,7 +13189,6 @@ mod tests {
     fn subagent_terminal_pair_retry_must_be_unambiguous() {
         let store = store();
         let conversation_id = store.conversation_id().clone();
-        let none = crate::events::types::SubagentWorkspaceTerminalResource::None;
 
         // Only the notice side is durable (committed through the plain
         // acceptance seam): the pair retry must not complete.
@@ -14005,7 +13197,7 @@ mod tests {
         let child_agent_id = crate::runtime::identity::AgentId::new(format!("agent-{subagent_id}"));
         own_normal_subagent(&store, &subagent_id, &child_agent_id);
         let (notice, report, event) =
-            success_publication(&store, &subagent_id, &child_agent_id, "report", &none);
+            success_publication(&store, &subagent_id, &child_agent_id, "report");
         store.accept_inbound(notice.clone()).expect("notice alone");
         assert!(matches!(
             store.accept_subagent_terminal(Some(notice), report, event),
@@ -14023,7 +13215,7 @@ mod tests {
         let child_agent_id = crate::runtime::identity::AgentId::new(format!("agent-{subagent_id}"));
         own_normal_subagent(&store, &subagent_id, &child_agent_id);
         let (notice, report, event) =
-            success_publication(&store, &subagent_id, &child_agent_id, "report", &none);
+            success_publication(&store, &subagent_id, &child_agent_id, "report");
         store.accept_inbound(report.clone()).expect("report alone");
         assert!(matches!(
             store.accept_subagent_terminal(Some(notice), report, event),
@@ -14038,12 +13230,12 @@ mod tests {
         let child_agent_id = crate::runtime::identity::AgentId::new(format!("agent-{subagent_id}"));
         own_normal_subagent(&store, &subagent_id, &child_agent_id);
         let (notice, report, event) =
-            success_publication(&store, &subagent_id, &child_agent_id, "report", &none);
+            success_publication(&store, &subagent_id, &child_agent_id, "report");
         store
             .accept_subagent_terminal(Some(notice), report, event)
             .expect("pair commits");
         let (notice, mut report, event) =
-            success_publication(&store, &subagent_id, &child_agent_id, "report", &none);
+            success_publication(&store, &subagent_id, &child_agent_id, "report");
         report.content = vec![UserContentBlock::Text(TextBlock {
             text: "a conflicting report body".to_owned(),
         })];
@@ -14054,45 +13246,53 @@ mod tests {
         assert_eq!(store.load_pending().unwrap().len(), 4, "exactly once");
     }
 
-    #[test]
-    fn workflow_agent_value_and_child_terminal_are_one_atomic_transition() {
+    fn workflow_terminal_fixture(
+        node_instance: &crate::runtime::workflow::WorkflowNodeInstance,
+        normal: bool,
+    ) -> (
+        SqliteConversationStore,
+        RuntimeEventEnvelope,
+        RuntimeEventEnvelope,
+    ) {
         let store = store();
         let conversation_id = store.conversation_id().clone();
+        let mut node_instance = node_instance.clone();
+        node_instance.block.run.conversation_id = conversation_id.clone();
         let subagent_id =
             crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 1);
         let child_agent_id = AgentId::new(format!("agent-{subagent_id}"));
         let timestamp = Utc.with_ymd_and_hms(2026, 8, 31, 12, 0, 0).unwrap();
-        store
-            .append_event(envelope(
-                &conversation_id,
-                crate::runtime::subagent::subagent_ownership_event_id(&subagent_id).as_ref(),
-                None,
-                RuntimeEvent::SubagentOwnershipCommitted {
-                    parent_agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
-                    admitted_authority: None,
-                    subagent_id: subagent_id.clone(),
-                    child_agent_id: child_agent_id.clone(),
-                    child_conversation_id:
-                        crate::scripted_suites::common::identity::child_conversation_id(
-                            subagent_id.as_str(),
-                        ),
-                    origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
-                        tool_call_id: ToolCallId::new("workflow-call"),
+        if normal {
+            own_normal_subagent(&store, &subagent_id, &child_agent_id);
+        } else {
+            store
+                .append_event(envelope(
+                    &conversation_id,
+                    crate::runtime::subagent::subagent_ownership_event_id(&subagent_id).as_ref(),
+                    None,
+                    RuntimeEvent::SubagentOwnershipCommitted {
+                        parent_agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
+                        admitted_authority: None,
+                        subagent_id: subagent_id.clone(),
+                        child_agent_id: child_agent_id.clone(),
+                        child_conversation_id:
+                            crate::scripted_suites::common::identity::child_conversation_id(
+                                subagent_id.as_str(),
+                            ),
+                        origin: crate::runtime::subagent::AgentActivationOrigin::Workflow {
+                            node_id: Box::new(node_instance.clone()),
+                        },
+                        agent: "reviewer".to_owned(),
+                        definition_digest: "sha256:definition".to_owned(),
+                        profile_digest: "sha256:profile".to_owned(),
+                        ownership: crate::events::types::SubagentOwnershipKind::Workflow,
+                        workspace: std::path::PathBuf::from("/shared-workspace"),
                     },
-                    agent: "reviewer".to_owned(),
-                    definition_digest: "sha256:definition".to_owned(),
-                    profile_digest: "sha256:profile".to_owned(),
-                    ownership: crate::events::types::SubagentOwnershipKind::Workflow,
-                    workspace: crate::runtime::workspace::WorkspaceSnapshot::shared(
-                        std::path::PathBuf::from("<shared-workspace>"),
-                    ),
-                },
-            ))
-            .expect("ownership fact");
+                ))
+                .expect("ownership fact");
+        }
 
-        let workflow_id =
-            crate::runtime::workflow::WorkflowId::parse("review_pr").expect("workflow id");
-        let node_instance = crate::runtime::workflow::test_instance("review_pr", "review");
+        let workflow_id = node_instance.block.definition.workflow_id.clone();
         let run_id = node_instance.block.run.clone();
         let terminal = crate::runtime::subagent::terminal_settlement(
             &conversation_id,
@@ -14100,7 +13300,6 @@ mod tests {
             &child_agent_id,
             crate::events::types::SubagentTerminalState::Succeeded,
             true,
-            &crate::events::types::SubagentWorkspaceTerminalResource::None,
             timestamp,
         );
         let output = crate::runtime::subagent::workflow_output_event(
@@ -14113,6 +13312,156 @@ mod tests {
             timestamp,
         );
 
+        (store, terminal, output)
+    }
+
+    #[test]
+    fn workflow_ownership_requires_matching_kind_origin_and_parent_conversation() {
+        use crate::events::types::SubagentOwnershipKind;
+        use crate::runtime::subagent::AgentActivationOrigin;
+        for case in [
+            "foreign_run",
+            "foreign_envelope",
+            "ordinary_origin",
+            "normal_kind",
+        ] {
+            let (source, terminal, output) = workflow_terminal_fixture(
+                &crate::runtime::workflow::test_instance("review_pr", "review"),
+                false,
+            );
+            let target = store();
+            let mut ownership = source.read_events(None, 10).unwrap().events[0].clone();
+            ownership.sequence = 0;
+            assert_eq!(&ownership.conversation_id, target.conversation_id());
+            let mut invalid = ownership.clone();
+            let RuntimeEvent::SubagentOwnershipCommitted {
+                origin,
+                ownership: kind,
+                child_agent_id,
+                ..
+            } = &mut invalid.event
+            else {
+                unreachable!()
+            };
+            let child = child_agent_id.clone();
+            match case {
+                "foreign_run" | "foreign_envelope" => {
+                    let AgentActivationOrigin::Workflow { node_id } = origin else {
+                        unreachable!()
+                    };
+                    node_id.block.run.conversation_id = ConversationId::generate();
+                    if case == "foreign_envelope" {
+                        invalid.conversation_id = node_id.block.run.conversation_id.clone();
+                    }
+                }
+                "ordinary_origin" => *origin = AgentActivationOrigin::ClientControl,
+                "normal_kind" => *kind = SubagentOwnershipKind::Normal,
+                _ => unreachable!(),
+            }
+            let result = if case == "normal_kind" {
+                // Supply legitimate private authority so this tests the kind/origin
+                // boundary, not an unrelated missing-authority rejection.
+                let (event, authority) =
+                    crate::local_runtime::session::tests::deletion_tests::admit_agent(invalid);
+                target.append_agent_admission(event, &authority)
+            } else {
+                target.append_event(invalid)
+            };
+            if case == "foreign_envelope" {
+                assert!(
+                    matches!(
+                        result,
+                        Err(ConversationStoreError::ConversationIdMismatch { .. })
+                    ),
+                    "{case}: {result:?}"
+                );
+            } else {
+                assert!(
+                    matches!(result, Err(ConversationStoreError::InvalidReference(_))),
+                    "{case}: {result:?}"
+                );
+            }
+            assert!(
+                target.read_events(None, 10).unwrap().events.is_empty(),
+                "{case}"
+            );
+            assert!(
+                target.load_agent_authority(&child).is_err(),
+                "no partial private authority: {case}"
+            );
+            let lifecycle_count: i64 = target
+                .lock()
+                .unwrap()
+                .query_row("SELECT COUNT(*) FROM lifecycle_state", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(lifecycle_count, 0, "no partial lifecycle: {case}");
+            // The same exact identity is still admissible after rejection.
+            target.append_event(ownership).unwrap();
+            let committed = target
+                .commit_workflow_agent_terminal(terminal.clone(), output.clone())
+                .unwrap();
+            assert_eq!(
+                target
+                    .commit_workflow_agent_terminal(terminal, output)
+                    .unwrap(),
+                committed
+            );
+            assert_eq!(target.read_events(None, 10).unwrap().events.len(), 3);
+        }
+    }
+
+    #[test]
+    fn normal_agent_creation_and_resume_ownership_keep_their_native_admission_paths() {
+        let store = store();
+        let first =
+            crate::runtime::identity::SubagentId::for_conversation(store.conversation_id(), 1);
+        let second =
+            crate::runtime::identity::SubagentId::for_conversation(store.conversation_id(), 2);
+        let child = AgentId::new("durable-ordinary-agent");
+        own_normal_subagent(&store, &first, &child);
+        let (notice, report, event) = success_publication(&store, &first, &child, "first result");
+        store
+            .accept_subagent_terminal(Some(notice), report, event)
+            .unwrap();
+        own_normal_subagent(&store, &second, &child);
+        let (notice, report, event) =
+            success_publication(&store, &second, &child, "resumed result");
+        store
+            .accept_subagent_terminal(Some(notice), report, event)
+            .unwrap();
+        assert!(store.load_agent_authority(&child).is_ok());
+        let events = store.read_events(None, 10).unwrap().events;
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(
+                    event.event,
+                    RuntimeEvent::SubagentOwnershipCommitted { .. }
+                ))
+                .count(),
+            2
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(
+                    event.event,
+                    RuntimeEvent::AgentActivationAdmission {
+                        phase: crate::events::types::AgentActivationAdmissionPhase::Reserved,
+                        ..
+                    }
+                ))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn workflow_agent_value_and_child_terminal_are_one_atomic_transition() {
+        let (store, terminal, output) = workflow_terminal_fixture(
+            &crate::runtime::workflow::test_instance("review_pr", "review"),
+            false,
+        );
         let mut unproven = terminal.clone();
         if let RuntimeEvent::SubagentTerminalSettled {
             physical_settlement_proven,
@@ -14156,27 +13505,128 @@ mod tests {
         assert_eq!(store.read_events(None, 10).unwrap().events.len(), 3);
     }
 
+    /// Every rejection leaves the exact committed prefix untouched; the valid
+    /// pair can then commit and retry, including repeated/nested instances.
     #[test]
-    fn subagent_ownership_rejects_a_widened_isolated_workspace_snapshot() {
+    fn workflow_terminal_rejects_inconsistent_and_substituted_typed_identities() {
+        use crate::runtime::workflow::{WorkflowId, test_instance};
+        for case in [
+            "run_field",
+            "workflow_field",
+            "owned_run",
+            "owned_node",
+            "visit",
+            "loop",
+            "parallel",
+        ] {
+            let mut owned = test_instance("review_pr", "review");
+            if case == "loop" {
+                owned.block.definition.blocks = vec!["retry".into(), "body".into()];
+                owned.block.invocations = vec![0, 1];
+            } else if case == "parallel" {
+                owned.block.definition.blocks = vec!["checks".into(), "left".into()];
+                owned.block.invocations = vec![0, 0];
+            }
+            let (store, terminal, output) = workflow_terminal_fixture(&owned, false);
+            let before = store.read_events(None, 100).unwrap().events;
+            let mut invalid = output.clone();
+            let RuntimeEvent::WorkflowAgentOutputCommitted {
+                workflow_id,
+                run_id,
+                node_id,
+                ..
+            } = &mut invalid.event
+            else {
+                unreachable!()
+            };
+            match case {
+                "run_field" => run_id.invocation += 1,
+                "workflow_field" => *workflow_id = WorkflowId::parse("other_workflow").unwrap(),
+                "owned_run" => {
+                    run_id.invocation += 1;
+                    node_id.block.run = run_id.clone();
+                }
+                "owned_node" => node_id.node = "another_node".into(),
+                "visit" => node_id.visit += 1,
+                "loop" => node_id.block.invocations[1] += 1,
+                "parallel" => node_id.block.definition.blocks[1] = "right".into(),
+                _ => unreachable!(),
+            }
+            assert!(
+                matches!(
+                    store.commit_workflow_agent_terminal(terminal.clone(), invalid.clone()),
+                    Err(ConversationStoreError::InvalidReference(_))
+                ),
+                "{case}"
+            );
+            assert_eq!(
+                store.read_events(None, 100).unwrap().events,
+                before,
+                "{case}"
+            );
+            let committed = store
+                .commit_workflow_agent_terminal(terminal.clone(), output.clone())
+                .unwrap();
+            assert_eq!(
+                store
+                    .commit_workflow_agent_terminal(terminal.clone(), output)
+                    .unwrap(),
+                committed
+            );
+            let after = store.read_events(None, 100).unwrap().events;
+            assert_eq!(after.len(), before.len() + 2);
+            // The retry fast path must not bypass identity validation either.
+            assert!(
+                matches!(
+                    store.commit_workflow_agent_terminal(terminal, invalid),
+                    Err(ConversationStoreError::InvalidReference(_))
+                ),
+                "{case}"
+            );
+            assert_eq!(store.read_events(None, 100).unwrap().events, after);
+        }
+    }
+
+    #[test]
+    fn workflow_terminal_rejects_normal_agent_ownership_without_partial_facts() {
+        let (store, terminal, output) = workflow_terminal_fixture(
+            &crate::runtime::workflow::test_instance("review_pr", "review"),
+            true,
+        );
+        let before = store.read_events(None, 100).unwrap().events;
+        assert!(matches!(
+            store.commit_workflow_agent_terminal(terminal.clone(), output),
+            Err(ConversationStoreError::InvalidReference(_))
+        ));
+        assert_eq!(store.read_events(None, 100).unwrap().events, before);
+        let RuntimeEvent::SubagentTerminalSettled {
+            subagent_id,
+            child_agent_id,
+            ..
+        } = terminal.event
+        else {
+            unreachable!()
+        };
+        let (notice, report, event) =
+            success_publication(&store, &subagent_id, &child_agent_id, "ordinary success");
+        store
+            .accept_subagent_terminal(Some(notice), report, event)
+            .expect("ordinary Agent remains publishable");
+        assert_eq!(
+            store.read_events(None, 100).unwrap().events.len(),
+            before.len() + 1
+        );
+    }
+
+    /// The frozen Session execution binding in an ownership fact is one
+    /// absolute directory; a relative binding is refused before any write.
+    #[test]
+    fn subagent_ownership_rejects_a_relative_session_workspace_binding() {
         let store = store();
         let conversation_id = store.conversation_id().clone();
         let subagent_id =
             crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 1);
-        let physical = std::path::PathBuf::from("/tmp/rustx-worktree-1");
-        let workspace = crate::runtime::workspace::WorkspaceSnapshot {
-            borrowed_from: None,
-            logical_workspace: physical.clone(),
-            isolation: crate::runtime::workspace::WorkspaceIsolation::GitWorktree(
-                crate::runtime::workspace::GitWorktreeSnapshot {
-                    source_repository_root: std::path::PathBuf::from("/tmp/repository"),
-                    repository_relative_workspace: std::path::PathBuf::from("backend"),
-                    physical_worktree_root: physical,
-                    base_commit: "1111111111111111111111111111111111111111".to_owned(),
-                    branch: "rustx/subagent/abc".to_owned(),
-                    parent_had_uncommitted_changes: false,
-                },
-            ),
-        };
+        let workspace = std::path::PathBuf::from("relative/workspace");
         let error = store
             .append_event(envelope(
                 &conversation_id,
@@ -14201,438 +13651,9 @@ mod tests {
                     workspace,
                 },
             ))
-            .expect_err("durable ownership must reject authority widening");
+            .expect_err("durable ownership must reject a relative workspace binding");
         assert!(matches!(error, ConversationStoreError::InvalidReference(_)));
-    }
-
-    #[test]
-    #[allow(clippy::too_many_lines)] // One transaction regression covers the terminal/handoff pair.
-    fn subagent_terminal_persists_a_workspace_handoff_with_the_terminal_fact() {
-        let store = store();
-        let conversation_id = store.conversation_id().clone();
-        let subagent_id =
-            crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 1);
-        let child_agent_id = AgentId::new(format!("agent-{subagent_id}"));
-        let workspace = crate::runtime::workspace::WorkspaceSnapshot {
-            borrowed_from: None,
-            logical_workspace: std::path::PathBuf::from("/tmp/rustx-worktree-1/backend"),
-            isolation: crate::runtime::workspace::WorkspaceIsolation::GitWorktree(
-                crate::runtime::workspace::GitWorktreeSnapshot {
-                    source_repository_root: std::path::PathBuf::from("/tmp/rustx-repository"),
-                    repository_relative_workspace: std::path::PathBuf::from("backend"),
-                    physical_worktree_root: std::path::PathBuf::from("/tmp/rustx-worktree-1"),
-                    base_commit: "1111111111111111111111111111111111111111".to_owned(),
-                    branch: "rustx/subagent/abc".to_owned(),
-                    parent_had_uncommitted_changes: true,
-                },
-            ),
-        };
-        let handoff = crate::runtime::workspace::WorkspaceHandoff {
-            logical_workspace: workspace.logical_workspace.clone(),
-            physical_worktree_root: std::path::PathBuf::from("/tmp/rustx-worktree-1"),
-            branch: "rustx/subagent/abc".to_owned(),
-            base_commit: "1111111111111111111111111111111111111111".to_owned(),
-            head_commit: "2222222222222222222222222222222222222222".to_owned(),
-            dirty: false,
-        };
-        own_normal_subagent_with_workspace(&store, &subagent_id, &child_agent_id, workspace);
-        let retained = crate::events::types::SubagentWorkspaceTerminalResource::Retained {
-            handoff: handoff.clone(),
-        };
-        let (notice, report, event) = success_publication(
-            &store,
-            &subagent_id,
-            &child_agent_id,
-            "child answer",
-            &retained,
-        );
-        let notice_text = match &notice.content[0] {
-            UserContentBlock::Text(text) => text.text.clone(),
-            other => panic!("the notice is text: {other:?}"),
-        };
-        assert!(
-            notice_text.contains("changes were retained and are not applied to your workspace"),
-            "a retained settlement folds the semantic fact into the notice: {notice_text}"
-        );
-
-        // A handoff cannot widen the owned logical workspace.
-        let mut widened_handoff = handoff.clone();
-        widened_handoff.logical_workspace = widened_handoff.physical_worktree_root.clone();
-        let mut malformed_event = event.clone();
-        let RuntimeEvent::SubagentTerminalPublished {
-            workspace_resource, ..
-        } = &mut malformed_event.event
-        else {
-            panic!("terminal event");
-        };
-        *workspace_resource = crate::events::types::SubagentWorkspaceTerminalResource::Retained {
-            handoff: widened_handoff,
-        };
-        let malformed = store
-            .accept_subagent_terminal(Some(notice.clone()), report.clone(), malformed_event)
-            .expect_err("a handoff cannot widen the owned logical workspace");
-        assert!(matches!(
-            malformed,
-            ConversationStoreError::InvalidReference(_)
-        ));
-        assert_eq!(
-            store.load_pending().unwrap().len(),
-            0,
-            "the rejected publication accepted nothing"
-        );
-        store
-            .accept_subagent_terminal(Some(notice), report, event)
-            .expect("terminal handoff");
-        let events = store.read_events(None, 64).expect("events").events;
-        assert!(events.iter().any(|event| {
-            matches!(
-                &event.event,
-                RuntimeEvent::SubagentTerminalPublished {
-                    workspace_resource:
-                        crate::events::types::SubagentWorkspaceTerminalResource::Retained {
-                            handoff: actual,
-                        },
-                    ..
-                } if actual == &handoff
-            )
-        }));
-
-        let mut mismatched_handoff = handoff.clone();
-        mismatched_handoff.head_commit = "3333333333333333333333333333333333333333".to_owned();
-        let invalid_disposal = crate::runtime::subagent::workspace_disposal_started_event(
-            &conversation_id,
-            &subagent_id,
-            &mismatched_handoff,
-            Utc.with_ymd_and_hms(2026, 8, 7, 12, 1, 0).unwrap(),
-        );
-        let error = store
-            .commit_subagent_workspace_disposal_intent(invalid_disposal)
-            .expect_err("durable disposal must repeat the terminal handoff exactly");
-        assert!(matches!(error, ConversationStoreError::InvalidReference(_)));
-
-        let intent = crate::runtime::subagent::workspace_disposal_started_event(
-            &conversation_id,
-            &subagent_id,
-            &handoff,
-            Utc.with_ymd_and_hms(2026, 8, 7, 12, 1, 1).unwrap(),
-        );
-        let committed = store
-            .commit_subagent_workspace_disposal_intent(intent.clone())
-            .expect("retained-workspace disposal intent");
-        let retried = store
-            .commit_subagent_workspace_disposal_intent(intent)
-            .expect("same disposal intent is idempotent");
-        assert_eq!(retried, committed);
-        let conflicting_intent = crate::runtime::subagent::workspace_disposal_started_event(
-            &conversation_id,
-            &subagent_id,
-            &mismatched_handoff,
-            Utc.with_ymd_and_hms(2026, 8, 7, 12, 1, 3).unwrap(),
-        );
-        let error = store
-            .commit_subagent_workspace_disposal_intent(conflicting_intent)
-            .expect_err("an intent replay with a different handoff conflicts");
-        assert!(matches!(
-            error,
-            ConversationStoreError::TerminalViolation(_)
-        ));
-        let partial = crate::runtime::subagent::workspace_disposal_settled_event(
-            &conversation_id,
-            &subagent_id,
-            &handoff,
-            crate::events::types::SubagentWorkspaceDisposalSettlement::WorktreeRemoved,
-            Utc.with_ymd_and_hms(2026, 8, 7, 12, 1, 2).unwrap(),
-        );
-        let committed_partial = store
-            .commit_subagent_workspace_disposal_settlement(partial.clone())
-            .expect("partial settlement");
-        assert_eq!(
-            store
-                .commit_subagent_workspace_disposal_settlement(partial)
-                .expect("same partial settlement is idempotent"),
-            committed_partial
-        );
-        let conflicting_partial = crate::runtime::subagent::workspace_disposal_settled_event(
-            &conversation_id,
-            &subagent_id,
-            &mismatched_handoff,
-            crate::events::types::SubagentWorkspaceDisposalSettlement::WorktreeRemoved,
-            Utc.with_ymd_and_hms(2026, 8, 7, 12, 1, 4).unwrap(),
-        );
-        let error = store
-            .commit_subagent_workspace_disposal_settlement(conflicting_partial)
-            .expect_err("a partial replay with a different handoff conflicts");
-        assert!(matches!(
-            error,
-            ConversationStoreError::TerminalViolation(_)
-        ));
-        let settlement = crate::runtime::subagent::workspace_disposal_settled_event(
-            &conversation_id,
-            &subagent_id,
-            &handoff,
-            crate::events::types::SubagentWorkspaceDisposalSettlement::Disposed,
-            Utc.with_ymd_and_hms(2026, 8, 7, 12, 1, 2).unwrap(),
-        );
-        let settled = store
-            .commit_subagent_workspace_disposal_settlement(settlement.clone())
-            .expect("retained-workspace disposal settlement");
-        let retried_settlement = store
-            .commit_subagent_workspace_disposal_settlement(settlement)
-            .expect("same disposal settlement is idempotent");
-        assert_eq!(retried_settlement, settled);
-        let conflicting_settlement = crate::runtime::subagent::workspace_disposal_settled_event(
-            &conversation_id,
-            &subagent_id,
-            &mismatched_handoff,
-            crate::events::types::SubagentWorkspaceDisposalSettlement::Disposed,
-            Utc.with_ymd_and_hms(2026, 8, 7, 12, 1, 5).unwrap(),
-        );
-        let error = store
-            .commit_subagent_workspace_disposal_settlement(conflicting_settlement)
-            .expect_err("a final settlement replay with a different handoff conflicts");
-        assert!(matches!(
-            error,
-            ConversationStoreError::TerminalViolation(_)
-        ));
-        let events = store.read_events(None, 64).expect("events").events;
-        assert_eq!(
-            events
-                .iter()
-                .filter(|event| matches!(
-                    &event.event,
-                    RuntimeEvent::SubagentWorkspaceDisposalStarted { subagent_id: actual, .. }
-                        if actual == &subagent_id
-                ))
-                .count(),
-            1,
-            "an intent retry never creates a second disposal fact"
-        );
-        assert_eq!(
-            events
-                .iter()
-                .filter(|event| matches!(
-                    &event.event,
-                    RuntimeEvent::SubagentWorkspaceDisposalSettled {
-                        subagent_id: actual,
-                        settlement: crate::events::types::SubagentWorkspaceDisposalSettlement::WorktreeRemoved,
-                        ..
-                    } if actual == &subagent_id
-                ))
-                .count(),
-            1,
-            "a partial settlement retry never creates a second partial fact"
-        );
-        assert_eq!(
-            events
-                .iter()
-                .filter(|event| matches!(
-                    &event.event,
-                    RuntimeEvent::SubagentWorkspaceDisposalSettled {
-                        subagent_id: actual,
-                        settlement: crate::events::types::SubagentWorkspaceDisposalSettlement::Disposed,
-                        ..
-                    } if actual == &subagent_id
-                ))
-                .count(),
-            1,
-            "a settlement retry never creates a second disposal fact"
-        );
-    }
-
-    #[test]
-    #[allow(clippy::too_many_lines)] // One transaction regression covers unresolved authority and its settlement.
-    fn unresolved_workspace_resource_facts_are_idempotent_and_conflicts_are_rejected() {
-        let store = store();
-        let conversation_id = store.conversation_id().clone();
-        let subagent_id =
-            crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 1);
-        let child_agent_id = AgentId::new(format!("agent-{subagent_id}"));
-        let workspace = crate::runtime::workspace::WorkspaceSnapshot {
-            borrowed_from: None,
-            logical_workspace: std::path::PathBuf::from("/tmp/rustx-unresolved/backend"),
-            isolation: crate::runtime::workspace::WorkspaceIsolation::GitWorktree(
-                crate::runtime::workspace::GitWorktreeSnapshot {
-                    source_repository_root: std::path::PathBuf::from("/tmp/rustx-repository"),
-                    repository_relative_workspace: std::path::PathBuf::from("backend"),
-                    physical_worktree_root: std::path::PathBuf::from("/tmp/rustx-unresolved"),
-                    base_commit: "1111111111111111111111111111111111111111".to_owned(),
-                    branch: "rustx/subagent/abc".to_owned(),
-                    parent_had_uncommitted_changes: false,
-                },
-            ),
-        };
-        own_normal_subagent_with_workspace(
-            &store,
-            &subagent_id,
-            &child_agent_id,
-            workspace.clone(),
-        );
-
-        let unresolved_resource =
-            crate::events::types::SubagentWorkspaceTerminalResource::PreservedUnresolved {
-                reason: crate::runtime::workspace::WorkspaceUnresolvedReason::PhysicalSettlement,
-                detail: "the final workspace inspection was unavailable".to_owned(),
-            };
-        let (draft, terminal) = non_success_publication(
-            &store,
-            &subagent_id,
-            &child_agent_id,
-            SubagentTerminalState::Failed,
-            "workspace settlement remained unresolved",
-            &unresolved_resource,
-        );
-        let (notice, accepted, committed_terminal) = store
-            .accept_subagent_terminal(None, draft.clone(), terminal.clone())
-            .expect("unresolved terminal resource fact");
-        assert!(notice.is_none(), "a failed terminal carries no notice");
-        let (notice, retried, replayed_terminal) = store
-            .accept_subagent_terminal(None, draft, terminal)
-            .expect("identical unresolved terminal replay");
-        assert!(notice.is_none());
-        assert_eq!(replayed_terminal, committed_terminal);
-        assert!(!accepted.retried);
-        assert!(retried.retried);
-
-        let mut conflicting_terminal = committed_terminal.clone();
-        let RuntimeEvent::SubagentTerminalPublished {
-            workspace_resource, ..
-        } = &mut conflicting_terminal.event
-        else {
-            panic!("terminal event");
-        };
-        *workspace_resource =
-            crate::events::types::SubagentWorkspaceTerminalResource::PreservedUnresolved {
-                reason: crate::runtime::workspace::WorkspaceUnresolvedReason::NestedContainment,
-                detail: "different unresolved authority".to_owned(),
-            };
-        let (conflicting_draft, _) = non_success_publication(
-            &store,
-            &subagent_id,
-            &child_agent_id,
-            SubagentTerminalState::Failed,
-            "workspace settlement remained unresolved",
-            &unresolved_resource,
-        );
-        assert!(matches!(
-            store.accept_subagent_terminal(None, conflicting_draft, conflicting_terminal),
-            Err(ConversationStoreError::InvalidReference(_))
-        ));
-
-        let handoff = crate::runtime::workspace::WorkspaceHandoff {
-            logical_workspace: workspace.logical_workspace.clone(),
-            physical_worktree_root: std::path::PathBuf::from("/tmp/rustx-unresolved"),
-            branch: "rustx/subagent/abc".to_owned(),
-            base_commit: "1111111111111111111111111111111111111111".to_owned(),
-            head_commit: "1111111111111111111111111111111111111111".to_owned(),
-            dirty: true,
-        };
-        let mut changed_handoff = handoff.clone();
-        changed_handoff.head_commit = "2222222222222222222222222222222222222222".to_owned();
-        let changed_intent = crate::runtime::subagent::workspace_disposal_started_event(
-            &conversation_id,
-            &subagent_id,
-            &changed_handoff,
-            Utc.with_ymd_and_hms(2026, 8, 7, 12, 1, 0).unwrap(),
-        );
-        assert!(matches!(
-            store.commit_subagent_workspace_disposal_intent(changed_intent),
-            Err(ConversationStoreError::InvalidReference(detail))
-                if detail.contains("immutable workspace base")
-        ));
-        let intent = crate::runtime::subagent::workspace_disposal_started_event(
-            &conversation_id,
-            &subagent_id,
-            &handoff,
-            Utc.with_ymd_and_hms(2026, 8, 7, 12, 1, 0).unwrap(),
-        );
-        let committed_intent = store
-            .commit_subagent_workspace_disposal_intent(intent.clone())
-            .expect("unresolved resource disposal intent");
-        assert_eq!(
-            store
-                .commit_subagent_workspace_disposal_intent(intent)
-                .expect("identical disposal intent replay"),
-            committed_intent
-        );
-
-        let partial = crate::runtime::subagent::workspace_disposal_settled_event(
-            &conversation_id,
-            &subagent_id,
-            &handoff,
-            crate::events::types::SubagentWorkspaceDisposalSettlement::WorktreeRemoved,
-            Utc.with_ymd_and_hms(2026, 8, 7, 12, 1, 1).unwrap(),
-        );
-        let committed_partial = store
-            .commit_subagent_workspace_disposal_settlement(partial.clone())
-            .expect("partial unresolved-resource settlement");
-        assert_eq!(
-            store
-                .commit_subagent_workspace_disposal_settlement(partial)
-                .expect("identical partial settlement replay"),
-            committed_partial
-        );
-
-        let final_settlement = crate::runtime::subagent::workspace_disposal_settled_event(
-            &conversation_id,
-            &subagent_id,
-            &handoff,
-            crate::events::types::SubagentWorkspaceDisposalSettlement::Disposed,
-            Utc.with_ymd_and_hms(2026, 8, 7, 12, 1, 2).unwrap(),
-        );
-        let committed_final = store
-            .commit_subagent_workspace_disposal_settlement(final_settlement.clone())
-            .expect("final unresolved-resource settlement");
-        assert_eq!(
-            store
-                .commit_subagent_workspace_disposal_settlement(final_settlement)
-                .expect("identical final settlement replay"),
-            committed_final
-        );
-
-        let events = store.read_events(None, 64).expect("events").events;
-        assert_eq!(
-            events
-                .iter()
-                .filter(|event| matches!(
-                    &event.event,
-                    RuntimeEvent::SubagentTerminalPublished {
-                        subagent_id: actual,
-                        workspace_resource:
-                            crate::events::types::SubagentWorkspaceTerminalResource::PreservedUnresolved {
-                                ..
-                            },
-                        ..
-                    } if actual == &subagent_id
-                ))
-                .count(),
-            1,
-            "terminal unresolved authority is exactly-once"
-        );
-        assert_eq!(
-            events
-                .iter()
-                .filter(|event| matches!(
-                    &event.event,
-                    RuntimeEvent::SubagentWorkspaceDisposalStarted {
-                        subagent_id: actual, ..
-                    } if actual == &subagent_id
-                ))
-                .count(),
-            1
-        );
-        assert_eq!(
-            events
-                .iter()
-                .filter(|event| matches!(
-                    &event.event,
-                    RuntimeEvent::SubagentWorkspaceDisposalSettled {
-                        subagent_id: actual, ..
-                    } if actual == &subagent_id
-                ))
-                .count(),
-            2,
-            "partial and final settlement each have one canonical fact"
-        );
+        assert!(store.read_events(None, 8).unwrap().events.is_empty());
     }
 
     #[test]
@@ -14658,7 +13679,6 @@ mod tests {
                 &subagent_id,
                 claimed_child,
                 &format!("terminal-{suffix}"),
-                &crate::events::types::SubagentWorkspaceTerminalResource::None,
             );
             let mut report = report;
             report.source = UserSource::Agent {
@@ -14697,13 +13717,8 @@ mod tests {
         {
             let subagent_id =
                 crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 12);
-            let (notice, mut report, event) = success_publication(
-                &store,
-                &subagent_id,
-                &child_a,
-                "terminal-runtime-success",
-                &crate::events::types::SubagentWorkspaceTerminalResource::None,
-            );
+            let (notice, mut report, event) =
+                success_publication(&store, &subagent_id, &child_a, "terminal-runtime-success");
             report.source = UserSource::Runtime;
             assert!(matches!(
                 store.accept_subagent_terminal(Some(notice), report, event),
@@ -14722,7 +13737,6 @@ mod tests {
                 &child_a,
                 SubagentTerminalState::Failed,
                 "subagent failed",
-                &crate::events::types::SubagentWorkspaceTerminalResource::None,
             );
             report.source = UserSource::Agent {
                 agent_id: child_a.clone(),
@@ -14741,14 +13755,8 @@ mod tests {
             own(ordinal, &child_a);
             let subagent_id =
                 crate::runtime::identity::SubagentId::for_conversation(&conversation_id, ordinal);
-            let (report, event) = non_success_publication(
-                &store,
-                &subagent_id,
-                &child_a,
-                state,
-                "runtime terminal",
-                &crate::events::types::SubagentWorkspaceTerminalResource::None,
-            );
+            let (report, event) =
+                non_success_publication(&store, &subagent_id, &child_a, state, "runtime terminal");
             store
                 .accept_subagent_terminal(None, report, event)
                 .expect("Runtime-authored terminal");
@@ -14788,9 +13796,7 @@ mod tests {
                 definition_digest: "sha256:definition".to_owned(),
                 profile_digest: "sha256:profile".to_owned(),
                 ownership: crate::events::types::SubagentOwnershipKind::Normal,
-                workspace: crate::runtime::workspace::WorkspaceSnapshot::shared(
-                    std::path::PathBuf::from("<shared-workspace>"),
-                ),
+                workspace: std::path::PathBuf::from("/shared-workspace"),
             },
         );
         let (malformed, authority) =
@@ -14827,9 +13833,7 @@ mod tests {
                 definition_digest: "sha256:definition".to_owned(),
                 profile_digest: "sha256:profile".to_owned(),
                 ownership: crate::events::types::SubagentOwnershipKind::Normal,
-                workspace: crate::runtime::workspace::WorkspaceSnapshot::shared(
-                    std::path::PathBuf::from("<shared-workspace>"),
-                ),
+                workspace: std::path::PathBuf::from("/shared-workspace"),
             },
         );
         let (canonical, authority) =
@@ -14873,9 +13877,7 @@ mod tests {
                 definition_digest: "sha256:definition".to_owned(),
                 profile_digest: "sha256:profile".to_owned(),
                 ownership: crate::events::types::SubagentOwnershipKind::Normal,
-                workspace: crate::runtime::workspace::WorkspaceSnapshot::shared(
-                    std::path::PathBuf::from("<shared-workspace>"),
-                ),
+                workspace: std::path::PathBuf::from("/shared-workspace"),
             },
         );
         {
@@ -14912,13 +13914,8 @@ mod tests {
 
         // A terminal for S1 resolves the ownership fact by S1's canonical
         // EventId and must reject the embedded-S2 mismatch.
-        let (notice, report, event) = success_publication(
-            &store,
-            &s1,
-            &AgentId::new("agent-b"),
-            "terminal",
-            &crate::events::types::SubagentWorkspaceTerminalResource::None,
-        );
+        let (notice, report, event) =
+            success_publication(&store, &s1, &AgentId::new("agent-b"), "terminal");
         assert!(
             matches!(
                 store.accept_subagent_terminal(Some(notice), report, event),
@@ -15692,6 +14689,71 @@ mod tests {
             Err(ConversationStoreError::SchemaVersionMismatch { stored, expected })
                 if stored == SQLITE_SCHEMA_VERSION - 1 && expected == SQLITE_SCHEMA_VERSION
         ));
+    }
+
+    /// Pre-integration stores can hold retired workspace facts or lack the
+    /// combined canonical child-history contract. The gate refuses them at open,
+    /// before any row is decoded, and never rewrites, migrates or deletes it.
+    #[test]
+    fn pre_integration_stores_are_refused_and_left_untouched() {
+        for previous_version in [50, 51, 55] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("pre-integration.sqlite");
+            let id = ConversationId::new("conv_497e1eed-f051-7f55-8d8c-4775b598e15c");
+            {
+                let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+                let connection = store.conn.lock().unwrap();
+                for (sequence, event) in [
+                r#"{"type":"workflow_workspace_owned","run_id":{"conversation_id":"conv_497e1eed-f051-7f55-8d8c-4775b598e15c","attempt_id":"attempt","invocation":1},"workspace":{"logical_workspace":"/w","isolation":{"type":"shared"}}}"#,
+                r#"{"type":"subagent_workspace_disposal_started","subagent_id":"conv_497e1eed-f051-7f55-8d8c-4775b598e15c-subagent-1"}"#,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                connection
+                    .execute(
+                        "INSERT INTO events(sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json) VALUES(?1,?2,?3,?4,NULL,NULL,?5)",
+                        params![
+                            i64::try_from(sequence + 1).unwrap(),
+                            format!("retired-{sequence}"),
+                            i64::from(EVENT_SCHEMA_VERSION),
+                            id.as_str(),
+                            format!(
+                                r#"{{"schema_version":{EVENT_SCHEMA_VERSION},"event_id":"retired-{sequence}","sequence":{},"conversation_id":"{}","timestamp":"2026-01-01T00:00:00Z","event":{event}}}"#,
+                                sequence + 1,
+                                id.as_str()
+                            )
+                        ],
+                    )
+                    .unwrap();
+            }
+                connection
+                .execute(
+                    "UPDATE rustx_store SET schema_version = ?1, next_event_sequence = 3 WHERE id = 1",
+                    [previous_version],
+                )
+                .unwrap();
+            }
+            let before = std::fs::read(&path).unwrap();
+            assert!(matches!(
+                SqliteConversationStore::open(id, &path),
+                Err(ConversationStoreError::SchemaVersionMismatch {
+                    stored,
+                    expected: SQLITE_SCHEMA_VERSION
+                }) if stored == previous_version
+            ));
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                before,
+                "refusal never migrates, rewrites or deletes old data"
+            );
+            let mut sidecars = std::fs::read_dir(directory.path())
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+                .collect::<Vec<_>>();
+            sidecars.sort();
+            assert_eq!(sidecars, ["pre-integration.sqlite"]);
+        }
     }
 
     /// The other half of the gate: a store this runtime creates records the

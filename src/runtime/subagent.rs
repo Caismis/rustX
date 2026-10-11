@@ -1,7 +1,7 @@
 //! Durable native child Agents and finite activation supervision.
 //!
 //! SubagentRegistry owns each stable AgentId, child ConversationId, lineage,
-//! frozen admitted authority and retained workspace, plus zero or one current
+//! frozen admitted authority and frozen Session execution binding, plus zero or one current
 //! activation. SubagentId names a finite activation, not the durable Agent.
 //! Catalog/resolver freeze creation authority; later send_message calls reuse it.
 //!
@@ -9,7 +9,7 @@
 //! Child SealRequested closes admission before the driver grants local sealing;
 //! previously admitted envelopes drain in FIFO order. Inactive message admission
 //! reserves one next activation. Stopping rejects transiently; unavailable
-//! settlement or workspace authority requires explicit proof or repair.
+//! settlement or publication authority requires explicit proof or repair.
 //!
 //! Drivers alone own process handles, cancellation escalation, reap and nested
 //! containment. Committed terminal publication with proven physical settlement
@@ -116,18 +116,15 @@ pub(crate) fn is_safe_child_conversation_component(conversation_id: &Conversatio
         && !value.contains('\\')
 }
 
-use crate::runtime::workspace::{
-    WorkspaceHandoff, WorkspaceSettlement, WorkspaceSettlementDisposition, WorkspaceSnapshot,
-};
 pub use activity::{
     SubagentActivity, SubagentActivityCounters, SubagentExecutionProfile, SubagentObservation,
     SubagentWaitReason,
 };
 pub use catalog::{
-    AgentCatalog, CHILD_UNSAFE_BUILTIN_TOOLS, MAX_SUBAGENT_DEFINITIONS,
-    MAX_SUBAGENT_EXECUTION_DEADLINE_MS, NamedAgentDefinition, NamedAgentDefinitionDigest,
-    NamedAgentDefinitionError, SUBAGENT_DEFINITION_DIGEST_VERSION, SubagentAdmissionError,
-    SubagentExecutionDeadline, SubagentExecutionDeadlineError, SubagentName, SubagentNameError,
+    AgentCatalog, MAX_SUBAGENT_DEFINITIONS, MAX_SUBAGENT_EXECUTION_DEADLINE_MS,
+    NamedAgentDefinition, NamedAgentDefinitionDigest, NamedAgentDefinitionError,
+    SUBAGENT_DEFINITION_DIGEST_VERSION, SubagentAdmissionError, SubagentExecutionDeadline,
+    SubagentExecutionDeadlineError, SubagentName, SubagentNameError,
 };
 pub use invocation::{
     MAX_OVERRIDE_SKILLS, MAX_OVERRIDE_TOOLS, SubagentInvocationOverride, SubagentOverrideError,
@@ -141,8 +138,7 @@ pub use registry::{
     SubagentObserver, SubagentPhysicalSettlement, SubagentPublication, SubagentRegistry,
     SubagentRegistryConfig, SubagentSettlement, SubagentSnapshot, SubagentStartError,
     SubagentStartOutcome, SubagentStartSpec, SubagentState, SubagentSteerError,
-    SubagentTerminalMode, SubagentWorkspaceDisposal, SubagentWorkspaceDisposalError,
-    SubagentWorkspaceResourceState,
+    SubagentTerminalMode,
 };
 #[cfg(test)]
 pub(crate) use registry::{CommitBoundaryHook, ResumeTestGates};
@@ -159,7 +155,7 @@ use chrono::{DateTime, Utc};
 use crate::durable::inbox::InboundDraft;
 use crate::events::types::{
     EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope, SubagentOwnershipKind,
-    SubagentTerminalState, SubagentWorkspaceDisposalSettlement, SubagentWorkspaceTerminalResource,
+    SubagentTerminalState,
 };
 use crate::message::content::TextBlock;
 use crate::message::types::{InboundKind, UserContentBlock, UserMessageBlock, UserSource};
@@ -596,7 +592,7 @@ pub(crate) fn ownership_event(
     definition_digest: &NamedAgentDefinitionDigest,
     profile_digest: &resolver::SubagentExecutionProfileDigest,
     ownership: SubagentOwnershipKind,
-    workspace: &WorkspaceSnapshot,
+    workspace: &std::path::Path,
     timestamp: DateTime<Utc>,
 ) -> RuntimeEventEnvelope {
     RuntimeEventEnvelope {
@@ -618,7 +614,7 @@ pub(crate) fn ownership_event(
             definition_digest: definition_digest.as_str().to_owned(),
             profile_digest: profile_digest.as_str().to_owned(),
             ownership,
-            workspace: workspace.clone(),
+            workspace: workspace.to_path_buf(),
         },
     }
 }
@@ -651,13 +647,6 @@ pub(crate) fn terminal_notice_correlation(subagent_id: &SubagentId) -> String {
     format!("subagent-terminal-notice:{subagent_id}")
 }
 
-/// The minimal actionable parent-facing fact of a retained changed isolated
-/// workspace (Issue #192): semantic only — never a physical path, branch,
-/// or commit, which remain user/Runtime Client concerns below the model
-/// boundary.
-pub(crate) const RETAINED_WORKSPACE_FACT: &str = "changes were retained and are not applied to your workspace; the user can inspect or \
-     dispose of the retained workspace";
-
 /// Runtime-owned correlation for one final report. Stable Agent identity and
 /// finite activation identity are explicit and never supplied by child content.
 /// The store validates this exact notice in the same transaction as the report.
@@ -665,16 +654,10 @@ pub(crate) fn terminal_notice_text(
     agent_id: &AgentId,
     subagent_id: &SubagentId,
     agent: &str,
-    retained: bool,
 ) -> String {
-    let retained_sentence = if retained {
-        format!(" Its {RETAINED_WORKSPACE_FACT}.")
-    } else {
-        String::new()
-    };
     format!(
         "Agent {agent_id} activation {subagent_id} (profile \"{agent}\") completed; the message that follows \
-         is its final report.{retained_sentence}"
+         is its final report."
     )
 }
 
@@ -682,10 +665,8 @@ pub(crate) fn terminal_notice_text(
 /// terminal (Issue #192).
 ///
 /// The success report itself is child-authored, so the runtime correlation
-/// metadata and the runtime-observed workspace settlement fact must not be
-/// concatenated into it — that would falsely attribute runtime statements
-/// to the child, and the child cannot authoritatively know terminal
-/// workspace settlement anyway. The notice is a separate
+/// metadata must not be concatenated into it — that would falsely attribute
+/// runtime statements to the child. The notice is a separate
 /// `UserSource::Runtime` inbound item committed in the **same** durable
 /// transaction as the terminal publication, ordered strictly before the
 /// report: the terminal result remains the last item of the publication.
@@ -693,7 +674,6 @@ pub(crate) fn terminal_notice(
     agent_id: &AgentId,
     subagent_id: &SubagentId,
     agent: &SubagentName,
-    retained: bool,
     timestamp: DateTime<Utc>,
 ) -> InboundDraft {
     InboundDraft {
@@ -701,7 +681,7 @@ pub(crate) fn terminal_notice(
         source: UserSource::Runtime,
         kind: InboundKind::Message,
         content: vec![UserContentBlock::Text(TextBlock {
-            text: terminal_notice_text(agent_id, subagent_id, agent.as_str(), retained),
+            text: terminal_notice_text(agent_id, subagent_id, agent.as_str()),
         })],
         timestamp,
         correlation: Some(terminal_notice_correlation(subagent_id)),
@@ -718,110 +698,6 @@ pub(crate) fn terminal_event_id(subagent_id: &SubagentId) -> EventId {
 /// terminal publication it has no parent message or delivery correlation.
 pub(crate) fn terminal_settlement_event_id(subagent_id: &SubagentId) -> EventId {
     EventId::new(format!("subagent-terminal-settled-event:{subagent_id}"))
-}
-
-/// The deterministic event identity of the durable retained-workspace
-/// disposal intent. This fact lives after the logical child terminal event
-/// and opens a separate resource lifecycle for exactly one handoff.
-pub(crate) fn workspace_disposal_started_event_id(subagent_id: &SubagentId) -> EventId {
-    EventId::new(format!(
-        "subagent-workspace-disposal-started-event:{subagent_id}"
-    ))
-}
-
-/// The deterministic event identity of one durable retained-workspace
-/// disposal settlement. Intermediate and final settlement facts have
-/// distinct identities so `WorktreeRemoved` can remain open until the exact
-/// branch compare-delete settles.
-pub(crate) fn workspace_disposal_settled_event_id(
-    subagent_id: &SubagentId,
-    settlement: SubagentWorkspaceDisposalSettlement,
-) -> EventId {
-    let phase = match settlement {
-        SubagentWorkspaceDisposalSettlement::WorktreeRemoved => "worktree-removed",
-        SubagentWorkspaceDisposalSettlement::Disposed => "disposed",
-    };
-    EventId::new(format!(
-        "subagent-workspace-disposal-{phase}-event:{subagent_id}"
-    ))
-}
-
-/// Builds the durable post-terminal retained-workspace disposal intent.
-/// Durable validation independently binds the handoff to the child ownership
-/// and terminal facts before the intent can authorize physical mutation.
-pub(crate) fn workspace_disposal_started_event(
-    conversation_id: &ConversationId,
-    subagent_id: &SubagentId,
-    workspace_handoff: &WorkspaceHandoff,
-    timestamp: DateTime<Utc>,
-) -> RuntimeEventEnvelope {
-    RuntimeEventEnvelope {
-        schema_version: EVENT_SCHEMA_VERSION,
-        event_id: workspace_disposal_started_event_id(subagent_id),
-        sequence: 0,
-        conversation_id: conversation_id.clone(),
-        attempt_id: None,
-        turn_id: None,
-        timestamp,
-        event: RuntimeEvent::SubagentWorkspaceDisposalStarted {
-            subagent_id: subagent_id.clone(),
-            workspace_handoff: workspace_handoff.clone(),
-        },
-    }
-}
-
-/// Builds one durable physical settlement of an admitted retained-workspace
-/// disposal. The exact handoff is repeated so each phase is self-describing;
-/// durable validation compares it with the intent and terminal facts.
-pub(crate) fn workspace_disposal_settled_event(
-    conversation_id: &ConversationId,
-    subagent_id: &SubagentId,
-    workspace_handoff: &WorkspaceHandoff,
-    settlement: SubagentWorkspaceDisposalSettlement,
-    timestamp: DateTime<Utc>,
-) -> RuntimeEventEnvelope {
-    RuntimeEventEnvelope {
-        schema_version: EVENT_SCHEMA_VERSION,
-        event_id: workspace_disposal_settled_event_id(subagent_id, settlement),
-        sequence: 0,
-        conversation_id: conversation_id.clone(),
-        attempt_id: None,
-        turn_id: None,
-        timestamp,
-        event: RuntimeEvent::SubagentWorkspaceDisposalSettled {
-            subagent_id: subagent_id.clone(),
-            workspace_handoff: workspace_handoff.clone(),
-            settlement,
-        },
-    }
-}
-
-/// Converts the closed workspace settlement disposition into the durable
-/// terminal resource fact. A preserved unresolved workspace carries its
-/// reason and diagnostic, but never a fabricated `WorkspaceHandoff`.
-pub(crate) fn terminal_workspace_resource(
-    settlement: &WorkspaceSettlement,
-) -> SubagentWorkspaceTerminalResource {
-    match &settlement.disposition {
-        WorkspaceSettlementDisposition::AgentRetained
-        | WorkspaceSettlementDisposition::Borrowed
-        | WorkspaceSettlementDisposition::Shared
-        | WorkspaceSettlementDisposition::Removed => SubagentWorkspaceTerminalResource::None,
-        WorkspaceSettlementDisposition::Retained { handoff, .. } => {
-            SubagentWorkspaceTerminalResource::Retained {
-                handoff: handoff.clone(),
-            }
-        }
-        WorkspaceSettlementDisposition::PreservedUnresolved { reason, detail } => {
-            SubagentWorkspaceTerminalResource::PreservedUnresolved {
-                reason: *reason,
-                detail: bound_utf8(
-                    detail.clone(),
-                    crate::runtime::workspace::MAX_WORKSPACE_SETTLEMENT_DETAIL_BYTES,
-                ),
-            }
-        }
-    }
 }
 
 pub(crate) fn admission_event_id(
@@ -907,7 +783,6 @@ pub(crate) fn terminal_settlement(
     child_agent_id: &AgentId,
     state: SubagentTerminalState,
     physical_settlement_proven: bool,
-    workspace_resource: &SubagentWorkspaceTerminalResource,
     timestamp: DateTime<Utc>,
 ) -> RuntimeEventEnvelope {
     RuntimeEventEnvelope {
@@ -923,7 +798,6 @@ pub(crate) fn terminal_settlement(
             child_agent_id: child_agent_id.clone(),
             state,
             physical_settlement_proven,
-            workspace_resource: workspace_resource.clone(),
         },
     }
 }
@@ -971,7 +845,6 @@ pub(crate) fn terminal_publication(
     child_agent_id: &AgentId,
     state: SubagentTerminalState,
     content: Vec<UserContentBlock>,
-    workspace_resource: &SubagentWorkspaceTerminalResource,
     physical_settlement_proven: bool,
     timestamp: DateTime<Utc>,
 ) -> (InboundDraft, RuntimeEventEnvelope) {
@@ -1004,7 +877,6 @@ pub(crate) fn terminal_publication(
             message_id: message.id.clone(),
             state,
             physical_settlement_proven,
-            workspace_resource: workspace_resource.clone(),
         },
     };
     let draft = InboundDraft {
@@ -1047,17 +919,8 @@ pub fn recovery_terminal_publication(
     child_agent_id: &AgentId,
     agent: &str,
     definition_digest: &str,
-    workspace_resource: &SubagentWorkspaceTerminalResource,
     timestamp: DateTime<Utc>,
 ) -> (InboundDraft, RuntimeEventEnvelope) {
-    // The notice is runtime-authored, so the retained-workspace fact folds
-    // into the same message without any provenance ambiguity.
-    let retained = matches!(
-        workspace_resource,
-        SubagentWorkspaceTerminalResource::Retained { .. }
-    )
-    .then(|| format!(" Its {RETAINED_WORKSPACE_FACT}."))
-    .unwrap_or_default();
     terminal_publication(
         conversation_id,
         subagent_id,
@@ -1067,10 +930,9 @@ pub fn recovery_terminal_publication(
             text: format!(
                 "Subagent {subagent_id} (agent {agent}, definition {definition_digest}) was \
                  interrupted by a runtime restart: its actual outcome is unknown and it was \
-                 not restarted.{retained}"
+                 not restarted."
             ),
         })],
-        workspace_resource,
         false,
         timestamp,
     )
@@ -1082,32 +944,19 @@ mod tests {
     use super::*;
 
     /// The recovery-authored interruption notice preserves the "actual
-    /// outcome unknown" semantics and folds the runtime-observed retained
-    /// workspace fact into the same Runtime-authored message (Issue #192).
+    /// outcome unknown" semantics as a Runtime-authored message (Issue #192).
     #[test]
-    fn the_recovery_interruption_notice_is_runtime_authored_and_carries_the_retained_fact() {
+    fn the_recovery_interruption_notice_is_runtime_authored() {
         let subagent_id = SubagentId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18-subagent-1");
         let child_agent_id = AgentId::new("agent-child");
         let conversation_id = ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
         let timestamp = chrono::Utc::now();
-        let handoff = crate::runtime::workspace::WorkspaceHandoff {
-            logical_workspace: std::path::PathBuf::from("/physical/worktree"),
-            physical_worktree_root: std::path::PathBuf::from("/physical/worktree"),
-            branch: "rustx/subagent/secret-branch".to_owned(),
-            base_commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
-            head_commit: "89abcdef012345670123456789abcdef01234567".to_owned(),
-            dirty: true,
-        };
-        let retained = SubagentWorkspaceTerminalResource::Retained {
-            handoff: handoff.clone(),
-        };
         let (draft, event) = super::recovery_terminal_publication(
             &conversation_id,
             &subagent_id,
             &child_agent_id,
             "explore",
             "sha256:d1",
-            &retained,
             timestamp,
         );
         assert_eq!(draft.source, UserSource::Runtime);
@@ -1119,75 +968,29 @@ mod tests {
             text.contains("its actual outcome is unknown and it was not restarted"),
             "interruption never becomes a proven failure or cancellation: {text}"
         );
-        assert!(
-            text.contains("changes were retained and are not applied to your workspace"),
-            "the retained fact is reported: {text}"
-        );
-        for physical in ["/physical/worktree", "secret-branch"] {
-            assert!(
-                !text.contains(physical),
-                "no physical fact crosses into the notice: {physical} in {text}"
-            );
-        }
+        assert!(!text.contains("retained"), "{text}");
         assert!(matches!(
             event.event,
             RuntimeEvent::SubagentTerminalPublished {
                 state: SubagentTerminalState::Interrupted,
+                physical_settlement_proven: false,
                 ..
             }
         ));
-
-        // Without a retained settlement, no retained fact is fabricated.
-        let (draft, _) = super::recovery_terminal_publication(
-            &conversation_id,
-            &subagent_id,
-            &child_agent_id,
-            "explore",
-            "sha256:d1",
-            &SubagentWorkspaceTerminalResource::None,
-            timestamp,
-        );
-        let text = match &draft.content[0] {
-            UserContentBlock::Text(text) => text.text.clone(),
-            other => panic!("the notice is text: {other:?}"),
-        };
-        assert!(
-            !text.contains("retained"),
-            "no retained-workspace claim without a retained settlement: {text}"
-        );
     }
 
     /// The successful-terminal notice correlates the exact typed execution
     /// handle the creation result returned, plus the named agent — and no
-    /// internal child identity (Issue #192). The retained-workspace fact
-    /// folds into the same one notice when settlement retained work.
+    /// internal child identity (Issue #192).
     #[test]
     fn the_terminal_notice_correlates_the_exact_execution_handle() {
         let subagent_id = SubagentId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18-subagent-2");
-        let plain = super::terminal_notice_text(
-            &AgentId::new("agent-child"),
-            &subagent_id,
-            "explore",
-            false,
-        );
+        let plain =
+            super::terminal_notice_text(&AgentId::new("agent-child"), &subagent_id, "explore");
         assert_eq!(
             plain,
             "Agent agent-child activation conv_36524fd8-f674-7fc2-8125-06d01fee0e18-subagent-2 \
              (profile \"explore\") completed; the message that follows is its final report."
-        );
-        let retained = super::terminal_notice_text(
-            &AgentId::new("agent-child"),
-            &subagent_id,
-            "explore",
-            true,
-        );
-        assert!(
-            retained.starts_with(&plain),
-            "the retained fact extends the same one notice: {retained}"
-        );
-        assert!(
-            retained.contains(super::RETAINED_WORKSPACE_FACT),
-            "the retained semantic fact is stated: {retained}"
         );
 
         let agent = SubagentName::parse("explore").expect("name");
@@ -1196,7 +999,6 @@ mod tests {
             &AgentId::new("agent-child"),
             &subagent_id,
             &agent,
-            false,
             timestamp,
         );
         assert_eq!(draft.source, UserSource::Runtime);

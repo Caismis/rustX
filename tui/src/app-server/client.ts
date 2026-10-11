@@ -188,7 +188,6 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   "job/cancel": "side_effecting",
   "agent/status": "read",
   "agent/interrupt": "side_effecting",
-  "subagent/disposeWorkspace": "side_effecting",
   // Negotiation and subscriptions die with this connection; neither changes
   // authoritative product/runtime state. Re-establish them after reconnect.
   "initialize": "connection_local",

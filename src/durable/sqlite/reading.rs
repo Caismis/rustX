@@ -137,10 +137,32 @@ fn message_preview(
     })
 }
 
-/// The opening human message or delegated Agent task of a local turn: the earliest eligible message
-/// adopted with this Attempt, or adopted while idle after the previous Attempt
-/// started and before this one did. Steering of the previous turn carries that
-/// turn's identity and never opens this one.
+/// Only human messages and delegated Agent tasks can open a Turn. Context records
+/// and runtime/external notifications remain ineligible in every lineage.
+pub(super) const OPENING_PROMPT_FILTER: &str = "json_extract(l.message_json,'$.role')='user'
+ AND (json_extract(l.message_json,'$.source')='human' OR json_type(l.message_json,'$.source.agent')='object')
+ AND COALESCE(json_extract(l.message_json,'$.kind'),'message')='message'";
+
+pub(super) fn local_prompt_sql() -> String {
+    format!(
+        "WITH adoptions AS (
+         SELECT sequence,event_json FROM events INDEXED BY events_attempt_kind_idx
+         WHERE attempt_id=?1 AND json_extract(event_json,'$.event.type')='inbound_turn_adopted' AND sequence<=?3
+         UNION ALL
+         SELECT sequence,event_json FROM events INDEXED BY events_attempt_kind_idx
+         WHERE attempt_id IS NULL AND json_extract(event_json,'$.event.type')='inbound_turn_adopted' AND sequence<?2
+           AND sequence>(SELECT COALESCE(MAX(sequence),0) FROM events INDEXED BY events_kind_idx
+             WHERE sequence<?2 AND json_extract(event_json,'$.event.type')='attempt_started')
+        )
+        SELECT m.value FROM adoptions e,json_each(e.event_json,'$.event.message_ids') m
+        JOIN message_ledger l ON l.message_id=m.value
+        WHERE {OPENING_PROMPT_FILTER}
+        ORDER BY e.sequence,CAST(m.key AS INTEGER)"
+    )
+}
+
+/// The earliest eligible input adopted by this Attempt or while idle between
+/// the previous and current starts. Previous-Attempt steering keeps its owner.
 fn local_prompt(
     connection: &Connection,
     attempt: &AttemptId,
@@ -148,18 +170,7 @@ fn local_prompt(
     through: u64,
 ) -> Result<Option<(MessageId, String)>, ConversationStoreError> {
     let mut statement = connection
-        .prepare_cached(
-            "SELECT m.value FROM events e INDEXED BY events_kind_idx,json_each(e.event_json,'$.event.message_ids') m
-             JOIN message_ledger l ON l.message_id=m.value
-             WHERE json_extract(e.event_json,'$.event.type')='inbound_turn_adopted' AND e.sequence<=?3
-               AND e.sequence>(SELECT COALESCE(MAX(sequence),0) FROM events INDEXED BY events_kind_idx
-                 WHERE sequence<?2 AND json_extract(event_json,'$.event.type')='attempt_started')
-               AND (e.attempt_id=?1 OR (e.attempt_id IS NULL AND e.sequence<?2))
-               AND json_extract(l.message_json,'$.role')='user'
-               AND (json_extract(l.message_json,'$.source')='human' OR json_type(l.message_json,'$.source.agent')='object')
-               AND COALESCE(json_extract(l.message_json,'$.kind'),'message')='message'
-             ORDER BY e.sequence,CAST(m.key AS INTEGER)",
-        )
+        .prepare_cached(&local_prompt_sql())
         .map_err(|error| storage(format!("turn prompt: {error}")))?;
     let ids = statement
         .query_map(
@@ -236,7 +247,7 @@ fn local_previews(
 
 /// Prompt and response of an inherited turn from its immutable provenance.
 /// Both reading ownership and completed-response replay ownership explicitly
-/// name retained human inputs. Their earliest text-bearing input is the preview;
+/// name retained eligible opening inputs. Their earliest text-bearing input is the preview;
 /// transcript adjacency and the source's current state are never evidence.
 fn inherited_previews(
     connection: &Connection,
@@ -260,13 +271,10 @@ fn inherited_previews(
     // Only the selected Turn's validated response owners enter this lookup.
     // Never scan the normalized inherited response directory for a preview.
     let mut statement = connection
-        .prepare_cached(
-            "SELECT m.message_id FROM json_each(?1) i JOIN message_ledger m ON m.message_id=i.value
-         WHERE json_extract(m.message_json,'$.role')='user'
-           AND json_extract(m.message_json,'$.source')='human'
-           AND COALESCE(json_extract(m.message_json,'$.kind'),'message')='message'
-         ORDER BY m.position",
-        )
+        .prepare_cached(&format!(
+            "SELECT l.message_id FROM json_each(?1) i JOIN message_ledger l ON l.message_id=i.value
+             WHERE {OPENING_PROMPT_FILTER} ORDER BY l.position"
+        ))
         .map_err(|error| storage(format!("inherited prompt owners: {error}")))?;
     let inputs = statement
         .query_map(

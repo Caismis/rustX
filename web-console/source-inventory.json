@@ -480,7 +480,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "7e2f1f4bbde9c4c3427ad70bc1ef8272fedd0171d5841ccc18fede53bea43642"
+      "local_sha256": "f44ed28de47004804176a95b10f8e6dcb2bd76b6abbcb45db0ba64fe209f7f3f"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
@@ -957,7 +957,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "6919b222533ab4e402715814632d06c5b5a4b5f913b9f5bb90a242ddaeb44f59",
+      "local_sha256": "04cdacba4e68666fac5982e58f932d77f803373e9eaf79d45462de48a8045a72",
       "additional_sources": [
         {
           "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
@@ -1294,7 +1294,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "7b2c0fe0e00bf8ec72b04815db7fa0e5e0fb19988e8c283885760263e8708beb",
+      "local_sha256": "1c568efe993dbd10cd58f6834a17a8534614da9220548667a831d9e2848a652e",
       "classification": "A"
     },
     {
@@ -1315,7 +1315,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "7cc2bd46bcad86cc665de0b96895b1ae82015fc673700ede4d9d2c230e079697",
+      "local_sha256": "6e0a6b1b79b5d002a67401b15beba4cbff2dea524638f3a8c4457750c5aaac87",
       "classification": "A"
     },
     {
@@ -2339,7 +2339,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "977068165771feb553c2ad627e6fabf400511a4e9419008f90ce017319a730f3",
+      "local_sha256": "de44256887482cccf66fec300941f90307600300fbf75b40362ec77b7d61c320",
       "classification": "B"
     },
     {
@@ -3271,7 +3271,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "380ff5a939c056e2354ffd95e40b81b8460a9346c585f69a0fa80681c9fd5722"
+      "local_sha256": "eac452165171ec4649875c9c0b7b7268f5d3fd192a8c785f51d3d575e348c7bc"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -3391,7 +3391,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "1501de24adbc3a4d3a86dd418cc180aa9fa5bcae10eaa93e17cd65a63362b319"
+      "local_sha256": "4521144b192e458ede762aac464b664188f05947f6c5da542aa977a0ee6b9c84"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -3573,7 +3573,7 @@
         "Harness scroll ownership",
         "Total-sized virtualizer measurement cache"
       ],
-      "local_sha256": "1696d8c389c6e0d7b0169d54688bf36d651cedd68cf8a0e78370030b40317a61"
+      "local_sha256": "3cf4cb8758c17bf41565982abcc130445d4d62230d0e5b732530dbe31653fd92"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/stop-sequence.ts",

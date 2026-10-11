@@ -132,31 +132,17 @@ pub(super) async fn request(
 /// native Agent registry, never from a browser's paths or claimed Agent identity.
 fn workspace_root(
     mapped_root: &std::path::Path,
-    child: Option<&crate::runtime::workspace::WorkspaceSnapshot>,
+    child: Option<&std::path::PathBuf>,
     roots: &Roots,
 ) -> io::Result<PathBuf> {
-    use crate::runtime::workspace::WorkspaceIsolation;
     let root = match child {
         None => mapped_root,
-        Some(workspace) => match &workspace.isolation {
-            WorkspaceIsolation::Shared => {
-                if workspace.logical_workspace != mapped_root {
-                    return Err(crate::tools::session_files::unavailable());
-                }
-                mapped_root
+        Some(workspace) => {
+            if workspace != mapped_root {
+                return Err(crate::tools::session_files::unavailable());
             }
-            WorkspaceIsolation::GitWorktree(_) => {
-                if matches!(roots, Roots::Registered(_)) {
-                    return Err(io::Error::new(
-                        io::ErrorKind::PermissionDenied,
-                        "Product Host delivery does not authorize isolated child workspaces",
-                    ));
-                }
-                // Explicit native-process delivery authority retains the registry's
-                // frozen workspace selection, including runtime-owned isolation.
-                &workspace.logical_workspace
-            }
-        },
+            workspace.as_path()
+        }
     };
     if let Roots::Registered(registered) = roots
         && !registered.iter().any(|path| path == root)
@@ -625,7 +611,7 @@ mod workspace_tests {
         let parent = PathBuf::from("/native/parent");
         let unrelated = PathBuf::from("/native/unrelated");
         let registrations = Roots::Registered(vec![parent.clone(), unrelated.clone()]);
-        let child = crate::runtime::workspace::WorkspaceSnapshot::shared(&unrelated);
+        let child = unrelated.clone();
         assert_eq!(
             crate::tools::session_files::read_failure(
                 &workspace_root(&parent, Some(&child), &registrations).unwrap_err()
@@ -633,7 +619,7 @@ mod workspace_tests {
             FileFailure::Unavailable
         );
         assert!(workspace_root(&parent, Some(&child), &Roots::OriginalMapping).is_err());
-        let child = crate::runtime::workspace::WorkspaceSnapshot::shared(&parent);
+        let child = parent.clone();
         assert_eq!(
             workspace_root(&parent, Some(&child), &registrations).unwrap(),
             parent

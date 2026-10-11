@@ -75,7 +75,7 @@ agents = ["explore"]
 model = "fixture/subagent-model"
 "#;
 
-const ISOLATED_SUBDIRECTORY_SESSION_TOML: &str = r#"agent_id = "agent-parent"
+const SHARED_SUBDIRECTORY_SESSION_TOML: &str = r#"agent_id = "agent-parent"
 
 [context]
 reserve_tokens = 1024
@@ -91,10 +91,6 @@ description = "Read the preserved logical project scope."
 
 [subagents.roles.explore.tools]
 builtin = ["read"]
-
-
-[subagents.roles.explore.worktree]
-enabled = true
 
 
 [agent]
@@ -213,12 +209,12 @@ fn route(body: &str) -> crate::common::FixtureReply {
     }
 }
 
-/// Routes the Issues #187/#189 real-child proof. The child can reach the final
-/// answer only after its real `read` tool resolves an ignored overlay against
-/// the repository-subdirectory authority carried over IPC and composed into
-/// its `ConversationToolRuntime`.
-fn isolated_subdirectory_route(body: &str) -> crate::common::FixtureReply {
-    let is_parent = body.contains("please delegate isolated scope");
+/// Routes the Issue #462 shared-workspace real-child proof. The child can
+/// reach the final answer only after its real `read` tool resolves an
+/// uncommitted parent file against the frozen Session workspace binding
+/// carried over IPC and composed into its `ConversationToolRuntime`.
+fn shared_subdirectory_route(body: &str) -> crate::common::FixtureReply {
+    let is_parent = body.contains("please delegate the shared scope");
     let has_tool_history =
         body.contains("\\\"role\\\":\\\"tool\\\"") || body.contains("\"role\":\"tool\"");
     if is_parent && !has_tool_history {
@@ -338,37 +334,17 @@ fn has_runtime_interrupted_notice(message: &rustx::message::types::MessageBlock)
     )
 }
 
-fn git(cwd: &std::path::Path, args: &[&str]) {
-    let output = std::process::Command::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .args(args)
-        .env("GIT_AUTHOR_NAME", "rustX tests")
-        .env("GIT_AUTHOR_EMAIL", "rustx-tests@example.invalid")
-        .env("GIT_COMMITTER_NAME", "rustX tests")
-        .env("GIT_COMMITTER_EMAIL", "rustx-tests@example.invalid")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .output()
-        .expect("run Git");
-    assert!(
-        output.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-/// Issues #187/#189: the parent workspace is a repository subdirectory. A
-/// real child process receives the nested workspace snapshot over IPC,
-/// composes its tool runtime at `<physical-worktree-root>/backend`, and reads
-/// an ignored file selected relative to that exact logical scope. Terminal
-/// cleanup proves the overlay is not source state while the immutable logical
-/// scope remains unchanged in the Runtime Client projection.
+/// Issue #462 (B01/B02/B05): the parent Session workspace is a repository
+/// subdirectory. A real child process receives that exact frozen binding over
+/// IPC, composes its tool runtime there (no worktree, no copy), and reads a
+/// file the parent has never committed. The Runtime Client projection names
+/// the same directory, the inactive Agent owns no workspace resource, and
+/// wider repository guidance outside the binding stays undiscovered.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
-async fn an_isolated_real_child_preserves_the_repository_subdirectory_boundary() {
+async fn a_real_child_shares_the_session_workspace_subdirectory() {
     let server = crate::common::FixtureServer::start_with_body(|_attempt, _head, body| {
-        isolated_subdirectory_route(body)
+        shared_subdirectory_route(body)
     })
     .await;
     let root = tempfile::tempdir().expect("temp root");
@@ -386,18 +362,8 @@ async fn an_isolated_real_child_preserves_the_repository_subdirectory_boundary()
         "ISSUE187_BACKEND_MARKER\n",
     )
     .expect("marker");
-    std::fs::write(
-        logical_parent.join(".worktreeinclude"),
-        "local/runtime.env\n",
-    )
-    .expect("overlay manifest");
-    std::fs::write(
-        repository.join(".gitignore"),
-        "/backend/local/runtime.env\n",
-    )
-    .expect("overlay ignore rule");
-    // The physical worktree contains wider repository resources. Neither main
-    // project guidance nor child workspace acquisition may discover them.
+    // The repository contains wider resources outside the Session binding.
+    // Neither parent nor child project guidance may discover them.
     std::fs::write(
         repository.join("AGENTS.md"),
         "CFG236_WIDER_INSTRUCTIONS_MUST_NOT_APPEAR",
@@ -417,34 +383,29 @@ async fn an_isolated_real_child_preserves_the_repository_subdirectory_boundary()
     )
     .unwrap();
     let mut session: serde_json::Value =
-        rustx::toml_authoring::parse(ISOLATED_SUBDIRECTORY_SESSION_TOML.as_bytes()).unwrap();
+        rustx::toml_authoring::parse(SHARED_SUBDIRECTORY_SESSION_TOML.as_bytes()).unwrap();
     crate::launch_fixture::write_roles(&logical_parent, &mut session["subagents"]);
-    git(&repository, &["init"]);
-    git(&repository, &["add", "--all"]);
-    git(
-        &repository,
-        &["commit", "-m", "isolated subdirectory fixture"],
-    );
+    // Uncommitted parent state: the child sees it in place (B02).
     std::fs::create_dir_all(logical_parent.join("local")).expect("overlay parent");
     std::fs::write(
         logical_parent.join("local/runtime.env"),
         "ISSUE189_FROZEN_OVERLAY\n",
     )
-    .expect("ignored overlay");
+    .expect("uncommitted parent state");
 
     let models = models_json(&server.url("/v1"));
     let mut process = launch_parent(
         root.path(),
         &logical_parent,
         &models,
-        ISOLATED_SUBDIRECTORY_SESSION_TOML,
+        SHARED_SUBDIRECTORY_SESSION_TOML,
         "subagent-secret",
         None,
         false,
     )
     .await;
     process.attach().await;
-    process.start_turn("please delegate isolated scope").await;
+    process.start_turn("please delegate the shared scope").await;
 
     let mut final_snapshot = None;
     for _ in 0..4_000 {
@@ -510,48 +471,41 @@ async fn an_isolated_real_child_preserves_the_repository_subdirectory_boundary()
     // The retention bound is projection policy and is deliberately absent
     // from the published API a client compiles against: this target sees the
     // wire contract only, and it cannot name a window size.
-    let rustx::runtime_client::RuntimeClientWorkspaceIsolation::GitWorktree {
-        source_repository_root,
-        repository_relative_workspace,
-        physical_worktree_root,
-        ..
-    } = &subagent.workspace.isolation
-    else {
-        panic!("the child must report isolated worktree facts");
-    };
     assert_eq!(
-        source_repository_root,
-        &repository.canonicalize().expect("canonical repository")
+        subagent
+            .workspace
+            .canonicalize()
+            .expect("canonical binding"),
+        logical_parent
+            .canonicalize()
+            .expect("canonical Session workspace"),
+        "the child runs in the parent's frozen Session workspace binding"
     );
-    assert_eq!(
-        repository_relative_workspace,
-        std::path::Path::new("backend")
-    );
-    assert_eq!(
-        subagent.workspace.logical_workspace,
-        physical_worktree_root.join("backend")
-    );
-    assert!(subagent.workspace.handoff.is_none());
     assert_eq!(
         subagent.state,
         rustx::runtime::subagent::AgentState::Inactive
     );
     assert!(subagent.current_activation.is_none());
+    assert_eq!(
+        std::fs::read_to_string(logical_parent.join("local/runtime.env"))
+            .expect("shared state survives settlement"),
+        "ISSUE189_FROZEN_OVERLAY\n"
+    );
     assert!(
-        physical_worktree_root.is_dir(),
-        "inactive Agent retains its physical workspace for later activations"
+        !root.path().join("workspaces").exists(),
+        "no Agent worktree or private workspace copy is ever allocated"
     );
     assert!(server.request_bodies().iter().any(|body| {
         body.contains("ISSUE189_FROZEN_OVERLAY")
             && body.contains("read the local overlay from local/runtime.env")
-            && !body.contains("please delegate isolated scope")
+            && !body.contains("please delegate the shared scope")
     }));
     assert!(
         server
             .request_bodies()
             .iter()
             .all(|body| !body.contains("CFG236_")),
-        "wider physical-worktree role, Skill, and project guidance stay undiscovered"
+        "wider repository role, Skill, and project guidance stay undiscovered"
     );
 
     let (status, stderr) = process.shutdown().await;
@@ -1990,3 +1944,6 @@ impl LiveInspector {
 
 #[path = "continuation.rs"]
 mod continuation;
+
+#[path = "shared_native_tools.rs"]
+mod shared_native_tools;

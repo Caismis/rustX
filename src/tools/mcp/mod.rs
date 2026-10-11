@@ -3414,12 +3414,6 @@ impl McpServerRuntime {
                     started,
                 ));
             }
-            Ok(InteractionOutcome::ReviewInvalidated) => {
-                return unsupported(
-                    "the MCP elicitation interaction was invalidated by native source \
-                     interference",
-                );
-            }
             // The existing coordinator contract, unchanged: provider absence
             // is never reported as a human decline, and a post-publication
             // control failure is a runtime failure of this invocation.
@@ -4255,12 +4249,6 @@ impl McpServerRuntime {
                 return Err(TaskDriveFailure::Cancelled(
                     "the execution deadline expired while the MCP task interaction was pending"
                         .to_owned(),
-                ));
-            }
-            Ok(InteractionOutcome::ReviewInvalidated) => {
-                return Err(unsupported(
-                    "the MCP elicitation interaction was invalidated by native source \
-                     interference",
                 ));
             }
             Err(failure) => {

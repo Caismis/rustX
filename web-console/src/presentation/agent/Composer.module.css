@@ -317,6 +317,10 @@
   background: var(--dsw-specific-selector);
   color: var(--dsw-alias-label-primary);
   cursor: pointer;
+  /* Keep the circular fill on one raster layer when uploads or the context
+     stack repaint the row, just like the adjacent send control. */
+  transform: translateZ(0);
+  will-change: transform;
 }
 
 .add:hover:not(:disabled) {

@@ -2085,9 +2085,7 @@ fn audited_proposals_reject_all_dependent_tool_transitions_atomically() {
                 definition_digest: "sha256:definition".to_owned(),
                 profile_digest: "sha256:profile".to_owned(),
                 ownership: rustx::events::types::SubagentOwnershipKind::Normal,
-                workspace: rustx::runtime::workspace::WorkspaceSnapshot::shared(
-                    std::path::PathBuf::from("<shared-workspace>"),
-                ),
+                workspace: std::path::PathBuf::from("/shared-workspace"),
             },
         );
         subagent.event_id = EventId::new(format!("subagent-committed-event:{subagent_id}"));

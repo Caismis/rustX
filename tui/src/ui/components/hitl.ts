@@ -412,9 +412,7 @@ export class HumanInteractionOverlay implements PopupContent {
     if (kind.type !== "review") return [];
     const key = interactionKey(routed.interaction);
     const review = kind.review;
-    const disclosure = review.subject.type === "candidate"
-      ? "Candidate content is NOT inlined. Inspect the frozen workspace at inspection_path; the reference covers the complete native source contract, including dirty bytes."
-      : "Complete structured plan and context below. Candidate-bound facts identify their exact source version; PgUp/PgDn reveals all rows.";
+    const disclosure = "Complete structured plan and context below. The decision binds this presented subject, not current files; PgUp/PgDn reveals all rows.";
     const rows = [disclosure, `Subject digest: ${kind.subject_digest}`, ...JSON.stringify(review, null, 2).split("\n")].flatMap(line => hardWrapLossless(line, width));
     const room = Math.max(1, height - 4);
     const offset = Math.min(this.#approvalScroll.get(key) ?? 0, Math.max(0, rows.length - room));

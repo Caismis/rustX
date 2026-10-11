@@ -235,7 +235,6 @@ pub(super) fn terminal(event: &E) -> TraceState {
                 S::Denied { .. } | S::QuestionnaireDeclined => TraceState::Denied,
                 S::Cancelled { .. } => TraceState::Cancelled,
                 S::DeadlineExpired { .. } => TraceState::TimedOut,
-                S::ReviewInvalidated => TraceState::Interrupted,
             }
         }
         E::AttemptCancelled { .. } | E::WorkflowCancelled { .. } => TraceState::Cancelled,

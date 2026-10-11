@@ -1023,7 +1023,6 @@ pub enum InteractionSettlement {
     Reviewed {
         response: super::review::ReviewResponse,
     },
-    ReviewInvalidated,
     /// A native execution deadline interrupted the approval rendezvous.
     DeadlineExpired {
         kind: crate::tools::deadline::ToolDeadlineKind,
@@ -1511,8 +1510,7 @@ pub fn validate_interaction_settlement(
             _,
             InteractionSettlement::Cancelled { .. } | InteractionSettlement::DeadlineExpired { .. },
         )
-        | (InteractionSubject::Approval { .. }, InteractionSettlement::Approved)
-        | (InteractionSubject::Review { .. }, InteractionSettlement::ReviewInvalidated) => Ok(()),
+        | (InteractionSubject::Approval { .. }, InteractionSettlement::Approved) => Ok(()),
         (InteractionSubject::Approval { .. }, InteractionSettlement::Denied { reason }) => {
             if reason.chars().count() > MAX_APPROVAL_DENIAL_REASON_CHARS {
                 return Err(format!(

@@ -120,6 +120,7 @@ export function SidebarRoot({ collapsed, width, toggleSidebar, startSession, bro
     <Tooltip label={collapsed ? tx('sidebar:toggle.open') : tx('sidebar:toggle.collapse')} delayMs={500}>
       <button
         type="button"
+        data-sidebar-toggle
         className={clsx(css.iconButton, css.toggle)}
         aria-label={collapsed ? tx('sidebar:toggle.open') : tx('sidebar:toggle.collapse')}
         onClick={() => { toggleSidebar() }}

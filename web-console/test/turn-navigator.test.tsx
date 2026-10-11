@@ -65,8 +65,8 @@ it('hover loads inherited previews without navigating, then clicks the destinati
   await waitFor(() => expect(ui.getByRole('tooltip').textContent).toBe('Prompt 960Response 960'));
   expect(navigate).not.toHaveBeenCalled();
   expect(turnsRequests()).toHaveLength(2);
-  fireEvent.click(ui.getByRole('button', { name: 'Jump to turn 960' }));
-  expect(navigate).toHaveBeenCalledExactlyOnceWith({ ...native(960), id: { conversation_id: 'fork-source', attempt_id: 'source-960' } });
+  fireEvent.click(ui.getByRole('button', { name: 'Load and jump to turn 960' }));
+  expect(navigate).toHaveBeenCalledExactlyOnceWith(960); // Preview identity never replaces the committed outline.
 });
 
 it('previews show the native prompt and final response, fall back to the turn number, and focus never navigates alone', async () => {
@@ -240,7 +240,7 @@ it('clicking the hover-loaded newest page follows subsequent native growth',asyn
  await scrollRail(fixture.ui,1000);
  fireEvent.pointerMove(fixture.ui.getByRole('button',{name:'Load and jump to turn 128'}));
  await waitFor(()=>expect(fixture.ui.getByRole('tooltip').textContent).toBe('turn 128'));
- await act(async()=>{fireEvent.click(fixture.ui.getByRole('button',{name:'Jump to turn 128'}));});
+ await act(async()=>{fireEvent.click(fixture.ui.getByRole('button',{name:'Load and jump to turn 128'}));});
  expect(server.client.getSnapshot().views.A.turnOutline?.paging).toEqual({type:'latest'});
  await fixture.start(129);await fixture.locate(129);await fixture.settle(129);
  expect(server.client.getSnapshot().views.A.turnOutline?.page?.offset).toBe(128);
@@ -372,4 +372,18 @@ for (const leaveRail of [false, true]) it(`a held hover reply cannot replace new
  await fixture.start(129); await fixture.locate(129); await fixture.settle(129);
  expect(fixture.offsets().slice(-3)).toEqual([null, null, null]);
  expect(fixture.mark(129)).toBeTruthy();
+});
+
+it('pointer leave retires a dispatched preview without publishing its page or error', async()=>{
+ const fixture=await pagingRail(128); await scrollRail(fixture.ui,0);
+ const committed=server.client.getSnapshot().views.A.turnOutline;
+ server.held.add('session/turns'); vi.useFakeTimers();
+ fireEvent.pointerMove(fixture.ui.getByRole('button',{name:'Load and jump to turn 1'}));
+ await act(async()=>vi.advanceTimersByTime(150));
+ const held=await server.waitFor('session/turns',2);
+ fireEvent.pointerLeave(fixture.ui.getByRole('navigation'));
+ await act(async()=>server.reply(held));
+ expect(fixture.ui.queryByRole('tooltip')).toBeNull();
+ expect(server.client.getSnapshot().views.A.turnOutline).toBe(committed);
+ expect(fixture.navigate).not.toHaveBeenCalled();
 });

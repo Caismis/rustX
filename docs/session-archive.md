@@ -357,8 +357,7 @@ cancellation received during that wait creates neither a reservation nor a proce
 
 Ownership API audit: `runtime_ownership_admission` serves the two Subagent
 transitions above. Fail-fast `ownership_mutation` remains for catalog publication,
-management database initialization, explicit Conversation startup and explicit
-retained-workspace disposal. SQLite's typed ownership-event guard also remains
+management database initialization and explicit Conversation startup. SQLite's typed ownership-event guard also remains
 fail-fast: Subagent membership publication is now protected by the outer runtime
 admission; other terminal/workflow settlement events retain their existing policy.
 That latter runtime use is a separate potential contention boundary, not changed

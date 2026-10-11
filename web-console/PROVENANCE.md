@@ -2346,3 +2346,67 @@ ModelSelect distinguishes lazy menu opening from an explicit forced catalog
 reread. AgentControls retains the native model recovery gates and does not replay
 a rejected selection. Held-response and cached-catalog regressions cover both
 changes; the pinned Harness source and presentation styles remain unchanged.
+
+
+## PR #463 integration with native child inspection
+
+The integration keeps PR #461's native child conversation, Trace, attachment
+and file-delivery presentation. Agent workspace values now carry the frozen
+Session path, and retired worktree disposal and Candidate controls are absent.
+The historical entries above retain the versions reviewed at those snapshots.
+The combined current contracts are App Server v45, Runtime Client v67, SQLite 56
+and Child IPC 32; see the [format inventory](../docs/agent-workflow-shared-workspace.md#format-and-version-inventory)
+for owners and rejection behavior. Imports and generated client contracts use
+App Server v45. The source inventory
+records the resulting local hashes and actual dependency closure; upstream
+Harness pins, licenses and source attribution remain unchanged.
+
+## PR 458 deterministic reading and responsive repair
+
+Turn previews share the existing single-flight outline pipeline but return only
+disposable presentation data. Only explicit reads/navigation publish committed
+paging. The rail retains one preview Turn and cancels it on pointer leave,
+navigation, native mutation, attachment or generation replacement. Focused
+marks keep their tooltip through explicit navigation; preview identities never
+replace committed outline identities.
+
+AppFrame measures responsive geometry directly from its ResizeObserver, clears
+the narrow overlay on breakpoint transitions, and restores focus to the sidebar
+toggle on dismissal. Tests exercise toggle, Escape, backdrop, inert central
+content and pointer hit testing at 390px across desktop/mobile transitions.
+The collapsed rail and intentional overlay presentation remain intact.
+
+Native opening prompts apply the same human/delegated-Agent classification to
+local and inherited provenance. Local lookup uses existing Attempt/type/range
+indexes. Deterministic VM comparisons after 0, 128 and 512 unrelated future
+Turns stay constant, including idle inputs, previous-Attempt steering and
+ineligible external notifications. No protocol or schema version changes.
+
+The browser repair inspected each failing reference, stable actual and available
+diff, including later captures in the same test. Approved references retain the
+current 856px conversation width, 12px shell inset, Composer action icons,
+800 × 704 Settings panel and narrow sidebar overlay. The 57 repaired references
+were captured with pinned Playwright 1.63.0 Linux Chromium; the production
+comparison/stabilization helpers and rasterizer-noise manifest are unchanged.
+The comparator's live evidence-binding and frozen negative-control tests pass
+against the updated references. No tolerance, deadline, retry or generic mask
+was added. Product speed labels remain `token/s`; assertions follow the current
+English/Chinese dictionaries.
+
+Full integrated execution exposed three history-dependent accessory circle
+rasters (18–24 changed pixels, maximum channel delta 2) after context and shell
+transitions. The accessory now owns a complete raster layer like the send
+control. Forty-nine reviewed stable captures change only the accessory: normally
+ten glyph-edge pixels by one channel level, and the disabled button's opacity
+rounding by one level inside its 28px bounds. The dark context capture also
+replaces the prior circle-edge raster. Geometry, clipping, comparator, browser
+pins and reference-local noise evidence remain unchanged. These captures are
+baseline-review evidence; only the subsequent complete strict run counts as
+browser conformance.
+
+Full-suite execution also exposed an unowned asyncio stdin observer in the
+external provider fixture. The CLI now retains and settles that task for the
+server lifetime. A forced-GC/EOF regression fails against the prior observer
+with the same destroyed-pending-task diagnostic; all 54 provider tests and the
+real native chat/child-capability browser scenarios pass with the owned task.
+This changes test-process lifetime, not rustX execution or settlement ownership.

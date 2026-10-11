@@ -319,7 +319,7 @@ fn production_allocation_peer(
         .unwrap()
         .allocation_test_hook = Some(AllocationTestHook {
         entered,
-        stage: Box::new(move |runtime_root, workspace| {
+        stage: Box::new(move |runtime_root| {
             // The production allocator, not this peer, created both directories.
             // No ownership admission survives into process staging/Ready.
             let snapshot = product.freeze_ownership().unwrap();
@@ -336,7 +336,7 @@ fn production_allocation_peer(
                 .unwrap();
             let pid = process.id().unwrap();
             assert!(created.send(ScriptedChild { peer, pid }).is_ok());
-            StagedChild::for_allocated_test(process, control, observation, runtime_root, workspace)
+            StagedChild::for_allocated_test(process, control, observation, runtime_root)
         }),
     });
     (reached, child)
@@ -549,19 +549,14 @@ async fn child_transcript_requires_exact_committed_parent_ownership_and_survives
 }
 
 #[tokio::test]
-async fn failed_and_cancelled_retained_children_keep_exact_transcript_authority() {
+async fn failed_and_cancelled_children_keep_exact_transcript_authority() {
     use crate::message::{
         TextBlock,
         types::{InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource},
     };
     for cancelled in [false, true] {
         let fixture = ArchivePlane::new();
-        make_clean_git_workspace(&fixture.plane);
-        let mut spec = start_spec("retained history");
-        spec.authority.resolved.workspace_policy =
-            crate::runtime::workspace::WorkspacePolicy::GitWorktree {
-                require_clean_parent: true,
-            };
+        let spec = start_spec("retained history");
         let (prepared, child) = fixture.prepare_spec(&spec).await;
         let id = prepared.subagent_id.clone();
         let path = fixture
@@ -593,14 +588,8 @@ async fn failed_and_cancelled_retained_children_keep_exact_transcript_authority(
         else {
             panic!("accepted")
         };
-        let workspace = fixture
-            .plane
-            .registry
-            .snapshot(&id)
-            .unwrap()
-            .workspace
-            .logical_workspace;
-        std::fs::write(workspace.join("keep.txt"), "retained work").unwrap();
+        let workspace = fixture.plane.registry.snapshot(&id).unwrap().workspace;
+        std::fs::write(workspace.join("keep.txt"), "shared work").unwrap();
         if cancelled {
             fixture
                 .plane
@@ -628,8 +617,8 @@ async fn failed_and_cancelled_retained_children_keep_exact_transcript_authority(
             }
         );
         assert!(
-            terminal.handoff.is_none() && workspace.join("keep.txt").exists(),
-            "inactive durable Agent retains its workspace without a disposable handoff"
+            workspace.join("keep.txt").exists(),
+            "failure and cancellation never roll back shared workspace effects"
         );
         assert_eq!(
             fixture

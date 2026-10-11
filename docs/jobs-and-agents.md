@@ -8,7 +8,7 @@ physical settlement, bounded output, watches and Event Journal primitives.
 | Domain | Identity | Owner | Lifecycle | Model tools |
 | --- | --- | --- | --- | --- |
 | Job | `ToolExecutionId`, exposed as `job_id` | Conversation's `ConversationBackgroundRegistry` | Active → terminal, permanently | `job_list`, `job_status`, `job_wait`, `job_cancel` |
-| Agent | `AgentId`, exposed as `agent_id` | Parent Conversation's `SubagentRegistry` | Inactive → Admitting → Active → Stopping → Inactive; unresolved authority → Unavailable | `subagent`, `list_agents`, `send_message`, `wait_agent`, `interrupt_agent` |
+| Agent | `AgentId`, exposed as `agent_id` | Parent Conversation's `SubagentRegistry` | Inactive → Admitting → Active → Stopping → Inactive; unresolved authority → Unavailable | `subagent`, `list_agents`, `send_message`, `wait_agent`, `interrupt_agent`, composed automatically as one Root-only group when `agent.agents` is nonempty |
 | Activation | Internal `SubagentId`, exposed as `activation_id` | One Agent and the shared finite child supervisor | Admission → running → stopping/settlement → terminal | Controlled through its owning Agent |
 
 An ordinary foreground Tool invocation is not a Job. One Job ID identifies one
@@ -255,13 +255,14 @@ Repeated activations reuse the same record; lineage copies omit it, archive
 exports do not read it, and deleting the owning Session removes its database.
 Existing local-store filesystem permissions protect these values.
 
-## Agent workspace lifetime
+## Agent workspace binding
 
-`AgentRetained` retains the workspace for the durable Agent lifetime across
-finite activations. It is not the finite Workflow `Retained` disposal handoff.
-`subagent/disposeWorkspace` cannot delete a still-existing Agent's workspace.
-An independent Agent-deletion lifecycle is a future owner, outside this repair;
-Session deletion retains its existing full ownership and containment checks.
+Every Agent runs in the Session's shared workspace (Issue #462). Admission
+freezes that binding as one absolute path; every activation of the same Agent
+uses exactly it, sees the parent's uncommitted state, and leaves its effects in
+place on success, failure or cancellation. There is no Agent worktree, copy,
+handoff or disposal operation. Session deletion retains its existing ownership
+and physical containment checks and never touches the workspace.
 
 Workflow checks logical terminal, committed publication/value, and physical proof
 separately. A valid value with unproven containment fails as physical settlement
@@ -347,8 +348,8 @@ Goal idle uses short claims in both execution registries: durable callbacks run
 outside the mutex while claims exclude new ownership. Private Job preparations
 also exclude idle; their rollback wakes the existing Goal coordinator.
 
-Finite Workflow recovery preserves durable ownership and physical proof for shared
-as well as retained workspaces. Restored execution history grants no executable
+Finite Workflow recovery preserves durable ownership and physical proof.
+Restored execution history grants no executable
 terminal protocol or resumed Workflow authority; physical reconciliation never
 replays a Workflow node.
 

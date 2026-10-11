@@ -33,7 +33,6 @@ it.each([
   [{ status: 'committed_cleanup_pending', session_id: 'private-id' }, 'committed, but cleanup is still pending'],
   [{ status: 'committed_durability_uncertain', session_id: 'private-id' }, 'Deletion needs verification'],
   [{ status: 'blocked', session_id: 'private-id', reason: { kind: 'resource_conflict' } }, 'external resource owner'],
-  [{ status: 'blocked', session_id: 'private-id', reason: { kind: 'workspace', resource_count: 2 } }, 'Retained workspaces'],
   [{ status: 'blocked', session_id: 'private-id', reason: { kind: 'invalid_ownership' } }, 'could not be verified'],
 ] as const)('preserves the native deletion outcome without raw DTOs: %j', (result, copy) => {
   const notice = displayText(translator('en'), sessionDeletionNotice(result as RuntimeClientSessionDeletionResult));

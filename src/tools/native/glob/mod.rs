@@ -40,9 +40,6 @@ pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistrati
 pub struct GlobTool;
 
 impl ToolExecutor for GlobTool {
-    fn workspace_use(&self) -> crate::tools::executor::WorkspaceUse {
-        crate::tools::executor::WorkspaceUse::ConsumesProvided
-    }
     fn start<'a>(
         &'a self,
         invocation: ToolInvocation,

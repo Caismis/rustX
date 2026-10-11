@@ -25,136 +25,16 @@ pub(super) fn eligible(definition: &ToolDefinition) -> bool {
         // (Issue #259). Naming it here too would imply it could otherwise
         // have been selected.
         && !(definition.origin == crate::tools::types::ToolOrigin::Builtin
-            && (definition.name == "subagent" || crate::tools::native::is_domain_control(&definition.name)))
+            && (crate::tools::native::is_agent_control(&definition.name)
+                || crate::tools::native::is_domain_control(&definition.name)))
 }
 
 impl WorkflowRuntime {
-    pub(super) fn tool_workspace_use(
-        run: &WorkflowRun,
-        context: &AttemptSubagentContext,
-        selector: &ExactToolSelector,
-    ) -> Result<crate::tools::executor::WorkspaceUse, WorkflowRunError> {
-        let definition = run.tools.get(selector).ok_or_else(|| {
-            WorkflowRunError::CapabilityNotAdmitted("capability was not admitted".into())
-        })?;
-        let registration = context
-            .resources()
-            .capability()
-            .available_tools()
-            .registration(definition)
-            .map_err(WorkflowRunError::IdentityChanged)?;
-        Ok(registration.executor.workspace_use())
-    }
-
-    #[allow(clippy::too_many_arguments, clippy::too_many_lines)] // One node admission followed by native invocation and fact projection.
+    /// One exact admitted registration through the standard native
+    /// invocation path and the invoking Session's execution binding.
+    /// External Tools keep their own admitted materialization contract.
+    #[allow(clippy::too_many_lines)]
     pub(super) async fn invoke_tool(
-        &self,
-        run: &WorkflowRun,
-        context: &AttemptSubagentContext,
-        node: &WorkflowNodeInstance,
-        selector: &ExactToolSelector,
-        arguments: expressions::CommittedValue,
-        cancellation: &crate::runtime::cancellation::ExecutionCancellation,
-        admitted_access: &mut Option<crate::runtime::workspace::WorkspaceAccess>,
-    ) -> Result<
-        (
-            ToolExecutionResult,
-            Option<crate::runtime::workspace::CandidateReference>,
-        ),
-        WorkflowRunError,
-    > {
-        let policy = Self::tool_workspace_use(run, context, selector)?;
-        let signal = cancellation.child_signal();
-        if policy == crate::tools::executor::WorkspaceUse::Independent {
-            debug_assert!(admitted_access.is_none());
-        } else if run.candidate.is_some()
-            && policy == crate::tools::executor::WorkspaceUse::Incompatible
-        {
-            return Err(WorkflowRunError::IneligibleCapability(
-                "executor cannot consume a candidate workspace".into(),
-            ));
-        } else if admitted_access.is_none()
-            && let Some(candidate) = &run.candidate
-        {
-            self.read_model.node(node, |view| {
-                view.state = super::read_model::WorkflowState::Waiting {
-                    reason: super::read_model::WorkflowWait::Workspace,
-                }
-            });
-            *admitted_access = Some(
-                candidate
-                    .borrow(node.clone(), arguments.candidate.as_ref(), &signal)
-                    .await
-                    .map_err(|error| {
-                        if cancellation.is_cancelled() {
-                            WorkflowRunError::from_cancellation(cancellation)
-                        } else {
-                            WorkflowRunError::InvocationAuthority(error)
-                        }
-                    })?,
-            );
-        }
-        // Setup errors leave the exact access in the caller's cleanup scope.
-        let access = admitted_access;
-        let workspace = access
-            .as_ref()
-            .map(|access| {
-                crate::tools::workspace::Workspace::new(&access.snapshot().logical_workspace)
-            })
-            .transpose()
-            .map_err(|error| WorkflowRunError::InvocationAuthority(error.to_string()))?;
-        let mut result = self
-            .invoke_tool_bound(
-                run,
-                context,
-                node,
-                selector,
-                arguments.value,
-                cancellation,
-                workspace.as_ref(),
-            )
-            .await;
-        let mut applicability = None;
-        if let Some(access) = access.take() {
-            let input = access.input().clone();
-            let status = match &result {
-                Ok(result) => result.status.clone(),
-                Err(error) => error.execution_status(),
-            };
-            let unchanged = if result.as_ref().is_ok_and(|result| {
-                matches!(result.status, ToolExecutionStatus::OutcomeUnknown { .. })
-            }) {
-                access.unresolved("Tool physical settlement is unknown".into());
-                false
-            } else {
-                match access.finish(true).await {
-                    Ok(_) => true,
-                    Err(error) => {
-                        if result
-                            .as_ref()
-                            .is_ok_and(|result| result.status == ToolExecutionStatus::Success)
-                        {
-                            result = Err(WorkflowRunError::InvalidValue(error));
-                        }
-                        false
-                    }
-                }
-            };
-            self.commit_resource(RuntimeEvent::WorkflowCandidateInvocation {
-                node: node.clone(),
-                input: input.clone(),
-                result: status,
-                candidate_unchanged: unchanged,
-            })?;
-            if unchanged {
-                applicability = Some(input);
-            }
-        }
-        result.map(|result| (result, applicability))
-    }
-
-    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-    async fn invoke_tool_bound(
         &self,
         run: &WorkflowRun,
         context: &AttemptSubagentContext,
@@ -162,7 +42,6 @@ impl WorkflowRuntime {
         selector: &ExactToolSelector,
         arguments: Value,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
-        workspace: Option<&crate::tools::workspace::Workspace>,
     ) -> Result<ToolExecutionResult, WorkflowRunError> {
         let services = context.native.as_ref().ok_or_else(|| {
             WorkflowRunError::InvocationAuthority(
@@ -278,7 +157,7 @@ impl WorkflowRuntime {
                     &run.run_id.conversation_id,
                     None,
                     cancellation.clone(),
-                    workspace.unwrap_or_else(|| services.runtime.workspace()),
+                    services.runtime.workspace(),
                     &progress,
                     services.runtime.artifacts(),
                     services.runtime.tool_output(),

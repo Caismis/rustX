@@ -40,6 +40,46 @@ test('narrow sidebar overlays the conversation without squeezing its composer', 
   await expect(page.getByRole('button', { name: 'Expand Sidebar' })).toBeVisible();
 });
 
+test('responsive sidebar dismissal restores interaction across breakpoint changes', async ({ page }) => {
+  const errors: string[]=[]; page.on('pageerror',error=>errors.push(error.message));
+  await page.goto(`${fixtureOrigin}/test/fixtures/shell.html`);
+  await expect(page).toHaveTitle(/rustX/);
+  const frame=page.locator('[data-harness-frame]'), center=page.locator('main');
+  const expand=page.getByRole('button',{name:'Expand Sidebar',exact:true});
+  const collapse=page.getByRole('button',{name:'Collapse Sidebar',exact:true});
+  const message=page.getByRole('textbox',{name:'Message',exact:true});
+  await expect(collapse).toBeVisible();
+  await page.setViewportSize({width:390,height:844});
+  await expect(expand).toBeVisible();
+  for(const dismissal of ['toggle','escape','backdrop'] as const){
+    await expand.click();
+    await expect(frame).toHaveAttribute('data-sidebar-overlay','true');
+    await expect(center).toHaveAttribute('inert','');
+    await expect(collapse).toBeFocused();
+    expect(await message.evaluate(el=>el.closest('[inert]')!==null)).toBe(true);
+    if(dismissal==='toggle') await collapse.click();
+    else if(dismissal==='escape') await page.keyboard.press('Escape');
+    else await page.getByRole('button',{name:'Close navigation'}).click({position:{x:370,y:400}});
+    await expect(frame).not.toHaveAttribute('data-sidebar-overlay');
+    await expect(center).not.toHaveAttribute('inert','');
+    await expect(page.getByRole('button',{name:'Close navigation'})).toHaveCount(0);
+    await expect(expand).toBeFocused();
+    await message.click(); await expect(message).toBeFocused();
+    expect(await message.evaluate(el=>{const r=el.getBoundingClientRect();return el.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));})).toBe(true);
+  }
+  await page.screenshot({path:'/tmp/pr458-sidebar-mobile-closed.png'});
+  await expand.click();
+  await page.setViewportSize({width:1440,height:1000});
+  await expect(frame).not.toHaveAttribute('data-sidebar-overlay');
+  await expect(center).not.toHaveAttribute('inert','');
+  await message.click(); await expect(message).toBeFocused();
+  await page.setViewportSize({width:390,height:844});
+  await expect(expand).toBeVisible();
+  await expect(center).not.toHaveAttribute('inert','');
+  await message.click(); await expect(message).toBeFocused();
+  expect(errors).toEqual([]);
+});
+
 test('stream publications and a turn-local clock preserve chrome identity, geometry and caret', async ({ page }) => {
   await page.clock.install({ time: new Date('2026-09-24T23:00:00Z') });
   await page.goto(`${fixtureOrigin}/test/fixtures/shell.html`);

@@ -194,7 +194,7 @@ function AgentFields({ form, models, profiles }: { form: import('../forms/bridge
     <Field name="workflows">{field => <Names label={tx('settings:extension-detail.delegated-workflows')} value={(field.state.value as string[] | undefined) ?? []} change={value => field.handleChange(value as never)} />}</Field>
     <p>{tx('settings:extension-detail.native-scope-validation-decides-which-capabilities-this-profile')}</p>
     <Field name="skills">{field => <Selection label={tx('settings:extension-detail.skill-prompt-visibility')} value={(field.state.value as AgentSkillSelection | undefined) ?? []} change={value => field.handleChange(value as never)} />}</Field>
-    <Advanced title={tx('settings:extension-detail.extensions-worktree-and-guidance')}>
+    <Advanced title={tx('settings:extension-detail.extensions-and-guidance')}>
       <Field name="plugins">{field => {
         const plugins = (field.state.value as AgentProfileDocument['plugins']) ?? {};
         return <fieldset><legend>{tx('settings:extension-detail.extensions-default-off')}</legend>
@@ -209,13 +209,6 @@ function AgentFields({ form, models, profiles }: { form: import('../forms/bridge
       <Field name="timeout_ms">{field => <label>{tx('settings:extension-detail.child-timeout-ms')}<input type="number" min="1"
         value={(field.state.value as string | null | undefined) ?? ''}
         onChange={event => field.handleChange((event.target.value || null) as never)} /></label>}</Field>
-      <Field name="worktree">{field => {
-        const worktree = (field.state.value as AgentProfileDocument['worktree']) ?? {};
-        return <>
-          <label><input type="checkbox" checked={worktree.enabled ?? false} onChange={event => field.handleChange({ ...worktree, enabled: event.target.checked } as never)} />{tx('settings:extension-detail.use-child-worktree')}</label>
-          <label><input type="checkbox" checked={worktree.require_clean_parent ?? true} onChange={event => field.handleChange({ ...worktree, require_clean_parent: event.target.checked } as never)} />{tx('settings:extension-detail.require-clean-parent')}</label>
-        </>;
-      }}</Field>
       <Field name="agents_md">{field => {
         const guidance = (field.state.value as AgentProfileDocument['agents_md']) ?? {};
         return <>

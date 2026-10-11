@@ -78,7 +78,6 @@ import {
   type SessionModelView,
   type SessionNodeId,
   type SessionUserMessageBoundary,
-  type SubagentId,
   type AgentId,
   type SurfaceRevision,
   type ToolExecutionId,
@@ -632,16 +631,6 @@ export class AppServerSession {
 
   async interruptAgent(agentId: AgentId) {
     return this.#client.call("agent/interrupt", { target: this.#target, agent_id: agentId }, "agent_wait");
-  }
-
-  /** Disposes one retained subagent workspace through the runtime authority. */
-  async disposeSubagent(subagentId: SubagentId) {
-    const disposed = await this.#client.call(
-      "subagent/disposeWorkspace",
-      { target: this.#target, subagent_id: subagentId },
-      "workspace_disposed",
-    );
-    return { subagent_id: disposed.subagent_id, workspace: disposed.workspace, outcome: disposed.outcome };
   }
 
   // -------------------------------------------------------------------------

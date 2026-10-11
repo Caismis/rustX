@@ -723,10 +723,6 @@ export class RustxTuiApp {
             void this.#inspectSelectedSubagent();
             return { consume: true };
           }
-          if (matchesKey(data, "d") && this.#subagentListFocused && this.#selectedAgentId !== undefined) {
-            this.#confirmDisposeSelectedSubagent();
-            return { consume: true };
-          }
         }
         // Ctrl+L is presentation-only input. `/model` remains the canonical
         // semantic command, and its complete CommandOutcome comes back
@@ -998,92 +994,6 @@ export class RustxTuiApp {
         "error",
         `subagent status unavailable: ${compactDiagnostic(error)}`,
       );
-    }
-  }
-
-  /** Asks for confirmation before disposing the selected runtime-owned workspace. */
-  #confirmDisposeSelectedSubagent(): void {
-    if (
-      !this.#subagentListFocused ||
-      this.#selectedAgentId === undefined ||
-      this.#finished
-    ) {
-      return;
-    }
-    const state = this.#session?.state;
-    if (state === undefined) return;
-    const selected = state.agents.find(
-      (subagent) => subagent.agent_id === this.#selectedAgentId,
-    );
-    if (selected === undefined) {
-      this.#showTransient("error", "the selected subagent is no longer known to the runtime");
-      return;
-    }
-    const resourceState = selected.workspace?.resource_state;
-    const disposalRetryable =
-      resourceState === "preserved_unresolved" ||
-      resourceState === "disposal_in_progress" ||
-      resourceState === "worktree_removed";
-    if (selected.workspace?.handoff == null && !disposalRetryable) {
-      this.#showTransient("info", "the selected subagent has no retained workspace");
-      return;
-    }
-
-    const subagentId = selected.activation_id;
-    const lease = this.#presentationLease();
-    const confirmation = new ConfirmationView({
-      title: "Dispose retained workspace",
-      confirmLabel: "Dispose workspace",
-      subject: `Subagent ${subagentId}`,
-      warning: resourceState === "preserved_unresolved"
-        ? "This workspace was preserved because physical settlement could not be proven. rustX will re-check ownership before attempting disposal."
-        : disposalRetryable
-        ? "This resumes the runtime-authorized disposal of the selected subagent workspace."
-        : "This permanently removes the retained Git worktree and discards its uncommitted source changes.",
-      onConfirm: () => {
-        this.#closeOverlay();
-        void this.#disposeSelectedSubagent(subagentId, lease);
-      },
-      onCancel: () => this.#closeOverlay(),
-    });
-    this.#showPopup(confirmation, { width: "80%", minWidth: 48, heightPercent: 38 });
-  }
-
-  /** Routes the confirmed operation through the App Server boundary. */
-  async #disposeSelectedSubagent(
-    subagentId: string,
-    lease: PresentationLease,
-  ): Promise<void> {
-    const attachedSession = lease.session;
-    if (attachedSession === undefined) return;
-    try {
-      const result = await attachedSession.disposeSubagent(subagentId);
-      if (!this.#isCurrentPresentationLease(lease)) return;
-      const subject = `subagent ${subagentId}`;
-      switch (result.outcome) {
-        case "disposed":
-          this.#showTransient("info", `retained workspace for ${subject} disposed; source changes discarded`);
-          return;
-        case "already_disposed":
-          this.#showTransient("info", `retained workspace for ${subject} was already disposed`);
-          return;
-        case "disposal_pending":
-          this.#showTransient(
-            "info",
-            `retained worktree for ${subject} was removed; branch cleanup remains pending`,
-          );
-          return;
-        case "no_retained_workspace":
-          this.#showTransient("info", `${subject} has no retained workspace`);
-          return;
-      }
-    } catch (error: unknown) {
-      if (!this.#isCurrentPresentationLease(lease)) return;
-      if (error instanceof AppServerRequestError) {
-        this.#showTransient("error", `workspace disposal refused: ${compactDiagnostic(error)}`);
-        return;
-      }
-      this.#showTransient("error", `workspace disposal failed: ${compactDiagnostic(error)}`);
     }
   }
 

@@ -653,23 +653,6 @@
             "value"
           ],
           "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "type": {
-              "const": "candidate",
-              "type": "string"
-            },
-            "value": {
-              "$ref": "#/$defs/WorkflowValue"
-            }
-          },
-          "required": [
-            "type",
-            "value"
-          ],
-          "type": "object"
         }
       ]
     },
@@ -803,17 +786,6 @@
           "type": "object"
         }
       ]
-    },
-    "WorkflowWorkspace": {
-      "additionalProperties": false,
-      "description": "A managed candidate always preserves isolation. Dirty-parent opt-out is\nexplicit and retains the native committed-baseline/overlay semantics.",
-      "properties": {
-        "require_clean_parent": {
-          "default": true,
-          "type": "boolean"
-        }
-      },
-      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -834,18 +806,6 @@
       "format": "uint64",
       "minimum": 0,
       "type": "integer"
-    },
-    "workspace": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/WorkflowWorkspace"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "description": "Explicit run-scoped candidate acquisition; absent means no Git resource."
     }
   },
   "required": [

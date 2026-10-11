@@ -300,8 +300,8 @@ of those selections. Definition existence never selects a resource.
 
 `agents_md.inherit` defaults true and `files` defaults empty inside its winning
 object. Files are resolved by the native resource owner, captured with the
-generation, and ordered as authored. Root has no child timeout or worktree
-fields; those belong to named profiles.
+generation, and ordered as authored. Root has no child timeout field; it
+belongs to named profiles.
 
 ### Plugins
 
@@ -363,12 +363,12 @@ units; there is no recursive TOML merge.
 | Providers | Complete `providers.<name>` | An incomplete Provider fails; `{}` map replaces no identities |
 | Models | Complete `models.<name>` | An incomplete Model fails; `{}` map replaces no identities |
 | Root model | Complete `agent.model` | Missing required model fails; optional members use domain defaults |
-| Native selection | Complete `agent.tools.builtin` array | `[]` selects none |
+| Native selection | Complete `agent.tools.builtin` array | `[]` selects no ordinary native Tool; it never suppresses the Agent control group |
 | MCP selection | Complete `agent.tools.sources.<server>` value | `[]` selects none for that source |
 | Python selection | Complete `agent.tools.sources."python:<package>"` value | `[]` selects none for that package |
 | Skill visibility | Complete `agent.skills` value | `[]` exposes none; `"all"` exposes valid eligible packages |
 | Plugins | Complete `agent.plugins.<plugin>` object | Empty object defaults off; omitted contributors use that Plugin's defaults |
-| Agent delegation | Complete `agent.agents` array | `[]` permits no named Agents |
+| Agent delegation | Complete `agent.agents` array | `[]` permits no named Agents and composes no Agent controls |
 | Workflow admission | Complete `agent.workflows` array | `[]` permits no Workflows |
 | Project guidance | Complete `agent.agents_md` object | `{}` uses inherit=true, files=[] |
 | Native invocation policy | Complete `native_tools.<tool>` object | `{}` restores that Tool's product defaults |
@@ -406,8 +406,9 @@ package bytes and resolved roots; it does not rediscover current files.
 
 Named Agents use complete TOML profiles at `agents/<name>.toml` with description,
 instructions, optional model selection, Native/source Tools, Skills, Plugins,
-project guidance, optional `timeout_ms`, and `worktree` (`enabled`,
-`require_clean_parent`). See [`agent.schema.json`](../schemas/agent.schema.json).
+project guidance and optional `timeout_ms`. There is no `worktree` table:
+every Agent runs in the Session's shared workspace, and an authored `worktree`
+table is refused (#462). See [`agent.schema.json`](../schemas/agent.schema.json).
 There is no Root Tool or Plugin ceiling. Root's explicit `agent.agents` array
 controls whether delegation is allowed. Omitted child model means the invoking
 Attempt's already-frozen effective model, including deliberate Session selection.
@@ -628,6 +629,23 @@ and Session configuration changes do not re-resolve that child's authority.
 `subagents.max_concurrent` limits simultaneous finite child activations, not the
 number of inactive durable identities. Job controls and Agent controls are
 separate fixed foreground control Tools. See [Jobs and Agents](jobs-and-agents.md).
+
+### Automatic Agent controls (#462)
+
+`subagent`, `list_agents`, `send_message`, `wait_agent` and `interrupt_agent` are
+one runtime-composed capability group of the Root Agent. They are present
+together, exactly once each, when `agent.agents` admits at least one valid named
+Agent, and absent otherwise. Discovered but unselected definitions, Workflow-only
+Agent dependencies and existing durable Agent identities do not compose them.
+None of the five names may appear in `tools.builtin` of the Root or a named
+Agent, in an invocation override, or in a native policy table: such an entry is
+rejected at the configuration boundary instead of being ignored, and an empty
+`tools.builtin` does not suppress the group. Named and Workflow child runtimes
+never receive it. A Root that admits Agents without the subagent registry fails
+composition rather than publishing a zero-tool state. Effective inspection
+reports the group as `agent_controls`, separate from the ordinary selection.
+Removing every admission removes the model-facing tools for new Attempts only;
+existing durable Agents keep their authorized typed App Server controls.
 
 ## Image Tool and Bash presentation (#412)
 

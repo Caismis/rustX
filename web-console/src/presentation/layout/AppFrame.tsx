@@ -82,14 +82,18 @@ export function AppFrame({ sidebar, children, rightPanel, rightOpen = false, ove
   const [dragging, setDragging] = useState(false);
   useLayoutEffect(() => {
     const element = frameRef.current!;
-    let frame: number | undefined;
     const measure = () => { const width = element.getBoundingClientRect().width; if (width > 0) setViewport(width); };
     measure();
-    const observer = new ResizeObserver(() => { frame ??= requestAnimationFrame(() => { frame = undefined; measure(); }); });
+    const observer = new ResizeObserver(measure);
     observer.observe(element);
-    return () => { observer.disconnect(); if (frame !== undefined) cancelAnimationFrame(frame); };
+    return () => observer.disconnect();
   }, []);
   const narrow = viewport < SIDEBAR_AUTO_COLLAPSE;
+  const [previousNarrow, setPreviousNarrow] = useState(narrow);
+  if (previousNarrow !== narrow) {
+    setPreviousNarrow(narrow);
+    setNarrowExpanded(false);
+  }
   const collapsed = narrow ? !narrowExpanded : sidebarWidth === 0;
   const floatingSidebar = narrow && !collapsed;
   const preference = collapsed ? 0 : sidebarWidth || SIDEBAR_DEFAULT;
@@ -97,8 +101,20 @@ export function AppFrame({ sidebar, children, rightPanel, rightOpen = false, ove
   const cols = computeColumns(viewport, narrow ? 0 : preference, rightOpen ? rightWidth ?? viewport * .45 : 0);
   const visibleSidebarWidth = floatingSidebar ? Math.min(preference, viewport - 48) : cols.sidebar;
   const base = useRef(0);
-  const dismissSidebar = () => { setNarrowExpanded(false); sidebarRef.current?.focus(); };
-  const toggleSidebar = () => { if (narrow) setNarrowExpanded(value => !value); else setSidebarWidth(value => value === 0 ? SIDEBAR_DEFAULT : 0); };
+  const wasFloating = useRef(false);
+  useLayoutEffect(() => {
+    if (floatingSidebar || wasFloating.current) {
+      const toggle = sidebarRef.current?.querySelector<HTMLElement>('[data-sidebar-toggle]');
+      (toggle ?? sidebarRef.current)?.focus();
+    }
+    wasFloating.current = floatingSidebar;
+  }, [floatingSidebar]);
+  const dismissSidebar = () => setNarrowExpanded(false);
+  const toggleSidebar = () => {
+    // The labelled gesture keeps its meaning if layout changes before dispatch.
+    if (narrow) setNarrowExpanded(collapsed);
+    else setSidebarWidth(collapsed ? SIDEBAR_DEFAULT : 0);
+  };
   return <div ref={frameRef} className={css.frame} data-harness-frame
     data-sidebar-overlay={floatingSidebar || undefined}
     onKeyDown={event => { if (floatingSidebar && event.key === 'Escape' && !event.defaultPrevented && sidebarRef.current?.contains(event.target as Node)) { event.preventDefault(); dismissSidebar(); } }}

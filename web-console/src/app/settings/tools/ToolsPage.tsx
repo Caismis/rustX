@@ -85,6 +85,7 @@ export function ToolsPage({ source, document, scope, revision }: {
       mutation={authored => ({ kind: 'config', mutation: { unit, authored } })}>
       {(value, change) => <Names label={unit} value={value} change={change} />}
     </UnitForm>)}
+    <AgentControls composed={source.prospective_resources?.main?.agent_controls.map(tool => tool.name)} />
 
     <Advanced title={tx('settings:tools-page.advanced-tool-policies')}>
       <p>{tx('settings:tools-page.invocation-policy-governs-execution-ownership-concurrency-and-ap')}</p>
@@ -106,6 +107,17 @@ export function ToolsPage({ source, document, scope, revision }: {
     </Advanced>
     {sourceView(source, scope) === undefined && <p role="alert" className={css.error}>{tx('settings:tools-page.this-scope-has-no-source-view')}</p>}
   </section>;
+}
+
+/** The runtime-composed Agent control group, as native inspection reports it.
+ * It has no enablement control: it follows the Agent allowlist alone. */
+function AgentControls({ composed }: { composed: readonly string[] | undefined }) {
+  const tx = useTranslation();
+  return <p className={css.hint} role="note" aria-label={tx('settings:tools-page.agent-controls')}>
+    {composed?.length
+      ? tx('settings:tools-page.agent-controls-composed', { p0: composed.join(', ') })
+      : tx('settings:tools-page.agent-controls-absent')}
+  </p>;
 }
 
 export function PolicyFields({ value, change }: { value: NativePolicyOverrideDocument; change: (value: NativePolicyOverrideDocument) => void }) {

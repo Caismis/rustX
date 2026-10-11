@@ -212,9 +212,6 @@ pub(super) fn definition() -> ToolDefinition {
 struct AskUserExecutor;
 
 impl ToolExecutor for AskUserExecutor {
-    fn workspace_use(&self) -> crate::tools::executor::WorkspaceUse {
-        crate::tools::executor::WorkspaceUse::Independent
-    }
     fn start<'a>(
         &'a self,
         invocation: ToolInvocation,
@@ -255,10 +252,9 @@ impl ToolExecutor for AskUserExecutor {
                     Ok(InteractionOutcome::Responded {
                         response: InteractionResponse::Questionnaire { response },
                     }) => questionnaire_result(&specification, &response),
-                    Ok(
-                        InteractionOutcome::Responded { .. }
-                        | InteractionOutcome::ReviewInvalidated,
-                    ) => failed_result("ask_user received a mismatched interaction response"),
+                    Ok(InteractionOutcome::Responded { .. }) => {
+                        failed_result("ask_user received a mismatched interaction response")
+                    }
                     Ok(InteractionOutcome::Cancelled { reason }) => cancelled_result(reason),
                     Err(failure) if failure.is_unavailable() => {
                         failed_result("ask_user interaction provider unavailable")

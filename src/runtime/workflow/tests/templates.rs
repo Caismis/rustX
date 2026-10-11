@@ -44,7 +44,6 @@ fn cfg237_templates_use_native_loader_compiler_and_editor_schema() {
         assert_eq!(view.blocks["block"].entry, program.entry());
         assert_eq!(view.conservative_steps, program.execution_bound);
         assert_eq!(view.conservative_retained_bytes, program.retained_bound);
-        assert!(view.workspace.is_none());
         assert!(
             !view
                 .runtime_requirements

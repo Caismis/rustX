@@ -189,15 +189,6 @@ impl RuntimeAttachment {
         self.access(true)?.compact_context(request_id).await
     }
 
-    /// Dispose only the retained resource identified by the native subagent owner.
-    /// # Errors
-    /// Closed attachment or native disposal refusal/failure.
-    pub async fn subagent_workspace_dispose(
-        &self,
-        id: &crate::runtime::identity::SubagentId,
-    ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.access(true)?.subagent_workspace_dispose(id).await
-    }
     /// Capture native operation authority at admission. Only a server-owned
     /// operation lease may retain this handle; it is not an external attachment.
     pub(crate) fn operation_authority(&self) -> Result<Arc<ClientInner>, RuntimeClientError> {
@@ -391,9 +382,6 @@ impl RuntimeAttachment {
             | RuntimeClientRequest::AgentInterrupt { .. } => {
                 unreachable!("Agent and Job settlement controls are awaited")
             }
-            RuntimeClientRequest::SubagentWorkspaceDispose { .. } => {
-                unreachable!("retained workspace disposal is handled asynchronously")
-            }
             RuntimeClientRequest::Detach { .. } => {
                 self.detach();
                 Ok(RuntimeClientResult::Detached)
@@ -519,17 +507,6 @@ impl RuntimeAttachment {
                 let result = inner
                     .respond_interaction(interaction, response.clone())
                     .await;
-                return match result {
-                    Ok(result) => RuntimeClientResponse {
-                        id,
-                        result: Some(result),
-                        error: None,
-                    },
-                    Err(error) => Self::error_response(id, error),
-                };
-            }
-            if let RuntimeClientRequest::SubagentWorkspaceDispose { subagent_id, .. } = &request {
-                let result = inner.subagent_workspace_dispose(subagent_id).await;
                 return match result {
                     Ok(result) => RuntimeClientResponse {
                         id,

@@ -6,7 +6,7 @@ use super::{
     MAX_PARALLEL_BRANCHES, MAX_VALUE_BYTES, MAX_WORKFLOW_AGENTS, MAX_WORKFLOW_NODES,
     MAX_WORKFLOW_STEPS, Serialize, SubagentName, Value, WorkflowBlockProgram, WorkflowNodeProgram,
     WorkflowPort, WorkflowPredicate, WorkflowProgram, WorkflowReviewSubject, WorkflowToolIdentity,
-    WorkflowValue, WorkflowWorkspace,
+    WorkflowValue,
 };
 use serde_json::json;
 
@@ -81,8 +81,6 @@ pub struct WorkflowInspection {
     pub input_schema: Value,
     pub output_schema: Value,
     pub configured_timeout_ms: u64,
-    pub workspace: Option<WorkflowWorkspace>,
-    pub candidate_handoff: &'static str,
     pub conservative_steps: usize,
     pub conservative_agent_runs: usize,
     pub conservative_retained_bytes: usize,
@@ -145,12 +143,6 @@ impl WorkflowProgram {
             input_schema: schema(&self.block.input_schema),
             output_schema: schema(&self.block.output_schema),
             configured_timeout_ms: self.timeout_ms,
-            workspace: self.workspace,
-            candidate_handoff: if self.workspace.is_some() {
-                "runtime_candidate_identity_requires_native_settlement"
-            } else {
-                "no_run_candidate_requested"
-            },
             conservative_steps: self.execution_bound,
             conservative_agent_runs: self.agent_bound,
             conservative_retained_bytes: self.retained_bound,
@@ -171,11 +163,6 @@ impl WorkflowProgram {
             tools: self.tools.clone(),
             profiles: BTreeSet::new(),
         };
-        if self.workspace.is_some() {
-            result
-                .runtime_requirements
-                .insert("workspace_candidate_acquisition_and_identity");
-        }
         block(&self.block, "block", &mut result);
         result
     }
@@ -382,7 +369,6 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                 view.kind = "review";
                 view.review_subject = Some(match subject {
                     WorkflowReviewSubject::Plan { .. } => "plan",
-                    WorkflowReviewSubject::Candidate { .. } => "candidate",
                 });
                 view.bindings
                     .insert("subject".into(), binding(subject.value()));

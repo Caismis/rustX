@@ -70,7 +70,6 @@ mod search;
 pub(crate) mod subagent;
 mod support;
 mod todo;
-pub(crate) use subagent::tool_id as subagent_tool_id;
 mod workflow;
 #[cfg(test)]
 pub(crate) use workflow::test_executor as test_workflow_executor;
@@ -88,15 +87,69 @@ use registration::NativeToolRegistration;
 pub use subagent::SUBAGENT_TOOL_NAME;
 pub(crate) use workflow::{definition as workflow_definition, tool_id as workflow_tool_id};
 
+/// The Root-only Agent control group. These five model-facing Tools are one
+/// automatically composed capability: they exist together exactly when the
+/// Root admits at least one valid named Agent, and never individually through
+/// an ordinary Tool selection, exclusion or native policy table.
+pub(crate) const AGENT_CONTROL_TOOL_NAMES: [&str; 5] = [
+    SUBAGENT_TOOL_NAME,
+    agents::NAMES[0],
+    agents::NAMES[1],
+    agents::NAMES[2],
+    agents::NAMES[3],
+];
+
+/// Whether `name` is one of the automatically composed Agent controls.
+pub(crate) fn is_agent_control(name: &str) -> bool {
+    AGENT_CONTROL_TOOL_NAMES.contains(&name)
+}
+
+/// The canonical Tool identity of one Agent control.
+pub(crate) fn agent_control_tool_id(name: &str) -> crate::runtime::identity::ToolId {
+    debug_assert!(is_agent_control(name));
+    crate::runtime::identity::ToolId::new(format!("tool-{name}"))
+}
+
 /// Domain-owned vocabulary shared by admission policy and nested-tool eligibility.
 pub(crate) fn is_domain_control(name: &str) -> bool {
     jobs::NAMES.contains(&name) || agents::NAMES.contains(&name)
 }
 
+/// The one Root composition decision of the Agent control group over one
+/// admitted named-Agent catalog.
+///
+/// ```text
+/// empty admitted catalog                      -> no group
+/// nonempty catalog + SubagentRegistry          -> all five
+/// nonempty catalog without SubagentRegistry    -> composition error
+/// ```
+///
+/// Child runtimes never reach this function: their plane is
+/// [`register_subagent_child_tools`], which has no Agent controls at all.
+fn agent_control_registrations(
+    subagents: Option<&crate::runtime::subagent::SubagentRegistry>,
+    catalog: &crate::runtime::subagent::AgentCatalog,
+) -> Result<Vec<NativeToolRegistration>, ToolRegistryError> {
+    if catalog.is_empty() {
+        return Ok(Vec::new());
+    }
+    let subagents = subagents.ok_or_else(|| {
+        ToolRegistryError::MissingService(
+            "the Root admits named Agents, but the subagent registry is unavailable".into(),
+        )
+    })?;
+    let mut registrations = agents::registrations(subagents);
+    registrations.push(subagent::registration(subagents.clone(), catalog));
+    Ok(registrations)
+}
+
 /// Canonical native metadata without constructing any execution resource.
+///
+/// The Agent control group follows the same rule as the executable
+/// composition: present exactly when `admitted_agents` is nonempty.
 pub(crate) fn definitions(
     policies: NativeToolPolicies,
-    subagents: Option<&crate::runtime::subagent::AgentCatalog>,
+    admitted_agents: &crate::runtime::subagent::AgentCatalog,
 ) -> Vec<(
     crate::tools::types::ToolDefinition,
     crate::tools::deadline::ForegroundPolicy,
@@ -113,9 +166,9 @@ pub(crate) fn definitions(
         bash::definition(policies.bash),
     ];
     definitions.extend(jobs::definitions());
-    if let Some(subagents) = subagents {
+    if !admitted_agents.is_empty() {
         definitions.extend(agents::definitions());
-        definitions.extend(subagent::definition(subagents));
+        definitions.push(subagent::definition(admitted_agents));
     }
     definitions
         .into_iter()
@@ -187,19 +240,17 @@ pub(crate) fn native_file_operation(call: &ToolCall) -> Option<NativeFileOperati
 pub struct NativeToolResources {
     /// The conversation background registry used by Job controls.
     pub background: ConversationBackgroundRegistry,
-    /// The conversation subagent registry used by the `subagent` intrinsic
-    /// (Issue #60). Registration also requires a non-empty catalog below;
-    /// `None` — for example inside a subagent child itself — means the
-    /// intrinsic is not registered at all, so recursive delegation is absent
-    /// by construction.
+    /// The conversation subagent registry used by the Agent control group
+    /// (Issue #60). It is common infrastructure owned independently of model
+    /// exposure: Workflow Agent nodes and typed Agent controls use it too.
     pub subagents: Option<crate::runtime::subagent::SubagentRegistry>,
-    /// The named-subagent catalog of the resource generation this
+    /// The Root-admitted named-Agent catalog of the resource generation this
     /// registration set belongs to (Issue #144).
     ///
-    /// It controls whether the intrinsic exists and, when non-empty, supplies
-    /// its model-facing routing description. The description a generation
-    /// publishes therefore always names exactly the agents that generation
-    /// admits, and an empty generation publishes no unsatisfiable Tool.
+    /// It alone decides whether the five Agent controls exist and, when
+    /// nonempty, supplies the `subagent` routing description. A nonempty
+    /// catalog without `subagents` is a composition error, never a valid
+    /// zero-tool configuration.
     pub subagent_catalog: crate::runtime::subagent::AgentCatalog,
 }
 
@@ -288,7 +339,7 @@ pub fn register_native_tools(
     // The explicit composition of the native tool plane: every entry is a
     // tool-owned registration, and this list is the only place that knows
     // which native capabilities exist.
-    for registration in native_tool_registrations(resources, policies) {
+    for registration in native_tool_registrations(resources, policies)? {
         let NativeToolRegistration {
             definition,
             executor,
@@ -345,10 +396,15 @@ fn register_workflow_registrations(
 ///
 /// The capability coordinator uses this internal seam to keep all native
 /// tools available while applying the current startup activation policy.
+///
+/// # Errors
+///
+/// Returns [`ToolRegistryError::MissingService`] when the catalog admits
+/// named Agents but no subagent registry can serve the Agent control group.
 pub(crate) fn native_tool_registrations(
     resources: NativeToolResources,
     policies: NativeToolPolicies,
-) -> Vec<NativeToolRegistration> {
+) -> Result<Vec<NativeToolRegistration>, ToolRegistryError> {
     let NativeToolResources {
         background,
         subagents,
@@ -365,21 +421,15 @@ pub(crate) fn native_tool_registrations(
         grep::registration(policies.grep),
         bash::registration(policies.bash),
     ];
-    // The `subagent` intrinsic exists only in a runtime that owns a
-    // subagent registry (never inside a child runtime) and whose frozen
-    // resource generation admits at least one named agent. An empty catalog
-    // has no satisfiable invocation, so publishing a Tool definition for it
-    // would make the model-facing capability set untruthful.
     registrations.extend(jobs::registrations(&background));
-    if let Some(subagents) = &subagents {
-        registrations.extend(agents::registrations(subagents));
-    }
-    if let Some(subagents) = subagents
-        && let Some(registration) = subagent::registration(subagents, &subagent_catalog)
-    {
-        registrations.push(registration);
-    }
-    registrations
+    // The Agent control group is one Root-only decision over the admitted
+    // catalog. An empty catalog has no satisfiable invocation, so none of
+    // the five controls is published for it.
+    registrations.extend(agent_control_registrations(
+        subagents.as_ref(),
+        &subagent_catalog,
+    )?);
+    Ok(registrations)
 }
 
 /// The one explicit native-name -> implementation composition of the

@@ -423,7 +423,6 @@ function settlementLabel(
 ): string {
   switch (settlement.type) {
     case "reviewed": return settlement.response.decision.type;
-    case "review_invalidated": return "review invalidated";
     case "deadline_expired":
       return "deadline expired";
     case "approved":

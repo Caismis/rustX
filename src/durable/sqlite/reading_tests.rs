@@ -1,3 +1,4 @@
+use super::seq_to_i64;
 use crate::durable::reading::*;
 use crate::durable::{ConversationStore, LineageSeed, SqliteConversationStore};
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
@@ -8,6 +9,7 @@ use crate::message::types::{
 };
 use crate::runtime::identity::{AttemptId, ConversationId, EventId, MessageId};
 use chrono::Utc;
+use rusqlite::params;
 /// The exact transcript entry at a turn's native location, read as the page
 /// before the position just after it.
 fn located(
@@ -141,6 +143,13 @@ fn timeout(store: &SqliteConversationStore, attempt: &str) {
         ))
         .unwrap();
 }
+fn opening_message(id: &str, text: &str, source: UserSource) -> MessageBlock {
+    let mut message = human(id, text);
+    if let MessageBlock::User(user) = &mut message {
+        user.source = source;
+    }
+    message
+}
 fn human(id: &str, text: &str) -> MessageBlock {
     MessageBlock::User(UserMessageBlock {
         id: MessageId::new(id),
@@ -273,6 +282,29 @@ fn delegated_tasks_open_turn_previews_without_reclassifying_the_source() {
     assert!(
         matches!(source, Some(UserSource::Agent { agent_id }) if agent_id.as_str() == "parent")
     );
+    // Fork uses the same native remapping as Session lineage publication.
+    let frozen = store
+        .read_lineage_cut(store.load_head().unwrap().revision)
+        .unwrap();
+    let destination = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    let seed = crate::local_runtime::session::remap_seed(
+        destination.conversation_id(),
+        &frozen.canonical,
+        &frozen.surface_history,
+        &frozen.checkpoints,
+        &frozen.completed_responses,
+        &frozen.turns,
+    )
+    .unwrap();
+    destination.initialize_lineage(&seed).unwrap();
+    let inherited = destination.conversation_turns(0, 64).unwrap();
+    assert_eq!(inherited.turns[0].prompt, "Explore the native API");
+    assert_eq!(inherited.turns[1].prompt, "Check one more case");
+    assert_eq!(inherited.turns[0].id, outline.turns[0].id);
+    assert_eq!(inherited.turns[0].cursor.unwrap().get(), 2);
+    assert!(matches!(located(&destination, &inherited.turns[0]).item,
+        crate::durable::TranscriptItem::Message { message: MessageBlock::Assistant(answer) }
+        if answer.id.as_str().starts_with(destination.conversation_id().as_str())));
 }
 
 #[test]
@@ -428,53 +460,71 @@ fn copied_turns_preserve_origin_and_use_destination_locations() {
 
 #[test]
 fn inherited_prompt_previews_use_explicit_opening_and_response_input_owners() {
-    for (opening, retry, expected) in [
-        (None, Some("opening"), "Original question"),
-        (Some("opening"), Some("steering"), "Original question"),
-        (None, None, ""),
+    for (input_source, eligible) in [
+        (UserSource::Human, true),
+        (
+            UserSource::Agent {
+                agent_id: crate::runtime::identity::AgentId::new("parent"),
+            },
+            true,
+        ),
+        (UserSource::Runtime, false),
+        (UserSource::ExternalSystem, false),
+        (UserSource::Fleet, false),
     ] {
-        let source = ConversationId::generate();
-        let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
-        let response = crate::durable::response::CompletedResponseProvenance {
-            process_message_ids: vec![MessageId::new("first"), MessageId::new("final")],
-            closing_message_id: MessageId::new("final"),
-            origin: crate::durable::response::ResponseOrigin {
-                conversation_id: source.clone(),
-                attempt_id: AttemptId::new("inherited"),
-                closing_message_id: MessageId::new("source-final"),
-            },
-            completed_at: Utc::now(),
-            retry_message_id: retry.map(MessageId::new),
-            usage: None,
-            timing: None,
-            models: Vec::new(),
-        };
-        let seed = LineageSeed::history(vec![
-            human("opening", "Original question"),
-            message("first", "first response"),
-            human("steering", "Later steering question"),
-            message("final", "final response"),
-        ])
-        .with_turns(vec![TurnReadingProvenance {
-            id: ConversationTurnId {
-                conversation_id: source,
-                attempt_id: AttemptId::new("inherited"),
-            },
-            process_message_ids: response.process_message_ids.clone(),
-            preceding_message_id: None,
-            prompt_message_id: opening.map(MessageId::new),
-            outcome: InheritedTurnOutcome::Completed,
-            started_at: None,
-            ended_at: Some(response.completed_at),
-            execution: None,
-        }])
-        .unwrap()
-        .with_completed_responses(vec![response])
-        .unwrap();
-        store.initialize_lineage(&seed).unwrap();
-        let outline = store.conversation_turns(0, 64).unwrap();
-        assert_eq!(outline.turns[0].prompt, expected);
-        assert_eq!(outline.turns[0].response, "final response");
+        for (opening, retry, expected) in [
+            (None, Some("opening"), "Original question"),
+            (Some("opening"), Some("steering"), "Original question"),
+            (None, None, ""),
+        ] {
+            let source = ConversationId::generate();
+            let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+            let response = crate::durable::response::CompletedResponseProvenance {
+                process_message_ids: vec![MessageId::new("first"), MessageId::new("final")],
+                closing_message_id: MessageId::new("final"),
+                origin: crate::durable::response::ResponseOrigin {
+                    conversation_id: source.clone(),
+                    attempt_id: AttemptId::new("inherited"),
+                    closing_message_id: MessageId::new("source-final"),
+                },
+                completed_at: Utc::now(),
+                retry_message_id: retry.map(MessageId::new),
+                usage: None,
+                timing: None,
+                models: Vec::new(),
+            };
+            let seed = LineageSeed::history(vec![
+                opening_message("opening", "Original question", input_source.clone()),
+                message("first", "first response"),
+                opening_message("steering", "Later steering question", input_source.clone()),
+                message("final", "final response"),
+            ])
+            .with_turns(vec![TurnReadingProvenance {
+                id: ConversationTurnId {
+                    conversation_id: source.clone(),
+                    attempt_id: AttemptId::new("inherited"),
+                },
+                process_message_ids: response.process_message_ids.clone(),
+                preceding_message_id: None,
+                prompt_message_id: opening.map(MessageId::new),
+                outcome: InheritedTurnOutcome::Completed,
+                started_at: None,
+                ended_at: Some(response.completed_at),
+                execution: None,
+            }])
+            .unwrap()
+            .with_completed_responses(vec![response])
+            .unwrap();
+            store.initialize_lineage(&seed).unwrap();
+            let outline = store.conversation_turns(0, 64).unwrap();
+            assert_eq!(
+                outline.turns[0].prompt,
+                if eligible { expected } else { "" }
+            );
+            assert_eq!(outline.turns[0].id.conversation_id, source);
+            assert_eq!(outline.turns[0].cursor.unwrap().get(), 2);
+            assert_eq!(outline.turns[0].response, "final response");
+        }
     }
 }
 #[test]
@@ -873,4 +923,185 @@ fn inherited_boundary_survives_reopen_and_identical_reinitialization() {
     assert_eq!(latest.entries.len(), 1);
     assert!(latest.entries[0].cursor.get() > 2);
     assert_eq!(latest.inherited_through.get(), 2);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // One linear, deterministic query-work comparison with a negative control.
+fn historical_opening_prompt_lookup_ignores_unrelated_future_turns() {
+    use rusqlite::StatementStatus;
+    let mut evidence = Vec::new();
+    for mode in [
+        "human",
+        "agent",
+        "idle",
+        "previous-steering",
+        "external",
+        "empty",
+    ] {
+        let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+        start(&store, "previous");
+        if mode == "previous-steering" {
+            adopt(
+                &store,
+                UserSource::Human,
+                "Previous steering",
+                Some("previous"),
+            );
+        }
+        timeout(&store, "previous");
+        let input = if mode == "agent" {
+            UserSource::Agent {
+                agent_id: crate::runtime::identity::AgentId::new("parent"),
+            }
+        } else if mode == "external" {
+            UserSource::ExternalSystem
+        } else {
+            UserSource::Human
+        };
+        if mode == "idle" {
+            adopt(&store, input.clone(), "Opening", None);
+        }
+        start(&store, "selected");
+        if matches!(mode, "human" | "agent" | "external") {
+            adopt(&store, input, "Opening", Some("selected"));
+        }
+        timeout(&store, "selected");
+        let selected_start: i64 = store.lock().unwrap().query_row(
+            "SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id='selected' AND json_extract(event_json,'$.event.type')='attempt_started'", [], |r| r.get(0)).unwrap();
+        let expected = if matches!(mode, "human" | "agent" | "idle") {
+            "Opening"
+        } else {
+            ""
+        };
+        let mut bounded = Vec::new();
+        let mut previous = Vec::new();
+        for future in 0..=512 {
+            if matches!(future, 0 | 128 | 512) {
+                let cut = store.conversation_read_cut().unwrap();
+                assert_eq!(
+                    store.conversation_turns(0, 2).unwrap().turns[1].prompt,
+                    expected
+                );
+                let connection = store.lock().unwrap();
+                let parameters =
+                    params!["selected", selected_start, seq_to_i64(cut.journal).unwrap()];
+                let mut query = connection
+                    .prepare(&super::reading::local_prompt_sql())
+                    .unwrap();
+                let rows = query
+                    .query_map(parameters, |r| r.get::<_, String>(0))
+                    .unwrap()
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap();
+                assert_eq!(rows.len(), usize::from(!expected.is_empty()));
+                bounded.push(query.get_status(StatementStatus::VmStep));
+                let old = format!("SELECT m.value FROM events e INDEXED BY events_kind_idx,json_each(e.event_json,'$.event.message_ids') m
+                    JOIN message_ledger l ON l.message_id=m.value
+                    WHERE json_extract(e.event_json,'$.event.type')='inbound_turn_adopted' AND e.sequence<=?3
+                    AND e.sequence>(SELECT COALESCE(MAX(sequence),0) FROM events INDEXED BY events_kind_idx WHERE sequence<?2 AND json_extract(event_json,'$.event.type')='attempt_started')
+                    AND (e.attempt_id=?1 OR (e.attempt_id IS NULL AND e.sequence<?2)) AND {} ORDER BY e.sequence,CAST(m.key AS INTEGER)", super::reading::OPENING_PROMPT_FILTER);
+                let mut legacy = connection.prepare(&old).unwrap();
+                let legacy_rows = legacy
+                    .query_map(
+                        params!["selected", selected_start, seq_to_i64(cut.journal).unwrap()],
+                        |r| r.get::<_, String>(0),
+                    )
+                    .unwrap()
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap();
+                assert_eq!(rows, legacy_rows);
+                previous.push(legacy.get_status(StatementStatus::VmStep));
+                let plan: Vec<String> = connection
+                    .prepare(&format!(
+                        "EXPLAIN QUERY PLAN {}",
+                        super::reading::local_prompt_sql()
+                    ))
+                    .unwrap()
+                    .query_map(
+                        params!["selected", selected_start, seq_to_i64(cut.journal).unwrap()],
+                        |r| r.get(3),
+                    )
+                    .unwrap()
+                    .collect::<Result<_, _>>()
+                    .unwrap();
+                assert!(
+                    plan.iter().any(
+                        |row| row.contains("SEARCH events USING INDEX events_attempt_kind_idx")
+                    ),
+                    "{plan:?}"
+                );
+            }
+            if future < 512 {
+                let id = format!("future-{future}");
+                start(&store, &id);
+                adopt(
+                    &store,
+                    UserSource::Human,
+                    "Unrelated future input",
+                    Some(&id),
+                );
+                timeout(&store, &id);
+            }
+        }
+        assert!(
+            bounded.iter().all(|steps| *steps == bounded[0]),
+            "{mode}: {bounded:?}"
+        );
+        assert!(previous[2] > previous[0] + 1000, "{mode}: {previous:?}");
+        evidence.push((mode, bounded, previous));
+    }
+    eprintln!("opening prompt VM steps (bounded, prior): {evidence:?}");
+}
+
+#[test]
+fn inherited_context_and_invalid_opening_owners_never_supply_a_prompt() {
+    let mut context = human("context", "Context is not an opening message");
+    if let MessageBlock::User(user) = &mut context {
+        user.kind = InboundKind::Context(crate::message::types::ContextKind::NativeEnvironment);
+    }
+    let history = vec![
+        human("unowned", "Adjacent input has no retained owner"),
+        context,
+        message("answer", "Retained answer"),
+    ];
+    let turn = TurnReadingProvenance {
+        id: ConversationTurnId {
+            conversation_id: ConversationId::generate(),
+            attempt_id: AttemptId::new("source"),
+        },
+        process_message_ids: vec![MessageId::new("answer")],
+        preceding_message_id: Some(MessageId::new("unowned")),
+        prompt_message_id: Some(MessageId::new("context")),
+        outcome: InheritedTurnOutcome::Completed,
+        started_at: None,
+        ended_at: None,
+        execution: None,
+    };
+    for invalid in ["missing", "answer"] {
+        let mut invalid_turn = turn.clone();
+        invalid_turn.prompt_message_id = Some(MessageId::new(invalid));
+        assert!(
+            LineageSeed::history(history.clone())
+                .with_turns(vec![invalid_turn])
+                .is_err()
+        );
+    }
+    for opening in [Some(MessageId::new("context")), None] {
+        let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+        let mut retained = turn.clone();
+        retained.prompt_message_id = opening;
+        store
+            .initialize_lineage(
+                &LineageSeed::history(history.clone())
+                    .with_turns(vec![retained])
+                    .unwrap(),
+            )
+            .unwrap();
+        let page = store.conversation_turns(0, 64).unwrap();
+        assert_eq!(page.turns[0].prompt, "");
+        assert_eq!(page.turns[0].response, "Retained answer");
+        assert_eq!(page.turns[0].id, turn.id);
+        // Context records do not allocate destination transcript positions.
+        assert_eq!(page.turns[0].cursor.unwrap().get(), 2);
+    }
 }

@@ -190,36 +190,9 @@ pub async fn run_subagent_child() -> i32 {
     // dispatcher takes ownership of it: a peer that does not speak exactly
     // this protocol version must be refused before anything at all is
     // composed, including the dispatcher's own tasks.
-    let spec = match read_parent_frame(&mut control).await {
-        Ok(Some(ParentFrame::Hello(spec))) => {
-            if spec.protocol_version != SUBAGENT_IPC_VERSION {
-                let _ = write_child_frame(
-                    &mut control,
-                    &ChildFrame::StartupError(DiagnosticFrame {
-                        message: format!(
-                            "unsupported control protocol version {} (this build speaks \
-                             {SUBAGENT_IPC_VERSION})",
-                            spec.protocol_version
-                        ),
-                    }),
-                )
-                .await;
-                return 2;
-            }
-            *spec
-        }
-        Ok(Some(_)) => {
-            eprintln!("subagent child: the first control frame was not Hello");
-            return 3;
-        }
-        Ok(None) => {
-            // The parent died before the handshake: nothing to do.
-            return 0;
-        }
-        Err(error) => {
-            eprintln!("subagent child: {error}");
-            return 3;
-        }
+    let spec = match read_child_hello(&mut control).await {
+        Ok(spec) => spec,
+        Err(code) => return code,
     };
     // From here on there is exactly one owner of the raw transports. Every
     // other child-side owner — the semantic driver and every nested
@@ -275,6 +248,42 @@ pub async fn run_subagent_child() -> i32 {
     };
     dispatcher.shutdown().await;
     code
+}
+
+// The one pre-composition handshake. Unsupported formats never install a
+// dispatcher, acquire a child lease, or enter runtime composition.
+async fn read_child_hello(control: &mut tokio::net::UnixStream) -> Result<SubagentChildSpec, i32> {
+    match read_parent_frame(control).await {
+        Ok(Some(ParentFrame::Hello(spec))) => {
+            if spec.protocol_version != SUBAGENT_IPC_VERSION {
+                let _ = write_child_frame(
+                    control,
+                    &ChildFrame::StartupError(DiagnosticFrame {
+                        message: format!(
+                            "unsupported control protocol version {} (this build speaks \
+                             {SUBAGENT_IPC_VERSION})",
+                            spec.protocol_version
+                        ),
+                    }),
+                )
+                .await;
+                return Err(2);
+            }
+            Ok(*spec)
+        }
+        Ok(Some(_)) => {
+            eprintln!("subagent child: the first control frame was not Hello");
+            Err(3)
+        }
+        Ok(None) => {
+            // The parent died before the handshake: nothing to do.
+            Err(0)
+        }
+        Err(error) => {
+            eprintln!("subagent child: {error}");
+            Err(3)
+        }
+    }
 }
 
 /// The child's typed early exits.
@@ -341,14 +350,9 @@ async fn run_child_inner(
     spec: SubagentChildSpec,
     lifetime: &mut ChildPhysicalLifetime,
 ) -> Result<(), ChildExit> {
-    if let Err(error) = spec.workspace_snapshot.validate() {
-        return Err(ChildExit::Startup(format!(
-            "the child workspace snapshot is invalid: {error}"
-        )));
-    }
-    if spec.resolved.workspace_policy.is_isolated() != spec.workspace_snapshot.is_isolated() {
+    if !spec.workspace.is_absolute() {
         return Err(ChildExit::Startup(
-            "the child workspace policy and immutable workspace snapshot disagree".to_owned(),
+            "the child execution workspace binding is not absolute".to_owned(),
         ));
     }
     let Some(core) = Box::pin(compose_cancellably(dispatcher, handle, &spec, lifetime)).await?
@@ -1861,6 +1865,43 @@ pub(crate) mod tests {
         runtime.shutdown().await.expect("child runtime drains");
     }
 
+    #[tokio::test]
+    async fn both_version_31_hello_formats_are_rejected_before_runtime_composition() {
+        use crate::runtime::subagent::ipc::{read_child_frame, write_frame};
+        for retired_snapshot in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let (spec, _) = preparation_fixture(&directory);
+            let mut hello = serde_json::to_value(spec).unwrap();
+            hello["protocolVersion"] = serde_json::json!(31);
+            if retired_snapshot {
+                hello.as_object_mut().unwrap().remove("workspace");
+                hello["workspaceSnapshot"] = serde_json::json!({
+                    "borrowedFrom": null,
+                    "logicalWorkspace": directory.path(), "isolation": {"type":"shared"}
+                });
+                hello["resolved"]["workspacePolicy"] =
+                    serde_json::json!({"type":"shared_workspace"});
+            }
+            let (mut parent, mut child) = tokio::net::UnixStream::pair().unwrap();
+            // Native Hello tag; payloads represent the two incompatible v31 peers.
+            write_frame(&mut parent, 1, &serde_json::to_vec(&hello).unwrap())
+                .await
+                .unwrap();
+            let result = read_child_hello(&mut child).await;
+            if retired_snapshot {
+                assert!(matches!(result, Err(3)), "retired snapshot cannot decode");
+            } else {
+                assert!(
+                    matches!(result, Err(2)),
+                    "old shared-path peer cannot negotiate"
+                );
+                assert!(
+                    matches!(read_child_frame(&mut parent).await.unwrap(), Some(ChildFrame::StartupError(error)) if error.message.contains("unsupported control protocol version 31"))
+                );
+            }
+        }
+    }
+
     fn preparation_fixture(
         dir: &tempfile::TempDir,
     ) -> (
@@ -1895,7 +1936,6 @@ pub(crate) mod tests {
                 ))
                 .expect("digest"),
                 execution_deadline: None,
-                workspace_policy: crate::runtime::workspace::WorkspacePolicy::SharedWorkspace,
                 instructions: "frozen child instructions".to_owned(),
                 model: crate::model::frozen::test_frozen_model_spec(
                     serde_json::from_value(serde_json::json!("local/model")).expect("model ref"),
@@ -1915,9 +1955,7 @@ pub(crate) mod tests {
                 keep_recent_tokens: 0,
                 summary_output_cap: None,
             },
-            workspace_snapshot: crate::runtime::workspace::WorkspaceSnapshot::shared(
-                workspace.clone(),
-            ),
+            workspace: workspace.clone(),
             incarnation: "incarnation-test".to_owned(),
             terminal: crate::runtime::subagent::ipc::ChildTerminalMode::Normal,
         };
@@ -2781,6 +2819,7 @@ pub(crate) mod tests {
     /// The fixture retains the transport until that late frame is written;
     /// successful cancellation may otherwise close it before the parent writes.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)] // complete FIFO cancellation and transport-drain fixture
     async fn cancel_during_close_admission_is_absorbing_and_preserves_guidance() {
         use crate::durable::ConversationStore;
         use crate::runtime::subagent::ipc::{GuidanceFrame, read_child_frame, write_parent_frame};
@@ -2828,6 +2867,14 @@ pub(crate) mod tests {
                 None,
             )
             .await;
+            // Consume the deliberately stale frame at the transport boundary,
+            // after semantic serving has returned. A completed parent write
+            // alone does not prove the reader drained the socket; closing it
+            // with unread bytes can reset the peer instead of producing EOF.
+            assert!(matches!(
+                dispatcher.next_event().await,
+                Some(ChildControlEvent::SealGranted)
+            ));
             // Keep only the fixture transport alive until the parent has
             // sent both FIFO frames and observed the terminal result.
             // Dropping the sender on assertion failure also releases cleanup.

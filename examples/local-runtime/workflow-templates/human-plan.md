@@ -18,6 +18,7 @@ acceptance as Tool execution approval or a Question answer.
 The entire invocation, including human wait, has a configured 120000 ms timeout.
 Use an attached client with native Review support for execution. Offline inspection
 neither creates a waiter nor verifies future interaction availability. Native
-Workflow and Review value/subject bounds apply to the plan. No candidate is
-allocated and no Git repository is required. Review of an actual candidate,
-candidate identity and handoff remain demonstrated by the complete reference stack.
+Workflow and Review value/subject bounds apply to the plan. No Git repository is
+required. Review gates later nodes only through an explicit Branch on
+`accepted`; the complete reference stack shows that gate in front of real
+implementation.

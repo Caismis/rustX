@@ -127,34 +127,16 @@ See the [architecture](docs/architecture.md) and
 [invariants](docs/invariants.md) documents for the exact native-tool
 contracts.
 
-### Isolated subagent local overlays
+### Shared Agent and Workflow workspace
 
-An isolated Git-worktree subagent may receive explicitly selected local files
-through `<workspace>/.worktreeinclude`. The manifest is resolved only at the
-authoritative logical workspace root, and each nonblank line is one exact path
-relative to that workspace. Leading and trailing whitespace is ignored, and a
-line whose first non-whitespace character is `#` is a comment. Version 1 does
-not support globs, negation, escaping, directory recursion, absolute paths, or
-`..` traversal.
-
-Every selected path must exist as an individual regular file, remain inside
-the logical workspace, contain no symlink component, be untracked, and be
-classified as ignored by Git. The manager acquires each source beneath a
-stable logical-workspace handle with no-symlink traversal and retains the
-validated file handle through freezing; no later pathname reopen supplies
-overlay bytes. Duplicate normalized/canonical destinations are rejected. A
-manifest may select at most 64 files and 8 MiB of content in total; the
-manifest itself is limited to 64 KiB. Missing or ineligible files fail
-isolated acquisition instead of being skipped.
-
-The workspace manager freezes all selected bytes from those retained handles
-before creating the child worktree, then materializes and byte-verifies them
-through the child logical-workspace authority before child ownership can
-commit. Later parent edits therefore cannot change the acquired overlay.
-These files are local execution inputs, not source synchronization: they do
-not copy dirty tracked or arbitrary untracked state, and overlay-only edits in
-the child remain ignored by ordinary Git settlement and do not create a
-source-worktree handoff.
+Every Agent and Workflow runs in the Session's workspace. Agents see the
+parent's uncommitted state and their own effects in place; failure,
+cancellation and a rejected Review never roll anything back. rustX allocates
+no Git worktree, branch or copy for an Agent or Workflow, and Session deletion
+never removes project files. The five Agent controls (`subagent`,
+`list_agents`, `send_message`, `wait_agent`, `interrupt_agent`) are composed
+automatically for the Root Agent when `agent.agents` admits at least one Agent.
+See [the shared-workspace contract](docs/agent-workflow-shared-workspace.md).
 
 Root and named-Agent Plugins all default off, including Todo, Goal and Agent Status.
 Only an explicitly authored enabled Plugin is composed.

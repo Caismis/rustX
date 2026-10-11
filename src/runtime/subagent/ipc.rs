@@ -53,7 +53,6 @@ use crate::runtime::identity::{AgentId, ConversationId, ProcessUnitId, SubagentI
 use crate::runtime::types::{ApprovalMode, CancellationReason};
 
 use super::resolver::ResolvedSubagentSpec;
-use crate::runtime::workspace::WorkspaceSnapshot;
 
 /// The only subagent control protocol version this build speaks.
 ///
@@ -106,7 +105,10 @@ use crate::runtime::workspace::WorkspaceSnapshot;
 /// Version 30 freezes the selected general Model Profile in the child model specification.
 /// Version 31 also carries native Session upload references in delegation and active guidance;
 /// peers with either earlier version-30 vocabulary are rejected.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 31;
+/// Version 32 combines native attachment input with the frozen Session
+/// workspace path and removes workspace policy and Candidate snapshots.
+/// Both incompatible version-31 formats are rejected before composition.
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 32;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -202,11 +204,10 @@ pub(crate) struct SubagentChildSpec {
     pub tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy,
     /// The session context policy of the child.
     pub context: SessionContextPolicy,
-    /// The authoritative logical project workspace and runtime-owned
-    /// isolation facts selected by the parent. In worktree mode the nested
-    /// facts separately carry the physical checkout root, repository-relative
-    /// scope, exact committed base, and runtime-created ref.
-    pub workspace_snapshot: WorkspaceSnapshot,
+    /// The invoking Session's execution workspace binding, frozen by the
+    /// parent at creation. The child uses exactly this directory; it never
+    /// resolves a default workspace or falls back to its process CWD.
+    pub workspace: PathBuf,
     /// The name of the already-reserved private incarnation beneath the child's
     /// identity-derived allocation. Never an absolute path or a grouping path.
     pub incarnation: String,
@@ -959,7 +960,6 @@ mod tests {
             definition_digest: serde_json::from_value(serde_json::json!("sha256:abc"))
                 .expect("digest"),
             execution_deadline: None,
-            workspace_policy: crate::runtime::workspace::WorkspacePolicy::SharedWorkspace,
             instructions: "instructions".to_owned(),
             model: crate::model::frozen::test_frozen_model_spec(
                 serde_json::from_value(serde_json::json!("local/model")).expect("model ref"),
@@ -1174,11 +1174,33 @@ mod tests {
                 keep_recent_tokens: 2,
                 summary_output_cap: None,
             },
-            workspace_snapshot: WorkspaceSnapshot::shared(PathBuf::from("/tmp/ws")),
+            workspace: PathBuf::from("/tmp/ws"),
             incarnation: "incarnation-test".to_owned(),
             product_root: PathBuf::from("/tmp"),
             terminal: ChildTerminalMode::Normal,
         }
+    }
+
+    /// Issue #462 (D07): a version-30 parent spoke a workspace snapshot
+    /// object. That Hello cannot decode under version 32, and a current-shape
+    /// Hello naming any other version is not this build's protocol, so the
+    /// child refuses both before composing anything.
+    #[test]
+    fn a_version_30_hello_is_refused_before_composition() {
+        let current = serde_json::to_value(allocation_spec()).unwrap();
+        assert_eq!(current["workspace"], "/tmp/ws");
+        let mut retired = current.clone();
+        retired["protocolVersion"] = serde_json::json!(30);
+        retired["workspace"] = serde_json::json!({
+            "logicalWorkspace": "/tmp/ws",
+            "isolation": {"mode": "shared"}
+        });
+        assert!(serde_json::from_value::<SubagentChildSpec>(retired).is_err());
+        let mut old_version = current;
+        old_version["protocolVersion"] = serde_json::json!(30);
+        let decoded = serde_json::from_value::<SubagentChildSpec>(old_version).unwrap();
+        assert_ne!(decoded.protocol_version, SUBAGENT_IPC_VERSION);
+        assert_eq!(SUBAGENT_IPC_VERSION, 32);
     }
 
     #[test]

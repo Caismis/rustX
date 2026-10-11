@@ -487,11 +487,7 @@ export function subagent(
     state,
     observation: subagentObservation(),
     started_at: "2026-09-02T10:00:00Z",
-    workspace: {
-      logical_workspace: "<shared-workspace>",
-      isolation: { type: "shared" },
-      resource_state: "none",
-    },
+    workspace: "/shared-workspace",
     ...overrides,
   };
 }

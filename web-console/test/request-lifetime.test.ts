@@ -24,7 +24,7 @@ function result(method: DomainMethod): MethodResult {
     activation_id: 'activation-b', current_activation: null, state: 'inactive', activation_state: 'cancelled',
     definition_digest: 'definition', profile_digest: 'profile', started_at: '2026-09-15T00:00:00Z',
     observation: { attempt_id: null, revision: '1', activity: { type: 'awaiting_activity' }, counters: { model_requests: 0, model_retries: 0, tool_executions: 0 } },
-    workspace: { logical_workspace: '/workspace', isolation: { type: 'shared' }, resource_state: 'none' },
+    workspace: '/workspace',
   } };
 }
 const methods: DomainMethod[] = ['agent/wait', 'job/wait', 'agent/sendMessage', 'agent/interrupt', 'job/cancel'];
