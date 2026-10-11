@@ -1,5 +1,7 @@
 # App Server protocol v45
 
+App Server v45 adds exact Message-positioned windows and the immutable inherited transcript boundary. Runtime Client v67 carries the boundary independently. Main v44/v66 peers are rejected before initialization.
+
 v45 adds complete child turn directories and cut-bound history positioning to
 both the native RuntimeAttachment and App Server. WebUI parent/child views share
 the Harness turn navigation surface, including distant unloaded turns, previews,
@@ -27,8 +29,6 @@ durable terminal facts always win. Clients must upgrade together to v45/v67.
 
 
 Child statistics remain available through `agent/statistics { target, agent_id }`.
-
-App Server v45 adds exact Message-positioned windows and the immutable inherited transcript boundary. Runtime Client v67 carries the boundary independently. Main v44/v66 peers are rejected before initialization.
 The result is `agent_statistics { metrics }`: child-owned `ConversationStatistics`,
 request-owned context occupancy, and cumulative working intervals (`settled_ms`
 plus an optional active interval). Usage, cache hit, request coverage, turns,

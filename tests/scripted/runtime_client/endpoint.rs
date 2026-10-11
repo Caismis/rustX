@@ -437,7 +437,7 @@ async fn unsupported_protocol_version_is_a_correlated_typed_error() {
 
     // Trace replaced its single-level entry with the summary/detail split in
     // v41, so a v41 client would decode a vocabulary that no longer exists.
-    let response = adapter.exchange(r#"{"method":"initialize","id":40,"protocol_version":45}"#);
+    let response = adapter.exchange(r#"{"method":"initialize","id":40,"protocol_version":40}"#);
     assert_eq!(
         response["error"]["supported"],
         RUNTIME_CLIENT_PROTOCOL_VERSION
