@@ -617,7 +617,28 @@ impl SubagentRegistry {
                     #[cfg(test)]
                     let mut test_gates = registry.state.lock().unwrap().resume_test_gates.take();
                     let mut reserved = false;
+                    let mut allocation_started = false;
                     let mut result = async {
+                        #[cfg(test)]
+                        let preflight_hook =
+                            registry.state.lock().unwrap().resume_preflight_hook.take();
+                        #[cfg(test)]
+                        if let Some(hook) = preflight_hook {
+                            hook.wait();
+                        }
+                        if cancellation.is_cancelled() {
+                            return Err(SubagentStartError::Cancelled);
+                        }
+                        // The mutex reservation still owns this exact Agent/activation
+                        // and frozen authority. Filesystem I/O stays off that mutex.
+                        super::validate_execution_workspace(&identity.workspace)?;
+                        if cancellation.is_cancelled() {
+                            return Err(SubagentStartError::Cancelled);
+                        }
+                        // Allocation admission: cancellation after this point follows
+                        // the existing physical proof/rollback path, even if no
+                        // Reserved event can be committed.
+                        allocation_started = true;
                         #[cfg(test)]
                         let authority_hook =
                             registry.state.lock().unwrap().authority_install_hook.take();
@@ -820,7 +841,10 @@ impl SubagentRegistry {
                     let had_physical_owner = identity.physical_owner.is_some();
                     // No executable handle survives the transfer. Reconciliation must
                     // acquire native proof; dropping the parent alone is not settlement.
-                    if !reserved && !matches!(&result, Ok(SubagentStartOutcome::Accepted(_))) {
+                    if allocation_started
+                        && !reserved
+                        && !matches!(&result, Ok(SubagentStartOutcome::Accepted(_)))
+                    {
                         drop(identity.physical_owner.take());
                         registry.reconcile_recovered_settlements();
                         registry.start_recovery_reconciliation();
@@ -835,6 +859,9 @@ impl SubagentRegistry {
                         .recovery_pending
                         .contains(&identity.activation_id);
                     let completion_outcome = match &result {
+                        // A retired memory-only reservation acquired no physical
+                        // obligations. Its waiters must not invent uncertain cleanup.
+                        _ if !allocation_started => AdmissionSettlement::RolledBack,
                         _ if recovery_pending || !had_physical_owner => AdmissionSettlement::Failed,
                         Err(SubagentStartError::Rollback { .. }) => AdmissionSettlement::Failed,
                         Ok(SubagentStartOutcome::Accepted(_)) => AdmissionSettlement::Committed,

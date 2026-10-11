@@ -2899,6 +2899,7 @@ impl ConversationStore for SqliteConversationStore {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("Workflow terminal transaction: {error}")))?;
+        validate_event_reference(&transaction, &output)?;
         let existing_terminal = find_event_by_id(&transaction, &terminal.event_id)?;
         let existing_output = find_event_by_id(&transaction, &output.event_id)?;
         match (existing_terminal, existing_output) {
@@ -7806,6 +7807,7 @@ fn find_subagent_ownership(
         std::path::PathBuf,
         crate::events::types::SubagentOwnershipKind,
         String,
+        crate::runtime::subagent::AgentActivationOrigin,
     ),
     ConversationStoreError,
 > {
@@ -7822,8 +7824,9 @@ fn find_subagent_ownership(
             ownership,
             workspace,
             agent,
+            origin,
             ..
-        } if embedded == *subagent_id => Ok((child_agent_id, workspace, ownership, agent)),
+        } if embedded == *subagent_id => Ok((child_agent_id, workspace, ownership, agent, origin)),
         RuntimeEvent::SubagentOwnershipCommitted {
             subagent_id: embedded,
             ..
@@ -7884,7 +7887,7 @@ fn validate_subagent_terminal_publication(
             event.event_id
         )));
     }
-    let (committed_child_agent_id, _workspace, ownership, agent) =
+    let (committed_child_agent_id, _workspace, ownership, agent, _) =
         find_subagent_ownership(transaction, subagent_id)?;
     if ownership != crate::events::types::SubagentOwnershipKind::Normal {
         return Err(ConversationStoreError::InvalidReference(format!(
@@ -8596,7 +8599,7 @@ fn validate_event_reference(
                     crate::runtime::subagent::terminal_message_id(subagent_id)
                 )));
             }
-            let (committed_child_agent_id, _workspace, ownership, agent) =
+            let (committed_child_agent_id, _workspace, ownership, agent, _) =
                 find_subagent_ownership(transaction, subagent_id)?;
             if ownership != crate::events::types::SubagentOwnershipKind::Normal {
                 return Err(ConversationStoreError::InvalidReference(format!(
@@ -8670,7 +8673,7 @@ fn validate_event_reference(
                     "invalid physical settlement proof identity".into(),
                 ));
             }
-            let (owner, _, ownership, _) = find_subagent_ownership(transaction, subagent_id)?;
+            let (owner, _, ownership, _, _) = find_subagent_ownership(transaction, subagent_id)?;
             let terminal_id = match ownership {
                 crate::events::types::SubagentOwnershipKind::Normal => {
                     crate::runtime::subagent::terminal_event_id(subagent_id)
@@ -8725,7 +8728,7 @@ fn validate_event_reference(
                     envelope.event_id
                 )));
             }
-            let (committed_child_agent_id, _workspace, ownership, _agent) =
+            let (committed_child_agent_id, _workspace, ownership, _agent, _) =
                 find_subagent_ownership(transaction, subagent_id)?;
             if ownership != crate::events::types::SubagentOwnershipKind::Workflow {
                 return Err(ConversationStoreError::InvalidReference(format!(
@@ -8740,6 +8743,8 @@ fn validate_event_reference(
         }
         RuntimeEvent::WorkflowAgentOutputCommitted {
             subagent_id,
+            workflow_id,
+            run_id,
             node_id,
             output,
             ..
@@ -8767,6 +8772,12 @@ fn validate_event_reference(
                     "Workflow output event has an invalid node identity".to_owned(),
                 ));
             }
+            if &node_id.block.run != run_id || &node_id.block.definition.workflow_id != workflow_id
+            {
+                return Err(ConversationStoreError::InvalidReference(
+                    "Workflow output run and definition disagree with its node identity".to_owned(),
+                ));
+            }
             let encoded = serde_json::to_vec(output)
                 .map_err(|error| storage(format!("Workflow output event encoding: {error}")))?;
             if encoded.len() > crate::runtime::subagent::MAX_RESULT_CONTENT_BYTES {
@@ -8774,11 +8785,18 @@ fn validate_event_reference(
                     "Workflow output event exceeds the bounded value size".to_owned(),
                 ));
             }
-            let (_, _, ownership, _) = find_subagent_ownership(transaction, subagent_id)?;
+            let (_, _, ownership, _, origin) = find_subagent_ownership(transaction, subagent_id)?;
             if ownership != crate::events::types::SubagentOwnershipKind::Workflow {
                 return Err(ConversationStoreError::InvalidReference(format!(
                     "subagent {subagent_id} normal ownership cannot commit a Workflow output"
                 )));
+            }
+            if !matches!(origin, crate::runtime::subagent::AgentActivationOrigin::Workflow { node_id: owned } if owned.as_ref() == node_id)
+            {
+                return Err(ConversationStoreError::InvalidReference(
+                    "Workflow output node differs from the committed child ownership origin"
+                        .to_owned(),
+                ));
             }
         }
         _ => {}
@@ -12600,43 +12618,51 @@ mod tests {
         assert_eq!(store.load_pending().unwrap().len(), 4, "exactly once");
     }
 
-    #[test]
-    fn workflow_agent_value_and_child_terminal_are_one_atomic_transition() {
+    fn workflow_terminal_fixture(
+        node_instance: &crate::runtime::workflow::WorkflowNodeInstance,
+        normal: bool,
+    ) -> (
+        SqliteConversationStore,
+        RuntimeEventEnvelope,
+        RuntimeEventEnvelope,
+    ) {
         let store = store();
         let conversation_id = store.conversation_id().clone();
         let subagent_id =
             crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 1);
         let child_agent_id = AgentId::new(format!("agent-{subagent_id}"));
         let timestamp = Utc.with_ymd_and_hms(2026, 8, 31, 12, 0, 0).unwrap();
-        store
-            .append_event(envelope(
-                &conversation_id,
-                crate::runtime::subagent::subagent_ownership_event_id(&subagent_id).as_ref(),
-                None,
-                RuntimeEvent::SubagentOwnershipCommitted {
-                    parent_agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
-                    admitted_authority: None,
-                    subagent_id: subagent_id.clone(),
-                    child_agent_id: child_agent_id.clone(),
-                    child_conversation_id:
-                        crate::scripted_suites::common::identity::child_conversation_id(
-                            subagent_id.as_str(),
-                        ),
-                    origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
-                        tool_call_id: ToolCallId::new("workflow-call"),
+        if normal {
+            own_normal_subagent(&store, &subagent_id, &child_agent_id);
+        } else {
+            store
+                .append_event(envelope(
+                    &conversation_id,
+                    crate::runtime::subagent::subagent_ownership_event_id(&subagent_id).as_ref(),
+                    None,
+                    RuntimeEvent::SubagentOwnershipCommitted {
+                        parent_agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
+                        admitted_authority: None,
+                        subagent_id: subagent_id.clone(),
+                        child_agent_id: child_agent_id.clone(),
+                        child_conversation_id:
+                            crate::scripted_suites::common::identity::child_conversation_id(
+                                subagent_id.as_str(),
+                            ),
+                        origin: crate::runtime::subagent::AgentActivationOrigin::Workflow {
+                            node_id: Box::new(node_instance.clone()),
+                        },
+                        agent: "reviewer".to_owned(),
+                        definition_digest: "sha256:definition".to_owned(),
+                        profile_digest: "sha256:profile".to_owned(),
+                        ownership: crate::events::types::SubagentOwnershipKind::Workflow,
+                        workspace: std::path::PathBuf::from("/shared-workspace"),
                     },
-                    agent: "reviewer".to_owned(),
-                    definition_digest: "sha256:definition".to_owned(),
-                    profile_digest: "sha256:profile".to_owned(),
-                    ownership: crate::events::types::SubagentOwnershipKind::Workflow,
-                    workspace: std::path::PathBuf::from("/shared-workspace"),
-                },
-            ))
-            .expect("ownership fact");
+                ))
+                .expect("ownership fact");
+        }
 
-        let workflow_id =
-            crate::runtime::workflow::WorkflowId::parse("review_pr").expect("workflow id");
-        let node_instance = crate::runtime::workflow::test_instance("review_pr", "review");
+        let workflow_id = node_instance.block.definition.workflow_id.clone();
         let run_id = node_instance.block.run.clone();
         let terminal = crate::runtime::subagent::terminal_settlement(
             &conversation_id,
@@ -12651,11 +12677,20 @@ mod tests {
             &subagent_id,
             &workflow_id,
             &run_id,
-            &node_instance,
+            node_instance,
             serde_json::json!({"passed": true}),
             timestamp,
         );
 
+        (store, terminal, output)
+    }
+
+    #[test]
+    fn workflow_agent_value_and_child_terminal_are_one_atomic_transition() {
+        let (store, terminal, output) = workflow_terminal_fixture(
+            &crate::runtime::workflow::test_instance("review_pr", "review"),
+            false,
+        );
         let mut unproven = terminal.clone();
         if let RuntimeEvent::SubagentTerminalSettled {
             physical_settlement_proven,
@@ -12697,6 +12732,119 @@ mod tests {
             .expect("idempotent compound retry");
         assert_eq!(retried, committed);
         assert_eq!(store.read_events(None, 10).unwrap().events.len(), 3);
+    }
+
+    /// Every rejection leaves the exact committed prefix untouched; the valid
+    /// pair can then commit and retry, including repeated/nested instances.
+    #[test]
+    fn workflow_terminal_rejects_inconsistent_and_substituted_typed_identities() {
+        use crate::runtime::workflow::{WorkflowId, test_instance};
+        for case in [
+            "run_field",
+            "workflow_field",
+            "owned_run",
+            "owned_node",
+            "visit",
+            "loop",
+            "parallel",
+        ] {
+            let mut owned = test_instance("review_pr", "review");
+            if case == "loop" {
+                owned.block.definition.blocks = vec!["retry".into(), "body".into()];
+                owned.block.invocations = vec![0, 1];
+            } else if case == "parallel" {
+                owned.block.definition.blocks = vec!["checks".into(), "left".into()];
+                owned.block.invocations = vec![0, 0];
+            }
+            let (store, terminal, output) = workflow_terminal_fixture(&owned, false);
+            let before = store.read_events(None, 100).unwrap().events;
+            let mut invalid = output.clone();
+            let RuntimeEvent::WorkflowAgentOutputCommitted {
+                workflow_id,
+                run_id,
+                node_id,
+                ..
+            } = &mut invalid.event
+            else {
+                unreachable!()
+            };
+            match case {
+                "run_field" => run_id.invocation += 1,
+                "workflow_field" => *workflow_id = WorkflowId::parse("other_workflow").unwrap(),
+                "owned_run" => {
+                    run_id.invocation += 1;
+                    node_id.block.run = run_id.clone();
+                }
+                "owned_node" => node_id.node = "another_node".into(),
+                "visit" => node_id.visit += 1,
+                "loop" => node_id.block.invocations[1] += 1,
+                "parallel" => node_id.block.definition.blocks[1] = "right".into(),
+                _ => unreachable!(),
+            }
+            assert!(
+                matches!(
+                    store.commit_workflow_agent_terminal(terminal.clone(), invalid.clone()),
+                    Err(ConversationStoreError::InvalidReference(_))
+                ),
+                "{case}"
+            );
+            assert_eq!(
+                store.read_events(None, 100).unwrap().events,
+                before,
+                "{case}"
+            );
+            let committed = store
+                .commit_workflow_agent_terminal(terminal.clone(), output.clone())
+                .unwrap();
+            assert_eq!(
+                store
+                    .commit_workflow_agent_terminal(terminal.clone(), output)
+                    .unwrap(),
+                committed
+            );
+            let after = store.read_events(None, 100).unwrap().events;
+            assert_eq!(after.len(), before.len() + 2);
+            // The retry fast path must not bypass identity validation either.
+            assert!(
+                matches!(
+                    store.commit_workflow_agent_terminal(terminal, invalid),
+                    Err(ConversationStoreError::InvalidReference(_))
+                ),
+                "{case}"
+            );
+            assert_eq!(store.read_events(None, 100).unwrap().events, after);
+        }
+    }
+
+    #[test]
+    fn workflow_terminal_rejects_normal_agent_ownership_without_partial_facts() {
+        let (store, terminal, output) = workflow_terminal_fixture(
+            &crate::runtime::workflow::test_instance("review_pr", "review"),
+            true,
+        );
+        let before = store.read_events(None, 100).unwrap().events;
+        assert!(matches!(
+            store.commit_workflow_agent_terminal(terminal.clone(), output),
+            Err(ConversationStoreError::InvalidReference(_))
+        ));
+        assert_eq!(store.read_events(None, 100).unwrap().events, before);
+        let RuntimeEvent::SubagentTerminalSettled {
+            subagent_id,
+            child_agent_id,
+            ..
+        } = terminal.event
+        else {
+            unreachable!()
+        };
+        let (notice, report, event) =
+            success_publication(&store, &subagent_id, &child_agent_id, "ordinary success");
+        store
+            .accept_subagent_terminal(Some(notice), report, event)
+            .expect("ordinary Agent remains publishable");
+        assert_eq!(
+            store.read_events(None, 100).unwrap().events.len(),
+            before.len() + 1
+        );
     }
 
     /// The frozen Session execution binding in an ownership fact is one

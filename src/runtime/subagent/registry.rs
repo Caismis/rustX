@@ -618,6 +618,18 @@ struct RegistryState {
     resume_cleanup_hook: Option<ResumeCleanupHook>,
     #[cfg(test)]
     authority_install_hook: Option<Arc<CommitBoundaryHook>>,
+    #[cfg(test)]
+    resume_preflight_hook: Option<Arc<CommitBoundaryHook>>,
+}
+
+// Keep the frozen spelling as authority; canonicalization only proves that
+// the binding satisfies the native Tool workspace contract right now.
+fn validate_execution_workspace(workspace: &std::path::Path) -> Result<(), SubagentStartError> {
+    crate::tools::Workspace::new(workspace)
+        .map(|_| ())
+        .map_err(|error| SubagentStartError::Workspace {
+            detail: error.to_string(),
+        })
 }
 
 #[cfg(test)]
@@ -1543,6 +1555,8 @@ impl SubagentRegistry {
                 resume_cleanup_hook: None,
                 #[cfg(test)]
                 authority_install_hook: None,
+                #[cfg(test)]
+                resume_preflight_hook: None,
             })),
             state_version: tokio::sync::watch::Sender::new(0),
             #[cfg(test)]
@@ -1804,19 +1818,7 @@ impl SubagentRegistry {
             || self.config.workspace.clone(),
             |resume| resume.workspace.clone(),
         );
-        match std::fs::metadata(&workspace) {
-            Ok(metadata) if metadata.is_dir() => {}
-            Ok(_) => {
-                return Err(SubagentStartError::Workspace {
-                    detail: format!("{} is not a directory", workspace.display()),
-                });
-            }
-            Err(error) => {
-                return Err(SubagentStartError::Workspace {
-                    detail: format!("{}: {error}", workspace.display()),
-                });
-            }
-        }
+        validate_execution_workspace(&workspace)?;
         // Physical-root allocation is staged child ownership. A pre-commit
         // crash can leave a durable store for an identity that was never
         // published; skip that identity rather than ever allowing a new child
@@ -4936,6 +4938,12 @@ mod tests {
     fn workflow_spec(task: &str) -> SubagentStartSpec {
         let mut start = spec(task);
         start.admission = crate::runtime::subagent::ActivationAdmission {
+            origin: AgentActivationOrigin::Workflow {
+                node_id: Box::new(crate::runtime::workflow::test_instance(
+                    "test_workflow",
+                    "agent",
+                )),
+            },
             terminal: SubagentTerminalMode::WorkflowOutput {
                 output_schema: serde_json::json!({
                     "type": "object",
