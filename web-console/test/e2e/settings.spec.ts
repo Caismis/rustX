@@ -125,6 +125,13 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     await settings.screenshot({ path: test.info().outputPath('cfg3-native-extensions.png') });
     await expect(settings.getByRole('button', { name: 'Adopt prepared context', exact: true })).toHaveCount(0);
     await openSettingsPage(page, 'Advanced');
+    // A saved unit can precede the native application's final observation.
+    // Finish that source generation before editing its User input externally:
+    // changing it during an outstanding read correctly rejects that read cut.
+    const application = settings.getByRole('list').filter({ has: page.getByRole('listitem').filter({ hasText: /^Process bindings:/ }) });
+    await expect(application).toBeVisible();
+    await expect(application).not.toContainText('Preparing');
+    await expect(settings.getByRole('button', { name: 'Rescan configuration files', exact: true })).toBeEnabled();
     const authored = readFileSync(fixture.settings, 'utf8');
     writeFileSync(fixture.settings, 'invalid = [');
     await settings.getByRole('button', { name: 'Rescan configuration files', exact: true }).click();
