@@ -4662,6 +4662,7 @@ mod tests {
     include!("registry/physical_proof_tests.rs");
     mod archive_ownership;
     mod capacity_wait;
+    mod shared_workspace;
     use std::sync::Arc;
 
     use super::super::SubagentTerminalState;
@@ -7049,6 +7050,12 @@ mod tests {
             SubagentPublication::Abandoned
         );
         assert_eq!(settled.state, SubagentState::PublishingTerminal);
+        // Issue #462 (B18): the child process was physically settled; that
+        // proof alone never clears the independent publication failure.
+        assert_eq!(
+            settled.settlement.physical,
+            SubagentPhysicalSettlement::Proven
+        );
         assert!(matches!(
             plane.registry.wait_agent(&accepted.child_agent_id).await,
             Err(AgentControlError::Settlement)

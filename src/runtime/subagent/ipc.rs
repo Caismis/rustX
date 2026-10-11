@@ -1178,6 +1178,28 @@ mod tests {
         }
     }
 
+    /// Issue #462 (D07): a version-30 parent spoke a workspace snapshot
+    /// object. That Hello cannot decode under version 31, and a current-shape
+    /// Hello naming any other version is not this build's protocol, so the
+    /// child refuses both before composing anything.
+    #[test]
+    fn a_version_30_hello_is_refused_before_composition() {
+        let current = serde_json::to_value(allocation_spec()).unwrap();
+        assert_eq!(current["workspace"], "/tmp/ws");
+        let mut retired = current.clone();
+        retired["protocolVersion"] = serde_json::json!(30);
+        retired["workspace"] = serde_json::json!({
+            "logicalWorkspace": "/tmp/ws",
+            "isolation": {"mode": "shared"}
+        });
+        assert!(serde_json::from_value::<SubagentChildSpec>(retired).is_err());
+        let mut old_version = current;
+        old_version["protocolVersion"] = serde_json::json!(30);
+        let decoded = serde_json::from_value::<SubagentChildSpec>(old_version).unwrap();
+        assert_ne!(decoded.protocol_version, SUBAGENT_IPC_VERSION);
+        assert_eq!(SUBAGENT_IPC_VERSION, 31);
+    }
+
     #[test]
     fn child_allocation_identity_converges_aliases_and_rejects_substitution() {
         let directory = tempfile::tempdir().unwrap();

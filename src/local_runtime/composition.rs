@@ -3146,6 +3146,12 @@ enabled = true
             Some("frozen parent chain")
         );
         assert_eq!(resources.skill_catalog(), None);
+        // Issue #462 (B02/B03): every child Tool, including Write, Edit and
+        // Bash, is rooted at exactly the frozen Session binding.
+        assert_eq!(
+            core.runtime().tool_runtime().workspace().root(),
+            dir.path().join("checkouts/feature")
+        );
     }
 
     /// A frozen Skill allowlist is **materialized** into the child-private

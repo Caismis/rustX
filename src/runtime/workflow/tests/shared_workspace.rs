@@ -367,3 +367,27 @@ async fn pending_review_does_not_block_an_independent_parallel_branch() {
     assert_eq!(output["decision"]["accepted"], true);
     assert_eq!(output["write"]["exit_code"], 0);
 }
+
+/// C02/C13: the retired Workflow `workspace` key is refused, and the Runtime
+/// Client projections carry no Candidate, handoff or isolation vocabulary.
+#[test]
+fn retired_workspace_authoring_and_projection_fields_are_gone() {
+    let mut definition = serde_json::to_value(super::program_definition()).unwrap();
+    assert!(serde_json::from_value::<WorkflowDefinition>(definition.clone()).is_ok());
+    definition["workspace"] = json!({"require_clean_parent": true});
+    assert!(serde_json::from_value::<WorkflowDefinition>(definition).is_err());
+    for schema in [
+        serde_json::to_string(&schemars::schema_for!(
+            crate::runtime::workflow::read_model::WorkflowRunView
+        ))
+        .unwrap(),
+        serde_json::to_string(&schemars::schema_for!(
+            crate::runtime_client::snapshot::RuntimeClientAgent
+        ))
+        .unwrap(),
+    ] {
+        for retired in ["candidate", "handoff", "isolation", "resource_state", "borrowed_from"] {
+            assert!(!schema.contains(retired), "{retired} remains in {schema}");
+        }
+    }
+}
