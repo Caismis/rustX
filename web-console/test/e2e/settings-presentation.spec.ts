@@ -345,6 +345,27 @@ test('390 × 844: section menu, list → detail → back, long identities and no
   await expect(settings.getByLabel('Description', { exact: true })).toBeVisible();
   await expect(settings.getByRole('button', { name: '← Extensions', exact: true })).toBeInViewport();
   await expectNoHorizontalOverflow(page);
+  // The narrow bottom gutter belongs to the viewport, not to the content
+  // padding that disappears as the long Agent card scrolls through it.
+  const gutter = await settings.getByRole('form', { name: 'Agent reviewer' }).evaluate(form => {
+    let pane: HTMLElement | null = form.parentElement;
+    while (pane && getComputedStyle(pane).overflowY !== 'auto') pane = pane.parentElement;
+    if (!pane) throw new Error('Settings scroll owner missing');
+    const panel = form.closest('[role="dialog"]')!.getBoundingClientRect();
+    const gap = () => panel.bottom - pane!.getBoundingClientRect().bottom;
+    const before = gap(), position = pane.scrollTop;
+    pane.scrollTop = pane.scrollHeight;
+    const after = gap(), scrollable = pane.scrollHeight > pane.clientHeight;
+    pane.scrollTop = position;
+    const range = pane.scrollHeight - pane.clientHeight;
+    const margin = pane.style.marginBottom, padding = pane.style.paddingBottom;
+    pane.style.marginBottom = '0px'; pane.style.paddingBottom = '20px';
+    const priorRange = pane.scrollHeight - pane.clientHeight;
+    pane.style.marginBottom = margin; pane.style.paddingBottom = padding;
+    pane.scrollTop = position;
+    return { before, after, scrollable, rangeUnchanged: range === priorRange };
+  });
+  expect(gutter).toEqual({ before: 20, after: 20, scrollable: true, rangeUnchanged: true });
   await expectStableScreenshot(page, 'settings-agent-narrow-dark.png');
 
   // Escape closes Settings itself when no transient layer is open; the global

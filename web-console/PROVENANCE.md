@@ -2410,3 +2410,14 @@ server lifetime. A forced-GC/EOF regression fails against the prior observer
 with the same destroyed-pending-task diagnostic; all 54 provider tests and the
 real native chat/child-capability browser scenarios pass with the owned task.
 This changes test-process lifetime, not rustX execution or settlement ownership.
+
+Repair-head CI run 38157397982 passed 253 browser tests but exposed one remaining
+narrow Settings corner mismatch: ten pixels, maximum channel delta 6, where a
+long Agent card reached the panel clip. The narrow scrollport now owns its
+existing 20px bottom gutter as an outside margin rather than scrolling content
+padding. Panel dimensions, superellipse corners and content scroll range remain
+unchanged; content can no longer repaint behind the bottom corner. A rendered
+regression checks the fixed gap before and after scrolling; the prior style
+fails with 0px at both positions, while the repaired owner keeps 20px. Five
+reference/actual/diff sets were individually reviewed for this intentional
+bottom-gutter change. The strict comparator and noise manifest remain unchanged.

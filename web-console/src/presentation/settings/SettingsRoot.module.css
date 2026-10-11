@@ -307,5 +307,7 @@
     grid-template-areas: "sections close" "context context";
     padding: 12px 12px 10px 16px;
   }
-  .options { padding: 16px 16px 20px; }
+  /* Keep the bottom gutter outside the scrolling content. Long cards must
+     not paint through the panel's corner clip as their scroll layer moves. */
+  .options { margin-bottom: 20px; padding: 16px 16px 0; }
 }
