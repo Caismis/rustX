@@ -94,7 +94,10 @@ parent continues reading the reliable control channel through the physical
 epilogue: AnchorReleased and non-semantic Diagnostic frames remain admissible.
 Duplicate Results and other post-Result frames are protocol violations and take
 precedence over the earlier candidate. They settle through the existing Lost
-outcome, never successful terminal publication. The driver still reaps the direct
+outcome, never successful terminal publication. A valid anchor offered after
+Result is retained for containment without an acknowledgement that could admit
+new work. If the anchor cannot be retained, the existing ControlFailure outcome
+refuses physical settlement proof. The driver still reaps the direct
 process and contains every outstanding nested anchor or reports it unresolved
 before the registry can publish and release counted capacity. Existing
 cancellation commit points and bounded drain/termination escalation remain in
