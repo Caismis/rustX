@@ -12,7 +12,7 @@ const noop = () => {};
 /** One MCP resource's detail: its definition, and — as a separate native
  * mutation with its own Save — its availability to the root Agent. */
 const mcpDetail = (source: SourceSettings, scope: SourceScope, name: string) =>
-  <ExtensionDetail source={source} scope={scope} revision="cfg-1" models={[]} family="mcp" name={name} onFocus={noop} />;
+  <ExtensionDetail source={source} scope={scope} revision="cfg-1" models={[]} profiles={{}} family="mcp" name={name} onFocus={noop} />;
 
 it('edits an MCP definition independently from root selection and retains exact source revision', async () => {
   const source = cfg3Source();

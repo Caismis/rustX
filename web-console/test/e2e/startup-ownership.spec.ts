@@ -8,7 +8,7 @@ async function begin(page: Page, language = 'en', files = false, model?: 'explic
   await page.goto(fixture);
   await page.getByRole('button', { name: language === 'en' ? 'Choose Workspace' : '选择工作区', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Workspace A', exact: true }).click();
-  if (model === 'explicit') { await page.getByRole('button', { name: 'Model and reasoning' }).click(); await page.getByRole('menuitem', { name: 'Model', exact: true }).click(); await page.getByRole('menuitem', { name: 'fixture/second', exact: true }).click(); }
+  if (model === 'explicit') { await page.getByRole('button', { name: 'Model and profile' }).click(); await page.getByRole('menuitem', { name: 'Model', exact: true }).click(); await page.getByRole('menuitem', { name: 'fixture/second', exact: true }).click(); }
   await page.locator('textarea').fill('Retained first input');
   if (files) await page.locator('input[type=file]').setInputFiles([{ name: 'first.txt', mimeType: 'text/plain', buffer: Buffer.from('first') }, { name: 'second.txt', mimeType: 'text/plain', buffer: Buffer.from('second') }]);
   await page.locator('[data-composer-primary]').click();

@@ -191,6 +191,10 @@ pub struct EffectiveConfiguration {
     pub process_bindings: Option<super::super::app_server_policy::AppServerPolicy>,
     pub application: Option<super::application::ConfigurationApplication>,
     pub adopted_binding: u64,
+    /// The source manifest the adopted context generation was resolved from.
+    /// Independently published units — execution policy, shared capacity and
+    /// the Model Catalog — may be newer; `document` and `provenance` carry
+    /// their values, and `application` says which revision each applied.
     pub source_revisions: BTreeMap<PathBuf, String>,
     pub generation: crate::runtime::identity::RuntimeResourceRevision,
     pub document: SourceDocumentView,
@@ -377,16 +381,29 @@ fn source_resolution_diagnostic(document: &RuntimeLayer) -> Option<String> {
     validate().err()
 }
 fn view(path: PathBuf, bytes: Option<&[u8]>) -> SourceView<SourceDocumentView> {
-    let parsed = parse(bytes);
-    let diagnostic = parsed
-        .as_ref()
-        .err()
-        .map(|_| "invalid rustx.toml; source was not loaded".into());
+    let (authored, diagnostic) =
+        match crate::toml_authoring::parse_detailed::<RuntimeLayer>(bytes.unwrap_or(b"")) {
+            Ok(document) => (Some(redact(document)), None),
+            // A request_params failure names only its field path, category
+            // and locations, so it can say why the source cannot be edited.
+            // Other parser messages may quote authored text.
+            Err(failure) if failure.path.is_some() => (
+                None,
+                Some(format!(
+                    "invalid rustx.toml; source was not loaded: {}",
+                    failure.into_detail()
+                )),
+            ),
+            Err(_) => (
+                None,
+                Some("invalid rustx.toml; source was not loaded".into()),
+            ),
+        };
     SourceView {
         path,
         revision: revision(bytes),
         diagnostic,
-        authored: parsed.ok().map(redact),
+        authored,
     }
 }
 fn mcp_view(
@@ -498,7 +515,7 @@ fn mcp_candidate(
     } else {
         document.mcp_servers.remove(&id);
     }
-    toml::to_string_pretty(&document)
+    crate::toml_authoring::write(&document)
         .map(String::into_bytes)
         .map_err(|_| SettingsError::Invalid)
 }
@@ -686,7 +703,7 @@ fn encode(document: RuntimeLayer) -> Result<Vec<u8>, SettingsError> {
         },
         |environment| environment,
     );
-    toml::to_string_pretty(&document)
+    crate::toml_authoring::write(&document)
         .map(String::into_bytes)
         .map_err(|_| SettingsError::Invalid)
 }
@@ -1131,7 +1148,7 @@ impl UserConfigManager {
                             path.clone(),
                         )
                         .map_err(|_| SettingsError::Invalid)?;
-                        toml::to_string_pretty(&profile)
+                        crate::toml_authoring::write(&profile)
                             .map(String::into_bytes)
                             .map_err(|_| SettingsError::Invalid)
                     })

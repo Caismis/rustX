@@ -1181,14 +1181,14 @@ async fn request_serialization_is_model_facing_only() {
     }
 }
 
-/// A reasoning profile's configured request parameters reach the Anthropic
+/// A Model Profile's configured request parameters reach the Anthropic
 /// wire **exactly**, and nothing else appears.
 ///
-/// The two profiles deliberately use different provider-specific shapes, so
+/// The two presets deliberately use different provider-specific shapes, so
 /// the assertion cannot pass by an enum conversion: the wire JSON is exactly
 /// the configured overlay.
 #[tokio::test]
-async fn reasoning_profiles_produce_their_exact_configured_overlay() {
+async fn model_profiles_produce_their_exact_configured_overlay() {
     let cases = [
         (
             serde_json::json!({"thinking": {"type": "disabled"}, "temperature": 0.7}),

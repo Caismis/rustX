@@ -88,7 +88,7 @@ fn frozen_model(model: ModelRef) -> FrozenModelSpec {
             context_window: 128_000,
             model_max_output_tokens: 512,
             max_output_tokens: 512,
-            reasoning_profile: None,
+            profile: None,
             reasoning_enabled: false,
             request_params: RequestParams::new(),
             capabilities: ModelCapabilities::text_only(true, false),

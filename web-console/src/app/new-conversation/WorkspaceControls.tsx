@@ -63,6 +63,6 @@ export function sessionCatalog(source?: SourceSettings) {
  * draft model intent. Either way nothing is submitted. */
 export function sessionModelBlock(source: SourceSettings | undefined, intent?: SessionModelConfig) {
   if (source?.session_models?.kind === 'unavailable') return message('workspace:copy.native-cannot-create-a-session-in-this-workspace-value', { p0: source.session_models.diagnostic });
-  return intent && source && !catalogAdmits(sessionCatalog(source), intent.model, intent.reasoningProfile ?? undefined)
+  return intent && source && !catalogAdmits(sessionCatalog(source), intent.model, intent.profile ?? undefined)
     ? message('workspace:copy.the-selected-model-is-not-in-this-workspace-s-native-model-catalog-choose-a-model-again') : undefined;
 }

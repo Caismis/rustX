@@ -63,7 +63,7 @@ async fn archive_v3_contract_preserves_accepted_contributions_and_journal_vocabu
     assert_eq!(
         manifest["schemas"],
         serde_json::json!({
-            "journal": 2, "messages": 1, "surface": 1, "requests": 2,
+            "journal": 2, "messages": 1, "surface": 1, "requests": 3,
             "generations": 1, "publication_audits": 1, "inherited_responses": 1, "inherited_turns": 1,
         })
     );

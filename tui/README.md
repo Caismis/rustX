@@ -642,7 +642,7 @@ before cancellation is considered. The existing Ctrl+C interrupt-or-quit
 policy remains unchanged.
 
 The selector searches the model reference *and* useful metadata the catalog
-publishes — protocol, modalities, capabilities, reasoning profiles, and
+publishes — protocol, modalities, capabilities, Model Profiles, and
 limits. It preserves configured, effective, and attempt-frozen identities and
 shows the highlighted row's effective facts exactly as published. The client
 does not read `rustx.toml`, infer provider behavior from a model prefix, or
@@ -951,7 +951,7 @@ spellings such as `reasoning` and `reasoning_content` never enter the
 TypeScript protocol or presentation layer. Whether reasoning is *drawn* is a
 client preference (`/show-reasoning`, `ctrl+t`); when hidden it collapses to a
 `Thinking…` marker rather than becoming assistant text. What rustX *asks a
-provider for* is `SessionModelConfig.reasoningProfile` / `reasoningEnabled`,
+provider for* is `SessionModelConfig.profile` / `reasoningEnabled`,
 which only `session/setModel` changes.
 
 ### Working status is proven, never timed

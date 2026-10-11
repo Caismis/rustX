@@ -12,7 +12,7 @@ import { describe, it } from "node:test";
 import {
   ModelSelector,
   capabilityLine,
-  reasoningLine,
+  profileLine,
   searchTerms,
 } from "../src/ui/components/model-selector.ts";
 import { PopupFrame } from "../src/ui/components/popup-frame.ts";
@@ -30,12 +30,13 @@ const CATALOG: CatalogModelView[] = [
     },
     contextWindow: 200_000,
     maxOutputTokens: 8_192,
-    reasoningProfiles: [
-      { id: "low", enabled: true },
-      { id: "medium", enabled: true },
-      { id: "high", enabled: true },
+    profiles: [
+      { id: "low", reasoningEnabled: true, maxOutputTokens: 2_048 },
+      { id: "medium", reasoningEnabled: true },
+      { id: "high", reasoningEnabled: true },
+      { id: "off", reasoningEnabled: false },
     ],
-    defaultReasoningProfile: "medium",
+    defaultProfile: "medium",
   }),
   catalogModel("beta/model-b", { protocol: "openai_responses" }),
   catalogModel("beta/sonnet-x", { protocol: "anthropic_messages" }),
@@ -132,7 +133,7 @@ describe("search", () => {
     );
   });
 
-  it("matches a published reasoning profile id and the reasoning capability", () => {
+  it("matches a published Model Profile id and the reasoning capability", () => {
     const profile = selector();
     profile.setQuery("high");
     assert.deepEqual(
@@ -193,6 +194,7 @@ describe("search", () => {
       "low",
       "medium",
       "high",
+      "off",
       "200k",
       "8k",
     ]);
@@ -248,19 +250,31 @@ describe("displayed metadata", () => {
     assert.match(rendered, /Chat Completions · 200k ctx · 8k out · tools · in text\/image/);
   });
 
-  it("renders reasoning profiles exactly as the catalog published them", () => {
+  it("renders Model Profiles exactly as the catalog published them", () => {
     // The row states the *catalog's* fallback and says so in those words, so
     // it can never be read as the session's current configuration.
     assert.equal(
-      reasoningLine(CATALOG[0]!),
-      "catalog reasoning: low medium high (catalog default medium)",
+      profileLine(CATALOG[0]!),
+      "catalog profiles (catalog default medium): low (reasoning, 2k out) medium (reasoning) high (reasoning) off (no reasoning)",
     );
-    // A model without reasoning is reported as unsupported, not as "off".
-    assert.equal(reasoningLine(CATALOG[1]!), "catalog reasoning: unsupported");
-    // Reasoning-capable with no selectable profile is its own third case: no
+    assert.equal(profileLine(CATALOG[1]!), "catalog profiles: none");
+    // Non-reasoning sampling presets carry no reasoning annotation at all.
+    assert.equal(
+      profileLine(
+        catalogModel("g/s", {
+          profiles: [
+            { id: "precise", reasoningEnabled: false },
+            { id: "creative", reasoningEnabled: false, maxOutputTokens: 1_000 },
+          ],
+          defaultProfile: "precise",
+        }),
+      ),
+      "catalog profiles (catalog default precise): precise creative (1k out)",
+    );
+    // Reasoning-capable with no profiles is provider-default reasoning: no
     // universal off/low/medium/high is invented.
     assert.equal(
-      reasoningLine(
+      profileLine(
         catalogModel("g/h", {
           effectiveCapabilities: {
             inputModalities: ["text"],
@@ -270,7 +284,7 @@ describe("displayed metadata", () => {
           },
         }),
       ),
-      "catalog reasoning: supported, no selectable profile",
+      "catalog profiles: none (provider-default reasoning)",
     );
   });
 
@@ -409,25 +423,26 @@ describe("catalog reasoning is never presented as current configuration", () => 
               toolCalls: true,
               reasoning: true,
             },
-            reasoningProfile: "low",
+            profile: "low",
             reasoningEnabled: true,
           }),
-          configured: { model: "alpha/model-a", reasoningProfile: "high" },
+          configured: { model: "alpha/model-a", profile: "high" },
         },
       }),
     ).join("\n");
     // The catalog says its fallback is `medium`; the session asked for `high`
     // and the runtime resolved `low`. Three facts, three distinct statements.
     assert.match(rendered, /catalog default medium/);
-    assert.match(rendered, /configured reasoning {2}profile high/);
-    assert.match(rendered, /effective reasoning {3}on \(profile low\)/);
+    assert.match(rendered, /configured profile {2}high/);
+    assert.match(rendered, /effective profile {3}low/);
+    assert.match(rendered, /reasoning {11}on/);
   });
 
   it("says a session configured nothing rather than borrowing the catalog default", () => {
     const rendered = lines(selector()).join("\n");
     assert.match(
       rendered,
-      /configured reasoning {2}not configured \(the runtime decides\)/,
+      /configured profile {2}not configured \(the model default applies\)/,
     );
     // The catalog default is still visible, still labelled as the catalog's.
     assert.match(rendered, /catalog default medium/);
@@ -449,7 +464,7 @@ describe("catalog reasoning is never presented as current configuration", () => 
     ).join("\n");
     assert.match(
       rendered,
-      /effective reasoning {3}on \(runtime default, no selectable profile\)/,
+      /reasoning {11}on \(provider default, no profile\)/,
     );
     assert.ok(!/off\/low\/medium\/high/.test(rendered));
   });
@@ -464,12 +479,13 @@ describe("catalog reasoning is never presented as current configuration", () => 
             toolCalls: true,
             reasoning: true,
           },
-          reasoningProfile: "low",
+          profile: "low",
           reasoningEnabled: false,
         }),
       }),
     ).join("\n");
-    assert.match(rendered, /effective reasoning {3}off \(profile low\)/);
+    assert.match(rendered, /effective profile {3}low/);
+    assert.match(rendered, /reasoning {11}off/);
   });
 });
 
@@ -518,7 +534,7 @@ describe("finite viewport", () => {
     assert.ok(markerRow?.includes("prov/model-7"), "the selected row is visible and marked");
     // The selected entry keeps its detail rows when the budget allows them.
     assert.ok(
-      rows.some((line) => line.includes("catalog reasoning")),
+      rows.some((line) => line.includes("catalog profiles")),
       "the selected entry's detail rows render",
     );
 

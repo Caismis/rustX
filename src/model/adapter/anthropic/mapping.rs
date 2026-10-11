@@ -329,7 +329,7 @@ pub(crate) struct WireTool {
 /// it is then serialized to a JSON object and shallow-overlaid with the
 /// request's effective opaque `requestParams` under the protected-key
 /// contract. No `thinking` or `output_config` field is ever synthesized:
-/// whatever the selected reasoning profile configured is exactly what
+/// whatever the selected Model Profile configured is exactly what
 /// reaches the wire, and a model whose profile configures nothing sends
 /// nothing.
 pub(crate) fn translate_request(

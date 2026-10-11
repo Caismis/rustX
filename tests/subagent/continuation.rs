@@ -74,8 +74,8 @@ async fn real_child_resumes_same_identity_history_and_frozen_authority() {
     let config = root.path().join("rustx.toml");
     let changed = std::fs::read_to_string(&config)
         .unwrap()
-        .replace("temperature = 0.11", "temperature = 0.91");
-    assert!(changed.contains("temperature = 0.91"));
+        .replace(r#""temperature":0.11"#, r#""temperature":0.91"#);
+    assert!(changed.contains(r#""temperature":0.91"#));
     std::fs::write(config, changed).unwrap();
     let resumed = process
         .call(Method::AgentSendMessage {

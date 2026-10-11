@@ -4,7 +4,28 @@ App Server v39 combines exact native Message windows for fork source navigation
 with main's MCP authoring, cold reads, statistics and delivery vocabulary.
 Version 38 peers are rejected; native, Web and TUI must use the same v39 contract.
 
-App Server v39 / Runtime Client v60 add `agent/statistics { target, agent_id }`.
+App Server v39 / Runtime Client v61 replace reasoning profiles with general
+Model Profiles (#456). Model selections (`SessionModelConfig`, explicit Summary
+selections, authored `ModelLayer`) name an optional `profile`; catalog views
+publish `profiles` (`ModelProfileView`: `id`, `reasoningEnabled`, optional
+`maxOutputTokens`) and `defaultProfile`; invocation views, frozen Attempt models,
+Trace request details and Subagent execution profiles carry the selected
+`profile`. Authored `Model` documents carry `default_profile` and `profiles`
+(each with optional `reasoning_enabled`, `max_output_tokens` and
+`request_params`) in place of `reasoning`. Every `request_params` member on this
+protocol is a structured JSON object, including nested objects, arrays and
+`null`; the JSON-encoded string spelling exists only in source TOML. Its
+numbers are binary64-exact (I-JSON, RFC 7493 §2.2): the server never emits
+another, and a request carrying one — such as `9007199254740993` or
+`0.12345678901234567890` — is refused with Invalid params. The literal is read
+from the raw request text inside every declared `request_params`/`requestParams`
+member, before decoding could round it, so a binary64 JSON client such as the
+browser holds and echoes back exactly the value native holds. The
+`ReasoningSelection` `catalog_default`/`profile` union is removed: an omitted
+`profile` selects the Model's `default_profile`. See
+[configuration](configuration.md#model-profiles) for the resolution contract.
+
+App Server v39 / Runtime Client v61 add `agent/statistics { target, agent_id }`.
 The result is `agent_statistics { metrics }`: child-owned `ConversationStatistics`,
 request-owned context occupancy, and cumulative working intervals (`settled_ms`
 plus an optional active interval). Usage, cache hit, request coverage, turns,
@@ -26,10 +47,10 @@ per-connection `ServerCapabilities.delivery_access` report. Only transport
 authentication grants the access. See
 [Committed delivery access](#committed-delivery-access-v39).
 
-App Server v39 retains the v37 / Runtime Client v59 Trace input ownership contract at the
+App Server v39 / Runtime Client v61 refresh retained Trace input ownership at the
 current read cut. See [Trace retained-input ownership](#trace-retained-input-ownership-v39).
 
-App Server v39 / Runtime Client v60 separate Session configuration-adoption
+App Server v39 / Runtime Client v61 separate Session configuration-adoption
 eligibility from configuration application state. `ConfigurationApplication` no
 longer carries `eligibility`; the live runtime publishes it on its Runtime Client
 snapshot (`configuration_adoption_eligibility`) and changes it only through
@@ -102,12 +123,12 @@ open across reconstruction and paging. `CompletedResponseView` retains finalized
 answer/TurnTail provenance and actions. Lineage remains selective: finalized
 completed-response provenance may cross into children; unsuccessful source
 execution outcomes do not. See [the ownership contract](issue-406/terminal-process-ownership.md).
-Only App Server v39 / Runtime Client v60 are supported. Earlier peers are rejected without compatibility paths.
+Only App Server v39 / Runtime Client v61 are supported. Earlier peers are rejected without compatibility paths.
 
 The earlier v22/v48 revision introduced native whole-conversation Turn/Step
 totals, measured request timing, the latest exact Attempt clock, and authored
 `SessionModelsView::Available.default_model` from the same creation capture as
-its catalog. v39/v60 retain these capabilities. A browser product preference can
+its catalog. v39/v61 retain these capabilities. A browser product preference can
 seed new Session intent; it does not alter authored configuration or existing
 Sessions.
 
@@ -922,7 +943,7 @@ Complete = terminal
 The obsolete `GoalView.armed` member and every activation-only observation are
 removed, so no snapshot and no `goal_changed` event can represent
 `Active + disarmed`. Native Runtime Client version 43 introduced this vocabulary;
-current version 60 retains it and rejects older peers by strict negotiation. This remains mandatory
+current version 61 retains it and rejects older peers by strict negotiation. This remains mandatory
 App Server protocol v39, with no compatibility field and no activation mode.
 
 Clients derive presentation from the phase alone: `Active` offers Pause,
@@ -993,7 +1014,7 @@ other pre-1.0 schema changes, older stores are refused explicitly; no migration
 or compatibility representation is introduced.
 
 Native Runtime Client version 37 introduced the mandatory pending revision and
-`pending_inbound_changed` event. Current version 60 retains both with no
+`pending_inbound_changed` event. Current version 61 retains both with no
 compatibility decoder.
 
 Snapshot/attachment reads also reconcile Pending Inbound directly from durable
@@ -1171,6 +1192,14 @@ preserves canonical history. `configuration/reconcile` rescans external inputs o
 starts a new same-revision application attempt. It is never a second Save step.
 See [the native contract](configuration.md#save-automatic-application-and-session-adoption).
 
+A published Model Catalog that no longer admits a Session's configured Model or
+Profile leaves it configured and unavailable: `session/model` carries
+`unavailable` (the native diagnostic), with the last resolved `effective` and
+`summary` as display facts, or neither when the Session was loaded unavailable.
+`turn/start`, `turn/steer` and `context/compact` then fail with
+`model_unavailable` until `session/setModel` commits a complete selection the
+catalog admits; nothing falls back to a default.
+
 ## Session configuration adoption eligibility (v39)
 
 Whether a Session could adopt a prepared configuration *now* is runtime state,
@@ -1288,7 +1317,7 @@ the authored unit in that scope. Clients never write whole config documents.
 ## Current Session lifecycle contract
 
 Initialization requires exactly v39 and WebSocket requires `rustx.app-server.v39`.
-v37 and all earlier versions are rejected without fallback. Rust DTOs generate
+v38 and all earlier versions are rejected without fallback. Rust DTOs generate
 `v39.ts`, `v39.schema.json`, and the serialized fixtures; only the current version is kept.
 Manual runtime unload is absent from the public method/result vocabulary.
 Session lists have no residency field. Deletion blockers have no current-Session
@@ -1319,7 +1348,7 @@ recovery uses existing idempotent cleanup/finalization and idempotent fence rele
 A client-side unknown outcome requires authoritative observation, not cleanup
 recovery or mutation replay. Only server-confirmed committed outcomes grant the
 explicit recovery action. These recovery semantics remain in App Server v39;
-native Runtime Client is v60.
+native Runtime Client is v61.
 
 ## Rich historical Trace inspection (#364)
 
@@ -1633,7 +1662,7 @@ it. An accepted response is never retracted. See
 [file delivery](file-delivery.md#delivery-access-for-app-server-clients) for
 the synchronization.
 
-The internal Runtime Client vocabulary is v60. Only App Server v39 clients
+The internal Runtime Client vocabulary is v61. Only App Server v39 clients
 are generated; earlier versions are rejected, with no aliases or compatibility
 decoder. Event envelope 1, SQLite 49, Session catalog 13 and subagent IPC v29
 remain unchanged. Present is root-only until a real child delivery owner exists.
@@ -1668,7 +1697,7 @@ unallocated operation is Absent; consumed work survives control disconnect.
 
 ### Trace retained-input ownership (v39)
 
-App Server v39 / Runtime Client v60 require `TraceLifecycle.location` in each
+App Server v39 / Runtime Client v61 require `TraceLifecycle.location` in each
 retained-record refresh. An idle `InboundTurnAdopted` initially has no Attempt;
 its answering Attempt is resolved natively at the read cut after that Attempt
 starts. Summary pages and retained-record refreshes use the same resolution.

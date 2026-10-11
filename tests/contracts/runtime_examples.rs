@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use rustx::local_runtime::CurrentRuntimeConfig;
 use rustx::model::catalog::{
-    ChatReasoningReplay, MapCredentialEnvironment, ModelCatalog, ModelRef, ReasoningProfileId,
+    ChatReasoningReplay, MapCredentialEnvironment, ModelCatalog, ModelProfileId, ModelRef,
 };
 use rustx::model::session::SummaryModelPolicy;
 use rustx::model::types::ModelProtocol;
@@ -20,7 +20,7 @@ fn read_example(name: &str) -> Vec<u8> {
 
 fn example_catalog() -> ModelCatalog {
     let document: rustx::local_runtime::authoring::RuntimeLayer =
-        toml::from_str(&String::from_utf8(read_example("rustx.toml")).unwrap()).unwrap();
+        rustx::toml_authoring::parse(&read_example("rustx.toml")).unwrap();
     ModelCatalog::from_document(
         rustx::model::authoring::Catalog {
             schema_version: rustx::model::catalog::MODEL_CATALOG_SCHEMA_VERSION,
@@ -63,18 +63,23 @@ fn committed_model_example_uses_the_production_catalog_contract() {
         model.compat.chat_reasoning_replay,
         Some(ChatReasoningReplay::Reasoning)
     );
-    assert_eq!(model.request_params["temperature"], serde_json::json!(0.2));
-
-    let reasoning = model.reasoning.as_ref().expect("reasoning profiles");
-    assert_eq!(reasoning.default_profile.as_str(), "off");
-    assert_eq!(reasoning.profiles.len(), 2);
-    let off = ReasoningProfileId::new("off");
-    let on = ReasoningProfileId::new("on");
-    assert!(!reasoning.profiles[&off].enabled);
-    assert!(reasoning.profiles[&on].enabled);
+    // A Model with profiles declares no model-level native parameters.
+    assert!(model.request_params.is_empty());
+    assert_eq!(model.default_profile.as_ref().unwrap().as_str(), "off");
+    assert_eq!(model.profiles.len(), 2);
+    let off = ModelProfileId::new("off");
+    let on = ModelProfileId::new("on");
+    assert!(!model.profiles[&off].reasoning_enabled);
+    assert!(model.profiles[&on].reasoning_enabled);
+    assert_eq!(model.profiles[&off].max_output_tokens, None);
+    assert_eq!(model.profiles[&on].max_output_tokens, Some(2_048));
     assert_eq!(
-        reasoning.profiles[&on].request_params["reasoning_effort"],
-        serde_json::json!("low")
+        serde_json::Value::Object(model.profiles[&off].request_params.clone()),
+        serde_json::json!({"temperature": 0.2})
+    );
+    assert_eq!(
+        serde_json::Value::Object(model.profiles[&on].request_params.clone()),
+        serde_json::json!({"temperature": 0.2, "reasoning_effort": "low"})
     );
 
     let resolved = catalog
@@ -109,17 +114,12 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
         .model(&config.initial_model().model)
         .expect("configured model must exist in the example catalog");
     assert_eq!(
-        config
-            .initial_model()
-            .reasoning_profile
-            .as_ref()
-            .unwrap()
-            .as_str(),
+        config.initial_model().profile.as_ref().unwrap().as_str(),
         "off"
     );
     assert_eq!(
-        config.initial_model().request_params["temperature"],
-        serde_json::json!(0.1)
+        serde_json::Value::Object(config.initial_model().request_params.clone()),
+        serde_json::json!({"top_p": 0.9})
     );
     assert_eq!(config.initial_model().max_output_tokens, Some(2_048));
     assert_eq!(
@@ -326,6 +326,9 @@ fn current_product_surfaces_cannot_reintroduce_obsolete_authoring() {
         "models.jsonc",
         "rustx.jsonc",
         "request_params_json",
+        "reasoning_profile",
+        "reasoningProfile",
+        "ReasoningProfile",
         "defaultTools",
         "pythonSources",
         "--no-tools",
@@ -339,6 +342,7 @@ fn current_product_surfaces_cannot_reintroduce_obsolete_authoring() {
         "docs/subagent-resources.md",
         "docs/capability-inspection.md",
         "docs/invariants.md",
+        "docs/configuration.md",
         "examples/local-runtime/README.md",
         "tui/README.md",
         "src/local_runtime/cli.rs",
@@ -356,4 +360,70 @@ fn current_product_surfaces_cannot_reintroduce_obsolete_authoring() {
             );
         }
     }
+}
+
+/// The configuration reference's Provider/Model example is real authoring: it
+/// parses through the source boundary, validates as a catalog, and resolves
+/// the documented Profile semantics.
+#[test]
+fn configuration_reference_model_example_parses_validates_and_resolves() {
+    let text = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/configuration.md"),
+    )
+    .unwrap();
+    let start = text
+        .find("```toml\n[providers.service]")
+        .expect("model example")
+        + 8;
+    let block = &text[start..start + text[start..].find("```").unwrap()];
+    let document: rustx::local_runtime::authoring::RuntimeLayer =
+        rustx::toml_authoring::parse(block.as_bytes()).unwrap();
+    let catalog = ModelCatalog::from_document(
+        rustx::model::authoring::Catalog {
+            schema_version: rustx::model::catalog::MODEL_CATALOG_SCHEMA_VERSION,
+            providers: document.providers.clone().unwrap(),
+            models: document.models.clone().unwrap(),
+        }
+        .into(),
+    )
+    .unwrap();
+    let thinker = catalog.model(&ModelRef::parse("thinker").unwrap()).unwrap();
+    assert_eq!(
+        thinker.default_profile.as_ref().unwrap().as_str(),
+        "balanced"
+    );
+    assert!(thinker.request_params.is_empty());
+    assert_eq!(
+        thinker.profiles[&ModelProfileId::new("precise")].request_params["stop"],
+        serde_json::json!(["\n\n"])
+    );
+    let config = document.resolve().unwrap();
+    let registry = rustx::model::invocation::ModelBindingRegistry::new(
+        catalog
+            .resolve(&MapCredentialEnvironment::new([(
+                "SERVICE_API_KEY".to_owned(),
+                "documented".to_owned(),
+            )]))
+            .unwrap(),
+    )
+    .unwrap();
+    let invocation = registry
+        .resolve(&config.initial_model().selection())
+        .unwrap();
+    assert_eq!(invocation.profile().unwrap().as_str(), "fast");
+    assert!(invocation.reasoning_enabled());
+    assert_eq!(invocation.max_output_tokens(), 2048);
+    assert_eq!(
+        serde_json::Value::Object(invocation.request_params().clone()),
+        serde_json::json!({"reasoning_effort": "low", "seed": 7})
+    );
+    let fast = registry
+        .resolve(&rustx::model::invocation::ModelSelection::of(
+            ModelRef::parse("fast").unwrap(),
+        ))
+        .unwrap();
+    assert_eq!(
+        serde_json::Value::Object(fast.request_params().clone()),
+        serde_json::json!({"temperature": 0.2, "vendor": {"nested_option": true, "unset": null}})
+    );
 }

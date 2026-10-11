@@ -13,8 +13,10 @@ pub fn generate() -> BTreeMap<&'static str, Value> {
     let mut schemas = BTreeMap::from([
         (
             "agent.schema.json",
-            serde_json::to_value(schemars::schema_for!(super::config::AgentProfileDocument))
-                .expect("schema serializes"),
+            serde_json::to_value(crate::toml_authoring::source_schema::<
+                super::config::AgentProfileDocument,
+            >())
+            .expect("schema serializes"),
         ),
         (
             "rustx.schema.json",
@@ -22,8 +24,10 @@ pub fn generate() -> BTreeMap<&'static str, Value> {
         ),
         (
             "mcp.schema.json",
-            serde_json::to_value(schemars::schema_for!(super::mcp_resources::McpDocument))
-                .expect("schema serializes"),
+            serde_json::to_value(crate::toml_authoring::source_schema::<
+                super::mcp_resources::McpDocument,
+            >())
+            .expect("schema serializes"),
         ),
         (
             "workflow.schema.json",
@@ -183,17 +187,20 @@ mod tests {
     }
 
     #[test]
-    fn structured_request_parameter_schemas_are_recursive_objects() {
+    fn source_request_parameter_schemas_are_json_strings() {
         for (name, schema) in super::generate() {
             if matches!(name, "workflow.schema.json" | "mcp.schema.json") {
                 continue;
             }
-            assert!(!schema.to_string().contains("request_params_json"));
+            let text = schema.to_string();
+            assert!(!text.contains("request_params_json"));
+            assert!(!text.contains("reasoning_profile"));
+            assert!(!text.contains("\"RequestParams\""), "{name}");
             let parameter_schema =
-                json!({"$ref":"#/$defs/RequestParamsToml", "$defs":schema["$defs"]});
+                json!({"$ref":"#/$defs/RequestParamsJson", "$defs":schema["$defs"]});
             let validator = jsonschema::validator_for(&parameter_schema).unwrap();
-            assert!(validator.is_valid(&json!({"provider":{"order":["a"],"enabled":true},"documents":[{"title":"A"}],"temperature":0.7})));
-            for value in [json!("text"), json!([]), json!({"nested":[null]})] {
+            assert!(validator.is_valid(&json!(r#"{"provider":{"order":["a"]},"stop":null}"#)));
+            for value in [json!({"temperature":0.7}), json!([]), json!(1)] {
                 assert!(!validator.is_valid(&value));
             }
         }

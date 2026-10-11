@@ -56,7 +56,7 @@ void jobs; void dishonestJobs; void failedJob;
 // Creation intent already belongs to SessionPersistentState in mandatory v39.
 // A display-only projected default must be expressible as no explicit override.
 import type {SessionModelConfig} from './v39.js';
-const initialModel = {model: 'provider/selected', reasoningProfile: 'high'} satisfies SessionModelConfig;
+const initialModel = {model: 'provider/selected', profile: 'high'} satisfies SessionModelConfig;
 const explicitCreate = {method: 'session/create', params: {settings: {cwd: '/workspace', model: initialModel}}} satisfies Request1;
 const nativeDefaultCreate = {method: 'session/create', params: {settings: {cwd: '/workspace'}}} satisfies Request1;
 void explicitCreate;

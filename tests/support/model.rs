@@ -122,10 +122,12 @@ pub struct FixtureModel {
     pub context_window: u64,
     /// The configured maximum output tokens.
     pub max_output_tokens: u32,
-    /// The model-level default request parameters, as a JSON object.
-    pub request_params: serde_json::Value,
-    /// The reasoning block, as a JSON object, when the model declares one.
-    pub reasoning: Option<serde_json::Value>,
+    /// The model-level native request parameters, as a JSON object, when the
+    /// model declares them.
+    pub request_params: Option<serde_json::Value>,
+    /// The declared default profile and profiles object, when the model
+    /// declares Model Profiles.
+    pub profiles: Option<(String, serde_json::Value)>,
     /// The compat block, as a JSON object.
     pub compat: serde_json::Value,
     /// Whether the model claims tool-call support.
@@ -153,8 +155,8 @@ impl FixtureModel {
             protocol,
             context_window: 1_000_000,
             max_output_tokens: 4096,
-            request_params: serde_json::json!({}),
-            reasoning: None,
+            request_params: None,
+            profiles: None,
             compat,
             tool_calls: true,
             reasoning_capable: false,
@@ -176,25 +178,25 @@ impl FixtureModel {
         self
     }
 
-    /// Sets the model-level default request parameters.
+    /// Sets the model-level native request parameters.
     #[must_use]
     pub fn with_request_params(mut self, params: serde_json::Value) -> Self {
-        self.request_params = params;
+        self.request_params = Some(params);
         self
     }
 
-    /// Declares a reasoning block and marks the model reasoning-capable.
+    /// Declares Model Profiles (programmatic camelCase profile objects) and
+    /// the default profile.
     #[must_use]
-    pub fn with_reasoning(mut self, reasoning: serde_json::Value) -> Self {
-        self.reasoning = Some(reasoning);
-        self.reasoning_capable = true;
+    pub fn with_profiles(mut self, default: &str, profiles: serde_json::Value) -> Self {
+        self.profiles = Some((default.to_owned(), profiles));
         self
     }
 
-    /// Claims provider-default reasoning that is always enabled without
-    /// exposing selectable reasoning profiles.
+    /// Claims reasoning capability. Without profiles this is provider-default
+    /// reasoning that is always enabled without a selectable profile.
     #[must_use]
-    pub const fn always_on_reasoning(mut self) -> Self {
+    pub const fn claiming_reasoning(mut self) -> Self {
         self.reasoning_capable = true;
         self
     }
@@ -242,11 +244,14 @@ impl FixtureModel {
                 "toolCalls": self.tool_calls,
                 "reasoning": self.reasoning_capable,
             },
-            "requestParams": self.request_params,
             "compat": self.compat,
         });
-        if let Some(reasoning) = &self.reasoning {
-            document["reasoning"] = reasoning.clone();
+        if let Some(params) = &self.request_params {
+            document["requestParams"] = params.clone();
+        }
+        if let Some((default, profiles)) = &self.profiles {
+            document["defaultProfile"] = default.as_str().into();
+            document["profiles"] = profiles.clone();
         }
         (provider.to_owned(), document)
     }

@@ -9,7 +9,7 @@ beforeEach(async () => {
   server.handlers.set('session/setModel', request => {
     if (request.method !== 'session/setModel') throw Error('Wrong method');
     const snapshot = server.snapshots.get(request.params.target.session_id)!;
-    snapshot.model = { ...snapshot.model!, configured: request.params.config, effective: { ...snapshot.model!.effective, model: request.params.config.model, reasoningProfile: request.params.config.reasoningProfile } };
+    snapshot.model = { ...snapshot.model!, configured: request.params.config, effective: { ...snapshot.model!.effective!, model: request.params.config.model, profile: request.params.config.profile } };
     return { type: 'model', model: snapshot.model };
   });
   server.held.add('session/attach');
@@ -18,17 +18,17 @@ afterEach(() => server.client.disconnect());
 
 it('coalesces model and reasoning choices, and holds send until native acknowledgement and reread', async () => {
   const attach = server.client.attach('A'); const opening = await server.waitFor('session/attach', 1);
-  const first = server.client.prepareAgentModel('A', { model: 'first', reasoningProfile: 'low' });
-  const last = server.client.prepareAgentModel('A', { model: 'last', reasoningProfile: 'high' });
+  const first = server.client.prepareAgentModel('A', { model: 'first', profile: 'low' });
+  const last = server.client.prepareAgentModel('A', { model: 'last', profile: 'high' });
   expect(last).toBe(first);
   server.held.add('session/setModel');
   const send = server.client.send('A', 'after selection');
   server.reply(opening); await attach;
   const mutation = await server.waitFor('session/setModel', 1);
-  expect(mutation.params).toMatchObject({ config: { model: 'last', reasoningProfile: 'high' } });
+  expect(mutation.params).toMatchObject({ config: { model: 'last', profile: 'high' } });
   expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(0);
   server.reply(mutation); await first; await send;
-  expect(server.client.getSnapshot().views.A.snapshot?.model?.configured).toEqual({ model: 'last', reasoningProfile: 'high' });
+  expect(server.client.getSnapshot().views.A.snapshot?.model?.configured).toEqual({ model: 'last', profile: 'high' });
   expect(server.requests.filter(row => row.request.method === 'session/setModel')).toHaveLength(1);
   expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
 });

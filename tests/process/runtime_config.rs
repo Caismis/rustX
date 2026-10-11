@@ -97,7 +97,7 @@ fn config_json(
     builtin_tools: &[&str],
     _include_old_mcp: bool,
 ) -> String {
-    let profile = toml::to_string_pretty(&serde_json::json!({"schema_version": 9, "agent_id": "agent-issue96", "context": {"reserve_tokens": reserve_tokens, "keep_recent_tokens": 4096}, "environment": {"ISSUE96_CURRENT": environment_value}, "agent": {"skills": "all", "model": {"model": model}, "plugins": {
+    let profile = toml::to_string_pretty(&serde_json::json!({"schema_version": 10, "agent_id": "agent-issue96", "context": {"reserve_tokens": reserve_tokens, "keep_recent_tokens": 4096}, "environment": {"ISSUE96_CURRENT": environment_value}, "agent": {"skills": "all", "model": {"model": model}, "plugins": {
             "todo": {"enabled": true},
             "agent_status": {
                 "enabled": true,
@@ -568,7 +568,7 @@ async fn ext256_a_live_root_projects_its_frozen_effective_extension_composition(
     // that quietly substituted built-in defaults could not pass.
     std::fs::write(
         &config_path,
-        toml::to_string_pretty(&serde_json::json!({"schema_version": 9, "agent_id": "agent-ext256", "context": {"reserve_tokens": 11, "keep_recent_tokens": 4096}, "agent": {"model": {"model": "local/model-a"}, "plugins": {"todo": {"enabled": true}, "agent_status": {
+        toml::to_string_pretty(&serde_json::json!({"schema_version": 10, "agent_id": "agent-ext256", "context": {"reserve_tokens": 11, "keep_recent_tokens": 4096}, "agent": {"model": {"model": "local/model-a"}, "plugins": {"todo": {"enabled": true}, "agent_status": {
                 "enabled": true,
                 "time": {"enabled": true, "timezone": "Asia/Shanghai"},
                 "background": {"enabled": false}
@@ -618,7 +618,7 @@ async fn ext256_a_live_root_projects_its_frozen_effective_extension_composition(
     // The deliberate divergence with the prospective configuration surface.
     std::fs::write(
         &config_path,
-        toml::to_string_pretty(&serde_json::json!({"schema_version": 9, "agent_id": "agent-ext256", "context": {"reserve_tokens": 11, "keep_recent_tokens": 4096}, "agent": {"model": {"model": "local/model-a"}, "plugins": {"todo": {"enabled": true}, "agent_status": {"enabled": false}}, "tools": {"builtin": ["read"]}}}))
+        toml::to_string_pretty(&serde_json::json!({"schema_version": 10, "agent_id": "agent-ext256", "context": {"reserve_tokens": 11, "keep_recent_tokens": 4096}, "agent": {"model": {"model": "local/model-a"}, "plugins": {"todo": {"enabled": true}, "agent_status": {"enabled": false}}, "tools": {"builtin": ["read"]}}}))
         .unwrap(),
     )
     .expect("config v2");
