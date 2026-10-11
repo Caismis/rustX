@@ -82,7 +82,7 @@ if (variant.get('conversation') === 'ready') {
   const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], toolCalls: true, reasoning: false };
   source.session_models = { kind: 'available', default_model: { model: 'fixture/model' }, catalog: { models: [{
     model: 'fixture/model', protocol: 'openai_responses', contextWindow: 128000, maxOutputTokens: 8192,
-    declaredCapabilities: capabilities, effectiveCapabilities: capabilities, reasoningProfiles: [],
+    declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [],
     credentialSource: { type: 'environment', variable: 'KEY' },
   }] } };
 }

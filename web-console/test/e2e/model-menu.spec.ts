@@ -9,7 +9,7 @@ for (const width of [1440, 390]) test(`saved conversation model menu keeps compo
   await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.hold('session/models'); f.resumeCatalog(); });
   await page.locator('button[data-session-id=A]').click();
   await page.evaluate(() => (window as any).startupFixture.release('session/attach'));
-  const trigger = page.getByRole('button', { name: 'Model and reasoning' });
+  const trigger = page.getByRole('button', { name: 'Model and profile' });
   await expect(trigger).toBeEnabled();
   if (width < 600) {
     await page.getByRole('button', { name: 'Collapse Sidebar', exact: true }).click();

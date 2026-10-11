@@ -852,6 +852,16 @@ impl SessionRuntimeManager {
             clock: Arc::new(SystemMonotonicClock::new()),
         })
     }
+    /// Parks a Session application just before it takes the publication
+    /// fence that settles an unchanged invocation, so a test can overtake it.
+    #[cfg(test)]
+    pub(super) async fn configuration_catalog_gate(&self, session: &SessionId) {
+        let Ok((node, _)) = self.sessions.catalog.lock().await.lineage(session, None) else {
+            return;
+        };
+        let probe = self.probe(&node.conversation_id);
+        probe.before_catalog_publication.park().await;
+    }
     #[cfg(test)]
     pub(super) async fn configuration_test_gate(
         &self,
@@ -917,7 +927,7 @@ impl SessionRuntimeManager {
         let capture = tokio::task::spawn_blocking(move || {
             applications
                 .lock()
-                .initial_binding(&configuration, &input, &credentials)
+                .initial_binding(&configuration, &input, &credentials, false)
         })
         .await
         .map_err(|error| super::session::SessionError::Catalog {
@@ -1017,10 +1027,10 @@ impl SessionRuntimeManager {
                 .get(&session)
                 .cloned()
                 .ok_or(AdoptionError::NotReady)?;
-            let capture = owner
-                .configuration
-                .capture_session_model(&adopted, selection.clone())
-                .map_err(|diagnostic| AdoptionError::Failed { diagnostic })?;
+            // Selection admission resolves against the catalog this Session
+            // advertises: catalog publication commits the retained binding and
+            // the runtime authority together under this same fence.
+            let capture = adopted.with_session_model(selection.clone());
             let models = crate::model::invocation::ModelBindingRegistry::new(
                 capture
                     .models
@@ -1072,7 +1082,9 @@ impl SessionRuntimeManager {
                 Ok(())
             })?;
             drop(catalog);
-            let input = owner.configuration.capture_application(&retained.input);
+            let input = owner
+                .configuration
+                .capture_session_application(&retained.input);
             application.record_source(&retained.input.cwd, &input);
             application.capture_binding(session.to_string(), input);
             owner.applications.notify(&application);
@@ -1191,7 +1203,7 @@ impl SessionRuntimeManager {
             application.capture(
                 session.to_string(),
                 &input.cwd,
-                self.configuration.capture_application(&input),
+                self.configuration.capture_session_application(&input),
             );
         }
     }
@@ -1564,7 +1576,7 @@ impl SessionRuntimeManager {
             } else {
                 let paths = applications
                     .lock()
-                    .initial_binding(&configuration, &access.settings.input(), &credentials)
+                    .initial_binding(&configuration, &access.settings.input(), &credentials, true)
                     .map_err(error)?;
                 bindings
                     .lock()

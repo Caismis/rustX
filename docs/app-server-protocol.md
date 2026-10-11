@@ -48,7 +48,7 @@ per-connection `ServerCapabilities.delivery_access` report. Only transport
 authentication grants the access. See
 [Committed delivery access](#committed-delivery-access-v44).
 
-App Server v44 retains the v37 / Runtime Client v59 Trace input ownership contract at the
+App Server v44 / Runtime Client v66 refresh retained Trace input ownership at the
 current read cut. See [Trace retained-input ownership](#trace-retained-input-ownership-v44).
 
 App Server v44 / Runtime Client v66 separate Session configuration-adoption
@@ -944,7 +944,7 @@ Complete = terminal
 The obsolete `GoalView.armed` member and every activation-only observation are
 removed, so no snapshot and no `goal_changed` event can represent
 `Active + disarmed`. Native Runtime Client version 43 introduced this vocabulary;
-current version 60 retains it and rejects older peers by strict negotiation. This remains mandatory
+current version 66 retains it and rejects older peers by strict negotiation. This remains mandatory
 App Server protocol v44, with no compatibility field and no activation mode.
 
 Clients derive presentation from the phase alone: `Active` offers Pause,
@@ -1015,7 +1015,7 @@ other pre-1.0 schema changes, older stores are refused explicitly; no migration
 or compatibility representation is introduced.
 
 Native Runtime Client version 37 introduced the mandatory pending revision and
-`pending_inbound_changed` event. Current version 60 retains both with no
+`pending_inbound_changed` event. Current version 66 retains both with no
 compatibility decoder.
 
 Snapshot/attachment reads also reconcile Pending Inbound directly from durable
@@ -1209,6 +1209,14 @@ preserves canonical history. `configuration/reconcile` rescans external inputs o
 starts a new same-revision application attempt. It is never a second Save step.
 See [the native contract](configuration.md#save-automatic-application-and-session-adoption).
 
+A published Model Catalog that no longer admits a Session's configured Model or
+Profile leaves it configured and unavailable: `session/model` carries
+`unavailable` (the native diagnostic), with the last resolved `effective` and
+`summary` as display facts, or neither when the Session was loaded unavailable.
+`turn/start`, `turn/steer` and `context/compact` then fail with
+`model_unavailable` until `session/setModel` commits a complete selection the
+catalog admits; nothing falls back to a default.
+
 ## Session configuration adoption eligibility (v44)
 
 Whether a Session could adopt a prepared configuration *now* is runtime state,
@@ -1357,7 +1365,7 @@ recovery uses existing idempotent cleanup/finalization and idempotent fence rele
 A client-side unknown outcome requires authoritative observation, not cleanup
 recovery or mutation replay. Only server-confirmed committed outcomes grant the
 explicit recovery action. These recovery semantics remain in App Server v44;
-native Runtime Client is v60.
+native Runtime Client is v61.
 
 ## Rich historical Trace inspection (#364)
 
@@ -1698,8 +1706,8 @@ the synchronization.
 
 The internal Runtime Client vocabulary is v66. Only App Server v44 clients
 are generated; earlier versions are rejected, with no aliases or compatibility
-decoder. The current storage/control formats are Event envelope 1, SQLite 50, Session
-catalog 15 and subagent IPC v30. Child file and artifact reads use the registered
+decoder. The current storage/control formats are Event envelope 1, SQLite 51, Session
+catalog 15 and subagent IPC v31. Child file and artifact reads use the registered
 child Conversation and the parent attachment's native delivery authority.
 
 

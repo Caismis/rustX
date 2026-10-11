@@ -581,7 +581,7 @@ export function TrajectoryInspector({ item, facet, onFacet, detail, loading, err
     model: requestDetail.model,
     protocol: requestDetail.protocol,
     thinking: requestDetail.reasoning_enabled ? 'enabled' : 'disabled',
-    ...(requestDetail.reasoning_profile ? { reasoningEffort: requestDetail.reasoning_profile } : {}),
+    ...(requestDetail.profile ? { profile: requestDetail.profile } : {}),
     maxTokens: requestDetail.max_output_tokens,
     contextWindowTokens: requestDetail.context_window_tokens,
     ...Object.fromEntries(requestDetail.options.map(option => [option.name, option.value.value])),

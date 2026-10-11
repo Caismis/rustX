@@ -1777,7 +1777,7 @@ export class AppServerClient {
         await this.repairAgentModel(id);
         if (!current()) throw new Error('Model selection retired with its connection.');
         const observed = this.state.views[id].snapshot?.model?.configured;
-        if (observed?.model !== selection.model || (observed.reasoningProfile ?? undefined) !== (selection.reasoningProfile ?? undefined))
+        if (observed?.model !== selection.model || (observed.profile ?? undefined) !== (selection.profile ?? undefined))
           throw new Error('Selected model has not been confirmed. Reread model configuration before sending.');
         this.setSession(id, { modelIntent: undefined });
         return selection;
@@ -1844,7 +1844,7 @@ export class AppServerClient {
     if (observation.current() && this.state.views[id].modelMutation?.status !== 'in-flight') {
       const view = this.state.views[id], intent = view.modelIntent, observed = view.snapshot?.model?.configured;
       const confirmed = intent?.phase === 'failed' && observed?.model === intent.config.model
-        && (observed.reasoningProfile ?? undefined) === (intent.config.reasoningProfile ?? undefined);
+        && (observed.profile ?? undefined) === (intent.config.profile ?? undefined);
       this.setSession(id, { modelMutation: undefined, ...(confirmed ? { modelIntent: undefined } : {}) });
     }
   }

@@ -21,7 +21,7 @@ Settings is organized by product task into exactly six primary pages:
 | Page | What it holds |
 | --- | --- |
 | **General** | Browser-owned preferences: Appearance (theme) and Language (English / 中文). Global Settings opens here. |
-| **Models** | The default model for new Sessions, then Provider list → Provider detail (endpoint, credential, its Models) → Model detail (the complete typed Model, reasoning profiles and protocol compatibility under progressive disclosure). |
+| **Models** | The default model for new Sessions, then Provider list → Provider detail (endpoint, credential, its Models) → Model detail (the complete typed Model, Model Profiles and protocol compatibility under progressive disclosure). |
 | **Agent** | Root identity, description, instructions and project guidance. |
 | **Tools & Permissions** | Approval mode, Native Tools, Tool-source selections, Skill visibility, the Agent and Workflow delegation allowlists, and per-Tool/MCP policies under **Advanced Tool policies**. |
 | **Extensions** | One searchable inventory of MCP servers, Skills, named Agents, Workflows and Managed Python sources, filtered by kind, with a detail per resource; plus the native Todo, Goal and Agent Status extensions under **Native**. |
@@ -65,7 +65,7 @@ Named-Agent editing writes the complete resource profile, including its independ
 Tools/Skills/Plugins, delegation lists, model inheritance, timeout and worktree settings.
 Description and instructions remain optional; native projection and serialization
 keep empty defaults omitted during unrelated profile edits. Root and named-Agent explicit Summary
-Models each support independent model, reasoning profile, output limit and request
+Models each support independent model, profile, output limit and request
 parameters. Changing Summary identity preserves its other authored fields; choosing
 the Session/default option intentionally removes the explicit Summary settings.
 The default model is the model *new* Sessions start from: saving it writes the

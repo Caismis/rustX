@@ -80,7 +80,7 @@ pub fn attempt_model_view(reference: &str) -> rustx::model::AttemptModelView {
             context_window: 128_000,
             model_max_output_tokens: 4096,
             max_output_tokens: 4096,
-            reasoning_profile: None,
+            profile: None,
             reasoning_enabled: false,
             request_params: rustx::model::RequestParams::new(),
             capabilities: capabilities.clone(),
@@ -110,6 +110,7 @@ pub fn attempt_model_with_window(
         &ScriptedAdapterFactory::new(adapter),
     )
     .snapshot()
+    .unwrap()
 }
 
 /// Without uv, the shared prerequisite skips a boundary only where the

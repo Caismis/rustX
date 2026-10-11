@@ -32,7 +32,7 @@ import { ToolsPage } from './tools/ToolsPage';
 import { ExtensionsPage, type ExtensionFilter } from './extensions/ExtensionsPage';
 import { AdvancedPage } from './advanced/AdvancedPage';
 import {
-  catalogIdentities, configAuthoring, settingsLifecycle,
+  catalogIdentities, catalogProfiles, configAuthoring, settingsLifecycle,
   settingsTargetKey, settingsTargetLabel, settingsTargetScope, type SettingsTarget,
 } from './projection';
 import {
@@ -147,6 +147,7 @@ function SettingsDialog({ client, host, associations, theme = 'system', setTheme
   // Models page: this scope's authored identities, plus the native effective
   // ones for a Workspace when resolution produced them.
   const models = catalogIdentities(source, scope, 'models');
+  const profiles = catalogProfiles(source, scope);
   const lifecycle = settingsLifecycle({ connection: transport.connection, hasSource: !!observed, targetValid, readError });
   // A page change remounts the editor subtree so its local picker state does
   // not leak across pages. Editing transactions are deliberately not part of
@@ -166,7 +167,7 @@ function SettingsDialog({ client, host, associations, theme = 'system', setTheme
   const structured = config.state === 'structured';
   const body = !source || !selected ? null : <fieldset disabled={!editable} className={css.editor}>
     {current === 'models' && (structured
-      ? <ModelsPage source={source} scope={scope} revision={config.revision} models={models} focus={focus.models} onFocus={onFocus} />
+      ? <ModelsPage source={source} scope={scope} revision={config.revision} models={models} profiles={profiles} focus={focus.models} onFocus={onFocus} />
       : <MalformedNotice config={config} />)}
     {current === 'agent' && (structured
       ? <AgentPage document={config.document} scope={scope} revision={config.revision} />
@@ -182,7 +183,7 @@ function SettingsDialog({ client, host, associations, theme = 'system', setTheme
       focus={focus.mcp} onFocus={onFocus} probeStates={mcpProbes.states} testConnection={mcpProbes.testConnection} probeAvailable={mcpProbes.available} refresh={() => actor.send({type:'REFRESH'})} refreshing={busy || reconciling}
       scopeControl={<SettingsScopeMenu disabled={!!focus.mcp?.name} userLabel={tx('settings:mcp.user')} target={mcpTarget} host={host} onSelect={next => { onFocus(undefined); setMcpTarget(next); }}/>} />}
     {current === 'extensions' && <ExtensionsPage source={source} scope={scope}
-      revision={structured ? config.revision : undefined} models={models} focus={focus.extensions} onFocus={onFocus}
+      revision={structured ? config.revision : undefined} models={models} profiles={profiles} focus={focus.extensions} onFocus={onFocus}
       filter={extensionFilter} onFilter={setExtensionFilter} refresh={() => actor.send({type:'RECONCILE'})} refreshing={busy || reconciling}
       scopeControl={<SettingsScopeMenu key={`${transport.endpoint}:${transport.authorityRevision}`} target={target} host={host} onSelect={next => { navigation.send({type:'OPEN',target:next}); navigation.send({type:'SELECT',page:'extensions'}); }}/>} />}
     {current === 'advanced' && <AdvancedPage source={source} scope={scope}

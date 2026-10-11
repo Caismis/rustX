@@ -264,7 +264,8 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// Version 64 adds child turn directories and cut-bound transcript windows.
 /// Version 65 carries native transcript checkpoint counts and replaces the last
 /// request-only context seat with a measured-or-compacted `occupancy` reading.
-/// Version 66 adds exact Tool-occurrence navigation in child Trace domains.
+/// Version 66 adds exact Tool-occurrence navigation in child Trace domains, and
+/// general Model Profiles in model selection, invocation and catalog views.
 pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 66;
 
 /// The external cursor of the Runtime Client observation stream.
@@ -1032,9 +1033,11 @@ pub enum RuntimeClientError {
         /// Human-readable detail.
         message: String,
     },
-    /// A model configuration update could not be resolved.
+    /// A model configuration update could not be resolved, or new work was
+    /// refused because the Session's published catalog does not admit its
+    /// configured selection.
     ///
-    /// The update was rejected as a whole: no session state changed and no
+    /// The request was rejected as a whole: no session state changed and no
     /// model-configuration event was published. The message never carries a
     /// credential.
     InvalidModelConfiguration {
@@ -1350,7 +1353,7 @@ mod tests {
                 context_window: 128_000,
                 model_max_output_tokens: 4096,
                 max_output_tokens: 4096,
-                reasoning_profile: None,
+                profile: None,
                 reasoning_enabled: false,
                 request_params: RequestParams::new(),
                 capabilities: capabilities.clone(),

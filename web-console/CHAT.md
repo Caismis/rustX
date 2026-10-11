@@ -482,7 +482,7 @@ existing catalog. See [startup ownership and evidence](../docs/issue-419/ownersh
 
 Composer model choices come only from the Workspace read's native
 `session_models` catalog, the one the created Session serves from `session/models`.
-Order, reasoning profiles and the default profile are native. A configuration-only
+Order, Model Profiles and the default profile are native. A configuration-only
 model is never offered. Native unavailability, or a draft model the catalog stops
 publishing, blocks Send without creating a Session.
 

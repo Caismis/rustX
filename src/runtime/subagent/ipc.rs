@@ -103,8 +103,10 @@ use crate::runtime::workspace::WorkspaceSnapshot;
 /// Version 29 passes the preinstalled physical-authority lease on fd 2 before
 /// the child reads Hello. The parent installed that authority before Reserved;
 /// the child clones it before composition and restores stderr to diagnostics.
-/// Version 30 carries native Session upload references in delegation and active guidance.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 30;
+/// Version 30 freezes the selected general Model Profile in the child model specification.
+/// Version 31 also carries native Session upload references in delegation and active guidance;
+/// peers with either earlier version-30 vocabulary are rejected.
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 31;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///

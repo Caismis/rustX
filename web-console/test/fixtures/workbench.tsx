@@ -34,18 +34,18 @@ if (new URL(location.href).searchParams.has('composer-layout')) {
   const saved = server.snapshots.get('A')!;
   const model = 'DeepSeek/deepseek-flash';
   saved.model = cfg3Effective().effective_model!;
-  saved.model.configured = { model, reasoningProfile: 'on' };
-  saved.model.effective = { ...saved.model.effective, model, reasoningProfile: 'on' };
+  saved.model.configured = { model, profile: 'on' };
+  saved.model.effective = { ...saved.model.effective!, model, profile: 'on' };
   saved.transcript.statistics = agentMetrics.statistics;
   saved.context = { compaction_count: 0, compaction_in_progress: false, occupancy: agentMetrics.occupancy };
   saved.transcript.entries = Array.from({ length: 20 }, (_, index) => ({ cursor: String(index + 1), item: { type: 'message' as const, message: { id: `saved-${index}`, role: index % 2 ? 'assistant' as const : 'user' as const, source: 'human' as const, content: [{ type: 'text' as const, text: `Saved message ${index}: ` + 'Previously saved conversation content. '.repeat(12) }] } } }));
   const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], toolCalls: true, reasoning: false };
-  const models = [model, 'Short'].map(model => ({ model, protocol: 'openai_responses' as const, contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'literal' as const }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, reasoningProfiles: [{ id: 'on', enabled: true }], defaultReasoningProfile: 'on' }));
+  const models = [model, 'Short'].map(model => ({ model, protocol: 'openai_responses' as const, contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'literal' as const }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [{ id: 'on', reasoningEnabled: false }], defaultProfile: 'on' }));
   server.handlers.set('session/model', () => ({ type: 'model', model: saved.model! }));
   server.handlers.set('session/models', () => ({ type: 'models', catalog: { models } }));
   server.handlers.set('session/setModel', request => {
     if (request.method !== 'session/setModel') throw Error('Wrong method');
-    saved.model = { ...saved.model!, configured: request.params.config, effective: { ...saved.model!.effective, model: request.params.config.model, reasoningProfile: request.params.config.reasoningProfile } };
+    saved.model = { ...saved.model!, configured: request.params.config, effective: { ...saved.model!.effective!, model: request.params.config.model, profile: request.params.config.profile } };
     return { type: 'model', model: saved.model! };
   });
 }

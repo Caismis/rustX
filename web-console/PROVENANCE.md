@@ -2150,3 +2150,63 @@ QA verifies child and parent Inspect RPCs, selected rows, exact detail reads and
 Return to latest; resident child Trajectory paging is checked at 1440px and 390px.
 Screenshots are retained under `/tmp/rustx-tool-details-*` and
 `/tmp/rustx-native-tool-inspect-{child,root}.png`.
+
+### Issue #456: general Model Profiles
+
+The Harness-derived model/profile menu (`ModelSelect`), the command panel model
+rows and the adapted Models settings page now present rustX's general Model
+Profiles instead of reasoning profiles: menu and label copy says "Profile", and a
+profile row shows its native reasoning state and output default as published.
+The Model detail page edits each profile's complete native `request_params` as
+one JSON object (`RequestParamsEditor`, a rustX-authored field over the existing
+TanStack/XState unit bridge); invalid, non-object or duplicate-key text stays a
+local buffer that blocks submission, and formatting-only edits begin no draft.
+Native Rust remains the configuration authority. No upstream source is added.
+Inventory hashes and dependency closures describe this final source, including
+the v44 import renames.
+
+The #456 selection review separates configured from effective Profiles in the
+Harness-derived `ModelSelect`: its Profile submenu gains a "Model default
+profile" row, rows emit a typed selection intent instead of `(model, profile?)`,
+and the current marker follows the configured Profile while the trigger shows
+the effective one. The shared `Menu` now marks and announces the selected row of
+a submenu (`aria-current`, trailing check) exactly as it does a top-level row.
+The #456 stale Profile review also offers that Profile submenu, with a single
+"Use model defaults" row, on a Model that declares no Profiles while its
+configured Profile is pinned, so the pin can be cleared.
+
+### PR #461: integrating the current main contracts
+
+The main integration keeps App Server v44 and Runtime Client v66, which remain
+newer than main's v39/v61, and SQLite 51's checkpoint/Model Profile contract.
+Subagent IPC becomes v31 because main and this branch had different v30
+vocabularies; either old peer is rejected. The current generated protocol and
+consumers include main's general Model Profiles and JSON-string source authoring.
+MCP retains the reviewed explicit-action editor and diagnostics ownership.
+
+`ModelSelect` keeps main's configured/effective Profile distinction, explicit
+Model-default row and typed selection intent, alongside this PR's measured
+icon/text collapse and full-label title. The imported main selector reference
+retained its own earlier Composer surface and always-visible model glyph. The
+merged capture differs from that image by 2707 pixels, all in the Composer
+controls, while its new Profile menu matches main exactly. Against this PR's
+previous reference, every pixel outside the union of the old/new menu bounds
+(x699-1373, y813-969) is identical. Those bounds are investigation coordinates,
+not comparison exceptions. `agent-selectors-light-linux.png` is deliberately
+revised to represent main's new menu within the existing PR Composer. No
+product layout is changed to imitate an obsolete integrated reference, and
+no screenshot threshold, mask, retry, stabilization or browser pin is changed.
+
+The six conflicted Settings references also retained the pre-main paint owner.
+Main's existing `SettingsRoot.panel` opacity layer (PR #459) is kept unchanged.
+A pinned-browser diagnostic temporarily removes only that layer, then restores
+it in the same page with identical measured geometry. Removing it reproduces
+all six previous PR references exactly; restoring it reproduces each integrated
+capture exactly. The measured changes are 6594 pixels for `locale-general-zh`,
+4560 for `settings-delete-confirm-light`, 337 for `settings-read-error-light`,
+6089 for `settings-shell-light`, 949 for `settings-shell-dark`, and 319 for
+`mobile-settings-dark`. These six references are deliberately merged to record
+main's existing stable panel paint with the retained PR surface. The changes
+are caused by that inherited rendering correction, not by a new Settings
+layout or a relaxed comparator. No Settings presentation source or noise
+policy is changed for this reference merge.

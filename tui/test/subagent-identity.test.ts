@@ -62,7 +62,7 @@ describe("subagent identity", () => {
             observation,
             execution_profile: {
               model: "alpha/model-a",
-              reasoning_profile: "reasoning:high",
+              profile: "reasoning:high",
               reasoning_enabled: true,
             },
           }),
@@ -76,7 +76,7 @@ describe("subagent identity", () => {
     assert.equal(child.started_at, "2026-09-02T10:00:00Z");
     assert.deepEqual(child.execution_profile, {
       model: "alpha/model-a",
-      reasoning_profile: "reasoning:high",
+      profile: "reasoning:high",
       reasoning_enabled: true,
     });
   });

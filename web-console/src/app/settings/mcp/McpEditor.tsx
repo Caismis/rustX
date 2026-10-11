@@ -114,7 +114,7 @@ function Editor({ source, scope, revision, focus, scopeControl, close, document 
     if (mode === 'json') { pendingSave.current = true; applyJson(); }
     else { submitted.current = true; unit.submit(); }
   };
-  if (focus.mode === 'permissions' && name) return <ExtensionDetail source={source} scope={scope} revision={revision} models={[]} family="mcp" name={name} backLabel={tx('settings:mcp.back')} onFocus={close}/>;
+  if (focus.mode === 'permissions' && name) return <ExtensionDetail source={source} scope={scope} revision={revision} models={[]} profiles={{}} family="mcp" name={name} backLabel={tx('settings:mcp.back')} onFocus={close}/>;
   return <>
     <div className={css.back}><Button size="sm" variant="ghost" disabled={blocked} onClick={close}>{tx('settings:mcp.back')}</Button></div>
     <div className={css.editorHeader}><div><h3>{title}</h3><p>{tx('settings:mcp.form-help')}</p></div><div className={css.modes} role="group" aria-label={tx('settings:mcp.form')}>

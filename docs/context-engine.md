@@ -399,7 +399,7 @@ struct RequestSnapshot {
     runtime_resource_revision: RuntimeResourceRevision,
     invocation: ModelInvocationConfig,
     context_window_tokens: u64,
-    reasoning_profile: Option<ReasoningProfileId>,
+    profile: Option<ModelProfileId>,
     reasoning_enabled: bool,
     tool_definitions: Vec<ModelToolDefinition>,
     capability_revision: CapabilityRevision,
@@ -430,7 +430,7 @@ The value/reference decisions are deliberate:
   includes the effective model identity/configuration and opaque request
   parameters, so current session settings and the model catalog are not
   consulted later.
-- context_window_tokens, reasoning_profile, and reasoning_enabled are
+- context_window_tokens, profile, and reasoning_enabled are
   frozen effective model/reasoning values. The attempt's immutable model
   snapshot owns their authority.
 - tool_definitions are stored by value. capability_revision is retained

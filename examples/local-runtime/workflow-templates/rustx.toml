@@ -1,4 +1,4 @@
-schema_version = 9
+schema_version = 10
 # Runtime child capacity; Workflow static admission remains separate.
 [subagents]
 max_concurrent = 2
@@ -11,7 +11,8 @@ workflows = ["typed_agent", "parallel_checks", "human_plan", "specialized_agent"
 [agent.model]
 model = "example/demo-model"
 
-# Explicit provider/model declarations. Provider request overlays are structured TOML tables.
+# Explicit provider/model declarations. Provider-native request parameters are
+# JSON-encoded object strings, passed opaquely to the provider.
 # TOML configuration; fixed Workflows use YAML and model-facing resources use Markdown.
 [providers.example]
 base_url = "https://api.example.invalid/v1"

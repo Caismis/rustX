@@ -1145,7 +1145,8 @@ impl RuntimeClientProjection {
                     self.snapshot
                         .model
                         .as_ref()
-                        .map(|model| &model.effective.capabilities),
+                        .and_then(|model| model.effective.as_ref())
+                        .map(|effective| &effective.capabilities),
                 );
                 self.snapshot.capabilities = capabilities.clone();
                 vec![RuntimeClientEvent::CapabilityUpdated { capabilities }]
@@ -1173,7 +1174,10 @@ impl RuntimeClientProjection {
                 let capabilities = capability_view(
                     snapshot.capability(),
                     &availability,
-                    Some(&model.effective.capabilities),
+                    model
+                        .effective
+                        .as_ref()
+                        .map(|effective| &effective.capabilities),
                 );
                 let resources = resources_view(&snapshot);
                 let plugins = snapshot
@@ -1221,11 +1225,12 @@ impl RuntimeClientProjection {
                     .capabilities
                     .configured_tools
                     .iter()
-                    .filter(|tool| {
-                        crate::tools::executor::model_allows_tool(
+                    .filter(|tool| match &model.effective {
+                        Some(effective) => crate::tools::executor::model_allows_tool(
                             &tool.id,
-                            &model.effective.capabilities,
-                        )
+                            &effective.capabilities,
+                        ),
+                        None => tool.id.as_str() != "tool-read-image",
                     })
                     .cloned()
                     .collect();
@@ -6496,7 +6501,7 @@ mod tests {
             subagent.execution_profile,
             Some(SubagentExecutionProfile {
                 model: "local/model".to_owned(),
-                reasoning_profile: None,
+                profile: None,
                 reasoning_enabled: false,
             })
         );
@@ -6688,7 +6693,7 @@ mod tests {
             observation,
             profile: Some(SubagentExecutionProfile {
                 model: "local/model".to_owned(),
-                reasoning_profile: None,
+                profile: None,
                 reasoning_enabled: false,
             }),
             settlement: crate::runtime::subagent::SubagentSettlement::default(),

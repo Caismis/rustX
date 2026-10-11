@@ -72,7 +72,7 @@ The authoritative structural reference is
 [`rustx.schema.json`](../schemas/rustx.schema.json), generated from
 `local_runtime::authoring::RuntimeLayer`. Unknown fields are rejected. TOML
 tables and arrays preserve authored omission versus explicit empty values.
-The current document version is `schema_version = 9`.
+The current document version is `schema_version = 10`.
 
 | Top-level field | Owner and meaning |
 | --- | --- |
@@ -93,21 +93,34 @@ The current document version is `schema_version = 9`.
 
 ### Providers and Models
 
-Provider names and Model names are lookup identities. They do not infer protocol,
-credentials, limits, endpoint, reasoning support or compatibility. A Model can
-be replaced without replacing its Provider.
+Provider names, Model names and Profile names are lookup identities. They do not
+infer protocol, credentials, limits, endpoint, reasoning support, compatibility
+or any provider-native parameter. A Model can be replaced without replacing its
+Provider.
+
+Ownership is layered, and each layer owns only its own facts:
+
+| Owner | Owns |
+| --- | --- |
+| Provider | `base_url` and the credential source |
+| Model | provider binding, provider-native `id`, `protocol`, `context_window`, the hard maximum `max_output_tokens`, declared `capabilities`, `compat`, and either native `request_params` or named `profiles` |
+| Model Profile | one complete, independent invocation preset: `reasoning_enabled`, an optional default `max_output_tokens`, and its own native `request_params` |
+| Model selection | the chosen `model`, optional `profile`, explicit `request_params` overrides and an optional output limit |
+| Provider adapter | protocol structure, the output-token field spelling, and final protected-key validation |
 
 ```toml
 [providers.service]
 base_url = "https://api.example.invalid/v1"
 api_key = "$SERVICE_API_KEY"
 
+# A Model without profiles: its request_params are the native default object.
 [models.fast]
 provider = "service"
 id = "provider-wire-model-id"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
+request_params = '{"temperature":0.2,"vendor":{"nested_option":true,"unset":null}}'
 
 [models.fast.capabilities]
 input_modalities = ["text"]
@@ -118,12 +131,44 @@ reasoning = false
 [models.fast.compat]
 chat_reasoning_replay = "omit"
 
-[models.fast.request_params]
-temperature = 0.2
-vendor = { nested_option = true }
+# A Model with profiles: each profile is a complete preset; the Model itself
+# declares no request_params.
+[models.thinker]
+provider = "service"
+id = "provider-reasoning-model"
+protocol = "openai_chat_completions"
+context_window = 128000
+max_output_tokens = 8192
+default_profile = "balanced"
+
+[models.thinker.capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = true
+
+[models.thinker.compat]
+chat_reasoning_replay = "omit"
+
+[models.thinker.profiles.fast]
+reasoning_enabled = true
+max_output_tokens = 2048
+request_params = '{"reasoning_effort":"low"}'
+
+[models.thinker.profiles.balanced]
+reasoning_enabled = true
+request_params = '''
+{"reasoning_effort": "medium", "metadata": {"tier": null}}
+'''
+
+[models.thinker.profiles.precise]
+reasoning_enabled = false
+request_params = '{"temperature":0.1,"top_p":0.5,"stop":["\n\n"]}'
 
 [agent.model]
-model = "fast"
+model = "thinker"
+profile = "fast"
+request_params = '{"seed":7}'
 ```
 
 Each Provider requires `base_url` and `api_key`. Credentials are literal values
@@ -135,23 +180,87 @@ credential source; no member is recovered from the shadowed User Provider.
 Each Model requires `provider`, provider-native `id`, explicit `protocol`,
 `context_window`, `max_output_tokens`, and the complete `capabilities` object.
 Supported protocols and modality values are enumerated by the generated schema.
-Optional `request_params` is an opaque, recursively structured native request
-object. Optional `reasoning` declares `default_profile` and independently named
-`profiles`, each containing `enabled` and optional native `request_params`.
 Optional `compat` declares the adapter behavior: `chat_max_tokens_field`,
 `chat_stream_usage`, `chat_reasoning_replay`, `chat_tool_protocol`, and
 `responses_storage`. Protocol validation determines which members are applicable
-and required. This boundary preserves provider-native parameters without allowing
-them to replace runtime-owned request structure.
+and required.
 
-The Root `agent.model` object contains `model` and optional `request_params`,
-`reasoning_profile`, `max_output_tokens`, and `summary_model`. A reasoning choice
-is `{ mode = "catalog_default" }` or `{ mode = "profile", name = "..." }`.
-An output limit is `{ mode = "catalog_default" }` or
-`{ mode = "limit", tokens = 2048 }`. Summary selection is
-`{ mode = "session" }` or `{ mode = "explicit", model = "...", ... }` with its
-own reasoning, output and request settings. The whole selection is replaced
-together. Domain defaults are evaluated inside that winning object.
+#### Provider-native request parameters
+
+Every `request_params` field in source TOML is a **JSON-encoded string** whose
+JSON value must be one object. Nested objects, arrays, strings, numbers, booleans
+and explicit `null` are preserved exactly; there is no provider-key catalogue.
+Malformed JSON, a non-object root and a repeated key at any depth are rejected,
+and a TOML table is never accepted. Diagnostics name the field (for example
+`models.thinker.profiles.fast.request_params`), the error category and the line
+and column of the JSON text — never an authored value or key, since a key may
+itself hold a secret. The string is parsed once at the source boundary; App
+Server and client JSON carry the parsed structured object. Native writes
+re-encode it as compact JSON; formatting and key order are never semantics.
+
+Numbers are held to the domain every hop reads alike — rustX, binary64 JSON
+clients such as the browser, and the provider (the I-JSON rule of RFC 7493
+§2.2): a number is accepted only when its value is exactly what its IEEE 754
+binary64 reading prints back. `9007199254740993`, `2^60` and a decimal with more
+significant digits than binary64 carries are rejected with a located diagnostic
+instead of being silently rounded by a later hop, whether authored in TOML or
+sent as a structured App Server value; the native writer can never emit one.
+App Server requests are judged on their raw text: a JSON decoder rounds a
+literal before any decoded value exists, so the server reads each literal
+inside a declared `request_params`/`requestParams` member of the request schema
+before decoding, and refuses a lossy one as Invalid params naming neither key
+nor value.
+`9007199254740992`, `0.1`, `1e300` and every other binary64-exact value
+round-trip unchanged. A value that needs more precision belongs in a JSON
+string if the provider accepts one.
+
+#### Model Profiles
+
+- A Model with `profiles` declares a nonempty collection and a `default_profile`
+  naming one of them, and must not declare model-level `request_params` — not
+  even `'{}'`.
+- A Model without profiles must not declare `default_profile`; selecting any
+  profile for it fails. A reasoning-capable Model without profiles keeps
+  provider-default reasoning without a synthetic wire field.
+- On a reasoning-capable Model every profile declares `reasoning_enabled`. On a
+  non-reasoning Model omission means `false` and `true` is invalid. Reasoning
+  state is never inferred from a profile name or a native key.
+- A profile `max_output_tokens` is a positive default no greater than the
+  Model's hard maximum.
+- Profiles never inherit: neither from the Model nor from another profile.
+
+#### Resolution
+
+The effective native object has exactly one base and one shallow overlay:
+
+```text
+Model without profiles:  model request_params    + selection overrides
+Model with profiles:     selected profile params + selection overrides
+```
+
+The overlay is top-level only: nested values are replaced atomically and a JSON
+`null` is a real value, not a deletion. An override may add unrelated keys but
+may not repeat a top-level key the selected profile declares, whatever its
+value. That failure names the Model, the Profile and the override layer, never
+the key: a provider-native key is authored content as opaque as a value.
+Protocol-owned
+fields — model identity, messages/input/instructions, tools, streaming, provider
+continuation state and every output-token field — are protected in every layer
+and again at final wire construction. The output budget is the explicit
+selection limit, else the selected profile default, else the Model hard maximum;
+no limit may exceed the hard maximum, and the Context Engine summary cap still
+applies independently. An omitted `profile` selects `default_profile`; an
+unknown or inapplicable explicit profile fails without fallback.
+
+The Root `agent.model` object contains `model` and optional `profile`,
+`request_params`, `max_output_tokens`, and `summary_model`. An output limit is
+`{ mode = "catalog_default" }` or `{ mode = "limit", tokens = 2048 }`. Summary
+selection is `{ mode = "session" }` or `{ mode = "explicit", model = "...", ... }`
+with its own `profile`, output and request settings. The whole selection is
+replaced together. Domain defaults are evaluated inside that winning object.
+An admitted Attempt freezes the complete resolved invocation — Model, Profile,
+reasoning state, output budget and parameters — so later configuration changes
+affect only later admissions.
 
 ### Root Agent
 
@@ -366,6 +475,74 @@ provider request shape. Adapter-built system contributions, ordered Tool schemas
 provider/model namespace and request parameters determine impact. Natural history
 growth is excluded. Preserved means configuration preserves the relevant prefix;
 it does not promise a provider cache hit. Unproven changes require adoption.
+
+Whether a model or catalog edit reaches an existing Session at all is decided by
+the effective invocations an Attempt of that Session would freeze — its primary
+and explicit Summary selection and those of its admitted named Agents — resolved
+exactly as admission resolves them: provider endpoint and credential source,
+wire model, protocol, limits, compat, effective capabilities, the resolved
+Profile, reasoning state, output budget and request parameters. An omitted
+`profile` and an explicit `profile` naming the default resolve to the same
+invocation, and an edited, added or removed Profile that no such selection
+resolves through changes nothing for the Session's invocation: it prepares and
+adopts nothing, exactly as for an unselected Model.
+
+Catalog publication is a separate contract from invocation adoption. A valid
+source generation's Model Catalog — the Provider unit: `models`, `providers` and
+the new-Session default `agent.model` the catalog is validated with — is the
+authority for future selection. It is published to an existing Session without
+preparation when every invocation of that Session is unchanged, and also when the
+Session's own configured Model or Profile is one the new catalog no longer
+admits: the catalog is what the replacement is chosen from, and a stale Session
+selection never makes a valid catalog unpublishable. The Provider unit settles on
+its own: an Instructions, context or Capability change in the same generation
+neither holds it back nor is adopted by it. That includes the named Agents Root
+admits and their definitions, which are the Capability unit's until it adopts: a
+newly admitted Agent is not an invocation of the adopted closure, and an Agent
+naming no model inherits the invoking Attempt's. What publication must preserve
+is each adopted Agent's own explicit selection, which resolves against the
+published catalog. Those units are then prepared as
+usual against the binding just published, and their candidate waits for
+adoption as before, so the Session can discover and select a replacement first.
+An explicit selection committed meanwhile recaptures the generation over the new
+selection; the older candidate's expected binding no longer matches and it
+cannot adopt. Under the gate Attempt
+admission takes, the Session's selection authority, the catalog its configuration
+generation carries and its retained binding are committed together, all or
+nothing, and the configuration generation advances, while the current resolved
+invocations, their provider adapters and the capability snapshot are retained
+verbatim. From that commit, `session/models` advertises the published catalog
+and `session/setModel` (and Runtime Client `model_catalog`/`model_set`) resolve
+against exactly that catalog, never unpublished sources. An admitted Attempt
+keeps the snapshot and registry it froze. A failed or overtaken generation never
+publishes, so the last good catalog remains the authority; a catalog the source
+document cannot validate fails that generation's context units with it. When the
+edit changes an invocation the Session can still resolve — its own, or what an
+adopted named Agent's explicit selection resolves to — the catalog arrives with
+that change's adoption,
+together with any capability or context change of the same generation. A cold
+Session receives the catalog when it next becomes resident. New Sessions start
+from the Workspace's published creation catalog.
+
+A configured selection the published catalog does not admit is **unavailable**.
+The Session keeps it configured — nothing switches it to the catalog default or
+drops an explicit Summary policy — and `session/model` reports it in
+`unavailable` with the native diagnostic. Its last resolved `effective` and
+`summary` remain display facts only; a Session loaded with an already unavailable
+selection, after residency loss or a restart, has none. While unavailable, the
+Session admits no model work: `turn/start`, `turn/steer` and `context/compact`
+are refused with `model_unavailable`, and inbound accepted before the publication
+is held, never run on the removed selection and never dropped. Held work does not
+make the Session busy for the correction. The correction is an ordinary
+`session/setModel` (or Runtime Client `model_set`) with a complete selection the
+catalog admits, primary and explicit Summary alike; it commits through the usual
+fence and admits held work with exactly the new selection.
+
+The adopted generation's `source_revisions` stay the source manifest its context
+was resolved from. Independently published units — execution policy, shared
+capacity and the Model Catalog's Provider unit — carry their own component
+revision with their values and provenance, so a source file that also holds
+unrelated, not yet applied changes never makes those changes look adopted.
 
 `session/adoptConfiguration` addresses a concrete ready candidate and expected
 Session binding revision. It returns typed Busy, NotReady or Conflict, or commits

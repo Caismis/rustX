@@ -312,7 +312,8 @@ fn count_conversation_store_open() {
 /// Version 49 separates immutable inherited outcomes from live execution state.
 /// Version 50 retains the required independent task title in private Agent authority.
 /// Version 51 stores immutable checkpoint statistics and local completion correlation
-/// with the canonical Ledger summary. Older development stores are refused.
+/// with the canonical Ledger summary, and general Model Profiles in request snapshots
+/// and Session model configuration. Older development stores are refused.
 pub const SQLITE_SCHEMA_VERSION: i64 = 51;
 
 /// One operation in a deterministic admission fault script.
