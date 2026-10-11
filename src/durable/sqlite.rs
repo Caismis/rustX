@@ -316,8 +316,8 @@ fn count_conversation_store_open() {
 /// and Session model configuration. Older development stores are refused.
 /// Version 52 requires identity-bearing message fact lookup and a qualifying
 /// context-reading expression index over immutable Journal evidence.
-/// Version 54 normalizes immutable lineage provenance with indexed membership.
-pub const SQLITE_SCHEMA_VERSION: i64 = 54;
+/// Version 55 indexes reverse immutable Turn membership for exact validation.
+pub const SQLITE_SCHEMA_VERSION: i64 = 55;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -5592,6 +5592,7 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 response_ordinal INTEGER REFERENCES inherited_response_provenance(ordinal),
                 membership_digest TEXT NOT NULL
             );
+            CREATE INDEX IF NOT EXISTS inherited_membership_turn_idx ON inherited_message_membership(turn_ordinal,assistant_message_id);
             CREATE TABLE IF NOT EXISTS surface_ops (
                 revision INTEGER PRIMARY KEY,
                 compaction_generation INTEGER NOT NULL,
@@ -5770,6 +5771,19 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "missing or invalid inherited index {name}"
             )));
         }
+    }
+    let reverse_index: Option<String> = connection
+        .query_row("SELECT sql FROM sqlite_schema WHERE type='index' AND name='inherited_membership_turn_idx'", [], |row| row.get(0))
+        .optional()
+        .map_err(|error| storage(error.to_string()))?;
+    if reverse_index.as_deref()
+        != Some(
+            "CREATE INDEX inherited_membership_turn_idx ON inherited_message_membership(turn_ordinal,assistant_message_id)",
+        )
+    {
+        return Err(ConversationStoreError::IncompatibleSchema(
+            "missing or invalid inherited reverse membership index".into(),
+        ));
     }
     for table in ["inherited_turn_provenance", "inherited_response_provenance"] {
         let primary: (String, i64) = connection
@@ -15371,7 +15385,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 54);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 55);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -15440,7 +15454,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 54);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 55);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current

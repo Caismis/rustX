@@ -23,7 +23,11 @@ it does not parse unrelated inherited payloads. Each selected inherited ordinal
 uses the same targeted payload-digest and canonical-membership validation as
 native transcript inspection. The decoded Turn is reused for identity, location
 and previews, including terminal-only anchors. Compact bootstrap metadata and
-ordinal count/range checks fail closed even for a small page. Schema 54 is unchanged.
+ordinal count/range checks fail closed even for a small page. Schema 55 adds an
+ordinal-scoped reverse membership index. Each selected Turn must declare exactly
+the canonical Assistant members assigned to its ordinal;
+forward identity/digest checks and the reverse indexed lookup establish set
+equality without reading unrelated Turn payloads.
 
 Complete inherited loading, lineage reconstruction/reinitialization and archive
 validation retain full payload and membership checks. An unrelated damaged payload

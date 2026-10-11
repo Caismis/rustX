@@ -28,6 +28,8 @@ fn decode_turn(json: &str) -> Result<TurnReadingProvenance, ConversationStoreErr
     decode(json, "inherited Turn")
 }
 
+pub(super) const TURN_MEMBERS: &str = "SELECT assistant_message_id FROM inherited_message_membership INDEXED BY inherited_membership_turn_idx WHERE turn_ordinal=?1 ORDER BY assistant_message_id";
+
 pub(super) const TURN_LOOKUP: &str = "SELECT m.assistant_message_id,m.turn_ordinal,m.response_ordinal,m.membership_digest,p.ordinal,p.payload,p.payload_digest FROM message_ledger l LEFT JOIN inherited_message_membership m ON m.assistant_message_id=l.message_id LEFT JOIN inherited_turn_provenance p ON p.ordinal=m.turn_ordinal WHERE l.message_id=?1 AND l.position<=(SELECT message_count FROM bootstrap_identity WHERE id=1) AND json_extract(l.message_json,'$.role')='assistant'";
 pub(super) const RESPONSE_LOOKUP: &str = "SELECT m.assistant_message_id,m.turn_ordinal,m.response_ordinal,m.membership_digest,p.ordinal,p.payload,p.payload_digest FROM message_ledger l LEFT JOIN inherited_message_membership m ON m.assistant_message_id=l.message_id LEFT JOIN inherited_response_provenance p ON p.ordinal=m.response_ordinal WHERE l.message_id=?1 AND l.position<=(SELECT message_count FROM bootstrap_identity WHERE id=1) AND json_extract(l.message_json,'$.role')='assistant'";
 
@@ -138,6 +140,22 @@ fn verify_members(
             || (if kind == "turn" { turn } else { response }) != Some(ordinal)
         {
             return Err(storage("inconsistent inherited membership"));
+        }
+    }
+    if kind == "turn" {
+        // Forward checks establish canonical identity and digest validity for
+        // every declared member. The ordinal index proves that no persisted
+        // member was omitted, including for a terminal-only Turn.
+        let assigned = connection
+            .prepare_cached(TURN_MEMBERS)
+            .map_err(|error| storage(error.to_string()))?
+            .query_map([ordinal], |row| row.get::<_, String>(0))
+            .map_err(|error| storage(error.to_string()))?
+            .collect::<Result<BTreeSet<_>, _>>()
+            .map_err(|error| storage(error.to_string()))?;
+        let declared = seen.iter().map(|id| id.as_str().to_owned()).collect();
+        if assigned != declared {
+            return Err(storage("incomplete inherited Turn membership"));
         }
     }
     Ok(())

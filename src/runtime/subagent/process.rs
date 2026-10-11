@@ -1921,6 +1921,17 @@ async fn drive_child_control(
             }
             frame = read_child_frame(&mut control) => {
                 match frame {
+                    // Only physical release evidence and diagnostics remain
+                    // admissible after semantic settlement. No new semantic
+                    // work or anchor acquisition can reopen this activation.
+                    Ok(Some(frame)) if result.is_some()
+                        && !matches!(frame, ChildFrame::AnchorReleased(_) | ChildFrame::Diagnostic(_)) => {
+                        violation = Some(if matches!(frame, ChildFrame::Result(_)) {
+                            "duplicate child terminal result".to_owned()
+                        } else {
+                            "protocol violation: unexpected frame after Result".to_owned()
+                        });
+                    }
                     Ok(Some(ChildFrame::DelegateAccepted)) => {
                         if cancelled_before_start.is_none() { execution.start(); }
                         if let Some(owner) = &interactions { owner.accept_delegate(); }
@@ -1938,10 +1949,6 @@ async fn drive_child_control(
                         seal_pending = true;
                     }
                     Ok(Some(ChildFrame::Result(frame))) => {
-                        if result.is_some() {
-                            violation = Some("duplicate child terminal result".to_owned());
-                            continue;
-                        }
                         result = Some(frame);
                         execution.stop();
                         // Result is semantic settlement. The child's physical
@@ -2115,11 +2122,13 @@ async fn drive_child_control(
         .await;
     }
     let outcome = match (result, violation) {
-        (Some(frame), _) => PhysicalOutcome::Completed(frame),
-        (None, Some(diagnostic)) => PhysicalOutcome::Lost {
+        // A semantic candidate cannot erase a later control protocol failure.
+        // Physical reaping and nested containment still precede publication.
+        (_, Some(diagnostic)) => PhysicalOutcome::Lost {
             diagnostic,
             cancellation_delivered,
         },
+        (Some(frame), None) => PhysicalOutcome::Completed(frame),
         (None, None) => PhysicalOutcome::Lost {
             diagnostic: "the child exited without a terminal result".to_owned(),
             cancellation_delivered,
@@ -2844,7 +2853,7 @@ mod tests {
             None,
             None,
         );
-        let (_commands, start, settlement) = driver.split();
+        let (commands, start, mut settlement) = driver.split();
         start.send(None).unwrap();
         assert!(matches!(
             read_parent_frame(&mut harness.child).await.unwrap(),
@@ -2863,6 +2872,25 @@ mod tests {
         // EOF on the parent's write half proves it observed Result. Anchor
         // release then arrives strictly later, as it does during MCP drain.
         assert_eq!(read_parent_frame(&mut harness.child).await.unwrap(), None);
+        assert!(
+            futures_util::poll!(&mut settlement).is_pending(),
+            "Result is not physical settlement"
+        );
+        commands
+            .send(super::DriverCommand::Cancel {
+                reason: crate::runtime::types::CancellationReason::UserRequested,
+            })
+            .unwrap();
+        write_child_frame(
+            &mut harness.child,
+            &ChildFrame::Diagnostic(crate::runtime::subagent::ipc::DiagnosticFrame {
+                message: "physical drain".into(),
+            }),
+        )
+        .await
+        .unwrap();
+        // A transport cancellation admitted after Result cannot rewrite the
+        // already received semantic candidate or prevent anchor release.
         write_child_frame(
             &mut harness.child,
             &ChildFrame::AnchorReleased(ProcessUnitAnchorFrame {
@@ -2885,7 +2913,160 @@ mod tests {
             settled.nested.contained.is_empty(),
             "a released anchor needs no emergency containment"
         );
-        assert!(matches!(settled.outcome, PhysicalOutcome::Completed(_)));
+        assert!(matches!(
+            settled.outcome,
+            PhysicalOutcome::Completed(ResultFrame {
+                status: ChildResultStatus::Succeeded,
+                ..
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn terminal_protocol_violations_override_result_and_settle_retained_anchors() {
+        use crate::runtime::subagent::ipc::{
+            ChildResultStatus, DelegationFrame, DiagnosticFrame, ResultFrame,
+        };
+        let terminal = ChildFrame::Result(ResultFrame {
+            status: ChildResultStatus::Succeeded,
+            content: Some("candidate".into()),
+            diagnostic: None,
+        });
+        for (after_result, frame, expected) in [
+            (true, terminal.clone(), "duplicate child terminal result"),
+            (
+                true,
+                ChildFrame::SealRequested,
+                "unexpected frame after Result",
+            ),
+            (
+                false,
+                ChildFrame::StartupError(DiagnosticFrame {
+                    message: "out of phase".into(),
+                }),
+                "unexpected frame after Ready",
+            ),
+        ] {
+            let mut harness = stage();
+            let direct_process_id = harness.staged.child.id().unwrap();
+            let unit = ProcessUnitId::new("unresolved-protocol-anchor");
+            harness.staged.retain_for_test(unit.clone(), i32::MAX);
+            let driver = harness.staged.into_driver(
+                DelegationFrame {
+                    attachments: Vec::new(),
+                    task: "protocol precedence".into(),
+                    context: None,
+                    interaction_provider_available: false,
+                },
+                None,
+                None,
+                None,
+            );
+            let (_commands, start, mut settlement) = driver.split();
+            start.send(None).unwrap();
+            assert!(matches!(
+                read_parent_frame(&mut harness.child).await.unwrap(),
+                Some(ParentFrame::Delegate(_))
+            ));
+            if after_result {
+                write_child_frame(&mut harness.child, &terminal)
+                    .await
+                    .unwrap();
+                // Parent write EOF is the observable Result receipt boundary.
+                assert_eq!(read_parent_frame(&mut harness.child).await.unwrap(), None);
+                assert!(futures_util::poll!(&mut settlement).is_pending());
+            }
+            write_child_frame(&mut harness.child, &frame).await.unwrap();
+            if !after_result {
+                write_child_frame(&mut harness.child, &terminal)
+                    .await
+                    .unwrap();
+            }
+            drop(harness.child);
+            let settled = tokio::time::timeout(DEADLINE, settlement)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                matches!(&settled.outcome, PhysicalOutcome::Lost { diagnostic, cancellation_delivered: false } if diagnostic.contains(expected)),
+                "{:?}",
+                settled.outcome
+            );
+            assert_eq!(settled.nested.unproven.len(), 1);
+            assert_eq!(settled.nested.unproven[0].0, unit);
+            assert!(
+                harness.runtime_root.exists(),
+                "unresolved resources retain their namespace"
+            );
+            assert!(
+                matches!(
+                    nix::sys::signal::kill(
+                        nix::unistd::Pid::from_raw(i32::try_from(direct_process_id).unwrap()),
+                        None
+                    ),
+                    Err(nix::errno::Errno::ESRCH)
+                ),
+                "the direct process was reaped before failure publication"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn protocol_failure_contains_retained_process_before_settlement() {
+        use crate::runtime::subagent::ipc::{DelegationFrame, DiagnosticFrame};
+        let mut harness = stage();
+        let mut nested = tokio::process::Command::new("sh")
+            .args(["-c", "read gate"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0)
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let _gate = nested.stdin.take().unwrap();
+        let group = i32::try_from(nested.id().unwrap()).unwrap();
+        let unit = ProcessUnitId::new("protocol-failure-nested");
+        harness.staged.retain_for_test(unit.clone(), group);
+        let driver = harness.staged.into_driver(
+            DelegationFrame {
+                attachments: Vec::new(),
+                task: "protocol containment".into(),
+                context: None,
+                interaction_provider_available: false,
+            },
+            None,
+            None,
+            None,
+        );
+        let (_commands, start, settlement) = driver.split();
+        start.send(None).unwrap();
+        assert!(matches!(
+            read_parent_frame(&mut harness.child).await.unwrap(),
+            Some(ParentFrame::Delegate(_))
+        ));
+        write_child_frame(
+            &mut harness.child,
+            &ChildFrame::StartupError(DiagnosticFrame {
+                message: "forbidden after delegation".into(),
+            }),
+        )
+        .await
+        .unwrap();
+        drop(harness.child);
+        let settled = tokio::time::timeout(DEADLINE, settlement)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(settled.outcome, PhysicalOutcome::Lost { .. }));
+        assert_eq!(settled.nested.contained, vec![unit]);
+        assert!(settled.nested.unproven.is_empty());
+        assert!(matches!(
+            nix::sys::signal::killpg(nix::unistd::Pid::from_raw(group), None),
+            Err(nix::errno::Errno::ESRCH)
+        ));
+        assert!(!harness.runtime_root.exists());
+        drop(nested);
     }
 
     /// **Reap is not settlement.** The committed child driver publishes its

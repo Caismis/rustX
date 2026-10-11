@@ -1016,7 +1016,7 @@ later checkpoint retires that summary. Lineage copies retain those values and
 omit local completion correlation. Transcript decoration uses one keyed Ledger
 lookup and at most one keyed local Journal lookup per requested summary; it never
 reconstructs the retired Surface, hydrates retired messages, or scans the Journal.
-Missing or malformed checkpoint facts are explicit read errors. SQLite schema 54
+Missing or malformed checkpoint facts are explicit read errors. SQLite schema 55
 requires these facts; older development stores are refused without migration.
 
 ## Indexed historical occupancy
@@ -1054,7 +1054,7 @@ reads check the compact payload's integrity and shape; damaged or missing
 initialized metadata fails explicitly. The marker distinguishes an uninitialized
 store from a missing bootstrap identity. There is no independent update path.
 Later local events cannot change this immutable fallback at an earlier Journal
-cut. Schema 54 rejects obsolete development stores without migration.
+cut. Schema 55 rejects obsolete development stores without migration.
 
 Finite transcript decoration seeks each unique selected Assistant identity using
 `events_message_id_kind_idx`, with the Journal cut in each SQL predicate, and
@@ -1092,8 +1092,13 @@ seed and maps.
 Finite windows seek each distinct requested canonical identity in the Ledger and
 membership primary-key indexes, then read only its referenced provenance rows.
 Results are deduplicated by ordinal and returned in original bootstrap order.
-Selected records validate their directly relevant memberships. Missing rows,
-dangling references, inconsistent membership and corrupt payloads fail explicitly.
+Schema 55 additionally indexes `(turn_ordinal, assistant_message_id)` for reverse
+Turn membership validation. Each selected Turn declares exactly the persisted
+canonical Assistant membership set for its ordinal, including the empty set for
+terminal-only Turns. This check reads only that Turn's members; it does not
+hydrate unrelated provenance. Selected records validate their directly relevant
+memberships. Missing rows, dangling references, inconsistent membership and
+corrupt payloads fail explicitly.
 The whole-lineage readers additionally verify contiguous ordinals and recorded
 counts; those explicit complete-history operations may traverse the lineage.
 

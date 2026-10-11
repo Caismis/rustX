@@ -1280,10 +1280,11 @@ fn inherited_window_membership_is_independent_of_local_finite_execution_cuts() {
 }
 
 #[test]
-fn inherited_provenance_schema_requires_native_indexes_and_rejects_schema_53() {
+fn inherited_provenance_schema_requires_native_indexes_and_rejects_schema_54() {
     for index in [
         "inherited_turn_identity_idx",
         "inherited_response_closing_idx",
+        "inherited_membership_turn_idx",
     ] {
         let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
         store
@@ -1301,14 +1302,14 @@ fn inherited_provenance_schema_requires_native_indexes_and_rejects_schema_53() {
     store
         .lock()
         .unwrap()
-        .execute("UPDATE rustx_store SET schema_version=53", [])
+        .execute("UPDATE rustx_store SET schema_version=54", [])
         .unwrap();
     drop(store);
     assert!(matches!(
         SqliteConversationStore::open_existing(id, &path),
         Err(ConversationStoreError::SchemaVersionMismatch {
-            stored: 53,
-            expected: 54
+            stored: 54,
+            expected: 55
         })
     ));
 }
@@ -1523,4 +1524,181 @@ fn turn_directory_mixed_terminal_and_local_turns_reuse_exact_validated_navigatio
     store.lock().unwrap().execute("DELETE FROM transcript_order WHERE reference_kind='inherited_turn' AND reference_id='8'",[]).unwrap();
     assert!(store.conversation_turns(8, 1).is_err());
     assert!(store.load_inherited_turns().is_err());
+}
+
+#[test]
+fn inherited_turn_membership_is_exact_in_both_directions_with_valid_payload_digests() {
+    fn hash(input: &str) -> String {
+        use std::fmt::Write as _;
+        let mut result = String::new();
+        for byte in Sha256::digest(input.as_bytes()) {
+            write!(result, "{byte:02x}").unwrap();
+        }
+        result
+    }
+    let seed = response_seed(8);
+    assert_eq!(seed.turns()[0].process_message_ids.len(), 2);
+    for damage in [
+        "omitted",
+        "extra",
+        "duplicate",
+        "wrong-owner",
+        "digest",
+        "missing",
+        "reverse-extra",
+    ] {
+        let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+        store.initialize_lineage(&seed).unwrap();
+        assert_eq!(
+            store
+                .inherited_turns_for(&seed.turns()[0].process_message_ids)
+                .unwrap(),
+            seed.turns()[..1]
+        );
+        let mut turn = seed.turns()[0].clone();
+        let connection = store.lock().unwrap();
+        match damage {
+            "omitted" => {
+                turn.process_message_ids.pop();
+            }
+            "extra" => {
+                turn.process_message_ids
+                    .push(seed.turns()[1].process_message_ids[0].clone());
+            }
+            "duplicate" => {
+                turn.process_message_ids
+                    .push(turn.process_message_ids[0].clone());
+            }
+            "wrong-owner" => {
+                let digest = hash("rustx-inherited-member\nearly-closing\nSome(1)\nSome(0)");
+                connection.execute("UPDATE inherited_message_membership SET turn_ordinal=1,membership_digest=?1 WHERE assistant_message_id='early-closing'", [digest]).unwrap();
+            }
+            "digest" => {
+                connection.execute("UPDATE inherited_message_membership SET membership_digest='bad' WHERE assistant_message_id='early-closing'", []).unwrap();
+            }
+            "missing" => {
+                connection.execute("DELETE FROM inherited_message_membership WHERE assistant_message_id='early-closing'", []).unwrap();
+            }
+            "reverse-extra" => {
+                let digest = hash("rustx-inherited-member\ninherited-1\nSome(0)\nSome(1)");
+                connection.execute("UPDATE inherited_message_membership SET turn_ordinal=0,membership_digest=?1 WHERE assistant_message_id='inherited-1'", [digest]).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        // Payload corruption must reach membership checks, not merely fail
+        // because a previous digest was left stale.
+        let payload = serde_json::to_string(&turn).unwrap();
+        let digest = hash(&format!("rustx-inherited-turn\n0\n{payload}"));
+        connection
+            .execute(
+                "UPDATE inherited_turn_provenance SET payload=?1,payload_digest=?2 WHERE ordinal=0",
+                params![payload, digest],
+            )
+            .unwrap();
+        drop(connection);
+        provenance::take_turn_validation_counts();
+        assert!(store.conversation_turns(0, 1).is_err(), "{damage}");
+        assert_eq!(
+            provenance::take_turn_validation_counts(),
+            (1, 1),
+            "{damage}"
+        );
+        assert!(
+            store
+                .inherited_turns_for(&[MessageId::new("inherited-0")])
+                .is_err(),
+            "{damage}"
+        );
+        assert!(store.load_inherited_turns().is_err(), "{damage}");
+        assert!(store.initialize_lineage(&seed).is_err(), "{damage}");
+        assert!(store.archive_frontiers().is_err(), "{damage}");
+    }
+}
+
+#[test]
+fn inherited_turn_reverse_corruption_is_scoped_to_materialized_records() {
+    fn hash(input: &str) -> String {
+        use std::fmt::Write as _;
+        let mut result = String::new();
+        for byte in Sha256::digest(input.as_bytes()) {
+            write!(result, "{byte:02x}").unwrap();
+        }
+        result
+    }
+    let seed = response_seed(8);
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    store.initialize_lineage(&seed).unwrap();
+    let expected = store.conversation_turns(0, 1).unwrap();
+    let mut turn = seed.turns()[7].clone();
+    turn.process_message_ids.clear();
+    let payload = serde_json::to_string(&turn).unwrap();
+    let digest = hash(&format!("rustx-inherited-turn\n7\n{payload}"));
+    store
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE inherited_turn_provenance SET payload=?1,payload_digest=?2 WHERE ordinal=7",
+            params![payload, digest],
+        )
+        .unwrap();
+    provenance::take_turn_validation_counts();
+    assert_eq!(store.conversation_turns(0, 1).unwrap(), expected);
+    assert_eq!(provenance::take_turn_validation_counts(), (1, 1));
+    assert_eq!(
+        store
+            .inherited_turns_for(&[MessageId::new("inherited-0")])
+            .unwrap(),
+        seed.turns()[..1]
+    );
+    assert!(store.conversation_turns(7, 1).is_err());
+    assert!(store.load_inherited_turns().is_err());
+    assert!(store.initialize_lineage(&seed).is_err());
+    assert!(store.archive_frontiers().is_err());
+}
+
+#[test]
+fn inherited_turn_reverse_membership_seeks_only_the_selected_ordinal() {
+    let mut costs = Vec::new();
+    for count in [8, 128, 2048] {
+        let seed = response_seed(count);
+        let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+        store.initialize_lineage(&seed).unwrap();
+        let plan = store
+            .lock()
+            .unwrap()
+            .prepare(&format!("EXPLAIN QUERY PLAN {}", provenance::TURN_MEMBERS))
+            .unwrap()
+            .query_map([0], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+            .join("\n");
+        assert!(plan.contains("SEARCH inherited_message_membership USING COVERING INDEX inherited_membership_turn_idx (turn_ordinal=?)"), "{plan}");
+        assert!(!plan.contains("SCAN"), "{plan}");
+        let (members, instructions) = measured_vm(&store, || {
+            store
+                .lock()
+                .unwrap()
+                .prepare_cached(provenance::TURN_MEMBERS)
+                .unwrap()
+                .query_map([0], |row| row.get::<_, String>(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        });
+        assert_eq!(members, ["early-closing", "inherited-0"]);
+        provenance::take_turn_validation_counts();
+        assert_eq!(
+            store
+                .inherited_turns_for(&[MessageId::new("inherited-0")])
+                .unwrap(),
+            seed.turns()[..1]
+        );
+        assert_eq!(provenance::take_turn_validation_counts(), (1, 1));
+        println!(
+            "{count} inherited Turns: reverse lookup {instructions} VM instructions, 2 rows, one selected payload; {plan}"
+        );
+        costs.push(instructions);
+    }
+    assert!(costs.iter().all(|cost| *cost == costs[0]), "{costs:?}");
 }
