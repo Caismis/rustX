@@ -748,3 +748,84 @@ fn message_windows_reject_foreign_future_and_mutated_cuts() {
         .unwrap();
     assert_eq!(fresh.cut, store.conversation_read_cut().unwrap());
 }
+
+#[test]
+fn inherited_boundary_query_work_is_independent_of_seed_size() {
+    use rusqlite::StatementStatus;
+    let mut measurements = Vec::new();
+    let mut scanned = Vec::new();
+    for size in [128, 1024, 4096] {
+        let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+        let seed = LineageSeed::history(
+            (0..size)
+                .map(|n| message(&format!("seed-{n}"), "inherited"))
+                .collect(),
+        );
+        store.initialize_lineage(&seed).unwrap();
+        for _ in 0..3 {
+            let page = store.load_transcript_page(None, 64).unwrap();
+            assert_eq!(page.entries.len(), 64);
+            assert_eq!(page.inherited_through.get(), size);
+            let connection = store.lock().unwrap();
+            let mut query = connection
+                .prepare(super::INHERITED_TRANSCRIPT_THROUGH_SQL)
+                .unwrap();
+            let boundary: i64 = query.query_row([], |row| row.get(0)).unwrap();
+            assert_eq!(boundary, size as i64);
+            measurements.push(query.get_status(StatementStatus::VmStep));
+            // Negative control: the previous aggregate consumes the inherited prefix.
+            let mut aggregate = connection.prepare(
+                "SELECT COALESCE(MAX(position),0) FROM (
+                 SELECT t.position FROM message_ledger m
+                 JOIN transcript_order t ON t.reference_kind='message' AND t.reference_id=m.message_id
+                 WHERE m.position <= (SELECT message_count FROM bootstrap_identity WHERE id=1)
+                 UNION ALL SELECT position FROM transcript_order WHERE reference_kind='inherited_turn')",
+            ).unwrap();
+            assert_eq!(
+                aggregate.query_row([], |row| row.get::<_, i64>(0)).unwrap(),
+                boundary
+            );
+            scanned.push(aggregate.get_status(StatementStatus::VmStep));
+        }
+    }
+    assert!(measurements[0] > 0);
+    assert!(
+        measurements.iter().all(|steps| *steps == measurements[0]),
+        "{measurements:?}"
+    );
+    assert!(measurements[0] < 32, "{measurements:?}");
+    assert!(
+        scanned[0] < scanned[3] && scanned[3] < scanned[6],
+        "{scanned:?}"
+    );
+    eprintln!("inherited boundary VM steps: {measurements:?}; previous aggregate: {scanned:?}");
+}
+
+#[test]
+fn inherited_boundary_survives_reopen_and_identical_reinitialization() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("conversation.sqlite");
+    let conversation = ConversationId::generate();
+    let seed = LineageSeed::history(vec![human("human", "prompt"), message("seed", "reply")]);
+    {
+        let store = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
+        store.initialize_lineage(&seed).unwrap();
+        assert_eq!(
+            store
+                .load_transcript_page(None, 64)
+                .unwrap()
+                .inherited_through
+                .get(),
+            2
+        );
+        start(&store, "local");
+        commit(&store, "local", "local-message");
+        timeout(&store, "local");
+    }
+    let reopened = SqliteConversationStore::open(conversation, &path).unwrap();
+    reopened.initialize_lineage(&seed).unwrap();
+    let latest = reopened.load_transcript_page(None, 1).unwrap();
+    assert_eq!(latest.entries.len(), 1);
+    assert!(latest.entries[0].cursor.get() > 2);
+    assert_eq!(latest.inherited_through.get(), 2);
+}

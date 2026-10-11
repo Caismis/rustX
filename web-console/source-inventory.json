@@ -1078,7 +1078,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "7fbc61fb3b821690132db2bd76f971bad0e3d12cef6e1ba20b99fdd302d0041e",
+      "local_sha256": "c9370487839554ddf24022115b4a3a3af001e8fc2ff12d380e5e2bc7c978e6a7",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-model-selection/src/client/ModelSelect.tsx",
@@ -3546,7 +3546,7 @@
         "Harness scroll ownership",
         "Total-sized virtualizer measurement cache"
       ],
-      "local_sha256": "b409c6b5710bbd839b8a8538ea4a0355b48a9a51db6e53e2595c0e4b1d8309f8"
+      "local_sha256": "e971de3a2ea6d6c1b29502bb6ce7f7e9a38af18073a595c9767020c4db0989e2"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/stop-sequence.ts",

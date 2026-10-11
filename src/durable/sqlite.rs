@@ -312,7 +312,9 @@ fn count_conversation_store_open() {
 /// Version 50 stores the selected general Model Profile in request snapshots
 /// and Session model configuration (#456); stores carrying reasoning profiles
 /// are refused at open.
-pub const SQLITE_SCHEMA_VERSION: i64 = 50;
+/// Version 56 persists the immutable inherited transcript boundary at bootstrap.
+/// Versions 51–55 are already used by main; incompatible stores are refused.
+pub const SQLITE_SCHEMA_VERSION: i64 = 56;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -2040,7 +2042,7 @@ impl ConversationStore for SqliteConversationStore {
             }
             transaction
                 .execute(
-                    "INSERT INTO bootstrap_identity(id,message_count,history_digest,response_provenance,turn_provenance) VALUES(1,?1,?2,?3,?4)",
+                    "INSERT INTO bootstrap_identity(id,message_count,history_digest,response_provenance,turn_provenance,inherited_transcript_through) VALUES(1,?1,?2,?3,?4,(SELECT next_transcript_position FROM rustx_store WHERE id=1))",
                     params![
                         i64::try_from(messages.len()).map_err(|_| storage("initial message count is not representable"))?,
                         initial_history_digest(messages)?,
@@ -5386,7 +5388,8 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 message_count INTEGER NOT NULL,
                 history_digest TEXT NOT NULL,
                 response_provenance TEXT NOT NULL,
-                turn_provenance TEXT NOT NULL
+                turn_provenance TEXT NOT NULL,
+                inherited_transcript_through INTEGER NOT NULL CHECK(inherited_transcript_through >= 0)
             );
             CREATE TABLE IF NOT EXISTS surface_ops (
                 revision INTEGER PRIMARY KEY,
@@ -5569,6 +5572,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "history_digest",
                 "response_provenance",
                 "turn_provenance",
+                "inherited_transcript_through",
             ],
         ),
         (
@@ -6658,24 +6662,19 @@ fn load_transcript_page(
     })
 }
 
+const INHERITED_TRANSCRIPT_THROUGH_SQL: &str =
+    "SELECT COALESCE((SELECT inherited_transcript_through FROM bootstrap_identity WHERE id=1),0)";
+
 /// The seed owns canonical Ledger positions, not remapped message spelling or
 /// origin Conversation IDs. Context messages have no transcript row, while
 /// terminal-only inherited turns do: both are covered by this native boundary.
+/// Bootstrap persists its final transcript watermark atomically with the seed;
+/// local appends and repeated bounded reads never recompute the inherited prefix.
 fn inherited_transcript_through(
     connection: &Connection,
 ) -> Result<TranscriptCursor, ConversationStoreError> {
     let position: i64 = connection
-        .query_row(
-            "SELECT COALESCE(MAX(position),0) FROM (
-            SELECT t.position FROM message_ledger m
-            JOIN transcript_order t ON t.reference_kind='message' AND t.reference_id=m.message_id
-            WHERE m.position <= (SELECT message_count FROM bootstrap_identity WHERE id=1)
-            UNION ALL
-            SELECT position FROM transcript_order WHERE reference_kind='inherited_turn'
-        )",
-            [],
-            |row| row.get(0),
-        )
+        .query_row(INHERITED_TRANSCRIPT_THROUGH_SQL, [], |row| row.get(0))
         .map_err(|error| storage(format!("inherited transcript boundary: {error}")))?;
     Ok(TranscriptCursor::new(nonnegative(
         position,
@@ -14823,7 +14822,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 50);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 56);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -14892,7 +14891,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 50);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 56);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current

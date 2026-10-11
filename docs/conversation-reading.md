@@ -282,3 +282,5 @@ authority and navigation intent before publishing or anchoring. A superseding
 read, reattachment, node switch or user cancellation retires the result. The
 retained presentation remains bounded and later source activity cannot rewrite
 the fork seed boundary.
+
+The immutable inherited transcript boundary is stored with the lineage bootstrap in SQLite schema 56. Initialization records the final native transcript watermark in the same transaction as the seed, including terminal-only inherited Turns and excluding invisible Context messages. Repeated bounded transcript and snapshot reads resolve this boundary through a single bootstrap primary-key lookup. Older development stores are rejected without migration.

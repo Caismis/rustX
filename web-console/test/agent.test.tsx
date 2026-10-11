@@ -628,3 +628,24 @@ it('a catalog revision that drops a pinned Profile offers recovery while mounted
   expect(configuredProfile()).toBeUndefined();
   expect(count('session/models')).toBe(reads + 3);
 });
+
+it('the menu retry forces a catalog reread with cached choices and a retained rejected cold selection', async () => {
+ modelFixture(); await server.connect(); server.held.add('session/attach');
+ const attaching = server.client.attach('A');
+ const opening = await server.waitFor('session/attach', 1);
+ server.handlers.set('session/setModel', () => { throw new RpcFailure({ code: -32000, message: 'Model removed' }); });
+ const chosen = server.client.prepareAgentModel('A', { model: 'removed' });
+ const rejected = expect(chosen).rejects.toThrow('Model removed');
+ server.reply(opening); await attaching; await rejected;
+ render(<Control/>); await openModels();
+ expect(server.client.getSnapshot().views.A.modelIntent?.phase).toBe('failed');
+ const cachedReads = count('session/models');
+ expect(cachedReads).toBe(1);
+ // Ordinary menu reopening still uses the already authoritative catalog.
+ await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Model and profile' })));
+ await openModels(); expect(count('session/models')).toBe(cachedReads);
+ await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Reread models' })));
+ expect(count('session/models')).toBe(cachedReads + 1);
+ expect(server.client.getSnapshot().views.A.modelIntent?.phase).toBe('failed');
+ expect(count('session/setModel')).toBe(1);
+});

@@ -34,7 +34,7 @@ export function modelDefaultLabel(tx: Translate, choice: ModelChoice) {
  * current invocation resolves to and is only displayed. */
 export function ModelSelect({ choices, current, profile, effectiveProfile, disabled, loading, error, load, choose, initialOpen = false, binding = '' }: {
  choices: ModelChoice[]; current?: string; profile?: string; effectiveProfile?: string; disabled: boolean; loading: boolean; error?: string;
- load: () => void; choose: (intent: ModelSelectionIntent) => void; initialOpen?: boolean; binding?: string;
+ load: (refresh?: boolean) => void; choose: (intent: ModelSelectionIntent) => void; initialOpen?: boolean; binding?: string;
 }) {
   const tx = useTranslation();
  const [open, setOpen] = useState(initialOpen);
@@ -58,7 +58,7 @@ export function ModelSelect({ choices, current, profile, effectiveProfile, disab
  <Menu open={open} side="top" align="end" autoFocus={!loading && !disabled} items={items} footer={status}
  selectedIds={[`model:${current}`, profile === undefined ? 'profile-default' : `profile:${profile}`]} onClose={() => setOpen(false)}
  onSelect={id => {
-  if (disabled) return; if (id === 'retry') { load(); return; } if (loading) return; setOpen(false);
+  if (disabled) return; if (id === 'retry') { load(true); return; } if (loading) return; setOpen(false);
   if (id.startsWith('model:')) choose({ kind: 'model', model: id.slice(6) });
   else if (current && id === 'profile-default') choose({ kind: 'model-default', model: current });
   else if (current && id.startsWith('profile:')) choose({ kind: 'profile', model: current, profile: id.slice(8) });

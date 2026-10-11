@@ -1931,3 +1931,11 @@ a submenu (`aria-current`, trailing check) exactly as it does a top-level row.
 The #456 stale Profile review also offers that Profile submenu, with a single
 "Use model defaults" row, on a Model that declares no Profiles while its
 configured Profile is pinned, so the pin can be cleared.
+
+PR #458 follow-up: TurnNavigator's delayed hover read carries the current native
+navigation intent through publication, so a newer loaded-turn jump revokes a held
+preview without retiring ordinary outline reads during transcript pagination.
+ModelSelect distinguishes lazy menu opening from an explicit forced catalog
+reread. AgentControls retains the native model recovery gates and does not replay
+a rejected selection. Held-response and cached-catalog regressions cover both
+changes; the pinned Harness source and presentation styles remain unchanged.

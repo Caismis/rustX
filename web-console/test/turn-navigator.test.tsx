@@ -351,3 +351,25 @@ it('native invalidation removes rail geometry; explicit recovery places the curr
  expect(scroller(ui).scrollTop).toBeGreaterThan(9000);
  expect(ui.getByRole('button',{name:'Jump to turn 1000'}).getAttribute('aria-current')).toBe('true');
 });
+
+for (const leaveRail of [false, true]) it(`a held hover reply cannot replace newer loaded-turn navigation (leave rail: ${leaveRail})`, async () => {
+ const fixture = await pagingRail(128);
+ await scrollRail(fixture.ui, 600);
+ server.held.add('session/turns');
+ fireEvent.pointerMove(fixture.ui.getByRole('button', { name: 'Load and jump to turn 64' }));
+ const hover = await server.waitFor('session/turns', 2);
+ expect(hover.params).toMatchObject({ offset: 0 });
+ const held = server.commit(hover);
+ await scrollRail(fixture.ui, 1000);
+ await act(async () => fireEvent.click(fixture.ui.getByRole('button', { name: 'Jump to turn 128' })));
+ expect(server.client.getSnapshot().views.A.turnOutline?.paging).toEqual({ type: 'latest' });
+ if (leaveRail) fireEvent.pointerLeave(fixture.ui.getByRole('navigation'));
+ await act(async () => server.socket.deliver(held));
+ expect(server.client.getSnapshot().views.A.turnOutline?.page?.offset).toBe(64);
+ expect(server.client.getSnapshot().views.A.turnOutline?.paging).toEqual({ type: 'latest' });
+ expect(server.client.getSnapshot().views.A.turnOutline?.loading).toBeFalsy();
+ server.held.delete('session/turns');
+ await fixture.start(129); await fixture.locate(129); await fixture.settle(129);
+ expect(fixture.offsets().slice(-3)).toEqual([null, null, null]);
+ expect(fixture.mark(129)).toBeTruthy();
+});

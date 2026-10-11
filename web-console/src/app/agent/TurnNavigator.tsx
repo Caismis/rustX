@@ -69,9 +69,13 @@ export function TurnNavigator({ client, sessionId, onNavigate, active }: { clien
     if (!item || item.turn || view.attachment !== 'attached' || view.outline?.loading || view.navigation?.pending) return;
     const key = `${view.generation}:${view.conversation}:${item.key}`;
     if (previewRead.current === key) return;
+    const intent = client.getSnapshot().views[sessionId]?.turnNavigation?.intent;
     const timer = setTimeout(() => {
       previewRead.current = key;
-      void client.readTurns(sessionId, Math.floor((item.ordinal - 1) / HISTORY_PAGE_SIZE) * HISTORY_PAGE_SIZE);
+      // A newer navigation revokes this preview's publication authority even
+      // when its native outline response is already in flight.
+      void client.readTurns(sessionId, Math.floor((item.ordinal - 1) / HISTORY_PAGE_SIZE) * HISTORY_PAGE_SIZE,
+        () => client.getSnapshot().views[sessionId]?.turnNavigation?.intent === intent);
     }, 150);
     return () => clearTimeout(timer);
   }, [client, sessionId, items, previewKey, view.generation, view.conversation, view.attachment, view.outline?.loading, view.navigation?.pending]);
