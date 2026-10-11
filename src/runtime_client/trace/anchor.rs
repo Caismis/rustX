@@ -304,6 +304,9 @@ impl TraceProjection<'_> {
             }
             E::CompactionStarted => {
                 facts.kind = TraceKind::Compaction;
+                // Detail exists throughout the lifecycle. A loaded running row
+                // must remain inspectable when refresh supplies its summary ID.
+                facts.has_detail = true;
                 // Compaction has no native operation identity. Its boundary
                 // is the next compaction start or terminal in durable order.
                 let end = self
@@ -331,7 +334,6 @@ impl TraceProjection<'_> {
                     // The summary's identity is in the terminal fact itself.
                     // Its preview needs a Ledger read, so it is left to the
                     // summary projection.
-                    facts.has_detail = true;
                     facts.message_id = Some(summary_message_id.clone());
                 }
                 end

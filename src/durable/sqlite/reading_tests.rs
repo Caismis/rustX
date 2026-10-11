@@ -205,7 +205,7 @@ fn turn_previews_are_the_opening_human_prompt_and_the_settled_final_response() {
     start(&store, "a2");
     commit_text(&store, "a2", "a2-final", "Answer two");
     timeout(&store, "a2");
-    // Non-human inbound never opens a turn's prompt; automatic continuation has none.
+    // Runtime/external notices never open a prompt; continuation from them has none.
     adopt(&store, UserSource::ExternalSystem, "System notice", None);
     start(&store, "a3");
     timeout(&store, "a3");
@@ -230,6 +230,51 @@ fn turn_previews_are_the_opening_human_prompt_and_the_settled_final_response() {
         outline.turns
     );
 }
+#[test]
+fn delegated_tasks_open_turn_previews_without_reclassifying_the_source() {
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    let source = UserSource::Agent {
+        agent_id: crate::runtime::identity::AgentId::new("parent"),
+    };
+    adopt(&store, source.clone(), "Explore the native API", None);
+    start(&store, "child-first");
+    commit_text(
+        &store,
+        "child-first",
+        "child-first-answer",
+        "Initial findings",
+    );
+    timeout(&store, "child-first");
+    adopt(&store, source, "Check one more case", None);
+    start(&store, "child-second");
+    timeout(&store, "child-second");
+    let outline = store.conversation_turns(0, 64).unwrap();
+    assert_eq!(outline.turns[0].prompt, "Explore the native API");
+    assert_eq!(outline.turns[1].prompt, "Check one more case");
+    let window = store
+        .conversation_window(
+            &ConversationWindowAt::Turn {
+                id: outline.turns[0].id.clone(),
+                cut: outline.cut,
+            },
+            64,
+        )
+        .unwrap();
+    let source = window
+        .page
+        .entries
+        .iter()
+        .find_map(|entry| match &entry.item {
+            crate::durable::TranscriptItem::Message {
+                message: MessageBlock::User(user),
+            } => Some(&user.source),
+            _ => None,
+        });
+    assert!(
+        matches!(source, Some(UserSource::Agent { agent_id }) if agent_id.as_str() == "parent")
+    );
+}
+
 #[test]
 fn distant_turn_locations_are_exact_bounded_and_read_only() {
     let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
@@ -747,4 +792,29 @@ fn message_windows_reject_foreign_future_and_mutated_cuts() {
         .conversation_window(&ConversationWindowAt::Message { id, cut: None }, 64)
         .unwrap();
     assert_eq!(fresh.cut, store.conversation_read_cut().unwrap());
+}
+
+#[test]
+fn inherited_boundary_repeated_page_work_does_not_grow_with_seed() {
+    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+    fn work(size: usize) -> usize {
+        let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+        let seed = LineageSeed::history((0..size).map(|n| message(&format!("seed-{n}"), "inherited")).collect());
+        store.initialize_lineage(&seed).unwrap();
+        // Immutable seed discovery is paid once per connection, not per page.
+        assert_eq!(store.load_transcript_page(None, 64).unwrap().inherited_through.get(), size as u64);
+        let steps = Arc::new(AtomicUsize::new(0));
+        let observed = steps.clone();
+        store.conn.lock().unwrap().progress_handler(1, Some(move || { observed.fetch_add(1, Ordering::Relaxed); false }));
+        for _ in 0..3 {
+            let page = store.load_transcript_page(None, 64).unwrap();
+            assert_eq!(page.entries.len(), 64);
+            assert_eq!(page.inherited_through.get(), size as u64);
+        }
+        store.conn.lock().unwrap().progress_handler(0, None::<fn() -> bool>);
+        steps.load(Ordering::Relaxed)
+    }
+    let small = work(128);
+    let large = work(8192);
+    assert!(large <= small + 100, "fixed pages grew from {small} to {large} VM steps");
 }

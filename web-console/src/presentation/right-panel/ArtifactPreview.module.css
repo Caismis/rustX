@@ -1,10 +1,17 @@
-/* Copyright (c) 2026 DeepSeek. MIT. Adapted TextPreview header/body/wrap; see PROVENANCE.md. */
+/* Copyright (c) 2026 DeepSeek. MIT. Adapted TextPreview chrome and MarkdownBody document; see PROVENANCE.md. */
 .preview { display: flex; flex: 1 1 auto; flex-direction: column; height: 100%; min-height: 0; min-width: 0; overflow: hidden; }
-.header { display: flex; flex: 0 0 auto; gap: 4px; align-items: center; box-sizing: border-box; min-height: 38px; padding: 0 6px 0 16px; border-bottom: .5px solid var(--dsw-alias-border-l3); }
-.header strong { flex: 1; font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.body { flex: 1 1 auto; min-height: 0; max-height: none; margin: 0; padding: 12px; overflow: auto; color: var(--dsw-alias-label-primary); font-family: var(--ds-font-family-code), monospace; font-size: 13px; line-height: 1.6; white-space: pre; }
+.header { display: flex; flex: 0 0 38px; gap: 4px; align-items: center; box-sizing: border-box; height: 38px; padding: 0 6px 0 16px; border-bottom: .5px solid var(--dsw-alias-border-l3); }
+.path { flex: 1 1 auto; min-width: 0; font-size: 13px; }
+.tool { display: flex; flex: none; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 6px; color: var(--dsw-alias-label-secondary); background: transparent; border: 0; border-radius: var(--dsw-radius-sm); cursor: pointer; }
+.tool > span { display: flex; }
+.tool svg { width: 15px; height: 15px; }
+.tool:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
+.tool:disabled { opacity: .35; cursor: default; }
+.tool:focus-visible { outline: 2px solid var(--dsw-alias-label-primary); outline-offset: -2px; }
+.body { flex: 1 1 auto; min-height: 0; margin: 0; padding: 10px 12px; overflow: auto; color: var(--dsw-alias-label-primary); font-family: var(--ds-font-family-code), monospace; font-size: 13px; line-height: 1.6; white-space: pre; }
 .body pre { margin: 0; max-height: none; overflow: visible; font: inherit; white-space: inherit; }
-.body[data-wrap=true] { white-space: pre-wrap; overflow-wrap: anywhere; }
+.body[data-kind=text][data-wrap=true] { white-space: pre-wrap; overflow-wrap: anywhere; }
+.body[data-kind=markdown] { padding: 0; white-space: normal; font-family: var(--dsw-font, inherit); }
+.document { min-width: 0; padding: 10px 12px; white-space: normal; }
 .image { max-width: 100%; object-fit: contain; }
-.preview > :is(p, a, div) { padding: 10px 16px; font-size: 13px; }
-.preview > footer { flex: 0 0 auto; padding: 6px 16px; }
+.status { padding: 10px 16px; font-size: 13px; }

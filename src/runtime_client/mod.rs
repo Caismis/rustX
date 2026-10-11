@@ -98,8 +98,11 @@
 //! re-implements semantics, and transport loss detaches without cancelling or
 //! settling anything.
 
+pub mod agent_conversation;
 pub mod agent_statistics;
+mod agent_trace;
 pub mod attachment;
+mod compaction;
 pub mod endpoint;
 pub mod event;
 pub mod host;
@@ -115,6 +118,7 @@ pub mod types;
 pub(crate) mod test_sync;
 
 pub use attachment::RuntimeAttachment;
+pub use compaction::CompactionMarker;
 pub use endpoint::RuntimeClientEndpoint;
 pub use event::{RuntimeClientAttemptFailure, RuntimeClientEvent, RuntimeClientOutcome};
 pub use host::{

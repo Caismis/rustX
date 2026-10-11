@@ -1,12 +1,12 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Harness guide and DockLayout port; see PROVENANCE.md. */
-import { lazy, Suspense, useCallback, useEffect, useImperativeHandle, type Ref, useRef, useState, useSyncExternalStore } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useImperativeHandle, type ReactNode, type Ref, useRef, useState, useSyncExternalStore } from 'react';
 import type { ProductHostWorkspaces, WorkspaceAuthorityScope } from '../../workspaces/host';
 import type { DesktopTarget } from '../../workspaces/desktop';
 import type { WorkbenchRequest, WorkbenchTerminal } from '../../workspaces/workbench';
 import { useTranslation } from '../../locale/react';
 import { WorkspaceFiles, WorkspaceFile, fileTabView, type FileTabView } from './WorkbenchFiles';
 import { FileTypeIcon } from '../../presentation/primitives/FileTypeIcon';
-import { IconPanelLeftOutline16, IconChevronDownOutline14 } from '../../presentation/primitives/icons';
+import { IconPanelLeftOutline16, IconChevronDownOutline14, IconAgentPresetOutline16 } from '../../presentation/primitives/icons';
 import { Menu } from '../../presentation/primitives/Menu';
 import { CompassGlyph, GuideArtworkFiles, PluginArtworkTerminal, TerminalIcon, FullscreenGlyph, ExitFullscreenGlyph } from './WorkbenchIcons';
 import { readSidebarLayout, writeSidebarLayout } from './workbench-persistence';
@@ -18,9 +18,9 @@ import type { DockIntents } from '../../presentation/dockkit/contract/adapter';
 import css from '../../presentation/right-panel/Workbench.module.css';
 const TerminalView = lazy(() => import('./WorkbenchTerminal'));
 const guideTab = (id: TabId): TabRecord => ({id,kind:'start',contentId:`start:${id}`,title:''});
-export interface WorkbenchHandle { openFile(path: string, line?: number): Promise<boolean> }
-export function Workbench({ fileRef, host, scope, target, visible, floatingVisible, fullscreen, toggleFullscreen, closePanel }: {
-  fileRef?: Ref<WorkbenchHandle>; host: ProductHostWorkspaces; scope?: WorkspaceAuthorityScope; target?: DesktopTarget; visible: boolean; floatingVisible: boolean; fullscreen: boolean; toggleFullscreen: () => void; closePanel: () => void;
+export interface WorkbenchHandle { openFile(path: string, line?: number): Promise<boolean>; openAgent(id: string, title: string): void }
+export function Workbench({ renderAgent, fileRef, host, scope, target, visible, floatingVisible, fullscreen, toggleFullscreen, closePanel }: {
+  renderAgent?: (id: string, visible: boolean) => ReactNode; fileRef?: Ref<WorkbenchHandle>; host: ProductHostWorkspaces; scope?: WorkspaceAuthorityScope; target?: DesktopTarget; visible: boolean; floatingVisible: boolean; fullscreen: boolean; toggleFullscreen: () => void; closePanel: () => void;
 }) {
   const tx = useTranslation();
   const storageKey = JSON.stringify([scope?.endpoint,scope?.authorityId,target?.session_id,target?.active_node]);
@@ -43,15 +43,15 @@ export function Workbench({ fileRef, host, scope, target, visible, floatingVisib
     return host.workbench(scope,{target,request},signal ?? lifetime.current?.signal);
   },[host,scope?.authorityId,scope?.endpoint,target?.session_id,target?.active_node,tx]);
   const available=!!host.workbench && !!scope && !!target;
-  const open=(paneId:PaneId,tab:{kind:string;path?:string;id?:string})=>{
+  const open=(paneId:PaneId,tab:{kind:string;path?:string;id?:string;title?:string})=>{
     navigation.current++;
     const before=dock.getSnapshot().state;
     const pane=getPane(before,paneId), active=pane.activeTabId && before.tabs[pane.activeTabId];
     const contentId=tab.kind==='file' ? `file:${tab.path}` : tab.kind==='files' ? `files:${paneId}` : tab.id ?? crypto.randomUUID();
-    dock.openContent({paneId,kind:tab.kind,contentId,title:tab.path ?? ''});
+    dock.openContent({paneId,kind:tab.kind,contentId,title:tab.title ?? tab.path ?? ''});
     if(active && active.kind==='start') dock.closeTab(active.id);
   };
-  useImperativeHandle(fileRef, () => ({ openFile: async (path, line) => {
+  useImperativeHandle(fileRef, () => ({ openAgent: (id, title) => open(dock.activeDockPaneId(), { kind: 'subagent', id, title }), openFile: async (path, line) => {
     const ticket = ++navigation.current, signal = lifetime.current?.signal;
     setError('');
     try {
@@ -129,25 +129,26 @@ export function Workbench({ fileRef, host, scope, target, visible, floatingVisib
     window.addEventListener('keydown',key,true);return()=>window.removeEventListener('keydown',key,true);
   });
   const isMac=/Mac/.test(navigator.platform);
-  const title=(tab:TabRecord)=>tab.kind==='file'?tab.title.split('/').at(-1):tab.kind==='terminal'?terminals.find(t=>t.id===tab.contentId)?.shell.split('/').at(-1) ?? tab.title:tx(tab.kind==='start'?'artifacts:workbench.start':'artifacts:workbench.file-tab');
+  const title=(tab:TabRecord)=>tab.kind==='subagent'?tab.title:tab.kind==='file'?tab.title.split('/').at(-1):tab.kind==='terminal'?terminals.find(t=>t.id===tab.contentId)?.shell.split('/').at(-1) ?? tab.title:tx(tab.kind==='start'?'artifacts:workbench.start':'artifacts:workbench.file-tab');
   const body=(tab:TabRecord)=>{
     const pane=findTabPane(state,tab.id);
     return <div className={css.body} onKeyDown={e=>{if(tab.kind!=='terminal'&&e.key==='Escape'&&!e.defaultPrevented){e.preventDefault();if(fullscreen)toggleFullscreen();else closePanel();}}}>
-    {tab.kind==='start'? <div className={css.guide}>
+    {tab.kind==='subagent'?renderAgent?.(tab.contentId, pane.activeTabId === tab.id && (pane.host === 'float' ? floatingVisible : visible)):tab.kind==='start'? <div className={css.guide}>
         <span className={css.hero}><CompassGlyph size={56}/></span>
         <button type="button" className={css.entry} disabled={!available} aria-keyshortcuts={isMac ? 'Alt+Meta+P' : 'Alt+Control+P'} onClick={() => open(pane.id, { kind: 'files' })}><span className={css.entryIcon}><GuideArtworkFiles size={26}/></span><span className={css.entryText}><span className={css.entryTitle}>{tx('artifacts:workbench.files')}</span><span className={css.entryDescription}>{tx('artifacts:workbench.files-description')}</span></span><ShortcutKeys keys={isMac ? ['⌥', '⌘', 'P'] : ['Alt', 'Ctrl', 'P']}/></button>
         <div className={`${css.entry} ${css.terminalEntry}`}><button type="button" className={css.launch} aria-label={tx('artifacts:workbench.new-terminal')} aria-keyshortcuts="Control+`" disabled={!available || busy || !shell} onClick={() => void create(pane.id)}/><span className={css.entryIcon}><PluginArtworkTerminal size={26}/></span><span className={css.entryText}><span className={css.titleRow}><span className={css.entryTitle}>{tx('artifacts:workbench.new-terminal')}</span><Menu open={menu === pane.id} autoFocus align="end" items={shells.map(s => ({ id: s, label: s.split('/').at(-1)! }))} selectedId={shell} onClose={() => setMenu(undefined)} onSelect={s => { setShell(s); setMenu(undefined); void create(pane.id, s); }} anchor={<button type="button" className={css.shellTrigger} disabled={busy || !shells.length} aria-label={tx('artifacts:workbench.shell')} aria-haspopup="menu" aria-expanded={menu === pane.id} onClick={() => setMenu(menu === pane.id ? undefined : pane.id)}><IconChevronDownOutline14/></button>}/></span><span className={css.entryDescription}>{tx('artifacts:workbench.terminal-description')}</span></span><ShortcutKeys keys={[isMac ? '⌃' : 'Ctrl', '`']}/></div>
       </div> :tab.kind==='files'?<WorkspaceFiles call={call} view={viewFor(tab.id)} onOpen={path=>open(pane.id,{kind:'file',path})}/>:tab.kind==='file'?<WorkspaceFile key={`${tab.id}:${viewFor(tab.id).focusRevision ?? 0}`} onOpen={path=>open(pane.id,{kind:'file',path})} path={tab.title} call={call} view={viewFor(tab.id)}/>:<Suspense fallback={<p>{tx('artifacts:workbench.loading')}</p>}><TerminalView id={tab.contentId} call={call}/></Suspense>}
     </div>;
   };
+  const usesWorkspaceTools = Object.values(state.tabs).some(tab => tab.kind !== 'subagent' && findTabPane(state, tab.id).activeTabId === tab.id);
   return <div className={css.root} hidden={!visible && (!floatingVisible || !state.floats.length)} data-workbench>
     {error&&<p role="alert" className={css.notice}>{error}</p>}
-    {!available&&<p className={css.notice}>{tx('artifacts:workbench.unavailable')}</p>}
+    {!available&&usesWorkspaceTools&&<p className={css.notice}>{tx('artifacts:workbench.unavailable')}</p>}
     <DockLayout state={state} active={visible || floatingVisible && state.floats.length > 0} canSplit={dockPaneIds(state).length<2} dropZones="horizontal" minPaneFraction={0.2} intents={intents}
       canAddTab={id=>!getPane(state,id).tabs.some(t=>state.tabs[t].kind==='start')}
       canCloseTab={id=>state.tabs[id].kind!=='start'||Object.keys(state.tabs).length>1}
       labels={{emptyPane:tx('artifacts:workbench.start'),splitPane:tx('artifacts:workbench.split'),splitPaneDisabled:tx('artifacts:workbench.split'),splitPaneNarrow:tx('artifacts:workbench.split'),closeTab:tx('artifacts:workbench.close-tab'),addTab:tx('artifacts:workbench.add-tab'),dockFloat:tx('artifacts:workbench.dock'),closeFloat:tx('artifacts:workbench.close-tab'),dropZone:{center:tx('artifacts:workbench.dock'),left:tx('artifacts:workbench.split'),right:tx('artifacts:workbench.split'),top:tx('artifacts:workbench.split'),bottom:tx('artifacts:workbench.split')}}}
-      renderTab={body} renderTabTitle={tab=><span className={css.tabTitle}>{tab.kind==='start'?<CompassGlyph size={16}/>:tab.kind==='terminal'?<TerminalIcon/>:tab.kind==='files'?<FileTypeIcon kind="folder" size={16}/>:<FileTypeIcon path={tab.title} size={16}/>}<span>{title(tab)}</span></span>}
+      keepMounted={tab=>tab.kind==='subagent'} renderTab={body} renderTabTitle={tab=><span className={css.tabTitle}>{tab.kind==='subagent'?<IconAgentPresetOutline16/>:tab.kind==='start'?<CompassGlyph size={16}/>:tab.kind==='terminal'?<TerminalIcon/>:tab.kind==='files'?<FileTypeIcon kind="folder" size={16}/>:<FileTypeIcon path={tab.title} size={16}/>}<span>{title(tab)}</span></span>}
       renderTabMenuItems={(tab,dismiss)=><button role="menuitem" onClick={()=>{dismiss();intents.floatTab(tab.id);}}>{tx('artifacts:workbench.float')}</button>}
       chrome={<div className={css.chrome}><button type="button" className={css.iconButton} aria-label={tx(fullscreen?'artifacts:workbench.restore':'artifacts:workbench.fullscreen')} onClick={toggleFullscreen}>{fullscreen?<ExitFullscreenGlyph/>:<FullscreenGlyph/>}</button><button type="button" className={css.iconButton} aria-label={tx('artifacts:workbench.toggle')} onClick={closePanel}><IconPanelLeftOutline16 className={css.mirrored}/></button></div>}/>
   </div>;

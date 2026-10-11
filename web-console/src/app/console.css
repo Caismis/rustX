@@ -38,7 +38,7 @@ label { display: grid; gap: 5px; font-size: 12px; }
 .session-panel, .conversation-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
 .console-header { height: 60px; flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 20px; }
 .conversation-scroll { padding: 20px 24px; }
-.agent-control { display: flex; flex-direction: column; min-width: 0; max-width: 280px; }
+.agent-control { display: flex; flex-direction: column; min-width: 0; }
 .agent-control small { font-size: 10px; padding: 0 6px; }
 .agent-diff { padding: 10px 14px; overflow: auto; }
 .agent-diff pre { margin: 0; }
@@ -48,7 +48,7 @@ label { display: grid; gap: 5px; font-size: 12px; }
 [data-assistant-message] > :where(:not([hidden])) ~ :where(:not([hidden])) { margin-top: 6px; }
 [data-assistant-message] > [data-markdown-variant="normal"]:not(:first-child),
 [data-assistant-message] > [data-markdown-variant="normal"] + :not([hidden]) { margin-top: 12px; }
-@media (max-width: 600px) { .conversation-scroll { padding: 16px 12px; } .agent-control { max-width: 170px; } }
+@media (max-width: 600px) { .conversation-scroll { padding: 16px 12px; } }
 
 .chat-return-latest { position: absolute; z-index: 8; bottom: 16px; right: max(calc(var(--dsh-composer-side-clearance) + 16px), calc((100% - var(--dsh-chat-content-width)) / 2)); display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; border: 0; border-radius: 100px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-button-floating-fill); box-shadow: var(--dsw-elevation-panel); cursor: pointer; }
 .chat-return-latest:hover { background: var(--dsw-alias-button-floating-hover); }
@@ -60,4 +60,7 @@ label { display: grid; gap: 5px; font-size: 12px; }
 [data-conversation-scroll] { overflow-anchor: none; }
 [data-conversation-scroll] .chat-reading-surface { position: static; flex: 1 0 auto; min-height: auto; }
 [data-conversation-scroll] .conversation-scroll { overflow: visible; flex: 1 0 auto; min-height: auto; margin-right: 0; scrollbar-gutter: auto; padding-bottom: 0; }
-.conversation-panel:has([data-conversation-scroll]) > .chat-return-latest { bottom: calc(var(--dsh-composer-height, 0px) + 16px); }
+/* Floating chrome is a sibling of its scrollport, including inside the
+   resident parent-session surface. Only scrollports with a composer need
+   its clearance; Agent transcripts keep their own bottom alignment. */
+[data-conversation-scroll]:has([data-composer-seat]) ~ .chat-return-latest { bottom: calc(var(--dsh-composer-height, 0px) + 16px); }

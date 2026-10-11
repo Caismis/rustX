@@ -198,7 +198,7 @@ def web_agent_continuation() -> Scenario:
         Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
                     body_contains=("WEB_AGENT_PARENT",), tools_include=("subagent",)),
              Stream(ToolCall("web-agent-create", "subagent", json.dumps({
-                 "agent": "reviewer", "task": "WEB_AGENT_CHILD: review the workspace",
+                 "agent": "reviewer", "title": "Review workspace", "task": "WEB_AGENT_CHILD: review the workspace",
              })), Finish("tool_calls"))),
         *(Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model"),
                Stream(Gate(f"agent-initial-{index}"), Text("Initial request completed."), Finish()),
@@ -358,3 +358,38 @@ def web_terminal_ownership() -> Scenario:
 
 
 SCENARIOS["web_terminal_ownership"] = web_terminal_ownership
+
+
+def web_child_capabilities() -> Scenario:
+    """Full native child streaming, active/inactive uploads and output deliveries."""
+    return Scenario(
+        "web_child_capabilities",
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                    body_contains=("CHILD_CAPABILITIES_PARENT",), tools_include=("subagent",)),
+             Stream(ToolCall("child-capabilities-create", "subagent", json.dumps({
+                 "agent": "reviewer", "title": "Research UI capabilities", "task": "CHILD_CAPABILITIES_TASK",
+             })), Finish("tool_calls"))),
+        *(Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model"),
+               Stream(Text("Live child first chunk."), Gate(f"child-first-{index}"),
+                      Text(" Second live chunk."), Gate(f"child-second-{index}"), Finish())) for index in range(2)),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", tools_include=("write",),
+                    body_contains=("ACTIVE_CHILD_UPLOAD", "active.txt", "user_uploaded_files", ".agents/uploads/"),
+                    body_excludes=("CHILD_CAPABILITIES_PARENT",)),
+             Stream(ToolCall("child-write-report", "write", json.dumps({
+                 "path": "child-report.md", "content": "# Child deliverable\n\n**Verified native output.**\n",
+             })), Finish("tool_calls"))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("child-write-report",)),
+             Stream(ToolCall("child-present-report", "present", json.dumps({"files": [{"path":"child-report.md", "description":"Child result"}]})), Finish("tool_calls"))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", tools_include=("render_image",)),
+             Stream(ToolCall("child-image", "render_image", "{}"), Finish("tool_calls"))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("child-image",)),
+             Stream(Text("Canonical child final report."), Finish(), Usage(400, 40))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                    body_contains=("resume.txt", "user_uploaded_files", "CHILD_CAPABILITIES_TASK"),
+                    body_excludes=("CHILD_CAPABILITIES_PARENT",)),
+             Stream(Text("File-only child continuation completed."), Finish(), Usage(500, 30))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("CHILD_CAPABILITIES_PARENT",)),
+             Stream(Text("Parent and child remain independent."), Finish())),
+    )
+
+SCENARIOS["web_child_capabilities"] = web_child_capabilities

@@ -27,7 +27,7 @@ export function ArtifactPreview({ artifact, resources, viewState, onViewStateCha
     }).catch(error => { if (current()) setContent({ error: String(error) }); }).finally(() => { if (current()) setLoading(false); });
     return () => { live = false; read.abort(); if (owned) resources.release(owned); };
   }, [artifact.mimeType, artifact.image, resources, attempt, kind]);
-  return <Preview name={artifact.name} image={artifact.image} markdown={artifact.mimeType === 'text/markdown'} {...content} loading={loading}
+  return <Preview name={artifact.name} path={artifact.source.kind === 'session_file' ? artifact.source.file.path : artifact.name} image={artifact.image} markdown={artifact.mimeType === 'text/markdown'} {...content} loading={loading}
     viewState={viewState} onViewStateChange={saveViewState} onDownload={() => { if (resources.current()) onDownload(); }}
     decodeError={() => setContent(value => resources.current() && content.url && value.url === content.url ? { ...value, error: tx('artifacts:copy.image-could-not-be-decoded') } : value)} retry={() => retry(value => value + 1)} >
       {kind && content.bytes && <DocumentPreview kind={kind} bytes={content.bytes} resources={resources} viewState={viewState} onViewStateChange={saveViewState} retry={() => retry(value => value + 1)} />}

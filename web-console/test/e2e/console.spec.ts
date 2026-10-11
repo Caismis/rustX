@@ -88,6 +88,9 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await expect(page.getByLabel('Transport token')).toHaveCount(0); await showInspector(page);
     await expect(page.getByText('A is running.', { exact: true })).toBeVisible();
     await reload(); await expect(page.getByText('A is running.', { exact: true })).toBeVisible();
+    await expect.poll(async () => JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText())).toMatchObject({
+      SessionId: idA, attachment: 'attached', runtime_incarnation: expect.any(String),
+    });
     const incarnationA = JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).runtime_incarnation;
     await closeView(idA);
     await expect(page.locator(`button[data-session-id="${idA}"]`)).toBeVisible();
@@ -97,7 +100,10 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await fixture.control('observations/await?kind=response_completed&count=2&timeoutMs=30000');
     await page.locator(`button[data-session-id="${idA}"]`).click();
     await expect(page.getByText('A is running. A finished.', { exact: true })).toBeVisible();
-    expect(JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).runtime_incarnation).toBe(incarnationA);
+    // Cached transcript text can paint before the native attachment completes.
+    await expect.poll(async () => JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText())).toMatchObject({
+      SessionId: idA, attachment: 'attached', runtime_incarnation: incarnationA,
+    });
     // Alternate more than the native 32-attachment capacity on one connection.
     // Every close is acknowledged as detached, and every reopen keeps residency.
     for (let i = 0; i < 34; i++) {

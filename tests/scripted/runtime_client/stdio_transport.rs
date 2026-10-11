@@ -33,6 +33,7 @@ use rustx::message::content::TextBlock;
 use rustx::message::types::{ContentBlockIndex, MessageBlock, UserContentBlock, UserSource};
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
+use rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION;
 use rustx::runtime_client::transport::stdio::{
     STDIO_JSONL_MAX_RECORD_BYTES, StdioFramingError, StdioSessionEnd, StdioTransportError,
     serve_stdio_jsonl_with_io,
@@ -661,7 +662,7 @@ async fn invalid_records_are_fatal_and_write_nothing() {
         ),
         (
             "wrong-type",
-            br#"{"method":"initialize","id":"two","protocol_version":58}"#,
+            br#"{"method":"initialize","id":"two","protocol_version":67}"#,
         ),
     ];
     for (name, record) in cases {

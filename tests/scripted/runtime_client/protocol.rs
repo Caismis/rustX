@@ -17,6 +17,7 @@ use rustx::runtime::interaction::{
     QuestionnaireSpecification, QuestionnaireSubmission, RoutedInteraction,
     SingleChoiceSpecification,
 };
+use rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION;
 use rustx::runtime_client::RuntimeClientHost;
 use rustx::runtime_client::{
     RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientAgentWorkspace, RuntimeClientCursor,
@@ -448,9 +449,9 @@ async fn attachment_request_correlation_and_version_negotiation() {
             requested,
         }) if requested == RUNTIME_CLIENT_PROTOCOL_VERSION + 1
     ));
-    // v44 published a resource diagnostic's field path as its `identity`, so a
+    // v45 published a resource diagnostic's field path as its `identity`, so a
     // client had to guess which resource it belonged to. Issue #392 made the
-    // attribution a mandatory native `subject`; a v44 client is refused.
+    // attribution a mandatory native `subject`; a v45 client is refused.
     assert!(matches!(
         host.attach(44),
         Err(RuntimeClientError::UnsupportedProtocolVersion {
@@ -458,9 +459,9 @@ async fn attachment_request_correlation_and_version_negotiation() {
             requested: 44,
         })
     ));
-    // v40 spelled Trace as a single-level entry with blanket-redacted request
+    // v45 spelled Trace as a single-level entry with blanket-redacted request
     // and Tool input. Issue #364 replaced that vocabulary with the bounded
-    // summary/detail split, so a v40 client is refused rather than served a
+    // summary/detail split, so a v45 client is refused rather than served a
     // shape it cannot decode.
     assert!(matches!(
         host.attach(40),

@@ -36,7 +36,7 @@ the manifest also identifies the rustX package version and native durable schema
 | `sessions/<ConversationId>/generations.jsonl` | Request ID, source Journal sequence and existing `GenerationEvidence`; a convenience index of Journal-owned facts |
 | `sessions/<ConversationId>/publication_audits.jsonl` | Settled noncanonical publication audit values |
 | `sessions/<ConversationId>/inherited_responses.jsonl` | Immutable native completed-response lineage provenance from bootstrap, never reconstructed destination execution |
-| `sessions/<ConversationId>/inherited_turns.jsonl` | Native `TurnReadingProvenance` from `bootstrap_identity.turn_provenance`: original Conversation/Attempt identity, remapped process members and terminal-only predecessor, frozen outcome and timestamps |
+| `sessions/<ConversationId>/inherited_turns.jsonl` | Native `TurnReadingProvenance` from ordered `inherited_turn_provenance` rows: original Conversation/Attempt identity, remapped process members and terminal-only predecessor, frozen outcome and timestamps |
 | `artifacts/<ConversationId>/<ArtifactId>/content` | ArtifactStore bytes; one recorded display descriptor stays in the manifest and original references |
 
 Artifact IDs are conversation-scoped in the native store (`artifact_1` can occur

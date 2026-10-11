@@ -26,6 +26,7 @@ use crate::runtime_client::snapshot::{ForegroundToolState, RuntimeClientAttemptP
 /// name, a timestamp, a row position or the loaded window.
 pub(super) struct LiveTarget<'a> {
     kind: TraceKind,
+    request_id: Option<&'a crate::runtime::identity::RequestId>,
     state: &'a mut TraceState,
     native_id: Option<&'a str>,
     attempt_id: Option<&'a AttemptId>,
@@ -38,6 +39,7 @@ impl TraceRecord {
     fn live_target(&mut self) -> LiveTarget<'_> {
         LiveTarget {
             kind: self.kind,
+            request_id: self.request.as_ref().map(|request| &request.request_id),
             state: &mut self.state,
             native_id: self.native_id.as_deref(),
             attempt_id: self.location.attempt_id.as_ref(),
@@ -57,6 +59,10 @@ impl AnchorFacts {
     fn live_target(&mut self) -> LiveTarget<'_> {
         LiveTarget {
             kind: self.kind,
+            request_id: self
+                .request
+                .as_ref()
+                .map(|request| &request.frozen.request_id),
             state: &mut self.state,
             native_id: self.native_id.as_deref(),
             attempt_id: self.location.attempt_id.as_ref(),
@@ -189,6 +195,62 @@ fn repair<'a>(
                 }
             }
             _ => {}
+        }
+    }
+}
+
+/// A child Trace uses only child activity identities, never the parent's snapshot.
+pub(crate) fn repair_agent_records(
+    records: &mut [TraceRecord],
+    agent: &crate::runtime_client::snapshot::RuntimeClientAgent,
+) {
+    repair_agent(records.iter_mut().map(TraceRecord::live_target), agent);
+}
+pub(super) fn repair_agent_anchor(
+    facts: &mut AnchorFacts,
+    agent: &crate::runtime_client::snapshot::RuntimeClientAgent,
+) {
+    repair_agent(std::iter::once(facts.live_target()), agent);
+}
+fn repair_agent<'a>(
+    targets: impl IntoIterator<Item = LiveTarget<'a>>,
+    agent: &crate::runtime_client::snapshot::RuntimeClientAgent,
+) {
+    use crate::runtime::subagent::{AgentState, SubagentActivity};
+    if !matches!(agent.state, AgentState::Active | AgentState::Stopping) {
+        return;
+    }
+    for record in targets {
+        if *record.state != TraceState::Incomplete
+            || record.attempt_id != agent.observation.attempt_id.as_ref()
+            || record.attempt_id.is_none()
+        {
+            continue;
+        }
+        let live = match (record.kind, &agent.observation.activity) {
+            (TraceKind::Attempt, _) => Some(if agent.state == AgentState::Stopping {
+                TraceState::Cancelling
+            } else {
+                TraceState::Running
+            }),
+            (TraceKind::Request, SubagentActivity::Model { request_id, .. })
+                if record.request_id == Some(request_id) =>
+            {
+                Some(TraceState::Running)
+            }
+            (
+                TraceKind::Tool,
+                SubagentActivity::Tool {
+                    tool_call_id,
+                    tool_id,
+                    ..
+                },
+            ) if record.tool_call == Some((tool_call_id, tool_id)) => Some(TraceState::Running),
+            (TraceKind::Compaction, SubagentActivity::Compacting) => Some(TraceState::Running),
+            _ => None,
+        };
+        if let Some(state) = live {
+            *record.state = state;
         }
     }
 }

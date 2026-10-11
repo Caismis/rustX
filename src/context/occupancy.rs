@@ -1,6 +1,5 @@
-//! Request-owned context occupancy. A provider measurement describes one exact
-//! prepared request, never tokenized visible history. Compaction invalidates the
-//! last request reading until a new request reports input again.
+//! Native context readings: a provider-measured request or the deterministic
+//! rebuilt context committed by compaction. Neither uses browser-visible history.
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -9,15 +8,18 @@ use crate::durable::presentation::{FactQuery, FactScope};
 use crate::durable::{ConversationStore, ConversationStoreError};
 use crate::events::types::RuntimeEvent;
 
-/// The last provider-measured request context for this Conversation.
-/// It is explicitly a request reading, not an estimate of unsent composer text.
+/// Latest native context reading for this Conversation, with explicit provenance.
+/// Unsent composer text is never included.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ContextOccupancy {
-    /// Exact normalized effective request input, including cache reads.
+    /// True for the native rebuilt-context estimate after compaction.
+    #[serde(default)]
+    pub estimated: bool,
+    /// Normalized request input, or the committed rebuilt-context estimate.
     #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub input_tokens: u64,
-    /// Capacity frozen in the same request's native model snapshot.
+    /// Capacity frozen in the request or compaction's native model snapshot.
     #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub context_window_tokens: u64,
     /// Provider-facing historical model, never substituted from current config.
@@ -26,10 +28,21 @@ pub struct ContextOccupancy {
     pub breakdown: ContextBreakdown,
 }
 
+impl ContextOccupancy {
+    pub(crate) fn validate(&self) -> Result<(), ConversationStoreError> {
+        if self.context_window_tokens == 0 {
+            return Err(ConversationStoreError::InvalidReference(
+                "an inherited occupancy reading has no valid context window".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Where one request's measured input went, priced by the provider-neutral
-/// `ceil(bytes / 4)` estimate. Only the System prompt and Tool definitions are
-/// estimated; messages are the measured remainder, so the parts sum to the
-/// provider's reading unless the estimates alone exceed it.
+/// `ceil(bytes / 4)` estimate. System prompt and Tool definitions are priced
+/// heuristically; messages are the remainder of the measured or estimated total.
+/// The parts sum to that total unless the component estimates alone exceed it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ContextBreakdown {
@@ -41,19 +54,20 @@ pub struct ContextBreakdown {
     pub message_tokens: u64,
 }
 
-/// Project the latest prepared request's provider reading at a finite cut.
-/// A newer unfinished request, or compaction, makes the prior reading absent.
+/// Project the latest native context reading at a finite cut.
+/// New requests and compaction in progress preserve the last reading. A committed
+/// checkpoint replaces it with its native estimate; failed maintenance preserves it.
 /// # Errors
 /// Durable read failures are not treated as missing evidence.
 pub(crate) fn read(
     store: &dyn ConversationStore,
     through: u64,
 ) -> Result<Option<ContextOccupancy>, ConversationStoreError> {
-    let boundary = store.read_presentation_events(&FactQuery {
-        scope: FactScope::All,
+    let events = store.read_presentation_events(&FactQuery {
+        scope: FactScope::ContextReading,
         kinds: vec![
-            "model_request_started",
-            "compaction_started",
+            "model_request_completed",
+            "model_request_failed",
             "compaction_completed",
         ],
         before: None,
@@ -62,65 +76,53 @@ pub(crate) fn read(
         through,
         limit: 1,
     })?;
-    let Some(event) = boundary.first() else {
-        return inherited(store);
-    };
-    let RuntimeEvent::ModelRequestStarted { request_id, .. } = &event.event else {
-        return Ok(None);
-    };
-    let terminal = store.read_presentation_events(&FactQuery {
-        scope: FactScope::Request(request_id.to_string()),
-        kinds: vec!["model_request_completed", "model_request_failed"],
-        before: None,
-        after: event.sequence,
-        ascending: true,
-        through,
-        limit: 1,
-    })?;
-    let Some(
-        RuntimeEvent::ModelRequestCompleted {
-            usage: Some(usage), ..
-        }
-        | RuntimeEvent::ModelRequestFailed {
-            usage: Some(usage), ..
-        },
-    ) = terminal.first().map(|event| &event.event)
-    else {
-        return Ok(None);
-    };
-    measure(usage, &store.load_request_snapshot(request_id)?)
+    match events.first().map(|event| &event.event) {
+        Some(
+            RuntimeEvent::ModelRequestCompleted {
+                request_id,
+                usage: Some(usage),
+                ..
+            }
+            | RuntimeEvent::ModelRequestFailed {
+                request_id,
+                usage: Some(usage),
+                ..
+            },
+        ) => measure(usage, &store.load_request_snapshot(request_id)?),
+        Some(RuntimeEvent::CompactionCompleted { occupancy, .. }) => Ok(occupancy.clone()),
+        None => store.load_inherited_occupancy(),
+        Some(_) => Err(ConversationStoreError::InvalidReference(
+            "context reading index returned non-qualifying Journal evidence".into(),
+        )),
+    }
 }
 
-/// Before its own first request, a lineage child reads the context its newest
-/// inherited request measured, as a Harness fork's copied prefix does, unless
-/// its retained Surface compacted after that turn's content.
-fn inherited(
-    store: &dyn ConversationStore,
-) -> Result<Option<ContextOccupancy>, ConversationStoreError> {
+/// Derive the immutable bootstrap reading once from a validated lineage seed.
+/// The newest inherited request Turn owns absence as well as measurement;
+/// a retained Surface replacement after its content suppresses the reading.
+pub(crate) fn inherit(
+    turns: &[crate::durable::reading::TurnReadingProvenance],
+    history: &[crate::conversation::SurfaceOp],
+) -> Option<ContextOccupancy> {
     use crate::conversation::SurfaceOp;
-    let Some(turn) = store
-        .load_inherited_turns()?
-        .into_iter()
-        .rev()
-        .find(|turn| {
-            turn.execution
-                .as_ref()
-                .is_some_and(|execution| execution.model_requests > 0)
-        })
-    else {
-        return Ok(None);
-    };
-    let history = store.load_surface_history(store.load_head()?.revision)?;
-    let appended = history.iter().rposition(|op| {
-        matches!(op, SurfaceOp::Append { message_id } if turn.process_message_ids.contains(message_id))
-    });
+    let turn = turns.iter().rev().find(|turn| {
+        turn.execution
+            .as_ref()
+            .is_some_and(|execution| execution.model_requests > 0)
+    })?;
+    let members: std::collections::BTreeSet<_> = turn.process_message_ids.iter().collect();
+    let appended = history.iter().rposition(
+        |op| matches!(op, SurfaceOp::Append { message_id } if members.contains(message_id)),
+    );
     let compacted = history
         .iter()
         .rposition(|op| matches!(op, SurfaceOp::Replace { .. }));
     if compacted > appended {
-        return Ok(None);
+        return None;
     }
-    Ok(turn.execution.and_then(|execution| execution.occupancy))
+    turn.execution
+        .as_ref()
+        .and_then(|execution| execution.occupancy.clone())
 }
 
 /// The occupancy one terminal reading measures for its own frozen request.
@@ -156,6 +158,7 @@ pub(crate) fn measure(
         )
     };
     Ok(Some(ContextOccupancy {
+        estimated: false,
         input_tokens: usage.input_tokens,
         context_window_tokens: snapshot.context_window_tokens,
         model: snapshot.invocation.model.clone(),
@@ -167,4 +170,35 @@ pub(crate) fn measure(
                 .saturating_sub(system_tokens.saturating_add(tool_tokens)),
         },
     }))
+}
+
+/// Prices the same primary request context validated and committed by compaction.
+/// The reading never contributes to cumulative provider usage.
+pub(crate) fn estimate(
+    input_tokens: u64,
+    context_window_tokens: u64,
+    model: &str,
+    system: &str,
+    tools: &[crate::tools::types::ModelToolDefinition],
+) -> ContextOccupancy {
+    use crate::context::TokenEstimator as _;
+    let estimator = crate::context::DefaultTokenEstimator;
+    let base = estimator.estimate_input(&[], "", &[]);
+    let system_tokens = estimator
+        .estimate_input(&[], system, &[])
+        .saturating_sub(base);
+    let tool_tokens = estimator
+        .estimate_input(&[], "", tools)
+        .saturating_sub(base);
+    ContextOccupancy {
+        estimated: true,
+        input_tokens,
+        context_window_tokens,
+        model: model.to_owned(),
+        breakdown: ContextBreakdown {
+            system_tokens,
+            tool_tokens,
+            message_tokens: input_tokens.saturating_sub(system_tokens.saturating_add(tool_tokens)),
+        },
+    }
 }

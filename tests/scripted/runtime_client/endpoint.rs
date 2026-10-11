@@ -18,6 +18,7 @@ use super::super::support;
 use rustx::message::types::MessageBlock;
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
+use rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION;
 use rustx::runtime_client::{
     EventDelivery, RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientEndpoint, RuntimeClientHost,
     RuntimeClientRequest, RuntimeClientResponse,
@@ -228,16 +229,16 @@ async fn unsupported_protocol_version_is_a_correlated_typed_error() {
     assert_eq!(response["error"]["requested"], 38);
     assert_eq!(adapter.endpoint.attachment_id(), None);
 
-    // main's v61 decoder rejects the new inherited_through transcript field.
+    // main's v66 decoder rejects the new inherited_through transcript field.
     // Reject it before an attachment can deliver that incompatible snapshot.
-    let response = adapter.exchange(r#"{"method":"initialize","id":61,"protocol_version":61}"#);
+    let response = adapter.exchange(r#"{"method":"initialize","id":66,"protocol_version":66}"#);
     assert!(response.get("result").is_none());
     assert_eq!(response["error"]["type"], "unsupported_protocol_version");
     assert_eq!(
         response["error"]["supported"],
         RUNTIME_CLIENT_PROTOCOL_VERSION
     );
-    assert_eq!(response["error"]["requested"], 61);
+    assert_eq!(response["error"]["requested"], 66);
     assert_eq!(adapter.endpoint.attachment_id(), None);
 
     // A future version the runtime does not speak is rejected explicitly.
@@ -419,7 +420,7 @@ async fn unsupported_protocol_version_is_a_correlated_typed_error() {
     assert_eq!(response["error"]["requested"], 34);
     assert_eq!(adapter.endpoint.attachment_id(), None);
 
-    // Native deletion mutations were removed in v40, not kept as aliases.
+    // Native deletion mutations were removed in v41, not kept as aliases.
     let response = adapter.exchange(r#"{"method":"initialize","id":39,"protocol_version":39}"#);
     assert_eq!(
         response["error"]["supported"],
@@ -429,7 +430,7 @@ async fn unsupported_protocol_version_is_a_correlated_typed_error() {
     assert_eq!(adapter.endpoint.attachment_id(), None);
 
     // Trace replaced its single-level entry with the summary/detail split in
-    // v41, so a v40 client would decode a vocabulary that no longer exists.
+    // v41, so a v41 client would decode a vocabulary that no longer exists.
     let response = adapter.exchange(r#"{"method":"initialize","id":40,"protocol_version":40}"#);
     assert_eq!(
         response["error"]["supported"],
@@ -438,7 +439,7 @@ async fn unsupported_protocol_version_is_a_correlated_typed_error() {
     assert_eq!(response["error"]["requested"], 40);
     assert_eq!(adapter.endpoint.attachment_id(), None);
 
-    // Completed-response projections are mandatory in v42.
+    // Completed-response projections are mandatory in v45.
     let response = adapter.exchange(r#"{"method":"initialize","id":41,"protocol_version":41}"#);
     assert_eq!(
         response["error"]["supported"],

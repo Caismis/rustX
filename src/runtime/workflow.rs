@@ -2695,11 +2695,13 @@ impl WorkflowRuntime {
         })?;
         let spec = crate::runtime::subagent::SubagentStartSpec {
             authority: crate::runtime::subagent::DurableAgentAuthority {
+                title: node_id.node.clone(),
                 execution_policy: context.execution_policy(),
                 resolved,
                 approval_mode: context.approval_mode(),
             },
             admission: crate::runtime::subagent::ActivationAdmission {
+                attachments: Vec::new(),
                 task: agent.task.clone(),
                 context: Some(context_package),
                 origin: crate::runtime::subagent::AgentActivationOrigin::Workflow {

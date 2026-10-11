@@ -32,9 +32,9 @@ export function modelDefaultLabel(tx: Translate, choice: ModelChoice) {
 /** The Harness model/profile two-level menu over exact adapter-supplied choices.
  * `profile` is the configured (pinned) Profile; `effectiveProfile` is what the
  * current invocation resolves to and is only displayed. */
-export function ModelSelect({ choices, current, profile, effectiveProfile, disabled, loading, error, load, choose, initialOpen = false, binding = '' }: {
+export function ModelSelect({ choices, current, profile, effectiveProfile, disabled, loading, error, load, reload, choose, initialOpen = false, binding = '' }: {
  choices: ModelChoice[]; current?: string; profile?: string; effectiveProfile?: string; disabled: boolean; loading: boolean; error?: string;
- load: () => void; choose: (intent: ModelSelectionIntent) => void; initialOpen?: boolean; binding?: string;
+ load: () => void; reload: () => void; choose: (intent: ModelSelectionIntent) => void; initialOpen?: boolean; binding?: string;
 }) {
   const tx = useTranslation();
  const [open, setOpen] = useState(initialOpen);
@@ -58,11 +58,11 @@ export function ModelSelect({ choices, current, profile, effectiveProfile, disab
  <Menu open={open} side="top" align="end" autoFocus={!loading && !disabled} items={items} footer={status}
  selectedIds={[`model:${current}`, profile === undefined ? 'profile-default' : `profile:${profile}`]} onClose={() => setOpen(false)}
  onSelect={id => {
-  if (disabled) return; if (id === 'retry') { load(); return; } if (loading) return; setOpen(false);
+  if (disabled) return; if (id === 'retry') { reload(); return; } if (loading) return; setOpen(false);
   if (id.startsWith('model:')) choose({ kind: 'model', model: id.slice(6) });
   else if (current && id === 'profile-default') choose({ kind: 'model-default', model: current });
   else if (current && id.startsWith('profile:')) choose({ kind: 'profile', model: current, profile: id.slice(8) });
  }}
- anchor={<button data-model-select="" className={css.trigger} type="button" aria-label={tx('agent:model-select.model-and-profile')} title={[current ?? tx('agent:model-select.choose-model'), displayed].filter(Boolean).join(' · ')} aria-haspopup="menu" aria-expanded={open} disabled={disabled} onClick={() => { setOpen(v => !v); if (!open) load(); }}><IconDataOutline16 size={16}/><span className={css.triggerLabel}>{current ?? tx('agent:model-select.choose-model')}</span>{displayed && <span className={css.triggerEffort}>{displayed}</span>}<IconChevronDownOutline14/></button>}/>
+ anchor={<button data-model-select="" title={[current ?? tx('agent:model-select.choose-model'), displayed].filter(Boolean).join(' ')} className={css.trigger} type="button" aria-label={tx('agent:model-select.model-and-profile')} aria-haspopup="menu" aria-expanded={open} disabled={disabled} onClick={() => { setOpen(v => !v); if (!open) load(); }}><IconDataOutline16 size={16} className={css.triggerIcon}/><span className={css.triggerLabel}>{current ?? tx('agent:model-select.choose-model')}</span>{displayed && <span className={css.triggerEffort}>{displayed}</span>}<IconChevronDownOutline14/></button>}/>
  </div>;
 }

@@ -37,7 +37,7 @@ it('only registrations authorize files; picker/classification roots alone do not
   expect(await host.classifyLocations([other], scope.endpoint)).toEqual([{ authorized: true }]);
   const pending = host.readDelivery(scope, read); const socket = GatedSocket.instances[0]; socket.open();
   expect(socket.payload?.roots).toEqual([root]);
-  expect(socket.protocols).toEqual(['rustx.product-host.file-read.v2', 'rustx-product-host.private-token']);
+  expect(socket.protocols).toEqual(['rustx.product-host.file-read.v3', 'rustx-product-host.private-token']);
   expect(socket.url.href).toBe('ws://127.0.0.1:1234/product-host/file-read');
   expect(JSON.stringify(socket.payload)).not.toContain('private-token');
   socket.complete(); expect((await pending).data).toBe('aGk='); expect(socket.closed).toBe(true);

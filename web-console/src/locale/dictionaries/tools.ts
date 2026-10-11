@@ -1,5 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
+  "tool-card.inspect": "Inspect",
   "tool-card.copy": "Copy",
   "tool-card.copied": "Copied",
   "tool-card.collapse-output": "Collapse output",
@@ -35,6 +36,7 @@ export const en = {
 } as const;
 export type ToolsKey = keyof typeof en;
 export const zh = {
+  "tool-card.inspect": "查看",
   "tool-card.copy": "复制",
   "tool-card.copied": "已复制",
   "tool-card.collapse-output": "收起输出",

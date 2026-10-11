@@ -95,39 +95,7 @@ fn request_timed(
     generation: Option<crate::model::generation_evidence::GenerationEvidence>,
     failed: bool,
 ) {
-    let snapshot = RequestSnapshot::new(
-        RequestIdentity {
-            attempt_id: AttemptId::new(attempt),
-            turn: TurnId::new("1"),
-            retry_number: retry,
-        },
-        store.load_head().unwrap().revision,
-        "system".into(),
-        vec![],
-        crate::runtime::RuntimeResourceRevision::new(1),
-        ModelInvocationConfig {
-            model: "historical-model".into(),
-            protocol: ModelProtocol::OpenAiChatCompletions,
-            max_output_tokens: 100,
-            request_params: RequestParams::new(),
-            capabilities: ModelCapabilities::text_only(true, true),
-            compat: ModelCompat::default(),
-        },
-        4096,
-        None,
-        false,
-        vec![],
-        CapabilityRevision::new(1),
-        ContextGeneration {
-            id: 1,
-            contributors: vec![],
-        },
-        None,
-        vec![],
-    );
-    store
-        .commit_model_turn_start(&[], &snapshot, Utc.timestamp_opt(1_700_000_000, 0).unwrap())
-        .unwrap();
+    let snapshot = start_request(store, attempt, retry);
     append(
         store,
         attempt,
@@ -157,6 +125,50 @@ fn request_timed(
             }
         },
     );
+}
+fn start_request(store: &dyn ConversationStore, attempt: &str, retry: u32) -> RequestSnapshot {
+    start_request_with_window(store, attempt, retry, 4096)
+}
+fn start_request_with_window(
+    store: &dyn ConversationStore,
+    attempt: &str,
+    retry: u32,
+    context_window: u64,
+) -> RequestSnapshot {
+    let snapshot = RequestSnapshot::new(
+        RequestIdentity {
+            attempt_id: AttemptId::new(attempt),
+            turn: TurnId::new("1"),
+            retry_number: retry,
+        },
+        store.load_head().unwrap().revision,
+        "system".into(),
+        vec![],
+        crate::runtime::RuntimeResourceRevision::new(1),
+        ModelInvocationConfig {
+            model: "historical-model".into(),
+            protocol: ModelProtocol::OpenAiChatCompletions,
+            max_output_tokens: 100,
+            request_params: RequestParams::new(),
+            capabilities: ModelCapabilities::text_only(true, true),
+            compat: ModelCompat::default(),
+        },
+        context_window,
+        None,
+        false,
+        vec![],
+        CapabilityRevision::new(1),
+        ContextGeneration {
+            id: 1,
+            contributors: vec![],
+        },
+        None,
+        vec![],
+    );
+    store
+        .commit_model_turn_start(&[], &snapshot, Utc.timestamp_opt(1_700_000_000, 0).unwrap())
+        .unwrap();
+    snapshot
 }
 fn usage(cached: Option<u64>) -> ModelUsage {
     ModelUsage {
@@ -464,7 +476,7 @@ fn interrupted_output_and_incomplete_usage_never_claim_completion_or_zero() {
 }
 
 #[test]
-fn context_measurement_is_native_and_is_invalidated_by_compaction() {
+fn context_measurement_survives_pending_and_failed_compaction() {
     let store = SqliteConversationStore::in_memory(ConversationId::new(
         "conv_b05f9cb7-dcec-7fa1-8fa9-2047ae76d95f",
     ))
@@ -492,15 +504,24 @@ fn context_measurement_is_native_and_is_invalidated_by_compaction() {
             message_tokens: 98
         }
     );
-    request(&store, "a", 1, None);
+    // Streaming has no new provider sample yet, including after reopening a read.
+    start_request(&store, "a", 1);
     assert_eq!(
         crate::context::occupancy::read(&store, store.presentation_frontier().unwrap()).unwrap(),
-        None,
-        "a newer unmeasured request cannot inherit the previous reading"
+        Some(read.clone())
+    );
+    // Usage-free terminals must not erase the measurement, even across pages.
+    for retry in 2..=2049 {
+        request(&store, "a", retry, None);
+    }
+    assert_eq!(
+        crate::context::occupancy::read(&store, store.presentation_frontier().unwrap()).unwrap(),
+        Some(read.clone()),
+        "a newer unmeasured request preserves the last measured reading"
     );
     let mut zero = usage(None);
     zero.input_tokens = 0;
-    request(&store, "a", 2, Some(zero));
+    request(&store, "a", 2050, Some(zero));
     assert_eq!(
         crate::context::occupancy::read(&store, store.presentation_frontier().unwrap())
             .unwrap()
@@ -511,14 +532,30 @@ fn context_measurement_is_native_and_is_invalidated_by_compaction() {
     );
     let totals = page(&store, None, 64).statistics;
     append(&store, "a", RuntimeEvent::CompactionStarted);
+    let pending = crate::context::occupancy::read(&store, store.presentation_frontier().unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        pending.input_tokens, 0,
+        "maintenance preserves even a measured zero"
+    );
+    assert!(!pending.estimated);
+    append(
+        &store,
+        "a",
+        RuntimeEvent::CompactionFailed {
+            error: "summary failed".into(),
+        },
+    );
     assert_eq!(
         crate::context::occupancy::read(&store, store.presentation_frontier().unwrap()).unwrap(),
-        None
+        Some(pending)
     );
     assert_eq!(page(&store, None, 64).statistics, totals);
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn real_compaction_preserves_response_identity_cut_and_cumulative_usage() {
     let store = SqliteConversationStore::in_memory(ConversationId::new(
         "conv_b05f9cb7-dcec-7fa1-8fa9-2047ae76d95f",
@@ -564,17 +601,44 @@ fn real_compaction_preserves_response_identity_cut_and_cumulative_usage() {
             attempt_id: None,
             turn_id: None,
             timestamp: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+            occupancy: Some(crate::context::occupancy::estimate(
+                20,
+                4096,
+                "compaction-primary",
+                "system",
+                &[],
+            )),
         })
         .unwrap();
     let outline_after = store.conversation_turns(0, 64).unwrap();
     assert_eq!(outline_before.turns, outline_after.turns);
     assert_ne!(outline_before.cut, outline_after.cut);
     let after = page(&store, None, 64);
+    let marker = after
+        .entries
+        .iter()
+        .find_map(|entry| entry.compaction.as_ref())
+        .unwrap();
+    assert_eq!(marker.retired_messages, 2);
+    assert!(marker.retired_tokens > 0);
+    assert_eq!(marker.manual, Some(true));
+    let historical = page(&store, None, 1);
+    assert_eq!(
+        historical.entries[0].compaction.as_ref(),
+        Some(marker),
+        "a bounded page resolves its own replacement facts"
+    );
     assert_eq!(tails(&after)[0], &tail);
     assert_eq!(after.statistics, before.statistics);
     assert_eq!(
         crate::context::occupancy::read(&store, store.presentation_frontier().unwrap()).unwrap(),
-        None
+        Some(crate::context::occupancy::estimate(
+            20,
+            4096,
+            "compaction-primary",
+            "system",
+            &[]
+        ))
     );
     assert!(is_completed_response(&store, &tail.closing_message_id).unwrap());
     assert_eq!(
@@ -593,6 +657,10 @@ fn real_compaction_preserves_response_identity_cut_and_cumulative_usage() {
             .unwrap(),
         &store
             .read_lineage_cut(store.load_head().unwrap().revision)
+            .unwrap()
+            .checkpoints,
+        &store
+            .read_lineage_cut(store.load_head().unwrap().revision)
             .map(|cut| cut.completed_responses)
             .unwrap(),
         &store
@@ -604,6 +672,17 @@ fn real_compaction_preserves_response_identity_cut_and_cumulative_usage() {
     let child = SqliteConversationStore::in_memory(child_id).unwrap();
     child.initialize_lineage(&seed).unwrap();
     let inherited = page(&child, None, 64);
+    let copied_marker = inherited
+        .entries
+        .iter()
+        .find_map(|entry| entry.compaction.as_ref())
+        .unwrap();
+    assert_eq!(copied_marker.retired_messages, 2);
+    assert!(copied_marker.retired_tokens > 0);
+    assert_eq!(
+        copied_marker.manual, None,
+        "copied history does not fabricate local command attribution"
+    );
     assert_eq!(tails(&inherited).len(), 1);
     let inherited_tail = tails(&inherited)[0];
     assert_eq!(inherited_tail.origin, tail.origin);
@@ -924,7 +1003,32 @@ fn exact_window_decoration_keeps_attempt_tool_occurrences_and_response_identity(
         assistant(&store, attempt, &format!("{attempt}-final"));
         finish(&store, attempt);
     }
+    let expected = page(&store, Some(crate::durable::TranscriptCursor::new(5)), 4);
     let outline = store.conversation_turns(0, 64).unwrap();
+    let frontier = store.presentation_frontier().unwrap();
+    let unrelated = (0..2048)
+        .map(|index| {
+            let id = MessageId::new(format!("unrelated-{index}"));
+            let mut committed = event(
+                &store,
+                "unrelated",
+                RuntimeEvent::AssistantMessageCommitted {
+                    message_id: id.clone(),
+                },
+            );
+            committed.event_id = EventId::new(format!("event-{}", frontier + index + 1));
+            (
+                AssistantMessageBlock {
+                    id: id.clone(),
+                    content: vec![AssistantContentBlock::Text(TextBlock {
+                        text: id.to_string(),
+                    })],
+                },
+                committed,
+            )
+        })
+        .collect::<Vec<_>>();
+    crate::durable::sqlite::append_assistant_history_fixture(&store, &unrelated).unwrap();
     // The four rows of Attempt a: the page before Attempt b's location.
     let read = store
         .conversation_window(
@@ -937,7 +1041,6 @@ fn exact_window_decoration_keeps_attempt_tool_occurrences_and_response_identity(
         .unwrap();
     let mut window = crate::runtime_client::snapshot::transcript_page_view(read.page).unwrap();
     super::decorate_window(&store, &mut window, read.cut.journal).unwrap();
-    let expected = page(&store, Some(crate::durable::TranscriptCursor::new(5)), 4);
     assert_eq!(window.entries, expected.entries);
     assert_eq!(tails(&window)[0].origin.attempt_id, AttemptId::new("a"));
     assert!(window.entries.iter().all(|entry| {
@@ -951,7 +1054,7 @@ fn exact_window_decoration_keeps_attempt_tool_occurrences_and_response_identity(
         expected.entries[0].tool_calls[0].state
     );
     assert!(window.statistics.is_none());
-    assert_eq!(store.conversation_read_cut().unwrap(), outline.cut);
+    assert!(store.conversation_read_cut().unwrap().journal > outline.cut.journal);
 }
 
 #[test]
@@ -1065,7 +1168,7 @@ fn agent_statistics_replays_incrementally_with_full_native_metrics() {
     assert_eq!(live.statistics.model_requests, 2);
     assert_eq!(live.statistics.requests_with_usage, 1);
     assert_eq!(live.statistics.reported_usage.unwrap().total_tokens, 120);
-    assert!(live.occupancy.is_none());
+    assert_eq!(live.occupancy, first.occupancy);
     assert!(live.duration.active.as_ref().unwrap().running);
     assert_eq!(live.duration.settled_ms, 10_000);
     let frozen = fold.read(&store, cut, || None).unwrap();
@@ -1089,5 +1192,274 @@ fn agent_statistics_replays_incrementally_with_full_native_metrics() {
         StatisticsFold::default()
             .read(&store, cut, || None)
             .unwrap()
+    );
+}
+
+#[test]
+fn occupancy_compaction_absence_invalid_window_and_failed_usage_are_boundaries() {
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    request(&store, "a", 0, Some(usage(None)));
+    let measured_cut = store.presentation_frontier().unwrap();
+    let measured = crate::context::occupancy::read(&store, measured_cut)
+        .unwrap()
+        .unwrap();
+    let snapshot = start_request_with_window(&store, "a", 1, 0);
+    append(
+        &store,
+        "a",
+        RuntimeEvent::ModelRequestCompleted {
+            request_id: snapshot.request_id,
+            finish_reason: ModelFinishReason::Stop,
+            usage: Some(usage(None)),
+            generation: None,
+        },
+    );
+    assert_eq!(
+        crate::context::occupancy::read(&store, store.presentation_frontier().unwrap()).unwrap(),
+        None,
+        "an invalid window is not a reason to select older usage"
+    );
+    assert_eq!(
+        crate::context::occupancy::read(&store, measured_cut).unwrap(),
+        Some(measured)
+    );
+    request_timed(&store, "a", 2, Some(usage(None)), None, true);
+    let failed_cut = store.presentation_frontier().unwrap();
+    assert!(
+        !crate::context::occupancy::read(&store, failed_cut)
+            .unwrap()
+            .unwrap()
+            .estimated
+    );
+    // The same native atomic compaction transition owns an explicit absent estimate.
+    user(&store, "compacted-input");
+    assistant(&store, "a", "compacted-response");
+    store
+        .commit_compaction(crate::durable::CompactionCommitInput {
+            summary: UserMessageBlock {
+                id: MessageId::new("absent-summary"),
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: "summary".into(),
+                })],
+                source: UserSource::Runtime,
+                kind: InboundKind::CompactionSummary(
+                    crate::message::types::CompactionSummaryMetadata::empty(),
+                ),
+                timestamp: None,
+            },
+            span: crate::conversation::SurfaceSpan::new(
+                MessageId::new("compacted-input"),
+                MessageId::new("compacted-response"),
+            ),
+            expected_revision: store.load_head().unwrap().revision,
+            tokens_before: crate::runtime::types::TokenMeasurement {
+                input_tokens: 100,
+                source: crate::runtime::types::TokenMeasurementSource::ProviderReported,
+            },
+            estimated_tokens_after: 20,
+            attempt_id: None,
+            turn_id: None,
+            timestamp: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+            occupancy: None,
+        })
+        .unwrap();
+    request(&store, "a", 3, None);
+    assert_eq!(
+        crate::context::occupancy::read(&store, store.presentation_frontier().unwrap()).unwrap(),
+        None,
+        "unmeasured requests must not resurrect pre-compaction usage"
+    );
+    assert!(
+        crate::context::occupancy::read(&store, failed_cut)
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // One inherited window/occupancy cut sequence across reopen and local compaction.
+fn occupancy_reopens_and_inherits_without_local_requests_or_events() {
+    let directory = tempfile::tempdir().unwrap();
+    let id = ConversationId::generate();
+    let path = directory.path().join("source.sqlite");
+    let source = SqliteConversationStore::open(id.clone(), &path).unwrap();
+    user(&source, "input");
+    append(
+        &source,
+        "a",
+        RuntimeEvent::AttemptStarted {
+            attempt_id: AttemptId::new("a"),
+        },
+    );
+    request(&source, "a", 0, Some(usage(None)));
+    assistant(&source, "a", "response");
+    finish(&source, "a");
+    let cut = source.presentation_frontier().unwrap();
+    let expected = crate::context::occupancy::read(&source, cut).unwrap();
+    drop(source);
+    let source = SqliteConversationStore::open_existing(id, &path).unwrap();
+    assert_eq!(
+        crate::context::occupancy::read(&source, cut).unwrap(),
+        expected
+    );
+    let selected = source
+        .read_lineage_cut(source.load_head().unwrap().revision)
+        .unwrap();
+    let seed = crate::durable::LineageSeed::replayed(
+        selected.canonical,
+        selected.surface_history,
+        selected.checkpoints,
+    )
+    .unwrap()
+    .with_completed_responses(selected.completed_responses)
+    .unwrap()
+    .with_turns(selected.turns)
+    .unwrap();
+    let child_id = ConversationId::generate();
+    let child_path = directory.path().join("child.sqlite");
+    let child = SqliteConversationStore::open(child_id.clone(), &child_path).unwrap();
+    child.initialize_lineage(&seed).unwrap();
+    assert_eq!(
+        crate::context::occupancy::read(&child, 0).unwrap(),
+        expected
+    );
+    assert_eq!(child.presentation_frontier().unwrap(), 0);
+    assert!(
+        child
+            .transcript_attempts(&[MessageId::new("response")], 0)
+            .unwrap()
+            .is_empty()
+    );
+    let selected_window = child
+        .conversation_window(&crate::durable::reading::ConversationWindowAt::Latest, 8)
+        .unwrap();
+    let mut copied_page = transcript_page_view(selected_window.page).unwrap();
+    super::decorate_window(&child, &mut copied_page, selected_window.cut.journal).unwrap();
+    assert_eq!(
+        tails(&copied_page)[0].origin.conversation_id,
+        source.conversation_id().clone()
+    );
+
+    drop(child);
+    let child = SqliteConversationStore::open(child_id, &child_path).unwrap();
+    assert_eq!(
+        crate::context::occupancy::read(&child, 0).unwrap(),
+        expected
+    );
+    for retry in 0..2048 {
+        request(&child, "child", retry, None);
+    }
+    assert_eq!(
+        crate::context::occupancy::read(&child, child.presentation_frontier().unwrap()).unwrap(),
+        expected
+    );
+    let before_compaction = child.presentation_frontier().unwrap();
+    child
+        .commit_compaction(crate::durable::CompactionCommitInput {
+            summary: UserMessageBlock {
+                id: MessageId::new("child-summary"),
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: "summary".into(),
+                })],
+                source: UserSource::Runtime,
+                kind: InboundKind::CompactionSummary(
+                    crate::message::types::CompactionSummaryMetadata::empty(),
+                ),
+                timestamp: None,
+            },
+            span: crate::conversation::SurfaceSpan::new(
+                MessageId::new("input"),
+                MessageId::new("response"),
+            ),
+            expected_revision: child.load_head().unwrap().revision,
+            tokens_before: crate::runtime::types::TokenMeasurement {
+                input_tokens: 100,
+                source: crate::runtime::types::TokenMeasurementSource::ProviderReported,
+            },
+            estimated_tokens_after: 20,
+            attempt_id: None,
+            turn_id: None,
+            timestamp: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+            occupancy: None,
+        })
+        .unwrap();
+    assert_eq!(
+        crate::context::occupancy::read(&child, 0).unwrap(),
+        expected
+    );
+    assert_eq!(
+        crate::context::occupancy::read(&child, before_compaction).unwrap(),
+        expected
+    );
+    assert_eq!(
+        crate::context::occupancy::read(&child, child.presentation_frontier().unwrap()).unwrap(),
+        None
+    );
+}
+
+#[test]
+fn occupancy_thousands_of_unmeasured_terminal_requests_do_not_invent_a_reading() {
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    for retry in 0..2048 {
+        request_timed(&store, "unmeasured", retry, None, None, retry % 2 == 0);
+    }
+    assert_eq!(
+        crate::context::occupancy::read(&store, store.presentation_frontier().unwrap()).unwrap(),
+        None
+    );
+    let cut = store.presentation_frontier().unwrap();
+    request_timed(&store, "unmeasured", 2048, Some(usage(None)), None, true);
+    assert_eq!(crate::context::occupancy::read(&store, cut).unwrap(), None);
+    assert_eq!(
+        crate::context::occupancy::read(&store, store.presentation_frontier().unwrap())
+            .unwrap()
+            .unwrap()
+            .input_tokens,
+        100
+    );
+}
+
+#[test]
+fn window_decoration_empty_human_only_and_before_local_ownership_remain_exact() {
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    let read = store
+        .conversation_window(&crate::durable::reading::ConversationWindowAt::Latest, 8)
+        .unwrap();
+    let mut empty = transcript_page_view(read.page).unwrap();
+    super::decorate_window(&store, &mut empty, read.cut.journal).unwrap();
+    assert!(empty.entries.is_empty());
+    user(&store, "human-only");
+    let read = store
+        .conversation_window(&crate::durable::reading::ConversationWindowAt::Latest, 8)
+        .unwrap();
+    let mut human = transcript_page_view(read.page).unwrap();
+    super::decorate_window(&store, &mut human, read.cut.journal).unwrap();
+    assert!(human.entries[0].turn_process.is_none());
+    assert!(human.entries[0].completed_response.is_none());
+    append(
+        &store,
+        "later",
+        RuntimeEvent::AttemptStarted {
+            attempt_id: AttemptId::new("later"),
+        },
+    );
+    assistant(&store, "later", "later-answer");
+    finish(&store, "later");
+    let read = store
+        .conversation_window(&crate::durable::reading::ConversationWindowAt::Latest, 8)
+        .unwrap();
+    let mut historical = transcript_page_view(read.page).unwrap();
+    super::decorate_window(&store, &mut historical, 0).unwrap();
+    assert!(tails(&historical).is_empty());
+    assert!(
+        historical
+            .entries
+            .iter()
+            .all(|entry| entry.turn_process.is_none())
+    );
+    super::decorate_window(&store, &mut historical, read.cut.journal).unwrap();
+    assert_eq!(
+        tails(&historical)[0].origin.attempt_id,
+        AttemptId::new("later")
     );
 }

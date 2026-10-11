@@ -24,7 +24,7 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
     const png = PNG.sync.read(await page.screenshot({ ...(draft === '' ? { path: `/tmp/rustx-trajectory-resting-${theme}-${width}.png` } : {}) }));
     const sample = (offset: number) => png.data[(Math.floor(seatBox.y + offset) * png.width + Math.floor(body.x + 4)) * 4]!;
     const top = sample(0), middle = sample(18), solid = sample(40);
-    expect(await seat.evaluate(el => getComputedStyle(el).backgroundImage)).toContain('36px');
+    expect(await seat.evaluate(el => getComputedStyle(el, el.hasAttribute('data-sticky-overflow') ? '::before' : null).backgroundImage)).toContain('36px');
     if (theme === 'dark') {
       expect(middle).toBeGreaterThan(Math.min(top, solid));
       expect(middle).toBeLessThan(Math.max(top, solid));

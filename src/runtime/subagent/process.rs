@@ -1577,6 +1577,7 @@ pub(crate) enum ChildBoundRoute {
         guidance_id: u64,
         /// The bounded parent-authored guidance text.
         message: String,
+        attachments: Vec<crate::message::content::UploadedFileRef>,
         /// The child's explicit decision. Loss of this sender is classified
         /// using `write_started`, never inferred from terminal settlement.
         outcome: tokio::sync::oneshot::Sender<ChildGuidanceOutcome>,
@@ -1790,10 +1791,11 @@ async fn drive_child_control(
     let mut seal_pending = false;
     let mut result: Option<ResultFrame> = None;
     let mut violation: Option<String> = None;
+    let mut unproven_offer = false;
     let mut kill_deadline: Option<tokio::time::Instant> = None;
     let mut eof = false;
     loop {
-        if seal_pending && commands.is_empty() {
+        if seal_pending && commands.is_empty() && result.is_none() {
             // Cancel already closes admission and permits the child to report
             // its result. Do not race that normal completion with a stale grant.
             if !cancellation_delivered
@@ -1804,11 +1806,11 @@ async fn drive_child_control(
             }
             seal_pending = false;
         }
-        if result.is_some() || violation.is_some() || eof {
+        if violation.is_some() || eof {
             break;
         }
         tokio::select! {
-            command = commands.recv(), if commands_open => {
+            command = commands.recv(), if commands_open && result.is_none() => {
                 match command {
                     Some(DriverCommand::Cancel { reason })
                         if cancel_deadline.is_none() => {
@@ -1875,6 +1877,7 @@ async fn drive_child_control(
                     Some(DriverCommand::Route(ChildBoundRoute::Guidance {
                         guidance_id,
                         message,
+                        attachments,
                         outcome,
                         write_started,
                     })) => {
@@ -1885,6 +1888,7 @@ async fn drive_child_control(
                         // frame and parks the waiter under the exact
                         // correlation identity.
                         let frame = ParentFrame::Guidance(GuidanceFrame {
+                            attachments,
                             guidance_id,
                             message,
                         });
@@ -1918,6 +1922,27 @@ async fn drive_child_control(
             }
             frame = read_child_frame(&mut control) => {
                 match frame {
+                    // Only physical release evidence and diagnostics remain
+                    // admissible after semantic settlement. No new semantic
+                    // work or anchor acquisition can reopen this activation.
+                    Ok(Some(frame)) if result.is_some()
+                        && !matches!(frame, ChildFrame::AnchorReleased(_) | ChildFrame::Diagnostic(_)) => {
+                        // An offered unit already exists physically, even
+                        // though no ACK may admit it after Result. Retain its
+                        // valid anchor before refusing the protocol transition
+                        // so teardown also contains this unacknowledged unit.
+                        if let ChildFrame::AnchorOffered(offer) = &frame
+                            && let Err(refusal) = retained.retain(offer.unit_id.clone(), offer.pgid) {
+                            unproven_offer = true;
+                            violation = Some(format!("protocol violation: could not retain a post-Result anchor: {}", refusal.reason()));
+                            continue;
+                        }
+                        violation = Some(if matches!(frame, ChildFrame::Result(_)) {
+                            "duplicate child terminal result".to_owned()
+                        } else {
+                            "protocol violation: unexpected frame after Result".to_owned()
+                        });
+                    }
                     Ok(Some(ChildFrame::DelegateAccepted)) => {
                         if cancelled_before_start.is_none() { execution.start(); }
                         if let Some(owner) = &interactions { owner.accept_delegate(); }
@@ -1934,7 +1959,16 @@ async fn drive_child_control(
                         if let Some(owner) = &interactions { owner.begin_seal(); }
                         seal_pending = true;
                     }
-                    Ok(Some(ChildFrame::Result(frame))) => result = Some(frame),
+                    Ok(Some(ChildFrame::Result(frame))) => {
+                        result = Some(frame);
+                        execution.stop();
+                        // Result is semantic settlement. The child's physical
+                        // epilogue still releases supervised MCP/process anchors
+                        // on this socket. Signal drain but keep reading through
+                        // EOF; stopping here would discard their terminal proof.
+                        let _ = control.shutdown().await;
+                        cancel_deadline.get_or_insert(tokio::time::Instant::now() + CANCEL_GRACE);
+                    }
                     Ok(Some(ChildFrame::Diagnostic(_))) => {}
                     // The nested anchor protocol stays live for the whole
                     // committed lifetime: a unit may be created at any point
@@ -2041,7 +2075,7 @@ async fn drive_child_control(
                     },
                     None => std::future::pending::<Option<bool>>().await,
                 }
-            }, if provider_available.is_some() => {
+            }, if provider_available.is_some() && result.is_none() => {
                 let Some(available) = provider else {
                     provider_available = None;
                     continue;
@@ -2098,13 +2132,17 @@ async fn drive_child_control(
         )
         .await;
     }
-    let outcome = match (result, violation) {
-        (Some(frame), _) => PhysicalOutcome::Completed(frame),
-        (None, Some(diagnostic)) => PhysicalOutcome::Lost {
+    let outcome = match (result, violation, unproven_offer) {
+        // Refused physical evidence cannot produce a quiescent receipt.
+        (_, Some(diagnostic), true) => PhysicalOutcome::ControlFailure { diagnostic },
+        // A semantic candidate cannot erase a later control protocol failure.
+        // Physical reaping and nested containment still precede publication.
+        (_, Some(diagnostic), false) => PhysicalOutcome::Lost {
             diagnostic,
             cancellation_delivered,
         },
-        (None, None) => PhysicalOutcome::Lost {
+        (Some(frame), None, _) => PhysicalOutcome::Completed(frame),
+        (None, None, _) => PhysicalOutcome::Lost {
             diagnostic: "the child exited without a terminal result".to_owned(),
             cancellation_delivered,
         },
@@ -2372,6 +2410,7 @@ mod tests {
         let pid = harness.staged.child.id().expect("owned direct process");
         let driver = harness.staged.into_driver(
             DelegationFrame {
+                attachments: Vec::new(),
                 task: "ordered admission".to_owned(),
                 context: None,
                 interaction_provider_available: false,
@@ -2386,6 +2425,7 @@ mod tests {
             let (outcome, acknowledgement) = tokio::sync::oneshot::channel();
             commands
                 .send(DriverCommand::Route(ChildBoundRoute::Guidance {
+                    attachments: Vec::new(),
                     guidance_id,
                     message: format!("message-{guidance_id}"),
                     outcome,
@@ -2809,6 +2849,365 @@ mod tests {
         git(repository.path(), &["update-ref", "-d", &reference]);
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn terminal_result_keeps_the_control_reader_alive_for_physical_anchor_release() {
+        use crate::runtime::subagent::ipc::{ChildResultStatus, DelegationFrame, ResultFrame};
+        let mut harness = stage();
+        let unit = ProcessUnitId::new("settled-after-result");
+        harness.staged.retain_for_test(unit.clone(), 4242);
+        let driver = harness.staged.into_driver(
+            DelegationFrame {
+                attachments: Vec::new(),
+                task: "inspect".to_owned(),
+                context: None,
+                interaction_provider_available: false,
+            },
+            None,
+            None,
+            None,
+        );
+        let (commands, start, mut settlement) = driver.split();
+        start.send(None).unwrap();
+        assert!(matches!(
+            read_parent_frame(&mut harness.child).await.unwrap(),
+            Some(ParentFrame::Delegate(_))
+        ));
+        write_child_frame(
+            &mut harness.child,
+            &ChildFrame::Result(ResultFrame {
+                status: ChildResultStatus::Succeeded,
+                content: Some("done".to_owned()),
+                diagnostic: None,
+            }),
+        )
+        .await
+        .unwrap();
+        // EOF on the parent's write half proves it observed Result. Anchor
+        // release then arrives strictly later, as it does during MCP drain.
+        assert_eq!(read_parent_frame(&mut harness.child).await.unwrap(), None);
+        assert!(
+            futures_util::poll!(&mut settlement).is_pending(),
+            "Result is not physical settlement"
+        );
+        commands
+            .send(super::DriverCommand::Cancel {
+                reason: crate::runtime::types::CancellationReason::UserRequested,
+            })
+            .unwrap();
+        write_child_frame(
+            &mut harness.child,
+            &ChildFrame::Diagnostic(crate::runtime::subagent::ipc::DiagnosticFrame {
+                message: "physical drain".into(),
+            }),
+        )
+        .await
+        .unwrap();
+        // A transport cancellation admitted after Result cannot rewrite the
+        // already received semantic candidate or prevent anchor release.
+        write_child_frame(
+            &mut harness.child,
+            &ChildFrame::AnchorReleased(ProcessUnitAnchorFrame {
+                unit_id: unit,
+                pgid: 4242,
+            }),
+        )
+        .await
+        .unwrap();
+        drop(harness.child);
+        let settled = tokio::time::timeout(DEADLINE, settlement)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            settled.nested.unproven.is_empty(),
+            "proven releases after Result must be consumed"
+        );
+        assert!(
+            settled.nested.contained.is_empty(),
+            "a released anchor needs no emergency containment"
+        );
+        assert!(matches!(
+            settled.outcome,
+            PhysicalOutcome::Completed(ResultFrame {
+                status: ChildResultStatus::Succeeded,
+                ..
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn terminal_protocol_violations_override_result_and_settle_retained_anchors() {
+        use crate::runtime::subagent::ipc::{
+            ChildResultStatus, DelegationFrame, DiagnosticFrame, ResultFrame,
+        };
+        let terminal = ChildFrame::Result(ResultFrame {
+            status: ChildResultStatus::Succeeded,
+            content: Some("candidate".into()),
+            diagnostic: None,
+        });
+        for (after_result, frame, expected) in [
+            (true, terminal.clone(), "duplicate child terminal result"),
+            (
+                true,
+                ChildFrame::SealRequested,
+                "unexpected frame after Result",
+            ),
+            (
+                false,
+                ChildFrame::StartupError(DiagnosticFrame {
+                    message: "out of phase".into(),
+                }),
+                "unexpected frame after Ready",
+            ),
+        ] {
+            let mut harness = stage();
+            let direct_process_id = harness.staged.child.id().unwrap();
+            let unit = ProcessUnitId::new("unresolved-protocol-anchor");
+            harness.staged.retain_for_test(unit.clone(), i32::MAX);
+            let driver = harness.staged.into_driver(
+                DelegationFrame {
+                    attachments: Vec::new(),
+                    task: "protocol precedence".into(),
+                    context: None,
+                    interaction_provider_available: false,
+                },
+                None,
+                None,
+                None,
+            );
+            let (_commands, start, mut settlement) = driver.split();
+            start.send(None).unwrap();
+            assert!(matches!(
+                read_parent_frame(&mut harness.child).await.unwrap(),
+                Some(ParentFrame::Delegate(_))
+            ));
+            if after_result {
+                write_child_frame(&mut harness.child, &terminal)
+                    .await
+                    .unwrap();
+                // Parent write EOF is the observable Result receipt boundary.
+                assert_eq!(read_parent_frame(&mut harness.child).await.unwrap(), None);
+                assert!(futures_util::poll!(&mut settlement).is_pending());
+            }
+            write_child_frame(&mut harness.child, &frame).await.unwrap();
+            if !after_result {
+                write_child_frame(&mut harness.child, &terminal)
+                    .await
+                    .unwrap();
+            }
+            drop(harness.child);
+            let settled = tokio::time::timeout(DEADLINE, settlement)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                matches!(&settled.outcome, PhysicalOutcome::Lost { diagnostic, cancellation_delivered: false } if diagnostic.contains(expected)),
+                "{:?}",
+                settled.outcome
+            );
+            assert_eq!(settled.nested.unproven.len(), 1);
+            assert_eq!(settled.nested.unproven[0].0, unit);
+            assert!(
+                harness.runtime_root.exists(),
+                "unresolved resources retain their namespace"
+            );
+            assert!(
+                matches!(
+                    nix::sys::signal::kill(
+                        nix::unistd::Pid::from_raw(i32::try_from(direct_process_id).unwrap()),
+                        None
+                    ),
+                    Err(nix::errno::Errno::ESRCH)
+                ),
+                "the direct process was reaped before failure publication"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn protocol_failure_contains_retained_process_before_settlement() {
+        use crate::runtime::subagent::ipc::{DelegationFrame, DiagnosticFrame};
+        let mut harness = stage();
+        let mut nested = tokio::process::Command::new("sh")
+            .args(["-c", "read gate"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0)
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let _gate = nested.stdin.take().unwrap();
+        let group = i32::try_from(nested.id().unwrap()).unwrap();
+        let unit = ProcessUnitId::new("protocol-failure-nested");
+        harness.staged.retain_for_test(unit.clone(), group);
+        let driver = harness.staged.into_driver(
+            DelegationFrame {
+                attachments: Vec::new(),
+                task: "protocol containment".into(),
+                context: None,
+                interaction_provider_available: false,
+            },
+            None,
+            None,
+            None,
+        );
+        let (_commands, start, settlement) = driver.split();
+        start.send(None).unwrap();
+        assert!(matches!(
+            read_parent_frame(&mut harness.child).await.unwrap(),
+            Some(ParentFrame::Delegate(_))
+        ));
+        write_child_frame(
+            &mut harness.child,
+            &ChildFrame::StartupError(DiagnosticFrame {
+                message: "forbidden after delegation".into(),
+            }),
+        )
+        .await
+        .unwrap();
+        drop(harness.child);
+        let settled = tokio::time::timeout(DEADLINE, settlement)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(settled.outcome, PhysicalOutcome::Lost { .. }));
+        assert_eq!(settled.nested.contained, vec![unit]);
+        assert!(settled.nested.unproven.is_empty());
+        assert!(matches!(
+            nix::sys::signal::killpg(nix::unistd::Pid::from_raw(group), None),
+            Err(nix::errno::Errno::ESRCH)
+        ));
+        assert!(!harness.runtime_root.exists());
+        drop(nested);
+    }
+
+    #[tokio::test]
+    async fn forbidden_post_result_anchor_offer_is_contained_without_acknowledgement() {
+        use crate::runtime::subagent::ipc::{ChildResultStatus, DelegationFrame, ResultFrame};
+        let mut harness = stage();
+        let mut nested = tokio::process::Command::new("sh")
+            .args(["-c", "read gate"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0)
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let _gate = nested.stdin.take().unwrap();
+        let group = i32::try_from(nested.id().unwrap()).unwrap();
+        let unit = ProcessUnitId::new("forbidden-post-result-offer");
+        let driver = harness.staged.into_driver(
+            DelegationFrame {
+                attachments: Vec::new(),
+                task: "post-result containment".into(),
+                context: None,
+                interaction_provider_available: false,
+            },
+            None,
+            None,
+            None,
+        );
+        let (_commands, start, settlement) = driver.split();
+        start.send(None).unwrap();
+        assert!(matches!(
+            read_parent_frame(&mut harness.child).await.unwrap(),
+            Some(ParentFrame::Delegate(_))
+        ));
+        write_child_frame(
+            &mut harness.child,
+            &ChildFrame::Result(ResultFrame {
+                status: ChildResultStatus::Succeeded,
+                content: Some("candidate".into()),
+                diagnostic: None,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(read_parent_frame(&mut harness.child).await.unwrap(), None);
+        write_child_frame(
+            &mut harness.child,
+            &ChildFrame::AnchorOffered(ProcessUnitAnchorFrame {
+                unit_id: unit.clone(),
+                pgid: group,
+            }),
+        )
+        .await
+        .unwrap();
+        drop(harness.child);
+        let settled = tokio::time::timeout(DEADLINE, settlement)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(&settled.outcome, PhysicalOutcome::Lost { diagnostic, .. } if diagnostic.contains("unexpected frame after Result"))
+        );
+        assert_eq!(settled.nested.contained, vec![unit]);
+        assert!(settled.nested.unproven.is_empty());
+        assert!(matches!(
+            nix::sys::signal::killpg(nix::unistd::Pid::from_raw(group), None),
+            Err(nix::errno::Errno::ESRCH)
+        ));
+        assert!(!harness.runtime_root.exists());
+        drop(nested);
+    }
+
+    #[tokio::test]
+    async fn invalid_post_result_anchor_offer_cannot_prove_physical_settlement() {
+        use crate::runtime::subagent::ipc::{ChildResultStatus, DelegationFrame, ResultFrame};
+        let mut harness = stage();
+        let driver = harness.staged.into_driver(
+            DelegationFrame {
+                attachments: Vec::new(),
+                task: "invalid post-result anchor".into(),
+                context: None,
+                interaction_provider_available: false,
+            },
+            None,
+            None,
+            None,
+        );
+        let (_commands, start, settlement) = driver.split();
+        start.send(None).unwrap();
+        assert!(matches!(
+            read_parent_frame(&mut harness.child).await.unwrap(),
+            Some(ParentFrame::Delegate(_))
+        ));
+        write_child_frame(
+            &mut harness.child,
+            &ChildFrame::Result(ResultFrame {
+                status: ChildResultStatus::Succeeded,
+                content: Some("candidate".into()),
+                diagnostic: None,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(read_parent_frame(&mut harness.child).await.unwrap(), None);
+        write_child_frame(
+            &mut harness.child,
+            &ChildFrame::AnchorOffered(ProcessUnitAnchorFrame {
+                unit_id: ProcessUnitId::new("invalid-post-result-unit"),
+                pgid: 0,
+            }),
+        )
+        .await
+        .unwrap();
+        drop(harness.child);
+        let settled = tokio::time::timeout(DEADLINE, settlement)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(&settled.outcome, PhysicalOutcome::ControlFailure { diagnostic } if diagnostic.contains("could not retain a post-Result anchor"))
+        );
+        assert!(
+            harness.runtime_root.exists(),
+            "no quiescent proof or namespace deletion is justified"
+        );
+    }
+
     /// **Reap is not settlement.** The committed child driver publishes its
     /// physical settlement only after every retained nested anchor is
     /// resolved — so the direct child's exit and reap alone can never make
@@ -2834,6 +3233,7 @@ mod tests {
         // anchor set move into the driver task, exactly once.
         let driver = staged.into_driver(
             crate::runtime::subagent::ipc::DelegationFrame {
+                attachments: Vec::new(),
                 task: "inspect".to_owned(),
                 context: None,
                 interaction_provider_available: false,
@@ -2914,6 +3314,7 @@ mod tests {
         staged.retain_for_test(ProcessUnitId::new("candidate-nested"), pgid);
         let driver = staged.into_driver(
             crate::runtime::subagent::ipc::DelegationFrame {
+                attachments: Vec::new(),
                 task: "candidate".into(),
                 context: None,
                 interaction_provider_available: false,
@@ -2964,6 +3365,7 @@ mod tests {
         let harness = stage();
         let driver = harness.staged.into_driver(
             crate::runtime::subagent::ipc::DelegationFrame {
+                attachments: Vec::new(),
                 task: "inspect".to_owned(),
                 context: None,
                 interaction_provider_available: false,

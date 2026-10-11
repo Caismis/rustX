@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v40';
+import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v45';
 import { AgentComposer } from '../src/app/agent/AgentComposer';
 import { localeController } from '../src/locale/controller';
 import { AgentControls } from '../src/app/agent/AgentControls';
@@ -18,7 +18,7 @@ beforeEach(() => { server = new Server(); });
 afterEach(() => { cleanup(); server.client.disconnect(); act(() => localeController.setLocale('en')); });
 const count = (method: string) => server.requests.filter(row => row.request.method === method).length;
 it('keeps initial model loading inside the popup and cached refresh out of the trigger layout', () => {
- const props = { current: 'exact/model', profile: 'brief', disabled: false, loading: true, load: () => {}, choose: () => {}, initialOpen: true };
+ const props = { current: 'exact/model', profile: 'brief', disabled: false, loading: true, load: () => {}, reload: () => {}, choose: () => {}, initialOpen: true };
  const { rerender } = render(<ModelSelect {...props} choices={[]} />);
  expect(screen.getByText('Reading native models…').closest('[role="menu"]')).not.toBeNull();
  const trigger = screen.getByRole('button', { name: 'Model and profile' });
@@ -373,7 +373,7 @@ it.each(['refused', 'unknown'] as const)('slash profile mutation %s preserves th
 
 /** One Model, `example/chat`, whose Profiles resolve like native: a pinned
  * Profile is itself, an absent one follows the catalog's current default. */
-function profileFixture(configured: import('../../protocol/app-server/v40').SessionModelConfig, models = ['example/chat'], profiles = ['balanced', 'fast']) {
+function profileFixture(configured: import('../../protocol/app-server/v45').SessionModelConfig, models = ['example/chat'], profiles = ['balanced', 'fast']) {
   const state = { profiles, defaultProfile: profiles.length ? 'balanced' : undefined as string | undefined, revision: 1 };
   const base = cfg3Effective().effective_model;
   const resolve = (config: typeof configured) => ({ ...base, configured: config, effective: { ...base.effective!, model: config.model, profile: config.profile ?? state.defaultProfile ?? null } });
@@ -627,4 +627,22 @@ it('a catalog revision that drops a pinned Profile offers recovery while mounted
   expect(recovery[0].params).toEqual({ target: server.target('A'), config: { model: 'example/chat', maxOutputTokens: 256 } });
   expect(configuredProfile()).toBeUndefined();
   expect(count('session/models')).toBe(reads + 3);
+});
+
+it('explicit model-menu reread refreshes a cached catalog after a failed queued selection', async () => {
+ modelFixture();await server.connect();server.held.add('session/attach');
+ const attachment=server.client.attach('A');const request=await server.waitFor('session/attach',1);
+ server.handlers.set('session/setModel',()=>{throw new RpcFailure({code:-32000,message:'Queued model refused'});});
+ const chosen=server.client.prepareAgentModel('A',{model:'other'});const rejected=expect(chosen).rejects.toThrow('Queued model refused');
+ server.reply(request);await attachment;await rejected;
+ render(<Control/>);
+ await waitFor(()=>expect(count('session/models')).toBe(1));
+ await openModels();
+ expect(server.client.getSnapshot().views.A.modelIntent?.phase).toBe('failed');
+ const before={catalog:count('session/models'),model:count('session/model'),snapshot:count('session/snapshot'),mutations:count('session/setModel')};
+ await act(async()=>fireEvent.click(screen.getByRole('menuitem',{name:'Reread models'})));
+ await waitFor(()=>expect(count('session/models')).toBe(before.catalog+1));
+ expect(count('session/model')).toBe(before.model+1);
+ expect(count('session/snapshot')).toBe(before.snapshot+1);
+ expect(count('session/setModel')).toBe(before.mutations);
 });

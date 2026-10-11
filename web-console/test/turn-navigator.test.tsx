@@ -4,7 +4,7 @@ import { turnRail, turnRailRange } from '../src/app/agent/turn-rail-items';
 import { TurnNavigator } from '../src/app/agent/TurnNavigator';
 import { Server } from './fixture';
 import { installTurnNavigatorObserver } from './turn-navigator-fixture';
-import type { ConversationTurn, RuntimeClientSnapshot } from '../../protocol/app-server/v40';
+import type { ConversationTurn, RuntimeClientSnapshot } from '../../protocol/app-server/v45';
 let server: Server;
 afterEach(() => { cleanup(); server?.client.disconnect(); vi.unstubAllGlobals(); });
 const turnsRequests = () => server.requests.filter(row => row.request.method === 'session/turns');
@@ -350,4 +350,21 @@ it('native invalidation removes rail geometry; explicit recovery places the curr
  await act(async()=>fireEvent.click(recovery));
  expect(scroller(ui).scrollTop).toBeGreaterThan(9000);
  expect(ui.getByRole('button',{name:'Jump to turn 1000'}).getAttribute('aria-current')).toBe('true');
+});
+
+it('a held hover reply cannot replace a newer loaded-turn navigation or latest growth', async () => {
+ const fixture=await pagingRail(128); server.held.add('session/turns');
+ await scrollRail(fixture.ui,630);
+ fireEvent.pointerMove(fixture.ui.getByRole('button',{name:'Load and jump to turn 64'}));
+ const old=await server.waitFor('session/turns',2);
+ expect(old.params).toMatchObject({offset:0});
+ await scrollRail(fixture.ui,1000);
+ await act(async()=>{fireEvent.click(fixture.ui.getByRole('button',{name:'Jump to turn 128'}));});
+ fireEvent.pointerLeave(fixture.ui.getByRole('navigation'));
+ await act(async()=>server.reply(old)); server.held.delete('session/turns');
+ expect(server.client.getSnapshot().views.A.turnOutline?.paging).toEqual({type:'latest'});
+ expect(server.client.getSnapshot().views.A.turnOutline?.page?.offset).toBe(64);
+ await fixture.start(129);await fixture.locate(129);await fixture.settle(129);
+ expect(server.client.getSnapshot().views.A.turnOutline?.page?.offset).toBe(128);
+ expect(fixture.mark(129)).toBeTruthy();
 });

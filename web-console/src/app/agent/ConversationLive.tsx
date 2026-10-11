@@ -1,6 +1,8 @@
+import { useSubagents } from './subagent-context';
+import { ToolInspectionContext, useToolTraceNavigation } from './tool-inspection';
 import type { AppServerClient } from '../../client/app-server';
 import { shallowEqual, useClientSelector } from '../../client/selectors';
-import { ModelRetries } from './ModelRetry';
+import { useModelRetryFeedback } from './ModelRetry';
 import { AgentTranscript } from './AgentTranscript';
 import { RuntimeFacts } from './Activity';
 import { ConversationStats } from './UsageStats';
@@ -12,22 +14,24 @@ import { todoDock, goalDock, queueRows } from '../../bindings/composer-context';
 import { ChatViewport } from '../../presentation/layout/ChatViewport';
 import { Trajectory } from '../trajectory/Trajectory';
 import type { ResponseAction } from '../commands/native';
-import type { AttachmentTarget, CompletedResponseView } from '../../../../protocol/app-server/v40';
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import type { AttachmentTarget, CompletedResponseView } from '../../../../protocol/app-server/v45';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { UserMessage, AssistantMessage } from '../../presentation/agent/Message';
 import pendingCss from './PendingMessage.module.css';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 import { useTranslation } from '../../locale/react';
 import { TurnNavigator } from './TurnNavigator';
-import { turnAnchor } from '../../client/transcript';
+import { transcriptPresentation, turnAnchor } from '../../client/transcript';
 import { type ForkOrigin, useForkPoint } from './ForkPoint';
 
-export function ConversationLive({ client, sessionId, mode, disabled, onHistorical, onOpenSource, sourceLocation }: {
+export function ConversationLive({ client, sessionId, mode, disabled, onHistorical, onMode, onOpenSource, sourceLocation }: {
   client: AppServerClient; sessionId?: string; mode: 'chat' | 'trajectory'; disabled: boolean;
+  onMode?: (mode: 'chat' | 'trajectory') => void;
   onHistorical: (id: ResponseAction, response: CompletedResponseView) => void;
   onOpenSource?: (origin: ForkOrigin) => void;
   sourceLocation?: { target: AttachmentTarget; messageId: string };
 }) {
+  const scope = useSubagents();
   const tx=useTranslation(), viewport=useRef<ChatViewport>(null), [active,setActive]=useState<string | null>();
   const submission = useSyncExternalStore(client.firstSubmissions.subscribe, () => sessionId ? client.firstSubmissions.session(sessionId) : undefined);
   const waiting = !!submission && ['attaching', 'uploading', 'admitting'].includes(submission.phase);
@@ -66,11 +70,15 @@ export function ConversationLive({ client, sessionId, mode, disabled, onHistoric
       if (landed) intent.commit(`message:${sourceLocation.messageId}`, clientCurrent);
     });
   }, [client, view?.target, view?.observation, view?.readable, mode, sourceLocation]);
+  const inspect = useToolTraceNavigation(locator => view ? client.locateToolTrace(view.id, locator) : Promise.resolve(false), onMode, !!view && !view.readingPreview && !scope?.selected, `root:${sessionId}:${view?.target?.attachment_id}`);
+  const readingEntries = useMemo(() => view ? transcriptPresentation(view.history, view.transcript) : [], [view?.history, view?.transcript]);
+  const requestFeedback = useModelRetryFeedback(client, sessionId ?? '', readingEntries,
+    !view?.history?.window ? view?.attempt?.in_flight?.message_id : undefined);
   if (sessionId && tracePreview) return <Trajectory key={sessionId} cache={tracePreview.cache} onSelect={id => client.selectTrace(sessionId, id)} onLoadDetail={id => { void client.loadTraceDetail(sessionId, id); }} loadEarlier={() => void client.loadEarlierTrace(sessionId).catch(() => {})}/>;
   if (!view) return sessionId ? <ChatViewport latestLabel={tx('agent:agent-transcript.return-to-latest')}><PendingMessage client={client} sessionId={sessionId}/></ChatViewport> : null;
   return mode === 'trajectory' && view.trace
-    ? <Trajectory key={`${view.id}:${view.target?.attachment_id}`} cache={view.trace} onSelect={id => client.selectTrace(view.id, id)} onLoadDetail={id => { void client.loadTraceDetail(view.id, id); }} loadEarlier={() => void client.loadEarlierTrace(view.id).catch(() => {})}/>
-    : <ChatViewport ref={viewport} key={`${view.id}:${view.target?.attachment_id}`} latestLabel={tx('agent:agent-transcript.return-to-latest')}
+    ? <Trajectory key={`${view.id}:${view.target?.attachment_id}`} cache={view.trace} onLatest={() => void client.returnToLatestTrace(view.id)} onSelect={id => client.selectTrace(view.id, id)} onLoadDetail={id => { void client.loadTraceDetail(view.id, id); }} loadEarlier={() => void client.loadEarlierTrace(view.id).catch(() => {})}/>
+    : <ToolInspectionContext value={inspect}><ChatViewport chromeVisible={!scope?.selected} ref={viewport} key={`${view.id}:${view.target?.attachment_id}`} latestLabel={tx('agent:agent-transcript.return-to-latest')}
       overlay={<TurnNavigator key={`rail:${view.id}:${view.target?.attachment_id}`} client={client} sessionId={view.id} active={active} onNavigate={turn=>{
         let clientIntent: number | undefined;
         const clientCurrent = () => {
@@ -87,10 +95,10 @@ export function ConversationLive({ client, sessionId, mode, disabled, onHistoric
       latestTurn={view.attempt && view.attempt.phase.type!=='settled' ? turnAnchor({conversation_id:view.conversation_id,attempt_id:view.attempt.attempt_id}) : undefined}
       historical={!!view.history?.window} onLatest={() => client.returnToLatest(view.id)} onActiveTurn={setActive}>
       {fork.error && <div role="alert"><p>{fork.error}</p><button type="button" onClick={fork.retry}>{tx('agent:fork-point.reload')}</button></div>}
-      {(view.messages.length > 0 || !!view.transcript.entries?.length || !waiting) && <AgentTranscript requestFeedback={attemptId => <ModelRetries client={client} sessionId={view.id} attemptId={attemptId}/>} snapshot={view} history={view.history} loadLater={() => void client.loadLater(view.id)} loadEarlier={() => void (view.readingPreview ? client.loadEarlierPreview(view.id) : client.loadEarlier(view.id)).catch(() => {})} lineageSwitchSafe={view.safe} historicalDisabled={view.disabled} onHistorical={onHistorical} forkPoint={fork.point} onOpenSource={onOpenSource} sourceDisabled={!view.readable || fork.point?.origin.source_session === view.id && !view.safe}/>}
+      {(view.messages.length > 0 || !!view.transcript.entries?.length || !waiting) && <AgentTranscript requestFeedback={requestFeedback} snapshot={view} history={view.history} loadLater={() => void client.loadLater(view.id)} loadEarlier={() => void (view.readingPreview ? client.loadEarlierPreview(view.id) : client.loadEarlier(view.id)).catch(() => {})} lineageSwitchSafe={view.safe} historicalDisabled={view.disabled} onHistorical={onHistorical} forkPoint={fork.point} onOpenSource={onOpenSource} sourceDisabled={!view.readable || fork.point?.origin.source_session === view.id && !view.safe}/>}
       <ConversationActivity client={client} sessionId={view.id}/>
       <PendingMessage client={client} sessionId={view.id}/>
-    </ChatViewport>;
+    </ChatViewport></ToolInspectionContext>;
 }
 function ConversationActivity({ client, sessionId }: { client: AppServerClient; sessionId: string }) {
   const snapshot = useClientSelector(client, state => {
@@ -117,7 +125,7 @@ export function ConversationTotals({ client, sessionId }: { client: AppServerCli
     const view = state.views[sessionId];
     // A detached or disconnected view's last reading is not current occupancy.
     const current = state.connection === 'connected' && view?.attachment === 'attached';
-    return { statistics: view?.attachment === 'attaching' ? view.statisticsPreview?.statistics ?? view.snapshot?.transcript.statistics : view?.snapshot?.transcript.statistics, occupancy: current ? view?.snapshot?.context?.last_request_occupancy : view?.attachment === 'attaching' ? view.statisticsPreview?.occupancy ?? view.snapshot?.context?.last_request_occupancy : undefined };
+    return { statistics: view?.attachment === 'attaching' ? view.statisticsPreview?.statistics ?? view.snapshot?.transcript.statistics : view?.snapshot?.transcript.statistics, occupancy: current ? view?.snapshot?.context?.occupancy : view?.attachment === 'attaching' ? view.statisticsPreview?.occupancy ?? view.snapshot?.context?.occupancy : undefined };
   }, shallowEqual);
   return <ConversationStats statistics={facts.statistics} occupancy={facts.occupancy}/>;
 }

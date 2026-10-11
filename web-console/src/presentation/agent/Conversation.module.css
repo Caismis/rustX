@@ -446,12 +446,28 @@
      composer stays above the pinned header on the extreme small-viewport
      overlap and the pinned header stays above the rail. */
   z-index: 7;
-  /* Input mask (figma 1205:27463): transcript fades out under a FIXED 36px
-     band at the seat's top (the figma 24% of the resting ~150px composer),
-     solid below — px stops, not %, so a growing draft only widens the solid
-     region and the fade band never stretches. The 0px stop is bg-base at
-     zero alpha (not white, which the figma export hardcodes) so both themes
-     fade from their own base. */
+}
+
+/* The fade is background paint, not a containment boundary for the controls.
+   An overflowing seat gives it a local clipped paint origin across sticky/flow
+   promotion, even when the seat lands on a fractional CSS pixel. */
+.root[data-phase='active'] .composerSeat[data-sticky-overflow]::before,
+.embeddedBody[data-content-phase='active'] .composerSeat[data-sticky-overflow]::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  contain: paint;
+}
+
+.root[data-phase='active'] .composerSeat:not([data-sticky-overflow]),
+.embeddedBody[data-content-phase='active'] .composerSeat:not([data-sticky-overflow]),
+.root[data-phase='active'] .composerSeat[data-sticky-overflow]::before,
+.embeddedBody[data-content-phase='active'] .composerSeat[data-sticky-overflow]::before {
+  /* Input mask (figma 1205:27463): a fixed 36px fade from transparent
+     theme base to solid theme base. Growing drafts extend only the solid
+     region. Menus and card shadows remain outside this background's clip. */
   background: linear-gradient(
     180deg,
     color-mix(in srgb, var(--dsw-alias-bg-base) 0%, transparent) 0px,

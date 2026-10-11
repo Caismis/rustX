@@ -28,3 +28,5 @@
 .action { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer; }
 .action:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
 .action:focus-visible { outline: 1px solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); }
+
+.cardPreview:disabled { cursor: default; }
