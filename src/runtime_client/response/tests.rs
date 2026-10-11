@@ -127,6 +127,14 @@ fn request_timed(
     );
 }
 fn start_request(store: &dyn ConversationStore, attempt: &str, retry: u32) -> RequestSnapshot {
+    start_request_with_window(store, attempt, retry, 4096)
+}
+fn start_request_with_window(
+    store: &dyn ConversationStore,
+    attempt: &str,
+    retry: u32,
+    context_window: u64,
+) -> RequestSnapshot {
     let snapshot = RequestSnapshot::new(
         RequestIdentity {
             attempt_id: AttemptId::new(attempt),
@@ -145,7 +153,7 @@ fn start_request(store: &dyn ConversationStore, attempt: &str, retry: u32) -> Re
             capabilities: ModelCapabilities::text_only(true, true),
             compat: ModelCompat::default(),
         },
-        4096,
+        context_window,
         None,
         false,
         vec![],
@@ -503,7 +511,7 @@ fn context_measurement_survives_pending_and_failed_compaction() {
         Some(read.clone())
     );
     // Usage-free terminals must not erase the measurement, even across pages.
-    for retry in 2..=66 {
+    for retry in 2..=2049 {
         request(&store, "a", retry, None);
     }
     assert_eq!(
@@ -513,7 +521,7 @@ fn context_measurement_survives_pending_and_failed_compaction() {
     );
     let mut zero = usage(None);
     zero.input_tokens = 0;
-    request(&store, "a", 67, Some(zero));
+    request(&store, "a", 2050, Some(zero));
     assert_eq!(
         crate::context::occupancy::read(&store, store.presentation_frontier().unwrap())
             .unwrap()
@@ -1160,5 +1168,212 @@ fn agent_statistics_replays_incrementally_with_full_native_metrics() {
         StatisticsFold::default()
             .read(&store, cut, || None)
             .unwrap()
+    );
+}
+
+#[test]
+fn occupancy_compaction_absence_invalid_window_and_failed_usage_are_boundaries() {
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    request(&store, "a", 0, Some(usage(None)));
+    let measured_cut = store.presentation_frontier().unwrap();
+    let measured = crate::context::occupancy::read(&store, measured_cut)
+        .unwrap()
+        .unwrap();
+    let snapshot = start_request_with_window(&store, "a", 1, 0);
+    append(
+        &store,
+        "a",
+        RuntimeEvent::ModelRequestCompleted {
+            request_id: snapshot.request_id,
+            finish_reason: ModelFinishReason::Stop,
+            usage: Some(usage(None)),
+            generation: None,
+        },
+    );
+    assert_eq!(
+        crate::context::occupancy::read(&store, store.presentation_frontier().unwrap()).unwrap(),
+        None,
+        "an invalid window is not a reason to select older usage"
+    );
+    assert_eq!(
+        crate::context::occupancy::read(&store, measured_cut).unwrap(),
+        Some(measured)
+    );
+    request_timed(&store, "a", 2, Some(usage(None)), None, true);
+    let failed_cut = store.presentation_frontier().unwrap();
+    assert!(
+        !crate::context::occupancy::read(&store, failed_cut)
+            .unwrap()
+            .unwrap()
+            .estimated
+    );
+    // The same native atomic compaction transition owns an explicit absent estimate.
+    user(&store, "compacted-input");
+    assistant(&store, "a", "compacted-response");
+    store
+        .commit_compaction(crate::durable::CompactionCommitInput {
+            summary: UserMessageBlock {
+                id: MessageId::new("absent-summary"),
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: "summary".into(),
+                })],
+                source: UserSource::Runtime,
+                kind: InboundKind::CompactionSummary(
+                    crate::message::types::CompactionSummaryMetadata::empty(),
+                ),
+                timestamp: None,
+            },
+            span: crate::conversation::SurfaceSpan::new(
+                MessageId::new("compacted-input"),
+                MessageId::new("compacted-response"),
+            ),
+            expected_revision: store.load_head().unwrap().revision,
+            tokens_before: crate::runtime::types::TokenMeasurement {
+                input_tokens: 100,
+                source: crate::runtime::types::TokenMeasurementSource::ProviderReported,
+            },
+            estimated_tokens_after: 20,
+            attempt_id: None,
+            turn_id: None,
+            timestamp: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+            occupancy: None,
+        })
+        .unwrap();
+    request(&store, "a", 3, None);
+    assert_eq!(
+        crate::context::occupancy::read(&store, store.presentation_frontier().unwrap()).unwrap(),
+        None,
+        "unmeasured requests must not resurrect pre-compaction usage"
+    );
+    assert!(
+        crate::context::occupancy::read(&store, failed_cut)
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+fn occupancy_reopens_and_inherits_without_local_requests_or_events() {
+    let directory = tempfile::tempdir().unwrap();
+    let id = ConversationId::generate();
+    let path = directory.path().join("source.sqlite");
+    let source = SqliteConversationStore::open(id.clone(), &path).unwrap();
+    user(&source, "input");
+    append(
+        &source,
+        "a",
+        RuntimeEvent::AttemptStarted {
+            attempt_id: AttemptId::new("a"),
+        },
+    );
+    request(&source, "a", 0, Some(usage(None)));
+    assistant(&source, "a", "response");
+    finish(&source, "a");
+    let cut = source.presentation_frontier().unwrap();
+    let expected = crate::context::occupancy::read(&source, cut).unwrap();
+    drop(source);
+    let source = SqliteConversationStore::open_existing(id, &path).unwrap();
+    assert_eq!(
+        crate::context::occupancy::read(&source, cut).unwrap(),
+        expected
+    );
+    let selected = source
+        .read_lineage_cut(source.load_head().unwrap().revision)
+        .unwrap();
+    let seed = crate::durable::LineageSeed::replayed(
+        selected.canonical,
+        selected.surface_history,
+        selected.checkpoints,
+    )
+    .unwrap()
+    .with_completed_responses(selected.completed_responses)
+    .unwrap()
+    .with_turns(selected.turns)
+    .unwrap();
+    let child_id = ConversationId::generate();
+    let child_path = directory.path().join("child.sqlite");
+    let child = SqliteConversationStore::open(child_id.clone(), &child_path).unwrap();
+    child.initialize_lineage(&seed).unwrap();
+    assert_eq!(
+        crate::context::occupancy::read(&child, 0).unwrap(),
+        expected
+    );
+    assert_eq!(child.presentation_frontier().unwrap(), 0);
+    drop(child);
+    let child = SqliteConversationStore::open(child_id, &child_path).unwrap();
+    assert_eq!(
+        crate::context::occupancy::read(&child, 0).unwrap(),
+        expected
+    );
+    for retry in 0..2048 {
+        request(&child, "child", retry, None);
+    }
+    assert_eq!(
+        crate::context::occupancy::read(&child, child.presentation_frontier().unwrap()).unwrap(),
+        expected
+    );
+    let before_compaction = child.presentation_frontier().unwrap();
+    child
+        .commit_compaction(crate::durable::CompactionCommitInput {
+            summary: UserMessageBlock {
+                id: MessageId::new("child-summary"),
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: "summary".into(),
+                })],
+                source: UserSource::Runtime,
+                kind: InboundKind::CompactionSummary(
+                    crate::message::types::CompactionSummaryMetadata::empty(),
+                ),
+                timestamp: None,
+            },
+            span: crate::conversation::SurfaceSpan::new(
+                MessageId::new("input"),
+                MessageId::new("response"),
+            ),
+            expected_revision: child.load_head().unwrap().revision,
+            tokens_before: crate::runtime::types::TokenMeasurement {
+                input_tokens: 100,
+                source: crate::runtime::types::TokenMeasurementSource::ProviderReported,
+            },
+            estimated_tokens_after: 20,
+            attempt_id: None,
+            turn_id: None,
+            timestamp: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+            occupancy: None,
+        })
+        .unwrap();
+    assert_eq!(
+        crate::context::occupancy::read(&child, 0).unwrap(),
+        expected
+    );
+    assert_eq!(
+        crate::context::occupancy::read(&child, before_compaction).unwrap(),
+        expected
+    );
+    assert_eq!(
+        crate::context::occupancy::read(&child, child.presentation_frontier().unwrap()).unwrap(),
+        None
+    );
+}
+
+#[test]
+fn occupancy_thousands_of_unmeasured_terminal_requests_do_not_invent_a_reading() {
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    for retry in 0..2048 {
+        request_timed(&store, "unmeasured", retry, None, None, retry % 2 == 0);
+    }
+    assert_eq!(
+        crate::context::occupancy::read(&store, store.presentation_frontier().unwrap()).unwrap(),
+        None
+    );
+    let cut = store.presentation_frontier().unwrap();
+    request_timed(&store, "unmeasured", 2048, Some(usage(None)), None, true);
+    assert_eq!(crate::context::occupancy::read(&store, cut).unwrap(), None);
+    assert_eq!(
+        crate::context::occupancy::read(&store, store.presentation_frontier().unwrap())
+            .unwrap()
+            .unwrap()
+            .input_tokens,
+        100
     );
 }

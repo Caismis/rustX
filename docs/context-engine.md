@@ -1016,5 +1016,34 @@ later checkpoint retires that summary. Lineage copies retain those values and
 omit local completion correlation. Transcript decoration uses one keyed Ledger
 lookup and at most one keyed local Journal lookup per requested summary; it never
 reconstructs the retired Surface, hydrates retired messages, or scans the Journal.
-Missing or malformed checkpoint facts are explicit read errors. SQLite schema 51
+Missing or malformed checkpoint facts are explicit read errors. SQLite schema 52
 requires these facts; older development stores are refused without migration.
+
+## Indexed historical occupancy
+
+The latest context reading is selected from immutable Journal rows through one
+finite sequence cut. `events_context_reading_idx` indexes event kind, the native
+qualifying discriminator, and sequence. The discriminator accepts request
+terminals with a non-null usage payload and every completed compaction, including
+an explicitly absent estimate. Three indexed seeks return at most one row each;
+the presentation reader orders those candidates and returns the newest one.
+No backwards page loop or maximum-history cutoff participates in correctness.
+SQLite maintains this expression index in the Journal's existing transaction;
+there is no additional occupancy table or persisted semantic owner.
+
+Started requests, usage-free terminals and failed/in-progress compaction preserve
+the prior reading. Completed compaction replaces it, including with absence.
+Usage whose frozen context window is zero also yields absence without selecting
+an older request. Missing snapshots, malformed selected payloads and missing
+indexes fail explicitly. Provider usage remains measured; committed rebuilt
+context remains estimated. Inherited fallback reads only the validated immutable
+bootstrap Surface, so later local compaction cannot change an earlier cut. Its
+boundary uses the existing keyed `bootstrap_identity.message_count`, without
+hydrating canonical bodies or introducing a separate cached fact.
+
+The deterministic SQL regressions inspect the actual generated query plans and
+SQLite VM instruction counts before and after thousands of unrelated terminals
+and Assistant commits. Exact message fact queries use
+`events_message_id_kind_idx(message identity, event kind, sequence)`; Trace still
+joins the exact canonical occurrence to the native Step and Tool start, without
+creating an independent execution record.

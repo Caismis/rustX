@@ -52,41 +52,37 @@ pub(crate) fn read(
     store: &dyn ConversationStore,
     through: u64,
 ) -> Result<Option<ContextOccupancy>, ConversationStoreError> {
-    let mut before = None;
-    loop {
-        let events = store.read_presentation_events(&FactQuery {
-            scope: FactScope::All,
-            kinds: vec![
-                "model_request_completed",
-                "model_request_failed",
-                "compaction_completed",
-            ],
-            before,
-            after: 0,
-            ascending: false,
-            through,
-            limit: 64,
-        })?;
-        for event in &events {
-            match &event.event {
-                RuntimeEvent::ModelRequestCompleted {
-                    request_id,
-                    usage: Some(usage),
-                    ..
-                }
-                | RuntimeEvent::ModelRequestFailed {
-                    request_id,
-                    usage: Some(usage),
-                    ..
-                } => return measure(usage, &store.load_request_snapshot(request_id)?),
-                RuntimeEvent::CompactionCompleted { occupancy, .. } => return Ok(occupancy.clone()),
-                _ => {}
+    let events = store.read_presentation_events(&FactQuery {
+        scope: FactScope::ContextReading,
+        kinds: vec![
+            "model_request_completed",
+            "model_request_failed",
+            "compaction_completed",
+        ],
+        before: None,
+        after: 0,
+        ascending: false,
+        through,
+        limit: 1,
+    })?;
+    match events.first().map(|event| &event.event) {
+        Some(
+            RuntimeEvent::ModelRequestCompleted {
+                request_id,
+                usage: Some(usage),
+                ..
             }
-        }
-        if events.len() < 64 {
-            return inherited(store);
-        }
-        before = events.last().map(|event| event.sequence);
+            | RuntimeEvent::ModelRequestFailed {
+                request_id,
+                usage: Some(usage),
+                ..
+            },
+        ) => measure(usage, &store.load_request_snapshot(request_id)?),
+        Some(RuntimeEvent::CompactionCompleted { occupancy, .. }) => Ok(occupancy.clone()),
+        None => inherited(store),
+        Some(_) => Err(ConversationStoreError::InvalidReference(
+            "context reading index returned non-qualifying Journal evidence".into(),
+        )),
     }
 }
 
@@ -109,7 +105,11 @@ fn inherited(
     else {
         return Ok(None);
     };
-    let history = store.load_surface_history(store.load_head()?.revision)?;
+    // Only the immutable selected seed decides whether inherited evidence was
+    // already compacted. Later local Surface operations can lie beyond `through`.
+    // A validated LineageSeed has exactly one Surface operation per canonical row.
+    let revision = store.load_bootstrap_surface_revision()?;
+    let history = store.load_surface_history(revision)?;
     let appended = history.iter().rposition(|op| {
         matches!(op, SurfaceOp::Append { message_id } if turn.process_message_ids.contains(message_id))
     });

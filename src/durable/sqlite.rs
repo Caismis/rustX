@@ -314,7 +314,9 @@ fn count_conversation_store_open() {
 /// Version 51 stores immutable checkpoint statistics and local completion correlation
 /// with the canonical Ledger summary, and general Model Profiles in request snapshots
 /// and Session model configuration. Older development stores are refused.
-pub const SQLITE_SCHEMA_VERSION: i64 = 51;
+/// Version 52 requires identity-bearing message fact lookup and a qualifying
+/// context-reading expression index over immutable Journal evidence.
+pub const SQLITE_SCHEMA_VERSION: i64 = 52;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -2112,6 +2114,24 @@ impl ConversationStore for SqliteConversationStore {
         json.map(|json| decode(&json, "bootstrap responses"))
             .transpose()
             .map(Option::unwrap_or_default)
+    }
+
+    fn load_bootstrap_surface_revision(&self) -> Result<SurfaceRevision, ConversationStoreError> {
+        let count: i64 = self
+            .lock()?
+            .query_row(
+                "SELECT message_count FROM bootstrap_identity WHERE id=1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| storage(format!("bootstrap Surface boundary: {error}")))?;
+        Ok(SurfaceRevision::new(u64::try_from(count).map_err(
+            |_| {
+                ConversationStoreError::InvalidReference(
+                    "negative bootstrap Surface boundary".into(),
+                )
+            },
+        )?))
     }
 
     fn load_bootstrap_history(&self) -> Result<Vec<MessageBlock>, ConversationStoreError> {
@@ -5304,6 +5324,10 @@ fn validate_existing_schema(connection: &Connection) -> Result<(), ConversationS
     verify_schema_shape(connection)
 }
 
+// This is an index discriminator, not a second occupancy fact. The Journal
+// continues to own the usage payload and the compaction's explicit absence.
+const CONTEXT_READING_PREDICATE: &str = "json_extract(event_json, '$.event.type') = 'compaction_completed' OR COALESCE(json_type(event_json, '$.event.usage'), 'null') != 'null'";
+
 #[allow(clippy::too_many_lines)] // Closed indexed scope vocabulary in one place.
 /// The actual bounded SQL used by the reader and its query-plan contract tests.
 fn presentation_statements(
@@ -5322,6 +5346,7 @@ fn presentation_statements(
     ];
     let scope = match &query.scope {
         FactScope::All => String::new(),
+        FactScope::ContextReading => format!(" AND ({CONTEXT_READING_PREDICATE}) = 1"),
         FactScope::Step(attempt, turn) => {
             values.push(Value::Text(attempt.to_string()));
             values.push(Value::Text(turn.to_string()));
@@ -5357,6 +5382,7 @@ fn presentation_statements(
                 FactScope::Interaction(value) => ("interaction_id", value),
                 FactScope::Message(value) => ("message_id", value),
                 FactScope::All
+                | FactScope::ContextReading
                 | FactScope::Step(..)
                 | FactScope::Attempt(..)
                 | FactScope::ToolCall { .. } => unreachable!(),
@@ -5366,7 +5392,9 @@ fn presentation_statements(
         }
     };
     let index = match query.scope {
-        FactScope::All | FactScope::Message(..) => "events_kind_idx",
+        FactScope::All => "events_kind_idx",
+        FactScope::ContextReading => "events_context_reading_idx",
+        FactScope::Message(..) => "events_message_id_kind_idx",
         FactScope::Attempt(..) => "events_attempt_kind_idx",
         FactScope::Step(..) => "events_step_kind_idx",
         FactScope::Request(..) => "events_request_id_kind_idx",
@@ -5398,6 +5426,14 @@ fn presentation_statements(
 }
 
 const PRESENTATION_INDEXES: &[(&str, &str)] = &[
+    (
+        "events_context_reading_idx",
+        "json_extract(event_json, '$.event.type'), (json_extract(event_json, '$.event.type') = 'compaction_completed' OR COALESCE(json_type(event_json, '$.event.usage'), 'null') != 'null'), sequence",
+    ),
+    (
+        "events_message_id_kind_idx",
+        "json_extract(event_json, '$.event.message_id'), json_extract(event_json, '$.event.type'), sequence",
+    ),
     (
         "events_kind_idx",
         "json_extract(event_json, '$.event.type'), sequence",
@@ -10105,6 +10141,10 @@ mod pending_transaction_tests;
 
 #[cfg(test)]
 mod tests {
+    mod indexed_fact_tests {
+        use super::*;
+        include!("sqlite/indexed_fact_tests.rs");
+    }
     use super::*;
     use crate::context::assembly::ContextGeneration;
     use crate::conversation::ConversationState;
@@ -15039,7 +15079,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 51);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 52);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -15108,7 +15148,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 51);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 52);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
@@ -15186,7 +15226,8 @@ mod tests {
                 "events_step_kind_idx",
             ),
             (FactScope::Request("r".into()), "events_request_id_kind_idx"),
-            (FactScope::Message("m".into()), "events_kind_idx"),
+            (FactScope::Message("m".into()), "events_message_id_kind_idx"),
+            (FactScope::ContextReading, "events_context_reading_idx"),
             (
                 FactScope::ToolCall {
                     call_id: "c".into(),

@@ -1706,7 +1706,7 @@ the synchronization.
 
 The internal Runtime Client vocabulary is v66. Only App Server v44 clients
 are generated; earlier versions are rejected, with no aliases or compatibility
-decoder. The current storage/control formats are Event envelope 1, SQLite 51, Session
+decoder. The current storage/control formats are Event envelope 1, SQLite 52, Session
 catalog 15 and subagent IPC v31. Child file and artifact reads use the registered
 child Conversation and the parent attachment's native delivery authority.
 

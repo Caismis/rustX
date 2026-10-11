@@ -1797,6 +1797,10 @@ pub trait ConversationStore: Send + Sync + 'static {
         self.load_canonical()
     }
 
+    /// Immutable bootstrap Surface boundary, read from identity metadata without
+    /// loading canonical bodies. A validated seed has one Surface op per message.
+    fn load_bootstrap_surface_revision(&self) -> Result<SurfaceRevision, ConversationStoreError>;
+
     /// Read immutable lineage-bootstrap response provenance, never execution events.
     fn load_inherited_responses(
         &self,

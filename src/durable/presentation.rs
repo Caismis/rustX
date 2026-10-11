@@ -5,6 +5,9 @@ use crate::runtime::identity::{AttemptId, TurnId};
 #[derive(Debug, Clone)]
 pub enum FactScope {
     All,
+    /// Terminal request usage or a completed compaction, including an absent estimate.
+    /// An expression index skips usage-free requests without scanning their history.
+    ContextReading,
     Step(AttemptId, TurnId),
     Attempt(AttemptId),
     Request(String),
@@ -13,7 +16,7 @@ pub enum FactScope {
         attempt: Option<AttemptId>,
         turn: Option<TurnId>,
     },
-    /// Canonical commit correlation; kind and sequence own bounded native ordering.
+    /// Exact canonical message identity, event kind and sequence are indexed together.
     Message(String),
     Execution(String),
     Subagent(String),

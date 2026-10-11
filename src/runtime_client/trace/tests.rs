@@ -4364,7 +4364,7 @@ fn reused_tool_history() -> (SqliteConversationStore, u64, ToolCall) {
     start(&store);
     let call = bash_call("reused-call");
     let mut first_cut = 0;
-    for index in 0..160 {
+    for index in 0..2048 {
         let message_id = MessageId::new(format!("assistant-{index}"));
         let mut committed = event(
             &store,
@@ -4454,10 +4454,27 @@ fn tool_locator_searches_complete_history_and_disambiguates_reused_call_ids() {
         ..locator.clone()
     };
     assert!(projection.locate_tool(&wrong_tool).unwrap().is_none());
+    let wrong_message = TraceToolLocator {
+        occurrence: ToolCallOccurrenceRef::new(
+            MessageId::new("unrelated-assistant"),
+            ContentBlockIndex::new(1),
+        ),
+        ..locator.clone()
+    };
+    assert!(matches!(
+        projection.locate_tool(&wrong_message),
+        Err(ConversationStoreError::InvalidReference(message))
+            if message == "message unrelated-assistant is unavailable"
+    ));
+    let wrong_call = TraceToolLocator {
+        call_id: ToolCallId::new("different-call"),
+        ..locator.clone()
+    };
+    assert!(projection.locate_tool(&wrong_call).unwrap().is_none());
     let second = projection
         .locate_tool(&TraceToolLocator {
             occurrence: ToolCallOccurrenceRef::new(
-                MessageId::new("assistant-159"),
+                MessageId::new("assistant-2047"),
                 ContentBlockIndex::new(1),
             ),
             ..locator
@@ -4467,6 +4484,65 @@ fn tool_locator_searches_complete_history_and_disambiguates_reused_call_ids() {
     assert_ne!(second.record_id, location.record_id);
     assert_eq!(
         second.page.records.last().unwrap().location.step_id,
-        Some(TurnId::new("step-159"))
+        Some(TurnId::new("step-2047"))
     );
+}
+
+#[test]
+fn tool_locator_never_fabricates_execution_for_proposals_or_inherited_history() {
+    let source = store("conv_1c21f5be-5204-7123-aabd-32d315c81673");
+    start(&source);
+    let call = bash_call("proposal-only");
+    propose_tool_call(&source, "proposal", &call, 2);
+    let locator = TraceToolLocator {
+        occurrence: ToolCallOccurrenceRef::new(
+            MessageId::new("proposal"),
+            ContentBlockIndex::new(0),
+        ),
+        call_id: call.id.clone(),
+        tool_id: call.tool_id.clone(),
+    };
+    assert!(
+        TraceProjection::new(&source)
+            .unwrap()
+            .locate_tool(&locator)
+            .unwrap()
+            .is_none()
+    );
+    append(
+        &source,
+        E::ToolExecutionStarted {
+            tool_call_id: call.id.clone(),
+            tool_id: call.tool_id.clone(),
+        },
+        3,
+    );
+    assert!(
+        TraceProjection::new(&source)
+            .unwrap()
+            .locate_tool(&locator)
+            .unwrap()
+            .is_some()
+    );
+    let seed = crate::durable::LineageSeed::replayed(
+        source.load_canonical().unwrap(),
+        source
+            .load_surface_history(source.load_head().unwrap().revision)
+            .unwrap(),
+        std::collections::BTreeMap::new(),
+    )
+    .unwrap();
+    let child = SqliteConversationStore::in_memory(ConversationId::new(
+        "conv_1c21f5be-5204-7123-aabd-32d315c81674",
+    ))
+    .unwrap();
+    child.initialize_lineage(&seed).unwrap();
+    assert!(
+        TraceProjection::new(&child)
+            .unwrap()
+            .locate_tool(&locator)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(child.presentation_frontier().unwrap(), 0);
 }
