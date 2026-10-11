@@ -63,7 +63,7 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     // Provider is the native effective one.
     await expect(settings.getByLabel('Endpoint', { exact: true })).toHaveValue('');
     await settings.getByRole('button', { name: /Credential source$/ }).click();
-    await expect(page.getByRole('listbox').getByRole('option')).toHaveText(['Read it from an environment variable', 'Enter a secret']);
+    await expect(page.getByRole('listbox').getByRole('option')).toHaveText(['Read it from an environment variable', 'Enter a literal secret']);
     await page.keyboard.press('Escape');
     await expect(settings.getByText(/Native effective Provider acceptance/)).toBeVisible();
     await settings.getByLabel('Endpoint', { exact: true }).fill('http://127.0.0.1:2/v1');
