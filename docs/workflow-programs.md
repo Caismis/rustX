@@ -20,8 +20,8 @@ freezes all required capabilities before publication; a block never rediscovers 
 
 ## Authoring and lexical scope
 
-A definition contains `description`, `block`, optional `workspace`,
-and trusted `timeout_ms` (default 600000). Every block contains
+A definition contains `description`, `block`, and trusted `timeout_ms`
+(default 600000). There is no `workspace` key; authoring one is refused. Every block contains
 `input` and `output` JSON Schemas, `entry`, `nodes`, and `edges`. Parallel
 branches contain an `input` value expression and another `block` of exactly
 the same shape. There is no Block node, callable subworkflow, conversation,
@@ -62,7 +62,7 @@ block:
             source = Path("greeting.py")
             if source.stat().st_size > 4096:
                 raise ValueError("greeting.py exceeds the 4096-byte source limit")
-            # Candidate stdout cannot forge the checker's exact output contract.
+            # Implementation stdout cannot forge the checker's exact output contract.
             with contextlib.redirect_stdout(sys.stderr):
                 greeting = runpy.run_path(str(source))["greeting"]
                 actual = [greeting("Ada"), greeting("")]
@@ -99,9 +99,8 @@ An extension-provided Tool such as `todo` is not an ordinary capability at all
 and is refused at compile time, naming the extension that owns it; a Workflow
 Agent node composes Todo through `override.extensions`, never as a capability.
 No rediscovery or current-file lookup can replace a frozen registration.
-Without a run `workspace` binding, Tools use the ordinary invoking context.
-With a binding, every Tool consumes the exact native-authorized candidate as
-an exclusive validation consumer, under the contract below.
+Tools run with their exact admitted execution contract in the invoking
+Session's workspace; a Workflow never rebinds a Tool's working directory.
 
 `result` projects exactly one zero-based native `ToolExecutionResult.content`
 part. `type: json` requires `ToolResultContent::Json` and a declared closed
@@ -198,12 +197,12 @@ that gate, nor an Agent registry capacity slot, while awaiting descendants.
 Thus capacity one is usable without weakening ordinary outer sibling ordering.
 
 The copyable `implement_and_review` example uses ordinary native Bash and a
-standard-library checker frozen in trusted literal Tool arguments before candidate writer admission.
-The candidate supplies the source under test, not the verifier implementation.
-Candidate edits to Workflow YAML cannot change the already admitted program generation.
+standard-library checker frozen in trusted literal Tool arguments before any writer runs.
+The Implementer supplies the source under test, not the verifier implementation.
+Edits to Workflow YAML in the shared workspace cannot change the already admitted program generation.
 The checker's exact stdout enum is validated from the native JSON result before
 typed Branch/Return constructs business findings. Tool Approval permits an invocation,
-not the trustworthiness of candidate contents. This is not filesystem sandboxing
+not the trustworthiness of workspace contents. This is not filesystem sandboxing
 against arbitrary external host processes.
 No command-name special case or Workflow-owned process supervisor is involved.
 
@@ -453,23 +452,11 @@ root block terminal, WorkflowRun terminal. Terminal outcomes are unique.
 | Retained Workflow inputs, locals and exports | 4 MiB | Compiler proves whole-program reservation; run charges actual bytes before local commit |
 | Native/branch failure diagnostic text | 1 KiB per diagnostic | Clamp before retention/aggregation; preserve every outer branch key |
 
-Downstream admission evaluates dependencies, borrows the exact candidate when
-required, then observes cancellation and checks/commits node and Agent counts in
-one synchronous run-budget critical section immediately before
-`WorkflowNodeStarted`. Stale-candidate failure, pre-start cancellation and budget
-rejection commit no count. Once committed, counts are not refunded for subsequent
-preparation/execution failure.
-
-Workflow owns pre-start candidate access in one async result/cleanup scope. Every
-error after borrow returns through its finalizer unless ownership has transferred
-to the native consumer. The finalizer uses unchanged-validator `finish(true)`:
-it clears native admitted ownership and preserves the version when no source
-changed; real interference retains the existing conservative validation behavior.
-Tool setup borrows that owned slot through physical settlement; Agent setup leaves
-it there until native child preparation takes it. Pure consumers retain it through
-consumption. Zero-start cancellation emits no node start/settled facts and cannot
-alone manufacture abandoned-user/NestedContainment resource state. Review retains
-its separate existing CandidateFreeze acquisition path, without a duplicate borrow.
+Downstream admission evaluates dependencies, then observes cancellation and
+checks/commits node and Agent counts in one synchronous run-budget critical
+section immediately before `WorkflowNodeStarted`. Pre-start cancellation and
+budget rejection commit no count. Once committed, counts are not refunded for
+subsequent preparation/execution failure.
 
 Count reservations are conservative and never refunded or reset on child
 entry, failed preparation or scope completion. Private block inputs and
@@ -501,8 +488,8 @@ observation evidence under their existing durable owner.
 
 The registry transfers a successful native output once and clears its live
 copy. The existing durable output fact remains bounded evidence, not live
-block state. Native child transcripts, process resources and workspace
-ownership remain under their existing native owners and bounds.
+block state. Native child transcripts and process resources remain under their
+existing native owners and bounds.
 
 ## Freeze, history and observation
 
@@ -619,7 +606,7 @@ there is no pending reservation queue, redispatch path or resumable continuation
 The body's output commits at its ordinary Return validation/export reservation,
 and becomes available to Loop only after block finalization, including every
 native borrower and all Parallel siblings. A carry commits only after projection,
-current candidate checks, input validation, byte reservation and cancellation
+input validation, byte reservation and cancellation
 observation all succeed. Exit similarly validates/reserves the complete tagged
 result before its one local insertion and `WorkflowLoopExited` fact, then selects
 exactly the successor matching that committed status. Neither a
@@ -641,21 +628,18 @@ result retires after carry or final-result transfer. No output history is retain
 by Loop. Native child records and durable journal facts retain their existing
 bounded observation ownership, with at most 256 admitted children and 4096 steps.
 
-Native Agent/Tool execution, supervised process containment, candidate borrowers
-and Review/Questionnaire settlement are unchanged owners. Loop awaits their
-existing block boundary. It does not own a process supervisor or workspace
-manager. Body acceptance transitions compose sequentially and export to the
-containing block/Parallel join. Mutation A→B clears accepted A independently of
-whether the body inherited acceptance. Candidate-dependent carried data retains
-its exact applicability; stale data cannot authorize B. Fresh invocation vectors
-make Review and Questionnaire authority distinct in every iteration.
+Native Agent/Tool execution, supervised process containment and
+Review/Questionnaire settlement are unchanged owners. Loop awaits their
+existing block boundary. It does not own a process supervisor or any workspace
+resource. Fresh invocation vectors make Review and Questionnaire authority
+distinct in every iteration.
 
 Failed, Denied, TimedOut, Cancelled, unavailable human interaction and
 OutcomeUnknown stop execution without another feedback attempt. Interrupted
 native children and abandoned native terminal publication retain OutcomeUnknown;
 a child's own committed execution deadline maps to TimedOut. The outer deadline
-never resets. All terminal paths use native candidate settlement and preserve
-useful dirty handoff; cancellation is not rollback.
+never resets. Every terminal path leaves completed workspace effects in place;
+cancellation and failure are not rollback.
 
 `WorkflowLoopIterationAdmitted`, `WorkflowLoopIterationSettled` (including typed
 failure/cancellation/unknown outcome) and `WorkflowLoopExited` (satisfied or
@@ -664,285 +648,41 @@ interaction waits and native cancellation/drain facts continue to describe work
 inside an iteration. These are observations, not an executable Event Journal.
 No Goal round, Scheduler, cross-run budget renewal or durable resume is added.
 
-## Run-scoped candidate workspace (WF-03)
+## Shared Session workspace (Issue #462)
 
-Trusted definitions can add this run resource, never a graph node:
+A Workflow owns no workspace resource. Every Workflow Agent and Tool runs in the
+invoking Session's frozen execution binding, the same directory the invoking
+Agent uses. There is no Candidate, worktree, copy, freeze, validation borrow,
+handoff or rollback, and no implicit Git discovery, allocation or preparation:
 
-```yaml
-workspace:
-  require_clean_parent: true
-```
+- A Workflow Agent child's frozen spec carries the Session binding as its
+  working directory. Its frozen authority, invocation overrides and child-scope
+  restrictions are unchanged. It is a finite Workflow child: ordinary durable
+  Agent controls cannot resume it, and its result and recovery stay owned by its
+  exact Workflow node/visit rather than the parent mailbox.
+- Tools keep their admitted execution contract and working directory. A
+  Workflow invocation never rebinds an external Tool's materialization.
+- Native Bash checkers observe Agent writes in place. A failed check, a Review
+  rejected after a write, cancellation or Workflow failure leaves completed
+  effects in place. A successful Workflow does not complete a Goal, and its
+  results report observations rather than certifying current files.
+- Parallel branches take no lock beyond existing native scheduling. Concurrent
+  writers to the same files are the author's responsibility, exactly as for
+  concurrent Tools in an Agent turn.
+- A successful run returns exactly the declared output value. Failure and
+  cancellation return the native terminal status with no workspace settlement.
 
-Omission means no new Git requirement, discovery or acquisition. An empty
-`workspace: {}` selects the same strict isolated-worktree default. Explicit
-`false` permits a dirty parent but does not copy arbitrary parent bytes.
-The native `.worktreeinclude` policy is the only authorized ignored-file
-overlay; its frozen source and safe materialization rules remain unchanged.
-
-All Agent profiles in all branches must already resolve to exactly the same
-`GitWorktree { require_clean_parent }` policy. Shared profiles and mismatched
-cleanliness policies fail before acquisition or child/Tool side effects.
-Candidate Agents cannot select MCP (including managed Python) or nested
-native Agent creation/message orchestration: their existing bindings cannot safely
-promise candidate cwd or descendant access. These combinations are rejected,
-not stripped from a profile. Candidate eligibility reads each node's
-**effective** capability set, so an Agent node's invocation override (SUB-OVR)
-is applied before the check rather than after it: an override cannot smuggle an
-ineligible capability past this gate, and it cannot be blamed for one the role
-already had. Tool executors declare the shared `WorkspaceUse` contract:
-
-- `ConsumesProvided`: uses the supplied workspace as cwd/file authority. Native
-  filesystem Tools and Bash acquire the exact candidate validation borrow.
-- `Independent`: consumes no workspace authority. Native `ask_user` runs unchanged
-  without acquiring, holding or validating CandidateScope access, and its result
-  gains no candidate applicability merely because the run owns a workspace.
-- `Incompatible` (the default): external/fixed-cwd executors cannot safely honor
-  the binding and fail admission before execution. Current MCP executors use this.
-
-No frozen policy is reinterpreted against a different checkout. A pending
-Questionnaire cannot block a writer solely because the run owns a candidate;
-source mutation cannot turn its independent response into candidate failure.
-
-Agents are exclusive source-writing borrowers. Every workspace-consuming Tool
-is an exclusive **validation** borrower, regardless of its name. This is not
-a read-only sandbox: a test may write, but then cannot certify its input.
-All candidate consumers serialize, including consumers in Parallel branches
-and Tools whose ordinary scheduler permits parallel execution. There is no
-parallel-reader claim. Candidate access is acquired before child capacity or
-Tool scheduling. No borrower waits for another candidate-consuming child;
-nested orchestration is rejected before execution. Ordinary supervised OS
-descendants stay inside their existing physical containment boundary.
-
-### One owner and explicit frontiers
+Agent physical settlement (process containment and nested-unit proof) remains
+owned by the subagent registry and never inspects or removes the shared
+workspace. The replacement example gates implementation on an explicit Branch:
 
 ```text
-Workflow run (logical candidate scope)
-  -> runtime::workspace::CandidateScope (native owner)
-      -> one WorkspaceLease
-          -> one WorkspaceAccess for an exact node instance
-              -> Agent process / native Tool / supervised descendants
+Plan -> Review -> Branch(review.accepted)
+                    | false -> Return(rejected)
+                    | true  -> Loop[Implement -> Check -> Branch(passed)]
+                                 | satisfied -> Return(implemented)
+                                 | exhausted -> Return(needs_revision)
 ```
-
-`runtime::workspace`, moved from `runtime::subagent::workspace`, is the sole
-Git/resource owner. `WorkspaceUse::Owned` transfers a one-shot lease to the
-native process driver; `Borrowed` transfers access only. There is no second
-Workflow Git manager. WorkflowRuntime holds the logical scope and never
-runs Git. Candidate access changes cwd, not instructions, Skills, model,
-profile, capability allowlists, ToolVersion/MCP identities, approvals or
-deadlines. Downstream Agents receive explicit values and their own context,
-not the preceding Agent's transcript.
-
-The linearization points are:
-
-1. Native `acquire` freezes repository identity, logical relative scope,
-   baseline, cleanliness/overlay facts and deterministic physical ownership.
-   A staged failure settles that same lease; dirty or unknown work is preserved.
-2. `retain_for_run` transfers the sole lease into native scope state. Required
-   durable `WorkflowWorkspaceOwned` publication commits run admission. Failed
-   publication or observed cancellation settles staging; no node starts.
-3. `CandidateScope::borrow` takes the exclusive native mutex, validates the
-   exact run/reference/Git ownership and content, installs mutation observation,
-   checks cancellation, then marks access admitted. Paths and references alone
-   cannot construct access. Cancellation while waiting starts no new work.
-4. Native physical settlement precedes `WorkspaceAccess::finish`: Agent reap
-   and nested-anchor containment, or native Tool settlement. Only then is
-   content inspected and the current version published. Dropping an access
-   future leaves it admitted/unresolved, not released.
-5. Clearing admitted state and releasing the guard makes the next borrower
-   eligible. Unknown containment poisons the scope; no next writer is granted.
-6. `CandidateScope::settle` waits for access, revalidates final content, then
-   consumes the lease through the same native settlement on every terminal
-   path. Settlement is absorbing. Inspection/removal never precedes physical
-   containment. A run-scoped native settlement anchor also covers acquisition
-   and final cleanup, so outer cancellation cannot outrun this boundary.
-7. Exact native proof plus settled ownership authorizes disposal. Automatic
-   disposal removes only clean, unchanged managed work. Changed work is retained;
-   unknown ownership is durably unresolved. Explicit disposal takes run identity
-   and authoritative journal facts, never a caller-supplied path, branch or SHA.
-
-Cancellation is intent, not rollback. Once physical work starts, cancellation
-propagates and settlement is still awaited. Cancellation observed at final
-run commit prevents a success outcome but cannot reverse already completed
-physical settlement. No terminal path automatically commits, integrates,
-resets, stashes or force-removes dirty source.
-
-### Candidate content and interference
-
-`CandidateReference { run, version, content }` is a historical native fact,
-not an access token. The SHA-256 content identity covers frozen repository,
-logical/physical workspace and baseline facts, current HEAD, exact stage/index
-entries, and the repository-wide union of tracked, HEAD-tree and non-ignored
-untracked paths. Length-framed names and bytes distinguish deletions, staged
-versus working-tree state, regular-file executable modes and symlink target
-bytes (links are not followed). Thus identical HEAD with different dirty bytes
-is not the same candidate. Ignored untracked build/cache/runtime files are
-excluded, including ignored overlay files; tracked files remain included even
-if an ignore rule matches them.
-
-Unmerged index stages, gitlinks/submodules, sparse/assume-unchanged entries,
-special files, unsafe paths and oversized content fail closed. The bounded
-algorithm permits at most 100,000 paths, 16 MiB Git listings and 256 MiB source
-bytes; it is not a source archive. Native ownership is re-proved around two
-matching content scans using stable directory-relative, no-follow reads.
-
-The runtime prevents overlapping **runtime-owned** writers. It does not
-sandbox arbitrary host processes. Every access revalidates exact source facts;
-Linux inotify/macOS vnode observation detects observed source/control writes
-during validation, including writes followed by restoration of identical bytes.
-Darwin attribute-only notifications exclude access-time-only bookkeeping when
-all other recorded attributes are unchanged. This filters read noise; it is
-not source-equality proof. Content/index/mode fingerprints and independent
-data-write notifications remain required.
-Observation loss/overflow or invalid ownership fails closed. macOS directory
-notifications may conservatively invalidate a check for directory changes.
-Kernel notification semantics are not universal external-process isolation:
-privileged interference, remote filesystem changes, and writes outside kernel
-notification coverage are outside this guarantee. Timestamps are never proof.
-
-A proven validation mutation publishes a new version and fails applicability,
-even if final bytes were restored. Lost directory coverage instead leaves
-currentness unresolved and cannot certify an unchanged candidate. The durable `WorkflowCandidateInvocation`
-correlates the actual native outcome with the input reference and an explicit
-`candidate_unchanged` fact; native Success alone is insufficient. Historical
-checks never authorize a later version. External net changes between borrowers
-or before final settlement invalidate admission/final reference and preserve
-the workspace conservatively. Model text is not native verification evidence.
-
-### Committed-value applicability and consumption
-
-The interpreter retains `CommittedValue { value: Value, candidate:
-Option<CandidateReference> }`. This metadata is internal, never an authored
-JSON field. A successful candidate Tool projection carries the exact input
-reference returned directly by native invocation after physical settlement and
-source/mutation verification. Successful candidate Agent structured outputs
-carry the exact post-node reference returned by `WorkspaceAccess::finish(false)`
-after child and nested physical settlement. `WorkspaceUseSettlement.candidate`
-passes this fact through `PhysicalSettlement.candidate` to the registry's
-process-local `WorkflowAgentOutput.candidate`, then Agent settlement commits it
-in `CommittedValue`. No candidate identity enters authored JSON or durable child
-output. With no mutation A stays A; a writer transforming A into B binds its
-output to B. Inspection failure or unresolved containment supplies no successful
-candidate-bound local output. A machine-review Agent's `passed=true` for A
-becomes stale after a later writer produces B, just like a Tool check.
-Literals and external run arguments are unbound.
-References retain applicability, including field selection; objects and arrays
-merge their dependencies. Parallel inputs, branch Returns and keyed exports
-retain the same metadata. Mixing different references fails explicitly; there
-is one run candidate, not a provenance graph.
-
-Branch predicates, Return, derived Tool arguments, derived Agent inputs and
-Parallel block input/export commits check applicability through the live
-`CandidateScope::assert_current`. It validates the run and exact current
-reference and fails closed for unresolved/released state. It grants no access
-and changes no candidate. Tool/Agent admission additionally checks the expected
-reference while acquiring exclusive access, after queued writers settle.
-Journal correlation records history and is never queried for this decision.
-
-The linearization sequence is:
-
-```text
-A -> exclusive Tool access admitted
-  -> native check executes: passed=true
-  -> physical Tool settlement -> source/mutation verification
-  -> committed local value carrying A
-  -> later writer admitted -> physical writer settlement -> version B committed
-  -> Branch/Return attempts to consume A -> Workflow InvalidValue (stale reference)
-```
-
-The native Success remains historical Success. Applicability rejection is a
-Workflow-domain failure; it does not rewrite the historical invocation outcome.
-Denied, Failed, Cancelled, TimedOut and OutcomeUnknown retain their native
-meaning. Unknown physical settlement never releases borrower ownership.
-
-Directory watch admission enumerates the existing candidate tree using
-no-follow, descriptor-relative traversal, including empty and ignored
-directories. The fixed limits are 100,000 enumerated entries, depth 64 beneath
-the root, and 100,000 total source/control/directory watch candidates. Allocation
-or enumeration failure rejects admission. Existing source/control files and
-necessary control ancestors are also covered. This is a bounded observation
-interval, not an unbounded recursive watcher.
-
-Linux inotify observes child names at each admitted directory. Creating or
-moving in a new directory invalidates coverage immediately when notifications
-are drained; its descendants cannot silently certify unchanged content.
-Ignored file activity may be excluded using Git source policy. macOS vnode
-observes existing files and directories but cannot name a changed child;
-directory-entry changes conservatively invalidate coverage, even in ignored
-caches. Directory watch loss, revocation and Linux queue overflow fail closed.
-Neither platform uses timestamps to certify equality or claims arbitrary-host
-sandboxing.
-
-### Terminal handoff and resource persistence
-
-Successful candidate runs return `{output, workspace, candidate}`. Failed or
-cancelled runs attach the same bounded structured workspace settlement and
-optional final candidate reference to their native Tool result, even without
-business Return. Unresolved ownership has no final valid reference. Required
-resource journal facts are separate from best-effort execution observation.
-
-`WorkspaceManager::inspect_workflow_workspace` reads historical settlement
-and separate disposal status; `dispose_workflow_workspace` accepts only the
-run identity and conversation store. Its durable intent and physical phases
-use the existing native disposal primitive. One-shot proof/disposal entry points
-accept only `SubagentId`, so they cannot bypass Workflow journal/content authority.
-Repeated disposal is idempotent
-and retained source bytes are revalidated before deletion, including retries
-that have not yet removed the worktree. A changed handoff fails closed
-and cannot rewrite the Workflow terminal outcome. Recovery exposes retained
-or unresolved resource facts, never resurrects borrowers, nodes or execution
-authority. No Workflow resume or full inspector UI is introduced here.
-
-Unresolved candidate state stores a typed reason and a bounded detail.
-`NestedContainment` means a physical user/descendant remains unproven: active
-process-local ownership stays registered and Git-only disposal is rejected,
-including after reopening. `PhysicalSettlement` means physical users have
-settled but final hashing, Git inspection or mutation coverage is uncertain.
-At absorbing run settlement the native lease preserves the workspace and
-retires its active registration before returning this fact. The existing exact
-native re-proof/disposal route may recover dirty/index/source facts only while
-the runtime-created branch and checkout HEAD still equal the immutable
-acquisition base, and current exact content matches its durable recovery guard.
-`WorkflowWorkspaceSettled.candidate` means the exact proven terminal candidate;
-it remains `None` for unresolved final state. The separate
-`recovery_guard: Option<CandidateRecoveryGuard>` contains a `reference` copied
-from native `CandidateScope.state.current`, the last successful candidate proof
-before uncertainty. It is not a final candidate, execution authority, or
-model-visible JSON: it is only a destructive-recovery comparison baseline.
-
-If a writer's `finish(false)` failed after changing A to B, only A can guard
-recovery, so B is preserved. If `finish(false)` proved B and final run inspection
-later failed, the guard is B. Recovery may remove unchanged B, but later B-to-C
-edits are preserved. Missing guard means no destructive authority.
-
-An unresolved terminal fact has no trusted durable terminal HEAD: if the Agent
-committed a newer HEAD before inspection failed, readable
-current Git facts cannot authorize that commit's disposal. The worktree and
-branch remain retained for explicit user/manual recovery. No borrower or
-execution is recreated. Missing terminal settlement remains
-conservatively `NestedContainment`.
-
-```text
-Retained -> DisposalStarted (durable exact intent)
-         -> worktree removal -> branch/ref settlement
-         -> DisposalSettled (durable physical phase)
-```
-
-The native physical owner (`WorkspaceManager::dispose_authorized_workspace_inner`)
-recomputes `inspect_source` and compares its content digest to the final candidate
-or recovery guard, then re-proves exact ownership immediately before the first
-`git worktree remove --force`. This comparison applies whenever the worktree
-remains present,
-including retries with committed intent. If removal succeeded but the durable
-settlement append failed, retry uses that same intent and exact absence of
-both path and Git registration to continue branch/ref settlement without
-hashing the deleted checkout. If the branch was also removed, retry commits
-AlreadyDisposed. A partial branch failure can commit WorktreeRemoved or retry
-from the still-authorized intent. Repository identity, deterministic allocation,
-registration and compare-delete ref proofs remain mandatory. Absence without
-intent, partial absence, replaced paths, unrelated refs and changed retained
-source before the destructive frontier fail closed. There is one native
-physical disposal state machine; the Workflow wrapper only carries durable
-identity, candidate applicability and phase facts.
 
 ## Human questions and business Review (WF-04)
 
@@ -955,15 +695,18 @@ deadlines, provider absence and control failures never create that answer.
 The native context reborrow also rebinds the requester to the driver's leaf
 cancellation/deadline scope. Both leaf and finite outer deadlines remain active.
 
-[The executable implementation/review example](../examples/local-runtime/workspace/.agents/workflows/implement_and_review.yaml)
+[The executable implementation/review example](../examples/local-runtime/.agents/workflows/implement_and_review.yaml)
 shows static capability selection, literal arguments, typed results, Branch and
 Review. Register it explicitly through the usual Workflow resource configuration.
 Its root receives business input such as `{"requirement":"Fix greeting.py"}`. An
 empty requirement takes the fixed question path. A planning Agent consumes that
 committed business context and produces a structured plan; Review accepts or rejects
-that plan. Acceptance admits the bounded implementation/check Loop, followed by
-candidate-bound Review on success or an explicit retained handoff on exhaustion.
-The plan is data and cannot change the fixed graph or capability selectors.
+that plan, and an explicit Branch on `accepted` routes rejection to the declared
+`rejected` Return. Only the accepted branch reaches the bounded
+implementation/check Loop, which returns `implemented` when the frozen checker
+passes or `needs_revision` on exhaustion. Every Return satisfies the declared
+output schema. The plan is data and cannot change the fixed graph or capability
+selectors.
 
 There are three distinct contracts:
 
@@ -978,133 +721,51 @@ Questionnaire or Review, select capabilities, or change workspace authority.
 No Review policy or model/provider interpretation is involved.
 
 A Review node has `type: review`, a `subject`, and a `context` array. The subject
-must reference an already committed value, including a validated block input:
+must reference an already committed value, including a validated block input.
+An explicit Branch on the Review's `accepted` field gates later work:
 
 ```yaml
-human_review:
+review_plan:
   type: review
   subject:
-    type: candidate
-    value: {type: reference, path: [implement]}
+    type: plan
+    value: {type: reference, path: [plan]}
   context:
-    - {type: reference, path: [check]}
+    - {type: reference, path: [intake]}
+plan_accepted:
+  type: branch
+  condition:
+    type: boolean
+    value: {type: reference, path: [review_plan, accepted]}
 ```
 
-`type: plan` freezes the actual structured object by value. It does not certify
-files named by strings inside that object. `type: candidate` requires the referenced
-value's interpreter-owned CandidateReference; authored JSON cannot manufacture it.
-The reference includes the owning run, monotonically changing version and native
-content digest. The WF-03 source contract (dirty tracked bytes, admitted untracked
-source, deletions, index/modes/symlinks, exclusions and unsupported-content rules)
-continues unchanged. Equal HEAD with different source bytes is a different subject.
-Context/check entries are bounded typed facts `{value, candidate}`. The optional
-candidate is the runtime-owned exact reference, not a claim from authored JSON.
-Plan subjects also preserve their own optional candidate applicability. These
-identities are included in the Review specification, digest, durable requested
-fact and UI disclosure. Identical check JSON tied to A and B has different Review
-identity. All subject/context dependencies must agree on one exact candidate;
-conflicts fail before publication. Plan Reviews with candidate-bound facts acquire
-and retain the same native freeze used by candidate subjects.
+`type: plan` is the only subject kind. It freezes the actual structured object
+by value and binds the presented subject, not mutable files named by strings
+inside it. Context entries are bounded committed values. The subject, context
+and concrete node instance are included in the Review specification, digest,
+durable requested fact and UI disclosure.
+
+The Review result `{accepted, feedback}` is ordinary typed data. Rejection is
+not a Workflow failure; only an explicit Branch on `accepted` routes around
+gated nodes, so merely placing a Review before a write establishes no gate.
+There is no implicit rejection-to-failure rule. Acceptance grants no Tool
+authority and does not certify that files still match anything that was shown.
+A Review after a write does not undo it. Review acquires no filesystem lease:
+an independent Parallel branch keeps running while it waits.
 
 ### Ownership and linearization
 
 | Frontier | Owner and rule |
 | --- | --- |
 | Subject selection | Workflow evaluates a committed explicit reference and bounded context. |
-| Candidate freeze | Workspace plane borrows the exact expected CandidateReference, starts native mutation observation and holds its exclusive borrow. |
 | Requested commit | InteractionCoordinator commits InteractionRequested before installing/publishing the actionable prompt through the existing route. |
-| Response validation | Coordinator checks the live identity, kind, concrete instance and whole-subject digest. CandidateFreeze validates while retaining that native borrow. |
-| Settled commit | Under coordinator terminal ownership, durable InteractionSettled precedes waiter release. Observable cancellation/deadline overrides a response. Source invalidation is a separate runtime outcome, never rejection. |
-| Review local commit | Workflow validates native freeze settlement and commits immutable decision/feedback JSON without candidate provenance. Accepted candidate identity is retained separately in run-local Acceptance state. |
-| Downstream admission | When explicit data applicability or Accepted(A) supplies an exact expected reference, the candidate-consuming Tool/Agent acquires that native borrow **before** WorkflowNodeStarted and receives the same access through physical settlement. With neither constraint, ordinary native admission borrows the current run candidate; no Human Review is required. |
+| Response validation | Coordinator checks the live identity, kind, concrete instance and whole-subject digest. |
+| Settled commit | Under coordinator terminal ownership, durable InteractionSettled precedes waiter release. Observable cancellation/deadline overrides a response. |
+| Review local commit | Workflow commits the immutable `{accepted, feedback}` JSON as the node value. |
+| Downstream admission | Ordinary Branch/Agent/Tool/Return admission. Only an explicit Branch on `accepted` routes around gated nodes. |
 
-The borrow may be released between settled Review and later admission. A queued
-writer can win that interval and publish B. In that case the next admission of A
-fails before its node starts. There is no unlocked currentness-check followed by
-later execution: acquisition, exact-reference validation and the effect's access
-are one ownership transfer. Pure Branch/Return reads of Review decision/feedback
-need no candidate authority. Ordinary candidate-derived data and explicit old
-candidate references still require currentness; pure consumers hold their native
-borrow through consumption. Parallel passes acceptance separately from input data
-and does not hold a parent borrow while branches wait. An Agent executes under
-Accepted(A); the exact native admitted and post-node references determine its
-branch effect. A -> A preserves Accepted(A); A -> B emits Cleared. B needs a new explicit Review only to gain human acceptance.
-
-Both accepted and rejected Review JSON are immutable business records. Rejection
-establishes no standing candidate authorization: after Reject A, a writer can
-produce B and Branch/Return can still read the decision and feedback. An explicit
-A-bound producer remains stale and cannot start a repair Agent against B. Accepted
-A likewise cannot admit a candidate-dependent operation against B. Acceptance is
-not encoded in `CommittedValue.candidate`; that field remains data provenance.
-
-### Parallel acceptance transitions
-
-Parallel branches inherit the current `Acceptance` for execution, but their outputs
-carry an explicit `AcceptanceTransition` relative to that entry: `Unchanged`,
-`Cleared`, or `Replaced(CandidateReference)`. The join merges these effects, then
-applies the merged transition to its entry state. It never merges inherited
-snapshots as competing decisions.
-
-| Incoming | Branch transitions | Result |
-| --- | --- | --- |
-| Accepted A | Unchanged, Unchanged | Accepted A |
-| Accepted A | Unchanged, Replaced(B) | Accepted B |
-| Accepted A | Unchanged, Cleared | None; no accepted-candidate constraint |
-| Accepted A | Replaced(B), Replaced(B) | Accepted B, using exact reference equality |
-| Accepted A | Replaced(B), Replaced(C), B != C | Conflict |
-| Accepted A | Cleared, Replaced(B) | Conflict; no coherent timeline proven |
-| Accepted A | Cleared, Cleared | None |
-
-`Unchanged` is the merge identity. Merge is commutative; neither definition nor
-completion order selects a winner. Clear/replacement mixtures fail closed because
-the transitions do not prove whether the replacement survived the other branch's
-candidate consumption. CandidateScope still serializes every physical consumer;
-there are no independent branch candidates or workspace copies.
-
-Only explicit Accepted candidate Review emits `Replaced`. Rejection and business
-values do not change acceptance. A candidate Agent emits `Cleared` whenever its authoritative post-node
-reference differs from its native admitted reference, regardless of local acceptance;
-otherwise its effect is Unchanged.
-Agent type or write capability alone does not imply mutation. Machine-review
-Agents leaving the exact candidate unchanged preserve existing acceptance.
-The pre-node reference is cloned from WorkspaceAccess::input() immediately before
-transfer to native child preparation; post-node identity comes from the native
-committed result. This adds no borrow, source scan, or ownership clone.
-Missing or wrong-run post-node candidate facts fail closed. Candidate validators
-retain acceptance when unchanged.
-The snapshot is either `Accepted(A)` (human acceptance applies to exact A) or
-`None` (no currently applicable human acceptance). Clearing acceptance removes
-that constraint; it does not revoke candidate execution authority. Agent A -> B
-clears Accepted(A), but B remains available to normal Tool/Agent execution,
-including machine validation and repair before any later Human Review.
-Human Review is not a workspace/Tool permission gate. Explicit candidate-derived
-inputs still enforce their own exact applicability even when acceptance is None.
-
-| Entry acceptance | Native pre -> post | Agent branch effect |
-| --- | --- | --- |
-| None | A -> A | Unchanged |
-| None | A -> B | Cleared |
-| Accepted(A) | A -> A | Unchanged |
-| Accepted(A) | A -> B | Cleared |
-
-Applying Cleared to a local None snapshot is a snapshot no-op, but the transition
-must still be exported so a concurrent sibling Replaced(A) cannot survive a later
-A -> B mutation. For Parallel entry None/current A: one branch Review/Accepts A
-(Replaced(A)); after its freeze releases, a sibling Agent changes A -> B (Cleared).
-The join fails with conflicting transitions. It cannot reinstall Accepted(A).
-Nested Parallel exports the same mutation effect through its enclosing block.
-
-Within a block, the latest explicit effect supersedes earlier effects. Unchanged
-steps preserve that effect. Nested Parallel contributes its joined transition in
-exactly this way. Clearing and then explicitly reaccepting the entry candidate is
-still `Replaced(A)`, not inferred `Unchanged`. An untouched sibling can never
-resurrect acceptance cleared by another branch. All state is run-local and remains
-separate from `CommittedValue` data applicability.
-
-Native writer exclusion is not a sandbox against arbitrary external host processes.
-WF-03's kernel observation and content checks detect interference at the native
-freeze/settlement/admission boundaries. Review does not claim a new containment
-mechanism. Invalidation fails closed without automatic reprompt/retry.
+Stale responses, wrong node visits, wrong subject digests and responses after
+terminal cancellation remain rejected by the existing interaction owner.
 
 Questionnaire facts now carry ordinary ToolInvocationId; Workflow invocations use
 concrete run/block/node/visit identity. Review carries that same concrete node
@@ -1118,24 +779,20 @@ Human waiting consumes the outer wall-clock deadline. Cancellation observable
 before downstream admission prevents that work. No capable provider before
 publication fails closed. Detach after publication preserves the live waiter;
 resync shows the same request without another audit/request. Process death removes
-live authority. Neither audit history nor SQLite reopen reconstructs waiters,
-Workflow execution or acceptance grants.
+live authority. Neither audit history nor SQLite reopen reconstructs waiters
+or Workflow execution.
 
 ### Disclosure and limits
 
 Plans are complete inline structured objects, limited to 32768 serialized UTF-8
 bytes. Context has at most eight entries and 8192 total serialized bytes. Concrete
-instance serialization is bounded to 8192 bytes. Candidate inspection paths are
-native-generated and at most 4096 UTF-8 bytes. Feedback is at most 2000 Unicode
+instance serialization is bounded to 8192 bytes. Feedback is at most 2000 Unicode
 scalar values; Accept has no feedback channel. Review uses the existing Workflow
 value/depth and aggregate local-data bounds as well.
 
 The unified overlay starts on Reject. Accept requires explicit navigation. Ctrl+F
 edits bounded rejection feedback; Enter exits feedback editing without submitting.
 PgUp/PgDn scrolls complete plan/context rows and reports the visible range.
-Candidate content is explicitly **not inlined**: the trusted inspection path is
-shown with its exact candidate identity, and no shortened diff is presented as
-complete. Inspection is read-only in meaning and conveys no write authority.
 Esc dismisses Review presentation; it does not answer it. Removing one pending
 item leaves unrelated drafts and interactions intact.
 
@@ -1144,16 +801,18 @@ Runtime Client 21 and child IPC 19. TUI carries those interactions through
 App Server. SQLite development schema 30 retains the WF-04 audit payloads introduced in schema 29 and adds Loop facts; older stores
 are refused, without migration. Event
 envelope version remains 1 because framing has not changed. No durable Workflow
-or pending-interaction tables are added.
+or pending-interaction tables are added. Issue #462 removed Candidate subjects,
+Candidate-bound context and the `review_invalidated` settlement in Runtime
+Client 62, App Server 40, child IPC 31 and SQLite 51; older peers and stores
+are refused at their version gates.
 
 ## Foreground native details (WF-06)
 
 Runtime Client projects live native run cuts (introduced in protocol 22);
 App Server carries them into the foreground Workflow Tool details. See
 [run projection](workflow-run-projection.md) for ownership, revision domains, cursor/resync synchronization, finite retention,
-cancellation draining, candidate applicability, and reconnect/process death.
+cancellation draining, and reconnect/process death.
 
-Invocation overrides never change `borrowed_from`, Workflow run identity, or
-physical disposal authority. Borrowing Agent children own their Conversations,
-while a shared Workflow-owned worktree contributes exactly one Session deletion
-blocker. See [capability identity and Session ownership](subagent-resources.md#capability-identity-and-session-ownership).
+Invocation overrides never change Workflow run identity. Workflow Agent
+children own their Conversations and run in the shared Session workspace; a
+Workflow owns no workspace resource and contributes no Session deletion blocker. See [capability identity and Session ownership](subagent-resources.md#capability-identity-and-session-ownership).

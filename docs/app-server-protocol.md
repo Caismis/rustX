@@ -1,5 +1,17 @@
 # App Server protocol v40
 
+App Server v40 / Runtime Client v62 share one Session workspace across Agents
+and Workflows (#462). `RuntimeClientAgent.workspace` is the frozen Session
+binding path; the isolation, resource-state and handoff object is gone, and
+`subagent/disposeWorkspace` with its `workspace_disposed` result is removed.
+Workflow views carry no Candidate or handoff fields, Review subjects are Plan
+only, the `review_invalidated` settlement is removed, and Session deletion
+reports no `workspace` blocker. The five Agent controls (`subagent`,
+`list_agents`, `send_message`, `wait_agent`, `interrupt_agent`) are composed
+automatically for the Root Agent whenever it admits at least one Agent profile;
+capability inspection reports them as `agent_controls`, and authoring them as
+ordinary tool selections is refused. v39 clients and servers are rejected.
+
 App Server v40 / Runtime Client v62 replace reasoning profiles with general
 Model Profiles (#456). Model selections (`SessionModelConfig`, explicit Summary
 selections, authored `ModelLayer`) name an optional `profile`; catalog views
@@ -460,7 +472,6 @@ explicitly rejected as an invalid request before any action occurs.
 | `agent/statistics` | Parent `AttachmentTarget` → exact parent registry Agent ownership → existing child store → incremental native usage, timing and occupancy; read-only, no child activation |
 | `agent/transcript` | Parent `AttachmentTarget` → current parent Runtime Client authority → exact parent `SubagentRegistry` ownership resolution of caller-supplied `AgentId` (never arbitrary child `ConversationId`) → exact owned child Conversation, which remains history authority → bounded read-only durable transcript projection; grants no execution, control, or HITL authority |
 | `agent/list`, `agent/status`, `agent/sendMessage`, `agent/wait`, `agent/interrupt` | Durable Agent owner: atomic message/resume arbitration, captured activation wait and activation-only interruption |
-| `subagent/disposeWorkspace` | Activation-specific retained resource owner; no caller-supplied filesystem cleanup paths |
 
 `turn/start` and `turn/steer` both submit native inbound content. The runtime
 decides whether it starts a fresh attempt or joins the inbound queue of the
@@ -623,7 +634,7 @@ type RuntimeClientCursor = string;
 
 This covers runtime incarnation, event and transcript cursors, Surface revision,
 Session model CAS revisions, capability and resource revisions, Goal
-references, Workflow revision and run invocation, candidate version, child
+references, Workflow revision and run invocation, child
 observation revision, compaction generation, inbound sequence, and Todo IDs,
 dependencies and allocator position. Natural string identities and default
 document/deletion revision strings remain strings. These are distinct domains,
@@ -1313,7 +1324,7 @@ the authored unit in that scope. Clients never write whole config documents.
 ## Current Session lifecycle contract
 
 Initialization requires exactly v40 and WebSocket requires `rustx.app-server.v40`.
-v38 and all earlier versions are rejected without fallback. Rust DTOs generate
+v39 and all earlier versions are rejected without fallback. Rust DTOs generate
 `v40.ts`, `v40.schema.json`, and the serialized fixtures; only the current version is kept.
 Manual runtime unload is absent from the public method/result vocabulary.
 Session lists have no residency field. Deletion blockers have no current-Session
@@ -1403,8 +1414,7 @@ reader uses the child's durable transcript cursor/projection and response-fact
 decorator, exactly as root reads do. App Server only routes/translates. This path
 reads committed history, not uncommitted streaming tokens. It works while the
 child runs or waits and after success, failure or cancellation while ownership
-and durable history remain retained. Workspace retention/disposal is independent
-of conversation history. Lifecycle status never supplies transcript settlement.
+and durable history remain retained. Lifecycle status never supplies transcript settlement.
 
 Pages use the same native limit validation (1–256) and exclusive `before` cursor
 as root reads; clients default to 32 entries. Limits outside 1–256 yield
@@ -1476,9 +1486,7 @@ Permanent Agent unavailability is distinct from finite activation failure:
 `agent_settlement` identifies the Agent requiring reconciliation or repair, and
 clients do not suggest retry-after-settlement. A later native physical proof can
 update an Interrupted activation's Agent to Inactive without changing its logical
-outcome or replaying it. `subagent/disposeWorkspace` returns the finite resource
-projection `{subagent_id, workspace, outcome}`; it cannot manufacture Agent state
-or dispose a workspace still owned by a durable Agent.
+outcome or replaying it.
 ## Session startup commit and catalog invalidation (v40)
 
 `session/create.settings.model` is optional `SessionModelConfig`. Explicit intent

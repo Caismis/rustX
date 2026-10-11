@@ -142,14 +142,12 @@ native workspace managers derive storage from their composed Conversation access
 Session deletion cascades along durable ownership, never provenance. `/tree`
 nodes belong to the same Session; `/fork` and `/clone` materialize independent
 Sessions. Catalog membership and native typed child ownership commits establish
-the finite target. Retained worktrees and branches are blockers requiring
-explicit disposal, not implicit cleanup targets. A Workflow Agent borrowing a
-Workflow-owned candidate/worktree acquires no independent physical disposal
-authority. Preflight validates the typed borrow against the durable Workflow
-owner in the same Conversation and emits one Workflow blocker, regardless of
-the number of borrowers. Workflow disposal clears that blocker without child
-terminal events; each child still owns its Conversation/private runtime state. Shared environments, capability
-resources, caches, config, credentials and project files remain outside it.
+the finite target. Agents and Workflows share the Session's frozen workspace
+binding and own no workspace resource, so deletion never removes, inspects or
+blocks on project files. Each child still owns its Conversation/private runtime
+state. Unproven activation physical settlement and unproven admission rollback
+remain deletion barriers. Shared environments, capability resources, caches,
+config, credentials and project files remain outside the target.
 
 Canonical `ProductRoot` identity, `ProductController` admission and target
 Conversation lifecycle access are separate. Preflight freezes ownership
@@ -158,20 +156,10 @@ allocations exclusively in sorted identity order. A live unrelated Session and
 its Runtime Client remain usable; actual target runtime/child/inspection/private
 writer access blocks exclusivity. Ordinary activity does not hold the ownership
 freeze. Guards release through drop or OS process death; aliases share identity.
-The local WorkspaceManager retains ownership-mutation authority from before
-reading disposal facts through durable Started, physical removal and settlement,
-including retries. `WorkflowWorkspaceDisposalStarted` is the destructive
-admission boundary: a retained ownership snapshot excludes it. Conversely, an
-admitted disposal excludes new ownership snapshots until it finishes. Neither
-operation can cross the other's conflicting boundary. Started alone does not
-change the semantic blocker revision.
-Local composition binds ConversationAccess to WorkspaceManager independently of
-its durable store, including existing-only access for historical management.
 ConversationStore exposes durable semantics only, with no local OS-lock capability.
-Concrete SQLite internally guards ownership-sensitive event transactions; the
-WorkspaceManager independently guards the full physical disposal interval.
-The semantic revision hashes only target membership, owned allocations and
-final workspace-blocker state, never raw catalog bytes or execution history.
+Concrete SQLite internally guards ownership-sensitive event transactions.
+The semantic revision hashes only target membership and owned allocations,
+never raw catalog bytes or execution history.
 Management reads never create missing stores or directories. See
 [the ownership and storage contract](session-deletion-ownership.md) for the exact
 lock order, acquisition/release points, participant lifetimes and regression map.
@@ -2607,7 +2595,9 @@ ownership commits. Global invocation policies remain global, not profile prose.
   (`GuidanceResult`) of Issue #193; the envelope carries a bounded message
   plus a transport correlation id and nothing else, so no launch authority
   is spellable on the wire. HITL traffic is never a control acknowledgement
-  and never uses the disposable observation lane.
+  and never uses the disposable observation lane. Version 31 (Issue #462)
+  replaces the child workspace snapshot with the frozen Session binding, one
+  absolute path; a version-30 child or parent is refused at the handshake.
 
 ## Invocation overrides and frozen child contracts
 
@@ -2626,153 +2616,32 @@ unselected definitions do not create execution authority. A steering message is
 ordinary inbound task content, never a way to change that admitted profile.
 
 
-## Issues #146, #187, and #189: deterministic, scope-preserving worktree isolation
+## Issue #462: shared Session workspace binding
 
-- **Workspace policy is bounded definition state.** A named definition
-  resolves to either `SharedWorkspace` or
-  `GitWorktree { require_clean_parent }`. Shared workspace is the default;
-  there is no model-facing per-call override, provider, strategy, or generic
-  workspace backend.
-- **One manager owns physical workspaces.** `SubagentResolver` resolves the
-  policy only. `WorkspaceManager` owns repository resolution, exact
-  `HEAD` capture, parent-status inspection, worktree/ref creation, final Git
-  inspection, safe removal, and handoff facts. `SubagentRegistry` owns live
-  lifecycle/capacity/cancellation/durability and never executes Git. Git is
-  not a Tool Plane capability.
-- **Isolation preserves the logical workspace boundary (Issue #187).** The
-  manager starts from the canonical source repository root and the parent
-  logical workspace, derives the complete repository-relative logical path,
-  creates a physical isolated worktree root, and sets the child logical
-  workspace to `physical_worktree_root / repository_relative_workspace`.
-  Only an empty repository-relative path maps the child to the physical root.
-  `WorkspaceSnapshot` encodes the logical authority separately from the
-  closed `GitWorktreeSnapshot` ownership facts, and validation rejects path
-  traversal or any mismatch in that equation. A scope absent from the selected
-  committed checkout fails acquisition; it never falls back to repository
-  root.
-- **An isolated child observes one exact committed snapshot.** Before any
-  child ownership commit, the manager captures `HEAD = C`, observes the
-  parent's tracked/index/untracked state, enforces the strict-parent option,
-  and creates the runtime worktree at exactly `C`. Parent movement after that
-  point is irrelevant. Parent dirty bytes, index state, untracked files,
-  stashes, and patches are never implicitly copied, and the immutable
-  `WorkspaceSnapshot` records whether the parent was dirty.
-- **Workspace acquisition is staged ownership.** `WorkspaceLease` is the
-  explicit physical owner from acquisition through child preparation. It
-  moves into the staged child and then the committed driver at the one
-  `SubagentOwnershipCommitted` boundary. A failure, cancellation, EOF, Git
-  error, resource-materialization failure, or process-containment failure
-  before that boundary commits no child and settles every staged resource;
-  there is no second workspace commit point and no lease hidden as a path.
-- **Project workspace authority is separate from frozen resource authority.**
-  The logical child workspace is the child process cwd and the root for native
-  filesystem tools, Bash, and workspace-relative process setup. It does not
-  become authority for the already-frozen model, project-instruction chain,
-  Skills/resources, MCP definitions, or Builtin definitions. The child performs no ancestor project-instruction
-  discovery, Skill discovery, Python-package discovery, or arbitrary
-  configuration rediscovery from the worktree.
-- **Isolated execution is strict by default (Issue #188).** An enabled
-  worktree resolves an omitted `require_clean_parent` to `true` at the
-  configuration/domain boundary. A dirty ordinary source workspace — tracked
-  unstaged, staged/index, or untracked non-ignored changes — rejects the
-  start before durable ownership and before worktree creation; the typed
-  rejection retains the exact committed `HEAD` captured before the dirty
-  observation. Ignored-only build/cache artifacts never make the source
-  workspace dirty. `require_clean_parent = false` is the only explicit opt-out:
-  the child then sees the committed tree at `C` only, while parent-local
-  dirty bytes are intentionally excluded and never copied.
-- **Local overlays are explicit, bounded, and manager-owned (Issue #189).**
-  The manager resolves only `<parent-logical-workspace>/.worktreeinclude`.
-  Each trimmed nonblank, non-comment line names one exact path relative to
-  that logical workspace; v1 has no glob, negation, escape, directory, or
-  recursion syntax. Every selected path must be an existing regular
-  non-symlink file with no symlink ancestor, must be untracked in both the
-  index and captured commit, and must be classified as ignored by Git.
-  Absolute, parent/current traversal, duplicate normalized or canonical
-  destinations, missing files, and any boundary escape reject acquisition.
-  The fixed limits are 64 files, 8 MiB total frozen bytes, and a 64 KiB UTF-8
-  regular-file manifest.
-- **Overlay bytes freeze before physical creation and ownership commit.** The
-  manager opens the authoritative parent logical workspace as a stable
-  directory handle, acquires every selected source through component-by-
-  component no-symlink traversal, and retains the regular file handles while
-  it validates the complete selection. It then freezes bytes only from those
-  retained handles, creates the Git worktree at `C`, materializes only those
-  frozen bytes beneath a stable child logical-workspace handle, and
-  byte-verifies every destination from its created file object. It never
-  reopens a parent overlay pathname to obtain frozen bytes. Frozen contents
-  cross no journal, snapshot, IPC, log, diagnostic, or handoff boundary. The
-  child ownership linearization point remains `SubagentOwnershipCommitted`,
-  after worktree, overlay, process, and Ready staging have all completed.
-- **Overlay staging uses the existing lease settlement.** Cancellation or
-  failure before physical creation leaves no worktree. After creation and
-  before ownership commit, the same staged `WorkspaceLease` remains the sole
-  owner and settles through the existing conservative path: provably clean
-  state is removed, while unproven or source-changed state is preserved and
-  reported. There is no overlay-specific cleanup owner.
-- **Overlays cannot widen authority or become source state.** Manifest
-  location and entries are both rooted at the authoritative logical
-  workspace, and materialization uses the corresponding child logical path,
-  never the physical checkout root as broader authority. Ordinary Git status
-  still defines dirtiness and ignores overlay bytes; overlay-only presence or
-  mutation keeps `changed = false`, while tracked changes and `HEAD != C`
-  retain the existing handoff behavior.
-- **The dirty-parent rejection is a typed fact, not a message.** The workspace
-  manager owns Git inspection and reports
-  `WorkspaceAcquireError::DirtyParent { base_commit }`; its own diagnostic is
-  workspace-domain only and never names the public configuration spelling,
-  the definition that carries it, or the Git commands used to observe the
-  parent. The subagent lifecycle preserves that identity as
-  `SubagentStartError::WorkspaceDirtyParent`, so the reason stays
-  distinguishable from generic Git/worktree failure, settlement/rollback, and
-  cancellation without parsing prose. The native `subagent` tool is the one
-  boundary that renders the actionable public remediation — commit or clean
-  the parent, or set `require_clean_parent = false` to run from the committed
-  `HEAD` snapshot while ignoring local changes — because that is where an
-  internal failure becomes model-visible output.
-- **Runtime worktree identity is deterministic and bounded.** For semantic
-  `SubagentId = S`, the manager hashes
-  `rustx-subagent-worktree-v1\n<length(S)>\nS` with SHA-256 and uses the
-  lowercase 64-hex digest for both
-  `<runtime-artifact-root>/worktrees/<digest>` and
-  `rustx/subagent/<digest>`. Names depend only on stable execution identity,
-  not task prose, completion order, or race-sensitive counters; path/ref
-  occupancy is checked before Git creation and Git's own ref/worktree
-  operation is authoritative for collision rejection.
-- **Terminality waits for physical process settlement.** A child terminal
-  candidate is not parent-visible until the direct child is reaped and every
-  retained Issue #145 nested-process anchor is physically contained or
-  explicitly proven uncontainable. Workspace inspection and cleanup follow
-  that settlement, never direct PID exit alone. An unresolved anchor prevents
-  cleanup and preserves the worktree fail-closed.
-- **Filesystem failure and cancellation are not rollback.** A child may write
-  files or commit before success, failure, cancellation, or process loss.
-  The manager inspects final Git state: `dirty` means ordinary
-  tracked/index/untracked non-ignored changes, while `head_commit !=
-  base_commit` independently proves retained committed work. Ignored files
-  alone are execution cache and do not make a handoff dirty. A clean
-  `HEAD == C` worktree is safely removed; all other proven work is preserved.
-- **Settlement never rewrites logical authority.** Git inspection,
-  registration proof, worktree removal, and branch cleanup always target the
-  physical worktree root. The immutable snapshot continues to record the
-  logical child workspace at terminal state. A `WorkspaceHandoff` carries both
-  that logical scope and the actual retained physical worktree root, and
-  durable validation requires both to match the ownership snapshot.
-- **Semantic success cannot hide physical settlement failure.** A child
-  semantic success remains `Succeeded` only when direct-child reaping,
-  retained nested-unit containment, workspace inspection/cleanup or handoff,
-  and private runtime-root settlement are all proven. A required physical
-  settlement failure is classified through the existing runtime `Failed`
-  terminal, with a bounded runtime-authored diagnostic and no child success
-  content crossing the failed provenance boundary. A successfully inspected
-  and preserved changed worktree is not a failure: it is a normal `Succeeded`
-  terminal with durable handoff facts.
-- **Handoff is runtime fact, not model output.** A preserved
-  `WorkspaceHandoff` contains only the physical path, runtime ref, base/head
-  commits, and dirty fact. It is not merged, rebased, cherry-picked, stashed,
-  committed, patched, or copied into the parent automatically. Runtime Client
-  and TUI project these facts for recovery and own no acquisition, cleanup,
-  or integration policy.
+- **One binding, frozen at admission.** Every Agent and Workflow child runs in
+  the Session's frozen execution binding: one absolute directory carried by
+  `SubagentOwnershipCommitted.workspace` and `SubagentChildSpec.workspace`.
+  Every later activation of the same Agent repeats it exactly; a resumed
+  ownership fact with a different binding is rejected as invalid ownership.
+- **No implicit Git, no copies.** rustX discovers, allocates, prepares,
+  inspects and disposes no worktree, branch or copy for an Agent or Workflow.
+  Explicit user Tool commands and independent Product Host Git features are
+  unaffected.
+- **Missing binding fails closed.** A missing or unusable binding fails the
+  activation before any allocation, without falling back to another working
+  directory or creating a replacement directory.
+- **Effects are never rolled back.** Failure, cancellation, interruption and a
+  rejected Review leave completed file effects in place.
+- **Physical settlement is independent of the workspace.** Process containment
+  and nested-unit proof gate resume per exact activation: a late proof for one
+  activation cannot release a newer one, an unproven terminal or admission
+  rollback keeps the Agent unavailable and the Session undeletable, and an
+  unrecoverable publication keeps the Agent unavailable. In-process resume is
+  arbitrated by the registry reservation (one winner); cross-process exclusion
+  is the parent physical lease.
+- **Retired formats are refused.** SQLite 51, child IPC 31, Runtime Client 62
+  and App Server 40 refuse earlier stores and peers. Authoring a `worktree`
+  table on an Agent profile or a `workspace` key on a Workflow is rejected.
 
 ## Subagent recovery-semantics conformance (Issue #138)
 
@@ -2814,8 +2683,8 @@ the launch-boundary policy inheritance.
   explicit cancellation. The registry mutex transition `Running ->
   Cancelling` is the cancellation linearization point: the first source owns
   the typed `CancellationReason`, and later sources cannot overwrite it.
-  Physical driver cancellation, escalation, child reap, retained-anchor and
-  workspace/worktree settlement remain unchanged. A terminal candidate
+  Physical driver cancellation, escalation, child reap and retained-anchor
+  settlement remain unchanged. A terminal candidate
   instead commits `PublishingTerminal` under that same mutex, so success or
   another terminal state that wins there makes deadline expiry a no-op. There
   is no `TimedOut` lifecycle state, no second terminal publisher, no fresh
@@ -3001,7 +2870,7 @@ the launch-boundary policy inheritance.
 - **Native authorities remain native.** WorkflowRuntime composes the named
   SubagentRuntime, frozen model/capability/Skill resources, retry/timeout,
   ApprovalMode, ToolApprovalPolicy, InteractionCoordinator,
-  process containment, workspace/worktree acquisition, handoff, and physical
+  process containment, the frozen Session workspace binding, and physical
   settlement. It creates no child scheduler, permission system, TUI path,
   Tool Plane dispatch path, or second Agent Loop.
 - **Events are facts, not state authority.** Ordinary Workflow lifecycle and
@@ -5890,45 +5759,12 @@ semantic normalization boundary. The frozen invariants:
   as `failed` through the Runtime Client. There is no v15 -> v16 conversion
   and no legacy `interrupted` decoding: a v15 client is rejected explicitly
   at negotiation.
-- **Runtime Client protocol v15 exposes retained-workspace disposal as a
-  separate resource lifecycle.** The request names only a terminal
-  `SubagentId`; it never carries an arbitrary path or Git ref and is not
-  available through model-facing Agent control Tools. The post-terminal
-  resource state is explicit: `None`, `Retained`, `PreservedUnresolved`,
-  `DisposalInProgress`, `WorktreeRemoved`, or `Disposed`. A `Retained`
-  resource first requires the complete current ownership proof, then a durable
-  `SubagentWorkspaceDisposalStarted` intent authorizes the exact handoff;
-  `DisposalInProgress` precedes the successful `git worktree remove --force`
-  destructive linearization point; `WorktreeRemoved` records an authorized
-  partial state; and only compare-delete of
-  `refs/heads/<recorded branch>` followed by durable settlement reaches
-  `Disposed`. The manager compares the current branch with the recorded
-  handoff `HEAD` and never unconditionally deletes a moved ref.
-  `PreservedUnresolved` means a runtime-created physical workspace may still
-  exist but terminal settlement could not prove the stronger handoff. Its
-  original immutable `WorkspaceSnapshot`, plus a typed reason, is durable
-  authority; it is never projected as `None` and never given a fabricated
-  `WorkspaceHandoff`. A later identity-only disposal request must re-prove the
-  exact repository, deterministic path, registration, branch, HEAD, and
-  snapshot relationship before it can commit disposal intent. Because this
-  form has no durable terminal `HEAD`, both current heads must also equal the
-  immutable snapshot base; changed commit state remains unresolved rather than
-  being guessed into a disposable handoff. Nested
-  containment uncertainty is stricter: Git facts alone cannot authorize
-  deletion, so that resource remains unresolved and disposal is refused.
-  Missing path/registration without durable disposal intent remains an
-  ownership mismatch; a runtime-authorized intent lets recovery continue the
-  exact resource lifecycle without restoring ordinary `Retained` or guessing
-  from filesystem state. Crashes before intent leave `Retained` or
-  `PreservedUnresolved`; crashes after intent recover a retryable phase; a
-  worktree removed before branch cleanup recovers as `WorktreeRemoved`; and
-  physical completion before final settlement converges through the durable
-  intent to `already_disposed`. Repeated identity requests are serialized and
-  deterministic, and no resource outcome changes the absorbing logical
-  terminal state. rustX makes no claim of atomicity across the separate final
-  proof and Git processes: its own calls serialize, the proof is immediately
-  before mutation, and Git/compare-delete preserve fail-closed behavior for
-  external concurrent mutation.
+- **Runtime Client protocol v62 retires the Agent workspace object (Issue
+  #462).** `RuntimeClientAgent.workspace` is the frozen Session binding path.
+  The v13 isolation projection, the v15 retained-workspace resource lifecycle
+  and its `subagent_workspace_dispose` request, Workflow Candidate and handoff
+  fields, Candidate Review subjects and the `review_invalidated` settlement are
+  removed. A v61 client is rejected explicitly at negotiation.
 - **Runtime Client protocol v15 introduces the Issue #194 Agent Status
   contextual annotation projection.** The snapshot's latest-only `status` is
   replaced by the bounded window `statuses`; each status opportunity carries
@@ -5947,7 +5783,8 @@ semantic normalization boundary. The frozen invariants:
   projection carrying the source repository root, repository-relative
   workspace, physical worktree root, base commit, branch, and parent dirty
   fact, and a retained handoff carries `logical_workspace` and
-  `physical_worktree_root` alongside its branch/base/head/dirty facts.
+  `physical_worktree_root` alongside its branch/base/head/dirty facts. v62
+  retired this representation.
 - **Runtime Client protocol v12 adds the routed interaction projection.** The
   root-facing pending-interaction set carries Approval and Questionnaire
   requests from the primary conversation and live supervised children. Each
@@ -7398,74 +7235,18 @@ restarted from an earlier offset. The TUI uses the loaded length as the
 monotonic no-op offset for the exhausted side while the other side continues;
 it does not duplicate rows or turn client-side search into a native unbounded
 query.
-## WF-03 candidate invariants
+## Shared-workspace Workflow invariants (Issue #462)
 
-One native owner retains one exact candidate across fixed nodes. Access is admitted only after exact run/node identity, lease/Git proof, content verification and cancellation checks. A candidate reference or path is not access authority. One exclusive borrower survives until actual Tool/Agent/nested physical settlement; cancellation and future drop do not release it. Unknown containment prevents new access and disposal. Run settlement is absorbing and occurs before the Workflow terminal result on success and every failure path.
+A Workflow owns no workspace resource and has no Candidate. Agent and Tool
+nodes run in the shared Session binding under their existing native owners; a
+successful run returns exactly its declared output. Review is a typed
+`{accepted, feedback}` value over an immutable Plan subject, gates later work
+only through an explicit Branch on `accepted`, acquires no filesystem lease,
+and never rolls back an earlier write. Stale responses, wrong node visits,
+wrong subject digests and responses after terminal cancellation remain
+rejected. Workflow children are finite: ordinary durable Agent controls cannot
+resume them, and their results stay owned by the exact node/visit.
 
-Tool candidate consumers are exclusive validators, not presumed readers. Source mutation (including observed write-and-restore) invalidates certification and advances the version; native results remain correlated to their historical input. No check authorizes a changed version. Runtime serialization is not arbitrary-host isolation. [The canonical content and interference contract](workflow-programs.md#candidate-content-and-interference) defines coverage, exclusions and unsupported content. Candidate rebinding cannot rediscover or widen frozen authority.
-
-Workflow committed values retain internal candidate applicability through
-references, objects, arrays and Parallel inputs/exports. Branch, Return and
-derived execution inputs reject stale applicability against the live
-CandidateScope; queued Tool/Agent consumers recheck under exclusive admission.
-Successful candidate Agent outputs carry the exact post-node reference from
-native borrowed-access physical settlement: unchanged A binds A, a writer's B
-binds B. Both structured output and candidate settlement must succeed before
-local commit. Machine review of A cannot authorize B, just like a Tool check.
-Event Journal correlation is historical evidence, never interpreter authority.
-
-Bounded no-follow directory admission includes existing empty directories
-(100,000 entries, depth 64, 100,000 source/control/directory watch candidates).
-New unwatched trees or notification loss fail closed; macOS directory-entry
-events conservatively invalidate coverage. PhysicalSettlement retires ended
-process-local ownership. Durable Workflow re-proof requires checkout and branch
-HEAD to equal the acquisition base when no trusted terminal HEAD exists and
-current source content to equal the durable recovery guard;
-advanced-HEAD unresolved resources remain retained for explicit user/manual
-recovery. Readable current facts do not manufacture terminal authority;
-NestedContainment retains active ownership and rejects Git-only recovery.
-Durable disposal intent authorizes exact continuation after removal, never
-arbitrary absence or deletion of changed source before the destructive frontier.
-
-`WorkflowWorkspaceSettled.candidate` is exact proven terminal state.
-`recovery_guard: Option<CandidateRecoveryGuard>` is instead the last proven
-`CandidateReference` from `CandidateScope.state.current`, committed only for
-PhysicalSettlement. Uncertainty clears the former, never upgrades the latter.
-The guard is a destructive-recovery baseline, not a final candidate, local-value
-applicability, access authority, or model-visible data. Missing guard fails closed.
-An uncertain writer B cannot replace guard A; proven B followed by later final
-inspection failure guards B. Any current bytes differing from the guard survive.
-Native disposal compares `inspect_source` immediately before the first removal;
-exact durable intent permits continuation without rehash only after that physical
-frontier. Schema 28 durably separates these meanings without compatibility code.
-
-
-### Candidate-bound human business acceptance
-
-Review is distinct from Questionnaire and Tool Approval. InteractionRequested
-commits before presentation; InteractionSettled commits before human waiter
-release. Candidate acceptance carries its exact native version, never just HEAD.
-Downstream admission borrows that expected version before node start and transfers
-the borrow to the effect. A writer that wins first invalidates old acceptance;
-cancellation observed before admission starts no next work. Historical acceptance
-and requested facts cannot reconstruct runtime authority after process death.
-See [the owner/frontier table](workflow-programs.md#ownership-and-linearization).
-
-WF-04 Review decisions/feedback are immutable business data, separate from
-a run-local accepted-candidate constraint. Reject A remains readable after writer B;
-explicit A-derived inputs remain stale. Plan and context facts preserve candidate
-applicability in the Review specification/digest/audit, and all dependencies share
-the native freeze. Native ask_user is workspace-independent under WorkspaceUse:
-it never holds a CandidateScope borrow while waiting.
-
-Parallel acceptance joins merge explicit branch effects relative to entry,
-not inherited snapshots. Unchanged siblings neither conflict with a replacement
-nor resurrect cleared acceptance. Conflicting replacements and clear/replacement
-mixtures fail closed; completion order grants no authority.
-
-Clearing human acceptance removes its exact-candidate constraint, not Tool/workspace permission. Normal machine checking and repair may continue on the current candidate; explicit data applicability remains independently enforced.
-
-An Agent compares native admitted and post-node candidate identities. A -> A emits Unchanged; A -> B emits Cleared even under local acceptance None. The effect survives nested joins, preventing a sibling Replaced(A) from surviving mutation. Agent execution/write capability is not itself a mutation fact.
 ## CFG3 external sources
 
 Discovery, identity, selection, finite demand, credential resolution,
@@ -7606,27 +7387,6 @@ replace it with false nor infer it from terminal naming or workspace disposition
 See [the image and Bash contract](image-reading.md) for effective capability
 intersection, Attempt-frozen publication, managed image ownership, provider
 transport, text-only history projection, and presentation-only Bash descriptions.
-
-## Repository metadata mutation ownership
-
-WorkspaceManager owns Git worktree/ref operations. A process-wide gate keyed by
-Git's canonical common directory serializes worktree add/remove, registration
-reads, and ref deletion. Linked checkouts, logical subdirectories, independent
-Conversation managers, and manager clones converge on that key. The existing
-manager disposal lock still owns the multi-step retained-disposal transaction;
-the repository gate owns only each physical Git metadata command through its
-supervised settlement. Overlay preparation and unrelated repositories proceed
-independently. Queued cancellation exits before spawning the mutation. The owned gate transfers
-into the physical supervision task before spawn; dropping or aborting the caller
-cannot release it before child settlement and output drainage. A real Git
-reference-transaction hook regression proves caller-abort exclusion and independent
-repository progress with FIFO synchronization.
-
-This is local runtime coordination, not an exclusion guarantee against arbitrary
-external Git processes. Git's own ref checks and native ownership re-proofs remain
-authoritative across external mutation. Tests explicitly poll the shared gate,
-prove independent-repository progress, and cancel an independently composed
-linked-worktree manager at the gate without a ref mutation.
 
 ### Image input capability across protocols
 

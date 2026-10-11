@@ -34,9 +34,6 @@ github = ["get_diff"]
 enabled = true
 [agents_md]
 inherit = true
-[worktree]
-enabled = true
-require_clean_parent = true
 ```
 
 | Dimension | Owner and meaning |
@@ -46,10 +43,10 @@ require_clean_parent = true
 | `tools.sources` | MCP identity or `python:<package>` to `"all"`, exact Tool names, or `[]`. Definition alone grants nothing. |
 | `skills` | `"all"`, exact names, or `[]`, for both Root and named Agents; default none. Prompt visibility only. |
 | `plugins` | Closed Rust-owned Agent Status, Todo and Goal vocabulary, default off. Each Root Plugin object overlays atomically. |
-| `agents`, `workflows` | Explicit delegation/invocation allowlists. Child scope limits remain enforced for every activation. |
+| `agents`, `workflows` | Explicit delegation/invocation allowlists. Child scope limits remain enforced for every activation. A nonempty `agents` list composes the five Root-only Agent controls automatically; they are never authored in `tools.builtin`. |
 | `description`, `instructions` | Agent prose; named reusable profiles require nonempty values. Prose cannot change invocation policy. |
 | `agents_md` | Canonical project guidance and bounded supplemental files. |
-| `timeout_ms`, `worktree` | Named child lifecycle/workspace policy only. Root rejects these fields. |
+| `timeout_ms` | Named child lifecycle policy only. Root rejects it. Every Agent runs in the shared Session workspace; an authored `worktree` table is refused. |
 
 Root may delegate to reviewer while lacking reviewer's Grep or external Tools.
 There is no Root Tool or Plugin ceiling over the named profile. Invocation

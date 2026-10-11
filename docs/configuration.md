@@ -300,8 +300,8 @@ of those selections. Definition existence never selects a resource.
 
 `agents_md.inherit` defaults true and `files` defaults empty inside its winning
 object. Files are resolved by the native resource owner, captured with the
-generation, and ordered as authored. Root has no child timeout or worktree
-fields; those belong to named profiles.
+generation, and ordered as authored. Root has no child timeout field; it
+belongs to named profiles.
 
 ### Plugins
 
@@ -406,8 +406,9 @@ package bytes and resolved roots; it does not rediscover current files.
 
 Named Agents use complete TOML profiles at `agents/<name>.toml` with description,
 instructions, optional model selection, Native/source Tools, Skills, Plugins,
-project guidance, optional `timeout_ms`, and `worktree` (`enabled`,
-`require_clean_parent`). See [`agent.schema.json`](../schemas/agent.schema.json).
+project guidance and optional `timeout_ms`. There is no `worktree` table:
+every Agent runs in the Session's shared workspace, and an authored `worktree`
+table is refused (#462). See [`agent.schema.json`](../schemas/agent.schema.json).
 There is no Root Tool or Plugin ceiling. Root's explicit `agent.agents` array
 controls whether delegation is allowed. Omitted child model means the invoking
 Attempt's already-frozen effective model, including deliberate Session selection.

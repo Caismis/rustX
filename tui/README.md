@@ -1024,15 +1024,13 @@ immediately. Unresolved deletion results wait while another popup owns focus
 and are presented again afterward. A same-attachment snapshot invalidates the
 old popup and preview, but preserves submitted-operation ownership. Actual
 attachment replacement or terminal transport ends observation without replay
-or a fabricated outcome. The same safe confirmation
-choice behavior applies to retained-workspace disposal.
+or a fabricated outcome.
 
 Deletion is permanent from rustX's perspective, including owned internal lineages
 and child conversations. Independent `/fork` and `/clone` Sessions and project
 files are preserved. The current Session can be deleted directly; the server
-settles its runtime before durable deletion. Retained
-worktrees must be disposed explicitly through the existing subagent workspace
-action; Session deletion never disposes them automatically.
+settles its runtime before durable deletion. Agents share the Session
+workspace, so deletion never touches project files.
 
 A changed preview requires a fresh preview and another explicit confirmation.
 `CleanupPending` means the Session has been removed and cannot be resumed, but
