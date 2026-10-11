@@ -3150,7 +3150,10 @@ enabled = true
         // Bash, is rooted at exactly the frozen Session binding.
         assert_eq!(
             core.runtime().tool_runtime().workspace().root(),
-            dir.path().join("checkouts/feature")
+            dir.path()
+                .join("checkouts/feature")
+                .canonicalize()
+                .expect("canonical binding")
         );
     }
 
