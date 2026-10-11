@@ -161,7 +161,6 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
     await input.fill('Review these notes.'); await shot('attachment');
     if (width === 390) {
       const reader = page.locator('[data-conversation-scroll]').first();
-      const seat = page.locator('[data-composer-seat]');
       const paint = () => page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
       const geometry = await stack.boundingBox();
       const before = await stack.screenshot({ animations: 'disabled', caret: 'hide', scale: 'css' });
@@ -169,9 +168,9 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
       await paint();
       // Invalidate the fade in the sticky pose, then restore the identical
       // reading pose. Compare real pixels, never a retry against a baseline.
-      await seat.evaluate(element => { element.style.backgroundImage = 'linear-gradient(red, red)'; });
+      const stickyInvalidation = await page.addStyleTag({ content: '[data-composer-seat], [data-composer-seat]::before { background-image: linear-gradient(red, red) !important; }' });
       await paint();
-      await seat.evaluate(element => { element.style.removeProperty('background-image'); });
+      await stickyInvalidation.evaluate(element => element.parentNode?.removeChild(element));
       await paint();
       await reader.evaluate(element => { element.scrollTop = element.scrollHeight; });
       await paint();
@@ -181,6 +180,23 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
       await test.info().attach('composer-before-sticky-repaint', { body: before, contentType: 'image/png' });
       await test.info().attach('composer-after-sticky-repaint', { body: after, contentType: 'image/png' });
       expect(comparison.totalChanged, comparison.report).toBe(0);
+      // Re-record the fade after demoting its seat at the flow origin. The old
+      // gradient could settle on a different raster with identical geometry
+      // and styles; two identical screenshots alone cannot detect that history.
+      const invalidation = await page.addStyleTag({ content: `
+        [data-composer-seat] { transform: none !important; }
+        [data-composer-seat], [data-composer-seat]::before {
+          background-image: linear-gradient(red, red) !important;
+        }
+      ` });
+      await paint();
+      await invalidation.evaluate(element => element.parentNode?.removeChild(element));
+      await paint();
+      expect(await stack.boundingBox()).toEqual(geometry);
+      const restored = await stack.screenshot({ animations: 'disabled', caret: 'hide', scale: 'css' });
+      const recorded = compareScreenshot({ expected: decodePng(before), actual: decodePng(restored), referenceName: 'composer-fade-flow-repaint', noisePolicy: [] });
+      await test.info().attach('composer-after-flow-repaint', { body: restored, contentType: 'image/png' });
+      expect(recorded.totalChanged, recorded.report).toBe(0);
     }
     await page.getByRole('button', { name: 'Remove review.txt' }).click();
     await expect(input).toHaveValue('Review these notes.');

@@ -2047,12 +2047,40 @@ viewport-based model wrapper caps are removed. Existing sticky seat measurement
 continues to reserve draft, toolbar and statistics height for main and child chats.
 The rounded card uses an explicit zero transform for its raster layer; native
 selector menus are document portals and editor menus are card-relative.
-The existing ChatViewport layout capture also identifies scroll overflow. Only
-an overflowing composer's sticky seat owns a local compositing plane, keeping
-its fade independent of Chromium's earlier scroll/paint promotion while
-non-scrolling seats retain their normal raster. Narrow light/dark browser
-regressions invalidate the fade in the sticky pose and compare exact pixels
-after returning to the same reading pose; references and noise policy are unchanged.
+The existing ChatViewport overflow measurement elects an absolute,
+paint-contained background pseudo-element for the fixed 36px theme-base fade
+only when sticky/flow transitions are possible. Non-scrolling seats retain
+their original seat background and ordinary paint origin. The sticky seat keeps its existing geometry
+and stacking; its controls, shadows and editor menus remain uncontained. The
+obsolete overflow-dependent seat transform is removed. In the pinned browser, the previous gradient could retain a different
+raster origin after sticky/flow promotion even with identical final geometry,
+scroll offset and computed styles. The regression re-records background paint
+at both origins, restores all styles, and compares exact RGBA with no noise
+allowance. Both attachment themes still match their existing references. Tolerance,
+masks, stabilization schedule and browser pins are unchanged.
+The investigation downloaded the browser traces and actual images from hosted
+run `38067804782` at `8649f8af`. Its 327x291 attachment captures differ by 1229
+light / 2927 dark pixels, all within rows 1-66. Re-recording the old seat's
+background at the flow origin reproduces both hosted actual images exactly in
+decoded RGBA, while final DOM geometry, scroll offset and computed styles stay
+unchanged. The prior passing HEAD `6e64c1f9` has the same Composer/ChatViewport
+source, and isolated fresh contexts can pass; neither observation proves the
+rendering independent of paint history. Paint containment belongs only to the
+background so menus, narrow attachment placement and native context controls
+keep their existing appearance and behavior. Full-suite inspection also caught a separate 2238-pixel, channel-delta-1
+difference in the dark narrow Agent capture. Its seat is also overflowing:
+327x108 at (56, 735.5), reader scroll 24 of 792 with client height 768. The old
+seat initially matches the reference, then reproduces the new image exactly
+after flow-origin invalidation with unchanged final geometry. Seat/pseudo
+transforms and will-change do not resolve that difference. The intended
+correction is one stable local background raster for that same 36px theme-base
+fade. Only `agent-dark-narrow-linux.png` is intentionally revised: 2238 pixels
+in rows 736-771, maximum channel delta 1; every other pixel is identical. This
+reference no longer records one accidental old paint history. The two failing
+attachment references remain byte-identical. Non-overflowing seats retain
+their original direct background; no sticky/flow origin transition exists there.
+Trajectory assertions inspect the elected background owner and retain their
+pixel/geometry checks.
 
 ## Single-row composer statistics
 

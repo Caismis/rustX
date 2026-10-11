@@ -981,7 +981,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "ea54728ab26dbc01cb657cb8badd55867c2fe819714097a2f9f1ee190e1172e7",
+      "local_sha256": "a8167fd2ba13f454b8f8917194c061a19460fd46e8402b43ec1f33f0455d8e07",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css",
