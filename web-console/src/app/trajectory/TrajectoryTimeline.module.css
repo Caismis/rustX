@@ -80,17 +80,30 @@
   padding-left: 3px;
   border: 0;
   outline: none;
+  background: none;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xs-13);
+  line-height: 1;
+  opacity: 0.72;
+  cursor: pointer;
+}
+
+/* The fade owns a local paint origin; text, focus and the portaled tooltip
+   remain outside containment. */
+.earlierHistory::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  contain: paint;
+  will-change: opacity;
   background: linear-gradient(
     to right,
     var(--dsw-alias-bg-layer-2) 0,
     var(--dsw-alias-bg-layer-2) 38%,
     transparent 100%
   );
-  color: var(--dsw-alias-label-secondary);
-  font: var(--dsw-font-xs-13);
-  line-height: 1;
-  opacity: 0.72;
-  cursor: pointer;
 }
 
 .earlierHistory:hover {

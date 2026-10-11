@@ -741,7 +741,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "30d7f23c5169669923836bc6ac7040eff91f5020e61efcfc2ec372be087c552c",
+      "local_sha256": "fc66dde6679da449a273eb56c4e6dcb6d06e1d4b7fd38e291c372ce603afe4b6",
       "additional_sources": [
         {
           "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",

@@ -2210,3 +2210,47 @@ main's existing stable panel paint with the retained PR surface. The changes
 are caused by that inherited rendering correction, not by a new Settings
 layout or a relaxed comparator. No Settings presentation source or noise
 policy is changed for this reference merge.
+
+### PR #461: independently verified Timeline fade repaint
+
+After the main integration, the complete pinned suite found an independent
+16-pixel, channel-delta-1 failure in `ledger-order-inspector-390-en-linux.png`.
+The earlier-history button's 28x50 gradient, at (44, 71.5), changed after a
+background invalidation with identical final geometry, styles and no animation.
+Six fresh contexts reproduce the full-suite failed image exactly. A background
+pseudo-element alone still permits the initial/partial-paint variants, as the
+new exact repaint regression proves. The user explicitly extended the repair
+scope to this verified rendering defect.
+
+The background now owns a paint-contained pseudo-element and an independent
+opacity compositing layer. The layer-2 color, 38% opaque stop, transparent end,
+inherited 0.72 opacity, text geometry and font are unchanged. Containing the
+whole button shifts its text raster and is rejected. Containment belongs only
+to the background; inset keyboard focus and the portaled tooltip remain outside
+it. The intended appearance is the same fade with a neutral, consistently
+antialiased history glyph instead of colored subpixel fringes that depend on
+paint ownership. This explicitly intentional rendering correction changes
+references within the button's 28x50 box, including the font's grayscale
+antialiasing; it is not an allowance for future mismatches.
+
+A fresh-context diagnostic applies each candidate before the UI's first paint
+and invalidates both parent and pseudo-element backgrounds. The independent
+background layer is exactly stable through initial and partial paints. Native
+navigation acceptance additionally asserts identical geometry and exact RGBA
+before/after that invalidation with no noise allowance. All revised captures
+are reviewed against their old references: dimensions and every pixel outside
+the button remain identical. The 44-state same-page diagnostic reproduces each original reference with
+the old paint owner exactly or with only 16/60 channel-delta-1 gradient pixels;
+the independent layer returns to exactly the same RGBA after restoration in
+every state. Its 37 deliberately revised references change only the 28x50
+button, with 230-1303 pixels depending on the scene. The former color-fringed
+glyph becomes neutral gray. Exact per-reference measurements are recorded in
+`docs/evidence/pr461-rendering.json`.
+
+The old Chinese 16-pixel noise evidence and its original reference move verbatim
+to the comparator's existing frozen fixtures. Its positive/negative comparator
+tests remain intact. The live allowance is removed; new tests reject a one-level
+change at every formerly allowed site in both current English and Chinese
+references. Other noise entries, global thresholds, retries, settle schedule
+and browser pins remain unchanged. The source inventory retains the Harness
+pin and records this concrete local CSS adaptation.
