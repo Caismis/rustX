@@ -16172,6 +16172,7 @@ mod presentation_cancellation_tests {
     #[test]
     fn presentation_cancellation_interrupts_running_sql_and_restores_writer_policy() {
         let owner = Arc::new(ConnectionOwner {
+            inherited_boundary: OnceLock::new(),
             available: Mutex::new(Some(Connection::open_in_memory().unwrap())),
             wake: Condvar::new(),
             poisoned: AtomicBool::new(false),
@@ -16211,6 +16212,7 @@ mod presentation_cancellation_tests {
     #[test]
     fn presentation_cancellation_ends_connection_wait_without_releasing_writer() {
         let owner = Arc::new(ConnectionOwner {
+            inherited_boundary: OnceLock::new(),
             available: Mutex::new(Some(Connection::open_in_memory().unwrap())),
             wake: Condvar::new(),
             poisoned: AtomicBool::new(false),

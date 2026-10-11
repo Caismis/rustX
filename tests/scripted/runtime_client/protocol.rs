@@ -17,7 +17,6 @@ use rustx::runtime::interaction::{
     QuestionnaireSpecification, QuestionnaireSubmission, RoutedInteraction,
     SingleChoiceSpecification,
 };
-use rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION;
 use rustx::runtime_client::RuntimeClientHost;
 use rustx::runtime_client::{
     RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientAgentWorkspace, RuntimeClientCursor,

@@ -18,7 +18,6 @@ use super::super::support;
 use rustx::message::types::MessageBlock;
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
-use rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION;
 use rustx::runtime_client::{
     EventDelivery, RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientEndpoint, RuntimeClientHost,
     RuntimeClientRequest, RuntimeClientResponse,
