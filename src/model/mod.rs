@@ -36,8 +36,8 @@ pub use adapter::{
 pub use catalog::{
     ChatMaxTokensField, ChatReasoningReplay, ChatStreamUsage, ChatToolProtocol, CredentialSource,
     CredentialSourceView, Modality, ModelCapabilities, ModelCatalog, ModelCatalogError,
-    ModelCatalogView, ModelCompat, ModelDefinition, ModelId, ModelRef, ProviderId,
-    ReasoningProfile, ReasoningProfileId, ResolvedModelCatalog, ResponsesStorageMode,
+    ModelCatalogView, ModelCompat, ModelDefinition, ModelId, ModelProfile, ModelProfileId,
+    ModelProfileView, ModelRef, ProviderId, ResolvedModelCatalog, ResponsesStorageMode,
 };
 pub use deadline::{
     DEFAULT_RESPONSE_START_TIMEOUT, DEFAULT_STREAM_IDLE_TIMEOUT, ModelDeadlinePhase, ModelProgress,
@@ -68,8 +68,8 @@ pub use invocation::{
     DEFAULT_RUNTIME_REASONING_BYTE_SHARE_DENOMINATOR,
     DEFAULT_RUNTIME_REASONING_BYTE_SHARE_NUMERATOR, ModelBindingRegistry, ModelInvocationConfig,
     ModelInvocationError, ModelInvocationView, ModelSelection,
-    RUNTIME_GENERATED_BYTES_PER_OUTPUT_TOKEN, RUNTIME_MIN_GENERATED_BYTES, RequestParams,
-    ResolvedModelInvocation, runtime_fallback_generation_safety_policy,
+    RUNTIME_GENERATED_BYTES_PER_OUTPUT_TOKEN, RUNTIME_MIN_GENERATED_BYTES, RequestKey,
+    RequestParams, ResolvedModelInvocation, runtime_fallback_generation_safety_policy,
 };
 pub use session::{
     AttemptModelSnapshot, AttemptModelView, AttemptSummaryModel, SessionModelConfig,

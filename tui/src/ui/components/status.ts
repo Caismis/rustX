@@ -131,10 +131,22 @@ export function workingStatus(state: PresentationState): string | undefined {
  */
 function modelSegments(state: PresentationState): Segment[] {
   if (state.sessionModel === null) return [{ text: "historical model unavailable", priority: 1 }];
-  const configured = state.sessionModel.configured.model;
-  const effective = state.sessionModel.effective.model;
+  const session = state.sessionModel;
+  const configured = session.configured.model;
   const attempt = state.attempt?.phase.type === "settled"
     ? undefined : state.attempt?.model?.primary.model;
+  if (session.unavailable != null || session.effective == null) {
+    // The published catalog no longer admits the selection: nothing new runs
+    // until one it admits is chosen, so the footer says so and names no
+    // fallback. A running attempt keeps the model it froze.
+    const segments: Segment[] = [];
+    if (attempt !== undefined) {
+      segments.push({ text: role.accent(`attempt ${attempt}`), compact: role.accent(attempt), priority: 0, model: true });
+    }
+    segments.push({ text: role.warning(`${configured} unavailable`), compact: role.warning(configured), priority: 0, model: true });
+    return segments;
+  }
+  const effective = session.effective.model;
 
   const distinct =
     configured !== effective ||
@@ -380,12 +392,18 @@ export function renderStartup(
   width = 120,
 ): string {
   if (state.sessionModel === null) return role.meta("rustX · historical inspection · live model unavailable");
-  const model = state.sessionModel.effective;
-  const lines = [
-    role.strong("rustX"),
-    `${role.meta("model")} ${role.accent(model.model)}`,
-    `${role.meta(`provider ${providerLabel(model)} · ${protocolLabel(model.protocol)}`)} · ${role.meta(contextLabel(state))} · ${role.meta(`reasoning ${describeReasoning(model)}`)}`,
-  ];
+  const model = state.sessionModel.unavailable == null ? state.sessionModel.effective : undefined;
+  const lines = model == null
+    ? [
+        role.strong("rustX"),
+        // No effective model is invented for a selection the catalog dropped.
+        `${role.meta("model")} ${role.warning(`${state.sessionModel.configured.model} unavailable`)} ${role.meta("· /model to choose one the catalog publishes")}`,
+      ]
+    : [
+        role.strong("rustX"),
+        `${role.meta("model")} ${role.accent(model.model)}`,
+        `${role.meta(`provider ${providerLabel(model)} · ${protocolLabel(model.protocol)}`)} · ${role.meta(contextLabel(state))} · ${role.meta(`${model.profile == null ? "" : `profile ${model.profile} · `}reasoning ${describeReasoning(model)}`)}`,
+      ];
   if (session !== undefined) {
     lines.push(
       `${role.meta("session")} ${role.accent(sessionLabel(session))}`,

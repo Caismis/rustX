@@ -1,6 +1,6 @@
 /** Pure Runtime Client read-model fold. Routing/cursor continuity belongs to
  * the attachment owner. No I/O, providers, React, or execution authority. */
-import type { RuntimeClientSnapshot as Snapshot, RuntimeClientEvent as Event, InFlightBlock, ForegroundToolExecution } from './v38.ts';
+import type { RuntimeClientSnapshot as Snapshot, RuntimeClientEvent as Event, InFlightBlock, ForegroundToolExecution } from './v39.ts';
 
 const upsert = <T>(rows: readonly T[] | undefined, value: T, key: (row: T) => string): T[] => {
   const index = (rows ?? []).findIndex(row => key(row) === key(value));

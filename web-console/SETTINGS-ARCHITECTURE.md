@@ -773,7 +773,7 @@ Catalog identity suggestions can include published and authored identities. This
 is a union of names for input assistance, never a browser overlay or claim of
 availability. Adding a new identity is offered only for one the catalog does not
 already reach, so an inherited identity is overridden rather than re-created. Provider/Model editors are separate detail views. Model replacement
-preserves the generated capabilities, reasoning profiles, request params and
+preserves the generated capabilities, Model Profiles, request params and
 compatibility fields. Named Agents write complete independent profiles, including
 delegation fields; Rust validates scope applicability. Description and instructions
 remain optional, including when replacing another part of an existing profile.
@@ -782,7 +782,7 @@ existing byte bounds; the Web does not invent validation rules. Native source
 projections and serialization omit empty text defaults, so an independent profile
 edit does not materialize description/instructions in the outgoing mutation.
 Root and named-Agent model controls share the native independent explicit Summary
-selection (model, reasoning profile, output limit and request params). Changing its
+selection (model, profile, output limit and request params). Changing its
 identity preserves the other authored fields; choosing Session deliberately replaces
 it with `{ mode: "session" }`. Rendering never materializes native defaults.
 

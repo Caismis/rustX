@@ -135,8 +135,8 @@ pub(super) fn request_detail(
         max_output_tokens: snapshot.invocation.max_output_tokens,
         context_window_tokens: snapshot.context_window_tokens,
         reasoning_enabled: snapshot.reasoning_enabled,
-        reasoning_profile: snapshot
-            .reasoning_profile
+        profile: snapshot
+            .profile
             .as_ref()
             .map(|profile| profile.as_str().to_owned()),
         options,

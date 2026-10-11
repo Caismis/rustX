@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import type { McpWrite, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v38';
+import type { McpWrite, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v39';
 import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
 import { useUnitEditing } from '../forms/bridge';
@@ -51,7 +51,7 @@ function Editor({ source, scope, revision, focus, scopeControl, close, document 
     setPendingImport(next); setImports({}); setName(focus.name ?? (id || name)); setMode('form'); setError('');
   };
   useEffect(() => { if (pendingImport && name && !duplicate && unit.writable) {unit.edit(pendingImport);setPendingImport(undefined);} }, [pendingImport,name,duplicate,unit.writable]);
-  if (focus.mode === 'permissions' && name) return <ExtensionDetail source={source} scope={scope} revision={revision} models={[]} family="mcp" name={name} backLabel={tx('settings:mcp.back')} onFocus={close}/>;
+  if (focus.mode === 'permissions' && name) return <ExtensionDetail source={source} scope={scope} revision={revision} models={[]} profiles={{}} family="mcp" name={name} backLabel={tx('settings:mcp.back')} onFocus={close}/>;
   return <>
     <div className={css.breadcrumb}><button type="button" onClick={close}>{tx('settings:catalog.mcp')}</button><span>›</span><span>{focus.name ?? title}</span></div>
     <div className={css.editorHeader}><div><h3>{title}</h3><p>{tx('settings:mcp.form-help')}</p></div><div className={css.modes} role="group" aria-label={tx('settings:mcp.form')}>
@@ -63,7 +63,7 @@ function Editor({ source, scope, revision, focus, scopeControl, close, document 
       <p>{tx('settings:mcp.json-help')}</p><label>{tx('settings:mcp.json')}<textarea className={css.json} value={json} onChange={event => setJson(event.target.value)}/></label>
       <Button onClick={() => {try {const parsed = parseMcpJson(json);const ids=Object.keys(parsed);if(ids.length===1) importValue(ids[0],parsed[ids[0]]);else setImports(parsed);setError('');}catch(cause){setError(String(cause));}}}>{tx('settings:mcp.apply-json')}</Button>
       {Object.keys(imports).length > 1 && <div className={css.actions}>{Object.entries(imports).map(([id,data]) => <Button key={id} onClick={() => importValue(id,data)}>{id}</Button>)}</div>}
-    </> : name && !duplicate && <McpDefinition source={source} scope={scope} name={name} family="mcp" models={[]} revision={revision} onFocus={close}/>}
+    </> : name && !duplicate && <McpDefinition source={source} scope={scope} name={name} family="mcp" models={[]} profiles={{}} revision={revision} onFocus={close}/>}
     {error && <p role="alert">{tx('settings:mcp.invalid-json',{error})}</p>}
     <Button disabled={unit.busy} onClick={() => {unit.discard();close();}}>{tx('settings:mcp.cancel')}</Button>
   </>;

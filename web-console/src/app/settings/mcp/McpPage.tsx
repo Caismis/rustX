@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import type { SourceScope, SourceSettings } from '../../../../../protocol/app-server/v38';
+import type { SourceScope, SourceSettings } from '../../../../../protocol/app-server/v39';
 import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
 import { Menu } from '../../../presentation/primitives/Menu';

@@ -7,7 +7,7 @@ import type { WorkspaceAuthority } from '../../workspaces/authority';
 import { useTranslation } from '../../locale/react';
 import { useState, type ReactNode } from 'react';
 import type { AppServerClient, SessionView } from '../../client/app-server';
-import type { SourceTarget } from '../../../../protocol/app-server/v38';
+import type { SourceTarget } from '../../../../protocol/app-server/v39';
 import { useClientSelector, sameValue } from '../../client/selectors';
 import { Menu } from '../../presentation/primitives/Menu';
 import { Button } from '../../presentation/primitives/Button';
@@ -51,7 +51,7 @@ export function ConversationHeader({ host, authority, client, view, workspaceId,
       {error && <p role="alert">{error}</p>}
       </header>;
 }
-function LiveAgentControls({ client, sessionId, coldSource }: { client: AppServerClient; sessionId: string; coldSource?: import('../../../../protocol/app-server/v38').SourceSettings }) {
+function LiveAgentControls({ client, sessionId, coldSource }: { client: AppServerClient; sessionId: string; coldSource?: import('../../../../protocol/app-server/v39').SourceSettings }) {
   useClientSelector(client, state => {
     const view = state.views[sessionId];
     return { generation: state.generation, target: view?.target, attachment: view?.attachment, intent: view?.attachmentIntent,

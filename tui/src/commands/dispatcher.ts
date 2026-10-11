@@ -32,7 +32,8 @@ import {
 import {
   activeBackground,
   capabilitySummary,
-  describeConfiguredReasoning,
+  describeConfiguredProfile,
+  describeProfile,
   describeReasoning,
   inactiveToolsByOrigin,
   latestAgentStatus,
@@ -117,7 +118,7 @@ export type CommandOutcome =
  * One change to a client presentation preference.
  *
  * These never reach the runtime. `reasoning` here is *display* of reasoning
- * content, which is a different thing from the `reasoningProfile` /
+ * content, which is a different thing from the Model Profile and
  * `reasoningEnabled` model request configuration `/model` shows.
  */
 export type PreferenceChange =
@@ -182,7 +183,7 @@ export class CommandDispatcher {
   // A retained command is one submission until its response is classified.
   // Other controls and commands (including on a replacement attachment) remain usable.
   readonly #agentMessageSubmissions = new WeakSet<AppServerSession>();
-  #inspected = new Map<string, import('../../../protocol/app-server/v38.ts').AvailableConfiguration>();
+  #inspected = new Map<string, import('../../../protocol/app-server/v39.ts').AvailableConfiguration>();
 
   constructor(context: DispatcherContext) {
     this.#context = context;
@@ -506,7 +507,7 @@ export class CommandDispatcher {
   async #settings(argument: string): Promise<CommandOutcome> {
     const words = argument.match(/"(?:[^"\\]|\\.)*"|\S+/g)?.map(word => word.startsWith('"') ? JSON.parse(word) as string : word) ?? [];
     const owner = words.shift() ?? "user";
-    let target: import("../../../protocol/app-server/v38.ts").SourceTarget;
+    let target: import("../../../protocol/app-server/v39.ts").SourceTarget;
     if (owner === "user") target = { kind: "user" };
     else if (owner === "workspace" && words[0]) target = { kind: "workspace", directory: words.shift()! };
     else return transient("error", 'usage: /settings [user | workspace "<canonical absolute path>"] [rescan | approval policy|full_access|inherit]');
@@ -627,10 +628,10 @@ export class CommandDispatcher {
       if (!clear && !profile) return transient("error", "usage: /model profile set <id> | /model profile clear");
       const current = await session.modelGet();
       const configured = { ...current.configured };
-      if (clear) delete configured.reasoningProfile;
-      else if (profile !== undefined) configured.reasoningProfile = profile;
+      if (clear) delete configured.profile;
+      else if (profile !== undefined) configured.profile = profile;
       const updated = await session.modelSet(configured);
-      return transient("info", `Session reasoning profile -> ${updated.configured.reasoningProfile ?? "model default"}; next eligible admission. Defaults unchanged.`);
+      return transient("info", `Session model profile -> ${updated.configured.profile ?? "model default"}; next eligible admission. Defaults unchanged.`);
     }
     if (argument === "show") {
       return inspect("Model", renderModel(state));
@@ -676,12 +677,12 @@ export class CommandDispatcher {
       }
 
       // `/model X` is a deliberate whole-state replacement: the selected
-      // primary model gets its own runtime defaults, while the independently
-      // configured summary policy is copied from the authoritative current
-      // configuration unchanged.
+      // primary model gets its own runtime defaults — the runtime resolves
+      // its default profile — while the independently configured summary
+      // policy is copied from the authoritative current configuration
+      // unchanged.
       const replacement = {
         model: model.model,
-        reasoningProfile: model.defaultReasoningProfile,
         requestParams: {},
         summaryModel: current.summaryModel,
       };
@@ -698,11 +699,11 @@ export class CommandDispatcher {
         ? [
             `session model -> ${updated.configured.model}; ${attemptNote}`,
             "change applies to next attempt; primary overrides reset; summary policy preserved",
-            `capabilities: ${capabilitySummary(updated.effective)}`,
+            `capabilities: ${updated.effective == null ? "unavailable" : capabilitySummary(updated.effective)}`,
           ].join("\n")
         : [
             `session model -> ${updated.configured.model}; primary overrides reset; summary policy preserved`,
-            `capabilities: ${capabilitySummary(updated.effective)}`,
+            `capabilities: ${updated.effective == null ? "unavailable" : capabilitySummary(updated.effective)}`,
           ].join("\n");
       return transient(
         "info",
@@ -731,9 +732,9 @@ export class CommandDispatcher {
 /**
  * `/show-reasoning [on|off]` — a display preference, applied by the UI.
  *
- * It changes what is drawn and nothing else. The model's reasoning request
- * configuration lives in `SessionModelConfig.reasoningProfile` and is only
- * changeable through `model_set`.
+ * It changes what is drawn and nothing else. The model's request
+ * configuration lives in `SessionModelConfig.profile` and is only changeable
+ * through `model_set`.
  */
 function reasoningPreference(argument: string): CommandOutcome {
   switch (argument) {
@@ -919,14 +920,16 @@ export function renderHelp(): string {
  * `/model` — the authoritative session model, and the running attempt's
  * frozen model.
  *
- * Three model identities and two reasoning facts, each named for what it is:
+ * Three model identities, two profile facts and the reasoning state, each
+ * named for what it is:
  *
  * ```text
  * configured            SessionModelView.configured.model
  * effective             SessionModelView.effective.model
  * attempt               AttemptModelView.primary.model
- * configured reasoning  SessionModelConfig.reasoningProfile
- * effective reasoning   ModelInvocationView.reasoningProfile/reasoningEnabled
+ * configured profile    SessionModelConfig.profile
+ * effective profile     ModelInvocationView.profile
+ * effective reasoning   ModelInvocationView.reasoningEnabled
  * ```
  *
  * They are always all printed, even when they coincide, because `/model show`
@@ -937,44 +940,59 @@ export function renderModel(state: PresentationState): string {
   if (session === null) {
     return "Historical evidence is partial. Active Session model, approval, resources, and launch sources are unavailable. Consult retained Request Snapshots for request-specific evidence.";
   }
+  // A selection the published catalog no longer admits has no effective
+  // model for new work; the last resolved one is not offered as one.
+  const effective = session.unavailable == null ? session.effective : undefined;
   const lines = [
     `### ${state.settingsEvidence === "frozen_child" ? "Parent-provided child" : "Session"} model (next eligible admission)`,
     `- configured: \`${session.configured.model}\``,
-    `- effective: \`${session.effective.model}\` via ${session.effective.protocol}`,
-    `- context window: ${session.effective.contextWindow}`,
-    `- max output tokens: ${session.effective.maxOutputTokens} (model maximum ${session.effective.modelMaxOutputTokens})`,
-    // Configured and effective reasoning are separate facts: the session asks,
-    // the runtime resolves, and a catalog default is neither of them.
-    `- configured reasoning: ${describeConfiguredReasoning(session.configured)}`,
-    `- effective reasoning: ${describeReasoning(session.effective)}`,
-    `- capabilities: ${capabilitySummary(session.effective)}`,
   ];
-
-  const unavailable = unavailableInputModalities(session.effective);
-  if (unavailable.length > 0) {
-    // Only effective capability is advertised; the declaration explains why
-    // something the catalog claims is not offered.
+  if (effective == null) {
     lines.push(
-      `- declared but not usable today: input ${unavailable.join(", ")}`,
+      `- effective: unavailable — ${session.unavailable ?? "the published catalog does not admit the configured selection"}`,
+      "- nothing new is admitted until a Model or Profile the catalog publishes is selected",
+      `- configured profile: ${describeConfiguredProfile(session.configured)}`,
     );
+  } else {
+    lines.push(
+      `- effective: \`${effective.model}\` via ${effective.protocol}`,
+      `- context window: ${effective.contextWindow}`,
+      `- max output tokens: ${effective.maxOutputTokens} (model maximum ${effective.modelMaxOutputTokens})`,
+      // Configured and effective profiles are separate facts: the session asks,
+      // the runtime resolves, and a catalog default is neither of them.
+      `- configured profile: ${describeConfiguredProfile(session.configured)}`,
+      `- effective profile: ${describeProfile(effective)}`,
+      `- reasoning: ${describeReasoning(effective)}`,
+      `- capabilities: ${capabilitySummary(effective)}`,
+    );
+
+    const unavailable = unavailableInputModalities(effective);
+    if (unavailable.length > 0) {
+      // Only effective capability is advertised; the declaration explains why
+      // something the catalog claims is not offered.
+      lines.push(
+        `- declared but not usable today: input ${unavailable.join(", ")}`,
+      );
+    }
+
+    const params = effective.requestParams ?? {};
+    if (Object.keys(params).length > 0) {
+      // Opaque provider-owned configuration: displayed, never interpreted.
+      lines.push(
+        "- request parameters (provider-owned, opaque):",
+        "```json",
+        JSON.stringify(params, null, 2),
+        "```",
+      );
+    }
   }
 
-  const params = session.effective.requestParams ?? {};
-  if (Object.keys(params).length > 0) {
-    // Opaque provider-owned configuration: displayed, never interpreted.
-    lines.push(
-      "- request parameters (provider-owned, opaque):",
-      "```json",
-      JSON.stringify(params, null, 2),
-      "```",
-    );
-  }
-
+  const summary = session.summary ?? session.configured.summaryModel;
   lines.push(
     `- summary model: ${
-      session.summary.mode === "session"
+      summary == null || summary.mode === "session"
         ? "follows the attempt's primary model"
-        : `\`${session.summary.model}\``
+        : `\`${summary.model}\``
     }`,
   );
 
@@ -985,16 +1003,17 @@ export function renderModel(state: PresentationState): string {
       `### Active attempt model (frozen at admission)`,
       `- attempt: \`${attempt.attemptId}\` (${attempt.phase.type})`,
       `- model: \`${attempt.model?.primary.model ?? "unavailable"}\``,
+      `- profile: ${(attempt.model ? describeProfile(attempt.model.primary) : "unavailable")}`,
       `- reasoning: ${(attempt.model ? describeReasoning(attempt.model.primary) : "unavailable")}`,
       `- effective capabilities: ${attempt.model ? capabilitySummary(attempt.model.primary) : "unavailable"}`,
       `- read_image active: ${attempt.executionSettings?.read_image_active ?? "unavailable"}`,
     );
-    if (attempt.model && attempt.model.primary.model !== session.effective.model) {
+    if (attempt.model && effective != null && attempt.model.primary.model !== effective.model) {
       lines.push(
-        `- the session's effective model is \`${session.effective.model}\`; this attempt keeps the model it froze.`,
+        `- the session's effective model is \`${effective.model}\`; this attempt keeps the model it froze.`,
       );
     }
-    if (session.configured.model !== session.effective.model) {
+    if (effective != null && session.configured.model !== effective.model) {
       lines.push(
         `- the session is configured for \`${session.configured.model}\`, which is not what it would use today.`,
       );

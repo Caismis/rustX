@@ -6,8 +6,9 @@ import { AgentPage } from '../src/app/settings/agent/AgentPage';
 import { ToolsPage } from '../src/app/settings/tools/ToolsPage';
 import { ExtensionDetail } from '../src/app/settings/extensions/ExtensionDetail';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
-import type { ModelLayer, RuntimeLayer, SourceScope, SourceSettings } from '../../protocol/app-server/v38';
-import { chooseOption, confirmAction, renderEditor } from './settings-harness';
+import type { ModelLayer, RuntimeLayer, SourceScope, SourceSettings } from '../../protocol/app-server/v39';
+import { chooseOption, confirmAction, renderEditor, sameRevision } from './settings-harness';
+import type { WriteOutcome } from '../src/app/settings/machines/port';
 import { act } from '@testing-library/react';
 import { localeController } from '../src/locale/controller';
 import { translator } from '../src/locale/translation';
@@ -35,13 +36,13 @@ function catalogSource(scope: SourceScope, document: Record<string, unknown>) {
 /** The Models page focused on one Model's detail, which is where a Model's
  * complete typed contract is authored. */
 const modelDetail = (source: SourceSettings, scope: SourceScope, revision: string, id: string) =>
-  <ModelsPage source={source} scope={scope} revision={revision} models={[]} focus={{ kind: 'model', id }} onFocus={noop} />;
+  <ModelsPage source={source} scope={scope} revision={revision} models={[]} profiles={{}} focus={{ kind: 'model', id }} onFocus={noop} />;
 /** The Tools & Permissions page, bound to one authored `rustx.toml`. */
 const toolsPage = (source: SourceSettings, document: RuntimeLayer, scope: SourceScope, revision: string) =>
   <ToolsPage source={source} document={document} scope={scope} revision={revision} />;
 
-it('preserves complete Model replacement, profile params and all compatibility fields', async () => {
-  const model = { ...cfg3Effective().document.models!.main, request_params: { temperature: .3, nested: { budget: 32 } }, reasoning: { default_profile: 'deep', profiles: { deep: { enabled: true, request_params: { reasoning: { effort: 'high' } } } } }, compat: { chat_max_tokens_field: 'max_completion_tokens' as const, chat_stream_usage: 'supported' as const, chat_reasoning_replay: 'omit' as const, chat_tool_protocol: 'native' as const, responses_storage: 'stateless' as const } };
+it('preserves complete Model replacement, profiles and all compatibility fields', async () => {
+  const model = { ...cfg3Effective().document.models!.main, capabilities: { ...cfg3Effective().document.models!.main.capabilities, reasoning: true }, default_profile: 'deep', profiles: { deep: { reasoning_enabled: true, max_output_tokens: 2048, request_params: { reasoning: { effort: 'high' }, stop: [null] } }, quick: { reasoning_enabled: false, request_params: {} } }, compat: { chat_max_tokens_field: 'max_completion_tokens' as const, chat_stream_usage: 'supported' as const, chat_reasoning_replay: 'omit' as const, chat_tool_protocol: 'native' as const, responses_storage: 'stateless' as const } };
   const source = catalogSource('workspace', { models: { main: model } });
   const { writes: write } = await renderEditor(modelDetail(source, 'workspace', 'exact', 'main'), { source, context: source });
   // One unrelated field changes; everything else must survive the complete
@@ -53,18 +54,38 @@ it('preserves complete Model replacement, profile params and all compatibility f
   await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: null } }, 'exact'));
 });
 
-it('edits reasoning profiles and native request values without interpreting semantics', async () => {
-  const source = catalogSource('user', { models: { main: cfg3Effective().document.models!.main } });
+it('authors general Model Profiles as complete presets, moving model parameters into the first one', async () => {
+  const main = { ...cfg3Effective().document.models!.main, request_params: { temperature: 0.2 } };
+  const source = catalogSource('user', { models: { main } });
   const { writes: write } = await renderEditor(modelDetail(source, 'user', 'r1', 'main'), { source, context: source });
-  fireEvent.click(screen.getByRole('button', { name: 'Reasoning profiles' }));
-  fireEvent.change(screen.getByLabelText('New reasoning profile'), { target: { value: 'deep' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Model profiles' }));
+  fireEvent.change(screen.getByLabelText('New profile identity'), { target: { value: 'precise' } });
   fireEvent.click(screen.getByRole('button', { name: 'Add profile' }));
-  const profile = screen.getByLabelText('deep').parentElement!.parentElement!;
-  fireEvent.change(within(profile).getByLabelText('Parameter name'), { target: { value: 'budget' } });
-  fireEvent.click(within(profile).getByRole('button', { name: 'Add parameter' }));
-  fireEvent.change(within(profile).getByLabelText('budget'), { target: { value: '1024' } });
+  const precise = within(screen.getByRole('group', { name: 'Profile precise' }));
+  // The Model's own parameters seed the first profile; the Model no longer
+  // declares any, and the new profile is the default.
+  expect((precise.getByLabelText('Profile request parameters') as HTMLTextAreaElement).value).toBe('{\n  "temperature": 0.2\n}');
+  fireEvent.change(precise.getByLabelText('Profile request parameters'), { target: { value: '{"temperature": 0.1, "top_p": 0.5, "stop": ["\\n", null], "metadata": {"tier": null}}' } });
+  fireEvent.change(precise.getByLabelText('Default output tokens'), { target: { value: '1024' } });
+  fireEvent.change(screen.getByLabelText('New profile identity'), { target: { value: 'creative' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Add profile' }));
+  const creative = within(screen.getByRole('group', { name: 'Profile creative' }));
+  // A later profile starts empty: profiles never inherit from one another.
+  expect((creative.getByLabelText('Profile request parameters') as HTMLTextAreaElement).value).toBe('{}');
+  fireEvent.change(creative.getByLabelText('Profile request parameters'), { target: { value: '{"temperature": 1.3}' } });
+  await chooseOption('Reasoning', 'Off', creative);
   fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
-  await waitFor(() => expect(write.mock.calls[0][0]).toMatchObject({ mutation: { authored: { reasoning: { default_profile: 'deep', profiles: { deep: { enabled: true, request_params: { budget: 1024 } } } } } } }));
+  await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+  const { request_params: _, ...rest } = main;
+  expect(write.mock.calls[0][0]).toEqual({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...rest, default_profile: 'precise', profiles: {
+    precise: { request_params: { temperature: 0.1, top_p: 0.5, stop: ['\n', null], metadata: { tier: null } }, max_output_tokens: 1024 },
+    creative: { request_params: { temperature: 1.3 }, reasoning_enabled: false },
+  } } } });
+  // Removing the default profile moves the default to a remaining one.
+  fireEvent.click(precise.getByRole('button', { name: 'Delete profile precise' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
+  await waitFor(() => expect(write).toHaveBeenCalledTimes(2));
+  expect(write.mock.calls[1][0]).toMatchObject({ mutation: { authored: { default_profile: 'creative', profiles: { creative: { request_params: { temperature: 1.3 } } } } } });
 });
 
 it.each(['all', 'none', 'exact'] as const)('writes exact native %s Skill selection', async mode => {
@@ -107,9 +128,9 @@ it('writes Native and MCP invocation policies independently, and an empty policy
 
 it('round-trips an independent Agent profile with delegation, guidance, model and worktree', async () => {
   const source = cfg3Source();
-  const authored = { description: 'Review', instructions: 'Inspect', agents: ['helper'], workflows: ['audit'], model: { model: 'main', reasoning_profile: { mode: 'catalog_default' as const }, max_output_tokens: { mode: 'catalog_default' as const }, summary_model: { mode: 'session' as const }, request_params: { temperature: .5 } }, tools: { builtin: ['read'], sources: { 'python:analysis': 'all' as const, search: [] } }, skills: 'all' as const, agents_md: { inherit: false, files: ['REVIEW.md'] }, timeout_ms: '30000', worktree: { enabled: true, require_clean_parent: false }, plugins: { todo: { enabled: true }, goal: { enabled: false }, agent_status: { enabled: true, time: { enabled: false }, background: { enabled: true } } } };
+  const authored = { description: 'Review', instructions: 'Inspect', agents: ['helper'], workflows: ['audit'], model: { model: 'main', profile: 'deep', max_output_tokens: { mode: 'catalog_default' as const }, summary_model: { mode: 'session' as const }, request_params: { temperature: .5, nested: [null] } }, tools: { builtin: ['read'], sources: { 'python:analysis': 'all' as const, search: [] } }, skills: 'all' as const, agents_md: { inherit: false, files: ['REVIEW.md'] }, timeout_ms: '30000', worktree: { enabled: true, require_clean_parent: false }, plugins: { todo: { enabled: true }, goal: { enabled: false }, agent_status: { enabled: true, time: { enabled: false }, background: { enabled: true } } } };
   source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/workspace/.agents/agents/reviewer.toml', revision: 'agent-r1', authored } }];
-  const { writes: write } = await renderEditor(<ExtensionDetail source={source} scope="workspace" revision="r1" models={['main']} family="agent" name="reviewer" onFocus={noop} />, { source, context: source });
+  const { writes: write } = await renderEditor(<ExtensionDetail source={source} scope="workspace" revision="r1" models={['main']} profiles={{}} family="agent" name="reviewer" onFocus={noop} />, { source, context: source });
   // Opening an authored profile authors nothing new, so a no-op Save is
   // unavailable; an edit back to the same text still round-trips every field.
   expect((screen.getByRole('button', { name: 'Save Agent reviewer' }) as HTMLButtonElement).disabled).toBe(true);
@@ -138,20 +159,20 @@ it('replaces default model intent and project guidance as independent native uni
   // Agent page: two user tasks, and two independent native semantic units.
   const source = catalogSource('workspace', { agent: { model: { model: 'main', request_params: { temperature: .4 } } } });
   const { writes: write, rerender } = await renderEditor(
-    <ModelsPage source={source} scope="workspace" revision="root-r1" models={['main', 'summary']} onFocus={noop} />,
+    <ModelsPage source={source} scope="workspace" revision="root-r1" models={['main', 'summary']} profiles={{ main: ['deep', 'quick'] }} onFocus={noop} />,
     { source, context: source });
   fireEvent.click(screen.getByRole('button', { name: 'Default model for new Sessions' }));
   const model = within(screen.getByRole('form', { name: 'Default model' }));
-  await chooseOption('Reasoning profile', 'Named profile', model);
-  fireEvent.change(model.getByLabelText('Profile identity'), { target: { value: 'deep' } });
+  await chooseOption('Profile', 'deep', model);
   fireEvent.change(model.getByLabelText('Output limit'), { target: { value: '4096' } });
   await chooseOption('Summary model', 'summary', model);
   fireEvent.click(model.getByRole('button', { name: 'Save Default model' }));
-  await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', mutation: { unit: 'root_model', authored: { model: 'main', request_params: { temperature: .4 }, reasoning_profile: { mode: 'profile', name: 'deep' }, max_output_tokens: { mode: 'limit', tokens: 4096 }, summary_model: { mode: 'explicit', model: 'summary' } } } }, 'root-r1'));
-  await chooseOption('Reasoning profile', 'Catalog default', model);
+  await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', mutation: { unit: 'root_model', authored: { model: 'main', request_params: { temperature: .4 }, profile: 'deep', max_output_tokens: { mode: 'limit', tokens: 4096 }, summary_model: { mode: 'explicit', model: 'summary' } } } }, 'root-r1'));
+  // The model default profile is an omission, never a sentinel.
+  await chooseOption('Profile', 'Model default profile', model);
   fireEvent.change(model.getByLabelText('Output limit'), { target: { value: '' } });
   fireEvent.click(model.getByRole('button', { name: 'Save Default model' }));
-  await waitFor(() => expect(write.mock.calls.at(-1)?.[0]).toMatchObject({ mutation: { authored: { reasoning_profile: { mode: 'catalog_default' }, max_output_tokens: { mode: 'catalog_default' } } } }));
+  await waitFor(() => expect(write.mock.calls.at(-1)?.[0]).toEqual({ kind: 'config', mutation: { unit: 'root_model', authored: { model: 'main', request_params: { temperature: .4 }, max_output_tokens: { mode: 'catalog_default' }, summary_model: { mode: 'explicit', model: 'summary' } } } }));
 
   rerender(<AgentPage document={{}} scope="workspace" revision="root-r1" />);
   const guidance = within(screen.getByRole('form', { name: 'Project guidance' }));
@@ -165,17 +186,18 @@ it('replaces default model intent and project guidance as independent native uni
 });
 
 it.each(['default', 'named Agent'] as const)('%s preserves and edits the complete explicit Summary Model independently', async owner => {
-  const summary = { mode: 'explicit' as const, model: 'summary-a', reasoning_profile: { mode: 'profile' as const, name: 'deep' }, max_output_tokens: { mode: 'limit' as const, tokens: 2048 }, request_params: { temperature: .2 } };
-  const model = { model: 'main', reasoning_profile: { mode: 'catalog_default' as const }, request_params: { temperature: .7 }, summary_model: summary };
+  const summary = { mode: 'explicit' as const, model: 'summary-a', profile: 'deep', max_output_tokens: { mode: 'limit' as const, tokens: 2048 }, request_params: { temperature: .2 } };
+  const model = { model: 'main', profile: 'fast', request_params: { temperature: .7 }, summary_model: summary };
   const models = ['main', 'summary-a', 'summary-b'];
+  const profiles = { main: ['fast'], 'summary-a': ['deep'], 'summary-b': ['deep', 'quick'] };
   let write!: Awaited<ReturnType<typeof renderEditor>>['writes'];
   if (owner === 'default') {
     const source = catalogSource('workspace', { agent: { model } });
-    ({ writes: write } = await renderEditor(<ModelsPage source={source} scope="workspace" revision="r1" models={models} onFocus={noop} />, { source, context: source }));
+    ({ writes: write } = await renderEditor(<ModelsPage source={source} scope="workspace" revision="r1" models={models} profiles={profiles} onFocus={noop} />, { source, context: source }));
   } else {
     const source = cfg3Source();
     source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/agent.toml', revision: 'r1', authored: { model } } }];
-    ({ writes: write } = await renderEditor(<ExtensionDetail source={source} scope="workspace" revision="r1" models={models} family="agent" name="reviewer" onFocus={noop} />, { source, context: source }));
+    ({ writes: write } = await renderEditor(<ExtensionDetail source={source} scope="workspace" revision="r1" models={models} profiles={profiles} family="agent" name="reviewer" onFocus={noop} />, { source, context: source }));
   }
   if (owner === 'default') fireEvent.click(screen.getByRole('button', { name: 'Default model for new Sessions' }));
   const formName = owner === 'default' ? 'Default model' : 'Agent reviewer';
@@ -194,13 +216,14 @@ it.each(['default', 'named Agent'] as const)('%s preserves and edits the complet
   await chooseOption('Summary model', 'summary-b');
   await commit({ ...model, summary_model: { ...summary, model: 'summary-b' } });
   const nested = within(screen.getByRole('group', { name: 'Explicit Summary Model settings' }));
-  fireEvent.change(nested.getByLabelText('Profile identity (Summary)'), { target: { value: 'quick' } });
+  await chooseOption('Profile (Summary)', 'quick', nested);
   fireEvent.change(nested.getByLabelText('Output limit (Summary)'), { target: { value: '1024' } });
-  fireEvent.change(nested.getByLabelText('temperature'), { target: { value: '0.4' } });
-  await commit({ ...model, summary_model: { ...summary, model: 'summary-b', reasoning_profile: { mode: 'profile', name: 'quick' }, max_output_tokens: { mode: 'limit', tokens: 1024 }, request_params: { temperature: .4 } } });
-  await chooseOption('Reasoning profile (Summary)', 'Catalog default', nested);
+  fireEvent.change(nested.getByLabelText('Request parameter overrides (Summary)'), { target: { value: '{"temperature": 0.4, "seed": null}' } });
+  await commit({ ...model, summary_model: { ...summary, model: 'summary-b', profile: 'quick', max_output_tokens: { mode: 'limit', tokens: 1024 }, request_params: { temperature: .4, seed: null } } });
+  await chooseOption('Profile (Summary)', 'Model default profile', nested);
   fireEvent.change(nested.getByLabelText('Output limit (Summary)'), { target: { value: '' } });
-  await commit({ ...model, summary_model: { ...summary, model: 'summary-b', reasoning_profile: { mode: 'catalog_default' }, max_output_tokens: { mode: 'catalog_default' }, request_params: { temperature: .4 } } });
+  const { profile: _, ...withoutProfile } = summary;
+  await commit({ ...model, summary_model: { ...withoutProfile, model: 'summary-b', max_output_tokens: { mode: 'catalog_default' }, request_params: { temperature: .4, seed: null } } });
   await chooseOption('Summary model', 'Follow selected model');
   await commit({ ...model, summary_model: { mode: 'session' } });
   expect(screen.queryByRole('group', { name: 'Explicit Summary Model settings' })).toBeNull();
@@ -209,10 +232,10 @@ it.each(['default', 'named Agent'] as const)('%s preserves and edits the complet
 });
 
 it('the explicit Summary Model variant owns complete labels in each locale without changing native payloads', async () => {
-  const summary = { mode: 'explicit' as const, model: 'summary-a', reasoning_profile: { mode: 'profile' as const, name: 'deep' }, max_output_tokens: { mode: 'limit' as const, tokens: 2048 }, request_params: { temperature: .2 } };
-  const model = { model: 'main', reasoning_profile: { mode: 'profile' as const, name: 'main-profile' }, max_output_tokens: { mode: 'limit' as const, tokens: 4096 }, request_params: { temperature: .7 }, summary_model: summary };
+  const summary = { mode: 'explicit' as const, model: 'summary-a', profile: 'deep', max_output_tokens: { mode: 'limit' as const, tokens: 2048 }, request_params: { temperature: .2 } };
+  const model = { model: 'main', profile: 'main-profile', max_output_tokens: { mode: 'limit' as const, tokens: 4096 }, request_params: { temperature: .7 }, summary_model: summary };
   const source = catalogSource('workspace', { agent: { model } });
-  const { writes: write, context } = await renderEditor(<ModelsPage source={source} scope="workspace" revision="r1" models={['main', 'summary-a']} onFocus={noop} />, { source, context: source });
+  const { writes: write, context } = await renderEditor(<ModelsPage source={source} scope="workspace" revision="r1" models={['main', 'summary-a']} profiles={{ main: ['main-profile'], 'summary-a': ['deep', 'quick'] }} onFocus={noop} />, { source, context: source });
   fireEvent.click(screen.getByRole('button', { name: 'Default model for new Sessions' }));
   const labels = (locale: 'en' | 'zh') => {
     const tx = translator(locale);
@@ -220,105 +243,300 @@ it('the explicit Summary Model variant owns complete labels in each locale witho
     const nested = within(group);
     return {
       group,
-      reasoning: nested.getByRole('button', { name: (name: string) => name.endsWith(tx('settings:models-page.reasoning-profile-summary')) }),
-      identity: nested.getByLabelText(tx('settings:models-page.profile-identity-summary')) as HTMLInputElement,
+      profile: nested.getByRole('button', { name: (name: string) => name.endsWith(tx('settings:models-page.profile-summary')) }),
       limit: nested.getByLabelText(tx('settings:models-page.output-limit-summary')) as HTMLInputElement,
-      outer: screen.getByLabelText(tx('settings:models-page.profile-identity')) as HTMLInputElement,
+      params: nested.getByLabelText(tx('settings:models-page.request-parameter-overrides-summary')) as HTMLTextAreaElement,
+      outer: screen.getByLabelText(tx('settings:models-page.request-parameter-overrides')) as HTMLTextAreaElement,
     };
   };
   const english = labels('en');
-  expect([english.identity.value, english.limit.value, english.outer.value]).toEqual(['deep', '2048', 'main-profile']);
-  expect(screen.getByLabelText('Profile identity (Summary)')).toBe(english.identity);
+  expect([english.limit.value, english.params.value, english.outer.value]).toEqual(['2048', '{\n  "temperature": 0.2\n}', '{\n  "temperature": 0.7\n}']);
+  expect(english.profile.textContent).toContain('deep');
   expect(screen.getByLabelText('Output limit (Summary)')).toBe(english.limit);
   const snapshot = context();
 
   act(() => localeController.setLocale('zh'));
   const chinese = labels('zh');
-  expect([chinese.identity, chinese.limit, chinese.outer]).toEqual([english.identity, english.limit, english.outer]);
-  expect(screen.getByLabelText('配置标识（摘要）')).toBe(english.identity);
+  expect([chinese.limit, chinese.params, chinese.outer]).toEqual([english.limit, english.params, english.outer]);
   expect(screen.getByLabelText('输出上限（摘要）')).toBe(english.limit);
-  expect(within(chinese.group).getByRole('button', { name: /推理配置（摘要）$/ })).toBe(chinese.reasoning);
+  expect(screen.getByLabelText('请求参数覆盖（摘要）')).toBe(english.params);
+  expect(within(chinese.group).getByRole('button', { name: /预设（摘要）$/ })).toBe(chinese.profile);
   expect(within(chinese.group).queryAllByRole('button', { name: /Summary/ })).toEqual([]);
-  expect(chinese.group.textContent).not.toMatch(/Summary|Reasoning|Profile identity|Output limit/);
+  expect(chinese.group.textContent).not.toMatch(/Summary|Profile|Output limit|Request parameter/);
   expect(write).not.toHaveBeenCalled();
   expect(context()).toBe(snapshot);
 
-  fireEvent.change(chinese.identity, { target: { value: 'quick' } });
   fireEvent.change(chinese.limit, { target: { value: '1024' } });
   const zh = translator('zh');
   const form = screen.getByRole('form', { name: zh('settings:models-page.default-model') });
   fireEvent.click(within(form).getByRole('button', { name: `${zh('settings:bridge.save')} ${zh('settings:models-page.default-model')}` }));
   await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
   expect(write.mock.calls[0]).toEqual([{ kind: 'config', mutation: { unit: 'root_model', authored: {
-    ...model, summary_model: { ...summary, reasoning_profile: { mode: 'profile', name: 'quick' }, max_output_tokens: { mode: 'limit', tokens: 1024 } },
+    ...model, summary_model: { ...summary, max_output_tokens: { mode: 'limit', tokens: 1024 } },
   } } }, 'r1']);
 });
 
 it.each([{}, { description: 'Review' }, { instructions: 'Inspect' }])('saves an Agent with optional profile text omitted: %j', async authored => {
   const source = cfg3Source();
   source.agents = [{ name: 'optional', scope: 'workspace', source: { path: '/agent.toml', revision: 'optional-r1', authored } }];
-  const { writes: write } = await renderEditor(<ExtensionDetail source={source} scope="workspace" revision="r1" models={[]} family="agent" name="optional" onFocus={noop} />, { source, context: source });
+  const { writes: write } = await renderEditor(<ExtensionDetail source={source} scope="workspace" revision="r1" models={[]} profiles={{}} family="agent" name="optional" onFocus={noop} />, { source, context: source });
   fireEvent.click(screen.getByLabelText('read'));
   expect((screen.getByRole('form', { name: 'Agent optional' }) as HTMLFormElement).checkValidity()).toBe(true);
   fireEvent.click(screen.getByRole('button', { name: 'Save Agent optional' }));
   await waitFor(() => expect(write).toHaveBeenCalledWith({ kind: 'agent', name: 'optional', authored: { ...authored, tools: { builtin: ['read'] } } }, 'optional-r1'));
 });
 
-// ── A request parameter's JSON text is a buffer, never a second draft ───────
+// ── A request-parameter object's JSON text is a buffer, never a second draft ──
 
-/** A User Model with two explicit request parameters, opened on its detail
- * with the request-parameter editor expanded. */
+/** A User Model with native request parameters, opened on its detail with the
+ * request-parameter editor expanded. */
 async function requestParameters() {
   const main = { ...cfg3Effective().document.models!.main, request_params: { temperature: 1, top_p: 0.5 } };
   const source = catalogSource('user', { models: { main } });
   const editor = await renderEditor(modelDetail(source, 'user', 'r1', 'main'), { source, context: source });
   fireEvent.click(screen.getByRole('button', { name: 'Request defaults and protocol compatibility' }));
-  return { ...editor, main, input: screen.getByLabelText('temperature') as HTMLInputElement };
+  return { ...editor, main, input: screen.getByLabelText('Model request parameters') as HTMLTextAreaElement };
 }
-const incomplete = 'Enter a complete JSON value before saving.';
+const invalidJson = 'Not valid JSON. Nothing is saved until the text is one complete JSON object.';
+const save = () => screen.getByRole('button', { name: 'Save Model main' }) as HTMLButtonElement;
+
+it('a pasted object with nested values, arrays and null becomes the structured draft', async () => {
+  const { writes: write, main, input } = await requestParameters();
+  expect(input.value).toBe('{\n  "temperature": 1,\n  "top_p": 0.5\n}');
+  fireEvent.change(input, { target: { value: '{"provider": {"order": ["a", "b"], "fallback": null}, "stop": [null, "\\n"], "seed": null}' } });
+  expect(input.validity.valid).toBe(true);
+  fireEvent.click(save());
+  await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+  expect(write.mock.calls[0][0]).toEqual({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...main,
+    request_params: { provider: { order: ['a', 'b'], fallback: null }, stop: [null, '\n'], seed: null } } } });
+});
 
 it('an actor-owned reset replaces a mounted JSON buffer, its error and its validity, and a later edit starts from it', async () => {
   const { writes: write, main, input } = await requestParameters();
-  // A complete value becomes the actor's draft; incomplete text after it
-  // stays in the input with its error and its invalid state.
-  fireEvent.change(input, { target: { value: '2' } });
-  fireEvent.change(input, { target: { value: '{' } });
-  expect(input.value).toBe('{');
-  expect(screen.getByText(incomplete)).toBeTruthy();
+  // A complete object becomes the actor's draft; incomplete text after it
+  // stays in the editor with its error and its invalid state.
+  fireEvent.change(input, { target: { value: '{"temperature": 2}' } });
+  fireEvent.change(input, { target: { value: '{"temperature": 2' } });
+  expect(input.value).toBe('{"temperature": 2');
+  expect(screen.getByText(invalidJson)).toBeTruthy();
   expect(input.validity.valid).toBe(false);
-  // Discarding the draft is the transaction owner's reset. The parameter row
-  // keeps its key, so the same input stays mounted across it.
+  // Discarding the draft is the transaction owner's reset; the same editor
+  // stays mounted across it and follows the owner's value.
   fireEvent.click(screen.getByRole('button', { name: 'Discard draft' }));
   await waitFor(() => expect(screen.queryByRole('button', { name: 'Discard draft' })).toBeNull());
-  expect(screen.getByLabelText('temperature')).toBe(input);
-  expect(input.value).toBe('1');
-  expect(screen.queryByText(incomplete)).toBeNull();
+  expect(screen.getByLabelText('Model request parameters')).toBe(input);
+  expect(input.value).toBe('{\n  "temperature": 1,\n  "top_p": 0.5\n}');
+  expect(screen.queryByText(invalidJson)).toBeNull();
   expect(input.validity.valid).toBe(true);
   expect(input.validationMessage).toBe('');
   // Following the owner wrote nothing back and began no draft.
-  expect((screen.getByRole('button', { name: 'Save Model main' }) as HTMLButtonElement).disabled).toBe(true);
-  // The next keystroke extends what the owner holds, not the stale buffer.
-  fireEvent.change(input, { target: { value: `${input.value}5` } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
+  expect(save().disabled).toBe(true);
+  fireEvent.change(input, { target: { value: input.value.replace('0.5', '0.25') } });
+  fireEvent.click(save());
   await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
-  expect(write.mock.calls[0][0]).toEqual({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...main, request_params: { temperature: 15, top_p: 0.5 } } } });
+  expect(write.mock.calls[0][0]).toEqual({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...main, request_params: { temperature: 1, top_p: 0.25 } } } });
 });
 
-it('incomplete JSON stays visible and diagnosed locally and never reaches the draft', async () => {
-  const { writes: write, main, input } = await requestParameters();
-  fireEvent.change(input, { target: { value: '{"budget":' } });
-  expect(input.value).toBe('{"budget":');
-  expect(screen.getByText(incomplete)).toBeTruthy();
+/** One deferred value, resolved explicitly by the test. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(settle => { resolve = settle; });
+  return { promise, resolve };
+}
+const canonical = '{\n  "temperature": 1,\n  "top_p": 0.5\n}';
+/** The same Model detail as `requestParameters`, with the native write and the
+ * reads after the first under the test's control, so source observations and
+ * post-commit rereads arrive exactly when the test says. */
+async function ownedRequestParameters() {
+  const main = { ...cfg3Effective().document.models!.main, request_params: { temperature: 1, top_p: 0.5 } };
+  const source = catalogSource('user', { models: { main } });
+  const reads: Array<ReturnType<typeof deferred<SourceSettings>>> = [];
+  const writes: Array<ReturnType<typeof deferred<WriteOutcome>>> = [];
+  const editor = await renderEditor(modelDetail(source, 'user', 'r1', 'main'), {
+    source, context: source,
+    write: () => { const next = deferred<WriteOutcome>(); writes.push(next); return next.promise; },
+    reread: () => { const next = deferred<SourceSettings>(); reads.push(next); return next.promise; },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Request defaults and protocol compatibility' }));
+  const input = screen.getByLabelText('Model request parameters') as HTMLTextAreaElement;
+  /** A native source revision carrying `models`, as the authoritative read
+   * and the Settings page that renders it both see it. */
+  const revision = (name: string, models: Record<string, unknown>) => {
+    const next = sameRevision(catalogSource('user', { models }), name);
+    return next;
+  };
+  /** Deliver one authoritative observation to the actor and the page. */
+  const observe = async (next: SourceSettings) => {
+    await act(async () => { editor.actor.send({ type: 'REFRESH' }); });
+    await waitFor(() => expect(reads.length).toBeGreaterThan(0));
+    await act(async () => { reads.shift()!.resolve(structuredClone(next)); });
+    await waitFor(() => expect(editor.context().observation?.user.revision).toBe(next.user.revision));
+    editor.rerender(modelDetail(next, 'user', next.user.revision, 'main'));
+  };
+  return { ...editor, main, input, revision, observe, reads, nativeWrites: writes };
+}
+/** The editor shows exactly the owner's value again: canonical text, no
+ * diagnostic, valid, and the same mounted element. */
+function restored(input: HTMLTextAreaElement, text = canonical) {
+  expect(screen.getByLabelText('Model request parameters')).toBe(input);
+  expect(input.value).toBe(text);
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(input.getAttribute('aria-invalid')).toBeNull();
+  expect(input.validity.valid).toBe(true);
+  expect(input.validationMessage).toBe('');
+}
+/** Unparsed text held by the editor alone, diagnosed and invalid. */
+function unparsed(input: HTMLTextAreaElement, text = '{"temperature": 2') {
+  fireEvent.change(input, { target: { value: text } });
+  expect(input.value).toBe(text);
+  expect(screen.getByText(invalidJson)).toBeTruthy();
+  expect(input.getAttribute('aria-invalid')).toBe('true');
   expect(input.validity.valid).toBe(false);
-  // No draft exists: the incomplete text was never offered to the actor.
-  expect((screen.getByRole('button', { name: 'Save Model main' }) as HTMLButtonElement).disabled).toBe(true);
+}
+const contextWindow = () => screen.getByLabelText('Context window') as HTMLInputElement;
+const discardButton = () => screen.queryByRole('button', { name: 'Discard draft' });
+
+it('Discard resets unparsed JSON even when the discarded draft never changed request_params', async () => {
+  const { writes: write, main, input } = await requestParameters();
+  // The draft is an unrelated field; the JSON text never became part of it.
+  fireEvent.change(contextWindow(), { target: { value: '64000' } });
+  unparsed(input);
+  fireEvent.click(discardButton()!);
+  await waitFor(() => expect(discardButton()).toBeNull());
+  restored(input);
+  expect(contextWindow().value).toBe(String(main.context_window));
+  expect(save().disabled).toBe(true);
+  // A later valid edit starts from the owner's value and is the only write.
+  fireEvent.change(input, { target: { value: '{"temperature": 0.3}' } });
+  fireEvent.click(save());
+  await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+  expect(write.mock.calls[0][0]).toEqual({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...main, request_params: { temperature: 0.3 } } } });
+});
+
+it('an unrelated source observation keeps unparsed JSON, and the explicit reviewed revision resets it', async () => {
+  const { main, input, revision, observe, nativeWrites } = await ownedRequestParameters();
+  // No draft yet: only unparsed text. A new source revision that leaves this
+  // Model's request_params untouched is not an owner reset of the text.
+  unparsed(input);
+  await observe(revision('r2', { main: { ...main, max_output_tokens: main.max_output_tokens - 1 } }));
+  expect(input.value).toBe('{"temperature": 2');
+  expect(screen.getByText(invalidJson)).toBeTruthy();
+  expect(input.validity.valid).toBe(false);
+  // A draft of another field, then a conflicting external revision: the
+  // unparsed text still survives the observation itself…
+  fireEvent.change(contextWindow(), { target: { value: '64000' } });
+  unparsed(input, '{"top_p": ');
+  await observe(revision('r3', { main: { ...main, max_output_tokens: main.max_output_tokens - 2 } }));
+  expect(await screen.findByRole('button', { name: 'Use reviewed revision' })).toBeTruthy();
+  expect(input.value).toBe('{"top_p": ');
+  // …and the explicit review gesture is the owner reset: the editor shows the
+  // draft's own request_params, which the draft keeps, fenced on r3.
+  fireEvent.click(screen.getByRole('button', { name: 'Use reviewed revision' }));
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Use reviewed revision' })).toBeNull());
+  restored(input);
+  expect(contextWindow().value).toBe('64000');
+  expect(discardButton()).toBeTruthy();
+  expect(nativeWrites).toHaveLength(0);
+  fireEvent.change(input, { target: { value: '{"temperature": 0.3}' } });
+  fireEvent.click(save());
+  await waitFor(() => expect(nativeWrites).toHaveLength(1));
+});
+
+it('the authoritative observation that settles a commit resets unparsed JSON even when request_params never changed', async () => {
+  const { writes: write, main, input, revision, nativeWrites, reads, rerender } = await ownedRequestParameters();
+  // The committed draft is an unrelated field, so request_params presents the
+  // same value before the commit, after it, and in the reread.
+  fireEvent.change(contextWindow(), { target: { value: '64000' } });
+  fireEvent.click(save());
+  await waitFor(() => expect(nativeWrites).toHaveLength(1));
+  const committed = revision('r2', { main: { ...main, context_window: '64000' } });
+  await act(async () => { nativeWrites[0]!.resolve({ acknowledgement: committed }); });
+  // Until the commit is observed the unit accepts no edit; text typed now is
+  // the editor's alone.
+  unparsed(input, '{"temperature": 3');
+  await waitFor(() => expect(reads.length).toBeGreaterThan(0));
+  await act(async () => { reads.shift()!.resolve(structuredClone(committed)); });
+  rerender(modelDetail(committed, 'user', 'r2', 'main'));
+  await waitFor(() => expect(input.value).toBe(canonical));
+  restored(input);
+  expect(contextWindow().value).toBe('64000');
+  expect(discardButton()).toBeNull();
+  expect(write).toHaveBeenCalledTimes(1);
+  // Editing resumes from the committed value, fenced on its revision.
+  fireEvent.change(input, { target: { value: '{"temperature": 4}' } });
+  fireEvent.click(save());
+  await waitFor(() => expect(nativeWrites).toHaveLength(2));
+  expect(write.mock.calls[1]).toEqual([{ kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...main, context_window: '64000', request_params: { temperature: 4 } } } }, 'r2']);
+});
+
+it('an unrelated Model edit resubmits binary64-exact request parameters exactly as native emitted them', async () => {
+  // The projection exactly as the App Server client decodes response text.
+  const emitted = '{"seed":9007199254740992,"floor":-9007199254740991,"big":10000000000000000000,"tiny":5.357830195732913e-76,"huge":1e300,"nested":{"list":[0.1,{"n":-2.5e-7}]}}';
+  const main = { ...cfg3Effective().document.models!.main, request_params: JSON.parse(emitted) as Record<string, unknown> };
+  const source = catalogSource('user', JSON.parse(JSON.stringify({ models: { main } })) as Record<string, unknown>);
+  const { writes: write } = await renderEditor(modelDetail(source, 'user', 'r1', 'main'), { source, context: source });
+  fireEvent.change(screen.getByLabelText('Context window'), { target: { value: '64000' } });
+  fireEvent.click(save());
+  await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+  // The mutation text the client sends carries every number unchanged, so
+  // native reads back the very values it emitted.
+  const sent = JSON.stringify(write.mock.calls[0][0]);
+  const params = (JSON.parse(sent) as { mutation: { authored: { request_params: unknown } } }).mutation.authored.request_params;
+  expect(JSON.stringify(params)).toBe(JSON.stringify(JSON.parse(emitted)));
+  for (const literal of ['9007199254740992', '-9007199254740991', '10000000000000000000', '5.357830195732913e-76', '1e+300', '0.1', '-2.5e-7'])
+    expect(sent).toContain(literal);
+});
+
+const duplicate = (line: number, column: number) => `The JSON text repeats an object key at line ${line}, column ${column}.`;
+const inexact = (line: number, column: number) => `The number at line ${line}, column ${column} cannot be kept exactly: rustX, the browser and providers read JSON numbers as IEEE 754 binary64 values, and this one would be rounded. Nothing is saved until it is changed.`;
+
+it.each([
+  ['{"budget":', invalidJson],
+  ['[1, 2]', 'Request parameters must be a JSON object.'],
+  ['null', 'Request parameters must be a JSON object.'],
+  ['{"a": 1, "a": 2}', duplicate(1, 10)],
+  ['{"outer": {"list": [{"k": 1, "k": 1}]}}', duplicate(1, 30)],
+  // A key is located, never quoted: it may itself hold a secret.
+  ['{"sk-SECRET [x] \\"q\\"": 1, "sk-SECRET [x] \\"q\\"": 2}', duplicate(1, 28)],
+  // A number JSON.parse would round is refused on its text, before parsing.
+  ['{"seed": 9007199254740993}', inexact(1, 10)],
+  ['{\n  "a": [1.5, {"b": -9007199254740993}]\n}', inexact(2, 20)],
+  ['{"t": 0.12345678901234567890}', inexact(1, 7)],
+])('invalid text %s stays visible and diagnosed locally and never reaches the draft', async (text, diagnostic) => {
+  const { writes: write, main, input } = await requestParameters();
+  fireEvent.change(input, { target: { value: text } });
+  expect(input.value).toBe(text);
+  expect(screen.getByText(diagnostic)).toBeTruthy();
+  expect(input.validationMessage).toBe(diagnostic);
+  expect(input.validity.valid).toBe(false);
+  // No draft exists: the invalid text was never offered to the actor.
+  expect(save().disabled).toBe(true);
   expect(screen.queryByRole('button', { name: 'Discard draft' })).toBeNull();
-  // Completing it is an ordinary edit; the buffer is not reset by its own echo.
+  // Correcting it is an ordinary edit; the buffer is not reset by its own echo.
   fireEvent.change(input, { target: { value: '{"budget": 32}' } });
   expect(input.value).toBe('{"budget": 32}');
-  expect(screen.queryByText(incomplete)).toBeNull();
+  expect(screen.queryByText(diagnostic)).toBeNull();
   expect(input.validity.valid).toBe(true);
-  fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
+  fireEvent.click(save());
   await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
-  expect(write.mock.calls[0][0]).toEqual({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...main, request_params: { temperature: { budget: 32 }, top_p: 0.5 } } } });
+  expect(write.mock.calls[0][0]).toEqual({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...main, request_params: { budget: 32 } } } });
+});
+
+it('whitespace and key order alone are not an edit and begin no draft', async () => {
+  const { writes: write, input } = await requestParameters();
+  fireEvent.change(input, { target: { value: '{ "top_p" : 0.5,\n\n   "temperature":1 }' } });
+  expect(input.value).toBe('{ "top_p" : 0.5,\n\n   "temperature":1 }');
+  expect(input.validity.valid).toBe(true);
+  expect(save().disabled).toBe(true);
+  expect(screen.queryByRole('button', { name: 'Discard draft' })).toBeNull();
+  expect(write).not.toHaveBeenCalled();
+});
+
+it.each([['  ', false], ['{}', true]] as const)('blank optional parameters are absent, while an explicit empty object is authored: %j', async (text, present) => {
+  const { writes: write, main, input } = await requestParameters();
+  const { request_params: _, ...absent } = main;
+  fireEvent.change(input, { target: { value: text } });
+  fireEvent.click(save());
+  await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+  expect(write.mock.calls[0][0]).toEqual({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: present ? { ...absent, request_params: {} } : absent } });
 });

@@ -1497,7 +1497,12 @@ impl RuntimeInner {
         if state.current_attempt.is_some() || state.manual_compaction.is_some() {
             return Err(Busy::Foreground);
         }
-        if state.recovered_continuation.is_some() {
+        // Work that waits for admission owns nothing while the published
+        // catalog does not admit the configured selection: admission is closed
+        // until a valid selection is committed, and committing one is exactly
+        // the idle mutation this rule must leave open.
+        let admissible = state.model.unavailable().is_none();
+        if admissible && state.recovered_continuation.is_some() {
             return Err(Busy::Recovery);
         }
         if self.durability_gate.is_failed()
@@ -1512,14 +1517,16 @@ impl RuntimeInner {
         // Paused, Blocked, Complete, absent, an uncomposed extension, and an
         // Active Goal whose budget is exhausted all own nothing — an
         // exhausted Goal therefore cannot spin to pin residency forever.
-        if probe == IdleProbe::Durable
+        if admissible
+            && probe == IdleProbe::Durable
             && self
                 .goal_owns_future_work(state)
                 .map_err(|_| Busy::Durability)?
         {
             return Err(Busy::AutonomousExtension);
         }
-        if probe == IdleProbe::Durable
+        if admissible
+            && probe == IdleProbe::Durable
             && self.mailbox.has_pending().map_err(|_| Busy::Durability)?
         {
             return Err(Busy::Inbound);
@@ -2886,6 +2893,14 @@ impl RuntimeInner {
         if self.durability_gate.is_failed() {
             return;
         }
+        // A Session whose published Model Catalog no longer admits its
+        // configured selection admits nothing — no accepted inbound, recovered
+        // continuation or Goal round — until a valid selection is committed;
+        // committing one wakes this pass. The invocation it last resolved is
+        // never a substitute.
+        if state.model.unavailable().is_some() {
+            return;
+        }
         // Live admission guard: the coordinator may only adopt inbound when
         // the active conversation is at a safe boundary (no incomplete tool
         // call without its committed ToolResult sibling). This closes the
@@ -3210,7 +3225,10 @@ impl RuntimeInner {
         // the current session model, while a historical Request Snapshot is
         // reconstructed only from its own frozen durable facts and is never
         // rewritten to resemble the new configuration.
-        let model = state.model.snapshot();
+        let model = state
+            .model
+            .snapshot()
+            .expect("admission checked the selection under this lock");
         // The attempt's frozen *effective* model configuration, taken at the
         // same linearization point as its resolved snapshot. A named
         // subagent with no explicit model inherits exactly this — never live
@@ -3581,7 +3599,7 @@ impl ConversationRuntime {
         // context policy. Validating here (and again in `model_set`) is what
         // makes the per-attempt context runtime construction infallible at
         // admission, where there is no caller left to report to.
-        validate_context_policy(&config.context.policy, &config.model.snapshot())
+        validate_model_context(&config.context.policy, &config.model)
             .map_err(|error| ConversationRuntimeError::Context(error.message))?;
         // The durable store is composed once by the tool runtime's
         // `ConversationStoreBinding`. The runtime receives the full handle
@@ -4423,7 +4441,7 @@ impl ConversationRuntime {
             .ok_or("candidate has no configuration")?;
         let model = SessionModelState::new(generation.models.clone(), selection)
             .map_err(|error| error.to_string())?;
-        validate_context_policy(&generation.config.context_policy(), &model.snapshot())
+        validate_model_context(&generation.config.context_policy(), &model)
             .map_err(|error| error.message)?;
         let preview = Arc::new(RuntimeResourceSnapshot::from_prepared(
             old.revision().next(),
@@ -4469,9 +4487,13 @@ impl ConversationRuntime {
         capture: &crate::local_runtime::configuration::ProspectiveSessionConfig,
         models: crate::model::invocation::ModelBindingRegistry,
     ) -> Result<(), String> {
-        let model = SessionModelState::new(models.clone(), capture.session_model().clone())
+        // The Session's own selection is carried, never re-chosen: a catalog
+        // that no longer admits it yields an unavailable candidate.
+        let current = self.inner.lock_state().model.clone();
+        let model = current
+            .carry(models.clone(), capture.session_model().clone())
             .map_err(|error| error.to_string())?;
-        validate_context_policy(&capture.config.context_policy(), &model.snapshot())
+        validate_model_context(&capture.config.context_policy(), &model)
             .map_err(|error| error.message)?;
         if let Some(capability) = &mut candidate.capability {
             capability.set_context_profile(capture);
@@ -4524,12 +4546,14 @@ impl ConversationRuntime {
                 state.model.clone(),
             )
         };
-        let model = SessionModelState::new(
-            models.clone(),
-            selection.unwrap_or_else(|| old_model.config().clone()),
-        )
+        // An explicit selection must resolve; the Session's own carried
+        // selection may be one the new catalog no longer admits.
+        let model = match selection {
+            Some(selection) => SessionModelState::new(models.clone(), selection),
+            None => old_model.carry(models.clone(), old_model.config().clone()),
+        }
         .map_err(|error| error.to_string())?;
-        validate_context_policy(&capture.config.context_policy(), &model.snapshot())
+        validate_model_context(&capture.config.context_policy(), &model)
             .map_err(|error| error.message)?;
         let preview = Arc::new(old.with_context_binding(capture, models)?);
         let mut impact = match (old.request_shape(&old_model), preview.request_shape(&model)) {
@@ -4663,6 +4687,8 @@ impl ConversationRuntime {
             )
         };
         retain()?;
+        let reopens =
+            state.model.unavailable().is_some() && candidate.model.unavailable().is_none();
         state.model = candidate.model;
         state.effective_approval_mode = resources
             .configuration()
@@ -4687,6 +4713,11 @@ impl ConversationRuntime {
                 snapshot: resources,
                 availability,
             });
+        }
+        if reopens {
+            // Work accepted before the selection became unavailable was held,
+            // not dropped; this commit is what admits it.
+            self.inner.mailbox.wake().notify_one();
         }
         Ok(state.binding_revision)
     }
@@ -4717,6 +4748,64 @@ impl ConversationRuntime {
             ConversationLifecycleState::Inactive
         );
         state.binding_revision = revision;
+    }
+
+    /// Publish a newly available Model Catalog to this Session for future
+    /// selection without adopting anything.
+    ///
+    /// Under the lock Attempt admission and model changes take, the Session's
+    /// selection authority ([`SessionModelState::publish_catalog`]), the
+    /// catalog its configuration generation carries and the retained binding
+    /// are committed together, so `model_catalog`, `model_set` and every
+    /// later admission observe one catalog. The current invocations, their
+    /// adapters and the capability snapshot are retained verbatim; an
+    /// admitted Attempt keeps the snapshot and registry it froze. A configured
+    /// selection the catalog no longer admits becomes unavailable rather than
+    /// blocking publication. The binding revision advances so no candidate
+    /// prepared against the older catalog can adopt over this one, and
+    /// `retain` commits the retained binding at that revision inside the same
+    /// critical section. The caller holds the source/application fence.
+    ///
+    /// Returns `Ok(false)`, changing nothing, when the current configuration
+    /// would resolve to different invocations against `models`: that change
+    /// needs preparation and adoption.
+    ///
+    /// # Errors
+    ///
+    /// Returns `retain`'s refusal, or a generation that carries no
+    /// configuration, with nothing committed.
+    pub(crate) fn publish_model_catalog(
+        &self,
+        capture: &crate::local_runtime::configuration::ProspectiveSessionConfig,
+        models: crate::model::invocation::ModelBindingRegistry,
+        retain: impl FnOnce(u64) -> Result<(), String>,
+    ) -> Result<bool, String> {
+        let mut state = self.inner.lock_state();
+        let mut model = state.model.clone();
+        if !model.publish_catalog(models.clone()) {
+            return Ok(false);
+        }
+        let resources = Arc::new(
+            state
+                .resources
+                .with_model_catalog(capture, models)
+                .ok_or("the adopted generation carries no configuration")?,
+        );
+        let revision = state
+            .binding_revision
+            .checked_add(1)
+            .expect("Session binding revision exhausted");
+        retain(revision)?;
+        state.binding_revision = revision;
+        state.model = model;
+        state.resources = resources.clone();
+        self.inner.observe(ConversationObservation::Resources {
+            model: Box::new(state.model.view()),
+            approval_mode: state.effective_approval_mode,
+            availability: resources.capability_availability().clone(),
+            snapshot: resources,
+        });
+        Ok(true)
     }
 
     /// Publish independent policy without changing the adopted context or any
@@ -4840,7 +4929,11 @@ impl ConversationRuntime {
             if state.current_attempt.is_some() || state.manual_compaction.is_some() {
                 return Err(ManualCompactionError::Busy);
             }
-            let model = state.model.snapshot();
+            let model = state.model.snapshot().map_err(|error| {
+                ManualCompactionError::ModelUnavailable {
+                    diagnostic: error.to_string(),
+                }
+            })?;
             let resources = state.resources.clone();
             let context_runtime = self
                 .inner
@@ -5235,6 +5328,14 @@ impl ConversationRuntime {
                 message: failure.diagnostic,
             });
         }
+        // Explicit refusal, ordered with catalog publication and model
+        // commits by this lock: nothing is accepted for a selection the
+        // Session's published catalog does not admit.
+        if let Some(error) = state.model.unavailable() {
+            return Err(InboundAdmissionError::ModelUnavailable {
+                diagnostic: error.to_string(),
+            });
+        }
         // The parent Agent registry owns message-versus-interrupt arbitration.
         // Envelopes already on its reliable lane won admission before stopping;
         // child cancellation must not retroactively reject their durable input.
@@ -5555,7 +5656,7 @@ impl ConversationRuntime {
             .map_or(self.inner.context.policy, |generation| {
                 generation.config.context_policy()
             });
-        validate_context_policy(&policy, &candidate.snapshot())
+        validate_model_context(&policy, &candidate)
             .map_err(|error| ModelUpdateError::InvalidConfiguration(error.message))?;
         let view = candidate.view();
         let mut prepared = Some(PreparedConfiguration {
@@ -5587,6 +5688,17 @@ impl ConversationRuntime {
     #[cfg(test)]
     pub(crate) fn model_config(&self) -> SessionModelConfig {
         self.inner.lock_state().model.config().clone()
+    }
+
+    /// The resolved invocations the next Attempt would freeze, adapter
+    /// bindings included (test convenience).
+    #[cfg(test)]
+    pub(crate) fn model_snapshot(&self) -> AttemptModelSnapshot {
+        self.inner
+            .lock_state()
+            .model
+            .snapshot()
+            .expect("an admissible selection")
     }
 
     pub(crate) fn has_current_attempt(&self) -> bool {
@@ -6265,6 +6377,12 @@ pub enum InboundAdmissionError {
         /// The human-readable failure diagnostic.
         message: String,
     },
+    /// The Session's published Model Catalog does not admit its configured
+    /// selection: no work is accepted until a valid selection is committed.
+    ModelUnavailable {
+        /// Why the selection is unavailable.
+        diagnostic: String,
+    },
     /// The authoritative mailbox rejected the message.
     Mailbox(MailboxError),
 }
@@ -6282,6 +6400,12 @@ impl core::fmt::Display for InboundAdmissionError {
                 f,
                 "the conversation runtime durability authority failed: {message}"
             ),
+            Self::ModelUnavailable { diagnostic } => {
+                write!(
+                    f,
+                    "the configured session model is unavailable: {diagnostic}"
+                )
+            }
             Self::Mailbox(error) => error.fmt(f),
         }
     }
@@ -6378,6 +6502,9 @@ pub enum ManualCompactionError {
     Busy,
     /// The runtime's durable authority is already failed.
     DurabilityFailed { message: String },
+    /// The Session's published Model Catalog does not admit its configured
+    /// selection; a summary needs a valid one.
+    ModelUnavailable { diagnostic: String },
     /// Planning, summary generation, cancellation, or fit validation failed
     /// before a durable transition committed.
     Context(ContextError),
@@ -6396,6 +6523,10 @@ impl core::fmt::Display for ManualCompactionError {
             Self::DurabilityFailed { message } => write!(
                 formatter,
                 "the conversation runtime durability authority failed: {message}"
+            ),
+            Self::ModelUnavailable { diagnostic } => write!(
+                formatter,
+                "the configured session model is unavailable: {diagnostic}"
             ),
             Self::Context(error) => formatter.write_str(&error.message),
             Self::Durable { message } => write!(
@@ -6503,6 +6634,18 @@ fn invalid_model(error: &ModelInvocationError) -> ModelUpdateError {
 /// # Errors
 ///
 /// Returns the engine configuration error.
+/// [`validate_context_policy`] for a Session's model state. An unavailable
+/// selection resolves no budget and admits no work, so there is nothing to
+/// fit; the selection that replaces it is validated when it is applied.
+pub(crate) fn validate_model_context(
+    policy: &SessionContextPolicy,
+    model: &SessionModelState,
+) -> Result<(), crate::context::ContextError> {
+    model.snapshot().map_or(Ok(()), |snapshot| {
+        validate_context_policy(policy, &snapshot)
+    })
+}
+
 pub(crate) fn validate_context_policy(
     policy: &SessionContextPolicy,
     model: &AttemptModelSnapshot,

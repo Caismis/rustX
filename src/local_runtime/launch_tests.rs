@@ -62,23 +62,33 @@ struct Fixture {
 #[test]
 fn cfg279_structured_parameters_check_show_and_project_overlay_are_side_effect_free() {
     let f = Fixture::new();
-    f.user(json!({"agent":{"model":{"model":"host/one", "request_params":{"provider":{"order":["a","b"],"allow_fallbacks":true}}}}}));
+    f.user(json!({"agent":{"model":{"model":"host/one", "request_params":"{\"provider\":{\"order\":[\"a\",\"b\"],\"allow_fallbacks\":true}}"}}}));
     let file = f.host.launch_directory.join("rustx.toml");
     for (parameters, expected_path) in [
         (
-            "provider = {order = ['c']}\nsecret = 'SECRET_PROVIDER_VALUE'",
+            r#"request_params = '{"provider":{"order":["c"]},"secret":"SECRET_PROVIDER_VALUE","unset":null}'"#,
             None,
         ),
         (
-            "items = [{when = true}, {when = 1979-05-27}]\nsecret = 'SECRET_PROVIDER_VALUE'",
-            Some("agent.model.request_params.items[1].when"),
+            r#"request_params = '{"provider":{"order":["c"],"order":[]},"secret":"SECRET_PROVIDER_VALUE"}'"#,
+            Some("agent.model.request_params"),
+        ),
+        (
+            r#"request_params = '{"secret":"SECRET_PROVIDER_VALUE",}'"#,
+            Some("agent.model.request_params"),
+        ),
+        (
+            r#"request_params = '["SECRET_PROVIDER_VALUE"]'"#,
+            Some("agent.model.request_params"),
+        ),
+        (
+            "request_params = { secret = 'SECRET_PROVIDER_VALUE' }",
+            Some("agent.model.request_params"),
         ),
     ] {
         std::fs::write(
             &file,
-            format!(
-                "[agent.model]\nmodel = 'host/one'\n[agent.model.request_params]\n{parameters}"
-            ),
+            format!("[agent.model]\nmodel = 'host/one'\n{parameters}\n"),
         )
         .unwrap();
         for operation in ["config_check", "config_show"] {
@@ -90,12 +100,17 @@ fn cfg279_structured_parameters_check_show_and_project_overlay_are_side_effect_f
             if let Some(path) = expected_path {
                 assert_eq!(report.validity, super::diagnostics::Validity::Invalid);
                 assert_eq!(report.diagnostics[0].path, path);
+                assert_eq!(report.diagnostics[0].line, Some(3));
             } else {
                 assert_eq!(report.validity, super::diagnostics::Validity::Valid);
                 let launch = launch.unwrap();
                 assert_eq!(
                     launch.config.initial_model().request_params["provider"],
                     json!({"order":["c"]})
+                );
+                assert_eq!(
+                    launch.config.initial_model().request_params["unset"],
+                    serde_json::Value::Null
                 );
             }
         }
@@ -1587,14 +1602,14 @@ fn precedence_absence_empty_and_whole_entries_keep_provenance() {
     );
     assert_eq!(builtin.provenance["agent_id"], Origin::Builtin);
     f.mcp(true, json!({"service":{"command":"old-command","args":["old"]},"retained":{"command":"retained"}}));
-    f.user(json!({"agent_id": "user", "context": {"reserve_tokens":2000,"keep_recent_tokens":6000}, "environment": {"USER_ENTRY":"one","REPLACED":"old"},  "subagents": {}, "agent": {"model": {"model":"host/one", "reasoning_profile":{"mode":"catalog_default"}}, "tools": {"builtin": ["read","bash"]}}}));
+    f.user(json!({"agent_id": "user", "context": {"reserve_tokens":2000,"keep_recent_tokens":6000}, "environment": {"USER_ENTRY":"one","REPLACED":"old"},  "subagents": {}, "agent": {"model": {"model":"host/one", "profile":"custom"}, "tools": {"builtin": ["read","bash"]}}}));
     f.mcp(false, json!({"service":{"command":"new-command"}}));
     f.project(
         json!({"context": {"reserve_tokens":3000}, "environment": {"REPLACED":"new"},  "subagents": {}, "agent": {"model": {"model":"host/two"}, "tools": {"builtin": []}}}),
     );
     let resolved = f.resolve();
     assert!(matches!(
-        resolved.provenance["agent.model.reasoning_profile"],
+        resolved.provenance["agent.model.profile"],
         Origin::Workspace { .. }
     ));
     assert_eq!(resolved.config.agent_id.as_str(), "user");
@@ -2507,7 +2522,7 @@ mod session_resolution {
         let f = Fixture::new();
         let (manager, input) = f.request.session_input(&f.host).unwrap();
         let a = manager.resolve_session(&input).unwrap();
-        f.user(json!({"agent":{"model":{"model":"host/two", "request_params":{"temperature":0.3}}, "skills": []}}));
+        f.user(json!({"agent":{"model":{"model":"host/two", "request_params":"{\"temperature\":0.3}"}, "skills": []}}));
         let b = manager.resolve_session(&input).unwrap();
         assert_eq!(a.session_model().model.to_string(), "host/one");
         assert_eq!(b.session_model().model.to_string(), "host/two");
@@ -2530,7 +2545,7 @@ mod session_resolution {
     #[test]
     fn explicit_session_model_is_whole_state_and_beats_current_defaults() {
         let f = Fixture::new();
-        f.user(json!({"agent":{"model":{"model":"host/one", "request_params":{"temperature":0.3}, "max_output_tokens":{"mode":"limit","tokens":1024}}}}));
+        f.user(json!({"agent":{"model":{"model":"host/one", "request_params":"{\"temperature\":0.3}", "max_output_tokens":{"mode":"limit","tokens":1024}}}}));
         let (manager, mut input) = f.request.session_input(&f.host).unwrap();
         let omitted = manager.resolve_session(&input).unwrap();
         assert!(!omitted.session_model().request_params.is_empty());
@@ -2541,7 +2556,7 @@ mod session_resolution {
         assert_eq!(explicit.session_model(), &selected);
         assert!(explicit.session_model().request_params.is_empty());
         f.user(
-            json!({"agent":{"model":{"model":"host/one", "request_params":{"temperature":0.8}}}}),
+            json!({"agent":{"model":{"model":"host/one", "request_params":"{\"temperature\":0.8}"}}}),
         );
         assert_eq!(
             manager.resolve_session(&input).unwrap().session_model(),
@@ -2779,7 +2794,7 @@ mod session_resolution {
 
     #[test]
     fn whole_session_model_provenance_covers_every_field_and_catalog_default_choice() {
-        use crate::model::catalog::ReasoningProfileId;
+        use crate::model::catalog::ModelProfileId;
         use crate::model::session::SummaryModelPolicy;
         let f = Fixture::new();
         let path = f.host.config_directory.join("rustx.toml");
@@ -2787,18 +2802,19 @@ mod session_resolution {
             toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let entry = &mut catalog["models"]["host/one"];
         entry["capabilities"]["reasoning"] = json!(true);
-        entry["reasoning"] = json!({"default_profile":"off", "profiles":{"off":{"enabled":false},"on":{"enabled":true,"request_params":{"reasoning_effort":"high"}}}});
+        entry["default_profile"] = json!("off");
+        entry["profiles"] = json!({"off":{"reasoning_enabled":false},"on":{"reasoning_enabled":true,"request_params":"{\"reasoning_effort\":\"high\"}"}});
         std::fs::write(path, toml::to_string_pretty(&catalog).unwrap()).unwrap();
         let (manager, mut input) = f.request.session_input(&f.host).unwrap();
         let mut model = SessionModelConfig::of(ModelRef::parse("host/one").unwrap());
-        model.reasoning_profile = Some(ReasoningProfileId::parse("on").unwrap());
+        model.profile = Some(ModelProfileId::parse("on").unwrap());
         model
             .request_params
             .insert("custom".into(), json!("secret-model-parameter"));
         model.max_output_tokens = Some(1024);
         model.summary_model = SummaryModelPolicy::Explicit {
             model: ModelRef::parse("host/two").unwrap(),
-            reasoning_profile: None,
+            profile: None,
             request_params: serde_json::Map::default(),
             max_output_tokens: Some(512),
         };

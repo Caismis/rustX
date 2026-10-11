@@ -276,6 +276,150 @@ impl<'de> Deserialize<'de> for StrictValue {
     }
 }
 
+/// The declared protocol properties whose value is provider-native request
+/// parameters: `snake_case` in authored documents, `camelCase` in runtime
+/// selections and views.
+const REQUEST_PARAMS: [&str; 2] = ["request_params", "requestParams"];
+
+/// Whether every provider-native request-parameter number of one raw request
+/// text means exactly the value the text spells.
+///
+/// `serde_json` hands every decoder only the binary64 value nearest a decimal
+/// literal, so `0.12345678901234567890` is already `0.12345678901234568` when
+/// any `Deserialize` sees it: validating a decoded value can no longer tell
+/// that the client meant another number. This reads the original literals of
+/// already syntactically valid JSON text instead, before any DTO exists. Only
+/// literals inside a property the native request schema declares as
+/// [`REQUEST_PARAMS`] are held to the binary64-exact domain (see
+/// [`crate::model::invocation::exact_json_number`]); free-form JSON elsewhere,
+/// even under a key of the same name, keeps its own semantics.
+pub(super) fn request_params_numbers_are_exact(json: &str) -> bool {
+    enum Frame {
+        /// The byte span of the current key token, quotes included.
+        Object {
+            key: Option<(usize, usize)>,
+            expect_key: bool,
+        },
+        Array {
+            index: usize,
+        },
+    }
+    static SCHEMA: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
+    let schema = SCHEMA.get_or_init(|| {
+        serde_json::to_value(schemars::schema_for!(super::protocol::Request)).expect("Rust schema")
+    });
+    let bytes = json.as_bytes();
+    let mut stack = Vec::new();
+    let mut at = 0;
+    while let Some(&byte) = bytes.get(at) {
+        match byte {
+            b'"' => {
+                let start = at;
+                at += 1;
+                while bytes.get(at).is_some_and(|&byte| byte != b'"') {
+                    at += if bytes[at] == b'\\' { 2 } else { 1 };
+                }
+                at += 1;
+                if let Some(Frame::Object {
+                    key,
+                    expect_key: expect @ true,
+                }) = stack.last_mut()
+                {
+                    *key = Some((start, at));
+                    *expect = false;
+                }
+                continue;
+            }
+            b'-' | b'0'..=b'9' => {
+                let start = at;
+                while bytes.get(at).is_some_and(|byte| {
+                    matches!(byte, b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9')
+                }) {
+                    at += 1;
+                }
+                if !crate::model::invocation::exact_json_number(&json[start..at]) {
+                    let path = stack
+                        .iter()
+                        .map(|frame| match *frame {
+                            Frame::Object { key, .. } => key
+                                .and_then(|(start, end)| json.get(start..end))
+                                .and_then(|token| serde_json::from_str(token).ok())
+                                .map(Segment::Key),
+                            Frame::Array { index } => Some(Segment::Index(index)),
+                        })
+                        .collect::<Option<Vec<_>>>();
+                    if path.is_some_and(|path| declares_request_params(schema, schema, &path)) {
+                        return false;
+                    }
+                }
+                continue;
+            }
+            b'{' => stack.push(Frame::Object {
+                key: None,
+                expect_key: true,
+            }),
+            b'[' => stack.push(Frame::Array { index: 0 }),
+            b'}' | b']' => {
+                stack.pop();
+            }
+            b',' => match stack.last_mut() {
+                Some(Frame::Object { expect_key, .. }) => *expect_key = true,
+                Some(Frame::Array { index }) => *index += 1,
+                None => {}
+            },
+            _ => {}
+        }
+        at += 1;
+    }
+    true
+}
+
+/// One step from a JSON value to a member or element.
+enum Segment {
+    Key(String),
+    Index(usize),
+}
+
+/// Whether `path` from a value of `schema` passes through a declared
+/// [`REQUEST_PARAMS`] property. Undeclared members (`additionalProperties`)
+/// and free-form values never do.
+fn declares_request_params(schema: &Value, root: &Value, path: &[Segment]) -> bool {
+    if schema["$ref"]
+        .as_str()
+        .and_then(|reference| reference.strip_prefix('#'))
+        .and_then(|pointer| root.pointer(pointer))
+        .is_some_and(|target| declares_request_params(target, root, path))
+    {
+        return true;
+    }
+    if ["oneOf", "anyOf", "allOf"].iter().any(|keyword| {
+        schema[*keyword].as_array().is_some_and(|branches| {
+            branches
+                .iter()
+                .any(|branch| declares_request_params(branch, root, path))
+        })
+    }) {
+        return true;
+    }
+    let Some((first, rest)) = path.split_first() else {
+        return false;
+    };
+    match first {
+        Segment::Key(key) => match schema["properties"].get(key) {
+            Some(_) if REQUEST_PARAMS.contains(&key.as_str()) => true,
+            Some(property) => declares_request_params(property, root, rest),
+            None => {
+                schema["additionalProperties"].is_object()
+                    && declares_request_params(&schema["additionalProperties"], root, rest)
+            }
+        },
+        Segment::Index(index) => schema["prefixItems"]
+            .get(index)
+            .or_else(|| schema["items"].is_object().then_some(&schema["items"]))
+            .is_some_and(|items| declares_request_params(items, root, rest)),
+    }
+}
+
 macro_rules! envelope {
     ($ty:ty) => {
         impl Serialize for $ty {
@@ -435,7 +579,7 @@ mod tests {
             "the complete nested public surface was audited"
         );
         let types = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server/v38.ts"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server/v39.ts"),
         )
         .unwrap();
         for domain in [
@@ -450,6 +594,136 @@ mod tests {
                 types.contains(&format!("export type {domain} = string;")),
                 "{domain} must remain a distinct named string domain"
             );
+        }
+    }
+
+    /// Raw request text, never a `Value`: a `Value` already holds the rounded
+    /// number, which is exactly what this boundary must not depend on.
+    fn set_model(params: &str) -> String {
+        format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"session/setModel","params":{{"target":{{"session_id":"s","conversation_id":"c","runtime_incarnation":"1","attachment_id":"a"}},"config":{{"model":"p/m","requestParams":{params}}}}}}}"#
+        )
+    }
+
+    #[test]
+    fn request_param_literals_are_judged_on_the_raw_text() {
+        for literal in [
+            "0.12345678901234567890",
+            "-1.234567890123456789",
+            "9007199254740993",
+            "-9007199254740993",
+            "1152921504606846976",
+            "18446744073709551616",
+            "1e400",
+        ] {
+            for params in [
+                format!(r#"{{"t":{literal}}}"#),
+                format!(r#"{{"a":[1,{{"b":[0.5,{{"c":[[{literal}]]}}]}}]}}"#),
+                format!(r#"{{"温度 🔥":{literal}}}"#),
+                format!(r#"{{"s":"x\"9\\","n":null,"k":[true,false],"z":{literal}}}"#),
+            ] {
+                assert!(
+                    !request_params_numbers_are_exact(&set_model(&params)),
+                    "{params}"
+                );
+            }
+            // Strings never hold numbers, however they look or are escaped.
+            for params in [
+                format!(r#"{{"t":"{literal}"}}"#),
+                format!(r#"{{"{literal}":1}}"#),
+                format!(r#"{{"q":"\"{literal}\\\"","r":"\u0022{literal}"}}"#),
+            ] {
+                assert!(
+                    request_params_numbers_are_exact(&set_model(&params)),
+                    "{params}"
+                );
+            }
+            // A key spelled with escapes is the same declared property.
+            let escaped = set_model(&format!(r#"{{"t":{literal}}}"#))
+                .replace("requestParams", r"request\u0050arams");
+            assert!(!request_params_numbers_are_exact(&escaped));
+            // The same key elsewhere is not provider-native: the numeric
+            // domain of other fields is the typed decoder's to judge.
+            let target = set_model("{}").replace(
+                r#""attachment_id":"a""#,
+                &format!(r#""attachment_id":"a","requestParams":{{"t":{literal}}}"#),
+            );
+            assert!(request_params_numbers_are_exact(&target));
+            let list = format!(
+                r#"{{"jsonrpc":"2.0","id":1,"method":"session/list","params":{{"offset":{literal},"limit":1}}}}"#
+            );
+            assert!(request_params_numbers_are_exact(&list));
+        }
+        for literal in [
+            "0.1",
+            "1.5",
+            "1.50",
+            "15e-1",
+            "9007199254740992",
+            "-9007199254740991",
+            "1e20",
+            "1e300",
+            "5e-324",
+            "-0",
+            "0.0",
+            "10000000000000000000",
+            "5.357830195732913e-76",
+        ] {
+            let params =
+                format!(r#"{{"t":{literal},"nested":{{"list":[{literal},{{"x":{literal}}}]}}}}"#);
+            assert!(
+                request_params_numbers_are_exact(&set_model(&params)),
+                "{literal}"
+            );
+        }
+    }
+
+    /// The numeric domain reaches every provider-native parameter entry point
+    /// and nothing else: each declared property of that name is a JSON object
+    /// of opaque parameters, and the shared authored type is only reachable
+    /// through one.
+    #[test]
+    fn every_request_params_property_is_held_to_the_raw_numeric_domain() {
+        let native =
+            serde_json::to_value(schemars::schema_for!(super::super::protocol::Request)).unwrap();
+        let mut owners = std::collections::BTreeSet::new();
+        for (name, definition) in native["$defs"].as_object().unwrap() {
+            let mut stack = vec![definition];
+            while let Some(node) = stack.pop() {
+                if let Some(object) = node.as_object() {
+                    if let Some(properties) = object.get("properties").and_then(Value::as_object) {
+                        for (key, property) in properties {
+                            if REQUEST_PARAMS.contains(&key.as_str()) {
+                                owners.insert(name.clone());
+                                let text = property.to_string();
+                                assert!(
+                                    text.contains("#/$defs/RequestParams")
+                                        || property["additionalProperties"] == true,
+                                    "{name}.{key} is not an opaque parameter object"
+                                );
+                            } else {
+                                assert!(
+                                    !property.to_string().contains("\"#/$defs/RequestParams\""),
+                                    "{name}.{key} carries parameters under another name"
+                                );
+                            }
+                        }
+                    }
+                    stack.extend(object.values());
+                } else if let Some(array) = node.as_array() {
+                    stack.extend(array);
+                }
+            }
+        }
+        for owner in [
+            "Model",
+            "Profile",
+            "ModelLayer",
+            "SummaryAuthoring",
+            "SessionModelConfig",
+            "SummaryModelPolicy",
+        ] {
+            assert!(owners.contains(owner), "{owner} is not covered: {owners:?}");
         }
     }
 

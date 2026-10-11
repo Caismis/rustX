@@ -271,7 +271,7 @@ export function renderSubagentDetail(subagent: RuntimeClientAgent): string {
   }
   if (profile != null) {
     lines.push(
-      `- model: \`${profile.model}\`${profile.reasoning_profile == null ? "" : ` · reasoning ${profile.reasoning_profile}`}`,
+      `- model: \`${profile.model}\`${profile.profile == null ? "" : ` · profile ${profile.profile}`} · reasoning ${profile.reasoning_enabled ? "on" : "off"}`,
     );
   }
   if (observation != null) {
@@ -331,9 +331,9 @@ function renderSubagent(
   }
   const profile = subagent.execution_profile;
   if (profile != null) {
-    const reasoning = profile.reasoning_profile;
+    const selected = profile.profile;
     lines.push(
-      `  ${role.meta(bounded(reasoning == null ? profile.model : `${profile.model} · ${reasoning}`))}`,
+      `  ${role.meta(bounded(selected == null ? profile.model : `${profile.model} · ${selected}`))}`,
     );
   }
   return lines.join("\n");

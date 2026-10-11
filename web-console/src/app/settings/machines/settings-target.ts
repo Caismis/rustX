@@ -1,5 +1,5 @@
 import { assign, enqueueActions, fromPromise, raise, setup, stateIn, type ActorRefFrom, type SnapshotFrom } from 'xstate';
-import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../../../../protocol/app-server/v38';
+import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../../../../protocol/app-server/v39';
 import { isOutcomeUncertain, RpcFailure, type ConnectionState } from '../../../client/app-server';
 import { WorkspaceHostError } from '../../../workspaces/host';
 import { applicationScope, selectedRevision, type RevisionSelector, type SettingsTarget } from '../projection';
@@ -131,6 +131,12 @@ export interface SettingsTargetContext {
    * over a long-lived target; a later edit starts a fresh transaction from the
    * revision the editor then presents. */
   units: Record<string, UnitTransactionRef>;
+  /** Per unit identity, how many times its owner reset what editors present:
+   * a discarded intent, a reviewed revision, or a retired transaction (a
+   * discard or a settled commit with nothing left to own). It outlives the
+   * transactions it counts, so an editor tells an owner reset apart from a new
+   * transaction beginning, and from an unrelated source observation. */
+  resets: Record<string, number>;
   nextToken: number;
 }
 
@@ -145,6 +151,7 @@ export type SettingsTargetEvent =
   | { type: 'UNIT.DISCARD'; identity: string }
   | { type: 'UNIT.SUBMIT'; identity: string; selector: RevisionSelector; revision: string; mutation: SourceMutation }
   | { type: 'UNIT.RETIRED'; identity: string }
+  | { type: 'UNIT.RESET'; identity: string }
   /** Raised once `UNIT.DISCARD` has been forwarded to the unit, so the
    * `mutation` region answers the same gesture from whatever state it is in. */
   | { type: 'INTENT.DISCARDED'; identity: string }
@@ -502,6 +509,12 @@ export const settingsTargetMachine = setup({
       });
     }),
 
+    countReset: assign({
+      resets: ({ context, event }) => {
+        const { identity } = event as Extract<SettingsTargetEvent, { type: 'UNIT.RESET' | 'UNIT.RETIRED' }>;
+        return { ...context.resets, [identity]: (context.resets[identity] ?? 0) + 1 };
+      },
+    }),
     /** Open one submission against the exact CAS revision its transaction has
      * pinned, and hand the transaction the token that identifies it. */
     openSubmission: enqueueActions(({ context, event, enqueue }) => {
@@ -580,6 +593,7 @@ export const settingsTargetMachine = setup({
     convergenceError: '',
     maintenanceError: '',
     units: {},
+    resets: {},
     nextToken: 1,
   }),
   type: 'parallel',
@@ -867,7 +881,8 @@ export const settingsTargetMachine = setup({
     'UNIT.EDIT': { actions: ['ensureUnit', 'forwardEdit'] },
     'UNIT.REVIEW': { actions: 'forwardReview' },
     'UNIT.DISCARD': { actions: ['forwardDiscard', raise(({ event }) => ({ type: 'INTENT.DISCARDED' as const, identity: event.identity }))] },
-    'UNIT.RETIRED': { actions: 'retireUnit' },
+    'UNIT.RETIRED': { actions: ['retireUnit', 'countReset'] },
+    'UNIT.RESET': { actions: 'countReset' },
   },
 });
 

@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { AgentMeters, meterDemand, type MeterOutcome, type MeterScope } from '../src/client/agent-meters';
-import type { RuntimeClientAgent } from '../../protocol/app-server/v38';
+import type { RuntimeClientAgent } from '../../protocol/app-server/v39';
 import { agentMetrics } from './agent-statistics-fixture';
 import { cfg3Target } from './cfg3-fixture';
 const agent = (id: number, revision = '1') => ({ agent_id: String(id), activation_id: 'activation', child_conversation_id: `child-${id}`, state: 'inactive', activation_state: 'succeeded', observation: { revision } }) as RuntimeClientAgent;

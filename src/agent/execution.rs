@@ -2742,7 +2742,7 @@ impl<'a> AgentExecution<'a> {
             self.context_runtime.resource_revision,
             request.invocation.clone(),
             primary.context_window(),
-            primary.reasoning_profile().cloned(),
+            primary.profile().cloned(),
             primary.reasoning_enabled(),
             request.tools.clone(),
             self.capability.snapshot().revision(),
@@ -7077,7 +7077,7 @@ mod tests {
             attempt_id: AttemptId::new("attempt-1"),
             conversation: ConversationState::new(),
             initial_turn_trigger: InitialTurnTrigger::Continuation,
-            model: scripted_session_model(adapter).snapshot(),
+            model: scripted_session_model(adapter).snapshot().unwrap(),
         }
     }
 
@@ -7356,7 +7356,7 @@ mod tests {
             clock: clock.clone(),
             store: store.clone(),
         });
-        request.model = scripted_session_model(adapter).snapshot();
+        request.model = scripted_session_model(adapter).snapshot().unwrap();
         let tool_runtime = tool_runtime_with_store(id.as_str(), Some(store.clone()));
         let (_dir, coordinator, lease) = capability_lease(ToolRegistry::new(), &tool_runtime).await;
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
@@ -9143,7 +9143,7 @@ mod tests {
             attempt_id: AttemptId::new("attempt-1"),
             conversation: ConversationState::new(),
             initial_turn_trigger: InitialTurnTrigger::Continuation,
-            model: scripted_session_model(adapter.clone()).snapshot(),
+            model: scripted_session_model(adapter.clone()).snapshot().unwrap(),
         }
     }
 

@@ -4,7 +4,7 @@ import { StateDot } from '../../presentation/primitives/StateDot';
 import { displayText, message as uiMessage, type DisplayText } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import type { AgentStatistics, RuntimeClientAgent, RuntimeClientJob, RuntimeClientTranscriptPage, MethodResult, WorkflowRunView, WorkflowRunId } from '../../../../protocol/app-server/v38';
+import type { AgentStatistics, RuntimeClientAgent, RuntimeClientJob, RuntimeClientTranscriptPage, MethodResult, WorkflowRunView, WorkflowRunId } from '../../../../protocol/app-server/v39';
 import type { Observation } from '../../client/session-lifecycle/port';
 import { AppServerClient, RpcFailure } from '../../client/app-server';
 import { json } from '../../bindings/projection';

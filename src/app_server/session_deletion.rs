@@ -1,6 +1,6 @@
 //! App Server-owned bounded Session deletion wire projections. Native recovery authority is
 //! deliberately absent: clients confirm identity and revision, never a workset.
-// Schema names are pinned to the published App Server v38 definitions. They
+// Schema names are pinned to the published App Server v39 definitions. They
 // do not imply Runtime Client ownership or expose a Runtime Client alias.
 use crate::local_runtime::SessionId;
 use serde::{Deserialize, Serialize};

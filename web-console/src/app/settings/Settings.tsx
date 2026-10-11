@@ -6,7 +6,7 @@ import { McpIcon } from './mcp/McpIcon';
 import { McpPage } from './mcp/McpPage';
 import { SettingsScopeMenu } from './SettingsScopeMenu';
 import { shallowEqual, useSelector } from '@xstate/react';
-import type { SourceScope } from '../../../../protocol/app-server/v38';
+import type { SourceScope } from '../../../../protocol/app-server/v39';
 import type { AppServerClient } from '../../client/app-server';
 import { Button } from '../../presentation/primitives/Button';
 import { UnitForm } from './forms/bridge';
@@ -30,7 +30,7 @@ import { ToolsPage } from './tools/ToolsPage';
 import { ExtensionsPage, type ExtensionFilter } from './extensions/ExtensionsPage';
 import { AdvancedPage } from './advanced/AdvancedPage';
 import {
-  catalogIdentities, configAuthoring, settingsLifecycle,
+  catalogIdentities, catalogProfiles, configAuthoring, settingsLifecycle,
   settingsTargetKey, settingsTargetLabel, settingsTargetScope, type SettingsTarget,
 } from './projection';
 import {
@@ -144,6 +144,7 @@ function SettingsDialog({ client, host, theme = 'system', setTheme, connection, 
   // Models page: this scope's authored identities, plus the native effective
   // ones for a Workspace when resolution produced them.
   const models = catalogIdentities(source, scope, 'models');
+  const profiles = catalogProfiles(source, scope);
   const lifecycle = settingsLifecycle({ connection: transport.connection, hasSource: !!observed, targetValid, readError });
   // A page change remounts the editor subtree so its local picker state does
   // not leak across pages. Editing transactions are deliberately not part of
@@ -163,7 +164,7 @@ function SettingsDialog({ client, host, theme = 'system', setTheme, connection, 
   const structured = config.state === 'structured';
   const body = !source || !selected ? null : <fieldset disabled={!editable} className={css.editor}>
     {current === 'models' && (structured
-      ? <ModelsPage source={source} scope={scope} revision={config.revision} models={models} focus={focus.models} onFocus={onFocus} />
+      ? <ModelsPage source={source} scope={scope} revision={config.revision} models={models} profiles={profiles} focus={focus.models} onFocus={onFocus} />
       : <MalformedNotice config={config} />)}
     {current === 'agent' && (structured
       ? <AgentPage document={config.document} scope={scope} revision={config.revision} />
@@ -179,7 +180,7 @@ function SettingsDialog({ client, host, theme = 'system', setTheme, connection, 
       focus={focus.mcp} onFocus={onFocus} refresh={() => actor.send({type:'REFRESH'})} refreshing={busy || reconciling}
       scopeControl={<SettingsScopeMenu target={mcpTarget} host={host} onSelect={next => { onFocus(undefined); setMcpTarget(next); }}/>} />}
     {current === 'extensions' && <ExtensionsPage source={source} scope={scope}
-      revision={structured ? config.revision : undefined} models={models} focus={focus.extensions} onFocus={onFocus}
+      revision={structured ? config.revision : undefined} models={models} profiles={profiles} focus={focus.extensions} onFocus={onFocus}
       filter={extensionFilter} onFilter={setExtensionFilter} refresh={() => actor.send({type:'RECONCILE'})} refreshing={busy || reconciling}
       scopeControl={<SettingsScopeMenu key={`${transport.endpoint}:${transport.authorityRevision}`} target={target} host={host} onSelect={next => { navigation.send({type:'OPEN',target:next}); navigation.send({type:'SELECT',page:'extensions'}); }}/>} />}
     {current === 'advanced' && <AdvancedPage source={source} scope={scope}

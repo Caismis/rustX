@@ -41,7 +41,10 @@ path = "src/bin/interactive_supervisor.rs"
 clap = { version = "4.6.7", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
 uuid = { version = "1.24", features = ["v7"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# Correctly rounded float parsing: authored request-parameter numbers must read
+# back as exactly the binary64 value that was written (and that JSON clients
+# print), or a native source round trip would silently move them.
+serde_json = { version = "1", features = ["float_roundtrip"] }
 thiserror = "2"
 # PEP 508 grammar and PyPA normalized distribution identities for managed
 # Python requirements. Chumsky is direct only to normalize pep-508's public

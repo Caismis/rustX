@@ -1294,7 +1294,7 @@ pub(crate) fn translate_request(
         translate_inputs(request, continuation_variant)?;
 
     // Every runtime-owned structural field is written first; no reasoning
-    // field is ever synthesized here, so the selected reasoning profile's
+    // field is ever synthesized here, so the selected Model Profile's
     // configured parameters are exactly what reaches the wire.
     let mut request_value = serde_json::json!({
         "model": request.model(),

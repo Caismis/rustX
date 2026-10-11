@@ -1,4 +1,4 @@
-schema_version = 9
+schema_version = 10
 agent_id = "default-agent"
 
 [context]
@@ -29,13 +29,9 @@ workflows = ["parallel_review", "implement_and_review"]
 
 [agent.model]
 model = "example/demo-model"
-
-[agent.model.request_params]
-temperature = 0.1
-
-[agent.model.reasoning_profile]
-mode = "profile"
-name = "off"
+profile = "off"
+# Explicit overrides may add keys the selected Profile does not own.
+request_params = '{"top_p":0.9}'
 
 [agent.model.max_output_tokens]
 mode = "limit"
@@ -63,7 +59,8 @@ enabled = true
 [agent.tools]
 builtin = ["read", "write", "edit", "glob", "grep", "bash", "present"]
 
-# Explicit provider/model declarations. Provider request overlays are structured TOML tables.
+# Explicit provider/model declarations. Provider-native request parameters are
+# JSON-encoded object strings, passed opaquely to the provider.
 # TOML configuration; fixed Workflows use YAML and model-facing resources use Markdown.
 
 [providers.example]
@@ -76,8 +73,8 @@ id = "demo-model"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
-[models."example/demo-model".request_params]
-temperature = 0.2
+# Each Profile is a complete, independent invocation preset.
+default_profile = "off"
 
 [models."example/demo-model".capabilities]
 input_modalities = ["text"]
@@ -85,16 +82,16 @@ output_modalities = ["text"]
 tool_calls = true
 reasoning = true
 
-[models."example/demo-model".reasoning]
-default_profile = "off"
+[models."example/demo-model".profiles.off]
+reasoning_enabled = false
+request_params = '{"temperature":0.2}'
 
-[models."example/demo-model".reasoning.profiles.off]
-enabled = false
-request_params = {}
-
-[models."example/demo-model".reasoning.profiles.on]
-enabled = true
-request_params = { reasoning_effort = "low" }
+[models."example/demo-model".profiles.on]
+reasoning_enabled = true
+max_output_tokens = 2048
+request_params = '''
+{"temperature": 0.2, "reasoning_effort": "low"}
+'''
 
 [models."example/demo-model".compat]
 chat_max_tokens_field = "max_completion_tokens"

@@ -10,7 +10,7 @@ import { useTranslation, useNotice } from '../../locale/react';
 import { useState } from 'react';
 import type { ChangeEvent, KeyboardEvent } from 'react';
 import clsx from 'clsx';
-import type { QuestionSpecification, QuestionnaireSubmission } from '../../../../protocol/app-server/v38';
+import type { QuestionSpecification, QuestionnaireSubmission } from '../../../../protocol/app-server/v39';
 import { emptyDraft, submission, QuestionnaireValidationError, type QuestionDraft } from '../../bindings/questionnaire';
 import { message } from '../../locale/translation';
 import { Button } from '../../presentation/primitives/Button';

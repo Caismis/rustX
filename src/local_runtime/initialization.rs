@@ -106,8 +106,9 @@ pub(super) fn documents(request: &InitializationRequest) -> Result<[Vec<u8>; 1],
                 tool_calls: request.tool_calls.ok_or("init requires --tool-calls")?,
                 reasoning: request.reasoning.ok_or("init requires --reasoning")?,
             },
-            request_params: crate::toml_authoring::RequestParamsToml::default(),
-            reasoning: None,
+            request_params: None,
+            default_profile: None,
+            profiles: None,
             compat,
         }
     };
@@ -128,7 +129,7 @@ pub(super) fn documents(request: &InitializationRequest) -> Result<[Vec<u8>; 1],
             },
         )]),
     };
-    let bytes = toml::to_string_pretty(&catalog)
+    let bytes = crate::toml_authoring::write(&catalog)
         .map_err(|_| "cannot encode catalog")?
         .into_bytes();
     let parsed = ModelCatalog::from_toml_slice(&bytes).map_err(|_| "invalid model declaration; check protocol, limits, capabilities, and compatibility fields")?;
@@ -144,7 +145,7 @@ pub(super) fn documents(request: &InitializationRequest) -> Result<[Vec<u8>; 1],
         }),
         ..Default::default()
     };
-    let settings_bytes = toml::to_string_pretty(&settings)
+    let settings_bytes = crate::toml_authoring::write(&settings)
         .map_err(|_| "cannot encode settings")?
         .into_bytes();
     let config = super::config::CurrentRuntimeConfig::from_toml_slice(&settings_bytes)
@@ -398,7 +399,7 @@ mod tests {
             crate::toml_authoring::parse(&bytes[0]).unwrap();
         let model = authored.models.unwrap().into_values().next().unwrap();
         let path = root.path().join("model.toml");
-        std::fs::write(&path, toml::to_string(&model).unwrap()).unwrap();
+        std::fs::write(&path, crate::toml_authoring::write(&model).unwrap()).unwrap();
         let mut custom = InitializationRequest {
             template: Template::Custom,
             model_id: None,
@@ -443,8 +444,9 @@ mod tests {
             HostEnvironment::from_paths(workspace.clone(), root.path().join("home")).unwrap();
         let documents = documents(&declarations()).unwrap();
         let catalog = std::str::from_utf8(&documents[0]).unwrap();
-        assert!(catalog.contains("request_params"));
-        assert!(!catalog.contains("request_params_json"));
+        // An initialized Model declares no native parameters and no profiles.
+        assert!(!catalog.contains("request_params"));
+        assert!(!catalog.contains("profile"));
         let authored: super::super::authoring::RuntimeLayer =
             crate::toml_authoring::parse(&documents[0]).unwrap();
         assert!(
@@ -456,8 +458,7 @@ mod tests {
                 .next()
                 .unwrap()
                 .request_params
-                .0
-                .is_empty()
+                .is_none()
         );
 
         let result = initialize(&host, &documents);

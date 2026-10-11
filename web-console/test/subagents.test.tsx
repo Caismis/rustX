@@ -7,7 +7,7 @@ import { RuntimeFacts } from '../src/app/agent/Activity';
 import { agentDuration, SubagentScope, SubagentHeader, SubagentSurface } from '../src/app/agent/Subagents';
 import { cellKind } from '../src/app/trajectory/TrajectoryCell';
 import { Server, snapshot } from './fixture';
-import type { RuntimeClientAgent, MessageBlock } from '../../protocol/app-server/v38';
+import type { RuntimeClientAgent, MessageBlock } from '../../protocol/app-server/v39';
 const servers: Server[] = [];
 afterEach(() => { cleanup(); for (const server of servers.splice(0)) server.client.disconnect(); });
 const agent: RuntimeClientAgent = { agent_id: 'child', agent: 'Research', parent_agent_id: 'root', child_conversation_id: 'child-conversation', activation_id: 'activation', state: 'inactive', activation_state: 'succeeded', definition_digest: 'd', profile_digest: 'p', started_at: '2026-10-08T00:00:00Z', observation: { revision: '1', activity: { type: 'awaiting_activity' }, counters: { model_requests: 1, model_retries: 0, tool_executions: 0 } }, workspace: { logical_workspace: '/workspace', isolation: { type: 'shared' }, resource_state: 'none' } };

@@ -2,7 +2,7 @@
 //!
 //! A `RuntimeManifest` is the deterministic, immutable description of one
 //! attempt: agent identity and instructions, the catalog model reference and
-//! its selected reasoning profile, the capability set at a specific
+//! its selected Model Profile, the capability set at a specific
 //! monotonic revision, and context and execution limits. An attempt
 //! snapshots one manifest when it starts, and that snapshot is immutable for
 //! the attempt's lifetime.
@@ -14,7 +14,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::catalog::{ModelRef, ReasoningProfileId};
+use crate::model::catalog::{ModelProfileId, ModelRef};
 use crate::model::types::ModelProtocol;
 use crate::runtime::identity::{
     AgentId, AgentVersionId, CapabilityRevision, McpServerId, SkillId, SkillVersionId, ToolId,
@@ -23,7 +23,8 @@ use crate::tools::types::ToolOrigin;
 
 /// The current schema version of [`RuntimeManifest`]. M7 version 2 adds
 /// provider-independent `ToolOrigin` provenance to every tool binding.
-pub const MANIFEST_SCHEMA_VERSION: u16 = 2;
+/// Version 3 replaces the reasoning profile with the general Model Profile.
+pub const MANIFEST_SCHEMA_VERSION: u16 = 3;
 
 /// The immutable execution description of one attempt.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,22 +57,22 @@ pub struct AgentManifest {
     pub instructions: String,
 }
 
-/// The model binding and reasoning selection of one attempt.
+/// The model binding and Model Profile selection of one attempt.
 ///
-/// Reasoning is a model-declared *named profile*, never a universal effort
-/// enum: the runtime assigns no meaning to the profile name, and the
-/// profile's wire behaviour is exactly its configured provider request
-/// parameters.
+/// A Model Profile is a model-declared *named invocation preset*, never a
+/// universal effort enum: the runtime assigns no meaning to the profile
+/// name. Its reasoning state is explicit and its wire behaviour is exactly
+/// its configured provider request parameters.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelManifest {
     /// Protocol the adapter must speak.
     pub protocol: ModelProtocol,
     /// The fully qualified catalog model reference.
     pub model: ModelRef,
-    /// The selected reasoning profile, when the model declares any.
+    /// The selected Model Profile, when the model declares any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reasoning_profile: Option<ReasoningProfileId>,
-    /// Whether the selected profile semantically enables reasoning.
+    pub profile: Option<ModelProfileId>,
+    /// Whether the invocation semantically enables reasoning.
     pub reasoning_enabled: bool,
 }
 
@@ -158,7 +159,7 @@ mod tests {
         MANIFEST_SCHEMA_VERSION, McpBinding, ModelManifest, RuntimeManifest, SkillBinding,
         ToolBinding,
     };
-    use crate::model::catalog::{ModelRef, ReasoningProfileId};
+    use crate::model::catalog::{ModelProfileId, ModelRef};
     use crate::model::types::ModelProtocol;
     use crate::runtime::identity::{
         AgentId, AgentVersionId, CapabilityRevision, McpServerId, SkillId, SkillVersionId, ToolId,
@@ -177,7 +178,7 @@ mod tests {
             model: ModelManifest {
                 protocol: ModelProtocol::OpenAiResponses,
                 model: ModelRef::parse("provider-a/gpt-5-mini").expect("valid reference"),
-                reasoning_profile: Some(ReasoningProfileId::new("high")),
+                profile: Some(ModelProfileId::new("high")),
                 reasoning_enabled: true,
             },
             capabilities: CapabilitiesManifest {
@@ -224,6 +225,6 @@ mod tests {
     #[test]
     fn manifest_schema_version_is_explicit() {
         let value = serde_json::to_value(example_manifest()).expect("serialize manifest");
-        assert_eq!(value["schema_version"], 2);
+        assert_eq!(value["schema_version"], 3);
     }
 }

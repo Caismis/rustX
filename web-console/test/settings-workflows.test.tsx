@@ -3,7 +3,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { CapabilityInspection1, Model, Request1, SourceSettings } from '../../protocol/app-server/v38';
+import type { CapabilityInspection1, Model, Request1, SourceSettings } from '../../protocol/app-server/v39';
 import { settingsTransactionOwners } from '../src/app/settings/Settings';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { OutcomeUncertain } from '../src/client/app-server';
@@ -33,7 +33,7 @@ function deferred<T>() {
 const fullModel = (): Model => ({
   provider: 'transport', id: 'wire', protocol: 'openai_responses', context_window: '128000', max_output_tokens: 8192,
   capabilities: { input_modalities: ['text'], output_modalities: ['text'], tool_calls: true, reasoning: true },
-  reasoning: { default_profile: 'deep', profiles: { deep: { enabled: true, request_params: { effort: 'high' } } } },
+  default_profile: 'deep', profiles: { deep: { reasoning_enabled: true, request_params: { effort: 'high', unset: null } } },
   compat: { responses_storage: 'stateless' },
 });
 
@@ -63,7 +63,7 @@ it('S2-02 an edit reached through Provider → Model drill-down replaces the com
   fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   // The one field the user changed, and every other typed field unchanged —
-  // reasoning profiles and compatibility included.
+  // Model Profiles and compatibility included.
   expect(writes(s)[0].params.mutation).toEqual({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...fullModel(), context_window: '256000' } } });
 });
 

@@ -87,7 +87,7 @@ test('Harness New Conversation, permission, model, native process and Models con
     releaseObservation.resolve();
     await expect(permissions).toContainText('Full access');
     await expect(send).toBeEnabled();
-    const model = page.getByRole('button', { name: 'Model and reasoning', exact: true });
+    const model = page.getByRole('button', { name: 'Model and profile', exact: true });
     await expect(model).toBeEnabled(); await model.click();
     await page.getByRole('menuitem', { name: 'Model', exact: true }).click();
     await shot('06-new-conversation-model-picker');

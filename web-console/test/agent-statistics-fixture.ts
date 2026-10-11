@@ -1,4 +1,4 @@
-import type { AgentStatistics } from '../../protocol/app-server/v38';
+import type { AgentStatistics } from '../../protocol/app-server/v39';
 export const agentMetrics: AgentStatistics = {
   statistics: {
     turns: '3', steps: '8', completed_responses: '3', model_requests: '8', requests_with_usage: '7',

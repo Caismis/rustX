@@ -78,7 +78,7 @@ fn runtime_json(read_approval: &str, include_todo: bool) -> String {
     // no Todo extension unless a case asks for one.
     let builtin_tools = vec!["read", "bash", "job_status"];
     toml::to_string_pretty(&serde_json::json!({
-        "schema_version": 9,
+        "schema_version": 10,
         "agent_id": "agent-fnd06",
         "providers": {"fixture": {"base_url": "https://fixture.invalid/v1", "api_key": "fixture-key-fixture"}},
         "models": {MODEL: {"provider": "fixture", "id": "fnd06", "protocol": "openai_chat_completions", "context_window": 1_000_000, "max_output_tokens": 4096, "capabilities": {"input_modalities": ["text"], "output_modalities": ["text"], "tool_calls": true, "reasoning": false}, "compat": {"chat_reasoning_replay": "omit"}}},

@@ -102,7 +102,7 @@ impl LaunchFailure {
             Some(file.into()),
             failure.path.as_deref().unwrap_or("$"),
             if failure.path.is_some() {
-                "unsupported request parameter value"
+                "invalid request_params JSON string"
             } else if failure.syntax {
                 "malformed TOML"
             } else {

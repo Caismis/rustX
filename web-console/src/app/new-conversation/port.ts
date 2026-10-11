@@ -2,7 +2,7 @@ import { UploadFailure } from '../../client/uploads';
 import { modelPreferences } from '../model-preference';
 import { sameTarget, type AppServerClient } from '../../client/app-server';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
-import type { AttachmentTarget } from '../../../../protocol/app-server/v38';
+import type { AttachmentTarget } from '../../../../protocol/app-server/v39';
 import type { FirstSubmitPort } from './first-submit';
 
 export function firstSubmitPort(client: AppServerClient, host: ProductHostWorkspaces, navigationCurrent: () => boolean, opened: (id: string) => (() => boolean) | void, existing = false): FirstSubmitPort {

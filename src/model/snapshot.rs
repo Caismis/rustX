@@ -98,8 +98,8 @@ pub struct RequestSnapshot {
     pub invocation: ModelInvocationConfig,
     /// The model context limit frozen for this request.
     pub context_window_tokens: u64,
-    /// The selected reasoning profile identity, when any.
-    pub reasoning_profile: Option<crate::model::catalog::ReasoningProfileId>,
+    /// The selected Model Profile identity, when any.
+    pub profile: Option<crate::model::catalog::ModelProfileId>,
     /// The effective semantic reasoning state.
     pub reasoning_enabled: bool,
     /// The exact effective tool definitions/capability view used by this
@@ -177,7 +177,7 @@ impl RequestSnapshot {
         runtime_resource_revision: crate::runtime::RuntimeResourceRevision,
         invocation: ModelInvocationConfig,
         context_window_tokens: u64,
-        reasoning_profile: Option<crate::model::catalog::ReasoningProfileId>,
+        profile: Option<crate::model::catalog::ModelProfileId>,
         reasoning_enabled: bool,
         tool_definitions: Vec<ModelToolDefinition>,
         capability_revision: CapabilityRevision,
@@ -197,7 +197,7 @@ impl RequestSnapshot {
             runtime_resource_revision,
             invocation,
             context_window_tokens,
-            reasoning_profile,
+            profile,
             reasoning_enabled,
             tool_definitions,
             capability_revision,

@@ -12,7 +12,7 @@ import { useTranslation } from '../../locale/react';
  */
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { structuredPatch } from 'diff';
-import type { TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition } from '../../../../protocol/app-server/v38';
+import type { TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition } from '../../../../protocol/app-server/v39';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { JsonTree, type JsonTreeLabels } from '../../presentation/primitives/JsonTree';
 import { IconCheckOutline16, IconChevronRightOutline14, IconCopyOutline16, IconWrapLinesOutline16 } from '../../presentation/primitives/icons';
@@ -581,7 +581,7 @@ export function TrajectoryInspector({ item, facet, onFacet, detail, loading, err
     model: requestDetail.model,
     protocol: requestDetail.protocol,
     thinking: requestDetail.reasoning_enabled ? 'enabled' : 'disabled',
-    ...(requestDetail.reasoning_profile ? { reasoningEffort: requestDetail.reasoning_profile } : {}),
+    ...(requestDetail.profile ? { profile: requestDetail.profile } : {}),
     maxTokens: requestDetail.max_output_tokens,
     contextWindowTokens: requestDetail.context_window_tokens,
     ...Object.fromEntries(requestDetail.options.map(option => [option.name, option.value.value])),

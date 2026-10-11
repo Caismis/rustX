@@ -2,7 +2,7 @@
  * The App Server protocol as this client sees it.
  *
  * There is no wire transcription here. Every type below is either re-exported
- * from `protocol/app-server/v38.ts` — generated from the authoritative Rust DTOs
+ * from `protocol/app-server/v39.ts` — generated from the authoritative Rust DTOs
  * in `src/app_server/protocol.rs` — or **derived from one of those generated
  * types** with an indexed access. A derivation cannot drift: if the Rust DTO
  * changes shape, regeneration changes the type this file names, and every use
@@ -11,9 +11,9 @@
  * ```text
  * src/app_server/protocol.rs      (Rust authority)
  *        | schemars
- * protocol/app-server/v38.schema.json
+ * protocol/app-server/v39.schema.json
  *        | json-schema-to-typescript
- * protocol/app-server/v38.ts       (generated)
+ * protocol/app-server/v39.ts       (generated)
  *        | re-export + indexed access
  * this file                       (the only names the TUI spells)
  * ```
@@ -56,7 +56,7 @@ import type {
   SessionSummary,
   SessionUserMessageBoundary,
   Success,
-} from "../../../protocol/app-server/v38.ts";
+} from "../../../protocol/app-server/v39.ts";
 
 export type {
   ConfigurationApplication,
@@ -97,7 +97,6 @@ export type {
   QuestionSpecification,
   QuestionnaireAnswerEntry,
   QuestionnaireSpecification,
-  ReasoningProfileId,
   Request,
   Request1,
   RequestId,
@@ -134,7 +133,7 @@ export type {
   WorkflowDependencyFailure,
   WorkflowInspection,
   WorkflowState,
-} from "../../../protocol/app-server/v38.ts";
+} from "../../../protocol/app-server/v39.ts";
 
 // ---------------------------------------------------------------------------
 // Envelope helpers
@@ -320,7 +319,7 @@ export type WorkflowInstanceView = NonNullable<
 
 export type SessionModelView = NonNullable<RuntimeClientSnapshot["model"]>;
 export type SessionModelConfig = SessionModelView["configured"];
-export type ModelInvocationView = SessionModelView["effective"];
+export type ModelInvocationView = NonNullable<SessionModelView["effective"]>;
 export type AttemptModelView = NonNullable<RuntimeClientAttempt["model"]>;
 
 export type RuntimeClientTranscriptPage = RuntimeClientSnapshot["transcript"];
@@ -502,6 +501,8 @@ export function describeRpcError(error: RpcError): string {
       return `unknown node ${data.node_id} in session ${data.session_id}`;
     case "configuration_adoption":
       return `Configuration adoption: ${data.rejection.status === "failed" ? data.rejection.diagnostic : data.rejection.status.replaceAll("_", " ")}`;
+    case "model_unavailable":
+      return `the configured model is not in the published catalog; choose one with /model (${data.diagnostic})`;
     case "source_conflict":
       return `${data.scope} source changed (expected ${data.expected}, found ${data.actual})`;
     case "stale_settings":
