@@ -35,13 +35,13 @@ it.each(['text', 'markdown', 'image'] as const)('%s retains bounded scroll metad
   const content = (props: PreviewViewStateProps) => <ArtifactPreview name="same-name" text={kind === 'image' ? undefined : 'long text'} url="blob:original" image={kind === 'image'} markdown={kind === 'markdown'} loading={false} retry={() => {}} onDownload={() => {}} {...props}/>;
   const view = render(<Retained>{content}</Retained>);
   scroll(view.container.querySelector('[data-preview-scroll="body"]')!, 310, 25);
-  if (kind !== 'image') fireEvent.click(view.getByRole('button', { name: 'Wrap lines' }));
+  if (kind === 'text') fireEvent.click(view.getByRole('button', { name: 'Wrap lines' }));
   view.rerender(<Retained visible={false}>{content}</Retained>);
   expect(view.container.childElementCount).toBe(0);
   view.rerender(<Retained>{content}</Retained>);
   const restored = view.container.querySelector('[data-preview-scroll="body"]')!;
   expect(restored.scrollTop).toBe(310); expect(restored.scrollLeft).toBe(25);
-  if (kind !== 'image') expect(view.getByRole('button', { name: 'Wrap lines' }).getAttribute('aria-pressed')).toBe('false');
+  if (kind === 'text') expect(view.getByRole('button', { name: 'Wrap lines' }).getAttribute('aria-pressed')).toBe('false');
 });
 
 it('HTML preserves source mode and source scroll without relaxing opaque sandbox isolation', () => {

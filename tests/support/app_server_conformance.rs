@@ -148,7 +148,7 @@ pub async fn representative_scenario(
             call: Method::AgentTranscript {
                 target: a.clone(),
                 agent_id: child_id.clone(),
-                before: None,
+                at: rustx::durable::reading::ConversationWindowAt::Latest,
                 limit: 32,
             },
         })
@@ -158,8 +158,54 @@ pub async fn representative_scenario(
     };
     assert_eq!(
         failure.error.data,
-        Some(ErrorData::UnknownAgent { agent_id: child_id })
+        Some(ErrorData::UnknownAgent {
+            agent_id: child_id.clone()
+        })
     );
+
+    for call in [
+        Method::AgentTraceLocateTool {
+            target: a.clone(),
+            agent_id: child_id.clone(),
+            locator: rustx::runtime_client::trace::TraceToolLocator {
+                occurrence: rustx::message::types::ToolCallOccurrenceRef::new(
+                    rustx::runtime::identity::MessageId::new("missing-assistant"),
+                    rustx::message::types::ContentBlockIndex::new(0),
+                ),
+                call_id: rustx::runtime::identity::ToolCallId::new("call"),
+                tool_id: rustx::runtime::identity::ToolId::new("tool-bash"),
+            },
+        },
+        Method::AgentTrace {
+            target: a.clone(),
+            agent_id: child_id.clone(),
+            before: None,
+            limit: 32,
+            records: Vec::new(),
+        },
+        Method::AgentTraceDetail {
+            target: a.clone(),
+            agent_id: child_id.clone(),
+            record_id: "trace:1".into(),
+        },
+    ] {
+        let response = driver
+            .request(Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(375),
+                call,
+            })
+            .await;
+        let Response::Failure(failure) = response else {
+            panic!("child Trace requires a registered Agent identity");
+        };
+        assert_eq!(
+            failure.error.data,
+            Some(ErrorData::UnknownAgent {
+                agent_id: child_id.clone()
+            })
+        );
+    }
 
     // Reconciliation is native, scope identified and does not fabricate a
     // resource generation for unchanged inputs.

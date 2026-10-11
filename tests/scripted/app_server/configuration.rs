@@ -5117,6 +5117,7 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
         // The selected Profile's parameters change while an Attempt is
         // admitted: the Attempt keeps its frozen invocation on the wire, and
         // the change is adopted for the next Attempt.
+        let mut eligibility = EligibilityStream::open(&fixture, &id);
         let settlement = runtime.settlement_signal();
         runtime.submit_inbound(input("request-A frozen")).unwrap();
         fixture.gates[0].wait_entered().await;
@@ -5152,6 +5153,10 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
             serde_json::from_str(&fixture.provider.request_body(0)).unwrap();
         assert_eq!(frozen["temperature"], json!(0.5));
         assert!(frozen.get("seed").is_none());
+        // Settlement restores conversation state before the Attempt task
+        // releases its lifecycle admission. Adoption requires both fences.
+        eligibility.until(AdoptionEligibility::Busy).await;
+        eligibility.until(AdoptionEligibility::Eligible).await;
         fixture
             .manager
             .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)

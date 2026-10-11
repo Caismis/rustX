@@ -13,8 +13,8 @@ test('header child navigation preserves the parent draft and renders agent retur
   await rootScroll.evaluate(element => { element.scrollTop = 320; });
   const position = await rootScroll.evaluate(element => element.scrollTop);
   await page.getByRole('button', { name: 'Subagents', exact: true }).click();
-  await expect(page.getByRole('menuitem', { name: /Verify findings/ })).toContainText('12K tok');
-  await page.getByRole('menuitem', { name: /Verify findings/ }).click();
+  await expect(page.getByRole('treeitem', { name: /Verify findings/ })).toContainText('12K tok');
+  await page.getByRole('treeitem', { name: /Verify findings/ }).click();
   await expect(page.getByRole('heading', { name: 'Child research report' })).toBeVisible();
   await expect(page.locator('[data-agent-id] [data-composer-dock]')).toContainText('10%');
   await expect(page.locator('[data-agent-id] [data-composer-dock]')).toContainText('200');

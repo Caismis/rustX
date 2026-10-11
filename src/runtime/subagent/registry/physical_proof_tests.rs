@@ -436,3 +436,97 @@ fn recovered_activation_constructors_preserve_domain_defaults() {
         } else { NotificationState::None });
     }
 }
+
+#[tokio::test]
+async fn post_result_protocol_failure_publishes_once_after_physical_settlement() {
+    for duplicate in [true, false] {
+        let plane = plane(1);
+        let mut child = stage_stubborn(&plane);
+        let accepted = start(&plane, &start_spec("terminal protocol failure")).await;
+        child.accept_delegate().await;
+        child
+            .send_result(ChildResultStatus::Succeeded, Some("must not publish"))
+            .await;
+        assert_eq!(
+            super::super::ipc::read_parent_frame(&mut child.peer)
+                .await
+                .unwrap(),
+            None
+        );
+        assert!(published_terminal_states(&plane, &accepted.subagent_id).is_empty());
+        assert!(
+            plane
+                .registry
+                .snapshot(&accepted.subagent_id)
+                .unwrap()
+                .state
+                .is_active()
+        );
+        assert_eq!(
+            plane
+                .registry
+                .state
+                .lock()
+                .unwrap()
+                .records
+                .iter()
+                .filter(|record| record.lifecycle.is_active())
+                .count(),
+            1,
+            "Result alone retains counted capacity"
+        );
+        if duplicate {
+            child
+                .send_result(ChildResultStatus::Succeeded, Some("duplicate"))
+                .await;
+        } else {
+            super::super::ipc::write_child_frame(&mut child.peer, &ChildFrame::DelegateAccepted)
+                .await
+                .unwrap();
+        }
+        let pid = child.pid;
+        drop(child);
+        let terminal = plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .unwrap();
+        assert_eq!(terminal.state, SubagentState::Interrupted);
+        assert!(terminal.is_settled());
+        assert!(matches!(
+            nix::sys::signal::kill(
+                nix::unistd::Pid::from_raw(i32::try_from(pid).unwrap()),
+                None
+            ),
+            Err(nix::errno::Errno::ESRCH)
+        ));
+        assert_eq!(
+            published_terminal_states(&plane, &accepted.subagent_id),
+            vec![SubagentTerminalState::Interrupted]
+        );
+        assert_eq!(
+            plane
+                .registry
+                .state
+                .lock()
+                .unwrap()
+                .records
+                .iter()
+                .filter(|record| record.lifecycle.is_active())
+                .count(),
+            0
+        );
+        assert_eq!(
+            plane
+                .registry
+                .wait_until_settled(&accepted.subagent_id)
+                .await
+                .unwrap(),
+            terminal
+        );
+        assert_eq!(
+            published_terminal_states(&plane, &accepted.subagent_id),
+            vec![SubagentTerminalState::Interrupted]
+        );
+    }
+}

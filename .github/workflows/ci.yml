@@ -149,8 +149,9 @@ jobs:
       # step that selects them: an unassigned target, a stale filter or
       # --skip, or a Linux test no lane executes fails here. The checker's own
       # deterministic tests ran above as part of `--examples`.
+      # Reuse the all-feature library already compiled by the tested targets.
       - name: Check test lane coverage
-        run: cargo run --example check_test_lanes -- --job rust-contracts
+        run: cargo run --all-features --example check_test_lanes -- --job rust-contracts
 
   # Real boundaries: SQLite durability/recovery, the spawned rustx process
   # and stdio/IPC transport, the subagent child-process boundary, the tool

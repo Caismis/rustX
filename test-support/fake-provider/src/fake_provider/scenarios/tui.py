@@ -299,7 +299,7 @@ def tui_subagent_inspection() -> Scenario:
     question = json.dumps({"questions": [{"question": "Inspection checkpoint?", "header": "Inspect", "options": [{"label": "Continue", "description": "Continue inspection"}, {"label": "Stop", "description": "Stop inspection"}]}]})
     return Scenario("tui_subagent_inspection",
         Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=INTEGRATION_MODEL, tools_include=("subagent",)),
-             Stream(ToolCall("spawn-child", "subagent", '{"agent":"researcher","task":"Inspect canonical child history"}'), Finish("tool_calls"))),
+             Stream(ToolCall("spawn-child", "subagent", '{"agent":"researcher","title":"Research canonical history","task":"Inspect canonical child history"}'), Finish("tool_calls"))),
         *(Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=INTEGRATION_MODEL, tools_include=("ask_user",)),
                Stream(Gate(f"inspection-request-{index}"), ToolCall(f"inspection-question-{index}", "ask_user", question), Finish("tool_calls"), Usage(10, 2))) for index in range(2)),
         Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=INTEGRATION_MODEL, tools_include=("ask_user",)),
@@ -371,7 +371,7 @@ def tui_agent_interrupt() -> Scenario:
         Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=INTEGRATION_MODEL,
                     body_contains=("TUI_AGENT_PARENT",), tools_include=("subagent",)),
              Stream(ToolCall("tui-agent-create", "subagent", json.dumps({
-                 "agent": "reviewer", "task": "TUI_AGENT_CHILD: inspect the workspace",
+                 "agent": "reviewer", "title": "Review workspace", "task": "TUI_AGENT_CHILD: inspect the workspace",
              })), Finish("tool_calls"))),
         *(Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=INTEGRATION_MODEL),
                Stream(Gate(f"interrupt-initial-{index}"), Text("Initial request complete."), Finish()),

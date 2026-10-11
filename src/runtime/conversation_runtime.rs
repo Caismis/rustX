@@ -285,6 +285,7 @@
 //! real post-activation semantic transition — bootstrap state never
 //! fabricates a live event.
 
+use std::io::Write as _;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
@@ -1430,8 +1431,6 @@ pub(crate) struct RuntimeInner {
     /// Test-only coordinator synchronization hooks.
     #[cfg(test)]
     probe: Mutex<Option<CoordinatorProbe>>,
-    #[cfg(test)]
-    subagent_transcript_store_reads: std::sync::atomic::AtomicUsize,
     /// Test-only one-shot pre-tool policy injection for a runtime-created
     /// attempt. Production constructs the required policy from the admitted
     /// effective `ApprovalMode`; this hook never changes the production
@@ -2606,6 +2605,47 @@ impl RuntimeInner {
         execution.run().await
     }
 
+    /// Persists maintenance lifecycle evidence before exposing it to clients.
+    /// Completion uses the atomic compaction commit instead of this path.
+    fn publish_manual_compaction_event(
+        &self,
+        state: &mut CoordinatorState,
+        request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
+        event: RuntimeEvent,
+    ) -> Result<(), ManualCompactionError> {
+        let envelope = crate::events::types::RuntimeEventEnvelope {
+            schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
+            event_id: crate::runtime::identity::EventId::new(""),
+            sequence: 0,
+            conversation_id: self.conversation_id.clone(),
+            attempt_id: None,
+            turn_id: None,
+            timestamp: chrono::Utc::now(),
+            event,
+        };
+        match self.store.append_event(envelope) {
+            Ok(persisted) => {
+                self.observe(ConversationObservation::Published {
+                    journal_sequence: persisted.sequence,
+                    observation: Box::new(ConversationObservation::ManualCompactionEvent {
+                        request_id,
+                        event: persisted.event,
+                    }),
+                });
+                Ok(())
+            }
+            Err(error) => {
+                let message = format!("manual compaction event could not be persisted: {error}");
+                self.record_durability_failure(
+                    state,
+                    DurableOperation::EventJournal,
+                    message.clone(),
+                );
+                Err(ManualCompactionError::Durable { message })
+            }
+        }
+    }
+
     /// Runs one manual compaction over the conversation state checked out by
     /// the coordinator. This is runtime-owned work: the task continues to
     /// settlement even if the requesting attachment disappears.
@@ -2640,6 +2680,7 @@ impl RuntimeInner {
                     surface_revision,
                     tokens_before,
                     estimated_tokens_after,
+                    ..
                 } = &completed.persisted_event.event
                 else {
                     return ManualCompactionTaskResult {
@@ -2722,18 +2763,28 @@ impl RuntimeInner {
                     });
                     Ok(success.outcome)
                 }
-                Err(error) => {
-                    self.observe(ConversationObservation::ManualCompactionEvent {
+                Err(error) => self
+                    .publish_manual_compaction_event(
+                        &mut state,
                         request_id,
-                        event: RuntimeEvent::CompactionFailed {
+                        RuntimeEvent::CompactionFailed {
                             error: error.to_string(),
                         },
-                    });
-                    Err(error)
-                }
+                    )
+                    .and(Err(error)),
             };
         }
         self.settlement.notify_waiters();
+        // A closed launcher's stderr is not a maintenance failure.
+        let _ = writeln!(
+            std::io::stderr(),
+            "rustx: manual context compaction settled for {}: {}",
+            self.conversation_id,
+            match &completion_result {
+                Ok(_) => "committed".to_owned(),
+                Err(error) => format!("failed: {error}"),
+            }
+        );
         completion.complete(completion_result);
         self.admit_next_attempt();
     }
@@ -3850,8 +3901,6 @@ impl ConversationRuntime {
             settlement: tokio::sync::Notify::new(),
             #[cfg(test)]
             probe: Mutex::new(None),
-            #[cfg(test)]
-            subagent_transcript_store_reads: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
             test_pre_tool_policy: Mutex::new(None),
         });
@@ -4970,6 +5019,11 @@ impl ConversationRuntime {
                         format!("the frozen capability system guidance is invalid: {error}"),
                     ))
                 })?;
+            self.inner.publish_manual_compaction_event(
+                &mut state,
+                request_id.clone(),
+                RuntimeEvent::CompactionStarted,
+            )?;
             let conversation = state
                 .conversation
                 .take()
@@ -4978,11 +5032,6 @@ impl ConversationRuntime {
             state.manual_compaction = Some(CurrentManualCompaction {
                 cancellation: cancellation.clone(),
             });
-            self.inner
-                .observe(ConversationObservation::ManualCompactionEvent {
-                    request_id: request_id.clone(),
-                    event: RuntimeEvent::CompactionStarted,
-                });
             let admission = self
                 .inner
                 .lifecycle
@@ -4992,6 +5041,13 @@ impl ConversationRuntime {
             let completion_for_task = completion.clone();
             let inner = Arc::clone(&self.inner);
             drop(state);
+            // Diagnostics follow the runtime owner, not the requesting socket:
+            // disconnecting the requester cannot hide maintenance settlement.
+            let _ = writeln!(
+                std::io::stderr(),
+                "rustx: manual context compaction admitted for {}",
+                self.inner.conversation_id
+            );
             self.inner.executor.spawn(async move {
                 let task = inner
                     .run_manual_compaction(
@@ -6022,25 +6078,6 @@ impl ConversationRuntime {
             .subagents
             .as_ref()
             .and_then(|subagents| subagents.snapshot(subagent_id))
-    }
-
-    /// Resolve an exact owned child's read-only canonical store.
-    pub(crate) fn subagent_transcript_store(
-        &self,
-        id: &crate::runtime::identity::SubagentId,
-    ) -> Result<
-        crate::durable::SqliteConversationStore,
-        crate::runtime::subagent::SubagentTranscriptError,
-    > {
-        #[cfg(test)]
-        self.inner
-            .subagent_transcript_store_reads
-            .fetch_add(1, Ordering::Relaxed);
-        self.inner
-            .subagents
-            .as_ref()
-            .ok_or_else(|| crate::runtime::subagent::SubagentTranscriptError::Unknown(id.clone()))?
-            .transcript_store(id)
     }
 
     /// Requests cancellation of one subagent child through the
@@ -8018,12 +8055,14 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             authority: crate::runtime::subagent::DurableAgentAuthority {
+                                title: "Explore task".to_owned(),
                                 execution_policy:
                                     crate::runtime::subagent::InheritedExecutionPolicy::default(),
                                 resolved: test_resolved_subagent("explore"),
                                 approval_mode: crate::runtime::ApprovalMode::Policy,
                             },
                             admission: crate::runtime::subagent::ActivationAdmission {
+                                attachments: Vec::new(),
                                 task: "pre-constructed".to_owned(),
                                 context: None,
                                 origin:
@@ -8148,12 +8187,14 @@ mod tests {
                 .prepare(
                     &crate::runtime::subagent::SubagentStartSpec {
                         authority: crate::runtime::subagent::DurableAgentAuthority {
+                            title: "Explore task".to_owned(),
                             execution_policy:
                                 crate::runtime::subagent::InheritedExecutionPolicy::default(),
                             resolved: test_resolved_subagent("explore"),
                             approval_mode: crate::runtime::ApprovalMode::Policy,
                         },
                         admission: crate::runtime::subagent::ActivationAdmission {
+                            attachments: Vec::new(),
                             task: "transfer race".to_owned(),
                             context: None,
                             origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
@@ -8294,12 +8335,14 @@ mod tests {
             .prepare(
                 &crate::runtime::subagent::SubagentStartSpec {
                     authority: crate::runtime::subagent::DurableAgentAuthority {
+                        title: "Explore task".to_owned(),
                         execution_policy:
                             crate::runtime::subagent::InheritedExecutionPolicy::default(),
                         resolved: test_resolved_subagent("explore"),
                         approval_mode: crate::runtime::ApprovalMode::Policy,
                     },
                     admission: crate::runtime::subagent::ActivationAdmission {
+                        attachments: Vec::new(),
                         task: "refused after claim".to_owned(),
                         context: None,
                         origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
@@ -8650,6 +8693,29 @@ mod tests {
         }));
         assert_eq!(model.requests().len(), 2, "turn plus summary request");
 
+        let trace =
+            crate::runtime_client::trace::TraceProjection::new(runtime.inner.store.as_ref())
+                .expect("durable trace");
+        let row = trace
+            .page(None, 32)
+            .unwrap()
+            .records
+            .into_iter()
+            .find(|record| record.kind == crate::runtime_client::trace::TraceKind::Compaction)
+            .expect("manual compaction is retained in the trajectory");
+        assert_eq!(
+            row.state,
+            crate::runtime_client::trace::TraceState::Completed
+        );
+        assert_eq!(row.message_id, Some(outcome.summary_message_id.clone()));
+        assert!(row.location.attempt_id.is_none());
+        assert_eq!(
+            row.preview.as_ref().unwrap().text,
+            "compact factual summary"
+        );
+        let detail = trace.detail(&row.id).unwrap().unwrap();
+        assert_eq!(detail.messages.len(), 1);
+
         // The released compaction admission restores eligibility on the
         // worker's schedule; the semantic completion is still the last fact.
         let observations: Vec<_> = pending
@@ -8826,6 +8892,18 @@ mod tests {
             })
         ));
         assert!(runtime.coordinator_ledger().is_some());
+        let trace =
+            crate::runtime_client::trace::TraceProjection::new(runtime.inner.store.as_ref())
+                .expect("durable trace");
+        let row = trace
+            .page(None, 32)
+            .unwrap()
+            .records
+            .into_iter()
+            .find(|record| record.kind == crate::runtime_client::trace::TraceKind::Compaction)
+            .expect("failed maintenance keeps its own trajectory row");
+        assert_eq!(row.state, crate::runtime_client::trace::TraceState::Failed);
+        assert!(row.message_id.is_none());
         runtime
             .submit_inbound(text_content("works after rejected compaction"))
             .expect("accepted after failure");
@@ -11647,12 +11725,14 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             authority: crate::runtime::subagent::DurableAgentAuthority {
+                                title: "Explore task".to_owned(),
                                 execution_policy:
                                     crate::runtime::subagent::InheritedExecutionPolicy::default(),
                                 resolved: test_resolved_subagent("explore"),
                                 approval_mode: crate::runtime::ApprovalMode::Policy,
                             },
                             admission: crate::runtime::subagent::ActivationAdmission {
+                                attachments: Vec::new(),
                                 task: "first terminal".to_owned(),
                                 context: None,
                                 origin:
@@ -11719,12 +11799,14 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             authority: crate::runtime::subagent::DurableAgentAuthority {
+                                title: "Explore task".to_owned(),
                                 execution_policy:
                                     crate::runtime::subagent::InheritedExecutionPolicy::default(),
                                 resolved: test_resolved_subagent("explore"),
                                 approval_mode: crate::runtime::ApprovalMode::Policy,
                             },
                             admission: crate::runtime::subagent::ActivationAdmission {
+                                attachments: Vec::new(),
                                 task: "second terminal".to_owned(),
                                 context: None,
                                 origin:
@@ -11956,12 +12038,14 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             authority: crate::runtime::subagent::DurableAgentAuthority {
+                                title: "Explore task".to_owned(),
                                 execution_policy:
                                     crate::runtime::subagent::InheritedExecutionPolicy::default(),
                                 resolved: test_resolved_subagent("explore"),
                                 approval_mode: crate::runtime::ApprovalMode::Policy,
                             },
                             admission: crate::runtime::subagent::ActivationAdmission {
+                                attachments: Vec::new(),
                                 task: "hold the adoption gate".to_owned(),
                                 context: None,
                                 origin:
@@ -12137,12 +12221,14 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             authority: crate::runtime::subagent::DurableAgentAuthority {
+                                title: "Explore task".to_owned(),
                                 execution_policy:
                                     crate::runtime::subagent::InheritedExecutionPolicy::default(),
                                 resolved: test_resolved_subagent("explore"),
                                 approval_mode: crate::runtime::ApprovalMode::Policy,
                             },
                             admission: crate::runtime::subagent::ActivationAdmission {
+                                attachments: Vec::new(),
                                 task: "owned child".to_owned(),
                                 context: None,
                                 origin:
@@ -12220,12 +12306,14 @@ mod tests {
             .prepare(
                 &crate::runtime::subagent::SubagentStartSpec {
                     authority: crate::runtime::subagent::DurableAgentAuthority {
+                        title: "Explore task".to_owned(),
                         execution_policy:
                             crate::runtime::subagent::InheritedExecutionPolicy::default(),
                         resolved: test_resolved_subagent("explore"),
                         approval_mode: crate::runtime::ApprovalMode::Policy,
                     },
                     admission: crate::runtime::subagent::ActivationAdmission {
+                        attachments: Vec::new(),
                         task: "rejected after failure".to_owned(),
                         context: None,
                         origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
@@ -12383,12 +12471,14 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             authority: crate::runtime::subagent::DurableAgentAuthority {
+                                title: "Explore task".to_owned(),
                                 execution_policy:
                                     crate::runtime::subagent::InheritedExecutionPolicy::default(),
                                 resolved: test_resolved_subagent("explore"),
                                 approval_mode: crate::runtime::ApprovalMode::Policy,
                             },
                             admission: crate::runtime::subagent::ActivationAdmission {
+                                attachments: Vec::new(),
                                 task: "owned".to_owned(),
                                 context: None,
                                 origin:
@@ -12419,12 +12509,6 @@ mod tests {
 
         // The staged child commits real ownership but never creates a child
         // database. Its existing history is therefore deterministically unavailable.
-        let resolver_reads = || {
-            runtime
-                .inner
-                .subagent_transcript_store_reads
-                .load(std::sync::atomic::Ordering::Relaxed)
-        };
         let unknown = crate::runtime::identity::AgentId::new("unknown-child");
         assert!(matches!(attachment.agent_statistics(&unknown).await,
             Err(RuntimeClientError::UnknownAgent { agent_id }) if agent_id == unknown));
@@ -12435,32 +12519,26 @@ mod tests {
         for id in [&accepted.child_agent_id, &unknown] {
             for limit in [0, crate::durable::TRANSCRIPT_PAGE_LIMIT_MAX + 1] {
                 assert!(matches!(
-                    attachment.agent_transcript_page(id, None, limit),
+                    attachment.agent_transcript_window(
+                        id,
+                        &crate::durable::reading::ConversationWindowAt::Latest,
+                        limit
+                    ),
                     Err(RuntimeClientError::InvalidRequest { .. })
                 ));
             }
         }
-        assert_eq!(
-            resolver_reads(),
-            0,
-            "invalid limits must not enter ownership/storage resolution"
-        );
         for limit in [1, crate::durable::TRANSCRIPT_PAGE_LIMIT_MAX] {
             assert!(matches!(
-                attachment.agent_transcript_page(&unknown, None, limit),
+                attachment.agent_transcript_window(&unknown, &crate::durable::reading::ConversationWindowAt::Latest, limit),
                 Err(RuntimeClientError::UnknownAgent { agent_id }) if agent_id == unknown
             ));
             assert!(matches!(
-                attachment.agent_transcript_page(&accepted.child_agent_id, None, limit),
+                attachment.agent_transcript_window(&accepted.child_agent_id, &crate::durable::reading::ConversationWindowAt::Latest, limit),
                 Err(RuntimeClientError::RuntimeFailure { message })
                     if message.starts_with("subagent history unavailable:")
             ));
         }
-        assert_eq!(
-            resolver_reads(),
-            2,
-            "only owned Agent identities reach history storage resolution"
-        );
         let _ = subagents.cancel(&accepted.subagent_id, CancellationReason::UserRequested);
         subagents
             .wait_until_settled(&accepted.subagent_id)
@@ -12504,12 +12582,14 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             authority: crate::runtime::subagent::DurableAgentAuthority {
+                                title: "Explore task".to_owned(),
                                 execution_policy:
                                     crate::runtime::subagent::InheritedExecutionPolicy::default(),
                                 resolved: test_resolved_subagent("explore"),
                                 approval_mode: crate::runtime::ApprovalMode::Policy,
                             },
                             admission: crate::runtime::subagent::ActivationAdmission {
+                                attachments: Vec::new(),
                                 task: "owned".to_owned(),
                                 context: None,
                                 origin:
@@ -12626,12 +12706,14 @@ mod tests {
                 .prepare(
                     &crate::runtime::subagent::SubagentStartSpec {
                         authority: crate::runtime::subagent::DurableAgentAuthority {
+                            title: "Explore task".to_owned(),
                             execution_policy:
                                 crate::runtime::subagent::InheritedExecutionPolicy::default(),
                             resolved: test_resolved_subagent("explore"),
                             approval_mode: crate::runtime::ApprovalMode::Policy,
                         },
                         admission: crate::runtime::subagent::ActivationAdmission {
+                            attachments: Vec::new(),
                             task: "racing".to_owned(),
                             context: None,
                             origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
@@ -13287,12 +13369,14 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             authority: crate::runtime::subagent::DurableAgentAuthority {
+                                title: "Explore task".to_owned(),
                                 execution_policy:
                                     crate::runtime::subagent::InheritedExecutionPolicy::default(),
                                 resolved: test_resolved_subagent("explore"),
                                 approval_mode: crate::runtime::ApprovalMode::Policy,
                             },
                             admission: crate::runtime::subagent::ActivationAdmission {
+                                attachments: Vec::new(),
                                 task: "owned".to_owned(),
                                 context: None,
                                 origin:
@@ -13396,12 +13480,14 @@ mod tests {
             .prepare(
                 &crate::runtime::subagent::SubagentStartSpec {
                     authority: crate::runtime::subagent::DurableAgentAuthority {
+                        title: "Explore task".to_owned(),
                         execution_policy:
                             crate::runtime::subagent::InheritedExecutionPolicy::default(),
                         resolved: test_resolved_subagent("explore"),
                         approval_mode: crate::runtime::ApprovalMode::Policy,
                     },
                     admission: crate::runtime::subagent::ActivationAdmission {
+                        attachments: Vec::new(),
                         task: "rejected".to_owned(),
                         context: None,
                         origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
@@ -15909,12 +15995,14 @@ mod tests {
             .prepare(
                 &crate::runtime::subagent::SubagentStartSpec {
                     authority: crate::runtime::subagent::DurableAgentAuthority {
+                        title: "Explore task".to_owned(),
                         execution_policy:
                             crate::runtime::subagent::InheritedExecutionPolicy::default(),
                         resolved: test_resolved_subagent("reviewer"),
                         approval_mode: ApprovalMode::Policy,
                     },
                     admission: crate::runtime::subagent::ActivationAdmission {
+                        attachments: Vec::new(),
                         task: "Produce the workflow result.".to_owned(),
                         context: None,
                         origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
@@ -16048,11 +16136,13 @@ mod tests {
             .prepare(
                 &SubagentStartSpec {
                     authority: DurableAgentAuthority {
+                        title: "Explore task".to_owned(),
                         resolved: test_resolved_subagent("reviewer"),
                         execution_policy: InheritedExecutionPolicy::default(),
                         approval_mode: ApprovalMode::Policy,
                     },
                     admission: ActivationAdmission {
+                        attachments: Vec::new(),
                         task: "unproven child with abandoned publication".into(),
                         context: None,
                         origin: AgentActivationOrigin::CreationTool {
@@ -16153,11 +16243,13 @@ mod tests {
             .prepare(
                 &SubagentStartSpec {
                     authority: DurableAgentAuthority {
+                        title: "Explore task".to_owned(),
                         resolved: test_resolved_subagent("reviewer"),
                         execution_policy: InheritedExecutionPolicy::default(),
                         approval_mode: ApprovalMode::Policy,
                     },
                     admission: ActivationAdmission {
+                        attachments: Vec::new(),
                         task: "Exercise failed physical settlement".into(),
                         context: None,
                         origin: AgentActivationOrigin::CreationTool {
@@ -17150,6 +17242,7 @@ mod tests {
                     attempt_id: None,
                     turn_id: None,
                     timestamp: fixed_time(),
+                    occupancy: None,
                 })
                 .expect("atomic compaction summary");
         }

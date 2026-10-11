@@ -121,6 +121,17 @@ and control capacity. The real App Server with a gated scripted provider covers 
 continued input, questionnaire settlement, automatic overflow compaction and
 final response in both locales at desktop and narrow viewport widths.
 
+The trajectory was also checked against this reference's
+`packages/client/ui-trajectory/src/client/trajectory-compaction-definition.ts`,
+`layout.ts`, and `TrajectoryTable.tsx`: completed compaction has a summary result
+with rendered Markdown and raw output. Manual maintenance now persists its
+start/failure boundaries, making that result reachable in the native trajectory
+both live and after reconnect. The inspector shows detail loading/errors, and
+an incomplete operation is no longer mislabeled as a failure. Native summary
+content remains the authority; unrecorded provider usage is not synthesized.
+Docker browser tests inspect the summary during completion and after reconnect
+in English/Chinese on desktop/mobile.
+
 ## #439 Composer keyboard policy
 
 Approved read-only reference: `deepseek-ai/deepseek-harness` at
@@ -760,7 +771,9 @@ The same immutable `ddefc45fbc7f8e46dd73185e68295696d1297887` baseline supplies:
 - `presentation/primitives/Switch.tsx` and `.module.css`: controlled accessible
   toggle and token-based appearance, with the retained MIT notice.
 - `presentation/right-panel/ArtifactPreview.module.css`: bounded adaptation of
-  TextPreview header, scroll body and wrap treatment. Host filesystem operations,
+  TextPreview 38px path/action header, scroll body and wrap treatment, plus
+  MarkdownBody document padding and normal whitespace. Native preview strips reuse
+  the already attributed dockkit chips, file icons and sidebar chrome. Host filesystem operations,
   registry, resource store, slots, automatic reload and binary renderer framework
   are excluded. The TS preview component is rustX-authored.
 
@@ -806,7 +819,7 @@ settings file was inspected for the Queue default, not imported. The existing
 prop; its upstream pin and hash are unchanged. The settings
 store, Lexical, slot/plugin system, continuable-child transport and queued-item
 steering remain excluded. rustX's typed client/native owners replace those
-runtime boundaries. The textarea measurement hook is rustX code.
+runtime boundaries. The native textarea uses CSS content sizing; no temporary-collapse measurement hook remains.
 
 All twelve reviewed source versions are recorded in the inspection inventory
 unless already present. MIT/DeepSeek copyright is retained in the adapted policy;
@@ -1466,7 +1479,7 @@ antialiased differently depending on which tile or partial repaint drew them:
 search capture, and other captures varied too. As its own layer it rendered
 identically in 45 of 45 targeted replays.
 
-Trace retained-input ownership repair updates generated imports to App Server v40.
+Trace retained-input ownership repair updates generated imports to App Server v39.
 Source inventory local hashes and dependency closure reflect this mechanical
 protocol change; all Harness upstream pins remain unchanged.
 
@@ -1682,6 +1695,19 @@ there is no countdown or maximum; a timeout alone is not labelled an active retr
 Actual started retries shimmer while attached and running. Settled or disconnected
 observations stop the animation. No runtime, protocol or retry policy is changed.
 
+Retry placement was rechecked against the same Harness revision's
+`conversation-nodes/retry.ts`, `conversation-nodes/process-groups.ts` and
+`chat-branch-tails.client.spec.tsx`: completed retries remain independent durable
+rows with collapsed failure disclosures. rustX now seats each Step's retry before
+its first retained native request publication, instead of collecting the whole
+Attempt's retries beneath its completion summary. No-publication requests keep
+their exact Attempt feedback seat. Retry boundaries close the preceding process
+group so later reasoning and Tools cannot fold ahead of the independent retry.
+Native MessageIds determine placement across
+streaming, canonical settlement, clipped history and reattachment; neighboring
+messages supply no ownership. Disclosure state follows the native retry chain
+when its publication changes render seats, without automatic detail reads.
+
 
 Appearance preferences follow local Harness `ui-theme` at
 `5badb15009ae1756c3afe0ae0cef1faafc290ccc`: `AppearanceRow.tsx`,
@@ -1716,7 +1742,7 @@ admission; navigation/transport replacement never replays the pending gesture.
 
 Quiet connection correction: keep the Harness resident chat/composer layout and
 render the locally submitted user bubble plus generic waiting feedback inside the
-conversation. Opening alone has no connecting notice. App Server v40 adds the
+conversation. Opening alone has no connecting notice. App Server v39 adds the
 read-only `session/history` window so cold stored history can render independently
 of resource preparation; this is a native durable read, never a fabricated runtime
 snapshot. Both clients fence late history reads against the current attachment.
@@ -1787,7 +1813,7 @@ The ISC license is shipped in `public/LICENSE-Lucide-1.17.txt` and the generated
 third-party notices. Only the React SVG wrapper is local.
 
 
-Child statistics now use App Server v40's native `agent/statistics` reading.
+Child statistics now use App Server v39's native `agent/statistics` reading.
 The Harness SubagentHeaderLineage token/duration columns accompany the existing
 state rows; the child reader reuses the main conversation's statistics dock,
 context meter and completed-response presentation. Native event folds retain
@@ -1813,9 +1839,9 @@ PR #457 repair retains the scope-local list and Harness settings primitives, but
 routes both definition entry points through the existing `McpDefinition` and
 Settings transaction actor. JSON import only accepts environment references;
 Header/Env literals are retained by key or removed, never introduced by Web
-configuration writes. Settings inspection and refresh are read-only. The native
-capability lifecycle owns all MCP connections; no settings connection/probe is
-created. Meter scheduling remains separate from native durable folding authority.
+configuration writes. Configuration inspection remains read-only. The native capability lifecycle
+owns Session MCP connections. The MCP list now invokes finite native diagnostics
+as described below. Meter scheduling remains separate from native durable folding authority.
 The client owns two current observations and a total budget of four unconfirmed
 reads across scope changes. Current inventory plus a fair cursor replaces the
 lossy 32-entry pending queue; selected demand gets alternating priority. Exact
@@ -1906,6 +1932,308 @@ and the Inspect pill. `src/bindings/present.ts` is the rustX-authored adapter. I
 maps native foreground lifecycle to Harness phases and maps only a successful
 committed Tool message's typed `deliveries` to cards. Preview and Download stay
 with the existing PreviewWorkspace and original-byte owners. Inventory hashes and
+dependency closures describe this final source, including the v39 import renames.
+
+## UI optimization: MCP screenshot alignment
+
+ZCode `29628c9acdb81b703bbd4080c207a0e7ce5e276e` remains the interaction
+reference for the scope-local list, form/JSON mode switch and optional fields:
+`McpServerForm.tsx`, `McpServerList.tsx`, `McpSettingsSection.tsx`,
+`SettingsFormActions.tsx`, `PluginScopeMenu.tsx`, and `mcpSettingsShared.ts`.
+Existing definitions have a fixed scope; a returned list keeps its own selected
+owner. Mode switching and saves retain the native CAS transaction semantics.
+
+Presentation follows Harness `5badb15009ae1756c3afe0ae0cef1faafc290ccc`:
+`ModelsSection.module.css`, `SettingsRoot.module.css` and settings-form fields.
+The MCP list and editor inherit the shared settings palette, with 20px page
+headings, 13px fields, 36px inputs, outlined list cards, a module-filled editor,
+shared capsule buttons, chevron disclosures and a sticky Save/Cancel row.
+No MCP-only dark palette or list/editor background override remains. Status
+indicators use theme state tokens; Refresh animates during a check and honors
+reduced motion. The editor includes a return-to-list control; long endpoint or
+command descriptions expose their full text on hover.
+No ZCode runtime or component implementation is copied.
+
+The generic unit shell, argument array rows, working-directory/advanced fields,
+retained-secret checkboxes, redundant form explanations and list permission
+metadata are absent from the dedicated MCP surface. JSON shows the named
+server definition, not the internal transaction wrapper, and accepts both
+named objects and `mcpServers` objects. A JSON save submits one identity through
+the existing native CAS transaction and returns after its authoritative read.
+Unexposed native retention metadata remains attached to edits of the same
+identity. Partial tool selections keep their list switch disabled rather than
+replace native grants or expose an additional selection-editor button.
+
+The user explicitly chose to keep rustX's native rules: no timeout,
+protocol-version or literal-credential authoring controls were added. Optional
+environment/header JSON therefore accepts `$VARIABLE` references. Existing
+native cwd and secret retention survive ordinary form edits. Invalid field
+buffers block Save and JSON switching, and new drafts survive renaming without
+writing unnamed or duplicate identities. The single arguments field uses
+`shell-quote` 1.12.0 for reversible argv formatting; it never launches a shell or
+expands environment variables. Its MIT notice is included in generated notices.
+
+Validation includes editor/transaction regressions, desktop and narrow browser
+interaction/geometry checks, and local screenshots of all four Chinese states.
+The browser fixture exercises the real UI against deterministic source
+responses; it does not claim a live MCP server connection or pinned-container
+pixel-baseline equivalence.
+
+MCP connectivity indicators retain ZCode's row presentation and existing Refresh
+control (`McpSettingsSection.tsx`, `zcode-protocol/mcp.ts`). rustX requires an
+explicit per-definition Test connection action; Refresh only reads configuration.
+rustX uses
+finite `mcp/probe` operations instead of ZCode's retained `mcp-status` process
+connections. Green means the authored configuration passed its last handshake
+and tool-list check; tooltips distinguish it from a live Agent connection.
+Source revision, target and transport identity fence results. Workspace probes
+use the existing Product Host registration lane; no browser path grants authority.
+
+
+Composer growth repair (2026-10-10): inspected local Harness `5badb15009`
+`ui-conversation/src/client/skeleton/ConversationContent.tsx` and
+`ui-chat/src/client/chat/{use-chat-viewport,use-chat-reading,use-scroll-follow}.ts`.
+The shared sticky composer, seat ResizeObserver and independent tail/reading
+intent remain intact. rustX's native textarea now uses `field-sizing: content`
+instead of collapsing its height to measure each edit. ChatViewport acknowledges
+browser caret scrolling during composer input without treating it as a reader
+gesture; pre-input sampling retains genuine prior reader movement. The frame
+remains the sole owner of automatic scroll corrections. Harness's Lexical editor
+and its transport are not imported. Regression checks use actual multiline
+keystrokes, pasted capped drafts, shrinking, width reflow and detached reading in
+the production App with a fixture transport, at desktop and mobile widths.
+
+Subagent UI alignment (2026-10-10): inspected pinned local Harness
+`ui-subagent/src/client/{SubagentHeaderLineage,SubagentReadOnlyComposer}` and
+its client entry point and sidebar-chat integration. The header reuses the
+sibling-switcher SVG and compact metrics presentation; native parent identities
+supply ancestor and direct-child navigation. Hover opens after 150ms; the existing
+shared Menu supplies its 200ms pointer-leave grace and keyboard/outside dismissal.
+Visited native child views retain drafts and reading positions. Their input uses
+the already inventoried conversation composer styling, shared sticky-seat height
+observation, Enter/Shift+Enter and IME handling, native interrupt admission, and
+real child statistics. Agent return events keep their native activity rendering.
+No Harness session controller, Lexical editor or sidebar runtime is imported.
+Native rustX does not expose child model mutation, independent child trajectory,
+or Harness's explicit one-shot mode projection, so those controls are not inferred
+from parent configuration. Browser validation exercises the production App with
+fixture agent identities and statistics, not a live model run or pixel-baseline
+claim.
+
+
+Child trajectory completion (2026-10-10): Harness subagent conversations reuse
+its ordinary conversation/trajectory view. rustX now exposes the same existing
+Trajectory presentation and composer geometry for children, backed by native
+agent/trace and agent/traceDetail over each child's durable store. The existing
+bounded TraceCache owns paging, lifecycle repairs and detail epochs; a child
+reader fences attachment replacement and coalesces activity refreshes. No parent
+trace records or current parent model configuration fill child data. Native
+child Attempt identity supplies exact current lifecycle correlation. The source
+revision remains pinned; App Server v39 / Runtime Client v61 require synchronized
+clients. Browser evidence uses fixture records; the real-process native suite
+separately verifies durable child authority and read-only behavior after exit.
+
+### Streaming context occupancy (2026-10-10)
+
+Studied Harness `packages/llm/token-meter/src/usage-projection.ts`'s
+`contextPressureProjectionDefinition` and the composer `ContextMeter.tsx`.
+Harness retains the prompt-side measurement while a request streams, replacing
+it when a newer usage sample arrives. RustX now retains the last native measured
+request across unfinished and usage-free requests, with that request's frozen
+model/capacity and composition. Compaction still invalidates the old reading.
+This is a shared Rust Context owner change, consumed by WebUI, TUI and child
+statistics, without presentation-local caching or estimated streaming tokens.
+Browser plugin not available; regular Playwright verifies the production App's
+context ring during running snapshots, subsequent measurement and invalidation
+on desktop and mobile. Reference pin unchanged.
+
+### Subagent call details and input roles (2026-10-10)
+
+Studied Harness `5badb15009ae1756c3afe0ae0cef1faafc290ccc`,
+`ui-tool/src/client/tool/{components/ToolDetails,models/control-details-model,toolviews/details-row}`
+and `ui-subagent` composer/lineage. The expandable result caption, bounded list,
+divided rows, status placement and explicit raw inspection follow that reference.
+`AgentToolDetails.module.css` adapts its ToolDetails styling. The rustX-only adapter
+reads recorded native ToolResult JSON: create and message operations display
+receipts, lists retain recorded Agent states, and waits display their captured
+activation outcomes. The live roster supplies navigation only. Manual refresh and
+wait controls move to the child header; the input retains its native send/interrupt
+controls and the shared composer geometry. At that revision the child model/permission controls were absent. The child capability update below replaces the committed-only transcript, input and preview paths with native ownership.
+File cards without a Preview owner show metadata with a disabled preview action,
+so absence of native access is not presented as a working click target. Independent Trace and statistics use their existing native read domains.
+Native adopted inputs now distinguish human messages from runtime/Agent/mixed
+context; late context keeps its chronological position within its native Attempt.
+Browser tests use the production App and fixture transport at 1440 and 390 pixels.
+The Browser plugin is unavailable in this session, so verification uses the
+project's installed Playwright. Screenshots are fixture evidence, not a live model run.
+
+### Native child capabilities (2026-10-10)
+
+Studied Harness `tool-subagent` description/prompt separation and `ui-subagent`
+`sidebar-chat/index.tsx`, which retains a child Session and reuses the full
+conversation/input component. Also inspected ZCode's `SubagentSessionSidePane`
+and Codex's App Server thread subscriptions. The implementation keeps rustX
+execution authority in Rust: task titles are frozen and persisted at creation;
+child reads reuse the child's complete Runtime Client snapshot/cursor endpoint;
+active and inactive input carries native Session upload references through IPC;
+file/artifact access resolves the owned child conversation and workspace.
+
+WebUI reuses AgentComposer and AttachmentIntake, scopes both conversation and
+trajectory preview resources to the Agent, and retires native observation reads
+when navigation changes. No child model settings are introduced. App Server v45,
+Runtime Client v67, child IPC v30 and Product Host file-read v3 are synchronized.
+The Browser plugin is unavailable; the repository's pinned Playwright browser
+validates real native child processes and deterministic provider streams.
+
+
+Subagent catalog and sidebar audit (2026-10-10): inspected the pinned Harness
+`ui-subagent/src/client/SubagentHeaderLineage.tsx`, its CSS, `SubagentReadOnlyComposer.tsx`
+and `sidebar-chat/index.tsx`. The new inventoried SubagentCatalog ports the tree
+hierarchy, disclosure alignment, current-title emphasis, two-row usage/duration,
+150ms hover-open / 120ms hover-close with click pinning, focus restoration, tree
+keyboard navigation, and a separate sidebar-chat button. Native parent IDs supply
+all membership and ancestry; no upstream Session controller or transport is retained.
+The existing DockLayout hosts resident child chats, including hidden-tab drafts,
+with visibility scoped native watchers. The main child trajectory remains mounted
+across conversation-view changes to preserve its filter and detail selection.
+Native source identity and independent title label inbound agent messages, with
+explicit parent-source context in child conversations. Unavailable agents receive
+a read-only explanation while retaining their inaccessible draft for native repair.
+No child model controls or one-shot mode are inferred. Whole-conversation child
+turn-outline / locate APIs remain absent, so the main turn navigator is not projected
+from a partial transcript. Source hashes and dependency closures are refreshed.
+
+The existing base theme now retains Harness radius tokens (4/8/12/16/20/28px);
+their missing definitions had invalidated catalog and other source-port radii.
+
+### Child turn directory and history positioning (2026-10-10)
+
+`TurnNavigator.tsx` now exposes the same Harness-derived rail presentation for
+parent and child conversations. The native child reader and `SubagentChat`
+composition are rustX-owned: `agent/turns` supplies the complete paged directory,
+and `agent/transcript` resolves native Turn identities at child-owned read cuts.
+The child watch remains independent of the bounded historical reading window.
+
+## Composer layout inside shrinking conversation panes
+
+Reference: Harness `5badb15009ae1756c3afe0ae0cef1faafc290ccc`,
+`ui-conversation/src/client/skeleton/{InputBar.module.css,control-row-layout.ts}`,
+`ui-model-selection/src/client/ModelSelect.module.css` and
+`ui-permission-presets/src/client/PermissionSelect.module.css`.
+The shared composer restores an anonymous inline-size control-row container,
+row-relative model width, 560px compact spacing and 460px permission-label cut.
+Harness's expanded-demand observer collapses model text only when the controls
+cannot share a line, reacting to pane, content and font changes without React
+state. Resize deliveries coalesce in an animation frame to avoid changing
+observed child sizes inside their own resize delivery. Full labels remain available through trigger titles. Model and permission
+menus already portal to the document, so the obsolete containment override and
+viewport-based model wrapper caps are removed. Existing sticky seat measurement
+continues to reserve draft, toolbar and statistics height for main and child chats.
+The rounded card uses an explicit zero transform for its raster layer; native
+selector menus are document portals and editor menus are card-relative.
+The existing ChatViewport overflow measurement elects an absolute,
+paint-contained background pseudo-element for the fixed 36px theme-base fade
+only when sticky/flow transitions are possible. Non-scrolling seats retain
+their original seat background and ordinary paint origin. The sticky seat keeps its existing geometry
+and stacking; its controls, shadows and editor menus remain uncontained. The
+obsolete overflow-dependent seat transform is removed. In the pinned browser, the previous gradient could retain a different
+raster origin after sticky/flow promotion even with identical final geometry,
+scroll offset and computed styles. The regression re-records background paint
+at both origins, restores all styles, and compares exact RGBA with no noise
+allowance. Both attachment themes still match their existing references. Tolerance,
+masks, stabilization schedule and browser pins are unchanged.
+The investigation downloaded the browser traces and actual images from hosted
+run `38067804782` at `8649f8af`. Its 327x291 attachment captures differ by 1229
+light / 2927 dark pixels, all within rows 1-66. Re-recording the old seat's
+background at the flow origin reproduces both hosted actual images exactly in
+decoded RGBA, while final DOM geometry, scroll offset and computed styles stay
+unchanged. The prior passing HEAD `6e64c1f9` has the same Composer/ChatViewport
+source, and isolated fresh contexts can pass; neither observation proves the
+rendering independent of paint history. Paint containment belongs only to the
+background so menus, narrow attachment placement and native context controls
+keep their existing appearance and behavior. Full-suite inspection also caught a separate 2238-pixel, channel-delta-1
+difference in the dark narrow Agent capture. Its seat is also overflowing:
+327x108 at (56, 735.5), reader scroll 24 of 792 with client height 768. The old
+seat initially matches the reference, then reproduces the new image exactly
+after flow-origin invalidation with unchanged final geometry. Seat/pseudo
+transforms and will-change do not resolve that difference. The intended
+correction is one stable local background raster for that same 36px theme-base
+fade. Only `agent-dark-narrow-linux.png` is intentionally revised: 2238 pixels
+in rows 736-771, maximum channel delta 1; every other pixel is identical. This
+reference no longer records one accidental old paint history. The two failing
+attachment references remain byte-identical. Non-overflowing seats retain
+their original direct background; no sticky/flow origin transition exists there.
+Trajectory assertions inspect the elected background owner and retain their
+pixel/geometry checks.
+
+## Single-row composer statistics
+
+Reference: Harness `5badb15009ae1756c3afe0ae0cef1faafc290ccc`,
+`ui-conversation/src/client/skeleton/InputBar.module.css` dock and
+`ui-chat/src/client/chat/StatsPills.module.css` labels. The shared main/child
+statistics dock uses the same non-wrapping centered row and 12px spacing.
+Activity and usage labels can shrink with ellipses while the context meter
+retains its ring and full percentage. Accessible names and click-open panels
+preserve complete native readings at narrow pane widths. No statistics,
+occupancy or streaming authority changes.
+
+## Compaction checkpoints and occupancy
+
+Compared with Harness `5badb15009ae1756c3afe0ae0cef1faafc290ccc`:
+`ui-chat/src/client/chat/CompactionItem.tsx`, `CompactionCommandCard.tsx` and
+`MessageItem.module.css`, plus `ui-conversation/src/client/skeleton/ContextMeter.tsx`
+and `llm/token-meter/src/usage-projection.ts`. Manual checkpoints show `compact`
+and localized replaced-history counts with an approximate token price. The whole
+row uses the tertiary tone and transitions to secondary on hover, retaining the existing
+summary disclosure, sticky heading and uncapped Markdown body. Native transcript
+metadata resolves the canonical replacement span even in historical pages and
+copied lineage; the browser never recounts visible rows or parses summary prose.
+Pending/failed compaction preserves occupancy; success replaces it with the
+committed primary context estimate. The panel marks that estimate with `~` while
+reported cumulative billing remains unchanged. Native runtime ownership replaces
+Harness projection/plugin wiring; obsolete protocol imports are removed.
+
+## Tool detail surfaces and native Inspect navigation
+
+Compared with Harness `5badb15009ae1756c3afe0ae0cef1faafc290ccc`:
+`ui-tool/src/client/tool/components/ToolRow.tsx` and its stylesheet,
+`toolviews/bash-sample.tsx`, `GenericToolCard.tsx`, and
+`ui-primitives/src/TerminalBlock.tsx`, its stylesheet and `ansi.ts`.
+The expanded Bash surface retains all returned lines, separate command/output
+scrollers, 150px/224px bounds, the 11px code font with 18px minimum line seats,
+16px radius, 4px flow indentation, sticky raw-output copy and copied feedback.
+ANSI styles use upstream Anser 2.3.5 and safe React spans; source markup is text.
+Cursor replay keeps only Anser-supported decorations and honors its SGR 21 bold
+reset. All retained numeric tokens are normalized decimal values; indexed/RGB
+components are integers in 0..255. Known color modes consume their full fixed
+payload even on rejection; an unknown mode discards the rest of that SGR.
+Rejected groups preserve the previous color. Both cursor and no-cursor paths
+apply this policy before Anser. Each emitted opening is at most 52 characters,
+independently of raw numeric-token lengths.
+Generic IN/OUT sections scroll independently with a full-width divider. Business
+icons remain stable on failure, summaries use native failure/stopped tones and
+lifecycle announcements are visually hidden. Keyboard expansion and running copy
+visibility follow the upstream flow.
+
+The Inspect pill is pure presentation. App Server v45 / Runtime Client v67 native
+readers locate the canonical occurrence across the complete indexed Journal,
+including historical and exited child stores. RustX supplies bounded continuous
+windows, exact record IDs and lifecycle repairs, replacing Harness runtime/store
+wiring. The browser preserves that landing until Return to latest, loads exact
+heavy detail, and fences attachment, navigation and visible-Conversation ownership.
+Resident hidden chats suppress portal chrome, so their floating navigation cannot
+escape into the active chat or Trajectory. Special Agent, present, question and
+Goal rows use the same native Inspect authority.
+
+Browser-plugin capabilities are not available in this session. Rendered QA uses
+the repository's immutable Playwright 1.63 Linux image, fixtures on loopback port
+5174 and the production preview on 5173. Light/dark tool detail views at desktop
+and 390px verify independent scrolling, uncapped middle lines, exact full-output
+copy, running transitions and keyboard expansion. Real native child-capabilities
+QA verifies child and parent Inspect RPCs, selected rows, exact detail reads and
+Return to latest; resident child Trajectory paging is checked at 1440px and 390px.
+Screenshots are retained under `/tmp/rustx-tool-details-*` and
+`/tmp/rustx-native-tool-inspect-{child,root}.png`.
 dependency closures describe this final source, including the v40 import renames.
 
 ### Issue #456: general Model Profiles
@@ -1920,7 +2248,7 @@ TanStack/XState unit bridge); invalid, non-object or duplicate-key text stays a
 local buffer that blocks submission, and formatting-only edits begin no draft.
 Native Rust remains the configuration authority. No upstream source is added.
 Inventory hashes and dependency closures describe this final source, including
-the v40 import renames.
+the v45 import renames.
 
 The #456 selection review separates configured from effective Profiles in the
 Harness-derived `ModelSelect`: its Profile submenu gains a "Model default
@@ -1932,6 +2260,85 @@ The #456 stale Profile review also offers that Profile submenu, with a single
 "Use model defaults" row, on a Model that declares no Profiles while its
 configured Profile is pinned, so the pin can be cleared.
 
+### PR #461: integrating the current main contracts
+
+The main integration keeps App Server v45 and Runtime Client v67, which remain
+newer than main's v39/v61, and SQLite 51's checkpoint/Model Profile contract.
+Subagent IPC becomes v31 because main and this branch had different v30
+vocabularies; either old peer is rejected. The current generated protocol and
+consumers include main's general Model Profiles and JSON-string source authoring.
+MCP retains the reviewed explicit-action editor and diagnostics ownership.
+
+`ModelSelect` keeps main's configured/effective Profile distinction, explicit
+Model-default row and typed selection intent, alongside this PR's measured
+icon/text collapse and full-label title. The imported main selector reference
+retained its own earlier Composer surface and always-visible model glyph. The
+merged capture differs from that image by 2707 pixels, all in the Composer
+controls, while its new Profile menu matches main exactly. Against this PR's
+previous reference, every pixel outside the union of the old/new menu bounds
+(x699-1373, y813-969) is identical. Those bounds are investigation coordinates,
+not comparison exceptions. `agent-selectors-light-linux.png` is deliberately
+revised to represent main's new menu within the existing PR Composer. No
+product layout is changed to imitate an obsolete integrated reference, and
+no screenshot threshold, mask, retry, stabilization or browser pin is changed.
+
+The six conflicted Settings references also retained the pre-main paint owner.
+Main's existing `SettingsRoot.panel` opacity layer (PR #459) is kept unchanged.
+A pinned-browser diagnostic temporarily removes only that layer, then restores
+it in the same page with identical measured geometry. Removing it reproduces
+all six previous PR references exactly; restoring it reproduces each integrated
+capture exactly. The measured changes are 6594 pixels for `locale-general-zh`,
+4560 for `settings-delete-confirm-light`, 337 for `settings-read-error-light`,
+6089 for `settings-shell-light`, 949 for `settings-shell-dark`, and 319 for
+`mobile-settings-dark`. These six references are deliberately merged to record
+main's existing stable panel paint with the retained PR surface. The changes
+are caused by that inherited rendering correction, not by a new Settings
+layout or a relaxed comparator. No Settings presentation source or noise
+policy is changed for this reference merge.
+
+### PR #461: independently verified Timeline fade repaint
+
+After the main integration, the complete pinned suite found an independent
+16-pixel, channel-delta-1 failure in `ledger-order-inspector-390-en-linux.png`.
+The earlier-history button's 28x50 gradient, at (44, 71.5), changed after a
+background invalidation with identical final geometry, styles and no animation.
+Six fresh contexts reproduce the full-suite failed image exactly. A background
+pseudo-element alone still permits the initial/partial-paint variants, as the
+new exact repaint regression proves. The user explicitly extended the repair
+scope to this verified rendering defect.
+
+The background now owns a paint-contained pseudo-element and an independent
+opacity compositing layer. The layer-2 color, 38% opaque stop, transparent end,
+inherited 0.72 opacity, text geometry and font are unchanged. Containing the
+whole button shifts its text raster and is rejected. Containment belongs only
+to the background; inset keyboard focus and the portaled tooltip remain outside
+it. The intended appearance is the same fade with a neutral, consistently
+antialiased history glyph instead of colored subpixel fringes that depend on
+paint ownership. This explicitly intentional rendering correction changes
+references within the button's 28x50 box, including the font's grayscale
+antialiasing; it is not an allowance for future mismatches.
+
+A fresh-context diagnostic applies each candidate before the UI's first paint
+and invalidates both parent and pseudo-element backgrounds. The independent
+background layer is exactly stable through initial and partial paints. Native
+navigation acceptance additionally asserts identical geometry and exact RGBA
+before/after that invalidation with no noise allowance. All revised captures
+are reviewed against their old references: dimensions and every pixel outside
+the button remain identical. The 44-state same-page diagnostic reproduces each original reference with
+the old paint owner exactly or with only 16/60 channel-delta-1 gradient pixels;
+the independent layer returns to exactly the same RGBA after restoration in
+every state. Its 37 deliberately revised references change only the 28x50
+button, with 230-1303 pixels depending on the scene. The former color-fringed
+glyph becomes neutral gray. Exact per-reference measurements are recorded in
+`docs/evidence/pr461-rendering.json`.
+
+The old Chinese 16-pixel noise evidence and its original reference move verbatim
+to the comparator's existing frozen fixtures. Its positive/negative comparator
+tests remain intact. The live allowance is removed; new tests reject a one-level
+change at every formerly allowed site in both current English and Chinese
+references. Other noise entries, global thresholds, retries, settle schedule
+and browser pins remain unchanged. The source inventory retains the Harness
+pin and records this concrete local CSS adaptation.
 PR #458 follow-up: TurnNavigator's delayed hover read carries the current native
 navigation intent through publication, so a newer loaded-turn jump revokes a held
 preview without retiring ordinary outline reads during transcript pagination.

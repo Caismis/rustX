@@ -228,17 +228,24 @@ async fn unsupported_protocol_version_is_a_correlated_typed_error() {
     assert_eq!(response["error"]["requested"], 38);
     assert_eq!(adapter.endpoint.attachment_id(), None);
 
-    // main's v61 decoder rejects the new inherited_through transcript field.
-    // Reject it before an attachment can deliver that incompatible snapshot.
-    let response = adapter.exchange(r#"{"method":"initialize","id":61,"protocol_version":61}"#);
-    assert!(response.get("result").is_none());
-    assert_eq!(response["error"]["type"], "unsupported_protocol_version");
-    assert_eq!(
-        response["error"]["supported"],
-        RUNTIME_CLIENT_PROTOCOL_VERSION
-    );
-    assert_eq!(response["error"]["requested"], 61);
-    assert_eq!(adapter.endpoint.attachment_id(), None);
+    // Both the original review base and current main lack inherited_through.
+    // Reject either before attachment can deliver an incompatible snapshot.
+    for version in [61, 66] {
+        let response = adapter.exchange(
+            &serde_json::json!({
+                "method": "initialize", "id": version, "protocol_version": version,
+            })
+            .to_string(),
+        );
+        assert!(response.get("result").is_none());
+        assert_eq!(response["error"]["type"], "unsupported_protocol_version");
+        assert_eq!(
+            response["error"]["supported"],
+            RUNTIME_CLIENT_PROTOCOL_VERSION
+        );
+        assert_eq!(response["error"]["requested"], version);
+        assert_eq!(adapter.endpoint.attachment_id(), None);
+    }
 
     // A future version the runtime does not speak is rejected explicitly.
     let future = RUNTIME_CLIENT_PROTOCOL_VERSION + 1;
@@ -419,7 +426,7 @@ async fn unsupported_protocol_version_is_a_correlated_typed_error() {
     assert_eq!(response["error"]["requested"], 34);
     assert_eq!(adapter.endpoint.attachment_id(), None);
 
-    // Native deletion mutations were removed in v40, not kept as aliases.
+    // Native deletion mutations were removed in v41, not kept as aliases.
     let response = adapter.exchange(r#"{"method":"initialize","id":39,"protocol_version":39}"#);
     assert_eq!(
         response["error"]["supported"],
@@ -429,8 +436,8 @@ async fn unsupported_protocol_version_is_a_correlated_typed_error() {
     assert_eq!(adapter.endpoint.attachment_id(), None);
 
     // Trace replaced its single-level entry with the summary/detail split in
-    // v41, so a v40 client would decode a vocabulary that no longer exists.
-    let response = adapter.exchange(r#"{"method":"initialize","id":40,"protocol_version":40}"#);
+    // v41, so a v41 client would decode a vocabulary that no longer exists.
+    let response = adapter.exchange(r#"{"method":"initialize","id":40,"protocol_version":45}"#);
     assert_eq!(
         response["error"]["supported"],
         RUNTIME_CLIENT_PROTOCOL_VERSION
@@ -438,7 +445,7 @@ async fn unsupported_protocol_version_is_a_correlated_typed_error() {
     assert_eq!(response["error"]["requested"], 40);
     assert_eq!(adapter.endpoint.attachment_id(), None);
 
-    // Completed-response projections are mandatory in v42.
+    // Completed-response projections are mandatory in v45.
     let response = adapter.exchange(r#"{"method":"initialize","id":41,"protocol_version":41}"#);
     assert_eq!(
         response["error"]["supported"],

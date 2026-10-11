@@ -11,7 +11,7 @@
 //! the socket. The socket pathname and the locked liveness sidecar are process
 //! routing state, never conversation history and never a discovery registry.
 //! External product access to child history goes through App Server
-//! `agent/transcript`/`agent/status`, never through this socket.
+//! `agent/conversation` (snapshot/cursor watch), `agent/transcript` and `agent/status`, never through this socket.
 
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};

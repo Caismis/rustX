@@ -224,7 +224,7 @@ test("child inspection preserves exact parent draft and cursor; Esc sends no req
   const parent = h.session.state;
   h.input("\x1b[1;5B"); h.input("\r");
   const read = await nextRequest(h, "agent/transcript", 0);
-  h.transport.respond(read.id, { type: "transcript", page: { entries: [] } }); await continuation();
+  h.transport.respond(read.id, { type: "transcript_window", window: { cut: { conversation_id: snapshot().conversation_id, journal: "20", transcript: "20", mutation_revision: "0" }, page: { entries: [] } } }); await continuation();
   assert.ok(h.focus instanceof PopupFrame);
   assert.match(h.focus.render(100).join("\n"), /read only/);
   assert.equal(h.editor.getExpandedText(), "draft中👩‍💻e\u0301");
@@ -248,9 +248,9 @@ test("actual child A to B navigation rejects late A without Session or control r
   const b = await nextRequest(h, "agent/transcript", 1);
   assert.equal((a.params as { agent_id: string }).agent_id, "A");
   assert.equal((b.params as { agent_id: string }).agent_id, "B");
-  h.transport.respond(b.id, { type: "transcript", page: { entries: [{ cursor: "1", item: { type: "message", message: userMessage("b", "ONLY-B") } }] } });
+  h.transport.respond(b.id, { type: "transcript_window", window: { cut: { conversation_id: snapshot().conversation_id, journal: "20", transcript: "20", mutation_revision: "0" }, page: { entries: [{ cursor: "1", item: { type: "message", message: userMessage("b", "ONLY-B") } }] } } });
   await continuation();
-  h.transport.respond(a.id, { type: "transcript", page: { entries: [{ cursor: "1", item: { type: "message", message: userMessage("a", "STALE-A") } }] } });
+  h.transport.respond(a.id, { type: "transcript_window", window: { cut: { conversation_id: snapshot().conversation_id, journal: "20", transcript: "20", mutation_revision: "0" }, page: { entries: [{ cursor: "1", item: { type: "message", message: userMessage("a", "STALE-A") } }] } } });
   await continuation();
   previousView?.handleInput?.("\x1b"); // A stale view callback cannot close B.
   assert.ok(h.focus instanceof PopupFrame);

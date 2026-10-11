@@ -22,7 +22,7 @@ content. Existing Context, ToolCall scope, canonical message IDs, request ordina
 provider clock bridge and detail/authorization primitives were reused.
 
 App Server v20 / Runtime Client v46 replace v19/v45 because mandatory Trace fields
-change the strict negotiated vocabulary; SQLite remains v43, with no migrations,
+change the strict negotiated vocabulary; SQLite remains v44, with no migrations,
 aliases, new events or persistent Trace store. Generated Rust-schema/TS fixtures,
 consumers, client admission and protocol tests move together. Native summary/page/
 detail bounds remain 8 KiB / 128 KiB / 512 KiB encoded JSON. Each prompt string is

@@ -153,8 +153,22 @@ impl Fixture {
         let gates = [HeaderGate::new(), HeaderGate::new()];
         let server_gates = gates.clone();
         let provider = FixtureServer::start_with_body(move |_, _, body| {
-            let index = usize::from(body.contains("request-B"));
             let request: serde_json::Value = serde_json::from_str(body).unwrap();
+            let index = usize::from(if tool == Some("delivery-child") {
+                // A parent's retained Tool arguments also contain the child's task.
+                // Only native user input identifies which fixture request is gated.
+                request["messages"].as_array().unwrap().iter().any(|message| {
+                    message["role"] == "user"
+                        && message["content"].to_string().contains("request-B")
+                })
+            } else {
+                body.contains("request-B")
+            });
+            if tool == Some("delivery-child") && request["tools"].as_array().is_some_and(|tools| tools.iter().any(|tool| tool["function"]["name"] == "subagent"))
+                && !request["messages"].as_array().unwrap().iter().any(|message| message["role"] == "tool") {
+                let chunk = serde_json::json!({"id":"child-delivery","object":"chat.completion.chunk","created":1,"model":"a", "choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"child-delivery-call","type":"function", "function":{"name":"subagent","arguments":serde_json::json!({"title":"Delivery child","agent":"reviewer","task":"request-B"}).to_string()}}]},"finish_reason":"tool_calls"}]});
+                return FixtureReply::body(200,"OK","text/event-stream",format!("data: {chunk}\n\ndata: [DONE]\n\n")).with_header_gate(server_gates[index].clone());
+            }
             if tool == Some("review") {
                 let offers = |name: &str| request["tools"].as_array().unwrap().iter().any(|tool| tool["function"]["name"] == name);
                 let child = offers("workflow_output");
@@ -170,7 +184,7 @@ impl Fixture {
                 }
             }
             if let Some(name) = tool
-                && name != "review"
+                && !matches!(name, "review" | "delivery-child")
                 && !request["messages"].as_array().unwrap().iter().any(|m| m["role"] == "tool") {
                 let arguments = if name == "ask_user" {
                     serde_json::json!({"questions":[{"question":"Continue?", "header":"Decision", "options":[
@@ -271,7 +285,7 @@ impl Fixture {
             UserConfigManager::new(paths.sources.clone()).unwrap(),
             CredentialSnapshot::new([("TEST_KEY".into(), "fixture".into())]),
             LocalRuntimeDependencies {
-                child_program: (tool == Some("review")).then(|| {
+                child_program: matches!(tool, Some("review" | "delivery-child")).then(|| {
                     std::env::current_exe()
                         .unwrap()
                         .parent()

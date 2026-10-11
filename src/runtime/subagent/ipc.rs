@@ -103,9 +103,10 @@ use crate::runtime::workspace::WorkspaceSnapshot;
 /// Version 29 passes the preinstalled physical-authority lease on fd 2 before
 /// the child reads Hello. The parent installed that authority before Reserved;
 /// the child clones it before composition and restores stderr to diagnostics.
-/// Version 30 freezes the selected general Model Profile, replacing the
-/// reasoning profile, in the child model specification (#456).
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 30;
+/// Version 30 freezes the selected general Model Profile in the child model specification.
+/// Version 31 also carries native Session upload references in delegation and active guidance;
+/// peers with either earlier version-30 vocabulary are rejected.
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 31;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -270,6 +271,7 @@ pub(crate) enum ChildTerminalMode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct DelegationFrame {
+    pub attachments: Vec<crate::message::content::UploadedFileRef>,
     /// The delegated task.
     pub task: String,
     /// The explicit bounded context package, when the delegating call
@@ -407,6 +409,7 @@ pub(crate) struct ActivityFrame {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct GuidanceFrame {
+    pub attachments: Vec<crate::message::content::UploadedFileRef>,
     /// Transport-only acceptance correlation identity.
     pub guidance_id: u64,
     /// The bounded parent-authored guidance text.
@@ -1075,6 +1078,7 @@ mod tests {
         let (mut parent, mut child) = pair();
         let observation = super::super::activity::SubagentObservation {
             revision: 7,
+            attempt_id: None,
             activity: super::super::activity::SubagentActivity::Tool {
                 tool_call_id: crate::runtime::identity::ToolCallId::new("call-1"),
                 tool_id: crate::runtime::identity::ToolId::new("tool-bash"),
@@ -1232,6 +1236,7 @@ mod tests {
         write_parent_frame(
             &mut parent,
             &ParentFrame::Delegate(DelegationFrame {
+                attachments: Vec::new(),
                 task: "inspect".to_owned(),
                 context: Some("ctx".to_owned()),
                 interaction_provider_available: false,
@@ -1274,6 +1279,7 @@ mod tests {
         // definition field exists on the wire at all, so a steer structurally
         // cannot re-author the child's frozen launch authority.
         let guidance = GuidanceFrame {
+            attachments: Vec::new(),
             guidance_id: 7,
             message: "focus on cancellation ownership".to_owned(),
         };

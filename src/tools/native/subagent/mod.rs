@@ -127,6 +127,8 @@ pub(super) fn definition(catalog: &AgentCatalog) -> Option<ToolDefinition> {
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SubagentInput {
+    /// A concise title of this task for navigation, distinct from the agent name.
+    pub title: String,
     /// The named agent to run, from this runtime's admitted catalog.
     pub agent: String,
     /// The delegated task, in natural language.
@@ -155,7 +157,11 @@ impl SubagentInput {
     /// Returns the deterministic rejection message of the first input
     /// contract violation.
     fn parse(arguments: &serde_json::Value) -> Result<Self, String> {
-        decode(SUBAGENT_TOOL_NAME, arguments)
+        let input: Self = decode(SUBAGENT_TOOL_NAME, arguments)?;
+        if input.title.trim().is_empty() || input.title.len() > 256 {
+            return Err("subagent title must contain 1 to 256 bytes".into());
+        }
+        Ok(input)
     }
 }
 
@@ -212,11 +218,13 @@ impl ToolExecutor for SubagentExecutor {
                 };
                 let spec = SubagentStartSpec {
                     authority: crate::runtime::subagent::DurableAgentAuthority {
+                        title: input.title.trim().to_owned(),
                         execution_policy: subagent_context.execution_policy(),
                         resolved,
                         approval_mode: subagent_context.approval_mode(),
                     },
                     admission: crate::runtime::subagent::ActivationAdmission {
+                        attachments: Vec::new(),
                         task: input.task,
                         context: input.context,
                         origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
@@ -359,7 +367,7 @@ mod tests {
     fn the_input_contract_accepts_agent_and_rejects_the_obsolete_profile_field() {
         let accepted = SubagentInput::parse(&serde_json::json!({
             "agent": "explore",
-            "task": "inspect the tool plane",
+            "title": "Inspect workspace", "task": "inspect the tool plane",
         }))
         .expect("the named-agent contract is accepted");
         assert_eq!(accepted.agent, "explore");
@@ -367,7 +375,7 @@ mod tests {
 
         let rejected = SubagentInput::parse(&serde_json::json!({
             "profile": "explore",
-            "task": "inspect the tool plane",
+            "title": "Inspect workspace", "task": "inspect the tool plane",
         }))
         .expect_err("the obsolete profile contract is rejected");
         assert!(
@@ -380,7 +388,7 @@ mod tests {
             SubagentInput::parse(&serde_json::json!({
                 "agent": "explore",
                 "profile": "explore",
-                "task": "inspect",
+                "title": "Inspect workspace", "task": "inspect",
             }))
             .is_err()
         );
@@ -453,7 +461,7 @@ mod tests {
             assert!(
                 SubagentInput::parse(&serde_json::json!({
                     "agent": "explore",
-                    "task": "inspect",
+                    "title": "Inspect workspace", "task": "inspect",
                     field: serde_json::json!("anything"),
                 }))
                 .is_err(),
@@ -464,7 +472,7 @@ mod tests {
             assert!(
                 SubagentInput::parse(&serde_json::json!({
                     "agent": "explore",
-                    "task": "inspect",
+                    "title": "Inspect workspace", "task": "inspect",
                     "override": {dimension: serde_json::json!("anything")},
                 }))
                 .is_err(),
@@ -473,7 +481,7 @@ mod tests {
         }
         let accepted = SubagentInput::parse(&serde_json::json!({
             "agent": "explore",
-            "task": "inspect",
+            "title": "Inspect workspace", "task": "inspect",
             "override": {
                 "tools": {"builtin": ["read"]},
                 "skills": ["code-review"],
@@ -488,10 +496,12 @@ mod tests {
         assert!(requested.skills.is_some());
         assert!(requested.extensions.is_some());
         assert!(
-            SubagentInput::parse(&serde_json::json!({"agent": "explore", "task": "t"}))
-                .expect("an omitted override parses")
-                .invocation_override
-                .is_none(),
+            SubagentInput::parse(
+                &serde_json::json!({"agent": "explore", "title": "Inspect workspace", "task": "t"})
+            )
+            .expect("an omitted override parses")
+            .invocation_override
+            .is_none(),
             "an omitted override is absent, never an empty request"
         );
     }
@@ -981,7 +991,7 @@ chat_reasoning_replay = "omit"
             &plane,
             serde_json::json!({
                 "agent": "reviewer",
-                "task": "review",
+                "title": "Inspect workspace", "task": "review",
                 "override": {"tools": {"builtin": ["missing_tool"]}},
             }),
         )
@@ -1018,7 +1028,7 @@ chat_reasoning_replay = "omit"
             &plane,
             serde_json::json!({
                 "agent": "reviewer",
-                "task": "review",
+                "title": "Inspect workspace", "task": "review",
                 "override": {"tools": {"builtin": ["grep"]}},
             }),
         )
@@ -1060,7 +1070,8 @@ chat_reasoning_replay = "omit"
             context: future.context_policy(),
         };
         assert_ne!(old, new);
-        let arguments = serde_json::json!({"agent":"reviewer", "task":"review"});
+        let arguments =
+            serde_json::json!({"agent":"reviewer", "title": "Inspect workspace", "task":"review"});
         let _ = invoke_subagent(&plane, arguments.clone()).await;
         assert_eq!(plane.subagents.prepared_execution_policies(), vec![old]);
         plane.subagent_context = plane.subagent_context.with_test_policy(new);
@@ -1125,7 +1136,7 @@ chat_reasoning_replay = "omit"
                     mode: crate::tools::types::ToolInvocationMode::Foreground,
                     arguments: serde_json::json!({
                         "agent": "isolated",
-                        "task": "inspect the isolated workspace",
+                        "title": "Inspect workspace", "task": "inspect the isolated workspace",
                     }),
                 },
                 context,
@@ -1194,7 +1205,7 @@ chat_reasoning_replay = "omit"
             .expect("object schema");
         let mut names = properties.keys().cloned().collect::<Vec<_>>();
         names.sort();
-        assert_eq!(names, vec!["agent", "context", "override", "task"]);
+        assert_eq!(names, vec!["agent", "context", "override", "task", "title"]);
         for forbidden in [
             "timeout",
             "timeoutMs",
@@ -1210,7 +1221,7 @@ chat_reasoning_replay = "omit"
         }
         assert_eq!(
             described.input_schema["required"],
-            serde_json::json!(["agent", "task"]),
+            serde_json::json!(["title", "agent", "task"]),
             "the override stays optional: omitting it runs the role's defaults exactly"
         );
     }
@@ -1259,11 +1270,11 @@ chat_reasoning_replay = "omit"
     #[test]
     fn sub258_the_model_cannot_name_its_own_delegation_authority() {
         for arguments in [
-            serde_json::json!({"agent": "explore", "task": "t", "authority": "trusted_program"}),
-            serde_json::json!({"agent": "explore", "task": "t", "domain": "workflow"}),
-            serde_json::json!({"agent": "explore", "task": "t", "invoking": {"tools": []}}),
-            serde_json::json!({"agent": "explore", "task": "t", "override": {"authority": "trusted_program"}}),
-            serde_json::json!({"agent": "explore", "task": "t", "override": null}),
+            serde_json::json!({"agent": "explore", "title": "Inspect workspace", "task": "t", "authority": "trusted_program"}),
+            serde_json::json!({"agent": "explore", "title": "Inspect workspace", "task": "t", "domain": "workflow"}),
+            serde_json::json!({"agent": "explore", "title": "Inspect workspace", "task": "t", "invoking": {"tools": []}}),
+            serde_json::json!({"agent": "explore", "title": "Inspect workspace", "task": "t", "override": {"authority": "trusted_program"}}),
+            serde_json::json!({"agent": "explore", "title": "Inspect workspace", "task": "t", "override": null}),
         ] {
             assert!(
                 SubagentInput::parse(&arguments).is_err(),

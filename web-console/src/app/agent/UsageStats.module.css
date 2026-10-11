@@ -5,13 +5,13 @@
    pills under the composer. Every dialog but the context panel wears the
    shared StatDialog skin. */
 
-/* Composer dock: the pills sit centered in one row under the card. */
+/* Harness InputBar dock: one centered row. Activity and usage labels shrink
+   with ellipses; the context meter retains its complete percentage. */
 .dock {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   justify-content: center;
-  gap: 4px 12px;
+  gap: 12px;
   min-width: 0;
   max-width: 100%;
   box-sizing: border-box;

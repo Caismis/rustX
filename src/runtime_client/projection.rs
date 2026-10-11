@@ -307,7 +307,7 @@ impl SnapshotCandidate {
                     message: e.to_string(),
                 })?;
         self.snapshot.transcript = page;
-        self.snapshot.context.last_request_occupancy = occupancy;
+        self.snapshot.context.occupancy = occupancy;
         Ok(self)
     }
 }
@@ -1087,6 +1087,7 @@ impl RuntimeClientProjection {
                     &snapshot,
                     existing.state,
                     existing.current_activation.clone(),
+                    &existing.title,
                 );
                 if !upsert_subagent(
                     &mut self.snapshot.agents,
@@ -1116,6 +1117,7 @@ impl RuntimeClientProjection {
                     &snapshot,
                     existing.state,
                     existing.current_activation.clone(),
+                    &existing.title,
                 );
                 if !upsert_subagent(
                     &mut self.snapshot.agents,
@@ -1677,7 +1679,6 @@ impl RuntimeClientProjection {
     ) -> Vec<RuntimeClientEvent> {
         match event {
             RuntimeEvent::CompactionStarted => {
-                self.snapshot.context.last_request_occupancy = None;
                 self.snapshot.context.compaction_error = None;
                 self.snapshot.context.compaction_in_progress = true;
                 vec![RuntimeClientEvent::ContextCompactionStarted {
@@ -1700,8 +1701,10 @@ impl RuntimeClientProjection {
                 surface_revision,
                 tokens_before,
                 estimated_tokens_after,
+                occupancy,
             } => {
                 self.snapshot.context.compaction_in_progress = false;
+                self.snapshot.context.occupancy.clone_from(occupancy);
                 let compaction = RuntimeClientCompactionView {
                     generation: *generation,
                     summary_message_id: summary_message_id.clone(),
@@ -2138,14 +2141,9 @@ impl RuntimeClientProjection {
             self.wake_subscribers();
         }
         self.read_domains_dirty = false;
-        if self.snapshot.transcript != transcript
-            || self.snapshot.context.last_request_occupancy != occupancy
-        {
+        if self.snapshot.transcript != transcript || self.snapshot.context.occupancy != occupancy {
             self.snapshot.transcript = transcript.clone();
-            self.snapshot
-                .context
-                .last_request_occupancy
-                .clone_from(&occupancy);
+            self.snapshot.context.occupancy.clone_from(&occupancy);
             if publish {
                 self.publish(RuntimeClientEvent::ReadDomainsUpdated {
                     transcript,
@@ -2626,7 +2624,12 @@ pub(crate) fn agent_view(
     agent: &crate::runtime::subagent::AgentSnapshot,
     activation: &crate::runtime::subagent::SubagentSnapshot,
 ) -> super::snapshot::RuntimeClientAgent {
-    activation_view(activation, agent.state, agent.current_activation.clone())
+    activation_view(
+        activation,
+        agent.state,
+        agent.current_activation.clone(),
+        &agent.title,
+    )
 }
 
 /// Activation data enriches a view only with explicitly supplied Agent authority.
@@ -2634,8 +2637,10 @@ fn activation_view(
     snapshot: &crate::runtime::subagent::SubagentSnapshot,
     state: crate::runtime::subagent::AgentState,
     current_activation: Option<crate::runtime::identity::SubagentId>,
+    title: &str,
 ) -> super::snapshot::RuntimeClientAgent {
     super::snapshot::RuntimeClientAgent {
+        title: title.to_owned(),
         parent_agent_id: snapshot.parent_agent_id.clone(),
         activation_id: snapshot.subagent_id.clone(),
         agent_id: snapshot.child_agent_id.clone(),
@@ -4511,6 +4516,7 @@ mod tests {
                     source: TokenMeasurementSource::ProviderReported,
                 },
                 estimated_tokens_after: 1700,
+                occupancy: None,
             },
         );
         apply_event(
@@ -4526,6 +4532,7 @@ mod tests {
                     source: TokenMeasurementSource::Estimated,
                 },
                 estimated_tokens_after: 1800,
+                occupancy: None,
             },
         );
 
@@ -4981,6 +4988,7 @@ mod tests {
                     source: TokenMeasurementSource::Estimated,
                 },
                 estimated_tokens_after: 1,
+                occupancy: None,
             },
             RuntimeEvent::CompactionFailed {
                 error: "boom".to_owned(),
@@ -5045,6 +5053,7 @@ mod tests {
                     source: TokenMeasurementSource::Estimated,
                 },
                 estimated_tokens_after: 1_900,
+                occupancy: None,
             },
         });
 
@@ -6524,6 +6533,7 @@ mod tests {
         state: crate::runtime::subagent::AgentState,
     ) -> crate::runtime::subagent::AgentSnapshot {
         crate::runtime::subagent::AgentSnapshot {
+            title: "Explore task".to_owned(),
             agent_id: activation.child_agent_id.clone(),
             conversation_id: activation.child_conversation_id.clone(),
             parent_agent_id: activation.parent_agent_id.clone(),
@@ -6710,6 +6720,7 @@ mod tests {
         projection.apply(ConversationObservation::SubagentLifecycle {
             snapshot: completed,
             agent: Some(Box::new(crate::runtime::subagent::AgentSnapshot {
+                title: "Explore task".to_owned(),
                 agent_id: first.child_agent_id.clone(),
                 conversation_id: first.child_conversation_id.clone(),
                 parent_agent_id: first.parent_agent_id.clone(),
@@ -6776,6 +6787,7 @@ mod tests {
         latest.state = SubagentState::Succeeded;
         latest.settlement = committed_settlement();
         let owner = AgentSnapshot {
+            title: "Explore task".to_owned(),
             agent_id: latest.child_agent_id.clone(),
             conversation_id: latest.child_conversation_id.clone(),
             parent_agent_id: latest.parent_agent_id.clone(),

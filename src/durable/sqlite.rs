@@ -28,6 +28,7 @@ use std::sync::atomic::AtomicUsize;
 
 use sha2::{Digest, Sha256};
 
+use crate::context::TokenEstimator;
 use crate::conversation::{SurfaceOp, SurfaceRevision, SurfaceSpan};
 use crate::events::interaction::{
     InteractionSubject, interaction_arguments_digest, validate_interaction_settlement,
@@ -309,11 +310,14 @@ fn count_conversation_store_open() {
 /// of terminal publication. Older development stores lack the required proof.
 /// Version 48 retains native turn-reading provenance and the semantic read-mutation epoch.
 /// Version 49 separates immutable inherited outcomes from live execution state.
-/// Version 50 stores the selected general Model Profile in request snapshots
-/// and Session model configuration (#456); stores carrying reasoning profiles
-/// are refused at open.
+/// Version 50 retains the required independent task title in private Agent authority.
+/// Version 51 stores immutable checkpoint statistics and local completion correlation
+/// with the canonical Ledger summary, and general Model Profiles in request snapshots
+/// and Session model configuration. Older development stores are refused.
+/// Version 52 requires identity-bearing message fact lookup and a qualifying
+/// context-reading expression index over immutable Journal evidence.
+/// Version 55 indexes reverse immutable Turn membership for exact validation.
 /// Version 56 persists the immutable inherited transcript boundary at bootstrap.
-/// Versions 51–55 are already used by main; incompatible stores are refused.
 pub const SQLITE_SCHEMA_VERSION: i64 = 56;
 
 /// One operation in a deterministic admission fault script.
@@ -384,11 +388,11 @@ pub struct SqliteConversationStore {
     #[cfg(test)]
     pub(crate) fail_adopt_remaining: Arc<AtomicUsize>,
     #[cfg(test)]
-    #[cfg(test)]
     pub(crate) fail_select_remaining: Arc<AtomicUsize>,
     #[cfg(test)]
     pub(crate) fail_compaction_remaining: Arc<AtomicUsize>,
     #[cfg(test)]
+    pub(crate) checkpoint_read_counts: Arc<[AtomicUsize; 3]>,
     #[cfg(test)]
     pub(crate) fail_event_remaining: Arc<AtomicUsize>,
     #[cfg(test)]
@@ -771,11 +775,11 @@ impl SqliteConversationStore {
             #[cfg(test)]
             fail_adopt_remaining: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
-            #[cfg(test)]
             fail_select_remaining: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
             fail_compaction_remaining: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
+            checkpoint_read_counts: Arc::new(std::array::from_fn(|_| AtomicUsize::new(0))),
             #[cfg(test)]
             fail_event_remaining: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
@@ -1365,20 +1369,30 @@ impl ConversationStore for SqliteConversationStore {
     fn transcript_attempts(
         &self,
         messages: &[MessageId],
+        through: u64,
     ) -> Result<Vec<AttemptId>, ConversationStoreError> {
+        let messages: std::collections::BTreeSet<_> = messages.iter().collect();
         let connection = self.lock()?;
-        let mut statement = connection.prepare("SELECT DISTINCT attempt_id FROM events INDEXED BY events_kind_idx WHERE json_extract(event_json,'$.event.type')='assistant_message_committed' AND json_extract(event_json,'$.event.message_id') IN (SELECT value FROM json_each(?1))").map_err(|error| storage(error.to_string()))?;
-        let rows = statement
-            .query_map(
-                [serde_json::to_string(messages).map_err(|error| storage(error.to_string()))?],
-                |row| row.get::<_, String>(0),
-            )
+        if messages.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut statement = connection
+            .prepare_cached(TRANSCRIPT_ATTEMPTS_SQL)
             .map_err(|error| storage(error.to_string()))?;
-        rows.map(|row| {
-            row.map(AttemptId::new)
-                .map_err(|error| storage(error.to_string()))
-        })
-        .collect()
+        let mut attempts = std::collections::BTreeSet::new();
+        for message in messages {
+            let rows = statement
+                .query_map(params![message.as_str(), seq_to_i64(through)?], |row| {
+                    row.get::<_, String>(0)
+                })
+                .map_err(|error| storage(error.to_string()))?;
+            for row in rows {
+                attempts.insert(AttemptId::new(
+                    row.map_err(|error| storage(error.to_string()))?,
+                ));
+            }
+        }
+        Ok(attempts.into_iter().collect())
     }
 
     fn inherited_responses_for(
@@ -1386,21 +1400,9 @@ impl ConversationStore for SqliteConversationStore {
         messages: &[MessageId],
     ) -> Result<Vec<super::response::CompletedResponseProvenance>, ConversationStoreError> {
         let connection = self.lock()?;
-        let mut statement = connection.prepare("SELECT p.value FROM bootstrap_identity b,json_each(b.response_provenance) p WHERE EXISTS(SELECT 1 FROM json_each(p.value,'$.process_message_ids') m WHERE m.value IN (SELECT value FROM json_each(?1)))").map_err(|error| storage(error.to_string()))?;
-        let rows = statement
-            .query_map(
-                [serde_json::to_string(messages).map_err(|error| storage(error.to_string()))?],
-                |row| row.get::<_, String>(0),
-            )
-            .map_err(|error| storage(error.to_string()))?;
-        rows.map(|row| {
-            decode(
-                &row.map_err(|error| storage(error.to_string()))?,
-                "selected inherited response",
-            )
-        })
-        .collect()
+        provenance::selected_responses(&connection, messages)
     }
+
     fn load_inherited_turns(
         &self,
     ) -> Result<Vec<super::reading::TurnReadingProvenance>, ConversationStoreError> {
@@ -1412,21 +1414,9 @@ impl ConversationStore for SqliteConversationStore {
         messages: &[MessageId],
     ) -> Result<Vec<super::reading::TurnReadingProvenance>, ConversationStoreError> {
         let connection = self.lock()?;
-        let mut statement = connection.prepare("SELECT p.value FROM bootstrap_identity b,json_each(b.turn_provenance) p WHERE EXISTS(SELECT 1 FROM json_each(p.value,'$.process_message_ids') m WHERE m.value IN (SELECT value FROM json_each(?1)))").map_err(|error| storage(error.to_string()))?;
-        let rows = statement
-            .query_map(
-                [serde_json::to_string(messages).map_err(|error| storage(error.to_string()))?],
-                |row| row.get::<_, String>(0),
-            )
-            .map_err(|error| storage(error.to_string()))?;
-        rows.map(|row| {
-            decode(
-                &row.map_err(|error| storage(error.to_string()))?,
-                "selected inherited turn",
-            )
-        })
-        .collect()
+        provenance::selected_turns(&connection, messages)
     }
+
     fn read_lineage_cut(
         &self,
         revision: SurfaceRevision,
@@ -1952,35 +1942,123 @@ impl ConversationStore for SqliteConversationStore {
         Ok(watermark > 0)
     }
 
+    fn initialize(&self, messages: &[MessageBlock]) -> Result<(), ConversationStoreError> {
+        let bootstrap: Option<(u64, String)> = self
+            .lock()?
+            .query_row(
+                "SELECT message_count,history_digest FROM bootstrap_identity WHERE id=1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|error| storage(format!("bootstrap count: {error}")))?;
+        let seed = if let Some((count, digest)) = bootstrap {
+            if count != messages.len() as u64 || digest != initial_history_digest(messages)? {
+                return Err(ConversationStoreError::InitialHistoryMismatch);
+            }
+            // Runtime reopening supplies canonical bootstrap bodies, not a new
+            // Surface. Reconstruct the original immutable seed, never flatten it.
+            let history = self.load_surface_history(SurfaceRevision::new(count))?;
+            let mut checkpoints = std::collections::BTreeMap::new();
+            for message in messages {
+                if let MessageBlock::User(user) = message
+                    && user.kind.is_compaction_summary()
+                {
+                    checkpoints.insert(
+                        user.id.clone(),
+                        self.compaction_checkpoint(&user.id, u64::MAX)?.0,
+                    );
+                }
+            }
+            LineageSeed::replayed(messages.to_vec(), history, checkpoints)?
+        } else {
+            LineageSeed::history(messages.to_vec())
+        };
+        self.initialize_lineage(
+            &seed
+                .with_completed_responses(self.load_inherited_responses()?)?
+                .with_turns(self.load_inherited_turns()?)?,
+        )
+    }
+
+    #[allow(clippy::too_many_lines)] // One atomic bootstrap owns Ledger, Surface and inherited facts.
     fn initialize_lineage(&self, seed: &LineageSeed) -> Result<(), ConversationStoreError> {
+        let validated = LineageSeed::replayed(
+            seed.canonical().to_vec(),
+            seed.surface_history().to_vec(),
+            seed.checkpoints().clone(),
+        )?
+        .with_completed_responses(seed.completed_responses().to_vec())?
+        .with_turns(seed.turns().to_vec())?;
+        let seed = &validated;
         let messages = seed.canonical();
+        // Semantics belong to the Context Engine; persistence has no alternate selection rule.
+        let occupancy = crate::context::occupancy::inherit(seed.turns(), seed.surface_history());
+        let occupancy_json = encode(&occupancy, "bootstrap occupancy")?;
+        let history_digest = initial_history_digest(messages)?;
+        let occupancy_digest =
+            inherited_occupancy_digest(messages.len() as u64, &history_digest, &occupancy_json);
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("initialize transaction: {error}")))?;
+        // Fail closed if initialized metadata is missing or damaged. The marker
+        // and identity are written in this same transaction, never independently.
+        read_inherited_occupancy(&transaction)?;
         let bootstrap: Option<(i64, String, String, String)> = transaction
             .query_row(
-                "SELECT message_count,history_digest,response_provenance,turn_provenance FROM bootstrap_identity WHERE id=1",
+                "SELECT message_count,history_digest,occupancy_json,occupancy_digest FROM bootstrap_identity WHERE id=1",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .optional()
             .map_err(|error| storage(format!("bootstrap probe: {error}")))?;
-        if let Some((count, digest, responses, turns)) = bootstrap {
-            let supplied_count = i64::try_from(messages.len())
-                .map_err(|_| storage("initial message count is not representable"))?;
-            if count != supplied_count
-                || digest != initial_history_digest(messages)?
-                || decode::<Vec<super::response::CompletedResponseProvenance>>(
-                    &responses,
-                    "bootstrap responses",
-                )? != seed.completed_responses()
-                || decode::<Vec<super::reading::TurnReadingProvenance>>(&turns, "bootstrap turns")?
-                    != seed.turns()
+        if let Some((count, digest, retained_occupancy, retained_digest)) = bootstrap {
+            for message in messages {
+                if let MessageBlock::User(user) = message
+                    && user.kind.is_compaction_summary()
+                {
+                    let retained = load_compaction_checkpoint(&transaction, &user.id, u64::MAX)?.0;
+                    if seed
+                        .checkpoints()
+                        .get(&user.id)
+                        .is_some_and(|supplied| *supplied != retained)
+                    {
+                        return Err(ConversationStoreError::InitialHistoryMismatch);
+                    }
+                }
+            }
+            let bootstrap_revision = SurfaceRevision::new(
+                u64::try_from(count).map_err(|_| storage("negative bootstrap message count"))?,
+            );
+            if replay_surface_history(&transaction, bootstrap_revision)?.1 != seed.surface_history()
             {
                 return Err(ConversationStoreError::InitialHistoryMismatch);
             }
+            let supplied_count = i64::try_from(messages.len())
+                .map_err(|_| storage("initial message count is not representable"))?;
+            if retained_occupancy != occupancy_json
+                || retained_digest != occupancy_digest
+                || count != supplied_count
+                || digest != history_digest
+                || provenance::responses(&transaction)? != seed.completed_responses()
+                || provenance::turns(&transaction)? != seed.turns()
+            {
+                return Err(ConversationStoreError::InitialHistoryMismatch);
+            }
+            provenance::verify_seed_membership(&transaction, seed)?;
         } else {
+            for message in messages {
+                if let MessageBlock::User(user) = message
+                    && user.kind.is_compaction_summary()
+                    && !seed.checkpoints().contains_key(&user.id)
+                {
+                    return Err(ConversationStoreError::InvalidReference(format!(
+                        "seeded checkpoint {} has no required statistics",
+                        user.id
+                    )));
+                }
+            }
             let existing: i64 = transaction
                 .query_row("SELECT COUNT(*) FROM message_ledger", [], |row| row.get(0))
                 .map_err(|error| storage(format!("bootstrap ledger probe: {error}")))?;
@@ -2014,6 +2092,20 @@ impl ConversationStore for SqliteConversationStore {
             append_terminals(None)?;
             for message in messages {
                 append_seeded_ledger_message(&transaction, message)?;
+                if let Some(statistics) = seed
+                    .checkpoints()
+                    .get(&crate::conversation::message_id_of(message))
+                {
+                    transaction
+                        .execute(
+                            "UPDATE message_ledger SET checkpoint_json=?2 WHERE message_id=?1",
+                            params![
+                                crate::conversation::message_id_of(message).as_str(),
+                                encode(statistics, "seeded checkpoint statistics")?
+                            ],
+                        )
+                        .map_err(|error| storage(format!("seed checkpoint: {error}")))?;
+                }
                 append_terminals(Some(&crate::conversation::message_id_of(message)))?;
             }
             // The seed's Surface history becomes this lineage's own retained
@@ -2042,15 +2134,25 @@ impl ConversationStore for SqliteConversationStore {
             }
             transaction
                 .execute(
-                    "INSERT INTO bootstrap_identity(id,message_count,history_digest,response_provenance,turn_provenance,inherited_transcript_through) VALUES(1,?1,?2,?3,?4,(SELECT next_transcript_position FROM rustx_store WHERE id=1))",
+                    "INSERT INTO bootstrap_identity(id,message_count,history_digest,turn_count,response_count,occupancy_json,occupancy_digest,provenance_digest,inherited_transcript_through) VALUES(1,?1,?2,?3,?4,?5,?6,?7,(SELECT next_transcript_position FROM rustx_store WHERE id=1))",
                     params![
                         i64::try_from(messages.len()).map_err(|_| storage("initial message count is not representable"))?,
-                        initial_history_digest(messages)?,
-                        encode(&seed.completed_responses(), "bootstrap responses")?,
-                        encode(&seed.turns(), "bootstrap turns")?
+                        history_digest,
+                        seq_to_i64(seed.turns().len() as u64)?,
+                        seq_to_i64(seed.completed_responses().len() as u64)?,
+                        occupancy_json,
+                        occupancy_digest,
+                        provenance::counts_digest(&history_digest,seq_to_i64(seed.turns().len() as u64)?,seq_to_i64(seed.completed_responses().len() as u64)?)
                     ],
                 )
                 .map_err(|error| storage(format!("insert bootstrap identity: {error}")))?;
+            provenance::persist(&transaction, seed)?;
+            transaction
+                .execute(
+                    "UPDATE rustx_store SET bootstrap_initialized=1 WHERE id=1",
+                    [],
+                )
+                .map_err(|error| storage(format!("mark lineage bootstrap: {error}")))?;
         }
         transaction
             .commit()
@@ -2060,18 +2162,15 @@ impl ConversationStore for SqliteConversationStore {
     fn load_inherited_responses(
         &self,
     ) -> Result<Vec<super::response::CompletedResponseProvenance>, ConversationStoreError> {
-        let json: Option<String> = self
-            .lock()?
-            .query_row(
-                "SELECT response_provenance FROM bootstrap_identity WHERE id=1",
-                [],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| storage(format!("bootstrap responses: {error}")))?;
-        json.map(|json| decode(&json, "bootstrap responses"))
-            .transpose()
-            .map(Option::unwrap_or_default)
+        let connection = self.lock()?;
+        provenance::responses(&connection)
+    }
+
+    fn load_inherited_occupancy(
+        &self,
+    ) -> Result<Option<crate::context::occupancy::ContextOccupancy>, ConversationStoreError> {
+        let connection = self.lock()?;
+        read_inherited_occupancy(&connection)
     }
 
     fn load_bootstrap_history(&self) -> Result<Vec<MessageBlock>, ConversationStoreError> {
@@ -2122,10 +2221,43 @@ impl ConversationStore for SqliteConversationStore {
         load_head(&transaction)
     }
 
+    fn messages_are_human_inputs(&self, ids: &[MessageId]) -> Result<bool, ConversationStoreError> {
+        let connection = self.lock()?;
+        let mut query = connection
+            .prepare_cached(
+                "SELECT json_extract(message_json, '$.id'),
+                    json_extract(message_json, '$.role') = 'user'
+                    AND json_extract(message_json, '$.source') = 'human'
+                    AND json_extract(message_json, '$.kind') = 'message'
+             FROM message_ledger WHERE message_id = ?1",
+            )
+            .map_err(|error| storage(format!("Ledger input authorship: {error}")))?;
+        for id in ids {
+            let (stored_id, human): (String, bool) = query
+                .query_row([id.as_str()], |row| Ok((row.get(0)?, row.get(1)?)))
+                .optional()
+                .map_err(|error| storage(format!("Ledger input authorship: {error}")))?
+                .ok_or_else(|| {
+                    ConversationStoreError::InvalidReference(format!("message {id} is unavailable"))
+                })?;
+            if stored_id != id.as_str() {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "Ledger row for {id} contains a different message identity"
+                )));
+            }
+            if !human {
+                return Ok(false);
+            }
+        }
+        Ok(!ids.is_empty())
+    }
+
     fn load_messages(
         &self,
         ids: &[MessageId],
     ) -> Result<Vec<MessageBlock>, ConversationStoreError> {
+        #[cfg(test)]
+        self.checkpoint_read_counts[0].fetch_add(ids.len(), Ordering::SeqCst);
         let connection = self.lock()?;
         ids.iter().map(|id| load_message(&connection, id)).collect()
     }
@@ -2169,6 +2301,18 @@ impl ConversationStore for SqliteConversationStore {
             .transpose()
     }
 
+    fn compaction_checkpoint(
+        &self,
+        summary_message_id: &MessageId,
+        through: u64,
+    ) -> Result<(super::inbox::CompactionCheckpointStatistics, Option<bool>), ConversationStoreError>
+    {
+        #[cfg(test)]
+        self.checkpoint_read_counts[2].fetch_add(1, Ordering::SeqCst);
+        let connection = self.lock()?;
+        load_compaction_checkpoint(&connection, summary_message_id, through)
+    }
+
     fn load_surface_history(
         &self,
         through: SurfaceRevision,
@@ -2181,6 +2325,8 @@ impl ConversationStore for SqliteConversationStore {
         &self,
         revision: SurfaceRevision,
     ) -> Result<Vec<MessageId>, ConversationStoreError> {
+        #[cfg(test)]
+        self.checkpoint_read_counts[1].fetch_add(1, Ordering::SeqCst);
         let connection = self.lock()?;
         reconstruct_surface(&connection, revision)
     }
@@ -2335,6 +2481,18 @@ impl ConversationStore for SqliteConversationStore {
         if self.consume_compaction_fault(CompactionFaultOperation::BeforeSummaryInsert) {
             return Err(storage("fault injected: before compaction summary insert"));
         }
+        // Estimate the exact validated replacement span once, under the same
+        // transaction that owns its summary and Surface transition. This also
+        // enforces the contract for direct native commit callers.
+        let retired = head.active_message_ids[start..=end]
+            .iter()
+            .map(|id| load_message_tx(&transaction, id))
+            .collect::<Result<Vec<_>, _>>()?;
+        let statistics = super::inbox::CompactionCheckpointStatistics {
+            retired_messages: retired.len() as u64,
+            retired_tokens: crate::context::DefaultTokenEstimator
+                .estimate_conversation_input(&retired),
+        };
         let summary_cursor = append_message_ledger(
             &transaction,
             &MessageBlock::User(input.summary.clone()),
@@ -2385,6 +2543,7 @@ impl ConversationStore for SqliteConversationStore {
                 surface_revision: revision,
                 tokens_before: input.tokens_before,
                 estimated_tokens_after: input.estimated_tokens_after,
+                occupancy: input.occupancy,
             },
         };
         #[cfg(test)]
@@ -2392,6 +2551,10 @@ impl ConversationStore for SqliteConversationStore {
             return Err(storage("fault injected: before compaction event insert"));
         }
         let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        transaction.execute(
+            "UPDATE message_ledger SET checkpoint_json=?2,compaction_event_sequence=?3 WHERE message_id=?1",
+            params![input.summary.id.as_str(), encode(&statistics, "checkpoint statistics")?, seq_to_i64(persisted.event.sequence)?],
+        ).map_err(|error| storage(format!("checkpoint facts: {error}")))?;
         #[cfg(test)]
         if self.consume_compaction_fault(CompactionFaultOperation::AfterEventInsert) {
             return Err(storage("fault injected: after compaction event insert"));
@@ -5201,6 +5364,10 @@ fn validate_existing_schema(connection: &Connection) -> Result<(), ConversationS
     verify_schema_shape(connection)
 }
 
+// This is an index discriminator, not a second occupancy fact. The Journal
+// continues to own the usage payload and the compaction's explicit absence.
+const CONTEXT_READING_PREDICATE: &str = "json_extract(event_json, '$.event.type') = 'compaction_completed' OR COALESCE(json_type(event_json, '$.event.usage'), 'null') != 'null'";
+
 #[allow(clippy::too_many_lines)] // Closed indexed scope vocabulary in one place.
 /// The actual bounded SQL used by the reader and its query-plan contract tests.
 fn presentation_statements(
@@ -5219,6 +5386,7 @@ fn presentation_statements(
     ];
     let scope = match &query.scope {
         FactScope::All => String::new(),
+        FactScope::ContextReading => format!(" AND ({CONTEXT_READING_PREDICATE}) = 1"),
         FactScope::Step(attempt, turn) => {
             values.push(Value::Text(attempt.to_string()));
             values.push(Value::Text(turn.to_string()));
@@ -5252,7 +5420,9 @@ fn presentation_statements(
                 FactScope::Subagent(value) => ("subagent_id", value),
                 FactScope::Workflow(value) => ("run_id", value),
                 FactScope::Interaction(value) => ("interaction_id", value),
+                FactScope::Message(value) => ("message_id", value),
                 FactScope::All
+                | FactScope::ContextReading
                 | FactScope::Step(..)
                 | FactScope::Attempt(..)
                 | FactScope::ToolCall { .. } => unreachable!(),
@@ -5263,6 +5433,8 @@ fn presentation_statements(
     };
     let index = match query.scope {
         FactScope::All => "events_kind_idx",
+        FactScope::ContextReading => "events_context_reading_idx",
+        FactScope::Message(..) => "events_message_id_kind_idx",
         FactScope::Attempt(..) => "events_attempt_kind_idx",
         FactScope::Step(..) => "events_step_kind_idx",
         FactScope::Request(..) => "events_request_id_kind_idx",
@@ -5294,6 +5466,14 @@ fn presentation_statements(
 }
 
 const PRESENTATION_INDEXES: &[(&str, &str)] = &[
+    (
+        "events_context_reading_idx",
+        "json_extract(event_json, '$.event.type'), (json_extract(event_json, '$.event.type') = 'compaction_completed' OR COALESCE(json_type(event_json, '$.event.usage'), 'null') != 'null'), sequence",
+    ),
+    (
+        "events_message_id_kind_idx",
+        "json_extract(event_json, '$.event.message_id'), json_extract(event_json, '$.event.type'), sequence",
+    ),
     (
         "events_kind_idx",
         "json_extract(event_json, '$.event.type'), sequence",
@@ -5345,7 +5525,8 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 next_transcript_position INTEGER NOT NULL CHECK(next_transcript_position >= 0),
                 reading_mutation_revision INTEGER NOT NULL DEFAULT 0 CHECK(reading_mutation_revision >= 0),
                 logical_step_sequence INTEGER NOT NULL CHECK(logical_step_sequence >= 0),
-                pending_unresolved_output_stream_id TEXT
+                pending_unresolved_output_stream_id TEXT,
+                bootstrap_initialized INTEGER NOT NULL DEFAULT 0 CHECK(bootstrap_initialized IN (0,1))
             );
             CREATE TABLE IF NOT EXISTS goal_state (
                 singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
@@ -5366,7 +5547,9 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
             CREATE TABLE IF NOT EXISTS message_ledger (
                 position INTEGER PRIMARY KEY,
                 message_id TEXT NOT NULL UNIQUE,
-                message_json TEXT NOT NULL
+                message_json TEXT NOT NULL,
+                checkpoint_json TEXT,
+                compaction_event_sequence INTEGER REFERENCES events(sequence)
             );
             CREATE TABLE IF NOT EXISTS canonical_tool_calls (
                 assistant_message_id TEXT NOT NULL REFERENCES message_ledger(message_id),
@@ -5387,10 +5570,32 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 id INTEGER PRIMARY KEY CHECK(id=1),
                 message_count INTEGER NOT NULL,
                 history_digest TEXT NOT NULL,
-                response_provenance TEXT NOT NULL,
-                turn_provenance TEXT NOT NULL,
+                occupancy_json TEXT NOT NULL,
+                occupancy_digest TEXT NOT NULL,
+                turn_count INTEGER NOT NULL CHECK(turn_count>=0),
+                response_count INTEGER NOT NULL CHECK(response_count>=0),
+                provenance_digest TEXT NOT NULL,
                 inherited_transcript_through INTEGER NOT NULL CHECK(inherited_transcript_through >= 0)
             );
+            CREATE TABLE IF NOT EXISTS inherited_turn_provenance (
+                ordinal INTEGER PRIMARY KEY CHECK(ordinal>=0),
+                payload TEXT NOT NULL,
+                payload_digest TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS inherited_turn_identity_idx ON inherited_turn_provenance(json_extract(payload,'$.id.conversation_id'),json_extract(payload,'$.id.attempt_id'));
+            CREATE TABLE IF NOT EXISTS inherited_response_provenance (
+                ordinal INTEGER PRIMARY KEY CHECK(ordinal>=0),
+                payload TEXT NOT NULL,
+                payload_digest TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS inherited_response_closing_idx ON inherited_response_provenance(json_extract(payload,'$.closing_message_id'));
+            CREATE TABLE IF NOT EXISTS inherited_message_membership (
+                assistant_message_id TEXT PRIMARY KEY REFERENCES message_ledger(message_id),
+                turn_ordinal INTEGER REFERENCES inherited_turn_provenance(ordinal),
+                response_ordinal INTEGER REFERENCES inherited_response_provenance(ordinal),
+                membership_digest TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS inherited_membership_turn_idx ON inherited_message_membership(turn_ordinal,assistant_message_id);
             CREATE TABLE IF NOT EXISTS surface_ops (
                 revision INTEGER PRIMARY KEY,
                 compaction_generation INTEGER NOT NULL,
@@ -5517,6 +5722,33 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
 
 #[allow(clippy::too_many_lines)] // One required-shape table, one place.
 fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreError> {
+    // Bootstrap metadata stays compact; provenance payloads have their own rows.
+    // Refuse obsolete inline arrays and require the native keyed representation.
+    let bootstrap_columns = connection
+        .prepare("PRAGMA table_info(bootstrap_identity)")
+        .map_err(|error| storage(error.to_string()))?
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|error| storage(error.to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| storage(error.to_string()))?;
+    if bootstrap_columns
+        != [
+            "id",
+            "message_count",
+            "history_digest",
+            "occupancy_json",
+            "occupancy_digest",
+            "turn_count",
+            "response_count",
+            "provenance_digest",
+            "inherited_transcript_through",
+        ]
+    {
+        return Err(ConversationStoreError::IncompatibleSchema(
+            "invalid bootstrap lookup field order".into(),
+        ));
+    }
+
     for (name, expression) in PRESENTATION_INDEXES {
         let sql: Option<String> = connection.query_row("SELECT sql FROM sqlite_schema WHERE type='index' AND name=?1 AND tbl_name='events'", [name], |row| row.get(0)).optional().map_err(|error| storage(error.to_string()))?;
         if sql.as_deref() != Some(format!("CREATE INDEX {name} ON events({expression})").as_str()) {
@@ -5524,6 +5756,87 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "missing or invalid presentation index {name}"
             )));
         }
+    }
+    for sql in [
+        "CREATE UNIQUE INDEX inherited_turn_identity_idx ON inherited_turn_provenance(json_extract(payload,'$.id.conversation_id'),json_extract(payload,'$.id.attempt_id'))",
+        "CREATE UNIQUE INDEX inherited_response_closing_idx ON inherited_response_provenance(json_extract(payload,'$.closing_message_id'))",
+    ] {
+        let name = sql.split_whitespace().nth(3).expect("literal index name");
+        let retained: Option<String> = connection
+            .query_row(
+                "SELECT sql FROM sqlite_schema WHERE type='index' AND name=?1",
+                [name],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| storage(error.to_string()))?;
+        if retained.as_deref() != Some(sql) {
+            return Err(ConversationStoreError::IncompatibleSchema(format!(
+                "missing or invalid inherited index {name}"
+            )));
+        }
+    }
+    let reverse_index: Option<String> = connection
+        .query_row("SELECT sql FROM sqlite_schema WHERE type='index' AND name='inherited_membership_turn_idx'", [], |row| row.get(0))
+        .optional()
+        .map_err(|error| storage(error.to_string()))?;
+    if reverse_index.as_deref()
+        != Some(
+            "CREATE INDEX inherited_membership_turn_idx ON inherited_message_membership(turn_ordinal,assistant_message_id)",
+        )
+    {
+        return Err(ConversationStoreError::IncompatibleSchema(
+            "missing or invalid inherited reverse membership index".into(),
+        ));
+    }
+    for table in ["inherited_turn_provenance", "inherited_response_provenance"] {
+        let primary: (String, i64) = connection
+            .query_row(
+                &format!("SELECT type,pk FROM pragma_table_info('{table}') WHERE name='ordinal'"),
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(|error| storage(error.to_string()))?;
+        if primary != ("INTEGER".into(), 1) {
+            return Err(ConversationStoreError::IncompatibleSchema(format!(
+                "invalid inherited ordinal primary key in {table}"
+            )));
+        }
+    }
+    let foreign = connection
+        .prepare("PRAGMA foreign_key_list(inherited_message_membership)")
+        .map_err(|error| storage(error.to_string()))?
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })
+        .map_err(|error| storage(error.to_string()))?
+        .collect::<Result<BTreeSet<_>, _>>()
+        .map_err(|error| storage(error.to_string()))?;
+    let expected = BTreeSet::from([
+        (
+            "message_ledger".into(),
+            "assistant_message_id".into(),
+            "message_id".into(),
+        ),
+        (
+            "inherited_turn_provenance".into(),
+            "turn_ordinal".into(),
+            "ordinal".into(),
+        ),
+        (
+            "inherited_response_provenance".into(),
+            "response_ordinal".into(),
+            "ordinal".into(),
+        ),
+    ]);
+    if foreign != expected {
+        return Err(ConversationStoreError::IncompatibleSchema(
+            "invalid inherited membership foreign keys".into(),
+        ));
     }
     let required = [
         (
@@ -5537,6 +5850,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "reading_mutation_revision",
                 "logical_step_sequence",
                 "pending_unresolved_output_stream_id",
+                "bootstrap_initialized",
             ] as &[&str],
         ),
         (
@@ -5549,7 +5863,13 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         ),
         (
             "message_ledger",
-            &["position", "message_id", "message_json"],
+            &[
+                "position",
+                "message_id",
+                "message_json",
+                "checkpoint_json",
+                "compaction_event_sequence",
+            ],
         ),
         (
             "transcript_order",
@@ -5570,9 +5890,29 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
             &[
                 "message_count",
                 "history_digest",
-                "response_provenance",
-                "turn_provenance",
+                "turn_count",
+                "response_count",
+                "provenance_digest",
+                "occupancy_json",
+                "occupancy_digest",
                 "inherited_transcript_through",
+            ],
+        ),
+        (
+            "inherited_turn_provenance",
+            &["ordinal", "payload", "payload_digest"],
+        ),
+        (
+            "inherited_response_provenance",
+            &["ordinal", "payload", "payload_digest"],
+        ),
+        (
+            "inherited_message_membership",
+            &[
+                "assistant_message_id",
+                "turn_ordinal",
+                "response_ordinal",
+                "membership_digest",
             ],
         ),
         (
@@ -5678,6 +6018,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         ("inbound_correlation", "message_id"),
         ("message_ledger", "message_id"),
         ("canonical_tool_calls", "result_message_id"),
+        ("inherited_message_membership", "assistant_message_id"),
         ("agent_authorities", "agent_id"),
         ("events", "event_id"),
         ("request_snapshots", "request_id"),
@@ -6286,6 +6627,55 @@ fn message_exists(
         .map_err(|error| storage(format!("message identity probe: {error}")))
 }
 
+/// Both lookups use existing unique Ledger identity and Journal sequence keys.
+fn load_compaction_checkpoint(
+    connection: &Connection,
+    id: &MessageId,
+    through: u64,
+) -> Result<(super::inbox::CompactionCheckpointStatistics, Option<bool>), ConversationStoreError> {
+    let row: Option<(Option<String>, Option<i64>)> = connection.query_row(
+        "SELECT checkpoint_json,compaction_event_sequence FROM message_ledger WHERE message_id=?1",
+        [id.as_str()], |row| Ok((row.get(0)?, row.get(1)?)),
+    ).optional().map_err(|error| storage(format!("checkpoint lookup: {error}")))?;
+    let (statistics, sequence) = row.ok_or_else(|| {
+        ConversationStoreError::InvalidReference(format!("checkpoint {id} is unavailable"))
+    })?;
+    let statistics: super::inbox::CompactionCheckpointStatistics = decode(
+        &statistics.ok_or_else(|| {
+            ConversationStoreError::InvalidReference(format!(
+                "checkpoint {id} has no required statistics"
+            ))
+        })?,
+        "checkpoint statistics",
+    )?;
+    if statistics.retired_messages == 0 {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "checkpoint {id} retires no messages"
+        )));
+    }
+    let manual = match sequence {
+        Some(sequence) if nonnegative(sequence, "compaction completion sequence")? <= through => {
+            let json: String = connection
+                .query_row(
+                    "SELECT event_json FROM events WHERE sequence=?1",
+                    [sequence],
+                    |row| row.get(0),
+                )
+                .map_err(|error| storage(format!("checkpoint completion: {error}")))?;
+            let event: RuntimeEventEnvelope = decode(&json, "checkpoint completion")?;
+            if !matches!(&event.event, RuntimeEvent::CompactionCompleted { summary_message_id, .. } if summary_message_id == id)
+            {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "checkpoint {id} has invalid completion correlation"
+                )));
+            }
+            Some(event.attempt_id.is_none())
+        }
+        _ => None,
+    };
+    Ok((statistics, manual))
+}
+
 fn load_message(
     connection: &Connection,
     message_id: &MessageId,
@@ -6690,20 +7080,15 @@ fn load_transcript_item(
     reference_id: &str,
 ) -> Result<TranscriptItem, ConversationStoreError> {
     match reference_kind {
-        "inherited_turn" => {
-            let json: String = connection
-                .query_row(
-                    "SELECT value FROM bootstrap_identity,json_each(turn_provenance) WHERE key=?1",
-                    [reference_id
-                        .parse::<i64>()
-                        .map_err(|error| storage(error.to_string()))?],
-                    |row| row.get(0),
-                )
-                .map_err(|error| storage(error.to_string()))?;
-            Ok(TranscriptItem::InheritedTurn {
-                provenance: decode(&json, "inherited turn")?,
-            })
-        }
+        "inherited_turn" => Ok(TranscriptItem::InheritedTurn {
+            provenance: provenance::turn_at(
+                connection,
+                reference_id
+                    .parse::<i64>()
+                    .map_err(|error| storage(error.to_string()))?,
+            )?,
+        }),
+
         "message" => {
             let ledger_json: Option<String> = connection
                 .query_row(
@@ -9893,6 +10278,127 @@ fn is_terminal(event: &RuntimeEvent) -> bool {
     )
 }
 
+/// Seed irrelevant text-Assistant history for read-cost regressions without
+/// reconstructing and validating the whole growing Surface on every append.
+/// Native Ledger, Surface and Journal writers still own every persisted fact.
+#[cfg(test)]
+pub(crate) fn append_assistant_history_fixture(
+    store: &SqliteConversationStore,
+    history: &[(
+        crate::message::types::AssistantMessageBlock,
+        RuntimeEventEnvelope,
+    )],
+) -> Result<(), ConversationStoreError> {
+    let mut connection = store.lock()?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| storage(format!("Assistant history fixture: {error}")))?;
+    ensure_surface_head(&transaction)?;
+    let mut head = load_head(&transaction)?;
+    for (assistant, event) in history {
+        if !assistant
+            .content
+            .iter()
+            .all(|block| matches!(block, AssistantContentBlock::Text(_)))
+        {
+            return Err(storage("the Assistant history fixture accepts only text"));
+        }
+        let message = MessageBlock::Assistant(assistant.clone());
+        validate_canonical_event_for_message(&message, &event.event)?;
+        append_message_ledger(&transaction, &message, None)?;
+        head.active_message_ids.push(assistant.id.clone());
+        head.revision = head.revision.next();
+        append_surface_op(
+            &transaction,
+            head.revision,
+            head.compaction_generation,
+            &SurfaceOp::Append {
+                message_id: assistant.id.clone(),
+            },
+        )?;
+        persist_event_tx(&transaction, store.conversation_id(), event.clone())?;
+    }
+    update_surface_head(
+        &transaction,
+        head.revision,
+        head.compaction_generation,
+        &head.active_message_ids,
+    )?;
+    update_checkpoint(
+        &transaction,
+        head.revision,
+        head.compaction_generation,
+        &head.active_message_ids,
+    )?;
+    // Verify the same final durable invariants as ordinary appends, once.
+    load_head(&transaction)?;
+    transaction
+        .commit()
+        .map_err(|error| storage(format!("Assistant history fixture commit: {error}")))
+}
+
+const TRANSCRIPT_ATTEMPTS_SQL: &str = "SELECT attempt_id FROM events INDEXED BY events_message_id_kind_idx WHERE json_extract(event_json,'$.event.message_id')=?1 AND json_extract(event_json,'$.event.type')='assistant_message_committed' AND sequence<=?2";
+const INHERITED_OCCUPANCY_SQL: &str = "SELECT s.bootstrap_initialized,b.message_count,b.history_digest,b.occupancy_json,b.occupancy_digest FROM rustx_store s LEFT JOIN bootstrap_identity b ON b.id=s.id WHERE s.id=1";
+
+fn inherited_occupancy_digest(count: u64, history_digest: &str, occupancy: &str) -> String {
+    use std::fmt::Write as _;
+    let mut hasher = Sha256::new();
+    hasher.update(b"rustx-inherited-occupancy-v1\n");
+    hasher.update(count.to_be_bytes());
+    hasher.update(history_digest.as_bytes());
+    hasher.update(occupancy.as_bytes());
+    let mut digest = String::new();
+    for byte in hasher.finalize() {
+        let _ = write!(digest, "{byte:02x}");
+    }
+    digest
+}
+
+fn read_inherited_occupancy(
+    connection: &Connection,
+) -> Result<Option<crate::context::occupancy::ContextOccupancy>, ConversationStoreError> {
+    let (initialized, count, history, json, digest): (
+        i64,
+        Option<i64>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = connection
+        .query_row(INHERITED_OCCUPANCY_SQL, [], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        })
+        .map_err(|error| storage(format!("bootstrap occupancy: {error}")))?;
+    let (count, history, json, digest) = match (initialized, count, history, json, digest) {
+        (0, None, None, None, None) => return Ok(None),
+        (1, Some(count), Some(history), Some(json), Some(digest)) if count >= 0 => (
+            u64::try_from(count).map_err(|_| storage("negative bootstrap message count"))?,
+            history,
+            json,
+            digest,
+        ),
+        _ => {
+            return Err(storage(
+                "missing or inconsistent immutable bootstrap metadata",
+            ));
+        }
+    };
+    if digest != inherited_occupancy_digest(count, &history, &json) {
+        return Err(storage("inconsistent immutable bootstrap occupancy"));
+    }
+    let reading: Option<crate::context::occupancy::ContextOccupancy> =
+        decode(&json, "bootstrap occupancy")?;
+    if let Some(reading) = &reading {
+        reading.validate()?;
+    }
+    Ok(reading)
+}
+
 fn initial_history_digest(messages: &[MessageBlock]) -> Result<String, ConversationStoreError> {
     use std::fmt::Write as _;
     let mut hasher = Sha256::new();
@@ -9968,6 +10474,10 @@ mod pending_transaction_tests;
 
 #[cfg(test)]
 mod tests {
+    mod indexed_fact_tests {
+        use super::*;
+        include!("sqlite/indexed_fact_tests.rs");
+    }
     use super::*;
     use crate::context::assembly::ContextGeneration;
     use crate::conversation::ConversationState;
@@ -10296,6 +10806,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // One retired-history seed and canonical occurrence contract.
     fn transcript_tool_lineage_seed_keeps_retired_reused_call_occurrences() {
         let call = ToolCall {
             id: ToolCallId::new("call-1"),
@@ -10355,9 +10866,17 @@ mod tests {
                 message_id: MessageId::new("b"),
             },
         ];
+        let checkpoints = BTreeMap::from([(
+            MessageId::new("summary"),
+            crate::durable::inbox::CompactionCheckpointStatistics {
+                retired_messages: 2,
+                retired_tokens: crate::context::DefaultTokenEstimator
+                    .estimate_conversation_input(&canonical[..2]),
+            },
+        )]);
         let store = store();
         store
-            .initialize_lineage(&LineageSeed::replayed(canonical, history).unwrap())
+            .initialize_lineage(&LineageSeed::replayed(canonical, history, checkpoints).unwrap())
             .unwrap();
         let unresolved = crate::runtime_client::snapshot::transcript_page_view(
             store.load_transcript_page(None, 1).unwrap(),
@@ -10768,6 +11287,7 @@ mod tests {
             attempt_id: None,
             turn_id: None,
             timestamp: Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap(),
+            occupancy: None,
         };
         store.arm_fail_compaction_times(1);
         assert!(store.commit_compaction(first_compaction(s1)).is_err());
@@ -10818,6 +11338,7 @@ mod tests {
                     attempt_id: None,
                     turn_id: None,
                     timestamp: Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap(),
+                    occupancy: None,
                 })
                 .is_err()
         );
@@ -10835,6 +11356,7 @@ mod tests {
                 attempt_id: None,
                 turn_id: None,
                 timestamp: Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap(),
+                occupancy: None,
             })
             .unwrap();
         assert_eq!(
@@ -10900,6 +11422,48 @@ mod tests {
     }
 
     #[test]
+    fn malformed_checkpoint_facts_fail_explicitly_without_history_recovery() {
+        let store = store();
+        store.initialize(&[user_message("a", "A")]).unwrap();
+        let input = CompactionCommitInput {
+            summary: summary_message("summary", "summary"),
+            span: SurfaceSpan::new(MessageId::new("a"), MessageId::new("a")),
+            expected_revision: store.load_head().unwrap().revision,
+            tokens_before: TokenMeasurement {
+                input_tokens: 10,
+                source: TokenMeasurementSource::Estimated,
+            },
+            estimated_tokens_after: 2,
+            attempt_id: None,
+            turn_id: None,
+            timestamp: Utc::now(),
+            occupancy: None,
+        };
+        store.commit_compaction(input).unwrap();
+        for value in [
+            None,
+            Some("{}"),
+            Some("{\"retired_messages\":0,\"retired_tokens\":1}"),
+            Some("{\"retired_messages\":1,\"retired_tokens\":-1}"),
+        ] {
+            store
+                .conn
+                .lock()
+                .unwrap()
+                .execute(
+                    "UPDATE message_ledger SET checkpoint_json=?1 WHERE message_id='summary'",
+                    [value],
+                )
+                .unwrap();
+            assert!(
+                store
+                    .compaction_checkpoint(&MessageId::new("summary"), u64::MAX)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn every_compaction_stage_fault_exposes_only_the_old_complete_state() {
         let faults = [
             CompactionFaultOperation::BeforeSummaryInsert,
@@ -10931,6 +11495,7 @@ mod tests {
                 attempt_id: None,
                 turn_id: None,
                 timestamp: Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap(),
+                occupancy: None,
             };
             store.arm_compaction_fault_script([fault]);
             assert!(store.commit_compaction(input()).is_err());
@@ -10947,8 +11512,30 @@ mod tests {
                     .any(|message| crate::conversation::message_id_of(message) == summary_id)
             );
             assert!(store.read_events(None, 20).unwrap().events.is_empty());
+            assert!(store.compaction_checkpoint(&summary_id, u64::MAX).is_err());
+            assert_eq!(
+                store
+                    .conn
+                    .lock()
+                    .unwrap()
+                    .query_row(
+                        "SELECT count(*) FROM message_ledger WHERE checkpoint_json IS NOT NULL",
+                        [],
+                        |row| row.get::<_, i64>(0)
+                    )
+                    .unwrap(),
+                0
+            );
 
             let (new_revision, _, event, _) = store.commit_compaction(input()).unwrap();
+            assert_eq!(
+                store
+                    .compaction_checkpoint(&summary_id, u64::MAX)
+                    .unwrap()
+                    .0
+                    .retired_messages,
+                2
+            );
             assert_eq!(new_revision, old_revision.next());
             assert!(matches!(
                 event.event,
@@ -11704,6 +12291,7 @@ mod tests {
                 attempt_id: None,
                 turn_id: None,
                 timestamp: Utc.with_ymd_and_hms(2026, 8, 27, 6, 2, 0).unwrap(),
+                occupancy: None,
             })
             .expect("compaction commits");
 
@@ -12686,6 +13274,7 @@ mod tests {
                 attempt_id: None,
                 turn_id: None,
                 timestamp: Utc::now(),
+                occupancy: None,
             })
             .unwrap();
         assert!(
@@ -14545,6 +15134,7 @@ mod tests {
                 attempt_id: None,
                 turn_id: None,
                 timestamp: Utc::now(),
+                occupancy: None,
             })
             .unwrap();
         let head = store.load_head().unwrap();
@@ -14969,6 +15559,8 @@ mod tests {
                 "events_step_kind_idx",
             ),
             (FactScope::Request("r".into()), "events_request_id_kind_idx"),
+            (FactScope::Message("m".into()), "events_message_id_kind_idx"),
+            (FactScope::ContextReading, "events_context_reading_idx"),
             (
                 FactScope::ToolCall {
                     call_id: "c".into(),
@@ -15535,6 +16127,7 @@ mod tests {
 // Finite archive readers share the concrete durable schema, never transport DTOs.
 pub(crate) mod archive;
 mod lineage;
+mod provenance;
 mod reading;
 #[cfg(test)]
 mod reading_tests;

@@ -1,6 +1,7 @@
 const fixtureOrigin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 import { test, expect, type Page } from '@playwright/test';
 import { expectStableScreenshot } from './screenshot';
+import { compareScreenshot, decodePng } from '../screenshot-comparator';
 
 const timelineTrack = (page: Page) => page.getByLabel('Timeline overview; drag horizontally to focus events');
 const loadEarlier = (page: Page) => page.getByRole('region', { name: /^(Trajectory timeline|轨迹时间线)$/ }).getByRole('button', { name: /^(Load earlier history|加载更早的历史)$/ });
@@ -461,6 +462,24 @@ for (const width of [1440, 390]) for (const locale of ['en', 'zh'] as const) {
     await page.keyboard.press('ArrowDown'); await expect(later).toBeFocused();
     await expect(reads).toHaveAttribute('data-detail-reads', '2');
     await expectStableScreenshot(page, `ledger-order-inspector-${width}-${locale}.png`);
+    if (width === 390) {
+      // The historical fade must not depend on the last partial repaint. Keep
+      // its text and focus outside containment and invalidate both paint owners.
+      const marker = loadEarlier(page);
+      const geometry = await marker.boundingBox();
+      const captureOptions = { animations: 'disabled', caret: 'hide', scale: 'css' } as const;
+      const before = await page.screenshot(captureOptions);
+      const invalidation = await page.addStyleTag({ content: '[data-earlier-history], [data-earlier-history]::before { background: red !important; }' });
+      await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      await invalidation.evaluate(node => node.parentNode?.removeChild(node));
+      await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      expect(await marker.boundingBox()).toEqual(geometry);
+      const after = await page.screenshot(captureOptions);
+      const comparison = compareScreenshot({ expected: decodePng(before), actual: decodePng(after), referenceName: 'timeline-history-fade-repaint', noisePolicy: [] });
+      await test.info().attach('timeline-before-background-repaint', { body: before, contentType: 'image/png' });
+      await test.info().attach('timeline-after-background-repaint', { body: after, contentType: 'image/png' });
+      expect(comparison.totalChanged, comparison.report).toBe(0);
+    }
     await details(page).getByRole('button', { name: locale === 'en' ? 'Close details' : '关闭详情' }).click();
     await opening.evaluate(el => { const pane = el.closest('[data-trajectory-scroll]')!; pane.scrollTop += el.getBoundingClientRect().top - pane.getBoundingClientRect().top; pane.dispatchEvent(new Event('scroll')); });
     // Invoke the real controlled page callback without transferring DOM focus.

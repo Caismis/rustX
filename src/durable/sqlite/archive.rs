@@ -46,6 +46,8 @@ impl SqliteConversationStore {
 
     pub(crate) fn archive_frontiers(&self) -> io::Result<ConversationArchiveFrontiers> {
         let conn = self.lock().map_err(error)?;
+        super::provenance::turns(&conn).map_err(error)?;
+        super::provenance::responses(&conn).map_err(error)?;
         let max = |table: &str, key: &str| {
             conn.query_row(
                 &format!("SELECT COALESCE(MAX({key}),0) FROM {table}"),
@@ -73,13 +75,13 @@ impl SqliteConversationStore {
         through: i64,
     ) -> io::Result<Option<(i64, String)>> {
         use rusqlite::OptionalExtension;
-        if let Some(column) = match authority {
-            Authority::InheritedResponses => Some("response_provenance"),
-            Authority::InheritedTurns => Some("turn_provenance"),
+        if let Some(table) = match authority {
+            Authority::InheritedResponses => Some("inherited_response_provenance"),
+            Authority::InheritedTurns => Some("inherited_turn_provenance"),
             _ => None,
         } {
             return self.lock().map_err(error)?.query_row(
-                &format!("SELECT json_each.key,json_each.value FROM bootstrap_identity,json_each({column}) WHERE bootstrap_identity.id<=?2 AND json_each.key>?1 ORDER BY json_each.key LIMIT 1"),
+                &format!("SELECT ordinal,payload FROM {table} WHERE ordinal>?1 AND EXISTS(SELECT 1 FROM bootstrap_identity WHERE id<=?2) ORDER BY ordinal LIMIT 1"),
                 params![after, through], |r| Ok((r.get(0)?, r.get(1)?)),
             ).optional().map_err(error);
         }

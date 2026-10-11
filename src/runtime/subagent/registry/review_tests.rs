@@ -138,7 +138,7 @@ async fn seal_open_restores_same_activation_before_admitting_another_message() {
     assert!(
         plane
             .registry
-            .admit_guidance(&first.subagent_id, "late")
+            .admit_guidance(&first.subagent_id, "late", &[])
             .is_err()
     );
     super::super::ipc::write_child_frame(&mut child.peer, &ChildFrame::SealOpen)
@@ -158,7 +158,7 @@ async fn seal_open_restores_same_activation_before_admitting_another_message() {
     );
     let (_, answer, _ticket) = plane
         .registry
-        .admit_guidance(&first.subagent_id, "same activation")
+        .admit_guidance(&first.subagent_id, "same activation", &[])
         .unwrap();
     let ParentFrame::Guidance(guidance) = child.read_frame().await else {
         panic!("guidance");
