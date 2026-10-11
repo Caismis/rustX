@@ -228,6 +228,15 @@ async fn unsupported_protocol_version_is_a_correlated_typed_error() {
     assert_eq!(response["error"]["requested"], 38);
     assert_eq!(adapter.endpoint.attachment_id(), None);
 
+    // main's v61 decoder rejects the new inherited_through transcript field.
+    // Reject it before an attachment can deliver that incompatible snapshot.
+    let response = adapter.exchange(r#"{"method":"initialize","id":61,"protocol_version":61}"#);
+    assert!(response.get("result").is_none());
+    assert_eq!(response["error"]["type"], "unsupported_protocol_version");
+    assert_eq!(response["error"]["supported"], RUNTIME_CLIENT_PROTOCOL_VERSION);
+    assert_eq!(response["error"]["requested"], 61);
+    assert_eq!(adapter.endpoint.attachment_id(), None);
+
     // A future version the runtime does not speak is rejected explicitly.
     let future = RUNTIME_CLIENT_PROTOCOL_VERSION + 1;
     let response = adapter.exchange(

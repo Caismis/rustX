@@ -263,7 +263,9 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// Version 61 replaces reasoning profiles with general Model Profiles in model
 /// selection, invocation and catalog views (#456). Version 60 clients are
 /// rejected without a compatibility projection.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 61;
+/// Version 62 adds the native inherited transcript boundary to transcript pages.
+/// Version 61 decoders reject that field and are refused during initialization.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 62;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1085,7 +1087,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 61);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 62);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

@@ -66,7 +66,7 @@ pub async fn representative_scenario(
     sessions: [SessionId; 2],
 ) {
     assert_ne!(sessions[0], sessions[1]);
-    for version in [6, 25, 26] {
+    for version in [6, 25, 26, 39] {
         let mismatch_id = RequestId::String(format!("version-mismatch-{version}"));
         let Response::Failure(failure) = driver
             .request(Request {

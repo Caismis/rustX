@@ -12,7 +12,7 @@ import { todoDock, goalDock, queueRows } from '../../bindings/composer-context';
 import { ChatViewport } from '../../presentation/layout/ChatViewport';
 import { Trajectory } from '../trajectory/Trajectory';
 import type { ResponseAction } from '../commands/native';
-import type { AttachmentTarget, CompletedResponseView } from '../../../../protocol/app-server/v39';
+import type { AttachmentTarget, CompletedResponseView } from '../../../../protocol/app-server/v40';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { UserMessage, AssistantMessage } from '../../presentation/agent/Message';
 import pendingCss from './PendingMessage.module.css';
@@ -51,12 +51,19 @@ export function ConversationLive({ client, sessionId, mode, disabled, onHistoric
   const located = useRef<object | undefined>(undefined);
   useEffect(() => {
     if (!view?.target || !view.readable || mode !== 'chat' || !sourceLocation || sourceLocation.target !== view.target || located.current === sourceLocation) return;
-    const intent = viewport.current?.beginNavigation();
+    let clientIntent: number | undefined;
+    const clientCurrent = () => {
+      const current = client.getSnapshot().views[view.id];
+      return current?.target === view.target && client.isAttachmentObservationCurrent(view.id, view.observation)
+        && current.turnNavigation?.intent === clientIntent;
+    };
+    const intent = viewport.current?.beginNavigation(() => { if (clientCurrent()) client.invalidateReading(view.id); });
     if (!intent) return;
     located.current = sourceLocation;
-    const target = view.target;
-    void client.navigateMessage(view.id, sourceLocation.messageId, intent.current).then(landed => {
-      if (landed) intent.commit(`message:${sourceLocation.messageId}`, () => client.getSnapshot().views[view.id]?.target === target && client.isAttachmentObservationCurrent(view.id, view.observation));
+    const work = client.navigateMessage(view.id, sourceLocation.messageId, intent.current);
+    clientIntent = client.getSnapshot().views[view.id]?.turnNavigation?.intent;
+    void work.then(landed => {
+      if (landed) intent.commit(`message:${sourceLocation.messageId}`, clientCurrent);
     });
   }, [client, view?.target, view?.observation, view?.readable, mode, sourceLocation]);
   if (sessionId && tracePreview) return <Trajectory key={sessionId} cache={tracePreview.cache} onSelect={id => client.selectTrace(sessionId, id)} onLoadDetail={id => { void client.loadTraceDetail(sessionId, id); }} loadEarlier={() => void client.loadEarlierTrace(sessionId).catch(() => {})}/>;

@@ -4,7 +4,7 @@ import { turnRail, turnRailRange } from '../src/app/agent/turn-rail-items';
 import { TurnNavigator } from '../src/app/agent/TurnNavigator';
 import { Server } from './fixture';
 import { installTurnNavigatorObserver } from './turn-navigator-fixture';
-import type { ConversationTurn, RuntimeClientSnapshot } from '../../protocol/app-server/v39';
+import type { ConversationTurn, RuntimeClientSnapshot } from '../../protocol/app-server/v40';
 let server: Server;
 afterEach(() => { cleanup(); server?.client.disconnect(); vi.unstubAllGlobals(); });
 const turnsRequests = () => server.requests.filter(row => row.request.method === 'session/turns');
@@ -233,6 +233,21 @@ it('an explicit historical page survives live growth; an unloaded newest mark re
  expect(fixture.mark(130)!.dataset.turnOrdinal).toBe('130');expect(fixture.offsets().slice(-4)).toEqual([128,null,null,null]);
 });
 
+it('clicking the hover-loaded newest page follows subsequent native growth',async()=>{
+ const fixture=await pagingRail(128);
+ await scrollRail(fixture.ui,0);
+ await act(async()=>{fireEvent.click(fixture.ui.getByRole('button',{name:'Load and jump to turn 1'}));});
+ await scrollRail(fixture.ui,1000);
+ fireEvent.pointerMove(fixture.ui.getByRole('button',{name:'Load and jump to turn 128'}));
+ await waitFor(()=>expect(fixture.ui.getByRole('tooltip').textContent).toBe('turn 128'));
+ await act(async()=>{fireEvent.click(fixture.ui.getByRole('button',{name:'Jump to turn 128'}));});
+ expect(server.client.getSnapshot().views.A.turnOutline?.paging).toEqual({type:'latest'});
+ await fixture.start(129);await fixture.locate(129);await fixture.settle(129);
+ expect(server.client.getSnapshot().views.A.turnOutline?.page?.offset).toBe(128);
+ expect(fixture.mark(129)).toBeTruthy();
+ expect(fixture.offsets().slice(-3)).toEqual([null,null,null]);
+});
+
 it('settlement during a gated outline reply preserves one latest refresh demand',async()=>{
  const fixture=await pagingRail(64);server.held.add('session/turns');
  await fixture.start(65);const started=await server.waitFor('session/turns',2);const captured=server.commit(started);
@@ -255,7 +270,8 @@ async function pagingRail(initial:number){
   return {type:'conversation_turns',page:{cut:{conversation_id:'conversation-A',journal:String(total),transcript:String(location??initial),mutation_revision:'0'},offset,total,
    turns:Array.from({length:Math.min(64,total-offset)},(_,i)=>{const n=offset+i+1;return {id:{conversation_id:'conversation-A',attempt_id:`a${n}`},ordinal:n,cursor:n>initial && n!==location?null:String(n),prompt:`turn ${n}`,response:''};})}};
  });
- const navigate=navigationIntent();
+ navigationIntent();
+ const navigate=vi.fn((selection:ConversationTurn|number)=>{void server.client.navigateTurn('A',selection);});
  let ui:ReturnType<typeof render>;await act(async()=>{ui=render(<TurnNavigator client={server.client} sessionId="A" onNavigate={navigate}/>);});
  const update=async(n:number,settled=false,phaseChange=false)=>{const s=server.snapshots.get('A')!;const next:RuntimeClientSnapshot={...s,attempt:{attempt_id:`a${n}`,turn:1,phase:settled?{type:'settled',outcome:{type:'completed',finish_reason:{type:'stop'}}}:{type:'running'}},transcript:{entries:location?[{cursor:String(location),item:{type:'message',message:{role:'assistant',id:`m${location}`,content:[{type:'text',text:'native output'}]}},turn_process:{conversation_id:'conversation-A',attempt_id:`a${n}`,control_cursor:String(location),message_count:1,tool_call_count:0,outcome:settled?'completed' as const:'running' as const}}]:[]}};await act(async()=>{server.snapshots.set('A',next);if(phaseChange)await server.client.refresh('A');else server.durableUpdate('A',next);});};
  return {ui:ui!,navigate,mark:(n:number)=>ui!.container.querySelector<HTMLButtonElement>(`[data-turn-id='["conversation-A","a${n}"]']`),
