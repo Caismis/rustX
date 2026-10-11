@@ -224,6 +224,11 @@ async fn serve_transport(
             }
         }
         let listener = tokio::net::TcpListener::bind(address).await?;
+        eprintln!(
+            "rustx app-server protocol v{} (runtime-client v{})",
+            super::protocol::APP_SERVER_PROTOCOL_VERSION,
+            crate::runtime_client::types::RUNTIME_CLIENT_PROTOCOL_VERSION
+        );
         eprintln!("rustx app-server listening ws://{}", listener.local_addr()?);
         websocket::serve(listener, host, credential, shutdown.clone()).await
     }

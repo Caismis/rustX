@@ -39,6 +39,7 @@ pub mod launch;
 mod launch_tests;
 pub(crate) mod live_inspection;
 pub mod managed_python_resources;
+pub mod mcp_probe;
 pub mod mcp_resources;
 #[cfg(all(test, unix))]
 mod preparation_e2e;

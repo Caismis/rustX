@@ -620,6 +620,7 @@ async fn a_committed_list_survives_the_compaction_that_retires_its_result() {
             attempt_id: None,
             turn_id: None,
             timestamp: chrono::Utc::now(),
+            occupancy: None,
         })
         .expect("compaction");
 

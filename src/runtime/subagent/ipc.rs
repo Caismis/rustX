@@ -102,13 +102,13 @@ use super::resolver::ResolvedSubagentSpec;
 /// Version 29 passes the preinstalled physical-authority lease on fd 2 before
 /// the child reads Hello. The parent installed that authority before Reserved;
 /// the child clones it before composition and restores stderr to diagnostics.
-/// Version 30 freezes the selected general Model Profile, replacing the
-/// reasoning profile, in the child model specification (#456).
-/// Version 31 (#462) replaces the workspace snapshot and Git isolation facts
-/// with the invoking Session's frozen execution binding, and removes the
-/// workspace policy from the frozen resolved specification. A version 30
-/// peer is refused at Hello, before composition.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 31;
+/// Version 30 freezes the selected general Model Profile in the child model specification.
+/// Version 31 also carries native Session upload references in delegation and active guidance;
+/// peers with either earlier version-30 vocabulary are rejected.
+/// Version 32 combines native attachment input with the frozen Session
+/// workspace path and removes workspace policy and Candidate snapshots.
+/// Both incompatible version-31 formats are rejected before composition.
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 32;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -272,6 +272,7 @@ pub(crate) enum ChildTerminalMode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct DelegationFrame {
+    pub attachments: Vec<crate::message::content::UploadedFileRef>,
     /// The delegated task.
     pub task: String,
     /// The explicit bounded context package, when the delegating call
@@ -409,6 +410,7 @@ pub(crate) struct ActivityFrame {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct GuidanceFrame {
+    pub attachments: Vec<crate::message::content::UploadedFileRef>,
     /// Transport-only acceptance correlation identity.
     pub guidance_id: u64,
     /// The bounded parent-authored guidance text.
@@ -1076,6 +1078,7 @@ mod tests {
         let (mut parent, mut child) = pair();
         let observation = super::super::activity::SubagentObservation {
             revision: 7,
+            attempt_id: None,
             activity: super::super::activity::SubagentActivity::Tool {
                 tool_call_id: crate::runtime::identity::ToolCallId::new("call-1"),
                 tool_id: crate::runtime::identity::ToolId::new("tool-bash"),
@@ -1179,7 +1182,7 @@ mod tests {
     }
 
     /// Issue #462 (D07): a version-30 parent spoke a workspace snapshot
-    /// object. That Hello cannot decode under version 31, and a current-shape
+    /// object. That Hello cannot decode under version 32, and a current-shape
     /// Hello naming any other version is not this build's protocol, so the
     /// child refuses both before composing anything.
     #[test]
@@ -1197,7 +1200,7 @@ mod tests {
         old_version["protocolVersion"] = serde_json::json!(30);
         let decoded = serde_json::from_value::<SubagentChildSpec>(old_version).unwrap();
         assert_ne!(decoded.protocol_version, SUBAGENT_IPC_VERSION);
-        assert_eq!(SUBAGENT_IPC_VERSION, 31);
+        assert_eq!(SUBAGENT_IPC_VERSION, 32);
     }
 
     #[test]
@@ -1255,6 +1258,7 @@ mod tests {
         write_parent_frame(
             &mut parent,
             &ParentFrame::Delegate(DelegationFrame {
+                attachments: Vec::new(),
                 task: "inspect".to_owned(),
                 context: Some("ctx".to_owned()),
                 interaction_provider_available: false,
@@ -1297,6 +1301,7 @@ mod tests {
         // definition field exists on the wire at all, so a steer structurally
         // cannot re-author the child's frozen launch authority.
         let guidance = GuidanceFrame {
+            attachments: Vec::new(),
             guidance_id: 7,
             message: "focus on cancellation ownership".to_owned(),
         };

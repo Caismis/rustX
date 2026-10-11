@@ -406,7 +406,7 @@ spine; clients merge live and older pages by durable transcript cursor. Entry
 identity only detects the same durable fact, and page reads do not move the
 live event cursor.
 
-App Server v40 navigation adds native Turn-relative finite windows at a captured
+App Server v45 navigation adds native Turn-relative finite windows at a captured
 `ConversationReadCut`. It owns positioning and mutation rejection. Web presentation
 retains at most 256 historical entries / 8 MiB plus the independent finite live
 snapshot; it never walks from a distant Turn to the live tail. New navigation,
@@ -2639,8 +2639,8 @@ ordinary inbound task content, never a way to change that admitted profile.
   unrecoverable publication keeps the Agent unavailable. In-process resume is
   arbitrated by the registry reservation (one winner); cross-process exclusion
   is the parent physical lease.
-- **Retired formats are refused.** SQLite 51, child IPC 31, Runtime Client 62
-  and App Server 40 refuse earlier stores and peers. Authoring a `worktree`
+- **Retired formats are refused.** SQLite 56, child IPC 32, Runtime Client 67
+  and App Server 45 refuse earlier stores and peers. Authoring a `worktree`
   table on an Agent profile or a `workspace` key on a Workflow is rejected.
 
 ## Subagent recovery-semantics conformance (Issue #138)
@@ -5759,7 +5759,7 @@ semantic normalization boundary. The frozen invariants:
   as `failed` through the Runtime Client. There is no v15 -> v16 conversion
   and no legacy `interrupted` decoding: a v15 client is rejected explicitly
   at negotiation.
-- **Runtime Client protocol v62 retires the Agent workspace object (Issue
+- **Runtime Client protocol v67 retires the Agent workspace object (Issue
   #462).** `RuntimeClientAgent.workspace` is the frozen Session binding path.
   The v13 isolation projection, the v15 retained-workspace resource lifecycle
   and its `subagent_workspace_dispose` request, Workflow Candidate and handoff
@@ -5783,7 +5783,7 @@ semantic normalization boundary. The frozen invariants:
   projection carrying the source repository root, repository-relative
   workspace, physical worktree root, base commit, branch, and parent dirty
   fact, and a retained handoff carries `logical_workspace` and
-  `physical_worktree_root` alongside its branch/base/head/dirty facts. v62
+  `physical_worktree_root` alongside its branch/base/head/dirty facts. v67
   retired this representation.
 - **Runtime Client protocol v12 adds the routed interaction projection.** The
   root-facing pending-interaction set carries Approval and Questionnaire
@@ -7053,6 +7053,12 @@ holds, not an input a reopen could contradict.
 snapshot supplies selected Surface history, canonical closure and both completed-
 response and turn-reading provenance through C. Session `prepare_*` only trims
 and remaps that frozen authority; it does not assemble independent current reads.
+Artifact materialization changes only managed content references. It preserves
+the remapped canonical closure, Surface operations, checkpoint statistics,
+completed responses and native Turn provenance together. Artifact-bearing and
+ordinary lineage copies therefore expose the same historical Turn directory
+and navigation after reopening. Original execution identities and totals remain
+immutable evidence; a copy creates no destination Attempt, event or request.
 
 `LineageSeed` is the public durable authority both halves are admitted
 through, so it is checked against what durable transitions can *reach*, not
@@ -7438,3 +7444,11 @@ Conversation-owned immutable PNG snapshots. See [image reading](image-reading.md
   evidence. Retained evidence grants no operation authority. See
   [Workspace ownership](../web-console/WORKSPACES.md) and
   [connection ownership](../web-console/CONNECTION.md) for bounds and precedence.
+
+### Attachment input admission
+
+An over-limit attachment input is rejected before guidance tickets, mailbox
+writes, activation identity/reservations, preparation or accepted/delivered facts.
+The shared message-domain limit is eight attachments per input; attachment-only
+input remains valid. Session receipt ownership and upload storage checks precede
+conversion into trusted references and remain separate from Runtime admission.

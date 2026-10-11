@@ -1240,6 +1240,11 @@ async fn t11_background_execution_busy_settles_into_eligible_adoption() {
             "the single request is the background terminal continuation: {}",
             requests[0]
         );
+        // Background settlement can publish an earlier Eligible before the
+        // continuation owns its Attempt. Capture the held continuation's read
+        // cut so its later release cannot consume that obsolete transition.
+        eligibility = EligibilityStream::open(&fixture, &id);
+        assert_eq!(eligibility.current, AdoptionEligibility::Busy);
         fixture.gates[0].release();
         // The runtime publishes busy -> idle itself when the last owner
         // releases its admission; nothing polls.

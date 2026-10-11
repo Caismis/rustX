@@ -472,7 +472,7 @@ export function subagent(
   state: RuntimeClientAgent["state"] = "active",
   overrides: Partial<RuntimeClientAgent> = {},
 ): RuntimeClientAgent {
-  return {
+  return { title: agent,
     activation_id: "activation-one",
     current_activation: state === "inactive" ? null : "activation-one",
     activation_state: state === "inactive" ? "succeeded" : state === "stopping" ? "stopping" : "running",

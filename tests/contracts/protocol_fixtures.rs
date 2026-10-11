@@ -436,6 +436,7 @@ fn additional_event_variants_round_trip() {
             source: TokenMeasurementSource::ProviderReported,
         },
         estimated_tokens_after: 1700,
+        occupancy: None,
     };
     let encoded = serde_json::to_value(&compaction).expect("serialize compaction");
     assert_eq!(

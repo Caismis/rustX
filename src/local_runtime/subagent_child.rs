@@ -190,36 +190,9 @@ pub async fn run_subagent_child() -> i32 {
     // dispatcher takes ownership of it: a peer that does not speak exactly
     // this protocol version must be refused before anything at all is
     // composed, including the dispatcher's own tasks.
-    let spec = match read_parent_frame(&mut control).await {
-        Ok(Some(ParentFrame::Hello(spec))) => {
-            if spec.protocol_version != SUBAGENT_IPC_VERSION {
-                let _ = write_child_frame(
-                    &mut control,
-                    &ChildFrame::StartupError(DiagnosticFrame {
-                        message: format!(
-                            "unsupported control protocol version {} (this build speaks \
-                             {SUBAGENT_IPC_VERSION})",
-                            spec.protocol_version
-                        ),
-                    }),
-                )
-                .await;
-                return 2;
-            }
-            *spec
-        }
-        Ok(Some(_)) => {
-            eprintln!("subagent child: the first control frame was not Hello");
-            return 3;
-        }
-        Ok(None) => {
-            // The parent died before the handshake: nothing to do.
-            return 0;
-        }
-        Err(error) => {
-            eprintln!("subagent child: {error}");
-            return 3;
-        }
+    let spec = match read_child_hello(&mut control).await {
+        Ok(spec) => spec,
+        Err(code) => return code,
     };
     // From here on there is exactly one owner of the raw transports. Every
     // other child-side owner — the semantic driver and every nested
@@ -275,6 +248,42 @@ pub async fn run_subagent_child() -> i32 {
     };
     dispatcher.shutdown().await;
     code
+}
+
+// The one pre-composition handshake. Unsupported formats never install a
+// dispatcher, acquire a child lease, or enter runtime composition.
+async fn read_child_hello(control: &mut tokio::net::UnixStream) -> Result<SubagentChildSpec, i32> {
+    match read_parent_frame(control).await {
+        Ok(Some(ParentFrame::Hello(spec))) => {
+            if spec.protocol_version != SUBAGENT_IPC_VERSION {
+                let _ = write_child_frame(
+                    control,
+                    &ChildFrame::StartupError(DiagnosticFrame {
+                        message: format!(
+                            "unsupported control protocol version {} (this build speaks \
+                             {SUBAGENT_IPC_VERSION})",
+                            spec.protocol_version
+                        ),
+                    }),
+                )
+                .await;
+                return Err(2);
+            }
+            Ok(*spec)
+        }
+        Ok(Some(_)) => {
+            eprintln!("subagent child: the first control frame was not Hello");
+            Err(3)
+        }
+        Ok(None) => {
+            // The parent died before the handshake: nothing to do.
+            Err(0)
+        }
+        Err(error) => {
+            eprintln!("subagent child: {error}");
+            Err(3)
+        }
+    }
 }
 
 /// The child's typed early exits.
@@ -524,6 +533,12 @@ pub(crate) async fn serve_child_delegation(
     content.push(UserContentBlock::Text(TextBlock {
         text: delegate.task,
     }));
+    content.extend(
+        delegate
+            .attachments
+            .into_iter()
+            .map(UserContentBlock::UploadedFile),
+    );
     if let Err(error) = runtime.submit_sourced_inbound(
         UserSource::Agent {
             agent_id: parent_agent_id.clone(),
@@ -766,9 +781,17 @@ async fn await_parent_admission_boundary(
             Some(ChildControlEvent::Guidance {
                 guidance_id,
                 message,
+                attachments,
             }) => {
-                apply_parent_guidance(handle, runtime, parent_agent_id, guidance_id, message)
-                    .await?;
+                apply_parent_guidance(
+                    handle,
+                    runtime,
+                    parent_agent_id,
+                    guidance_id,
+                    message,
+                    attachments,
+                )
+                .await?;
             }
             Some(ChildControlEvent::InteractionProviderAvailable { available }) => {
                 runtime.set_interaction_provider_available(available);
@@ -935,12 +958,15 @@ async fn apply_parent_guidance(
     parent_agent_id: &crate::runtime::identity::AgentId,
     guidance_id: u64,
     message: String,
+    attachments: Vec<crate::message::content::UploadedFileRef>,
 ) -> Result<(), ChildExit> {
     let outcome = match runtime.submit_parent_guidance(
         UserSource::Agent {
             agent_id: parent_agent_id.clone(),
         },
-        vec![UserContentBlock::Text(TextBlock { text: message })],
+        std::iter::once(UserContentBlock::Text(TextBlock { text: message }))
+            .chain(attachments.into_iter().map(UserContentBlock::UploadedFile))
+            .collect(),
     ) {
         Ok(_) => ChildGuidanceOutcome::Accepted,
         Err(InboundAdmissionError::GuidanceSealed) => {
@@ -1135,6 +1161,7 @@ where
                     Some(ChildControlEvent::Guidance {
                         guidance_id,
                         message,
+                        attachments,
                     }) => {
                         apply_parent_guidance(
                             handle,
@@ -1142,6 +1169,7 @@ where
                             parent_agent_id,
                             guidance_id,
                             message,
+                            attachments,
                         )
                         .await?;
                     }
@@ -1837,6 +1865,43 @@ pub(crate) mod tests {
         runtime.shutdown().await.expect("child runtime drains");
     }
 
+    #[tokio::test]
+    async fn both_version_31_hello_formats_are_rejected_before_runtime_composition() {
+        use crate::runtime::subagent::ipc::{read_child_frame, write_frame};
+        for retired_snapshot in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let (spec, _) = preparation_fixture(&directory);
+            let mut hello = serde_json::to_value(spec).unwrap();
+            hello["protocolVersion"] = serde_json::json!(31);
+            if retired_snapshot {
+                hello.as_object_mut().unwrap().remove("workspace");
+                hello["workspaceSnapshot"] = serde_json::json!({
+                    "borrowedFrom": null,
+                    "logicalWorkspace": directory.path(), "isolation": {"type":"shared"}
+                });
+                hello["resolved"]["workspacePolicy"] =
+                    serde_json::json!({"type":"shared_workspace"});
+            }
+            let (mut parent, mut child) = tokio::net::UnixStream::pair().unwrap();
+            // Native Hello tag; payloads represent the two incompatible v31 peers.
+            write_frame(&mut parent, 1, &serde_json::to_vec(&hello).unwrap())
+                .await
+                .unwrap();
+            let result = read_child_hello(&mut child).await;
+            if retired_snapshot {
+                assert!(matches!(result, Err(3)), "retired snapshot cannot decode");
+            } else {
+                assert!(
+                    matches!(result, Err(2)),
+                    "old shared-path peer cannot negotiate"
+                );
+                assert!(
+                    matches!(read_child_frame(&mut parent).await.unwrap(), Some(ChildFrame::StartupError(error)) if error.message.contains("unsupported control protocol version 31"))
+                );
+            }
+        }
+    }
+
     fn preparation_fixture(
         dir: &tempfile::TempDir,
     ) -> (
@@ -2018,6 +2083,7 @@ pub(crate) mod tests {
         crate::runtime::subagent::ipc::write_parent_frame(
             &mut parent,
             &ParentFrame::Delegate(crate::runtime::subagent::ipc::DelegationFrame {
+                attachments: Vec::new(),
                 task: "too early".into(),
                 context: None,
                 interaction_provider_available: false,
@@ -2288,6 +2354,7 @@ pub(crate) mod tests {
         crate::runtime::subagent::ipc::write_parent_frame(
             parent,
             &ParentFrame::Delegate(crate::runtime::subagent::ipc::DelegationFrame {
+                attachments: Vec::new(),
                 task: task.to_owned(),
                 context: None,
                 interaction_provider_available: false,
@@ -2330,6 +2397,7 @@ pub(crate) mod tests {
         crate::runtime::subagent::ipc::write_parent_frame(
             &mut fixture.parent,
             &ParentFrame::Delegate(crate::runtime::subagent::ipc::DelegationFrame {
+                attachments: Vec::new(),
                 task: "input that cannot commit".into(),
                 context: None,
                 interaction_provider_available: false,
@@ -2526,6 +2594,7 @@ pub(crate) mod tests {
                 write_parent_frame(
                     &mut parent,
                     &ParentFrame::Guidance(GuidanceFrame {
+                        attachments: Vec::new(),
                         guidance_id,
                         message: message.into(),
                     }),
@@ -2676,6 +2745,7 @@ pub(crate) mod tests {
         write_parent_frame(
             &mut parent,
             &ParentFrame::Guidance(GuidanceFrame {
+                attachments: Vec::new(),
                 guidance_id: 1,
                 message: "pending for a later activation".into(),
             }),
@@ -2821,6 +2891,7 @@ pub(crate) mod tests {
         write_parent_frame(
             &mut parent,
             &ParentFrame::Guidance(GuidanceFrame {
+                attachments: Vec::new(),
                 guidance_id: 17,
                 message: "accepted for a later activation".into(),
             }),

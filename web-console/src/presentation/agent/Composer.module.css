@@ -62,12 +62,11 @@
   border-radius: 22px;
   background: var(--dsw-specific-input-major);
   box-shadow: var(--dsw-elevation-soft);
-  /* Its own layer: the 22px stroke ring is rasterized whole, never split by
-     a page raster tile or a neighbouring partial repaint (focus, caret,
-     draft), either of which antialiases its corners differently. Opacity,
-     not transform, so the card never becomes the containing block of a
-     position:fixed descendant. */
-  will-change: opacity;
+  /* Rasterize the rounded surface as a complete layer at its stable origin.
+     Control menus portal to the document; editor menus use card-relative
+     positioning, so this containing block cannot capture a viewport menu. */
+  transform: translateZ(0);
+  will-change: transform;
   /* The draft text follows the Settings font-size preference (the textarea,
      mirror, and backdrop all inherit from here, so the three layers stay in
      step); the line height keeps the default 10px leading via the shared px
@@ -152,11 +151,15 @@
   to { opacity: 1; }
 }
 
-/* The measured native draft surface grows until its own CSS cap. figma .InputText 34:10434 drew pl 16 / pr 12 / pt 4; the
+/* The native draft surface grows until its own CSS cap. figma .InputText 34:10434 drew pl 16 / pr 12 / pt 4; the
    left pad tightened to 14, and the right pad is 8 here plus .scroll's 4px
    bar inset. */
 .input {
   box-sizing: border-box;
+  /* Size in one browser layout pass. Temporarily collapsing the textarea to
+     measure scrollHeight clamps the conversation's scrollTop and breaks tail
+     following while typing. Native sizing also handles wrapping on resize. */
+  field-sizing: content;
   /* Docked floor: one 24px line + 4px top pad = 28 content height; 36 leaves
      an 8px breath below the line (the hero keeps its own 52px floor below). */
   min-height: 36px;
@@ -266,6 +269,11 @@
   container-type: inline-size;
 }
 
+.row[data-model-compact] {
+  --dsh-composer-model-text-display: none;
+  --dsh-composer-model-icon-display: block;
+}
+
 .tools,
 .modes,
 .trailing {
@@ -368,13 +376,9 @@
   cursor: pointer;
 }
 
-/* Native control popovers use fixed positioning; do not add a size container. */
-.row { container-type: normal; }
 .dock { color: var(--dsw-alias-label-tertiary); font-size: 12px; }
-@media (max-width: 600px) {
-  .row, .tools, .modes, .trailing { gap: 8px; }
-  .trailing { max-width: 100%; }
-  .trailing > div { min-width: 0; flex-shrink: 1; }
+@container (max-width: 560px) {
+  .tools, .modes, .trailing { gap: 8px; }
 }
 
 .attachments { display: flex; gap: 10px; overflow-x: auto; padding: 6px 14px; }

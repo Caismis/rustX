@@ -18,6 +18,32 @@ export type JsonRpcVersion = '2.0';
 export type RequestId = string | number;
 export type Request1 =
   | {
+      method: 'agent/artifactRead';
+      params: {
+        target: AttachmentTarget;
+        agent_id: AgentId;
+        artifact_id: ArtifactId;
+      };
+    }
+  | {
+      method: 'agent/deliveryRead';
+      params: {
+        target: AttachmentTarget;
+        agent_id: AgentId;
+        message_id: MessageId;
+        delivery_index: number;
+      };
+    }
+  | {
+      method: 'agent/deliveryLocate';
+      params: {
+        target: AttachmentTarget;
+        agent_id: AgentId;
+        message_id: MessageId;
+        delivery_index: number;
+      };
+    }
+  | {
       method: 'artifact/read';
       params: {
         target: AttachmentTarget;
@@ -82,6 +108,13 @@ export type Request1 =
       params: {
         target: AttachmentTarget;
         record_id: string;
+      };
+    }
+  | {
+      method: 'session/traceLocateTool';
+      params: {
+        target: AttachmentTarget;
+        locator: TraceToolLocator;
       };
     }
   | {
@@ -183,6 +216,20 @@ export type Request1 =
       };
     }
   | {
+      method: 'agent/conversationCancel';
+      params: {
+        request_id: RequestId;
+      };
+    }
+  | {
+      method: 'agent/conversation';
+      params: {
+        target: AttachmentTarget;
+        agent_id: AgentId;
+        after?: AgentConversationCursor | null;
+      };
+    }
+  | {
       method: 'agent/statistics';
       params: {
         target: AttachmentTarget;
@@ -192,6 +239,7 @@ export type Request1 =
   | {
       method: 'agent/sendMessage';
       params: {
+        attachments: UploadReceipt[];
         target: AttachmentTarget;
         agent_id: AgentId;
         message: string;
@@ -212,11 +260,46 @@ export type Request1 =
       };
     }
   | {
+      method: 'agent/trace';
+      params: {
+        target: AttachmentTarget;
+        agent_id: AgentId;
+        before?: TraceCursor | null;
+        limit: number;
+        records?: TraceCursor[];
+      };
+    }
+  | {
+      method: 'agent/traceDetail';
+      params: {
+        target: AttachmentTarget;
+        agent_id: AgentId;
+        record_id: string;
+      };
+    }
+  | {
+      method: 'agent/traceLocateTool';
+      params: {
+        target: AttachmentTarget;
+        agent_id: AgentId;
+        locator: TraceToolLocator;
+      };
+    }
+  | {
       method: 'agent/transcript';
       params: {
         target: AttachmentTarget;
         agent_id: AgentId;
-        before?: RuntimeClientTranscriptCursor | null;
+        at: ConversationWindowAt;
+        limit: number;
+      };
+    }
+  | {
+      method: 'agent/turns';
+      params: {
+        target: AttachmentTarget;
+        agent_id: AgentId;
+        offset?: number | null;
         limit: number;
       };
     }
@@ -454,6 +537,14 @@ export type Request1 =
       };
     }
   | {
+      method: 'mcp/probe';
+      params: {
+        target: SourceTarget;
+        id: McpServerId;
+        expected_revision: string;
+      };
+    }
+  | {
       method: 'configuration/sourceWrite';
       params: {
         target: SourceTarget;
@@ -502,6 +593,12 @@ export type RuntimeIncarnationId = string;
  */
 export type AttachmentId = string;
 /**
+ * Identifies an Agent independently of its finite activations.
+ * For a continuable child, this is the durable Agent-domain identity of
+ * its child Conversation and remains unchanged across resume.
+ */
+export type AgentId = string;
+/**
  * Identifies a durable artifact produced or referenced by the runtime.
  *
  * An artifact is identified by an opaque runtime-owned id, never by a
@@ -522,6 +619,15 @@ export type SessionNodeId = string;
  * they never parse it.
  */
 export type TraceCursor = string;
+/**
+ * Provider/model-issued opaque correlation string, scoped to a request/publication.
+ * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
+ */
+export type ToolCallId = string;
+/**
+ * Identifies a tool definition in the capability set.
+ */
+export type ToolId = string;
 /**
  * Bounded windows positioned by native Turn identity or by a captured read cut.
  * Append-only live growth preserves a cut; mutation invalidates it.
@@ -614,33 +720,15 @@ export type GoalMutation =
     };
 export type ToolExecutionId = string;
 /**
- * Identifies an Agent independently of its finite activations.
- * For a continuable child, this is the durable Agent-domain identity of
- * its child Conversation and remains unchanged across resume.
- */
-export type AgentId = string;
-/**
- * The cursor domain of durable transcript paging.
- */
-export type RuntimeClientTranscriptCursor = string;
-/**
- * The identity of one exact historical Conversation Surface state.
+ * Identifies one finite activation owned by an Agent, or one finite
+ * Workflow child execution.
  *
- * A revision is a monotonic counter in its own identity domain. The empty
- * Surface of a new conversation is [`SurfaceRevision::INITIAL`] (`0`), and
- * every accepted [`SurfaceOp`] advances it by exactly one, so revision `n`
- * is precisely "the Surface after the first `n` accepted operations".
- *
- * A revision is deliberately **not** a `MessageId`, an `AttemptId`, a
- * `RuntimeClientCursor`, an `InboundSequence`, an Event Journal sequence,
- * or a `CapabilityRevision`: none of those identify a Surface state, and
- * none of them may be substituted for one.
+ * Repeated native Agent activations have distinct `SubagentId`s while
+ * retaining the same durable `AgentId`. This is not an OS pid: process
+ * identity or PID reuse can never establish durable ownership or proof
+ * of physical settlement.
  */
-export type SurfaceRevision = string;
-/**
- * Which history prefix a lineage operation retains.
- */
-export type LineageSide = 'before' | 'after';
+export type SubagentId = string;
 /**
  * The external cursor of the Runtime Client observation stream.
  *
@@ -663,6 +751,24 @@ export type LineageSide = 'before' | 'after';
  * fails explicitly and never wraps.
  */
 export type RuntimeClientCursor = string;
+/**
+ * The identity of one exact historical Conversation Surface state.
+ *
+ * A revision is a monotonic counter in its own identity domain. The empty
+ * Surface of a new conversation is [`SurfaceRevision::INITIAL`] (`0`), and
+ * every accepted [`SurfaceOp`] advances it by exactly one, so revision `n`
+ * is precisely "the Surface after the first `n` accepted operations".
+ *
+ * A revision is deliberately **not** a `MessageId`, an `AttemptId`, a
+ * `RuntimeClientCursor`, an `InboundSequence`, an Event Journal sequence,
+ * or a `CapabilityRevision`: none of those identify a Surface state, and
+ * none of them may be substituted for one.
+ */
+export type SurfaceRevision = string;
+/**
+ * Which history prefix a lineage operation retains.
+ */
+export type LineageSide = 'before' | 'after';
 /**
  * Clients author text and reference completed server receipts only.
  */
@@ -745,6 +851,10 @@ export type SourceTarget =
       directory: string;
       kind: 'workspace';
     };
+/**
+ * Identifies an MCP server bound to the runtime.
+ */
+export type McpServerId = string;
 export type SourceMutation =
   | {
       document: string;
@@ -764,10 +874,6 @@ export type SourceMutation =
       authored?: AgentProfileDocument | null;
       kind: 'agent';
     };
-/**
- * Identifies an MCP server bound to the runtime.
- */
-export type McpServerId = string;
 /**
  * A validated reference, written as `$ENV_VAR` only in declared secret fields.
  */
@@ -1097,8 +1203,8 @@ export type MethodResult =
       type: 'trace_detail';
     }
   | {
-      page: RuntimeClientTranscriptPage;
-      type: 'transcript';
+      location?: TraceToolLocation | null;
+      type: 'trace_tool_location';
     }
   | {
       conversation_id: ConversationId;
@@ -1148,6 +1254,14 @@ export type MethodResult =
   | {
       agent: RuntimeClientAgent;
       type: 'agent';
+    }
+  | {
+      accepted: boolean;
+      type: 'agent_conversation_cancelled';
+    }
+  | {
+      conversation: AgentConversation;
+      type: 'agent_conversation';
     }
   | {
       metrics: AgentStatistics;
@@ -1273,6 +1387,10 @@ export type MethodResult =
   | {
       projection: EffectiveConfiguration;
       type: 'effective_configuration';
+    }
+  | {
+      result: McpProbeResult;
+      type: 'mcp_probe';
     }
   | {
       projection: SourceSettings;
@@ -1439,7 +1557,8 @@ export type TraceKind =
       | 'workflow'
       | 'interaction'
     )
-  | 'user';
+  | 'user'
+  | 'context';
 /**
  * Identifies one actual provider-neutral model request.
  *
@@ -1507,25 +1626,6 @@ export type TraceContextKind =
   | 'runtime_tool_observation'
   | 'extension_environment'
   | 'agent_status';
-/**
- * Provider/model-issued opaque correlation string, scoped to a request/publication.
- * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
- */
-export type ToolCallId = string;
-/**
- * Identifies a tool definition in the capability set.
- */
-export type ToolId = string;
-/**
- * Identifies one finite activation owned by an Agent, or one finite
- * Workflow child execution.
- *
- * Repeated native Agent activations have distinct `SubagentId`s while
- * retaining the same durable `AgentId`. This is not an OS pid: process
- * identity or PID reuse can never establish durable ownership or proof
- * of physical settlement.
- */
-export type SubagentId = string;
 /**
  * Truthful admission source. Client controls have no model `ToolCall` identity.
  */
@@ -1604,6 +1704,10 @@ export type AgentStatusModuleId = 'time' | 'background' | 'todo';
 export type TraceContributionPresentation = {
   AgentStatus: AgentStatusView;
 };
+/**
+ * The cursor domain of durable transcript paging.
+ */
+export type RuntimeClientTranscriptCursor = string;
 /**
  * One structured Agent Status section of the external view.
  */
@@ -2232,68 +2336,6 @@ export type SubagentState =
   | 'cancelled'
   | 'interrupted';
 /**
- * Bounded external outcomes shared by App Server and local presentation.
- */
-export type RuntimeClientSessionDeletionResult =
-  | {
-      preview: RuntimeClientSessionDeletePreview;
-      status: 'preview';
-    }
-  | {
-      session_id: SessionId;
-      status: 'deleted';
-    }
-  | {
-      session_id: SessionId;
-      status: 'stale';
-    }
-  | {
-      session_id: SessionId;
-      reason: RuntimeClientSessionDeletionBlocker;
-      status: 'blocked';
-    }
-  | {
-      session_id: SessionId;
-      status: 'committed_cleanup_pending';
-    }
-  | {
-      session_id: SessionId;
-      status: 'committed_durability_uncertain';
-    }
-  | {
-      session_id: SessionId;
-      status: 'not_found';
-    };
-/**
- * Bounded safety summary. Resource identities and storage diagnostics stay native.
- */
-export type RuntimeClientSessionDeletionBlocker =
-  | {
-      kind: 'resource_conflict';
-    }
-  | {
-      kind: 'invalid_ownership';
-    };
-export type UnitApplication =
-  | {
-      status: 'applied';
-    }
-  | {
-      status: 'preparing';
-    }
-  | {
-      impact: CacheImpact;
-      status: 'ready';
-    }
-  | {
-      diagnostic: string;
-      status: 'failed';
-    }
-  | {
-      status: 'process_restart';
-    };
-export type CacheImpact = 'preserved' | 'prefix_changed' | 'cache_namespace_changed' | 'unproven';
-/**
  * Which native evidence is available for the canonical settings sections.
  */
 export type SettingsEvidence = ('live_session' | 'frozen_child') | 'historical_partial';
@@ -2783,6 +2825,68 @@ export type SkillDiagnostic =
       kind: 'shadowed';
     };
 /**
+ * Bounded external outcomes shared by App Server and local presentation.
+ */
+export type RuntimeClientSessionDeletionResult =
+  | {
+      preview: RuntimeClientSessionDeletePreview;
+      status: 'preview';
+    }
+  | {
+      session_id: SessionId;
+      status: 'deleted';
+    }
+  | {
+      session_id: SessionId;
+      status: 'stale';
+    }
+  | {
+      session_id: SessionId;
+      reason: RuntimeClientSessionDeletionBlocker;
+      status: 'blocked';
+    }
+  | {
+      session_id: SessionId;
+      status: 'committed_cleanup_pending';
+    }
+  | {
+      session_id: SessionId;
+      status: 'committed_durability_uncertain';
+    }
+  | {
+      session_id: SessionId;
+      status: 'not_found';
+    };
+/**
+ * Bounded safety summary. Resource identities and storage diagnostics stay native.
+ */
+export type RuntimeClientSessionDeletionBlocker =
+  | {
+      kind: 'resource_conflict';
+    }
+  | {
+      kind: 'invalid_ownership';
+    };
+export type UnitApplication =
+  | {
+      status: 'applied';
+    }
+  | {
+      status: 'preparing';
+    }
+  | {
+      impact: CacheImpact;
+      status: 'ready';
+    }
+  | {
+      diagnostic: string;
+      status: 'failed';
+    }
+  | {
+      status: 'process_restart';
+    };
+export type CacheImpact = 'preserved' | 'prefix_changed' | 'cache_namespace_changed' | 'unproven';
+/**
  * A conversation-scoped inbound sequence number.
  *
  * The sequence identifies one item of the conversation's inbound ordering
@@ -2832,6 +2936,13 @@ export type Origin =
       base: string;
       kind: 'process';
     };
+export type McpProbeOutcome =
+  | 'reachable'
+  | 'connection_failed'
+  | 'list_failed'
+  | 'timed_out'
+  | 'cancelled'
+  | 'settlement_failed';
 export type ProcessPolicyImpact = 'hot' | 'restart';
 /**
  * Whether native can bind a Session in a Workspace, and its model catalog.
@@ -2955,6 +3066,9 @@ export type ErrorData =
     }
   | {
       kind: 'delivery_cancelled';
+    }
+  | {
+      kind: 'observation_cancelled';
     }
   | {
       kind: 'stale_attachment';
@@ -3811,6 +3925,28 @@ export interface UploadMetadata {
   size: number;
 }
 /**
+ * The occurrence, rather than a globally ambiguous provider call ID, owns navigation.
+ */
+export interface TraceToolLocator {
+  occurrence: ToolCallOccurrenceRef;
+  call_id: ToolCallId;
+  tool_id: ToolId;
+}
+/**
+ * Exact rustX canonical ownership of a Tool call, independent of provider IDs.
+ * Message identity is remapped by lineage; the canonical content position stays fixed.
+ */
+export interface ToolCallOccurrenceRef {
+  /**
+   * Identifies a committed canonical message block.
+   */
+  assistant_message_id: string;
+  /**
+   * The `ToolCall` block within that Assistant's content.
+   */
+  block_index: number;
+}
+/**
  * Inclusive Journal/transcript bounds a read was captured at, plus its semantic mutation epoch.
  */
 export interface ConversationReadCut {
@@ -3894,6 +4030,18 @@ export interface SessionModelConfig {
 export interface GoalRef {
   id: string;
   revision: string;
+}
+export interface AgentConversationCursor {
+  activation_id: SubagentId;
+  cursor: RuntimeClientCursor;
+}
+/**
+ * A server-issued capability, scoped to exactly one Session.
+ */
+export interface UploadReceipt {
+  session_id: SessionId;
+  batch_id: string;
+  token: string;
 }
 export interface InitializeParams {
   protocol_version: number;
@@ -4586,14 +4734,6 @@ export interface UploadedFile {
   path: string;
 }
 /**
- * A server-issued capability, scoped to exactly one Session.
- */
-export interface UploadReceipt {
-  session_id: SessionId;
-  batch_id: string;
-  token: string;
-}
-/**
  * Runtime-authored identity of a Session-owned mutable workspace file.
  * The owning Session supplies allocation roots; history never stores host paths.
  */
@@ -5031,7 +5171,7 @@ export interface CapabilityView {
  */
 export interface RuntimeClientTool {
   /**
-   * The canonical tool identity.
+   * Identifies a tool definition in the capability set.
    */
   id: string;
   /**
@@ -5157,9 +5297,9 @@ export interface RuntimeClientContextView {
    */
   compaction_error?: string | null;
   /**
-   * Last prepared request occupancy from the Context owner; absent after compaction until measured again.
+   * Latest native measured request or committed compacted-context estimate.
    */
-  last_request_occupancy?: ContextOccupancy | null;
+  occupancy?: ContextOccupancy | null;
   /**
    * Whether the runtime currently owns a context-compaction operation.
    * This is live operation state, not inferred from token usage.
@@ -5194,16 +5334,20 @@ export interface RuntimeClientManualCompaction {
   error?: string | null;
 }
 /**
- * The last provider-measured request context for this Conversation.
- * It is explicitly a request reading, not an estimate of unsent composer text.
+ * Latest native context reading for this Conversation, with explicit provenance.
+ * Unsent composer text is never included.
  */
 export interface ContextOccupancy {
   /**
-   * Exact normalized effective request input, including cache reads.
+   * True for the native rebuilt-context estimate after compaction.
+   */
+  estimated?: boolean;
+  /**
+   * Normalized request input, or the committed rebuilt-context estimate.
    */
   input_tokens: number;
   /**
-   * Capacity frozen in the same request's native model snapshot.
+   * Capacity frozen in the request or compaction's native model snapshot.
    */
   context_window_tokens: number;
   /**
@@ -6280,6 +6424,20 @@ export interface TraceMessageDetail {
   truncated: boolean;
 }
 /**
+ * A contiguous native history window ending at the selected execution.
+ */
+export interface TraceToolLocation {
+  record_id: string;
+  page: TracePage;
+}
+export interface ConversationWindow {
+  cut: ConversationReadCut;
+  page: RuntimeClientTranscriptPage;
+  newer_cursor?: RuntimeClientTranscriptCursor | null;
+  target?: ConversationTurnId | null;
+  target_cursor?: RuntimeClientTranscriptCursor | null;
+}
+/**
  * One bounded newest-or-older page of derived transcript history.
  */
 export interface RuntimeClientTranscriptPage {
@@ -6356,6 +6514,10 @@ export interface ConversationTiming {
  * One derived transcript item and its stable durable cursor.
  */
 export interface RuntimeClientTranscriptEntry {
+  /**
+   * Native facts of a canonical compaction checkpoint, including copied lineage.
+   */
+  compaction?: CompactionMarker | null;
   /**
    * Exact native Attempt process membership, derived by native owners.
    * Absence is not permission for a client to infer a process boundary.
@@ -6538,6 +6700,23 @@ export interface RuntimeClientTranscriptEntry {
             };
         type: 'interaction_settled';
       };
+}
+/**
+ * Facts of one checkpoint, not cumulative totals over the compaction lineage.
+ */
+export interface CompactionMarker {
+  /**
+   * Exact number of canonical history messages replaced by this checkpoint.
+   */
+  retired_messages: string;
+  /**
+   * Native history-only estimate, excluding system prompt and tool schemas.
+   */
+  retired_tokens: string;
+  /**
+   * Local Journal attribution; copied lineage has no local command owner.
+   */
+  manual?: boolean | null;
 }
 /**
  * One native process owner shared by live, successful and unsuccessful Turns.
@@ -7014,7 +7193,7 @@ export interface ToolMessageBlock {
    * Identifies a committed canonical message block.
    */
   id: string;
-  occurrence: ToolCallOccurrenceRef;
+  occurrence: ToolCallOccurrenceRef1;
   /**
    * Provider/model-issued opaque correlation string, scoped to a request/publication.
    * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
@@ -7027,9 +7206,10 @@ export interface ToolMessageBlock {
   result: ToolExecutionResult2;
 }
 /**
- * Exact native canonical owner of this result.
+ * Exact rustX canonical ownership of a Tool call, independent of provider IDs.
+ * Message identity is remapped by lineage; the canonical content position stays fixed.
  */
-export interface ToolCallOccurrenceRef {
+export interface ToolCallOccurrenceRef1 {
   /**
    * Identifies a committed canonical message block.
    */
@@ -7356,13 +7536,6 @@ export interface QuestionnaireSubmission1 {
    */
   answers: QuestionnaireAnswerEntry[];
 }
-export interface ConversationWindow {
-  cut: ConversationReadCut;
-  page: RuntimeClientTranscriptPage;
-  newer_cursor?: RuntimeClientTranscriptCursor | null;
-  target?: ConversationTurnId | null;
-  target_cursor?: RuntimeClientTranscriptCursor | null;
-}
 export interface ConversationTurnPage {
   cut: ConversationReadCut;
   total: number;
@@ -7380,7 +7553,7 @@ export interface ConversationTurn {
    */
   cursor?: TranscriptCursor | null;
   /**
-   * The turn's first human prompt; empty when none was adopted for it.
+   * The turn's opening human message or Agent task; empty when none was adopted.
    */
   prompt: string;
   /**
@@ -7411,6 +7584,7 @@ export interface GoalView {
  * the stable Agent identity. Activity is bounded observation, never authority.
  */
 export interface RuntimeClientAgent {
+  title: string;
   parent_agent_id: AgentId;
   /**
    * Identifies one finite activation owned by an Agent, or one finite
@@ -7501,6 +7675,10 @@ export interface SubagentObservation {
    * transition.
    */
   revision: string;
+  /**
+   * Exact child-owned current Attempt; absent before start and after settlement.
+   */
+  attempt_id?: AttemptId | null;
   /**
    * What the child is observably doing right now.
    */
@@ -7619,369 +7797,14 @@ export interface SubagentExecutionProfile {
    */
   reasoning_enabled: boolean;
 }
-export interface AgentStatistics {
-  statistics: ConversationStatistics;
-  occupancy?: ContextOccupancy | null;
-  duration: AgentDuration;
-}
-export interface AgentDuration {
+export interface AgentConversation {
+  agent_id: AgentId;
+  activation_id: SubagentId;
   /**
-   * Sum of this child's closed working intervals, excluding inactive gaps.
+   * None for a durable, settled read, which has no live observation stream.
    */
-  settled_ms: string;
-  /**
-   * Last interval, if its terminal event has not been observed.
-   */
-  active?: AgentActiveInterval | null;
-}
-export interface AgentActiveInterval {
-  started_at: string;
-  /**
-   * Last durable evidence. Non-running children freeze here, including recovery.
-   */
-  observed_at: string;
-  /**
-   * Authoritative live lifecycle, never inferred from a missing terminal.
-   */
-  running: boolean;
-}
-export interface ServerCapabilities {
-  upload_policy: UploadPolicy;
-  multi_session: boolean;
-  single_writable_controller: boolean;
-  headless_interactions: boolean;
-  /**
-   * Whether this connection holds transport-granted delivery access.
-   * Reporting it grants nothing; the native seam checks the capability.
-   */
-  delivery_access: boolean;
-  experimental_methods: string[];
-}
-/**
- * Finite native storage admission, independent of image and control-frame limits.
- */
-export interface UploadPolicy {
-  max_file_bytes: number;
-  max_transfer_bytes: number;
-  max_files_per_transfer: number;
-  max_uploads_per_user_input: number;
-  max_upload_bytes_per_user_input: number;
-  max_concurrent_transfers: number;
-  max_chunk_bytes: number;
-}
-/**
- * Bounded authoritative metadata for one Session.
- *
- * The graph is deliberately not embedded here. Callers that need the graph
- * use the bounded tree page seam below, so `/session`, switch results, and
- * restart metadata never materialize every historical node.
- */
-export interface SessionSnapshot {
-  /**
-   * Session identity.
-   */
-  id: string;
-  /**
-   * The user-defined display name, when this Session has one.
-   *
-   * A Session is born unnamed. The name is display metadata a user
-   * chooses, never an identity: nothing resolves a Session by it, and an
-   * unnamed Session is a complete, ordinary Session.
-   */
-  name?: string | null;
-  /**
-   * Creation instant.
-   */
-  created_at: string;
-  /**
-   * Last metadata/active-node publication instant.
-   */
-  updated_at: string;
-  /**
-   * The active node selected in this Session.
-   */
-  active_node: string;
-  /**
-   * The conversation owned by the active node.
-   */
-  active_conversation_id: string;
-  /**
-   * Number of persisted nodes, useful metadata for a bounded tree view.
-   */
-  node_count: number;
-}
-/**
- * Native display metadata, shared by exact identity reads and catalog rows.
- */
-export interface SessionSummary {
-  /**
-   * Native execution ownership generation, encoded as an exact decimal integer.
-   * Changes only when active-node ownership is replaced; never a display timestamp.
-   */
-  ownership_generation: string;
-  /**
-   * Canonical durable Session cwd, projected without loading a runtime.
-   */
-  cwd: string;
-  /**
-   * Session identity.
-   */
-  id: string;
-  /**
-   * The user-defined display name, when this Session has one.
-   */
-  name?: string | null;
-  /**
-   * The first ordinary user message of this Session's root lineage,
-   * bounded to one line. It is what an unnamed row is recognized by, and
-   * it is the client-facing projection of the persisted
-   * `display_preview`: the catalog stores the derived line so listing,
-   * pagination, and search never open a conversation store. `None` is
-   * legitimate — no ordinary user message exists yet, or the first one
-   * has no renderable text — and yields the client-side identity
-   * fallback.
-   */
-  preview?: string | null;
-  /**
-   * Latest committed human-message time, or creation time for a new Session.
-   */
-  updated_at: string;
-  /**
-   * Active node in the session.
-   */
-  active_node: string;
-}
-/**
- * One node in the native Session graph.
- */
-export interface SessionNode {
-  /**
-   * Explicit durable publication order, never inferred from UUID bytes.
-   */
-  ordinal: string;
-  /**
-   * Node identity.
-   */
-  id: string;
-  /**
-   * Parent node within the same Session, when this is a tree branch.
-   */
-  parent?: SessionNodeId | null;
-  /**
-   * The one independent linear `ConversationRuntime` lineage of this node.
-   */
-  conversation_id: string;
-  /**
-   * Immutable product-level origin metadata.
-   */
-  origin:
-    | {
-        type: 'new';
-      }
-    | {
-        /**
-         * Source Session identity.
-         */
-        source_session: string;
-        /**
-         * Source node identity.
-         */
-        source_node: string;
-        /**
-         * The identity of one exact historical Conversation Surface state.
-         *
-         * A revision is a monotonic counter in its own identity domain. The empty
-         * Surface of a new conversation is [`SurfaceRevision::INITIAL`] (`0`), and
-         * every accepted [`SurfaceOp`] advances it by exactly one, so revision `n`
-         * is precisely "the Surface after the first `n` accepted operations".
-         *
-         * A revision is deliberately **not** a `MessageId`, an `AttemptId`, a
-         * `RuntimeClientCursor`, an `InboundSequence`, an Event Journal sequence,
-         * or a `CapabilityRevision`: none of those identify a Surface state, and
-         * none of them may be substituted for one.
-         */
-        source_surface_revision: string;
-        type: 'clone';
-      }
-    | {
-        /**
-         * Source Session identity.
-         */
-        source_session: string;
-        /**
-         * Source node identity.
-         */
-        source_node: string;
-        /**
-         * The identity of one exact historical Conversation Surface state.
-         *
-         * A revision is a monotonic counter in its own identity domain. The empty
-         * Surface of a new conversation is [`SurfaceRevision::INITIAL`] (`0`), and
-         * every accepted [`SurfaceOp`] advances it by exactly one, so revision `n`
-         * is precisely "the Surface after the first `n` accepted operations".
-         *
-         * A revision is deliberately **not** a `MessageId`, an `AttemptId`, a
-         * `RuntimeClientCursor`, an `InboundSequence`, an Event Journal sequence,
-         * or a `CapabilityRevision`: none of those identify a Surface state, and
-         * none of them may be substituted for one.
-         */
-        source_surface_revision: string;
-        /**
-         * Identifies a committed canonical message block.
-         */
-        source_message: string;
-        /**
-         * Which history prefix a lineage operation retains.
-         */
-        side: 'before' | 'after';
-        type: 'fork';
-      };
-}
-/**
- * One user-message boundary the native product exposes for `/fork` and
- * `/tree`. The revision fixes structural selection; temporal evidence is
- * captured separately at the copy operation's native read cut C.
- */
-export interface SessionUserMessageBoundary {
-  /**
-   * The identity of one exact historical Conversation Surface state.
-   *
-   * A revision is a monotonic counter in its own identity domain. The empty
-   * Surface of a new conversation is [`SurfaceRevision::INITIAL`] (`0`), and
-   * every accepted [`SurfaceOp`] advances it by exactly one, so revision `n`
-   * is precisely "the Surface after the first `n` accepted operations".
-   *
-   * A revision is deliberately **not** a `MessageId`, an `AttemptId`, a
-   * `RuntimeClientCursor`, an `InboundSequence`, an Event Journal sequence,
-   * or a `CapabilityRevision`: none of those identify a Surface state, and
-   * none of them may be substituted for one.
-   */
-  surface_revision: string;
-  message: UserMessageBlock1;
-}
-/**
- * Inbound information supplied to the current agent.
- *
- * A `UserMessageBlock` does not necessarily mean a human spoke: it is the
- * canonical home for anything inbound, including messages from other agents
- * (with [`UserSource::Agent`] provenance) and runtime compaction summaries
- * (with [`InboundKind::CompactionSummary`] kind). It
- * must never become `AssistantMessageBlock` or `ToolMessageBlock`, which are
- * reserved for output and actions of the current agent.
- */
-export interface UserMessageBlock1 {
-  /**
-   * Identifies a committed canonical message block.
-   */
-  id: string;
-  /**
-   * The inbound content.
-   */
-  content: UserContentBlock[];
-  /**
-   * Provenance: who supplied the inbound information.
-   */
-  source:
-    | 'human'
-    | {
-        agent: {
-          /**
-           * Identifies an Agent independently of its finite activations.
-           * For a continuable child, this is the durable Agent-domain identity of
-           * its child Conversation and remains unchanged across resume.
-           */
-          agent_id: string;
-        };
-      }
-    | 'fleet'
-    | 'external_system'
-    | 'runtime'
-    | {
-        extension: {
-          /**
-           * The stable logical key of one certified extension.
-           *
-           * Package/content attestation is intentionally not part of this type.  A
-           * package may be upgraded while preserving its logical ordering identity;
-           * the assembly generation records the attestation separately.
-           */
-          contributor: string;
-        };
-      };
-  /**
-   * Typed kind of inbound information.
-   */
-  kind?:
-    | {
-        goal_continuation: GoalRef;
-      }
-    | 'message'
-    | {
-        compaction_summary: CompactionSummaryMetadata;
-      }
-    | {
-        context: ContextKind;
-      };
-  /**
-   * The persisted UTC instant associated with the inbound message, when
-   * the producer supplied one.
-   *
-   * An ordinary asynchronously delivered inbound message
-   * ([`InboundKind::Message`]) carries the persisted instant of its
-   * delivery; the producer supplies the original timestamp explicitly and
-   * no wall-clock time is fabricated. Derived M4 compaction summaries
-   * ([`InboundKind::CompactionSummary`]) never carry one. Older or
-   * derived messages without a timestamp remain representable: the field
-   * defaults to `None` on deserialization and is omitted from the
-   * canonical encoding while absent.
-   */
-  timestamp?: string | null;
-}
-/**
- * Confirmation metadata; counts include the complete native ownership graph.
- */
-export interface RuntimeClientSessionDeletePreview {
-  session_id: SessionId;
-  /**
-   * Display name, truncated to at most 256 Unicode scalar values.
-   */
-  name?: string | null;
-  target_revision: string;
-  owned_node_count: number;
-  owned_conversation_count: number;
-  owned_child_count: number;
-}
-export interface ConfigurationApplication {
-  /**
-   * The application-scope key. A Session application carries the Session
-   * identity here; a source application carries `SourceTarget::
-   * application_scope`. It is an application key, never a source owner.
-   */
-  scope: string;
-  /**
-   * The authored source owners this application composes, lowest authority
-   * first. The User document always participates; a Workspace-rooted capture
-   * also names the exact canonical configuration directory it was taken
-   * from. This is the only fact that answers which authoring surface owns a
-   * configuration failure; it is never derived from `scope`.
-   */
-  sources: SourceTarget[];
-  version: string;
-  desired: ApplicationIdentity;
-  units: {
-    capabilities?: UnitApplication;
-    execution_policy?: UnitApplication;
-    instructions?: UnitApplication;
-    process_bindings?: UnitApplication;
-    provider?: UnitApplication;
-    shared_capacity?: UnitApplication;
-  };
-  candidate?: AvailableConfiguration | null;
-}
-export interface AvailableConfiguration {
-  identity: ApplicationIdentity;
-  expected_binding: string;
-  impact: CacheImpact;
+  cursor?: AgentConversationCursor | null;
+  snapshot: RuntimeClientSnapshot;
 }
 /**
  * The authoritative Runtime Client snapshot of one conversation runtime.
@@ -8754,7 +8577,7 @@ export interface InboundItemView {
    * The mailbox-assigned inbound sequence.
    */
   sequence: string;
-  message: UserMessageBlock2;
+  message: UserMessageBlock1;
 }
 /**
  * Inbound information supplied to the current agent.
@@ -8766,7 +8589,7 @@ export interface InboundItemView {
  * must never become `AssistantMessageBlock` or `ToolMessageBlock`, which are
  * reserved for output and actions of the current agent.
  */
-export interface UserMessageBlock2 {
+export interface UserMessageBlock1 {
   /**
    * Identifies a committed canonical message block.
    */
@@ -9053,9 +8876,9 @@ export interface RuntimeClientContextView1 {
    */
   compaction_error?: string | null;
   /**
-   * Last prepared request occupancy from the Context owner; absent after compaction until measured again.
+   * Latest native measured request or committed compacted-context estimate.
    */
-  last_request_occupancy?: ContextOccupancy | null;
+  occupancy?: ContextOccupancy | null;
   /**
    * Whether the runtime currently owns a context-compaction operation.
    * This is live operation state, not inferred from token usage.
@@ -9341,6 +9164,370 @@ export interface TodoTask {
     [k: string]: unknown;
   } | null;
 }
+export interface AgentStatistics {
+  statistics: ConversationStatistics;
+  occupancy?: ContextOccupancy | null;
+  duration: AgentDuration;
+}
+export interface AgentDuration {
+  /**
+   * Sum of this child's closed working intervals, excluding inactive gaps.
+   */
+  settled_ms: string;
+  /**
+   * Last interval, if its terminal event has not been observed.
+   */
+  active?: AgentActiveInterval | null;
+}
+export interface AgentActiveInterval {
+  started_at: string;
+  /**
+   * Last durable evidence. Non-running children freeze here, including recovery.
+   */
+  observed_at: string;
+  /**
+   * Authoritative live lifecycle, never inferred from a missing terminal.
+   */
+  running: boolean;
+}
+export interface ServerCapabilities {
+  upload_policy: UploadPolicy;
+  multi_session: boolean;
+  single_writable_controller: boolean;
+  headless_interactions: boolean;
+  /**
+   * Whether this connection holds transport-granted delivery access.
+   * Reporting it grants nothing; the native seam checks the capability.
+   */
+  delivery_access: boolean;
+  experimental_methods: string[];
+}
+/**
+ * Finite native storage admission, independent of image and control-frame limits.
+ */
+export interface UploadPolicy {
+  max_file_bytes: number;
+  max_transfer_bytes: number;
+  max_files_per_transfer: number;
+  max_uploads_per_user_input: number;
+  max_upload_bytes_per_user_input: number;
+  max_concurrent_transfers: number;
+  max_chunk_bytes: number;
+}
+/**
+ * Bounded authoritative metadata for one Session.
+ *
+ * The graph is deliberately not embedded here. Callers that need the graph
+ * use the bounded tree page seam below, so `/session`, switch results, and
+ * restart metadata never materialize every historical node.
+ */
+export interface SessionSnapshot {
+  /**
+   * Session identity.
+   */
+  id: string;
+  /**
+   * The user-defined display name, when this Session has one.
+   *
+   * A Session is born unnamed. The name is display metadata a user
+   * chooses, never an identity: nothing resolves a Session by it, and an
+   * unnamed Session is a complete, ordinary Session.
+   */
+  name?: string | null;
+  /**
+   * Creation instant.
+   */
+  created_at: string;
+  /**
+   * Last metadata/active-node publication instant.
+   */
+  updated_at: string;
+  /**
+   * The active node selected in this Session.
+   */
+  active_node: string;
+  /**
+   * The conversation owned by the active node.
+   */
+  active_conversation_id: string;
+  /**
+   * Number of persisted nodes, useful metadata for a bounded tree view.
+   */
+  node_count: number;
+}
+/**
+ * Native display metadata, shared by exact identity reads and catalog rows.
+ */
+export interface SessionSummary {
+  /**
+   * Native execution ownership generation, encoded as an exact decimal integer.
+   * Changes only when active-node ownership is replaced; never a display timestamp.
+   */
+  ownership_generation: string;
+  /**
+   * Canonical durable Session cwd, projected without loading a runtime.
+   */
+  cwd: string;
+  /**
+   * Session identity.
+   */
+  id: string;
+  /**
+   * The user-defined display name, when this Session has one.
+   */
+  name?: string | null;
+  /**
+   * The first ordinary user message of this Session's root lineage,
+   * bounded to one line. It is what an unnamed row is recognized by, and
+   * it is the client-facing projection of the persisted
+   * `display_preview`: the catalog stores the derived line so listing,
+   * pagination, and search never open a conversation store. `None` is
+   * legitimate — no ordinary user message exists yet, or the first one
+   * has no renderable text — and yields the client-side identity
+   * fallback.
+   */
+  preview?: string | null;
+  /**
+   * Latest committed human-message time, or creation time for a new Session.
+   */
+  updated_at: string;
+  /**
+   * Active node in the session.
+   */
+  active_node: string;
+}
+/**
+ * One node in the native Session graph.
+ */
+export interface SessionNode {
+  /**
+   * Explicit durable publication order, never inferred from UUID bytes.
+   */
+  ordinal: string;
+  /**
+   * Node identity.
+   */
+  id: string;
+  /**
+   * Parent node within the same Session, when this is a tree branch.
+   */
+  parent?: SessionNodeId | null;
+  /**
+   * The one independent linear `ConversationRuntime` lineage of this node.
+   */
+  conversation_id: string;
+  /**
+   * Immutable product-level origin metadata.
+   */
+  origin:
+    | {
+        type: 'new';
+      }
+    | {
+        /**
+         * Source Session identity.
+         */
+        source_session: string;
+        /**
+         * Source node identity.
+         */
+        source_node: string;
+        /**
+         * The identity of one exact historical Conversation Surface state.
+         *
+         * A revision is a monotonic counter in its own identity domain. The empty
+         * Surface of a new conversation is [`SurfaceRevision::INITIAL`] (`0`), and
+         * every accepted [`SurfaceOp`] advances it by exactly one, so revision `n`
+         * is precisely "the Surface after the first `n` accepted operations".
+         *
+         * A revision is deliberately **not** a `MessageId`, an `AttemptId`, a
+         * `RuntimeClientCursor`, an `InboundSequence`, an Event Journal sequence,
+         * or a `CapabilityRevision`: none of those identify a Surface state, and
+         * none of them may be substituted for one.
+         */
+        source_surface_revision: string;
+        type: 'clone';
+      }
+    | {
+        /**
+         * Source Session identity.
+         */
+        source_session: string;
+        /**
+         * Source node identity.
+         */
+        source_node: string;
+        /**
+         * The identity of one exact historical Conversation Surface state.
+         *
+         * A revision is a monotonic counter in its own identity domain. The empty
+         * Surface of a new conversation is [`SurfaceRevision::INITIAL`] (`0`), and
+         * every accepted [`SurfaceOp`] advances it by exactly one, so revision `n`
+         * is precisely "the Surface after the first `n` accepted operations".
+         *
+         * A revision is deliberately **not** a `MessageId`, an `AttemptId`, a
+         * `RuntimeClientCursor`, an `InboundSequence`, an Event Journal sequence,
+         * or a `CapabilityRevision`: none of those identify a Surface state, and
+         * none of them may be substituted for one.
+         */
+        source_surface_revision: string;
+        /**
+         * Identifies a committed canonical message block.
+         */
+        source_message: string;
+        /**
+         * Which history prefix a lineage operation retains.
+         */
+        side: 'before' | 'after';
+        type: 'fork';
+      };
+}
+/**
+ * One user-message boundary the native product exposes for `/fork` and
+ * `/tree`. The revision fixes structural selection; temporal evidence is
+ * captured separately at the copy operation's native read cut C.
+ */
+export interface SessionUserMessageBoundary {
+  /**
+   * The identity of one exact historical Conversation Surface state.
+   *
+   * A revision is a monotonic counter in its own identity domain. The empty
+   * Surface of a new conversation is [`SurfaceRevision::INITIAL`] (`0`), and
+   * every accepted [`SurfaceOp`] advances it by exactly one, so revision `n`
+   * is precisely "the Surface after the first `n` accepted operations".
+   *
+   * A revision is deliberately **not** a `MessageId`, an `AttemptId`, a
+   * `RuntimeClientCursor`, an `InboundSequence`, an Event Journal sequence,
+   * or a `CapabilityRevision`: none of those identify a Surface state, and
+   * none of them may be substituted for one.
+   */
+  surface_revision: string;
+  message: UserMessageBlock2;
+}
+/**
+ * Inbound information supplied to the current agent.
+ *
+ * A `UserMessageBlock` does not necessarily mean a human spoke: it is the
+ * canonical home for anything inbound, including messages from other agents
+ * (with [`UserSource::Agent`] provenance) and runtime compaction summaries
+ * (with [`InboundKind::CompactionSummary`] kind). It
+ * must never become `AssistantMessageBlock` or `ToolMessageBlock`, which are
+ * reserved for output and actions of the current agent.
+ */
+export interface UserMessageBlock2 {
+  /**
+   * Identifies a committed canonical message block.
+   */
+  id: string;
+  /**
+   * The inbound content.
+   */
+  content: UserContentBlock[];
+  /**
+   * Provenance: who supplied the inbound information.
+   */
+  source:
+    | 'human'
+    | {
+        agent: {
+          /**
+           * Identifies an Agent independently of its finite activations.
+           * For a continuable child, this is the durable Agent-domain identity of
+           * its child Conversation and remains unchanged across resume.
+           */
+          agent_id: string;
+        };
+      }
+    | 'fleet'
+    | 'external_system'
+    | 'runtime'
+    | {
+        extension: {
+          /**
+           * The stable logical key of one certified extension.
+           *
+           * Package/content attestation is intentionally not part of this type.  A
+           * package may be upgraded while preserving its logical ordering identity;
+           * the assembly generation records the attestation separately.
+           */
+          contributor: string;
+        };
+      };
+  /**
+   * Typed kind of inbound information.
+   */
+  kind?:
+    | {
+        goal_continuation: GoalRef;
+      }
+    | 'message'
+    | {
+        compaction_summary: CompactionSummaryMetadata;
+      }
+    | {
+        context: ContextKind;
+      };
+  /**
+   * The persisted UTC instant associated with the inbound message, when
+   * the producer supplied one.
+   *
+   * An ordinary asynchronously delivered inbound message
+   * ([`InboundKind::Message`]) carries the persisted instant of its
+   * delivery; the producer supplies the original timestamp explicitly and
+   * no wall-clock time is fabricated. Derived M4 compaction summaries
+   * ([`InboundKind::CompactionSummary`]) never carry one. Older or
+   * derived messages without a timestamp remain representable: the field
+   * defaults to `None` on deserialization and is omitted from the
+   * canonical encoding while absent.
+   */
+  timestamp?: string | null;
+}
+/**
+ * Confirmation metadata; counts include the complete native ownership graph.
+ */
+export interface RuntimeClientSessionDeletePreview {
+  session_id: SessionId;
+  /**
+   * Display name, truncated to at most 256 Unicode scalar values.
+   */
+  name?: string | null;
+  target_revision: string;
+  owned_node_count: number;
+  owned_conversation_count: number;
+  owned_child_count: number;
+}
+export interface ConfigurationApplication {
+  /**
+   * The application-scope key. A Session application carries the Session
+   * identity here; a source application carries `SourceTarget::
+   * application_scope`. It is an application key, never a source owner.
+   */
+  scope: string;
+  /**
+   * The authored source owners this application composes, lowest authority
+   * first. The User document always participates; a Workspace-rooted capture
+   * also names the exact canonical configuration directory it was taken
+   * from. This is the only fact that answers which authoring surface owns a
+   * configuration failure; it is never derived from `scope`.
+   */
+  sources: SourceTarget[];
+  version: string;
+  desired: ApplicationIdentity;
+  units: {
+    capabilities?: UnitApplication;
+    execution_policy?: UnitApplication;
+    instructions?: UnitApplication;
+    process_bindings?: UnitApplication;
+    provider?: UnitApplication;
+    shared_capacity?: UnitApplication;
+  };
+  candidate?: AvailableConfiguration | null;
+}
+export interface AvailableConfiguration {
+  identity: ApplicationIdentity;
+  expected_binding: string;
+  impact: CacheImpact;
+}
 /**
  * Redacted, immutable facts read at the runtime configuration publication lock.
  */
@@ -9612,6 +9799,11 @@ export interface AdmittedConfiguration {
   generation: RuntimeResourceRevision;
   model: SessionModelView;
   resources: CapabilityInspection1;
+}
+export interface McpProbeResult {
+  id: McpServerId;
+  revision: string;
+  outcome: McpProbeOutcome;
 }
 export interface SourceSettings {
   target: SourceTarget;
@@ -9955,9 +10147,9 @@ export interface RuntimeClientContextView2 {
    */
   compaction_error?: string | null;
   /**
-   * Last prepared request occupancy from the Context owner; absent after compaction until measured again.
+   * Latest native measured request or committed compacted-context estimate.
    */
-  last_request_occupancy?: ContextOccupancy | null;
+  occupancy?: ContextOccupancy | null;
   /**
    * Whether the runtime currently owns a context-compaction operation.
    * This is live operation state, not inferred from token usage.
@@ -9988,9 +10180,9 @@ export interface RuntimeClientContextView3 {
    */
   compaction_error?: string | null;
   /**
-   * Last prepared request occupancy from the Context owner; absent after compaction until measured again.
+   * Latest native measured request or committed compacted-context estimate.
    */
-  last_request_occupancy?: ContextOccupancy | null;
+  occupancy?: ContextOccupancy | null;
   /**
    * Whether the runtime currently owns a context-compaction operation.
    * This is live operation state, not inferred from token usage.
@@ -10021,9 +10213,9 @@ export interface RuntimeClientContextView4 {
    */
   compaction_error?: string | null;
   /**
-   * Last prepared request occupancy from the Context owner; absent after compaction until measured again.
+   * Latest native measured request or committed compacted-context estimate.
    */
-  last_request_occupancy?: ContextOccupancy | null;
+  occupancy?: ContextOccupancy | null;
   /**
    * Whether the runtime currently owns a context-compaction operation.
    * This is live operation state, not inferred from token usage.
@@ -10440,6 +10632,7 @@ export interface RuntimeClientJob1 {
  * the stable Agent identity. Activity is bounded observation, never authority.
  */
 export interface RuntimeClientAgent1 {
+  title: string;
   parent_agent_id: AgentId;
   /**
    * Identifies one finite activation owned by an Agent, or one finite

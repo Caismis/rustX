@@ -112,7 +112,11 @@ async fn sibling_agents_run_concurrently_in_one_workspace() {
 async fn a_workflow_child_cannot_be_resumed_through_agent_controls() {
     let plane = plane(4);
     let child = stage_exit0(&plane);
-    let accepted = start(&plane, &workflow_spec("produce the node output")).await;
+    let accepted = start(
+        &plane,
+        &workflow_spec(&plane.conversation_id, "produce the node output"),
+    )
+    .await;
     child
         .complete(ChildResultStatus::Succeeded, Some(r#"{"summary":"done"}"#))
         .await;
@@ -188,102 +192,120 @@ fn allocations(plane: &TestPlane) -> Vec<(SubagentId, ConversationId)> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn resume_workspace_preflight_rejects_missing_and_file_bindings_without_allocation() {
     for regular_file in [false, true] {
-        let plane = plane(4);
-        let child = stage_exit0(&plane);
-        let first = start(&plane, &start_spec("first activation")).await;
-        child
-            .complete(ChildResultStatus::Succeeded, Some("retained history"))
-            .await;
-        plane
-            .registry
-            .wait_until_settled(&first.subagent_id)
-            .await
-            .unwrap();
-        let workspace = plane
-            .registry
-            .snapshot(&first.subagent_id)
-            .unwrap()
-            .workspace;
-        let retained = plane.dir.path().join("retained-workspace");
-        std::fs::rename(&workspace, &retained).unwrap();
-        if regular_file {
-            std::fs::write(&workspace, "not a directory").unwrap();
-        }
-        let authority = plane.registry.state.lock().unwrap().agents[&first.child_agent_id]
-            .authority
-            .clone();
-        let before_events = events(&plane);
-        let before_allocations = allocations(&plane);
-        let before_attempts = plane.registry.state.lock().unwrap().allocation_attempts;
-        let error = plane
-            .registry
-            .send_message(
-                &first.child_agent_id,
-                "rejected resume",
-                AgentActivationOrigin::ClientControl,
-                CancellationSignal::new(),
-            )
-            .await
-            .unwrap_err();
-        assert!(
-            matches!(
-                error,
-                AgentControlError::Start(SubagentStartError::Workspace { .. })
-            ),
-            "{error:?}"
-        );
-        assert_eq!(events(&plane), before_events);
-        assert_eq!(allocations(&plane), before_allocations);
-        assert_eq!(
-            plane.registry.state.lock().unwrap().allocation_attempts,
-            before_attempts
-        );
-        assert!(plane.registry.unproven_settlements().is_empty());
-        let agent = plane
-            .registry
-            .agent_snapshot(&first.child_agent_id)
-            .unwrap();
-        assert_eq!(agent.state, AgentState::Inactive);
-        assert_eq!(agent.latest_activation, first.subagent_id);
-        assert!(agent.current_activation.is_none());
-        if regular_file {
-            std::fs::remove_file(&workspace).unwrap();
-        }
-        std::fs::rename(&retained, &workspace).unwrap();
-        let mut child = stage_exit0(&plane);
-        let (resumed, delegation) = tokio::join!(
-            plane.registry.send_message(
-                &first.child_agent_id,
-                "restored resume",
-                AgentActivationOrigin::ClientControl,
-                CancellationSignal::new()
-            ),
-            child.accept_delegate(),
-        );
-        let resumed = resumed.unwrap();
-        assert_eq!(delegation.task, "restored resume");
-        assert_eq!(resumed.agent_id, first.child_agent_id);
-        let snapshot = plane.registry.snapshot(&resumed.activation_id).unwrap();
-        assert_eq!(snapshot.workspace, workspace);
-        assert_eq!(snapshot.child_conversation_id, first.child_conversation_id);
-        {
-            let state = plane.registry.state.lock().unwrap();
-            assert_eq!(state.agents[&first.child_agent_id].authority, authority);
-            assert_eq!(
-                state.records[state.index[&first.subagent_id]].profile_digest,
-                state.records[state.index[&resumed.activation_id]].profile_digest
-            );
-        }
-        child
-            .send_result(ChildResultStatus::Succeeded, Some("second"))
-            .await;
-        plane
-            .registry
-            .wait_until_settled(&resumed.activation_id)
-            .await
-            .unwrap();
-        assert!(events(&plane).starts_with(&before_events));
+        assert_resume_workspace_preflight(regular_file, Vec::new()).await;
+        assert_resume_workspace_preflight(
+            regular_file,
+            vec![crate::message::content::UploadedFileRef {
+                batch_id: "admitted-batch".into(),
+                name: "input.txt".into(),
+            }],
+        )
+        .await;
     }
+}
+
+async fn assert_resume_workspace_preflight(
+    regular_file: bool,
+    attachments: Vec<crate::message::content::UploadedFileRef>,
+) {
+    let plane = plane(4);
+    let child = stage_exit0(&plane);
+    let first = start(&plane, &start_spec("first activation")).await;
+    child
+        .complete(ChildResultStatus::Succeeded, Some("retained history"))
+        .await;
+    plane
+        .registry
+        .wait_until_settled(&first.subagent_id)
+        .await
+        .unwrap();
+    let workspace = plane
+        .registry
+        .snapshot(&first.subagent_id)
+        .unwrap()
+        .workspace;
+    let retained = plane.dir.path().join("retained-workspace");
+    std::fs::rename(&workspace, &retained).unwrap();
+    if regular_file {
+        std::fs::write(&workspace, "not a directory").unwrap();
+    }
+    let authority = plane.registry.state.lock().unwrap().agents[&first.child_agent_id]
+        .authority
+        .clone();
+    let before_events = events(&plane);
+    let before_allocations = allocations(&plane);
+    let before_attempts = plane.registry.state.lock().unwrap().allocation_attempts;
+    let error = plane
+        .registry
+        .send_message_with_attachments(
+            &first.child_agent_id,
+            "rejected resume",
+            &attachments,
+            AgentActivationOrigin::ClientControl,
+            CancellationSignal::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            AgentControlError::Start(SubagentStartError::Workspace { .. })
+        ),
+        "{error:?}"
+    );
+    assert_eq!(events(&plane), before_events);
+    assert_eq!(allocations(&plane), before_allocations);
+    assert_eq!(
+        plane.registry.state.lock().unwrap().allocation_attempts,
+        before_attempts
+    );
+    assert!(plane.registry.unproven_settlements().is_empty());
+    let agent = plane
+        .registry
+        .agent_snapshot(&first.child_agent_id)
+        .unwrap();
+    assert_eq!(agent.state, AgentState::Inactive);
+    assert_eq!(agent.latest_activation, first.subagent_id);
+    assert!(agent.current_activation.is_none());
+    if regular_file {
+        std::fs::remove_file(&workspace).unwrap();
+    }
+    std::fs::rename(&retained, &workspace).unwrap();
+    let mut child = stage_exit0(&plane);
+    let (resumed, delegation) = tokio::join!(
+        plane.registry.send_message_with_attachments(
+            &first.child_agent_id,
+            "restored resume",
+            &attachments,
+            AgentActivationOrigin::ClientControl,
+            CancellationSignal::new()
+        ),
+        child.accept_delegate(),
+    );
+    let resumed = resumed.unwrap();
+    assert_eq!(delegation.task, "restored resume");
+    assert_eq!(delegation.attachments, attachments);
+    assert_eq!(resumed.agent_id, first.child_agent_id);
+    let snapshot = plane.registry.snapshot(&resumed.activation_id).unwrap();
+    assert_eq!(snapshot.workspace, workspace);
+    assert_eq!(snapshot.child_conversation_id, first.child_conversation_id);
+    {
+        let state = plane.registry.state.lock().unwrap();
+        assert_eq!(state.agents[&first.child_agent_id].authority, authority);
+        assert_eq!(
+            state.records[state.index[&first.subagent_id]].profile_digest,
+            state.records[state.index[&resumed.activation_id]].profile_digest
+        );
+    }
+    child
+        .send_result(ChildResultStatus::Succeeded, Some("second"))
+        .await;
+    plane
+        .registry
+        .wait_until_settled(&resumed.activation_id)
+        .await
+        .unwrap();
+    assert!(events(&plane).starts_with(&before_events));
 }
 
 /// A4: the parked off-lock preflight has the sole reservation. Interrupt

@@ -103,6 +103,8 @@ pub use tokens::{
 /// derived from Conversation Surface history, so no second authority can
 /// drift from it.
 pub struct ContextRuntime {
+    /// Provider-facing primary model frozen with the context capacity.
+    pub(crate) primary_model: String,
     /// The deterministic context engine, configured for this attempt's
     /// model context window.
     pub(crate) engine: ContextEngine,
@@ -216,6 +218,7 @@ impl ContextRuntime {
             summary_input_limit,
         );
         Ok(Self {
+            primary_model: model.primary().invocation_config().model,
             engine,
             summarizer: Arc::new(ModelBackedSummarizer::new(
                 summary,
@@ -277,6 +280,7 @@ impl ContextRuntime {
         compaction_budgets: CompactionBudgets,
     ) -> Self {
         Self {
+            primary_model: "scripted".to_owned(),
             engine,
             summarizer,
             native_composition: crate::extensions::NativeContextComposition::new(status_engine),

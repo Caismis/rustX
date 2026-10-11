@@ -284,13 +284,13 @@ export function SearchBlock(props: SearchBlockProps) {
 
 /** The native result is opaque text, not Harness's structured search metadata.
  * Preserve it verbatim; never infer paths, matches, counts or file coordinates. */
-export function SearchTextBlock({ text, label, truncated }: { text: string; label: string; truncated: boolean }) {
+export function SearchTextBlock({ text, label, truncated, className }: { text: string; label: string; truncated: boolean; className?: string }) {
   const tx = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const { copied, onCopy } = useCopyFeedback(text);
   const lines = text.split('\n');
   const { hidden, capped, headLines, tailLines } = headTailCap(lines.length, 8, expanded);
-  return <div className={css.block} data-search="opaque">
+  return <div className={clsx(css.block, className)} data-search="opaque">
     <div className={css.header}><span className={css.summary}>{label}{truncated ? tx('common:search-block.bounded-output') : ''}</span><button type="button" className={css.copyButton} onClick={onCopy}>{copied ? tx('common:search-block.copied') : tx('common:search-block.copy')}</button></div>
     <div className={css.body}>{(capped ? lines.slice(0, headLines) : lines).map((line, index) => <div className={css.path} key={index}>{line}</div>)}
       {hidden > 0 && <button type="button" className={css.expand} aria-expanded={expanded} onClick={() => setExpanded(v => !v)}>{expanded ? tx('common:search-block.collapse') : tx('common:search-block.show-value-more-lines', { p0: hidden })}</button>}

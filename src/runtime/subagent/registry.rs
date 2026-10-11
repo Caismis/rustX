@@ -835,7 +835,7 @@ pub enum SubagentSteerError {
         /// The named child.
         subagent_id: SubagentId,
     },
-    /// The guidance message is empty or exceeds [`MAX_TASK_BYTES`].
+    /// The guidance input is empty, exceeds [`MAX_TASK_BYTES`] or the shared attachment limit.
     InvalidMessage {
         /// The offending byte length.
         bytes: usize,
@@ -887,7 +887,9 @@ impl core::fmt::Display for SubagentSteerError {
             }
             Self::InvalidMessage { bytes } => write!(
                 f,
-                "the steer message must be non-empty and at most {MAX_TASK_BYTES} bytes ({bytes} given)"
+                "the guidance input must contain text or attachments, at most {MAX_TASK_BYTES} bytes \
+                 and at most {} attachments ({bytes} bytes given)",
+                crate::message::content::MAX_INPUT_ATTACHMENTS
             ),
             Self::CancellationCommitted { reason } => write!(
                 f,
@@ -931,6 +933,7 @@ pub struct SubagentStartSpec {
 /// Input and provenance of exactly one finite activation, never Agent authority.
 #[derive(Debug, Clone)]
 pub struct ActivationAdmission {
+    pub attachments: Vec<crate::message::content::UploadedFileRef>,
     pub task: String,
     pub context: Option<String>,
     pub origin: AgentActivationOrigin,
@@ -984,6 +987,7 @@ pub struct PreparedSubagent {
     terminal: SubagentTerminalMode,
     task: String,
     context: Option<String>,
+    attachments: Vec<crate::message::content::UploadedFileRef>,
     /// The definition-level deadline frozen before preparation. It is only
     /// scheduled after durable ownership commits.
     execution_deadline: Option<SubagentExecutionDeadline>,
@@ -1075,7 +1079,7 @@ pub enum SubagentStartOutcome {
 pub enum SubagentStartError {
     /// The owning conversation is draining or draining-complete.
     ConversationInactive,
-    /// The delegated task is empty or exceeds [`MAX_TASK_BYTES`].
+    /// The task input is empty, exceeds [`MAX_TASK_BYTES`] or the shared attachment limit.
     InvalidTask {
         /// The offending byte length.
         bytes: usize,
@@ -1138,8 +1142,9 @@ impl core::fmt::Display for SubagentStartError {
             }
             Self::InvalidTask { bytes } => write!(
                 f,
-                "the delegated task is empty or exceeds the {MAX_TASK_BYTES}-byte bound \
-                 ({bytes} bytes)"
+                "the task input must contain text or attachments, at most {MAX_TASK_BYTES} bytes \
+                 and at most {} attachments ({bytes} bytes given)",
+                crate::message::content::MAX_INPUT_ATTACHMENTS
             ),
             Self::ContextOversized { bytes } => write!(
                 f,
@@ -1786,18 +1791,13 @@ impl SubagentRegistry {
         preparation_cancellation: &CancellationSignal,
         resume: Option<&agents::ResumeIdentity>,
     ) -> Result<PreparedSubagent, SubagentStartError> {
-        #[cfg(test)]
-        self.state
-            .lock()
-            .unwrap()
-            .prepared_policies
-            .push(spec.authority.execution_policy);
         if preparation_cancellation.is_cancelled() {
             return Err(SubagentStartError::Cancelled);
         }
-        let task_bytes = spec.admission.task.len();
-        if spec.admission.task.trim().is_empty() || task_bytes > MAX_TASK_BYTES {
-            return Err(SubagentStartError::InvalidTask { bytes: task_bytes });
+        if !Self::valid_input(&spec.admission.task, spec.admission.attachments.len()) {
+            return Err(SubagentStartError::InvalidTask {
+                bytes: spec.admission.task.len(),
+            });
         }
         if let Some(context) = &spec.admission.context {
             let bytes = context.len();
@@ -1805,6 +1805,12 @@ impl SubagentRegistry {
                 return Err(SubagentStartError::ContextOversized { bytes });
             }
         }
+        #[cfg(test)]
+        self.state
+            .lock()
+            .unwrap()
+            .prepared_policies
+            .push(spec.authority.execution_policy);
         if self.config.mailbox.begin_running_admission().is_err() {
             return Err(SubagentStartError::ConversationInactive);
         }
@@ -1978,6 +1984,7 @@ impl SubagentRegistry {
                         definition_digest: spec.authority.resolved.definition_digest.clone(),
                         profile_digest: spec.authority.resolved.profile_digest(),
                         terminal: spec.admission.terminal.clone(),
+                        attachments: spec.admission.attachments.clone(),
                         task: spec.admission.task.clone(),
                         context: spec.admission.context.clone(),
                         execution_deadline: spec.authority.resolved.execution_deadline,
@@ -2000,6 +2007,7 @@ impl SubagentRegistry {
                     definition_digest: spec.authority.resolved.definition_digest.clone(),
                     profile_digest: spec.authority.resolved.profile_digest(),
                     terminal: spec.admission.terminal.clone(),
+                    attachments: spec.admission.attachments.clone(),
                     task: spec.admission.task.clone(),
                     context: spec.admission.context.clone(),
                     execution_deadline: spec.authority.resolved.execution_deadline,
@@ -2052,6 +2060,7 @@ impl SubagentRegistry {
             definition_digest: spec.authority.resolved.definition_digest.clone(),
             profile_digest: spec.authority.resolved.profile_digest(),
             terminal: spec.admission.terminal.clone(),
+            attachments: spec.admission.attachments.clone(),
             task: spec.admission.task.clone(),
             context: spec.admission.context.clone(),
             execution_deadline: spec.authority.resolved.execution_deadline,
@@ -2232,6 +2241,7 @@ impl SubagentRegistry {
             terminal,
             task,
             context,
+            attachments,
             execution_deadline,
             profile,
             staged,
@@ -2521,6 +2531,7 @@ impl SubagentRegistry {
                 let provider_available = self.interaction_provider_receiver();
                 let driver = staged.into_driver(
                     DelegationFrame {
+                        attachments,
                         task,
                         context,
                         // The driver overwrites this with the watch's current
@@ -3169,18 +3180,11 @@ impl SubagentRegistry {
         }
     }
 
-    /// Validate a bounded parent-authored message before lifecycle arbitration.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SubagentSteerError::InvalidMessage`] for an empty or
-    /// oversized message.
-    pub(crate) fn validate_guidance_message(message: &str) -> Result<(), SubagentSteerError> {
-        let bytes = message.len();
-        if message.trim().is_empty() || bytes > MAX_TASK_BYTES {
-            return Err(SubagentSteerError::InvalidMessage { bytes });
-        }
-        Ok(())
+    /// Shared task/guidance content admission, before ownership or preparation.
+    fn valid_input(message: &str, attachments: usize) -> bool {
+        (!message.trim().is_empty() || attachments > 0)
+            && message.len() <= MAX_TASK_BYTES
+            && attachments <= crate::message::content::MAX_INPUT_ATTACHMENTS
     }
 
     /// Advances one ticket to
@@ -3239,13 +3243,14 @@ impl SubagentRegistry {
     /// dropping it removes exactly its own ticket under this same mutex.
     ///
     /// The message must already be validated by
-    /// [`Self::validate_guidance_message`]. Production admission is composed
+    /// the shared input policy. Production admission is composed
     /// inside `send_message` under the same Agent owner mutex.
     #[cfg(test)]
     fn admit_guidance(
         &self,
         subagent_id: &SubagentId,
         message: &str,
+        attachments: &[crate::message::content::UploadedFileRef],
     ) -> Result<
         (
             u64,
@@ -3255,7 +3260,7 @@ impl SubagentRegistry {
         SubagentSteerError,
     > {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        self.admit_guidance_locked(&mut state, subagent_id, message)
+        self.admit_guidance_locked(&mut state, subagent_id, message, attachments)
     }
 
     fn admit_guidance_locked(
@@ -3263,6 +3268,7 @@ impl SubagentRegistry {
         state: &mut RegistryState,
         subagent_id: &SubagentId,
         message: &str,
+        attachments: &[crate::message::content::UploadedFileRef],
     ) -> Result<
         (
             u64,
@@ -3332,6 +3338,7 @@ impl SubagentRegistry {
                     super::process::ChildBoundRoute::Guidance {
                         guidance_id,
                         message: message.to_owned(),
+                        attachments: attachments.to_vec(),
                         write_started: Arc::clone(&write_started),
                         outcome,
                     },
@@ -4660,6 +4667,7 @@ mod tests {
     include!("registry/agent_recovery_tests.rs");
     include!("registry/agent_duration_tests.rs");
     include!("registry/agent_bootstrap_tests.rs");
+    mod input_admission;
     include!("registry/review_tests.rs");
     include!("registry/physical_proof_tests.rs");
     mod archive_ownership;
@@ -4920,11 +4928,13 @@ mod tests {
     fn spec(task: &str) -> SubagentStartSpec {
         SubagentStartSpec {
             authority: crate::runtime::subagent::DurableAgentAuthority {
+                title: "Explore task".to_owned(),
                 execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
                 resolved: resolved("explore"),
                 approval_mode: crate::runtime::ApprovalMode::Policy,
             },
             admission: crate::runtime::subagent::ActivationAdmission {
+                attachments: Vec::new(),
                 task: task.to_owned(),
                 context: None,
                 origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
@@ -4935,15 +4945,15 @@ mod tests {
         }
     }
 
-    fn workflow_spec(task: &str) -> SubagentStartSpec {
+    fn workflow_spec(conversation: &ConversationId, task: &str) -> SubagentStartSpec {
         let mut start = spec(task);
+        let mut node = crate::runtime::workflow::test_instance("test_workflow", "agent");
+        node.block.run.conversation_id = conversation.clone();
         start.admission = crate::runtime::subagent::ActivationAdmission {
             origin: AgentActivationOrigin::Workflow {
-                node_id: Box::new(crate::runtime::workflow::test_instance(
-                    "test_workflow",
-                    "agent",
-                )),
+                node_id: Box::new(node.clone()),
             },
+            attachments: Vec::new(),
             terminal: SubagentTerminalMode::WorkflowOutput {
                 output_schema: serde_json::json!({
                     "type": "object",
@@ -4953,13 +4963,8 @@ mod tests {
                 }),
                 workflow_id: crate::runtime::workflow::WorkflowId::parse("test_workflow")
                     .expect("workflow id"),
-                run_id: crate::runtime::workflow::test_instance("test_workflow", "agent")
-                    .block
-                    .run,
-                node_id: Box::new(crate::runtime::workflow::test_instance(
-                    "test_workflow",
-                    "agent",
-                )),
+                run_id: node.block.run.clone(),
+                node_id: Box::new(node.clone()),
             },
             ..start.admission
         };
@@ -5261,7 +5266,11 @@ mod tests {
             crate::local_runtime::subagent_child::tests::workflow_cancellation_ordering(late).await;
         let plane = plane(4);
         let child = stage_exit0(&plane);
-        let accepted = start(&plane, &workflow_spec("output cancellation ordering")).await;
+        let accepted = start(
+            &plane,
+            &workflow_spec(&plane.conversation_id, "output cancellation ordering"),
+        )
+        .await;
         plane
             .registry
             .cancel(&accepted.subagent_id, CancellationReason::UserRequested)
@@ -5302,7 +5311,11 @@ mod tests {
     async fn a_workflow_child_closes_native_lifecycle_without_parent_inbound() {
         let plane = plane(4);
         let child = stage_exit0(&plane);
-        let accepted = start(&plane, &workflow_spec("return a structured result")).await;
+        let accepted = start(
+            &plane,
+            &workflow_spec(&plane.conversation_id, "return a structured result"),
+        )
+        .await;
         child
             .complete(
                 ChildResultStatus::Succeeded,
@@ -5360,7 +5373,8 @@ mod tests {
             plane.registry.workflow_agent_output(&accepted.subagent_id),
             Some(serde_json::json!({"summary": "answer"})),
         );
-        let instance = crate::runtime::workflow::test_instance("test_workflow", "agent");
+        let mut instance = crate::runtime::workflow::test_instance("test_workflow", "agent");
+        instance.block.run.conversation_id = plane.conversation_id.clone();
         let mut other_instance = instance.clone();
         other_instance.block.invocations[0] = 1;
         assert_eq!(
@@ -7363,7 +7377,11 @@ mod tests {
     async fn the_registry_authority_refuses_to_steer_a_workflow_owned_child() {
         let plane = plane(4);
         let child = stage_exit0(&plane);
-        let accepted = start(&plane, &workflow_spec("produce the node output")).await;
+        let accepted = start(
+            &plane,
+            &workflow_spec(&plane.conversation_id, "produce the node output"),
+        )
+        .await;
         assert_eq!(
             plane
                 .registry
@@ -8246,8 +8264,10 @@ mod tests {
 
         // Admission is synchronous under the registry mutex. This call is
         // the gate establishing that the message wins before SealRequested.
-        let (guidance_id, answer, _ticket) =
-            plane.registry.admit_guidance(&id, "before seal").unwrap();
+        let (guidance_id, answer, _ticket) = plane
+            .registry
+            .admit_guidance(&id, "before seal", &[])
+            .unwrap();
         super::super::ipc::write_child_frame(&mut child.peer, &ChildFrame::SealRequested)
             .await
             .unwrap();
@@ -8262,7 +8282,7 @@ mod tests {
             SubagentState::Stopping
         );
         assert!(matches!(
-            plane.registry.admit_guidance(&id, "after seal"),
+            plane.registry.admit_guidance(&id, "after seal", &[]),
             Err(SubagentSteerError::Settled {
                 state: SubagentState::Stopping
             })
@@ -9051,7 +9071,7 @@ mod tests {
     async fn sub258_a_workflow_owned_child_commits_the_same_profile_identity() {
         let plane = plane(4);
         let child = stage_exit0(&plane);
-        let spec = workflow_spec("inspect");
+        let spec = workflow_spec(&plane.conversation_id, "inspect");
         let expected = spec.authority.resolved.profile_digest();
 
         let accepted = start(&plane, &spec).await;

@@ -391,9 +391,7 @@ pub fn resolve_agent_profile(
         }
         tools.retain(|_, tool| {
             let unsupported = tool.origin == ToolOrigin::Builtin
-                && (crate::runtime::subagent::catalog::CHILD_UNSAFE_BUILTIN_TOOLS
-                    .contains(&tool.name.as_str())
-                    || crate::tools::native::is_agent_control(&tool.name));
+                && crate::tools::native::is_agent_control(&tool.name);
             if unsupported {
                 diagnostics.push(AgentProfileDiagnostic::ScopeUnsupported {
                     capability: ScopeCapability::BuiltinTool(tool.id.clone()),
@@ -639,7 +637,7 @@ mod tests {
         );
     }
     #[test]
-    fn present_is_root_available_and_child_selection_is_a_scope_error() {
+    fn present_is_available_in_both_root_and_child_profiles() {
         let tools = available();
         let profile = profile(&["present"]);
         let root = resolve(
@@ -657,13 +655,8 @@ mod tests {
             &CapabilityAvailability::new(),
             AgentScope::OneShotChild,
         );
-        assert!(child.tools.is_empty());
-        assert_eq!(
-            child.diagnostics,
-            [AgentProfileDiagnostic::ScopeUnsupported {
-                capability: ScopeCapability::BuiltinTool(root.tools[0].id.clone())
-            }]
-        );
+        assert!(child.diagnostics.is_empty());
+        assert_eq!(child.tools, root.tools);
     }
     #[test]
     fn cfg273_resolved_generation_is_owned_and_preserves_host_tool_policy() {

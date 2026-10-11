@@ -682,7 +682,12 @@ async fn proactive_compaction_before_the_next_turn() {
     );
 
     let summary_id_committed = committed_summary(&result).id.clone();
-    let (surface_revision, compaction_tokens_before, compaction_estimated_after) = result
+    let (
+        surface_revision,
+        compaction_tokens_before,
+        compaction_estimated_after,
+        compacted_occupancy,
+    ) = result
         .event_history
         .iter()
         .find_map(|event| match event {
@@ -690,8 +695,14 @@ async fn proactive_compaction_before_the_next_turn() {
                 surface_revision,
                 tokens_before,
                 estimated_tokens_after,
+                occupancy,
                 ..
-            } => Some((*surface_revision, *tokens_before, *estimated_tokens_after)),
+            } => Some((
+                *surface_revision,
+                *tokens_before,
+                *estimated_tokens_after,
+                occupancy.clone(),
+            )),
             _ => None,
         })
         .expect("the attempt emitted one compaction completion");
@@ -740,6 +751,7 @@ async fn proactive_compaction_before_the_next_turn() {
             surface_revision,
             tokens_before: compaction_tokens_before,
             estimated_tokens_after: compaction_estimated_after,
+            occupancy: compacted_occupancy,
         },
         RuntimeEvent::ModelRequestStarted {
             request_id: RequestId::new("request:9:attempt-1:1:2:0"),
@@ -937,7 +949,12 @@ async fn overflow_compact_and_retry_succeeds() {
     );
 
     let summary_id_committed = committed_summary(&result).id.clone();
-    let (surface_revision, compaction_tokens_before, compaction_estimated_after) = result
+    let (
+        surface_revision,
+        compaction_tokens_before,
+        compaction_estimated_after,
+        compacted_occupancy,
+    ) = result
         .event_history
         .iter()
         .find_map(|event| match event {
@@ -945,8 +962,14 @@ async fn overflow_compact_and_retry_succeeds() {
                 surface_revision,
                 tokens_before,
                 estimated_tokens_after,
+                occupancy,
                 ..
-            } => Some((*surface_revision, *tokens_before, *estimated_tokens_after)),
+            } => Some((
+                *surface_revision,
+                *tokens_before,
+                *estimated_tokens_after,
+                occupancy.clone(),
+            )),
             _ => None,
         })
         .expect("the attempt emitted one compaction completion");
@@ -972,6 +995,7 @@ async fn overflow_compact_and_retry_succeeds() {
             surface_revision,
             tokens_before: compaction_tokens_before,
             estimated_tokens_after: compaction_estimated_after,
+            occupancy: compacted_occupancy,
         },
         RuntimeEvent::ModelRetryScheduled {
             failed_request_id: RequestId::new("request:9:attempt-1:1:1:0"),

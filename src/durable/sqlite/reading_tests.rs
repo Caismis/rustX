@@ -153,7 +153,7 @@ fn turn_previews_are_the_opening_human_prompt_and_the_settled_final_response() {
     start(&store, "a2");
     commit_text(&store, "a2", "a2-final", "Answer two");
     timeout(&store, "a2");
-    // Non-human inbound never opens a turn's prompt; automatic continuation has none.
+    // Runtime/external notices never open a prompt; continuation from them has none.
     adopt(&store, UserSource::ExternalSystem, "System notice", None);
     start(&store, "a3");
     timeout(&store, "a3");
@@ -178,6 +178,51 @@ fn turn_previews_are_the_opening_human_prompt_and_the_settled_final_response() {
         outline.turns
     );
 }
+#[test]
+fn delegated_tasks_open_turn_previews_without_reclassifying_the_source() {
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    let source = UserSource::Agent {
+        agent_id: crate::runtime::identity::AgentId::new("parent"),
+    };
+    adopt(&store, source.clone(), "Explore the native API", None);
+    start(&store, "child-first");
+    commit_text(
+        &store,
+        "child-first",
+        "child-first-answer",
+        "Initial findings",
+    );
+    timeout(&store, "child-first");
+    adopt(&store, source, "Check one more case", None);
+    start(&store, "child-second");
+    timeout(&store, "child-second");
+    let outline = store.conversation_turns(0, 64).unwrap();
+    assert_eq!(outline.turns[0].prompt, "Explore the native API");
+    assert_eq!(outline.turns[1].prompt, "Check one more case");
+    let window = store
+        .conversation_window(
+            &ConversationWindowAt::Turn {
+                id: outline.turns[0].id.clone(),
+                cut: outline.cut,
+            },
+            64,
+        )
+        .unwrap();
+    let source = window
+        .page
+        .entries
+        .iter()
+        .find_map(|entry| match &entry.item {
+            crate::durable::TranscriptItem::Message {
+                message: MessageBlock::User(user),
+            } => Some(&user.source),
+            _ => None,
+        });
+    assert!(
+        matches!(source, Some(UserSource::Agent { agent_id }) if agent_id.as_str() == "parent")
+    );
+}
+
 #[test]
 fn distant_turn_locations_are_exact_bounded_and_read_only() {
     let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();

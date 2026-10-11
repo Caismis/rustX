@@ -54,11 +54,11 @@ test("parent detach fences child continuation; reads send exact parent and Subag
   const h = await harness();
   const reading = h.session.agentTranscriptPage("A", "12");
   const read = await nextRequest(h, "agent/transcript", 0);
-  assert.deepEqual(read.params, { target: h.target, agent_id: "A", before: "12", limit: 32 });
+  assert.deepEqual(read.params, { target: h.target, agent_id: "A", at: { type: "older", before: "12", cut: null }, limit: 32 });
   const detached = h.session.detach();
   const detach = await nextRequest(h, "session/detach", 0);
   h.transport.respond(detach.id, { type: "detached" }); await detached;
-  h.transport.respond(read.id, { type: "transcript", page: page("10") });
+  h.transport.respond(read.id, { type: "transcript_window", window: { cut: { conversation_id: snapshot().conversation_id, journal: "20", transcript: "20", mutation_revision: "0" }, page: page("10") } });
   assert.equal(await reading, undefined);
   assert.equal(h.transport.transportCount("session/attach"), 1);
   for (const method of ["turn/start", "turn/steer", "agent/interrupt", "interaction/respond"] as const) assert.equal(h.transport.transportCount(method), 0);
@@ -72,8 +72,8 @@ test("resync fences old child read; authoritative reread reconstructs without wr
   h.transport.respond(snap.id, { type: "snapshot", snapshot: snapshot(), cursor: "2" });
   const sub = await nextRequest(h, "session/subscribe", 0); h.transport.respond(sub.id, { type: "subscribed", after_cursor: "2" }); await repair;
   const fresh = reader.newest(); const next = await nextRequest(h, "agent/transcript", 1);
-  h.transport.respond(next.id, { type: "transcript", page: page("20") }); await fresh;
-  h.transport.respond(read.id, { type: "transcript", page: page("10") }); await old;
+  h.transport.respond(next.id, { type: "transcript_window", window: { cut: { conversation_id: snapshot().conversation_id, journal: "20", transcript: "20", mutation_revision: "0" }, page: page("20") } }); await fresh;
+  h.transport.respond(read.id, { type: "transcript_window", window: { cut: { conversation_id: snapshot().conversation_id, journal: "20", transcript: "20", mutation_revision: "0" }, page: page("10") } }); await old;
   assert.deepEqual(reader.page, page("20"));
   assert.deepEqual(h.transport.log.requests.map(r => r.method), ["initialize", "session/attach", "agent/transcript", "session/snapshot", "session/subscribe", "agent/transcript"]);
   reader.dispose(); h.client.close();

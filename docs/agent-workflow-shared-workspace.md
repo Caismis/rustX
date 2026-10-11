@@ -48,28 +48,69 @@ An Agent is Unavailable while any of its own obligations is open. Session
 deletion keeps the same physical and admission barriers and never removes,
 inspects or blocks on project files.
 
+## Integration with native child input and inspection
+
+PR #461's attachment-bearing input remains owned by the existing native
+admission path. Text-only Tool calls delegate to that same path; typed controls
+can supply upload references. Active delivery and resumed delegation retain
+canonical acceptance acknowledgements, input provenance and cancellation.
+Resume checks the frozen directory off the Registry mutex before allocating an
+incarnation, then checks it again during preparation. Attachment input does not
+bypass either check.
+
+Child conversation, Turn, Trace and cut-bounded history reads retain native
+ownership. Child `present` uses the native Artifact/file-delivery authority;
+sharing a Session path does not authorize another registered root. Delivery
+still checks the exact child binding against the Session mapping and holds its
+physical read authority through cancellation or detachment.
+
+SQLite admits `SubagentOwnershipCommitted` only when Workflow kind and Workflow
+origin agree, and the typed node's run names the event's parent Conversation.
+The existing store/envelope Conversation check remains independent. Rejection
+rolls back ownership, lifecycle and private authority together.
+`commit_workflow_agent_terminal` remains the single atomic successful terminal
+and output transition: Workflow, run, full node instance, visit, loop and
+parallel identity must match the committed owner, including on retries.
+
+The native control reader remains alive after a child Result until physical
+anchors settle. Post-Result protocol violations still invalidate success;
+logical completion cannot discharge unproven containment or publication.
+No shared workspace directory is a cleanup or rollback resource.
+
+Regression evidence includes
+`workflow_ownership_requires_matching_kind_origin_and_parent_conversation`,
+`normal_agent_creation_and_resume_ownership_keep_their_native_admission_paths`,
+`workflow_terminal_rejects_inconsistent_and_substituted_typed_identities`, the
+three `resume_workspace_preflight_*` tests (including attachment input), native
+child delivery tests and post-Result containment tests. The real child
+`a_real_child_executes_native_tools_in_the_frozen_nested_workspace` still uses
+production Write, Edit, Read and Bash calls and verifies the resulting bytes,
+Git refs, worktree list and directory identity independently.
+
 ## Format and version inventory
 
 All formats break together. Old data is refused at its boundary and left
 untouched: nothing is migrated, rewritten, rehashed or deleted.
 
-| Boundary | Owner | Old | New | Refusal | Proof |
-| --- | --- | --- | --- | --- | --- |
-| SQLite conversation store | `SQLITE_SCHEMA_VERSION` | 50 | 51 | `SchemaVersionMismatch` at open, bytes unchanged | `a_version_50_store_with_retired_workspace_facts_is_refused_and_left_untouched` |
-| Parent/child IPC | `SUBAGENT_IPC_VERSION` | 30 | 31 | Hello decode or version mismatch before composition | `a_version_30_hello_is_refused_before_composition` |
-| Runtime Client | `RUNTIME_CLIENT_PROTOCOL_VERSION` | 61 | 62 | Negotiation rejects other versions | `attachment_request_correlation_and_version_negotiation` |
-| App Server | `APP_SERVER_PROTOCOL_VERSION` | 39 | 40 | `initialize` and WebSocket subprotocol require v40 | `current_app_server_documentation_matches_negotiated_version`, generated `v40.*` artifacts |
-| Agent definition digest | `SUBAGENT_DEFINITION_DIGEST_VERSION` | v5 | v6 | Frozen digests never match | `sub258_the_profile_framing_is_versioned` and definition digest tests |
-| Execution profile digest | `SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION` | v3 | v4 | Frozen digests never match | `sub258_the_profile_framing_is_versioned` |
-| Deletion revision token | `rustx/session-deletion-ownership` tag | v1 | v2 | Old tokens are stale | `deletion_never_removes_the_shared_session_workspace` |
-| Agent profile TOML | `agent.schema.json` | `[worktree]` | absent | Unknown field rejected | `retired_agent_worktree_authoring_is_refused` |
-| Workflow YAML | `workflow.schema.json` | `workspace:` | absent | Unknown field rejected | `retired_workspace_authoring_and_projection_fields_are_gone` |
-| Review subject | `ReviewSubject` | `plan`/`candidate` | `plan` | Unknown variant/field rejected | `retired_candidate_review_vocabulary_is_refused` |
-| Agent wire workspace | `RuntimeClientAgent.workspace` | object | path | Decode fails | `the_runtime_client_projection_carries_the_named_identity` |
+| Boundary | Owner | Main before integration | PR before integration | Combined | Breaking format / rejection | Proof |
+| --- | --- | --- | --- | --- | --- | --- |
+| SQLite conversation store | `src/durable/sqlite.rs`, `SQLITE_SCHEMA_VERSION` | 55 | 51 | 56 | Shared path ownership and Candidate removal combined with canonical child history, input provenance and context checkpoints; old versions return `SchemaVersionMismatch` without writes | `pre_integration_stores_are_refused_and_left_untouched`, Workflow ownership/output atomicity tests |
+| Parent/child IPC | `src/runtime/subagent/ipc.rs`, `SUBAGENT_IPC_VERSION` | 31 | 31 | 32 | Frozen workspace path plus attachment-bearing input and inherited provenance; either v31 Hello shape fails before composition | `both_version_31_hello_formats_are_rejected_before_runtime_composition`, real child attachment and native Tool suites |
+| Runtime Client | `src/runtime_client/types.rs`, `RUNTIME_CLIENT_PROTOCOL_VERSION` | 66 | 62 | 67 | Shared Agent workspace path, no disposal/Candidate, with child Turn/Trace/history and typed attachments; negotiation rejects other versions | `attachment_request_correlation_and_version_negotiation` |
+| App Server | `src/app_server/protocol.rs`, `APP_SERVER_PROTOCOL_VERSION` | 44 | 40 | 45 | Runtime Client changes reflected in RPC and generated schemas; initialize and WebSocket negotiation reject old peers | `current_app_server_documentation_matches_negotiated_version`, generated `v45.*`, `pnpm check` |
+| Agent definition digest | `SUBAGENT_DEFINITION_DIGEST_VERSION` | v5 | v6 | v6 | Worktree authoring removed; old frozen digests do not match | `sub258_the_profile_framing_is_versioned` and definition digest tests |
+| Execution profile digest | `SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION` | v3 | v4 | v4 | Shared binding and automatic controls; old frozen digests do not match | `sub258_the_profile_framing_is_versioned` |
+| Deletion revision token | `rustx/session-deletion-ownership` tag | v1 | v2 | v2 | No disposable workspace ownership; old tokens are stale | `deletion_never_removes_the_shared_session_workspace` |
+| Agent profile TOML | `agent.schema.json` | `[worktree]` | absent | absent | Unknown field rejected | `retired_agent_worktree_authoring_is_refused` |
+| Workflow YAML | `workflow.schema.json` | `workspace:` | absent | absent | Unknown field rejected | `retired_workspace_authoring_and_projection_fields_are_gone` |
+| Review subject | `ReviewSubject` | `plan`/`candidate` | `plan` | `plan` | Unknown variant/field rejected | `retired_candidate_review_vocabulary_is_refused` |
+| Agent wire workspace | `RuntimeClientAgent.workspace` | object | path | path | Old object does not decode as the new path | `the_runtime_client_projection_carries_the_named_identity` |
 
-`CURRENT_RUNTIME_SCHEMA_VERSION` and the Session catalog version are unchanged:
-their strict decoders already reject the removed `worktree` and
-`agent_workspaces` fields.
+Event envelope 1, Session catalog 15 and `CURRENT_RUNTIME_SCHEMA_VERSION`
+retain main's versions; this integration does not add another format change to
+those owners. Strict authoring decoders reject removed `worktree` and
+`agent_workspaces` fields. Child IPC 31 was independently assigned to two
+incompatible formats; neither is accepted as IPC 32.
 
 ## Developer upgrade contract
 
@@ -154,7 +195,7 @@ boundary_suites::`, `--test contracts --test provider`), **B** = `rust-boundarie
 | D03 | Web `settings-units` Agent controls note, TUI `convergence.test.ts` | W, T |
 | D04 | TUI `subagent-activity`, `workflow-projection`, `hitl` tests; Web `subagents` and `chat` tests | T, W |
 | D05 | Session archive tests and `queued_old_review_cannot_resurrect_a_settled_workflow_node` | C |
-| D06 | `a_version_50_store_with_retired_workspace_facts_is_refused_and_left_untouched` | C |
+| D06 | `pre_integration_stores_are_refused_and_left_untouched` | C |
 | D07 | `a_version_30_hello_is_refused_before_composition`, `attachment_request_correlation_and_version_negotiation` | C |
 | D08 | `proven_child_loss_has_identical_resume_authority_before_and_after_reopen`, `real_child_resumes_same_identity_history_and_frozen_authority` | C, B |
 | D09 | Full unchanged suites in every lane | C, B, T, P, W |

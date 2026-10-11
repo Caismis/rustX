@@ -259,17 +259,17 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// eligibility to the snapshot and its change event; ordinary streaming never
 /// publishes it. Version 57 clients are rejected without a compatibility path.
 /// Version 59 refreshes retained Trace records with their resolved native location.
-/// Version 60 adds child-owned incremental statistics and active-interval clocks.
-/// Version 61 replaces reasoning profiles with general Model Profiles in model
-/// selection, invocation and catalog views (#456). Version 60 clients are
-/// rejected without a compatibility projection.
-/// Version 62 (#462) marks the automatically composed Root Agent control group
-/// in capability inspection and removes every Workflow Candidate and
-/// Agent/Workflow Git Worktree vocabulary: workspace snapshots become the
-/// plain Session execution binding, and Candidate, handoff, retained-resource
-/// and disposal views, requests and results are gone. Version 61 clients are
-/// rejected without a compatibility projection.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 62;
+/// Version 61 adds child-owned Trace reads and exact current Attempt activity.
+/// Version 62 distinguishes native non-human and mixed Trace input.
+/// Version 64 adds child turn directories and cut-bound transcript windows.
+/// Version 65 carries native transcript checkpoint counts and replaces the last
+/// request-only context seat with a measured-or-compacted `occupancy` reading.
+/// Version 66 adds exact Tool-occurrence navigation in child Trace domains, and
+/// general Model Profiles in model selection, invocation and catalog views.
+/// Version 67 retains native child input/inspection/provenance and composes
+/// Root-only Agent controls over a frozen shared Session workspace, with no
+/// Candidate, worktree disposal or resource lifecycle vocabulary.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 67;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -518,11 +518,17 @@ pub enum RuntimeClientRequest {
     AgentList {
         id: RequestId,
     },
+    AgentConversation {
+        id: RequestId,
+        agent_id: AgentId,
+        after: Option<super::agent_conversation::AgentConversationCursor>,
+    },
     AgentStatistics {
         id: RequestId,
         agent_id: crate::runtime::identity::AgentId,
     },
     AgentSendMessage {
+        attachments: Vec<crate::message::content::UploadedFileRef>,
         id: RequestId,
         agent_id: crate::runtime::identity::AgentId,
         message: String,
@@ -535,10 +541,33 @@ pub enum RuntimeClientRequest {
         id: RequestId,
         agent_id: crate::runtime::identity::AgentId,
     },
+    AgentTrace {
+        id: RequestId,
+        agent_id: crate::runtime::identity::AgentId,
+        before: Option<super::trace::TraceCursor>,
+        limit: usize,
+        records: Vec<super::trace::TraceCursor>,
+    },
+    AgentTraceDetail {
+        id: RequestId,
+        agent_id: crate::runtime::identity::AgentId,
+        record_id: String,
+    },
+    AgentTraceLocateTool {
+        id: RequestId,
+        agent_id: crate::runtime::identity::AgentId,
+        locator: super::trace::TraceToolLocator,
+    },
     AgentTranscript {
         id: RequestId,
         agent_id: crate::runtime::identity::AgentId,
-        before: Option<super::snapshot::RuntimeClientTranscriptCursor>,
+        at: crate::durable::reading::ConversationWindowAt,
+        limit: usize,
+    },
+    AgentTurns {
+        id: RequestId,
+        agent_id: crate::runtime::identity::AgentId,
+        offset: Option<usize>,
         limit: usize,
     },
     /// Release the attachment.
@@ -581,11 +610,16 @@ impl RuntimeClientRequest {
             | Self::JobCancel { id, .. }
             | Self::AgentStatus { id, .. }
             | Self::AgentList { id, .. }
+            | Self::AgentConversation { id, .. }
             | Self::AgentStatistics { id, .. }
             | Self::AgentSendMessage { id, .. }
             | Self::AgentWait { id, .. }
             | Self::AgentInterrupt { id, .. }
+            | Self::AgentTrace { id, .. }
+            | Self::AgentTraceDetail { id, .. }
+            | Self::AgentTraceLocateTool { id, .. }
             | Self::AgentTranscript { id, .. }
+            | Self::AgentTurns { id, .. }
             | Self::Detach { id, .. }
             | Self::Shutdown { id, .. } => *id,
         }
@@ -614,11 +648,16 @@ impl RuntimeClientRequest {
             Self::JobCancel { .. } => "job_cancel",
             Self::AgentStatus { .. } => "agent_status",
             Self::AgentList { .. } => "agent_list",
+            Self::AgentConversation { .. } => "agent_conversation",
             Self::AgentStatistics { .. } => "agent_statistics",
             Self::AgentSendMessage { .. } => "agent_send_message",
             Self::AgentWait { .. } => "agent_wait",
             Self::AgentInterrupt { .. } => "agent_interrupt",
+            Self::AgentTrace { .. } => "agent_trace",
+            Self::AgentTraceDetail { .. } => "agent_trace_detail",
+            Self::AgentTraceLocateTool { .. } => "agent_trace_locate_tool",
             Self::AgentTranscript { .. } => "agent_transcript",
+            Self::AgentTurns { .. } => "agent_turns",
             Self::Detach { .. } => "detach",
             Self::Shutdown { .. } => "shutdown",
         }
@@ -630,6 +669,10 @@ impl RuntimeClientRequest {
         matches!(
             self,
             Self::AgentStatistics { .. }
+                | Self::AgentConversation { .. }
+                | Self::AgentTrace { .. }
+                | Self::AgentTraceDetail { .. }
+                | Self::AgentTraceLocateTool { .. }
                 | Self::CompactContext { .. }
                 | Self::InteractionRespond { .. }
                 | Self::JobWait { .. }
@@ -746,6 +789,15 @@ pub enum RuntimeClientResult {
     TraceDetail {
         detail: Option<Box<super::trace::TraceDetail>>,
     },
+    TraceToolLocation {
+        location: Option<super::trace::TraceToolLocation>,
+    },
+    TranscriptWindow {
+        window: super::snapshot::ConversationWindow,
+    },
+    ConversationTurns {
+        page: crate::durable::reading::ConversationTurnPage,
+    },
     TranscriptPage {
         /// The bounded durable transcript page.
         page: RuntimeClientTranscriptPage,
@@ -790,6 +842,9 @@ pub enum RuntimeClientResult {
     },
     Agent {
         agent: RuntimeClientAgent,
+    },
+    AgentConversation {
+        conversation: super::agent_conversation::AgentConversation,
     },
     AgentStatistics {
         metrics: super::agent_statistics::AgentStatistics,
@@ -1039,7 +1094,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 62);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 67);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {
@@ -1058,6 +1113,7 @@ mod tests {
     #[test]
     fn interrupted_subagent_projection_serializes_as_the_current_wire_state() {
         let subagent = RuntimeClientAgent {
+            title: "Explore task".to_owned(),
             activation_id: crate::runtime::identity::SubagentId::new("subagent-1"),
             current_activation: None,
             activation_state: crate::runtime::subagent::SubagentState::Interrupted,

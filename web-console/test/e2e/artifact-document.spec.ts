@@ -18,7 +18,7 @@ test('real immutable Artifact crosses private v2 derivation and rejects late att
       super(url, protocols); this.carrierProtocol = Array.isArray(protocols) ? protocols[0] : '';
     }
     send(data: Parameters<WebSocket['send']>[0]) {
-      if (this.carrierProtocol === 'rustx.product-host.file-read.v2') carrier.push({ protocol: this.carrierProtocol, payload: JSON.parse(String(data)) });
+      if (this.carrierProtocol === 'rustx.product-host.file-read.v3') carrier.push({ protocol: this.carrierProtocol, payload: JSON.parse(String(data)) });
       super.send(data);
     }
   };

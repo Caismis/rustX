@@ -121,10 +121,10 @@ pub use activity::{
     SubagentWaitReason,
 };
 pub use catalog::{
-    AgentCatalog, CHILD_UNSAFE_BUILTIN_TOOLS, MAX_SUBAGENT_DEFINITIONS,
-    MAX_SUBAGENT_EXECUTION_DEADLINE_MS, NamedAgentDefinition, NamedAgentDefinitionDigest,
-    NamedAgentDefinitionError, SUBAGENT_DEFINITION_DIGEST_VERSION, SubagentAdmissionError,
-    SubagentExecutionDeadline, SubagentExecutionDeadlineError, SubagentName, SubagentNameError,
+    AgentCatalog, MAX_SUBAGENT_DEFINITIONS, MAX_SUBAGENT_EXECUTION_DEADLINE_MS,
+    NamedAgentDefinition, NamedAgentDefinitionDigest, NamedAgentDefinitionError,
+    SUBAGENT_DEFINITION_DIGEST_VERSION, SubagentAdmissionError, SubagentExecutionDeadline,
+    SubagentExecutionDeadlineError, SubagentName, SubagentNameError,
 };
 pub use invocation::{
     MAX_OVERRIDE_SKILLS, MAX_OVERRIDE_TOOLS, SubagentInvocationOverride, SubagentOverrideError,

@@ -2650,7 +2650,17 @@ impl McpServerRuntime {
                         "MCP connection cancelled during the handshake".to_owned(),
                     )),
                     started = start_client_service(handler.clone(), transport, handshake_lifecycle(server_id)) => started,
-                }?;
+                };
+                let service = match service {
+                    Ok(service) => service,
+                    Err(error) => {
+                        // The handshake future (and its outbound seam) has
+                        // ended, but rmcp's HTTP worker may still own a POST.
+                        // Terminate and await that local ownership explicitly.
+                        ownership.settle_failed_handshake().await;
+                        return Err(error);
+                    }
+                };
                 (service, None)
             }
         };

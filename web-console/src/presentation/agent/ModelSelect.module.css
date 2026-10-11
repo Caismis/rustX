@@ -20,9 +20,7 @@
   align-items: center;
   gap: 4px;
   min-width: 0;
-  /* Legacy fallback, then a row-relative cap that grants long names more
-     room without letting this trailing control consume the composer. */
-  max-width: 220px;
+  /* Grant long names room within their own composer row. */
   max-width: min(360px, 45cqw);
   height: 28px;
   padding: 0 4px 0 8px;
@@ -71,27 +69,15 @@
   color: var(--dsw-alias-label-caption);
 }
 
-/* Stand-in for the whole text below the icon-only cut: the settings page's
-   Models glyph (IconDataOutline16), hidden while any text fits. */
+/* The measured composer row owns collapse; outside it the name remains visible. */
 .triggerIcon {
-  display: none;
+  display: var(--dsh-composer-model-icon-display, none);
   flex: 0 0 auto;
 }
 
-/* Icon-only floor: past continuous shrink (effort ellipsizes away first, then
-   the name), a 360px composer row leaves the 45cqw cap too little for a
-   legible name, so the text yields to the Models glyph. Same anonymous
-   container as PermissionSelect's 460px cut (InputBar .row); the full name
-   stays reachable through the trigger's title and aria-label. */
-@container (max-width: 360px) {
-  .triggerIcon {
-    display: block;
-  }
-
-  .triggerLabel,
-  .triggerEffort {
-    display: none;
-  }
+.triggerLabel,
+.triggerEffort {
+  display: var(--dsh-composer-model-text-display, block);
 }
 
 .chevron {

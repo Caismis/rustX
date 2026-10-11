@@ -15,7 +15,7 @@ use std::{io, path::PathBuf};
 use tokio_util::sync::CancellationToken;
 
 pub(crate) const PATH: &str = "/product-host/file-read";
-pub(crate) const SUBPROTOCOL: &str = "rustx.product-host.file-read.v2";
+pub(crate) const SUBPROTOCOL: &str = "rustx.product-host.file-read.v3";
 
 #[cfg(test)]
 #[derive(Debug)]
@@ -248,10 +248,14 @@ pub(crate) struct FileRead {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum ReadSource {
     SessionFile {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        agent_id: Option<crate::runtime::identity::AgentId>,
         message_id: crate::runtime::identity::MessageId,
         delivery_index: usize,
     },
     Artifact {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        agent_id: Option<crate::runtime::identity::AgentId>,
         artifact_id: crate::runtime::ArtifactId,
     },
 }
@@ -286,6 +290,7 @@ async fn read(
     let FileRead { source, roots, .. } = request;
     let result = match source {
         ReadSource::SessionFile {
+            agent_id,
             message_id,
             delivery_index,
         } => {
@@ -295,12 +300,18 @@ async fn read(
                 message_id,
                 delivery_index,
                 delivery_access::Roots::Registered(roots),
-                delivery_access::Access::Bytes,
+                agent_id.map_or(
+                    delivery_access::Access::Bytes,
+                    delivery_access::Access::AgentBytes,
+                ),
                 token,
             )
             .await
         }
-        ReadSource::Artifact { artifact_id } => artifact(host, route, artifact_id, token).await,
+        ReadSource::Artifact {
+            artifact_id,
+            agent_id,
+        } => artifact(host, route, artifact_id, agent_id, token).await,
     };
     (result, Some(publication))
 }
@@ -309,6 +320,7 @@ async fn artifact(
     host: AppServerHost,
     route: std::sync::Arc<super::connection::Route>,
     artifact_id: crate::runtime::ArtifactId,
+    agent_id: Option<crate::runtime::identity::AgentId>,
     authorization: CancellationToken,
 ) -> Result<MethodResult, RpcError> {
     let client = route.client.clone();
@@ -326,9 +338,11 @@ async fn artifact(
                             reason: FileFailure::Capacity,
                         })
                     })?;
-                    let data = authority
-                        .artifact_read(&artifact_id)
-                        .map_err(client_error)?;
+                    let data = match agent_id {
+                        Some(id) => authority.agent_artifact_read(&id, &artifact_id),
+                        None => authority.artifact_read(&artifact_id),
+                    }
+                    .map_err(client_error)?;
                     route.attachment.read_authority().map_err(client_error)?;
                     delivery_access::check_rpc(&authorization)?;
                     Ok(MethodResult::ArtifactBytes { data })

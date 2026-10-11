@@ -990,14 +990,122 @@ independently of the still-pending RPC. A new explicit invocation receives a new
 old transport callbacks cannot change it. A confirmed successful
 RPC remains successful if the following read repair fails.
 
-`last_request_occupancy` (shown by the TUI status line and the Web composer's
+`occupancy` (shown by the TUI status line and the Web composer's
 context ring) carries input tokens, capacity, provider-facing model and an
 estimated breakdown, all frozen in the same native RequestSnapshot. The breakdown
 prices the Effective System Prompt and Tool definitions with the default
 `ceil(bytes / 4)` estimator; messages are the measured remainder, saturating at
 zero. Desired model
-selection cannot change its denominator. The latest prepared request must have its
-own reported usage; a newer unmeasured request invalidates the previous value.
-Compaction invalidates occupancy until a later request measurement. Zero is a real
+selection cannot change its denominator. The most recent provider measurement remains available while newer requests stream
+or finish without usage. A new measurement replaces it using its own frozen snapshot.
+Pending or failed compaction preserves that reading. A successful compaction atomically
+records the rebuilt primary context estimate, capacity and model; `estimated` marks
+its provenance. This reading replaces the preceding request measurement and survives
+attachment/restart, without contributing to cumulative provider usage. Transcript checkpoint metadata consumes the immutable per-summary replaced
+canonical-message count and history-only estimate committed by the native
+replacement transaction, including retired checkpoints and copied lineage. Summary prose contributes no facts. Zero is a real
 measurement; absence or invalid capacity is unavailable, never zero. Paging does
 not change measurement authority and navigation does not generate requests.
+
+Compaction checkpoint statistics are immutable Ledger facts, committed atomically
+with the exact Surface replacement and its completion Journal fact. The native
+commit estimates only the selected canonical retired span once with the default
+history estimator; System Prompt, tools, billing and Context occupancy remain
+independent. Each summary keeps its own count and estimate, including when a
+later checkpoint retires that summary. Lineage copies retain those values and
+omit local completion correlation. Transcript decoration uses one keyed Ledger
+lookup and at most one keyed local Journal lookup per requested summary; it never
+reconstructs the retired Surface, hydrates retired messages, or scans the Journal.
+Missing or malformed checkpoint facts are explicit read errors. SQLite schema 56
+requires these facts; older development stores are refused without migration.
+
+## Indexed historical occupancy
+
+The latest context reading is selected from immutable Journal rows through one
+finite sequence cut. `events_context_reading_idx` indexes event kind, the native
+qualifying discriminator, and sequence. The discriminator accepts request
+terminals with a non-null usage payload and every completed compaction, including
+an explicitly absent estimate. Three indexed seeks return at most one row each;
+the presentation reader orders those candidates and returns the newest one.
+No backwards page loop or maximum-history cutoff participates in correctness.
+SQLite maintains this expression index in the Journal's existing transaction;
+there is no additional occupancy table or persisted semantic owner.
+
+Started requests, usage-free terminals and failed/in-progress compaction preserve
+the prior reading. Completed compaction replaces it, including with absence.
+Usage whose frozen context window is zero also yields absence without selecting
+an older request. Missing snapshots, malformed selected payloads and missing
+indexes fail explicitly. Provider usage remains measured; committed rebuilt
+context remains estimated. Inherited fallback performs a primary-key lookup of the compact immutable
+`bootstrap_identity.occupancy_json`, without loading Turn or Surface arrays.
+The Context Engine derives it once from the validated selected seed: the newest
+Turn with actual requests determines the reading, even when absent; a retained
+Surface replacement after that Turn's last member suppresses older occupancy.
+Clone, Fork and Tree therefore select their own cut, including subsequent lineage
+generations and Artifact remapping, without consulting current source state.
+
+SQLite writes the derivative, its history-bound integrity digest, and the
+bootstrap-initialized marker in the same transaction as canonical history,
+Surface operations, checkpoints and Turn provenance. Bootstrap metadata contains
+only compact fields; inherited provenance payloads live in their own immutable
+indexed rows. Initialization validates
+the supplied immutable evidence and rejects mismatched reinitialization. Runtime
+reads check the compact payload's integrity and shape; damaged or missing
+initialized metadata fails explicitly. The marker distinguishes an uninitialized
+store from a missing bootstrap identity. There is no independent update path.
+Later local events cannot change this immutable fallback at an earlier Journal
+cut. Schema 55 rejects obsolete development stores without migration.
+
+Finite transcript decoration seeks each unique selected Assistant identity using
+`events_message_id_kind_idx`, with the Journal cut in each SQL predicate, and
+deduplicates the resulting Attempt identities. An inherited message without a
+local commit does not acquire a destination Attempt. Query cost depends on the
+selected window and its directly relevant facts, not unrelated Assistant commits.
+
+
+The deterministic SQL regressions inspect the actual generated query plans and
+SQLite VM instruction counts before and after thousands of unrelated terminals
+and Assistant commits. Exact message fact queries use
+`events_message_id_kind_idx(message identity, event kind, sequence)`; Trace still
+joins the exact canonical occurrence to the native Step and Tool start, without
+creating an independent execution record.
+
+## Indexed inherited transcript provenance
+
+Schema 54 replaces the bootstrap Turn and Completed Response JSON arrays with
+`inherited_turn_provenance` and `inherited_response_provenance`. Each complete
+validated payload is stored once under its stable zero-based bootstrap ordinal.
+Original execution identity, outcome, timing, statistics and process membership
+remain immutable evidence, never destination execution or configuration.
+
+`inherited_message_membership` has one primary-key row for each inherited
+canonical Assistant. Its nullable foreign keys name the owning Turn and Response
+ordinals; a null reference records intentional absence, while a missing membership
+row is an error. This single index stores references, not semantic payload copies.
+Native initialization derives it from the validated selected LineageSeed in the
+same transaction as canonical history, Surface operations, checkpoint statistics,
+provenance, occupancy metadata and the bootstrap-initialized marker. There is no
+runtime writer or alternate provenance source. Integrity digests protect payloads,
+record counts and membership references; idempotent admission verifies the exact
+seed and maps.
+
+Finite windows seek each distinct requested canonical identity in the Ledger and
+membership primary-key indexes, then read only its referenced provenance rows.
+Results are deduplicated by ordinal and returned in original bootstrap order.
+Schema 55 additionally indexes `(turn_ordinal, assistant_message_id)` for reverse
+Turn membership validation. Each selected Turn declares exactly the persisted
+canonical Assistant membership set for its ordinal, including the empty set for
+terminal-only Turns. This check reads only that Turn's members; it does not
+hydrate unrelated provenance. Selected records validate their directly relevant
+memberships. Missing rows, dangling references, inconsistent membership and
+corrupt payloads fail explicitly.
+The whole-lineage readers additionally verify contiguous ordinals and recorded
+counts; those explicit complete-history operations may traverse the lineage.
+
+Inherited evidence is independent of the local Journal cut. Locally committed
+ownership still comes exclusively from `events_message_id_kind_idx` at the exact
+`through` sequence. Later execution and compaction cannot mutate inherited
+membership or manufacture destination Attempts. Clone/Fork/Tree and Artifact
+remapping populate the same validated representation; cold reads consult only the
+destination store. Development stores with an older schema are rejected, without
+migration or compatibility paths.

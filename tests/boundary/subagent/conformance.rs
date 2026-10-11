@@ -730,11 +730,13 @@ async fn launch_wired_child_full(
         .prepare(
             &SubagentStartSpec {
                 authority: crate::runtime::subagent::DurableAgentAuthority {
+                    title: "Explore task".to_owned(),
                     execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
                     resolved: resolved_child_spec("conformance"),
                     approval_mode: rustx::runtime::ApprovalMode::Policy,
                 },
                 admission: crate::runtime::subagent::ActivationAdmission {
+                    attachments: Vec::new(),
                     task: task.to_owned(),
                     context: None,
                     origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {

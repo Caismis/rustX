@@ -34,7 +34,7 @@ fn route_native_tools(body: &str) -> crate::common::FixtureReply {
         return if results.is_empty() {
             tool_reply(
                 "subagent",
-                &json!({"agent":"explore", "task":"CHILD-NATIVE-TOOLS"}),
+                &json!({"title":"Exercise native file tools", "agent":"explore", "task":"CHILD-NATIVE-TOOLS"}),
             )
         } else {
             crate::common::sse_fixture("openai_chat", "plain_text.sse")

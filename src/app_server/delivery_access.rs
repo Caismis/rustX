@@ -41,17 +41,20 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
-/// Which canonical roots may contain the original Session cwd.
+/// Native authority over the exact physical root used by the descriptor walk.
 pub(crate) enum Roots {
-    /// The Product Host's current registrations, checked against the mapping.
+    /// Current Product Host registrations. Child reads require shared native ownership;
+    /// a registered parent does not authorize an isolated Git Worktree.
     Registered(Vec<PathBuf>),
-    /// The original Session's current native mapping alone. Delivery access
-    /// is native-process authority; no external registration list applies.
+    /// The original Session mapping and its exact registry-owned child workspace.
+    /// Delivery access is native-process authority; no external registration applies.
     OriginalMapping,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) enum Access {
+    AgentBytes(crate::runtime::identity::AgentId),
+    AgentLocation(crate::runtime::identity::AgentId),
     /// Bounded original bytes, at most 512 KiB.
     Bytes,
     /// The verified absolute path and leaf identity; no bytes.
@@ -125,6 +128,33 @@ pub(super) async fn request(
         .map_err(|_| domain(ErrorData::OperationFailed))?
 }
 
+/// Inputs come from the current Session allocation and the attached parent's
+/// native Agent registry, never from a browser's paths or claimed Agent identity.
+fn workspace_root(
+    mapped_root: &std::path::Path,
+    child: Option<&std::path::PathBuf>,
+    roots: &Roots,
+) -> io::Result<PathBuf> {
+    let root = match child {
+        None => mapped_root,
+        Some(workspace) => {
+            if workspace != mapped_root {
+                return Err(crate::tools::session_files::unavailable());
+            }
+            workspace.as_path()
+        }
+    };
+    if let Roots::Registered(registered) = roots
+        && !registered.iter().any(|path| path == root)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "delivery Workspace not authorized by Product Host",
+        ));
+    }
+    Ok(root.to_path_buf())
+}
+
 /// Every fence runs here: authenticated admission, before lookup/allocation,
 /// before open, after leaf open immediately before bytes or identity, after
 /// edge verification, and before publication.
@@ -162,14 +192,30 @@ async fn resolve(
         .try_acquire_owned()
         .map_err(|_| failed(FileFailure::Capacity))?;
     route.attachment.read_authority().map_err(client_error)?;
-    let file = authority
-        .session_file_reference(&message_id, delivery_index)
+    let agent_id = match &access {
+        Access::AgentBytes(id) | Access::AgentLocation(id) => Some(id.clone()),
+        _ => None,
+    };
+    let child_workspace = agent_id
+        .as_ref()
+        .map(|id| authority.agent_file_workspace(id))
+        .transpose()
         .map_err(|_| failed(FileFailure::Unavailable))?;
+    let file = match &agent_id {
+        Some(id) => authority.agent_file_reference(id, &message_id, delivery_index),
+        None => authority.session_file_reference(&message_id, delivery_index),
+    }
+    .map_err(|_| failed(FileFailure::Unavailable))?;
+    let mapping_conversation = if agent_id.is_some() {
+        route.target.conversation_id.clone()
+    } else {
+        file.scope.conversation_id.clone()
+    };
     let (session, node) = sessions
         .catalog
         .lock()
         .await
-        .file_source(&file.scope.conversation_id)
+        .file_source(&mapping_conversation)
         .map_err(|_| failed(FileFailure::Unavailable))?;
     // Native allocation access excludes Session deletion while the read
     // is owned; acquiring it does not compose or start an Agent.
@@ -181,6 +227,7 @@ async fn resolve(
     let read_route = route.clone();
     let read_authorization = authorization.clone();
     let catalog = sessions.catalog.clone();
+    let authority = authority.clone();
     #[cfg(test)]
     let probe = host.file_read_probe();
     let resolved = tokio::task::spawn_blocking(move || {
@@ -201,12 +248,19 @@ async fn resolve(
             }
             check(&read_authorization)?;
             let mapping_current = catalog.blocking_lock().file_mapping_matches(
-                &reference.scope.conversation_id,
+                &mapping_conversation,
                 &session,
                 &node,
                 &mapped_cwd,
             );
-            if !mapping_current {
+            let child_current = match (&agent_id, &child_workspace) {
+                (Some(id), Some(workspace)) => authority
+                    .agent_file_workspace(id)
+                    .is_ok_and(|current| &current == workspace),
+                (None, None) => true,
+                _ => false,
+            };
+            if !mapping_current || !child_current {
                 return Err(crate::tools::session_files::unavailable());
             }
             read_route
@@ -222,23 +276,16 @@ async fn resolve(
         };
         authorized()?;
         // Current native mapping only. No textual Host-path fallback.
-        let root = std::fs::canonicalize(&mapped_cwd)
+        let mapped_root = std::fs::canonicalize(&mapped_cwd)
             .map_err(|_| crate::tools::session_files::unavailable())?;
-        if let Roots::Registered(roots) = &roots
-            && !roots.contains(&root)
-        {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "delivery Workspace not authorized by Product Host",
-            ));
-        }
+        let root = workspace_root(&mapped_root, child_workspace.as_ref(), &roots)?;
         let resolved = match access {
-            Access::Bytes => Resolved::Bytes(crate::tools::session_files::read_authorized(
-                &root, &reference, authorized,
-            )?),
-            Access::Location => Resolved::Location(crate::tools::session_files::locate_authorized(
-                &root, &reference, authorized,
-            )?),
+            Access::Bytes | Access::AgentBytes(_) => Resolved::Bytes(
+                crate::tools::session_files::read_authorized(&root, &reference, authorized)?,
+            ),
+            Access::Location | Access::AgentLocation(_) => Resolved::Location(
+                crate::tools::session_files::locate_authorized(&root, &reference, authorized)?,
+            ),
         };
         authorized()?;
         Ok::<_, std::io::Error>(resolved)
@@ -553,5 +600,29 @@ impl Drop for Publication {
         {
             table.remove(&key(&self.id));
         }
+    }
+}
+
+#[cfg(test)]
+mod workspace_tests {
+    use super::*;
+    #[test]
+    fn shared_child_requires_native_parent_root_even_when_both_paths_are_registered() {
+        let parent = PathBuf::from("/native/parent");
+        let unrelated = PathBuf::from("/native/unrelated");
+        let registrations = Roots::Registered(vec![parent.clone(), unrelated.clone()]);
+        let child = unrelated.clone();
+        assert_eq!(
+            crate::tools::session_files::read_failure(
+                &workspace_root(&parent, Some(&child), &registrations).unwrap_err()
+            ),
+            FileFailure::Unavailable
+        );
+        assert!(workspace_root(&parent, Some(&child), &Roots::OriginalMapping).is_err());
+        let child = parent.clone();
+        assert_eq!(
+            workspace_root(&parent, Some(&child), &registrations).unwrap(),
+            parent
+        );
     }
 }
