@@ -8400,6 +8400,8 @@ model = "provider/model"
         assert!(log.next_after(frontier).unwrap().2);
     }
     mod archive_tests;
+
+    mod artifact_lineage_tests;
     pub(crate) mod deletion_tests;
 }
 

@@ -7196,6 +7196,12 @@ holds, not an input a reopen could contradict.
 snapshot supplies selected Surface history, canonical closure and both completed-
 response and turn-reading provenance through C. Session `prepare_*` only trims
 and remaps that frozen authority; it does not assemble independent current reads.
+Artifact materialization changes only managed content references. It preserves
+the remapped canonical closure, Surface operations, checkpoint statistics,
+completed responses and native Turn provenance together. Artifact-bearing and
+ordinary lineage copies therefore expose the same historical Turn directory
+and navigation after reopening. Original execution identities and totals remain
+immutable evidence; a copy creates no destination Attempt, event or request.
 
 `LineageSeed` is the public durable authority both halves are admitted
 through, so it is checked against what durable transitions can *reach*, not
