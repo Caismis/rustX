@@ -434,9 +434,7 @@ fn prove_with_lock(
         }
         // Repeat the barrier after uncertain acknowledgement of an earlier seal.
         File::open(parent)?.sync_all()?;
-        return Ok(Some(RecoveredPhysicalProof {
-            lock: allocation,
-        }));
+        return Ok(Some(RecoveredPhysicalProof { lock: allocation }));
     }
     // Published names always require the exact lease and receipt. Private
     // evidence cannot excuse missing/corrupt evidence in this namespace.

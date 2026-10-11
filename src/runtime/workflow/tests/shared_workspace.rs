@@ -386,7 +386,13 @@ fn retired_workspace_authoring_and_projection_fields_are_gone() {
         ))
         .unwrap(),
     ] {
-        for retired in ["candidate", "handoff", "isolation", "resource_state", "borrowed_from"] {
+        for retired in [
+            "candidate",
+            "handoff",
+            "isolation",
+            "resource_state",
+            "borrowed_from",
+        ] {
             assert!(!schema.contains(retired), "{retired} remains in {schema}");
         }
     }

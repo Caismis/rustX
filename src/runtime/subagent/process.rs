@@ -645,21 +645,22 @@ pub(crate) async fn spawn_staged(
         }
     }
     if preparation_cancellation.is_cancelled() {
-        return Err(discard_unstaged_resources(runtime_root, SpawnError::Cancelled));
+        return Err(discard_unstaged_resources(
+            runtime_root,
+            SpawnError::Cancelled,
+        ));
     }
     if spec.runtime_root().as_deref().ok() != Some(runtime_root.path()) {
         let owned_path = runtime_root.path().display().to_string();
         let specified_path = format!("{:?}", spec.runtime_root());
-        return Err(
-            discard_unstaged_resources(
-                runtime_root,
-                SpawnError::WorkspaceSetup {
-                    detail: format!(
-                        "child spec runtime root {specified_path} does not match the reserved physical incarnation {owned_path}"
-                    ),
-                },
-            ),
-        );
+        return Err(discard_unstaged_resources(
+            runtime_root,
+            SpawnError::WorkspaceSetup {
+                detail: format!(
+                    "child spec runtime root {specified_path} does not match the reserved physical incarnation {owned_path}"
+                ),
+            },
+        ));
     }
     // The containment prerequisite is established BEFORE the child exists.
     // A subagent child may create nested supervised process units during

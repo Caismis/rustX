@@ -3,4 +3,3 @@ instructions = "Implement the accepted fixed greeting change. Use read/write/edi
 
 [tools]
 builtin = ["read", "write", "edit", "ask_user"]
-

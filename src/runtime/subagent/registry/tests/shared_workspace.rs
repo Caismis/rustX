@@ -48,7 +48,10 @@ async fn an_ordinary_child_shares_a_dirty_git_workspace_without_worktrees() {
         "uncommitted parent edit\n",
         "the child binding sees the parent's uncommitted state"
     );
-    assert_eq!(git(&workspace, &["worktree", "list", "--porcelain"]), worktrees);
+    assert_eq!(
+        git(&workspace, &["worktree", "list", "--porcelain"]),
+        worktrees
+    );
     assert_eq!(git(&workspace, &["branch", "--list"]), branches);
 
     child
@@ -59,7 +62,10 @@ async fn an_ordinary_child_shares_a_dirty_git_workspace_without_worktrees() {
         .wait_until_settled(&accepted.subagent_id)
         .await
         .unwrap();
-    assert_eq!(git(&workspace, &["worktree", "list", "--porcelain"]), worktrees);
+    assert_eq!(
+        git(&workspace, &["worktree", "list", "--porcelain"]),
+        worktrees
+    );
     assert_eq!(git(&workspace, &["branch", "--list"]), branches);
     assert_eq!(
         std::fs::read_to_string(workspace.join("tracked.txt")).unwrap(),
@@ -128,7 +134,12 @@ async fn a_workflow_child_cannot_be_resumed_through_agent_controls() {
             .is_err(),
         "a Workflow child has no durable continuation authority"
     );
-    assert!(plane.registry.agent_snapshot(&accepted.child_agent_id).is_none());
+    assert!(
+        plane
+            .registry
+            .agent_snapshot(&accepted.child_agent_id)
+            .is_none()
+    );
     assert_eq!(plane.registry.all_snapshots().len(), 1);
     assert_eq!(events(&plane).len(), before, "the refusal commits nothing");
     assert!(
@@ -151,7 +162,10 @@ async fn a_missing_workspace_binding_fails_without_fallback_or_creation() {
         .prepare(&start_spec("no binding"), &CancellationSignal::new())
         .await
         .expect_err("a missing binding cannot start a child");
-    assert!(matches!(error, SubagentStartError::Workspace { .. }), "{error:?}");
+    assert!(
+        matches!(error, SubagentStartError::Workspace { .. }),
+        "{error:?}"
+    );
     assert!(!missing.exists(), "no replacement directory is created");
     assert!(registry.all_snapshots().is_empty());
     assert!(events(&plane).is_empty(), "nothing is committed");
