@@ -346,7 +346,7 @@ it.each(['preview', 'blocked', 'stale', 'not_found'] as const)('recovery settles
   await s.client.deleteSession('A', 'confirmed');
   s.handlers.set('session/recoverDeletion', () => ({ type: 'deletion', result: status === 'preview'
     ? { status, preview: { session_id: 'A', target_revision: 'fresh', owned_node_count: 1, owned_conversation_count: 1, owned_child_count: 0 } }
-    : status === 'blocked' ? { status, session_id: 'A', reason: { kind: 'workspace', resource_count: 1 } }
+    : status === 'blocked' ? { status, session_id: 'A', reason: { kind: 'invalid_ownership' } }
     : { status, session_id: 'A' } }));
   expect((await s.client.recoverSessionDeletion('A'))?.status).toBe(status);
   expect(s.client.getSnapshot().views.A?.deletionRecovery).toBeUndefined();

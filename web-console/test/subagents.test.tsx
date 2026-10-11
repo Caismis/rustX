@@ -10,7 +10,7 @@ import { Server, snapshot } from './fixture';
 import type { RuntimeClientAgent, MessageBlock } from '../../protocol/app-server/v40';
 const servers: Server[] = [];
 afterEach(() => { cleanup(); for (const server of servers.splice(0)) server.client.disconnect(); });
-const agent: RuntimeClientAgent = { agent_id: 'child', agent: 'Research', parent_agent_id: 'root', child_conversation_id: 'child-conversation', activation_id: 'activation', state: 'inactive', activation_state: 'succeeded', definition_digest: 'd', profile_digest: 'p', started_at: '2026-10-08T00:00:00Z', observation: { revision: '1', activity: { type: 'awaiting_activity' }, counters: { model_requests: 1, model_retries: 0, tool_executions: 0 } }, workspace: { logical_workspace: '/workspace', isolation: { type: 'shared' }, resource_state: 'none' } };
+const agent: RuntimeClientAgent = { agent_id: 'child', agent: 'Research', parent_agent_id: 'root', child_conversation_id: 'child-conversation', activation_id: 'activation', state: 'inactive', activation_state: 'succeeded', definition_digest: 'd', profile_digest: 'p', started_at: '2026-10-08T00:00:00Z', observation: { revision: '1', activity: { type: 'awaiting_activity' }, counters: { model_requests: 1, model_retries: 0, tool_executions: 0 } }, workspace: '/workspace' };
 const report: MessageBlock = { role: 'user', id: 'return', source: { agent: { agent_id: 'child' } }, content: [{ type: 'text', text: '**Research result**' }] };
 it('agent return is a context disclosure, while a human message remains a user bubble', () => {
   const s = snapshot(); s.transcript = { entries: [{ cursor: '1', item: { type: 'message', message: report } }] };

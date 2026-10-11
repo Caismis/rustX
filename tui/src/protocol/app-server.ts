@@ -385,8 +385,6 @@ export type DeletionBlocker = Extract<
   SessionDeleteResult,
   { status: "blocked" }
 >["reason"];
-export type RuntimeClientAgentWorkspaceDisposalOutcome =
-  ResultOf<"workspace_disposed">["outcome"];
 
 // ---------------------------------------------------------------------------
 // Exact integer domains

@@ -70,13 +70,12 @@ function row(node: string, branch: string): WorkflowInstanceView {
   return { block: { run: id, definition: { workflow_id: "review", blocks: ["parallel", branch] }, invocations: [0, 0] },
     node, visit: 0, kind: "review", state: { type: "waiting", reason: "review" }, child: null, invocation: null, tool_id: null,
     interaction: { conversation_id: "conv_01900000-0000-7000-8000-000000000002", interaction_id: node }, iteration: null, iterations_max: null,
-    loop_exit: null, candidate: { run: id, version: "2", content: "old" }, checks_passed: null, review_accepted: true };
+    loop_exit: null, checks_passed: null, review_accepted: true };
 }
 function run(): WorkflowRunView {
   return { id, workflow_id: "review", program_digest: "a".repeat(64), resource_revision: "1", tool_call_id: "outer",
     state: { type: "running" }, instances: [row("human", "left"), { ...row("worker", "right"), state: { type: "running" }, child: "child-right", interaction: null, review_accepted: null }],
-    omitted_instances: 0, steps_consumed: 4, steps_max: 20, agents_consumed: 1, candidate_users: 0,
-    candidate: { run: id, version: "3", content: "new" }, handoff: { state: "retained", path: "/candidate", truncated: false } };
+    omitted_instances: 0, steps_consumed: 4, steps_max: 20, agents_consumed: 1 };
 }
 
 it("native replacement event and reconnect snapshot converge without canonical writes", () => {
@@ -91,12 +90,12 @@ it("native replacement event and reconnect snapshot converge without canonical w
   assert.equal(JSON.stringify(after), frozen, "expand/focus formatting cannot mutate any native fact");
 });
 
-it("Parallel human wait and child coexist and old acceptance is historical", () => {
+it("Parallel human wait and child coexist without Candidate or handoff rows", () => {
   const text = workflowDetails(run()).join("\n");
   assert.match(text, /human · waiting for review/);
   assert.match(text, /worker · running.*child-right/);
-  assert.match(text, /candidate v2 · historical/);
-  assert.match(text, /candidate v3/);
+  assert.match(text, /Review accepted/);
+  assert.doesNotMatch(text, /candidate|handoff/i);
   assert.match(text, /root HITL/);
 });
 

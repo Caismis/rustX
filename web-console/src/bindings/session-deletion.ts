@@ -12,7 +12,6 @@ export function sessionDeletionNotice(result: RuntimeClientSessionDeletionResult
     case 'blocked':
       switch (result.reason.kind) {
         case 'resource_conflict': return message('common:copy.an-external-resource-owner-prevents-deletion-inspect-the-ownership-conflict-before-trying-');
-        case 'workspace': return message('common:copy.retained-workspaces-are-blocking-deletion-review-the-affected-workspaces-and-recorded-deta');
         case 'invalid_ownership': return message('common:copy.saved-ownership-could-not-be-verified-inspect-the-recorded-details-before-trying-again');
       }
     case 'preview': return message('common:copy.review-the-deletion-confirmation-before-continuing');

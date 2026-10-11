@@ -19,7 +19,7 @@ export const agentFixture = (): RuntimeClientAgent => ({
   activation_id: 'activation-a', current_activation: 'activation-a', state: 'active', activation_state: 'running',
   definition_digest: 'definition', profile_digest: 'profile', started_at: '2026-09-15T00:00:00Z',
   observation: { revision: '1', activity: { type: 'awaiting_activity' }, counters: { model_requests: 0, model_retries: 0, tool_executions: 0 } },
-  workspace: { logical_workspace: '/workspace', isolation: { type: 'shared' }, resource_state: 'none' },
+  workspace: '/workspace',
 });
 it('Active and Inactive send use one owner operation; wait remains interruptible and captures a native activation', async () => {
   const server = new Server(); servers.push(server); await server.attached('A');

@@ -832,7 +832,7 @@ for (const carrier of ["stdio", "websocket"] as const) it(`native child transcri
     } finally { renameSync(`${database}.held`, database); }
     assert.equal(sent.filter(method => method === "turn/start").length, 1);
     assert.equal(sent.filter(method => method === "interaction/respond").length, 2);
-    for (const method of ["turn/steer", "agent/interrupt", "subagent/disposeWorkspace"]) assert.equal(sent.includes(method), false);
+    for (const method of ["turn/steer", "agent/interrupt"]) assert.equal(sent.includes(method), false);
     stop();
   } catch (error) {
     t.diagnostic(error instanceof Error ? error.stack! : String(error));

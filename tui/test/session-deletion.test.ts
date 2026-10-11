@@ -56,10 +56,9 @@ test("Rust and TypeScript use the same complete result fixtures", async () => {
 test("all blocker reasons and finalization uncertainty remain discriminated", () => {
   const reasons = [
     { kind: "resource_conflict" },
-    { kind: "workspace", resource_count: 1 },
     { kind: "invalid_ownership" },
   ] satisfies import("../src/protocol/app-server.ts").DeletionBlocker[];
-  assert.equal(new Set(reasons.map((r) => r.kind)).size, 3);
+  assert.equal(new Set(reasons.map((r) => r.kind)).size, 2);
   const final: SessionDeleteResult = { status: "committed_durability_uncertain", session_id: target.session_id };
   assert.equal(final.status, "committed_durability_uncertain");
 });

@@ -77,54 +77,11 @@ describe("subagent activity section", () => {
     assert.match(rendered, /conv_7563d0be-1638-75d5-8d79-6768bd57808c/);
   });
 
-  it("advertises disposal for retained and unresolved physical resources", () => {
+  it("offers no workspace disposal: every Agent shares the Session workspace", () => {
     const rendered = render([
-      subagent("worker", "sha256:d1", "inactive", {
-        workspace: {
-          logical_workspace: "/runtime/worktrees/one",
-          isolation: {
-            type: "git_worktree",
-            source_repository_root: "/repo",
-            repository_relative_workspace: "",
-            physical_worktree_root: "/runtime/worktrees/one",
-            base_commit: "base",
-            branch: "rustx/subagent/one",
-            parent_had_uncommitted_changes: false,
-          },
-          resource_state: "retained",
-          handoff: {
-            logical_workspace: "/runtime/worktrees/one",
-            physical_worktree_root: "/runtime/worktrees/one",
-            branch: "rustx/subagent/one",
-            base_commit: "base",
-            head_commit: "head",
-            dirty: true,
-          },
-        },
-      }),
+      subagent("worker", "sha256:d1", "inactive", { workspace: "/repo/backend" }),
     ]);
-    assert.match(rendered, /D dispose retained/);
-  });
-
-  it("does not hide an unresolved physical resource", () => {
-    const rendered = render([
-      subagent("worker", "sha256:d1", "inactive", {
-        workspace: {
-          logical_workspace: "/runtime/worktrees/one",
-          isolation: {
-            type: "git_worktree",
-            source_repository_root: "/repo",
-            repository_relative_workspace: "",
-            physical_worktree_root: "/runtime/worktrees/one",
-            base_commit: "base",
-            branch: "rustx/subagent/one",
-            parent_had_uncommitted_changes: false,
-          },
-          resource_state: "preserved_unresolved",
-        },
-      }),
-    ]);
-    assert.match(rendered, /D dispose retained/);
+    assert.doesNotMatch(rendered, /dispose|retained|worktree/i);
   });
 
   it("marks only the selected row without changing the observation payload", () => {
