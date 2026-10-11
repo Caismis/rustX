@@ -4658,7 +4658,7 @@ Git worktree ownership: the subagent workspace projection carries
 `logical_workspace` plus a tagged `isolation` (`shared` or `git_worktree` with
 the source repository root, repository-relative workspace, physical worktree
 root, base commit, branch, and parent dirty fact), and a retained handoff
-exposes `logical_workspace` and `physical_worktree_root`; Runtime Client 62
+exposes `logical_workspace` and `physical_worktree_root`; Runtime Client 67
 (Issue #462) retired that representation for the plain Session binding path. Version 12 added
 routed interaction projection for the root human surface. Version 11
 added the

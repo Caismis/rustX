@@ -115,8 +115,9 @@ incompatible formats; neither is accepted as IPC 32.
 ## Developer upgrade contract
 
 There is no compatibility layer. After upgrading, start from a fresh Session
-store. Existing stores, catalogs and peers from earlier builds are refused with
-explicit version errors and left exactly as they were. Worktrees and branches
+store. Unsupported store and catalog versions, and older protocol peers, are
+refused explicitly; persisted data is left exactly as it was. The unchanged
+Session catalog format remains version 15. Worktrees and branches
 that earlier builds created under the product root are no longer managed by
 rustX; inspect and remove them with ordinary Git commands if they are no longer
 wanted. Remove `[worktree]` tables from Agent profiles, `workspace:` keys from

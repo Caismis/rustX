@@ -1945,7 +1945,7 @@ bounded TraceCache owns paging, lifecycle repairs and detail epochs; a child
 reader fences attachment replacement and coalesces activity refreshes. No parent
 trace records or current parent model configuration fill child data. Native
 child Attempt identity supplies exact current lifecycle correlation. The source
-revision remains pinned; App Server v39 / Runtime Client v67 require synchronized
+revision remains pinned; App Server v39 / Runtime Client v61 require synchronized
 clients. Browser evidence uses fixture records; the real-process native suite
 separately verifies durable child authority and read-only behavior after exit.
 
@@ -1996,8 +1996,8 @@ file/artifact access resolves the owned child conversation and workspace.
 
 WebUI reuses AgentComposer and AttachmentIntake, scopes both conversation and
 trajectory preview resources to the Agent, and retires native observation reads
-when navigation changes. No child model settings are introduced. App Server v45,
-Runtime Client v67, child IPC v30 and Product Host file-read v3 are synchronized.
+when navigation changes. No child model settings are introduced. App Server v44,
+Runtime Client v66, child IPC v30 and Product Host file-read v3 are synchronized.
 The Browser plugin is unavailable; the repository's pinned Playwright browser
 validates real native child processes and deterministic provider streams.
 
@@ -2131,7 +2131,7 @@ icons remain stable on failure, summaries use native failure/stopped tones and
 lifecycle announcements are visually hidden. Keyboard expansion and running copy
 visibility follow the upstream flow.
 
-The Inspect pill is pure presentation. App Server v45 / Runtime Client v67 native
+The Inspect pill is pure presentation. App Server v44 / Runtime Client v66 native
 readers locate the canonical occurrence across the complete indexed Journal,
 including historical and exited child stores. RustX supplies bounded continuous
 windows, exact record IDs and lifecycle repairs, replacing Harness runtime/store
@@ -2177,7 +2177,7 @@ configured Profile is pinned, so the pin can be cleared.
 
 ### PR #461: integrating the current main contracts
 
-The main integration keeps App Server v45 and Runtime Client v67, which remain
+The main integration keeps App Server v44 and Runtime Client v66, which remain
 newer than main's v39/v61, and SQLite 51's checkpoint/Model Profile contract.
 Subagent IPC becomes v31 because main and this branch had different v30
 vocabularies; either old peer is rejected. The current generated protocol and
@@ -2255,12 +2255,15 @@ references. Other noise entries, global thresholds, retries, settle schedule
 and browser pins remain unchanged. The source inventory retains the Harness
 pin and records this concrete local CSS adaptation.
 
-
 ## PR #463 integration with native child inspection
 
 The integration keeps PR #461's native child conversation, Trace, attachment
 and file-delivery presentation. Agent workspace values now carry the frozen
 Session path, and retired worktree disposal and Candidate controls are absent.
-Imports and generated client contracts use App Server v45. The source inventory
+The historical entries above retain the versions reviewed at those snapshots.
+The combined current contracts are App Server v45, Runtime Client v67, SQLite 56
+and Child IPC 32; see the [format inventory](../docs/agent-workflow-shared-workspace.md#format-and-version-inventory)
+for owners and rejection behavior. Imports and generated client contracts use
+App Server v45. The source inventory
 records the resulting local hashes and actual dependency closure; upstream
 Harness pins, licenses and source attribution remain unchanged.
