@@ -1312,3 +1312,215 @@ fn inherited_provenance_schema_requires_native_indexes_and_rejects_schema_53() {
         })
     ));
 }
+
+#[test]
+fn turn_directory_validates_only_selected_payloads_across_large_cold_lineages() {
+    let directory = tempfile::tempdir().unwrap();
+    for count in [8, 128, 2048] {
+        let seed = inherited_seed(count, false, true);
+        let id = ConversationId::generate();
+        let path = directory.path().join(format!("directory-{count}.sqlite"));
+        let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+        store.initialize_lineage(&seed).unwrap();
+        drop(store);
+        let store = SqliteConversationStore::open_existing(id, &path).unwrap();
+        for (offset, limit) in [
+            (0, 1),
+            (count / 2, 1),
+            (count - 1, 1),
+            (1, 3),
+            (0, 64),
+            (count - 1, 64),
+        ] {
+            provenance::take_turn_validation_counts();
+            let page = store.conversation_turns(offset, limit).unwrap();
+            let counts = provenance::take_turn_validation_counts();
+            let offset = offset.min(count.saturating_sub(1) / limit * limit);
+            let selected = limit.min(count - offset);
+            assert_eq!(counts, (selected, selected));
+            assert_eq!(
+                (page.total, page.offset, page.turns.len()),
+                (count, offset, selected)
+            );
+            for (index, turn) in page.turns.iter().enumerate() {
+                let ordinal = offset + index;
+                assert_eq!(turn.id, seed.turns()[ordinal].id);
+                assert_eq!(turn.ordinal, ordinal + 1);
+                assert_eq!(turn.cursor.unwrap().get(), (ordinal * 2 + 1) as u64);
+                assert_eq!(turn.prompt, "");
+                assert_eq!(turn.response, "historical content");
+            }
+            println!(
+                "{count} inherited Turns, offset {offset}, limit {limit}: {} payload decodes, {} membership validations",
+                counts.0, counts.1
+            );
+        }
+        let plan=store.lock().unwrap().prepare("EXPLAIN QUERY PLAN SELECT payload,payload_digest FROM inherited_turn_provenance WHERE ordinal=?1").unwrap().query_map([0],|row|row.get::<_,String>(3)).unwrap().collect::<Result<Vec<_>,_>>().unwrap().join("\n");
+        assert!(
+            plan.contains("SEARCH inherited_turn_provenance USING INTEGER PRIMARY KEY"),
+            "{plan}"
+        );
+        assert!(!plan.contains("SCAN"), "{plan}");
+        assert_eq!(store.load_inherited_turns().unwrap(), seed.turns());
+    }
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    provenance::take_turn_validation_counts();
+    assert_eq!(store.conversation_turns(99, 64).unwrap().total, 0);
+    assert!(store.conversation_turns(0, 0).is_err());
+    assert!(store.conversation_turns(0, 65).is_err());
+    assert_eq!(provenance::take_turn_validation_counts(), (0, 0));
+}
+
+#[test]
+fn turn_directory_selected_corruption_fails_without_hydrating_unrelated_turns() {
+    let seed = inherited_seed(8, false, true);
+    let invalid = "{}";
+    let digest = |input: &[u8]| {
+        use std::fmt::Write as _;
+        let mut result = String::new();
+        for byte in Sha256::digest(input) {
+            write!(result, "{byte:02x}").unwrap();
+        }
+        result
+    };
+    let hash = digest(format!("rustx-inherited-turn\n0\n{invalid}").as_bytes());
+    let wrong_owner_hash = digest(b"rustx-inherited-member\ninherited-0\nSome(1)\nNone");
+    for damage in [
+        "UPDATE inherited_turn_provenance SET payload_digest='bad' WHERE ordinal=0".to_string(),
+        format!("UPDATE inherited_turn_provenance SET payload='{{}}',payload_digest='{hash}' WHERE ordinal=0"),
+        "DELETE FROM inherited_message_membership WHERE assistant_message_id='inherited-0'".into(),
+        format!("UPDATE inherited_message_membership SET turn_ordinal=1,membership_digest='{wrong_owner_hash}' WHERE assistant_message_id='inherited-0'"),
+        "UPDATE inherited_message_membership SET turn_ordinal=999 WHERE assistant_message_id='inherited-0'".into(),
+        "UPDATE inherited_turn_provenance SET ordinal=999 WHERE ordinal=0".into(),
+        "DELETE FROM bootstrap_identity".into(),
+        "UPDATE bootstrap_identity SET turn_count=9".into(),
+        "DELETE FROM inherited_turn_provenance WHERE ordinal=7".into(),
+    ] {
+        let store=SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+        store.initialize_lineage(&seed).unwrap();
+        store.lock().unwrap().execute_batch(&format!("PRAGMA foreign_keys=OFF; {damage};")).unwrap();
+        provenance::take_turn_validation_counts();
+        assert!(store.conversation_turns(0,1).is_err(),"{damage}");
+        let counts=provenance::take_turn_validation_counts();
+        assert!(counts.0<=1 && counts.1<=1,"{damage}: {counts:?}");
+        assert!(store.load_inherited_turns().is_err(),"{damage}");
+        assert!(store.initialize_lineage(&seed).is_err(),"{damage}");
+        assert!(store.archive_frontiers().is_err(),"{damage}");
+    }
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    store.initialize_lineage(&seed).unwrap();
+    let expected = store.conversation_turns(0, 1).unwrap();
+    store
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE inherited_turn_provenance SET payload='{}' WHERE ordinal=7",
+            [],
+        )
+        .unwrap();
+    provenance::take_turn_validation_counts();
+    assert_eq!(store.conversation_turns(0, 1).unwrap(), expected);
+    assert_eq!(provenance::take_turn_validation_counts(), (1, 1));
+    assert!(store.load_inherited_turns().is_err());
+    assert!(store.initialize_lineage(&seed).is_err());
+    assert!(store.read_lineage_cut(SurfaceRevision::new(1)).is_err());
+    assert!(store.archive_frontiers().is_err());
+    assert!(store.conversation_turns(7, 1).is_err());
+}
+
+#[test]
+fn turn_directory_mixed_terminal_and_local_turns_reuse_exact_validated_navigation() {
+    use crate::durable::reading::{ConversationWindowAt, InheritedTurnOutcome};
+    let base = response_seed(8);
+    let mut turns = base.turns().to_vec();
+    let mut terminal = turns[0].clone();
+    terminal.id.attempt_id = AttemptId::new("terminal-only");
+    terminal.process_message_ids.clear();
+    terminal.preceding_message_id = Some(MessageId::new("inherited-0"));
+    terminal.outcome = InheritedTurnOutcome::Failed;
+    turns.push(terminal);
+    let seed = LineageSeed::replayed(
+        base.canonical().to_vec(),
+        base.surface_history().to_vec(),
+        base.checkpoints().clone(),
+    )
+    .unwrap()
+    .with_turns(turns)
+    .unwrap()
+    .with_completed_responses(base.completed_responses().to_vec())
+    .unwrap();
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    store.initialize_lineage(&seed).unwrap();
+    let old = store.conversation_turns(8, 1).unwrap();
+    assert_eq!(old.turns[0].id, seed.turns()[8].id);
+    assert!(old.turns[0].cursor.is_some());
+    assert_eq!(old.turns[0].response, "");
+    provenance::take_turn_validation_counts();
+    let window = store
+        .conversation_window(
+            &ConversationWindowAt::Turn {
+                id: old.turns[0].id.clone(),
+                cut: old.cut.clone(),
+            },
+            1,
+        )
+        .unwrap();
+    // One targeted navigation validation and the materialized terminal transcript item.
+    assert_eq!(provenance::take_turn_validation_counts(), (2, 2));
+    assert!(matches!(
+        window.page.entries[0].item,
+        TranscriptItem::InheritedTurn { .. }
+    ));
+    for attempt in ["settled", "running"] {
+        store
+            .append_event(envelope(
+                store.conversation_id(),
+                &format!("start-{attempt}"),
+                Some(AttemptId::new(attempt)),
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: AttemptId::new(attempt),
+                },
+            ))
+            .unwrap();
+        if attempt == "settled" {
+            store
+                .append_event(envelope(
+                    store.conversation_id(),
+                    "terminal-settled",
+                    Some(AttemptId::new(attempt)),
+                    RuntimeEvent::AttemptTimedOut {
+                        attempt_id: AttemptId::new(attempt),
+                    },
+                ))
+                .unwrap();
+        }
+    }
+    provenance::take_turn_validation_counts();
+    let mixed = store.conversation_turns(8, 3).unwrap();
+    assert_eq!(provenance::take_turn_validation_counts(), (1, 1));
+    assert_eq!(mixed.total, 11);
+    assert_eq!(mixed.turns[0], old.turns[0]);
+    assert!(mixed.turns[1].cursor.is_some());
+    assert!(mixed.turns[2].cursor.is_none());
+    assert_eq!(mixed.turns[1].id.conversation_id, *store.conversation_id());
+    let repeated = store
+        .conversation_window(
+            &ConversationWindowAt::Turn {
+                id: old.turns[0].id.clone(),
+                cut: old.cut.clone(),
+            },
+            1,
+        )
+        .unwrap();
+    assert_eq!(repeated.cut, window.cut);
+    assert_eq!(repeated.page, window.page);
+    assert_eq!(repeated.target, window.target);
+    assert_eq!(repeated.target_cursor, window.target_cursor);
+    assert_eq!(repeated.newer_cursor, window.newer_cursor);
+    let frontier = store.presentation_frontier().unwrap();
+    store.conversation_turns(0, 64).unwrap();
+    assert_eq!(store.presentation_frontier().unwrap(), frontier);
+    store.lock().unwrap().execute("DELETE FROM transcript_order WHERE reference_kind='inherited_turn' AND reference_id='8'",[]).unwrap();
+    assert!(store.conversation_turns(8, 1).is_err());
+    assert!(store.load_inherited_turns().is_err());
+}

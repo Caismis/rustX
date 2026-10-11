@@ -41,12 +41,10 @@ fn require_cut(
 // Bootstrap order is immutable native provenance order. Local Attempt starts
 // use their indexed Journal order, independent of compaction or model steps.
 const OWNERS: &str = "WITH owners AS (
-    SELECT 0 AS source, p.ordinal AS ordering,
-      json_extract(p.payload,'$.id.conversation_id') AS conversation,
-      json_extract(p.payload,'$.id.attempt_id') AS attempt, p.payload AS inherited
+    SELECT 0 AS source, p.ordinal AS ordering
     FROM inherited_turn_provenance p
     UNION ALL
-    SELECT 1,sequence,conversation_id,attempt_id,NULL
+    SELECT 1,sequence
     FROM events INDEXED BY events_kind_idx
     WHERE sequence<=?1 AND json_extract(event_json,'$.event.type')='attempt_started'
 ) ";
@@ -54,15 +52,14 @@ const OWNERS: &str = "WITH owners AS (
 fn location(
     connection: &Connection,
     id: &ConversationTurnId,
-    inherited: Option<&str>,
+    inherited: Option<&TurnReadingProvenance>,
     cut: &ConversationReadCut,
 ) -> Result<Option<u64>, ConversationStoreError> {
-    let position: Option<i64> = if let Some(inherited) = inherited {
-        let turn: crate::durable::reading::TurnReadingProvenance = super::decode(inherited, "turn location")?;
+    let position: Option<i64> = if let Some(turn) = inherited {
         if turn.process_message_ids.is_empty() {
             connection.query_row("SELECT t.position FROM inherited_turn_provenance p INDEXED BY inherited_turn_identity_idx JOIN transcript_order t ON t.reference_kind='inherited_turn' AND t.reference_id=CAST(p.ordinal AS TEXT) WHERE json_extract(p.payload,'$.id.conversation_id')=?1 AND json_extract(p.payload,'$.id.attempt_id')=?2 AND t.position<=?3", params![id.conversation_id.as_str(),id.attempt_id.as_str(),seq_to_i64(cut.transcript)?], |row| row.get(0)).optional()
         } else {
-            connection.query_row("SELECT MIN(t.position) FROM json_each(?1,'$.process_message_ids') m JOIN transcript_order t ON t.reference_kind='message' AND t.reference_id=m.value WHERE t.position<=?2", params![inherited,seq_to_i64(cut.transcript)?], |row| row.get(0))
+            connection.query_row("SELECT MIN(t.position) FROM json_each(?1) m JOIN transcript_order t ON t.reference_kind='message' AND t.reference_id=m.value WHERE t.position<=?2", params![super::encode(&turn.process_message_ids,"turn members")?,seq_to_i64(cut.transcript)?], |row| row.get(0))
         }
     } else {
         connection.query_row(
@@ -252,40 +249,53 @@ pub(super) fn turns(
         return Err(storage("turn page limit must be between 1 and 64"));
     }
     let cut = cut(connection, conversation)?;
-    super::provenance::turns(connection)?;
-    let total: usize = connection
+    let inherited_count = super::provenance::turn_count(connection)?;
+    let (total, count, first, last): (usize,i64,Option<i64>,Option<i64>) = connection
         .query_row(
-            &format!("{OWNERS}SELECT COUNT(*) FROM owners"),
+            &format!("{OWNERS}SELECT COUNT(*),COALESCE(SUM(source=0),0),MIN(CASE WHEN source=0 THEN ordering END),MAX(CASE WHEN source=0 THEN ordering END) FROM owners"),
             [seq_to_i64(cut.journal)?],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)),
         )
         .map_err(|error| storage(error.to_string()))?;
+    if count != inherited_count || (count > 0 && (first != Some(0) || last != Some(count - 1))) {
+        return Err(storage("inconsistent inherited Turn directory metadata"));
+    }
     let offset = offset.min(total.saturating_sub(1) / limit * limit);
-    let mut statement = connection.prepare(&format!("{OWNERS}SELECT conversation,attempt,inherited,ordering FROM owners ORDER BY source,ordering LIMIT ?2 OFFSET ?3")).map_err(|error| storage(error.to_string()))?;
+    let mut statement = connection
+        .prepare(&format!(
+            "{OWNERS}SELECT source,ordering FROM owners ORDER BY source,ordering LIMIT ?2 OFFSET ?3"
+        ))
+        .map_err(|error| storage(error.to_string()))?;
     let rows = statement
         .query_map(params![seq_to_i64(cut.journal)?, limit, offset], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, i64>(3)?,
-            ))
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
         })
         .map_err(|error| storage(error.to_string()))?;
     let mut turns = Vec::with_capacity(limit);
     for (index, row) in rows.enumerate() {
-        let (origin, attempt, inherited, start) =
-            row.map_err(|error| storage(error.to_string()))?;
-        let id = ConversationTurnId {
-            conversation_id: ConversationId::new(origin),
-            attempt_id: AttemptId::new(attempt),
+        let (source, start) = row.map_err(|error| storage(error.to_string()))?;
+        let inherited = (source == 0)
+            .then(|| super::provenance::turn_at(connection, start))
+            .transpose()?;
+        let id = if let Some(turn) = &inherited {
+            turn.id.clone()
+        } else {
+            connection
+                .query_row(
+                    "SELECT conversation_id,attempt_id FROM events WHERE sequence=?1",
+                    [start],
+                    |row| {
+                        Ok(ConversationTurnId {
+                            conversation_id: ConversationId::new(row.get::<_, String>(0)?),
+                            attempt_id: AttemptId::new(row.get::<_, String>(1)?),
+                        })
+                    },
+                )
+                .map_err(|error| storage(error.to_string()))?
         };
-        let cursor = location(connection, &id, inherited.as_deref(), &cut)?;
-        let (prompt, response) = match inherited.as_deref() {
-            Some(inherited) => inherited_previews(
-                connection,
-                &super::decode::<TurnReadingProvenance>(inherited, "turn previews")?,
-            )?,
+        let cursor = location(connection, &id, inherited.as_ref(), &cut)?;
+        let (prompt, response) = match inherited.as_ref() {
+            Some(inherited) => inherited_previews(connection, inherited)?,
             None => local_previews(connection, &id.attempt_id, start, &cut)?,
         };
         turns.push(ConversationTurn {
@@ -342,10 +352,10 @@ pub(super) fn window(
             ))
         }
         ConversationWindowAt::Turn { id, .. } => {
-            let inherited: Option<Option<String>> = connection.query_row(
+            let inherited: Option<Option<i64>> = connection.query_row(
                 "SELECT NULL FROM events INDEXED BY events_attempt_idx
                  WHERE attempt_id=?3 AND conversation_id=?2 AND sequence<=?1 AND json_extract(event_json,'$.event.type')='attempt_started'
-                 UNION ALL SELECT p.payload FROM inherited_turn_provenance p INDEXED BY inherited_turn_identity_idx
+                 UNION ALL SELECT p.ordinal FROM inherited_turn_provenance p INDEXED BY inherited_turn_identity_idx
                  WHERE json_extract(p.payload,'$.id.conversation_id')=?2 AND json_extract(p.payload,'$.id.attempt_id')=?3 LIMIT 1",
                 params![seq_to_i64(cut.journal)?,id.conversation_id.as_str(),id.attempt_id.as_str()], |row| row.get(0),
             ).optional().map_err(|error| storage(error.to_string()))?;
@@ -354,12 +364,14 @@ pub(super) fn window(
                     "turn is absent from this Conversation".into(),
                 )
             })?;
-            let cursor =
-                location(connection, id, inherited.as_deref(), &cut)?.ok_or_else(|| {
-                    ConversationStoreError::InvalidReference(
-                        "turn has no published transcript location yet".into(),
-                    )
-                })?;
+            let inherited = inherited
+                .map(|ordinal| super::provenance::turn_at(connection, ordinal))
+                .transpose()?;
+            let cursor = location(connection, id, inherited.as_ref(), &cut)?.ok_or_else(|| {
+                ConversationStoreError::InvalidReference(
+                    "turn has no published transcript location yet".into(),
+                )
+            })?;
             target = Some(id.clone());
             target_cursor = Some(crate::durable::TranscriptCursor::new(cursor));
             // Read forward from the exact target, never the intervening prefix.

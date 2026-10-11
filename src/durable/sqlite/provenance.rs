@@ -8,6 +8,26 @@ use crate::durable::reading::TurnReadingProvenance;
 use crate::durable::response::CompletedResponseProvenance;
 use std::collections::{BTreeMap, BTreeSet};
 
+#[cfg(test)]
+thread_local! {
+    static TURN_VALIDATION_COUNTS: std::cell::Cell<(usize,usize)> = const { std::cell::Cell::new((0,0)) };
+}
+
+/// Decoded Turn payloads and complete Turn membership validations on this thread.
+#[cfg(test)]
+pub(super) fn take_turn_validation_counts() -> (usize, usize) {
+    TURN_VALIDATION_COUNTS.with(|counts| counts.replace((0, 0)))
+}
+
+fn decode_turn(json: &str) -> Result<TurnReadingProvenance, ConversationStoreError> {
+    #[cfg(test)]
+    TURN_VALIDATION_COUNTS.with(|counts| {
+        let (decoded, members) = counts.get();
+        counts.set((decoded + 1, members));
+    });
+    decode(json, "inherited Turn")
+}
+
 pub(super) const TURN_LOOKUP: &str = "SELECT m.assistant_message_id,m.turn_ordinal,m.response_ordinal,m.membership_digest,p.ordinal,p.payload,p.payload_digest FROM message_ledger l LEFT JOIN inherited_message_membership m ON m.assistant_message_id=l.message_id LEFT JOIN inherited_turn_provenance p ON p.ordinal=m.turn_ordinal WHERE l.message_id=?1 AND l.position<=(SELECT message_count FROM bootstrap_identity WHERE id=1) AND json_extract(l.message_json,'$.role')='assistant'";
 pub(super) const RESPONSE_LOOKUP: &str = "SELECT m.assistant_message_id,m.turn_ordinal,m.response_ordinal,m.membership_digest,p.ordinal,p.payload,p.payload_digest FROM message_ledger l LEFT JOIN inherited_message_membership m ON m.assistant_message_id=l.message_id LEFT JOIN inherited_response_provenance p ON p.ordinal=m.response_ordinal WHERE l.message_id=?1 AND l.position<=(SELECT message_count FROM bootstrap_identity WHERE id=1) AND json_extract(l.message_json,'$.role')='assistant'";
 
@@ -43,6 +63,11 @@ fn count(connection: &Connection, kind: &str) -> Result<i64, ConversationStoreEr
         return Err(storage("inconsistent immutable provenance metadata"));
     }
     Ok(if kind == "turn" { turns } else { responses })
+}
+
+pub(super) fn turn_count(connection: &Connection) -> Result<i64, ConversationStoreError> {
+    read_inherited_occupancy(connection)?;
+    count(connection, "turn")
 }
 
 pub(super) fn persist(
@@ -93,6 +118,13 @@ fn verify_members(
     ordinal: i64,
     members: &[MessageId],
 ) -> Result<(), ConversationStoreError> {
+    #[cfg(test)]
+    if kind == "turn" {
+        TURN_VALIDATION_COUNTS.with(|counts| {
+            let (decoded, members) = counts.get();
+            counts.set((decoded, members + 1));
+        });
+    }
     let mut seen = BTreeSet::new();
     let mut statement = connection.prepare_cached("SELECT m.turn_ordinal,m.response_ordinal,m.membership_digest FROM inherited_message_membership m JOIN message_ledger l ON l.message_id=m.assistant_message_id WHERE m.assistant_message_id=?1 AND json_extract(l.message_json,'$.role')='assistant' AND l.position<=(SELECT message_count FROM bootstrap_identity WHERE id=1)").map_err(|error| storage(error.to_string()))?;
     for id in members {
@@ -109,6 +141,45 @@ fn verify_members(
         }
     }
     Ok(())
+}
+
+fn validated_turn(
+    connection: &Connection,
+    ordinal: i64,
+    json: &str,
+) -> Result<TurnReadingProvenance, ConversationStoreError> {
+    let turn = decode_turn(json)?;
+    verify_members(connection, "turn", ordinal, &turn.process_message_ids)?;
+    for (id, prompt) in [
+        (&turn.preceding_message_id, false),
+        (&turn.prompt_message_id, true),
+    ] {
+        if let Some(id) = id {
+            let role:Option<String>=connection.query_row("SELECT json_extract(message_json,'$.role') FROM message_ledger WHERE message_id=?1 AND position<=(SELECT message_count FROM bootstrap_identity WHERE id=1)",[id.as_str()],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+            if role.is_none() || (prompt && role.as_deref() != Some("user")) {
+                return Err(storage("invalid inherited Turn canonical anchor"));
+            }
+        }
+    }
+    if turn.process_message_ids.is_empty() {
+        use crate::durable::reading::InheritedTurnOutcome;
+        let anchor:Option<i64>=connection.query_row("SELECT position FROM transcript_order WHERE reference_kind='inherited_turn' AND reference_id=?1",[ordinal.to_string()],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+        if matches!(
+            turn.outcome,
+            InheritedTurnOutcome::Completed | InheritedTurnOutcome::IncompleteAtCut
+        ) || anchor.is_none()
+        {
+            return Err(storage("invalid terminal-only inherited Turn"));
+        }
+    }
+    if let Some(reading) = turn
+        .execution
+        .as_ref()
+        .and_then(|execution| execution.occupancy.as_ref())
+    {
+        reading.validate()?;
+    }
+    Ok(turn)
 }
 
 fn selected(
@@ -177,8 +248,7 @@ pub(super) fn selected_turns(
     selected(connection, messages, "turn")?
         .into_iter()
         .map(|(ordinal, (json, selected_members))| {
-            let turn: TurnReadingProvenance = decode(&json, "inherited turn")?;
-            verify_members(connection, "turn", ordinal, &turn.process_message_ids)?;
+            let turn = validated_turn(connection, ordinal, &json)?;
             if !selected_members
                 .iter()
                 .all(|id| turn.process_message_ids.contains(id))
@@ -258,11 +328,7 @@ pub(super) fn turns(
 ) -> Result<Vec<TurnReadingProvenance>, ConversationStoreError> {
     all(connection, "turn")?
         .into_iter()
-        .map(|(ordinal, json)| {
-            let turn: TurnReadingProvenance = decode(&json, "inherited turn")?;
-            verify_members(connection, "turn", ordinal, &turn.process_message_ids)?;
-            Ok(turn)
-        })
+        .map(|(ordinal, json)| validated_turn(connection, ordinal, &json))
         .collect()
 }
 pub(super) fn responses(
@@ -293,7 +359,10 @@ pub(super) fn turn_at(
     connection: &Connection,
     ordinal: i64,
 ) -> Result<TurnReadingProvenance, ConversationStoreError> {
-    read_inherited_occupancy(connection)?;
+    let expected = turn_count(connection)?;
+    if ordinal < 0 || ordinal >= expected {
+        return Err(storage("inherited Turn ordinal outside bootstrap"));
+    }
     let (json, hash): (String, String) = connection
         .query_row(
             "SELECT payload,payload_digest FROM inherited_turn_provenance WHERE ordinal=?1",
@@ -304,9 +373,7 @@ pub(super) fn turn_at(
     if hash != payload_digest("turn", ordinal, &json) {
         return Err(storage("corrupt inherited Turn payload"));
     }
-    let turn: TurnReadingProvenance = decode(&json, "inherited Turn")?;
-    verify_members(connection, "turn", ordinal, &turn.process_message_ids)?;
-    Ok(turn)
+    validated_turn(connection, ordinal, &json)
 }
 
 pub(super) fn verify_seed_membership(
