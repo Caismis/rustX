@@ -105,7 +105,7 @@ it('resident child conversations keep their historical location across hide and 
     agent: { title: 'Worker', agent: 'Worker', agent_id: 'agent-worker', parent_agent_id: 'root', child_conversation_id: child,
       activation_id: 'activation', state: 'inactive' as const, activation_state: 'succeeded' as const, started_at: '2026-10-10T00:00:00Z', definition_digest: 'd', profile_digest: 'p',
       observation: { attempt_id: null, revision: '1', activity: { type: 'awaiting_activity' as const }, counters: { model_requests: 0, model_retries: 0, tool_executions: 0 } },
-      workspace: { logical_workspace: '/workspace', isolation: { type: 'shared' as const }, resource_state: 'none' as const } }, snapshot: live(130) };
+      workspace: '/workspace' }, snapshot: live(130) };
   let ui!: ReturnType<typeof render>;
   await act(async () => { ui = render(createElement(SubagentChat, { ...props, visible: true })); });
   const rail = ui.getByRole('navigation', { name: 'Turn navigation' }).firstElementChild as HTMLElement;
