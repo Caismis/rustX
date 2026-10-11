@@ -10,7 +10,7 @@ test('MCP scope shows only definitions owned by the selected scope', async ({pag
  await page.getByRole('button',{name:'Configuration scope'}).click();
  await expect(page.getByRole('menu').getByRole('separator')).toBeVisible();
  await expect(page.getByRole('menu').getByText('Workspaces',{exact:true})).toBeVisible();
- await expect(page.getByRole('menuitem',{name:'User (global)',exact:true})).toHaveAttribute('aria-current','true');
+ await expect(page.getByRole('menuitem',{name:'User',exact:true})).toHaveAttribute('aria-current','true');
  await page.screenshot({path:'/tmp/rustx-mcp-scope-menu.png'});
  await page.getByRole('menuitem',{name:'Workspace A',exact:true}).click();
  expect(await page.getByRole('tab').allTextContents()).toEqual(tabs);
@@ -24,7 +24,7 @@ test('MCP scope shows only definitions owned by the selected scope', async ({pag
  await expect(page.locator('[data-mcp-page] [class*="total"]')).toHaveText('MCP 0');
  await page.screenshot({path:'/tmp/rustx-mcp-workspace-scope.png'});
  await page.getByRole('button',{name:'Configuration scope'}).click();
- await page.getByRole('menuitem',{name:'User (global)',exact:true}).click();
+ await page.getByRole('menuitem',{name:'User',exact:true}).click();
  await expect(page.getByRole('listitem',{name:'exa',exact:true})).toBeVisible();
  expect(errors).toEqual([]);
 });
@@ -36,13 +36,16 @@ test('MCP settings share compact settings typography and fit narrow panels', asy
  await page.getByRole('tab',{name:'MCP servers',exact:true}).click();
  await expect(page.locator('[data-mcp-page] h3')).toHaveCSS('font-size','20px');
  await page.screenshot({path:'/tmp/rustx-mcp-list-light.png'});
- await page.emulateMedia({colorScheme:'dark'});
+ await page.getByRole('tab',{name:'General',exact:true}).click();
+ await page.getByRole('button',{name:'Dark',exact:true}).click();
+ await page.getByRole('tab',{name:'MCP servers',exact:true}).click();
  // MCP inherits the dialog material, like every other settings page.
  const surface=page.locator('[data-mcp-page]').locator('..');
  await expect(surface).toHaveCSS('background-color','rgba(0, 0, 0, 0)');
  await expect(page.getByRole('listitem',{name:'exa',exact:true})).toHaveCSS('background-color','rgb(44, 44, 46)');
  await page.screenshot({path:'/tmp/rustx-mcp-list-dark.png'});
  await page.getByRole('listitem',{name:'exa',exact:true}).getByRole('button').first().click();
+ await expect(page.getByRole('button',{name:'Configuration scope',exact:true})).toBeDisabled();
  await expect(page.getByRole('button',{name:'Form',exact:true})).toHaveAttribute('aria-pressed','true');
  await page.screenshot({path:'/tmp/rustx-mcp-editor-dark.png'});
  await page.getByRole('button',{name:'JSON',exact:true}).click();

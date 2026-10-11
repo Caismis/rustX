@@ -10,12 +10,20 @@
 .root {
   display: flex;
   flex-direction: column;
+  min-width: 0;
 }
 
 .row {
   position: relative; /* sweep-glare overlay anchor */
   overflow: hidden;
+  color: var(--dsw-alias-label-tertiary);
+  transition: color 100ms ease;
 }
+
+.row:hover {
+  color: var(--dsw-alias-label-secondary);
+}
+
 
 /* Running sweep (deepsuite ShimmerText pattern): a fixed-width glare band —
    theme background at 60% — glides over the row content from off-left to
@@ -45,6 +53,7 @@
 
 .leading {
   flex-shrink: 0;
+  color: inherit;
 }
 
 /* Cordis lifecycle tools retain their generic row mechanics while carrying a
@@ -63,11 +72,12 @@
 }
 
 .chevron {
-  color: var(--dsw-alias-label-secondary);
+  color: inherit;
 }
 
 .title {
   font-weight: 400;
+  color: inherit;
 }
 
 .sep {
@@ -87,6 +97,14 @@
   white-space: nowrap;
   font-size: var(--dsh-content-font-size-secondary, 13px);
   line-height: calc(24px + var(--dsh-content-font-delta, 0px));
+  color: inherit;
+}
+
+.summary[data-error] { color: var(--dsw-alias-state-error-primary); }
+.summary[data-stopped] { color: var(--dsw-alias-state-warn-label); }
+
+.diffCaption {
+  margin: 4px 0 0 4px;
   color: var(--dsw-alias-label-tertiary);
 }
 
@@ -215,7 +233,7 @@
   flex-direction: column;
   margin: 4px 0 4px 4px;
   border: 0.5px solid var(--dsw-alias-border-l1);
-  border-radius: 12px;
+  border-radius: var(--dsw-radius-lg);
   background: var(--dsw-alias-markdown-code-block);
   font: var(--dsw-font-markdown-code-block-small);
 }
@@ -286,13 +304,13 @@
    WebBlock. All are drawn by the shared primitive, so only the row's
    indentation is this file's concern — the margin also replaces each
    primitive's own standalone vertical spacing with the flow's row rhythm. */
-.codeBody,
-.terminalBody,
-.diffBody,
-.readBody,
-.imageBody,
-.searchBody,
-.webBody {
+.bodyWrap > .codeBody,
+.bodyWrap > .terminalBody,
+.bodyWrap > .diffBody,
+.bodyWrap > .readBody,
+.bodyWrap > .imageBody,
+.bodyWrap > .searchBody,
+.bodyWrap > .webBody {
   margin: 4px 0 4px 4px;
 }
 
@@ -338,7 +356,7 @@
 /* The terminal card scrolls its OUTPUT inside its own surface (same l1
    hairline as the IN/OUT card): the banner stays pinned and the scrollbar
    never rides over it. 224px = the 260px card cap minus the ~36px banner. */
-.terminalBody {
+.bodyWrap > .terminalBody {
   --dsl-terminal-font: var(--dsw-font-markdown-code-block-small);
   --dsl-terminal-line-height: 18px;
   --dsl-terminal-output-max-height: 224px;
@@ -357,8 +375,7 @@
   white-space: nowrap;
 }
 
-/* Keep lifecycle labels on one line while the summary yields on narrow panes. */
-.summary + small {
-  flex: none;
-  white-space: nowrap;
+@media (prefers-reduced-motion: reduce) {
+  .row { transition: none; }
+  .root[data-state='running'] .row::after { animation: none; }
 }

@@ -529,6 +529,12 @@ pub(crate) async fn serve_child_delegation(
     content.push(UserContentBlock::Text(TextBlock {
         text: delegate.task,
     }));
+    content.extend(
+        delegate
+            .attachments
+            .into_iter()
+            .map(UserContentBlock::UploadedFile),
+    );
     if let Err(error) = runtime.submit_sourced_inbound(
         UserSource::Agent {
             agent_id: parent_agent_id.clone(),
@@ -771,9 +777,17 @@ async fn await_parent_admission_boundary(
             Some(ChildControlEvent::Guidance {
                 guidance_id,
                 message,
+                attachments,
             }) => {
-                apply_parent_guidance(handle, runtime, parent_agent_id, guidance_id, message)
-                    .await?;
+                apply_parent_guidance(
+                    handle,
+                    runtime,
+                    parent_agent_id,
+                    guidance_id,
+                    message,
+                    attachments,
+                )
+                .await?;
             }
             Some(ChildControlEvent::InteractionProviderAvailable { available }) => {
                 runtime.set_interaction_provider_available(available);
@@ -940,12 +954,15 @@ async fn apply_parent_guidance(
     parent_agent_id: &crate::runtime::identity::AgentId,
     guidance_id: u64,
     message: String,
+    attachments: Vec<crate::message::content::UploadedFileRef>,
 ) -> Result<(), ChildExit> {
     let outcome = match runtime.submit_parent_guidance(
         UserSource::Agent {
             agent_id: parent_agent_id.clone(),
         },
-        vec![UserContentBlock::Text(TextBlock { text: message })],
+        std::iter::once(UserContentBlock::Text(TextBlock { text: message }))
+            .chain(attachments.into_iter().map(UserContentBlock::UploadedFile))
+            .collect(),
     ) {
         Ok(_) => ChildGuidanceOutcome::Accepted,
         Err(InboundAdmissionError::GuidanceSealed) => {
@@ -1140,6 +1157,7 @@ where
                     Some(ChildControlEvent::Guidance {
                         guidance_id,
                         message,
+                        attachments,
                     }) => {
                         apply_parent_guidance(
                             handle,
@@ -1147,6 +1165,7 @@ where
                             parent_agent_id,
                             guidance_id,
                             message,
+                            attachments,
                         )
                         .await?;
                     }
@@ -2026,6 +2045,7 @@ pub(crate) mod tests {
         crate::runtime::subagent::ipc::write_parent_frame(
             &mut parent,
             &ParentFrame::Delegate(crate::runtime::subagent::ipc::DelegationFrame {
+                attachments: Vec::new(),
                 task: "too early".into(),
                 context: None,
                 interaction_provider_available: false,
@@ -2296,6 +2316,7 @@ pub(crate) mod tests {
         crate::runtime::subagent::ipc::write_parent_frame(
             parent,
             &ParentFrame::Delegate(crate::runtime::subagent::ipc::DelegationFrame {
+                attachments: Vec::new(),
                 task: task.to_owned(),
                 context: None,
                 interaction_provider_available: false,
@@ -2338,6 +2359,7 @@ pub(crate) mod tests {
         crate::runtime::subagent::ipc::write_parent_frame(
             &mut fixture.parent,
             &ParentFrame::Delegate(crate::runtime::subagent::ipc::DelegationFrame {
+                attachments: Vec::new(),
                 task: "input that cannot commit".into(),
                 context: None,
                 interaction_provider_available: false,
@@ -2534,6 +2556,7 @@ pub(crate) mod tests {
                 write_parent_frame(
                     &mut parent,
                     &ParentFrame::Guidance(GuidanceFrame {
+                        attachments: Vec::new(),
                         guidance_id,
                         message: message.into(),
                     }),
@@ -2684,6 +2707,7 @@ pub(crate) mod tests {
         write_parent_frame(
             &mut parent,
             &ParentFrame::Guidance(GuidanceFrame {
+                attachments: Vec::new(),
                 guidance_id: 1,
                 message: "pending for a later activation".into(),
             }),
@@ -2820,6 +2844,7 @@ pub(crate) mod tests {
         write_parent_frame(
             &mut parent,
             &ParentFrame::Guidance(GuidanceFrame {
+                attachments: Vec::new(),
                 guidance_id: 17,
                 message: "accepted for a later activation".into(),
             }),

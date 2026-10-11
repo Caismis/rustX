@@ -1669,6 +1669,7 @@ async fn artifact_carrier_is_native_scoped_bounded_and_cold_reopen_safe() {
         let host_read = |target| crate::app_server::product_host::FileRead {
             target,
             source: crate::app_server::product_host::ReadSource::Artifact {
+                agent_id: None,
                 artifact_id: artifact_id.clone(),
             },
             roots: vec![],
@@ -5153,14 +5154,14 @@ impl TrustedFileHost {
         let mut request = self.endpoint.as_str().into_client_request().unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.product-host.file-read.v2, rustx-product-host.{credential}")
+            format!("rustx.product-host.file-read.v3, rustx-product-host.{credential}")
                 .parse()
                 .unwrap(),
         );
         let (socket, reply) = tokio_tungstenite::connect_async(request).await?;
         assert_eq!(
             reply.headers()["sec-websocket-protocol"],
-            "rustx.product-host.file-read.v2"
+            "rustx.product-host.file-read.v3"
         );
         Ok(socket)
     }
@@ -5213,7 +5214,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         let target = attach(&browser, &f, 0).await;
         let read = |message_id| crate::app_server::product_host::FileRead {
             target: target.clone(),
-            source: crate::app_server::product_host::ReadSource::SessionFile { message_id, delivery_index: 0 },
+            source: crate::app_server::product_host::ReadSource::SessionFile { agent_id: None, message_id, delivery_index: 0 },
             roots: vec![f.workspaces[0].clone()],
         };
         assert_eq!(
@@ -5328,7 +5329,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         assert_eq!(inherited.result.deliveries.as_slice(), std::slice::from_ref(&file));
         assert_ne!(fork_target.conversation_id, file.scope.conversation_id);
         let MethodResult::SessionFileBytes { file: inherited_file, data } = product_host.success( crate::app_server::product_host::FileRead {
-            target: fork_target, source: crate::app_server::product_host::ReadSource::SessionFile { message_id: inherited.id.clone(), delivery_index: 0 }, roots: vec![f.workspaces[0].clone()],
+            target: fork_target, source: crate::app_server::product_host::ReadSource::SessionFile { agent_id: None, message_id: inherited.id.clone(), delivery_index: 0 }, roots: vec![f.workspaces[0].clone()],
         }).await else { panic!() };
         assert_eq!(inherited_file, file);
         assert_eq!(base64::engine::general_purpose::STANDARD.decode(data).unwrap(), original);
@@ -5336,7 +5337,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         std::fs::write(f.workspaces[1].join(&file.path), b"UNRELATED").unwrap();
         let unrelated = attach_session(&browser, &f.sessions[1]).await;
         assert_eq!(product_host.rejected( crate::app_server::product_host::FileRead {
-            target: unrelated, source: crate::app_server::product_host::ReadSource::SessionFile { message_id: tool.id.clone(), delivery_index: 0 }, roots: vec![f.workspaces[1].clone()],
+            target: unrelated, source: crate::app_server::product_host::ReadSource::SessionFile { agent_id: None, message_id: tool.id.clone(), delivery_index: 0 }, roots: vec![f.workspaces[1].clone()],
         }).await, ErrorData::SessionFileRead { reason: FileFailure::Unavailable });
         let mut denied = read(tool.id.clone());
         denied.roots = vec![f.workspaces[1].clone()];
@@ -7730,4 +7731,9 @@ async fn switch_residency_settlement_survives_failure_and_lost_acknowledgement()
         }
     })
     .await;
+}
+
+mod child_delivery {
+    use super::*;
+    include!("child_delivery.rs");
 }

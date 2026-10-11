@@ -9,6 +9,8 @@ interface ViewportProps {
   children: ReactNode;
   overlay?: ReactNode;
   latestLabel?: string;
+  /** Resident hidden chats must not portal floating chrome into a visible sibling. */
+  chromeVisible?: boolean;
   historical?: boolean;
   onLatest?: () => void;
   latestTurn?: string;
@@ -53,14 +55,27 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     if (!this.mounted || this.frame !== undefined) return;
     this.frame = requestAnimationFrame(this.commitLayout);
   };
+  private onComposerBeforeInput = (event: Event) => {
+    if ((event.target as Element).closest('[data-composer-seat]')) this.onScroll();
+  };
+  private onComposerInput = (event: Event) => {
+    if (!(event.target as Element).closest('[data-composer-seat]')) return;
+    // Editing can move the scrollport as the browser reveals the textarea's
+    // caret (especially replacing a multiline selection). Acknowledge that
+    // layout movement without turning it into reader intent. The frame then
+    // follows the tail or restores the existing reading anchor as usual.
+    this.writtenTop = this.scroller()!.scrollTop;
+    this.markLayoutDirty();
+  };
   private commitLayout = () => {
     this.frame = undefined;
     const el = this.scroller();
-    if (!this.mounted || !el) return;
+    if (!this.mounted || !el || el.closest('[hidden]')) return;
     // Native scrolling can precede its scroll event. Adopt reader movement
     // before a queued layout correction gets a chance to overwrite it.
     this.onScroll();
     const floor = Math.max(0, el.scrollHeight - el.clientHeight);
+    el.querySelector('[data-composer-seat]')?.toggleAttribute('data-sticky-overflow', floor > 0);
     let desired = el.scrollTop;
     const navigation = this.navigation;
     this.navigation = undefined;
@@ -115,6 +130,9 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
   };
   private onScroll = () => {
     const el = this.scroller()!;
+    // Resident conversations disappear from layout while a sibling is open.
+    // Their zero geometry is not a scroll gesture or a new reading position.
+    if (el.closest('[hidden]')) return;
     const floor = Math.max(0, el.scrollHeight - el.clientHeight);
     const previous = Math.min(this.writtenTop, floor);
     if (el.scrollTop < previous || Math.abs(el.scrollTop - previous) > 0.5) {
@@ -158,6 +176,8 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     // Its initial offset is layout state, not a new reader gesture.
     this.writtenTop = scroller.scrollTop;
     scroller.addEventListener('scroll', this.onScroll);
+    scroller.addEventListener('beforeinput', this.onComposerBeforeInput, true);
+    scroller.addEventListener('input', this.onComposerInput);
     if (scroller !== this.viewport.current) this.setState({ chromeHost: scroller.parentElement! });
     this.markLayoutDirty();
     if (typeof ResizeObserver !== 'undefined') {
@@ -169,12 +189,14 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     }
   }
   getSnapshotBeforeUpdate() {
+    if (this.scroller()?.closest('[hidden]')) return {};
     // Preserve the original anchor across multiple commits before the frame.
     const position = this.position();
     if (!this.following && this.frame === undefined) this.reading = position;
     return { first: this.rows()[0]?.dataset.chatAnchorKey, position };
   }
   componentDidUpdate(_previous: Readonly<ViewportProps>, _state: unknown, before: { first?: string; position?: ReadingPosition }) {
+    if (this.scroller()?.closest('[hidden]')) return;
     const rows = this.rows();
     if (!this.explicitLatest && before.first && rows[0]?.dataset.chatAnchorKey !== before.first && rows.some(row => row.dataset.chatAnchorKey === before.first)) {
       if (this.following) this.reading = before.position;
@@ -184,7 +206,10 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     this.markLayoutDirty();
   }
   componentWillUnmount() {
+    this.scroller()?.querySelector('[data-composer-seat]')?.removeAttribute('data-sticky-overflow');
     this.scroller()?.removeEventListener('scroll', this.onScroll);
+    this.scroller()?.removeEventListener('beforeinput', this.onComposerBeforeInput, true);
+    this.scroller()?.removeEventListener('input', this.onComposerInput);
     this.mounted = false;
     this.retireNavigation();
     this.observer?.disconnect();
@@ -192,7 +217,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     this.frame = undefined;
   }
   render() {
-    const chrome = <>{this.props.overlay}{this.props.latestLabel && (this.state.detached || this.props.historical) && <button type="button" data-chat-latest className="chat-return-latest" aria-label={this.props.latestLabel} title={this.props.latestLabel} onClick={this.returnToBottom}><IconChevronDownOutline14 size={16}/></button>}</>;
+    const chrome = this.props.chromeVisible === false ? null : <>{this.props.overlay}{this.props.latestLabel && (this.state.detached || this.props.historical) && <button type="button" data-chat-latest className="chat-return-latest" aria-label={this.props.latestLabel} title={this.props.latestLabel} onClick={this.returnToBottom}><IconChevronDownOutline14 size={16}/></button>}</>;
     return <div className="chat-reading-surface">
       <div ref={this.viewport} className="conversation-scroll" style={{ overflowAnchor: 'none' }}>
         <div ref={this.content}>{this.props.children}</div>

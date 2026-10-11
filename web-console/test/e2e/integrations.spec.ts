@@ -1,3 +1,4 @@
+import { formatArguments } from '../../src/app/settings/mcp/form-values';
 import { expandModelAuthoring } from './shell-actions';
 import { openEmptySession } from './shell-actions';
 import {
@@ -29,12 +30,9 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     await openSettingsPage(page, 'MCP servers');
     await settings.getByRole('button', { name: '＋ New', exact: true }).click();
     await settings.getByLabel('Name', { exact: true }).fill('local-fixture');
-    await settings.getByLabel('MCP command').fill('python3');
-    for (const [index, value] of [fileURLToPath(new URL('./web09-mcp.py', import.meta.url)), join(fixture.directory, 'mcp-started')].entries()) {
-      await settings.getByRole('button', {name:'Add Arguments',exact:true}).click();
-      await settings.getByLabel(`Arguments ${index+1}`,{exact:true}).fill(value);
-    }
-    await settings.getByRole('button', { name: 'Save MCP local-fixture', exact: true }).click();
+    await settings.getByLabel('Command', { exact: true }).fill('python3');
+    await settings.getByLabel('Arguments (space-separated)',{exact:true}).fill(formatArguments([fileURLToPath(new URL('./web09-mcp.py', import.meta.url)), join(fixture.directory, 'mcp-started')]));
+    await settings.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(settings.getByRole('listitem', { name: 'local-fixture', exact: true })).toBeVisible();
     expect(existsSync(join(fixture.directory, 'mcp-started'))).toBe(false);
     await openSettingsPage(page, 'Advanced');
@@ -52,25 +50,25 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     // Viewing the inherited User definition is not Workspace authoring: its
     // safe native facts are shown read-only, nothing can be saved or removed,
     // and nothing is written.
-    await expect(settings.getByLabel('MCP command')).toHaveValue('python3');
-    await expect(settings.getByLabel('MCP command')).toBeDisabled();
-    await expect(settings.getByRole('button', { name: 'Save MCP local-fixture', exact: true })).toBeDisabled();
+    await expect(settings.getByLabel('Command', { exact: true })).toHaveValue('python3');
+    await expect(settings.getByLabel('Command', { exact: true })).toBeDisabled();
+    await expect(settings.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
     await expect(settings.getByRole('button', { name: 'Use global default MCP local-fixture', exact: true })).toHaveCount(0);
     // Only the explicit override begins a Workspace definition. It replaces the
     // whole User one when saved, against the real native Workspace document.
-    await settings.getByRole('button', { name: 'Override MCP local-fixture in this Workspace', exact: true }).click();
-    await settings.getByLabel('MCP command').fill('unused-workspace-command');
-    await settings.getByRole('button', { name: 'Save MCP local-fixture', exact: true }).click();
+    await settings.getByRole('button', { name: 'Override', exact: true }).click();
+    await settings.getByLabel('Command', { exact: true }).fill('unused-workspace-command');
+    await settings.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(settings.getByRole('listitem', { name: 'local-fixture', exact: true })).toBeVisible();
     await settings.getByRole('button', { name: 'MCP local-fixture', exact: true }).click();
-    await settings.getByLabel('MCP command').fill('preserved-draft');
+    await settings.getByLabel('Command', { exact: true }).fill('preserved-draft');
     appendFileSync(join(fixture.workspaceA, '.agents/mcp.toml'), '\n# external edit invalidates the draft revision\n');
-    await settings.getByRole('button', { name: 'Save MCP local-fixture', exact: true }).click();
+    await settings.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(settings.getByRole('alert')).toContainText('was not saved: the source changed');
-    await expect(settings.getByLabel('MCP command')).toHaveValue('preserved-draft');
+    await expect(settings.getByLabel('Command', { exact: true })).toHaveValue('preserved-draft');
     await settings.screenshot({ path: test.info().outputPath('cfg3-cas-conflict.png') });
     await settings.getByRole('button', { name: 'Use reviewed revision', exact: true }).click();
-    await settings.getByRole('button', { name: 'Save MCP local-fixture', exact: true }).click();
+    await settings.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(settings.getByRole('listitem', { name: 'local-fixture', exact: true })).toBeVisible();
     await openSettingsPage(page, 'Extensions');
     await settings.getByRole('tab', { name: 'Subagents', exact: true }).click();

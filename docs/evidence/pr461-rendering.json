@@ -1,0 +1,940 @@
+{
+  "reviewed_source_head": "8649f8af4a6b8d13e3c6abda051acc3bf87bf756",
+  "integrated_main": "5dc8597ac39f2eefe648bf9438f03cc8dd40e06e",
+  "browser_authority": "mcr.microsoft.com/playwright:v1.63.0-noble@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7",
+  "composer": {
+    "failed_ci_run": "https://github.com/Caismis/rustX/actions/runs/38067804782",
+    "previous_passing_head": "6e64c1f9eca0a0de95c19642c76140e0d2975c62",
+    "capture_dimensions": [
+      327,
+      291
+    ],
+    "changed_pixels": {
+      "light": 1229,
+      "dark": 2927
+    },
+    "difference_rows": [
+      1,
+      66
+    ],
+    "evidence": "Flow-origin background invalidation reproduces both hosted actual captures exactly in decoded RGBA with identical final geometry, styles and scroll. Only the overflowing seat background becomes paint-contained; controls stay uncontained. Original attachment references remain byte-identical.",
+    "intentional_dark_narrow_reference": {
+      "reference": "agent-dark-narrow-linux.png",
+      "changed_pixels": 2238,
+      "max_channel_delta": 1,
+      "difference_rows": [
+        736,
+        771
+      ],
+      "evidence": "The old initial paint matches the original reference; flow-origin invalidation reproduces the corrected local-paint reference exactly."
+    }
+  },
+  "settings_integration": {
+    "locale-general-zh": {
+      "current": {
+        "HEAD": {
+          "pixels": 6594,
+          "maxdelta": 35,
+          "bounds": [
+            216,
+            89,
+            1223,
+            914
+          ]
+        },
+        "origin/main": {
+          "pixels": 3924,
+          "maxdelta": 57,
+          "bounds": [
+            483,
+            885,
+            1258,
+            999
+          ]
+        }
+      },
+      "old-panel": {
+        "HEAD": {
+          "pixels": 0,
+          "maxdelta": 0,
+          "bounds": null
+        },
+        "origin/main": {
+          "pixels": 10518,
+          "maxdelta": 57,
+          "bounds": [
+            216,
+            89,
+            1258,
+            999
+          ]
+        }
+      },
+      "restored": {
+        "HEAD": {
+          "pixels": 6594,
+          "maxdelta": 35,
+          "bounds": [
+            216,
+            89,
+            1223,
+            914
+          ]
+        },
+        "origin/main": {
+          "pixels": 3924,
+          "maxdelta": 57,
+          "bounds": [
+            483,
+            885,
+            1258,
+            999
+          ]
+        }
+      },
+      "restored_equal_current": {
+        "pixels": 0,
+        "maxdelta": 0,
+        "bounds": null
+      }
+    },
+    "settings-delete-confirm-light": {
+      "current": {
+        "HEAD": {
+          "pixels": 4560,
+          "maxdelta": 3,
+          "bounds": [
+            212,
+            87,
+            1227,
+            919
+          ]
+        },
+        "origin/main": {
+          "pixels": 4042,
+          "maxdelta": 34,
+          "bounds": [
+            476,
+            888,
+            1252,
+            999
+          ]
+        }
+      },
+      "old-panel": {
+        "HEAD": {
+          "pixels": 0,
+          "maxdelta": 0,
+          "bounds": null
+        },
+        "origin/main": {
+          "pixels": 8517,
+          "maxdelta": 34,
+          "bounds": [
+            212,
+            87,
+            1252,
+            999
+          ]
+        }
+      },
+      "restored": {
+        "HEAD": {
+          "pixels": 4560,
+          "maxdelta": 3,
+          "bounds": [
+            212,
+            87,
+            1227,
+            919
+          ]
+        },
+        "origin/main": {
+          "pixels": 4042,
+          "maxdelta": 34,
+          "bounds": [
+            476,
+            888,
+            1252,
+            999
+          ]
+        }
+      },
+      "restored_equal_current": {
+        "pixels": 0,
+        "maxdelta": 0,
+        "bounds": null
+      }
+    },
+    "settings-read-error-light": {
+      "current": {
+        "HEAD": {
+          "pixels": 337,
+          "maxdelta": 42,
+          "bounds": [
+            0,
+            0,
+            999,
+            819
+          ]
+        },
+        "origin/main": {
+          "pixels": 22,
+          "maxdelta": 4,
+          "bounds": [
+            981,
+            811,
+            999,
+            819
+          ]
+        }
+      },
+      "old-panel": {
+        "HEAD": {
+          "pixels": 0,
+          "maxdelta": 0,
+          "bounds": null
+        },
+        "origin/main": {
+          "pixels": 343,
+          "maxdelta": 42,
+          "bounds": [
+            0,
+            0,
+            999,
+            819
+          ]
+        }
+      },
+      "restored": {
+        "HEAD": {
+          "pixels": 337,
+          "maxdelta": 42,
+          "bounds": [
+            0,
+            0,
+            999,
+            819
+          ]
+        },
+        "origin/main": {
+          "pixels": 22,
+          "maxdelta": 4,
+          "bounds": [
+            981,
+            811,
+            999,
+            819
+          ]
+        }
+      },
+      "restored_equal_current": {
+        "pixels": 0,
+        "maxdelta": 0,
+        "bounds": null
+      }
+    },
+    "settings-shell-light": {
+      "current": {
+        "HEAD": {
+          "pixels": 6089,
+          "maxdelta": 35,
+          "bounds": [
+            216,
+            89,
+            1223,
+            914
+          ]
+        },
+        "origin/main": {
+          "pixels": 5227,
+          "maxdelta": 57,
+          "bounds": [
+            479,
+            885,
+            1258,
+            999
+          ]
+        }
+      },
+      "old-panel": {
+        "HEAD": {
+          "pixels": 0,
+          "maxdelta": 0,
+          "bounds": null
+        },
+        "origin/main": {
+          "pixels": 11269,
+          "maxdelta": 57,
+          "bounds": [
+            216,
+            89,
+            1258,
+            999
+          ]
+        }
+      },
+      "restored": {
+        "HEAD": {
+          "pixels": 6089,
+          "maxdelta": 35,
+          "bounds": [
+            216,
+            89,
+            1223,
+            914
+          ]
+        },
+        "origin/main": {
+          "pixels": 5227,
+          "maxdelta": 57,
+          "bounds": [
+            479,
+            885,
+            1258,
+            999
+          ]
+        }
+      },
+      "restored_equal_current": {
+        "pixels": 0,
+        "maxdelta": 0,
+        "bounds": null
+      }
+    },
+    "settings-shell-dark": {
+      "current": {
+        "HEAD": {
+          "pixels": 949,
+          "maxdelta": 37,
+          "bounds": [
+            217,
+            89,
+            1220,
+            911
+          ]
+        },
+        "origin/main": {
+          "pixels": 4421,
+          "maxdelta": 39,
+          "bounds": [
+            479,
+            885,
+            1251,
+            999
+          ]
+        }
+      },
+      "old-panel": {
+        "HEAD": {
+          "pixels": 0,
+          "maxdelta": 0,
+          "bounds": null
+        },
+        "origin/main": {
+          "pixels": 5370,
+          "maxdelta": 39,
+          "bounds": [
+            217,
+            89,
+            1251,
+            999
+          ]
+        }
+      },
+      "restored": {
+        "HEAD": {
+          "pixels": 949,
+          "maxdelta": 37,
+          "bounds": [
+            217,
+            89,
+            1220,
+            911
+          ]
+        },
+        "origin/main": {
+          "pixels": 4421,
+          "maxdelta": 39,
+          "bounds": [
+            479,
+            885,
+            1251,
+            999
+          ]
+        }
+      },
+      "restored_equal_current": {
+        "pixels": 0,
+        "maxdelta": 0,
+        "bounds": null
+      }
+    },
+    "mobile-settings-dark": {
+      "current": {
+        "HEAD": {
+          "pixels": 319,
+          "maxdelta": 1,
+          "bounds": [
+            9,
+            11,
+            380,
+            833
+          ]
+        },
+        "origin/main": {
+          "pixels": 571,
+          "maxdelta": 30,
+          "bounds": [
+            329,
+            609,
+            389,
+            836
+          ]
+        }
+      },
+      "old-panel": {
+        "HEAD": {
+          "pixels": 0,
+          "maxdelta": 0,
+          "bounds": null
+        },
+        "origin/main": {
+          "pixels": 873,
+          "maxdelta": 30,
+          "bounds": [
+            9,
+            11,
+            389,
+            836
+          ]
+        }
+      },
+      "restored": {
+        "HEAD": {
+          "pixels": 319,
+          "maxdelta": 1,
+          "bounds": [
+            9,
+            11,
+            380,
+            833
+          ]
+        },
+        "origin/main": {
+          "pixels": 571,
+          "maxdelta": 30,
+          "bounds": [
+            329,
+            609,
+            389,
+            836
+          ]
+        }
+      },
+      "restored_equal_current": {
+        "pixels": 0,
+        "maxdelta": 0,
+        "bounds": null
+      }
+    }
+  },
+  "timeline": {
+    "scope_authorization": "The user explicitly authorized repairing the independently verified Timeline fade after the complete suite exposed it.",
+    "button_rect": [
+      44,
+      71.5,
+      28,
+      50
+    ],
+    "old_paint_evidence": "Six fresh-context invalidations reproduce the exact full-suite 16-pixel, channel-delta-1 variant. A contained pseudo-element alone still permits an initial-paint variant.",
+    "intended_rendering": "The same layer-2 color, 38% opaque stop, transparent end, inherited 0.72 opacity, font and geometry. An independent background opacity layer makes initial and partial paints deterministic and the history glyph consistently grayscale instead of colored subpixel fringes.",
+    "same_page_diagnostic_states": 44,
+    "restored_rgba_difference_in_every_state": 0,
+    "reference_corrections": [
+      {
+        "reference": "ledger-421-1440-en-linux.png",
+        "changed_pixels": 248,
+        "max_channel_delta": 44,
+        "bounds": [
+          45,
+          72,
+          71,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "ledger-421-1440-zh-linux.png",
+        "changed_pixels": 248,
+        "max_channel_delta": 44,
+        "bounds": [
+          45,
+          72,
+          71,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "ledger-421-390-en-linux.png",
+        "changed_pixels": 238,
+        "max_channel_delta": 44,
+        "bounds": [
+          45,
+          72,
+          70,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "ledger-421-390-zh-linux.png",
+        "changed_pixels": 238,
+        "max_channel_delta": 44,
+        "bounds": [
+          45,
+          72,
+          70,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "ledger-421-fold-1440-en-linux.png",
+        "changed_pixels": 248,
+        "max_channel_delta": 44,
+        "bounds": [
+          45,
+          72,
+          71,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "ledger-421-fold-1440-zh-linux.png",
+        "changed_pixels": 248,
+        "max_channel_delta": 44,
+        "bounds": [
+          45,
+          72,
+          71,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "ledger-421-fold-390-en-linux.png",
+        "changed_pixels": 238,
+        "max_channel_delta": 44,
+        "bounds": [
+          45,
+          72,
+          70,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "ledger-421-fold-390-zh-linux.png",
+        "changed_pixels": 238,
+        "max_channel_delta": 44,
+        "bounds": [
+          45,
+          72,
+          70,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "ledger-421-inspector-1440-en-linux.png",
+        "changed_pixels": 248,
+        "max_channel_delta": 44,
+        "bounds": [
+          45,
+          72,
+          71,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "ledger-421-inspector-1440-zh-linux.png",
+        "changed_pixels": 248,
+        "max_channel_delta": 44,
+        "bounds": [
+          45,
+          72,
+          71,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "ledger-421-inspector-390-en-linux.png",
+        "changed_pixels": 238,
+        "max_channel_delta": 44,
+        "bounds": [
+          45,
+          72,
+          70,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "ledger-421-inspector-390-zh-linux.png",
+        "changed_pixels": 238,
+        "max_channel_delta": 44,
+        "bounds": [
+          45,
+          72,
+          70,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "ledger-compact-expanded-1440-en-linux.png",
+        "changed_pixels": 264,
+        "max_channel_delta": 44,
+        "bounds": [
+          45,
+          72,
+          71,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "ledger-compact-expanded-1440-zh-linux.png",
+        "changed_pixels": 264,
+        "max_channel_delta": 44,
+        "bounds": [
+          45,
+          72,
+          71,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "ledger-compact-expanded-390-en-linux.png",
+        "changed_pixels": 260,
+        "max_channel_delta": 44,
+        "bounds": [
+          44,
+          72,
+          72,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "ledger-compact-expanded-390-zh-linux.png",
+        "changed_pixels": 260,
+        "max_channel_delta": 44,
+        "bounds": [
+          44,
+          72,
+          72,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "ledger-order-1440-en-linux.png",
+        "changed_pixels": 264,
+        "max_channel_delta": 44,
+        "bounds": [
+          45,
+          72,
+          71,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "ledger-order-1440-zh-linux.png",
+        "changed_pixels": 264,
+        "max_channel_delta": 44,
+        "bounds": [
+          45,
+          72,
+          71,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "ledger-order-390-en-linux.png",
+        "changed_pixels": 260,
+        "max_channel_delta": 44,
+        "bounds": [
+          44,
+          72,
+          72,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "ledger-order-390-zh-linux.png",
+        "changed_pixels": 260,
+        "max_channel_delta": 44,
+        "bounds": [
+          44,
+          72,
+          72,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "ledger-order-inspector-1440-en-linux.png",
+        "changed_pixels": 271,
+        "max_channel_delta": 44,
+        "bounds": [
+          45,
+          72,
+          71,
+          122
+        ],
+        "old_owner_replay_difference": 60,
+        "old_owner_max_delta": 1
+      },
+      {
+        "reference": "ledger-order-inspector-1440-zh-linux.png",
+        "changed_pixels": 271,
+        "max_channel_delta": 44,
+        "bounds": [
+          45,
+          72,
+          71,
+          122
+        ],
+        "old_owner_replay_difference": 60,
+        "old_owner_max_delta": 1
+      },
+      {
+        "reference": "ledger-order-inspector-390-en-linux.png",
+        "changed_pixels": 262,
+        "max_channel_delta": 44,
+        "bounds": [
+          44,
+          72,
+          72,
+          122
+        ],
+        "old_owner_replay_difference": 16,
+        "old_owner_max_delta": 1
+      },
+      {
+        "reference": "ledger-order-inspector-390-zh-linux.png",
+        "changed_pixels": 262,
+        "max_channel_delta": 44,
+        "bounds": [
+          44,
+          72,
+          72,
+          122
+        ],
+        "old_owner_replay_difference": 16,
+        "old_owner_max_delta": 1
+      },
+      {
+        "reference": "trajectory-calls-linux.png",
+        "changed_pixels": 248,
+        "max_channel_delta": 44,
+        "bounds": [
+          45,
+          72,
+          71,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "trajectory-inspector-1440-dark-linux.png",
+        "changed_pixels": 1303,
+        "max_channel_delta": 49,
+        "bounds": [
+          44,
+          72,
+          72,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "trajectory-inspector-1440-light-linux.png",
+        "changed_pixels": 291,
+        "max_channel_delta": 44,
+        "bounds": [
+          44,
+          72,
+          72,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "trajectory-inspector-390-dark-linux.png",
+        "changed_pixels": 1298,
+        "max_channel_delta": 49,
+        "bounds": [
+          44,
+          72,
+          72,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "trajectory-inspector-390-light-linux.png",
+        "changed_pixels": 283,
+        "max_channel_delta": 44,
+        "bounds": [
+          44,
+          72,
+          71,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "trajectory-ledger-1440-dark-linux.png",
+        "changed_pixels": 1295,
+        "max_channel_delta": 49,
+        "bounds": [
+          44,
+          72,
+          72,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "trajectory-ledger-1440-light-linux.png",
+        "changed_pixels": 248,
+        "max_channel_delta": 44,
+        "bounds": [
+          45,
+          72,
+          71,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "trajectory-ledger-390-dark-linux.png",
+        "changed_pixels": 1299,
+        "max_channel_delta": 49,
+        "bounds": [
+          44,
+          72,
+          72,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "trajectory-ledger-390-light-linux.png",
+        "changed_pixels": 230,
+        "max_channel_delta": 44,
+        "bounds": [
+          45,
+          72,
+          71,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "trajectory-resize-reset-linux.png",
+        "changed_pixels": 248,
+        "max_channel_delta": 44,
+        "bounds": [
+          45,
+          72,
+          71,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "trajectory-resized-narrow-ledger-linux.png",
+        "changed_pixels": 248,
+        "max_channel_delta": 44,
+        "bounds": [
+          45,
+          72,
+          71,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "trajectory-search-linux.png",
+        "changed_pixels": 233,
+        "max_channel_delta": 44,
+        "bounds": [
+          45,
+          72,
+          71,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      },
+      {
+        "reference": "trajectory-truncated-diff-linux.png",
+        "changed_pixels": 248,
+        "max_channel_delta": 44,
+        "bounds": [
+          45,
+          72,
+          71,
+          122
+        ],
+        "old_owner_replay_difference": 0,
+        "old_owner_max_delta": 0
+      }
+    ],
+    "noise_policy": "The obsolete Chinese 16-site allowance and original reference move verbatim to frozen comparator fixtures. Current English/Chinese references have no live allowance. All other policies, thresholds, retries, settling and pins are unchanged."
+  },
+  "settings_reference_head": "b362808246db24a889cdcb8086578a3cad4b5e17"
+}

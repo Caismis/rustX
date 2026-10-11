@@ -292,7 +292,7 @@ export function reduce(
         transcriptNextCursor: event.transcript.next_cursor ?? undefined,
         statistics: event.transcript.statistics,
       });
-      return { ...fresh, context: { ...state.context, last_request_occupancy: event.occupancy },
+      return { ...fresh, context: { ...state.context, occupancy: event.occupancy },
         todos: event.todos == null ? undefined : parseSnapshot(event.todos) };
     }
     case "goal_changed":

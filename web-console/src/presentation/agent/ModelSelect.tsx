@@ -62,7 +62,7 @@ export function ModelSelect({ choices, current, profile, effectiveProfile, disab
   else if (current && id === 'profile-default') choose({ kind: 'model-default', model: current });
   else if (current && id.startsWith('profile:')) choose({ kind: 'profile', model: current, profile: id.slice(8) });
  }}
- anchor={<button data-model-select="" className={css.trigger} type="button" aria-label={tx('agent:model-select.model-and-profile')} aria-haspopup="menu" aria-expanded={open} disabled={disabled} onClick={() => { setOpen(v => !v); if (!open) load(); }}><IconDataOutline16 size={16}/><span className={css.triggerLabel}>{current ?? tx('agent:model-select.choose-model')}</span>{displayed && <span className={css.triggerEffort}>{displayed}</span>}<IconChevronDownOutline14/></button>}/>
+ anchor={<button data-model-select="" title={[current ?? tx('agent:model-select.choose-model'), displayed].filter(Boolean).join(' ')} className={css.trigger} type="button" aria-label={tx('agent:model-select.model-and-profile')} aria-haspopup="menu" aria-expanded={open} disabled={disabled} onClick={() => { setOpen(v => !v); if (!open) load(); }}><IconDataOutline16 size={16} className={css.triggerIcon}/><span className={css.triggerLabel}>{current ?? tx('agent:model-select.choose-model')}</span>{displayed && <span className={css.triggerEffort}>{displayed}</span>}<IconChevronDownOutline14/></button>}/>
  {error && <p role="alert">{error}</p>}
  </div>;
 }

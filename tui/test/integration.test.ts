@@ -764,7 +764,7 @@ for (const carrier of ["stdio", "websocket"] as const) it(`native child transcri
     const assertInvalidTranscriptLimits = async (subagentId: string) => {
       for (const limit of [0, 257]) {
         await assert.rejects(
-          host.client.call("agent/transcript", { target: session.target, agent_id: subagentId, before: null, limit }, "transcript"),
+          host.client.call("agent/transcript", { target: session.target, agent_id: subagentId, at: { type: "latest" }, limit }, "transcript_window"),
           error => error instanceof Error && "kind" in error && error.kind === "invalid_params",
         );
       }
@@ -805,10 +805,10 @@ for (const carrier of ["stdio", "websocket"] as const) it(`native child transcri
     if (closing.item.type === "message") assert.equal(closing.completed_response!.closing_message_id, closing.item.message.id);
     assert.equal(closing.completed_response!.usage?.total_tokens, 132);
     // Explicit one-entry paging proves exact child cursor order over the transport.
-    const newest = await host.client.call("agent/transcript", { target: session.target, agent_id: child.agent_id, before: null, limit: 1 }, "transcript");
-    assert.equal(newest.page.entries!.length, 1); assert.ok(newest.page.next_cursor);
-    const older = await host.client.call("agent/transcript", { target: session.target, agent_id: child.agent_id, before: newest.page.next_cursor!, limit: 1 }, "transcript");
-    assert.ok(BigInt(older.page.entries![0]!.cursor) < BigInt(newest.page.entries![0]!.cursor));
+    const newest = await host.client.call("agent/transcript", { target: session.target, agent_id: child.agent_id, at: { type: "latest" }, limit: 1 }, "transcript_window");
+    assert.equal(newest.window.page.entries!.length, 1); assert.ok(newest.window.page.next_cursor);
+    const older = await host.client.call("agent/transcript", { target: session.target, agent_id: child.agent_id, at: { type: "older", before: newest.window.page.next_cursor!, cut: newest.window.cut }, limit: 1 }, "transcript_window");
+    assert.ok(BigInt(older.window.page.entries![0]!.cursor) < BigInt(newest.window.page.entries![0]!.cursor));
     await session.respondInteraction(primary.interaction, { ...answer, response: { type: "submitted", value: { answers: [...answer.response.value.answers] } } });
     await stateWhen(() => session.state.attempt?.phase.type === "settled");
     const id = session.sessionId; const node = session.nodeId;

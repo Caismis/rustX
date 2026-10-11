@@ -42,12 +42,12 @@ export async function startDogfood(scenario = 'web_console_dogfood') {
     });
     const catalog = `[providers.fixture]\nbase_url = "${providerUrl}/v1"\napi_key = "$RUSTX_CONSOLE_FIXTURE_KEY"\n` +
       ['console-model', 'second-model'].map(id => `\n[models."fixture/${id}"]\nprovider = "fixture"\nid = "${id}"\nprotocol = "openai_chat_completions"\ncontext_window = 128000\nmax_output_tokens = 4096\ncapabilities = { input_modalities = ["text"], output_modalities = ["text"], tool_calls = true, reasoning = false }\ncompat = { chat_reasoning_replay = "omit" }\n`).join('');
-    if (scenario === 'web_chat_history') {
+    if (['web_chat_history', 'web_child_capabilities'].includes(scenario)) {
       const agents = join(fixtureHome, 'rustx/.agents');
       mkdirSync(agents, { recursive: true });
       writeFileSync(join(agents, 'mcp.toml'), `[mcp_servers.image_fixture]\ntype = "stdio"\ncommand = "python3"\nargs = [${JSON.stringify(resolve(root, 'web-console/test/e2e/image-mcp.py'))}]\n`);
     }
-    const imageSource = scenario === 'web_chat_history' ? `
+    const imageSource = ['web_chat_history', 'web_child_capabilities'].includes(scenario) ? `
 [mcp_tool_policies.image_fixture]
 approval = "never"
 [agent.tools.sources]
@@ -65,9 +65,10 @@ timezone = "UTC"
 ` : '';
     const writeSettings = (model = 'console-model') => writeFileSync(settings, (scenario === 'web_compaction' ? '[context]\nreserve_tokens = 0\nkeep_recent_tokens = 0\n' : '') + catalog + `[model_timeout_policy]\nresponse_start_timeout_ms = 600000\nstream_idle_timeout_ms = 600000\n[native_tools.bash]\napproval = "always"\n[agent.tools]\nbuiltin = ["read", "write", "edit", "glob", "grep", "bash", "present", "ask_user", "job_list", "job_status", "job_wait", "job_cancel", "list_agents", "send_message", "wait_agent", "interrupt_agent"]\n[agent.model]\nmodel = "fixture/${model}"\n` + imageSource);
     writeSettings();
-    if (scenario === 'web_agent_continuation') {
+    if (scenario === 'web_child_capabilities') writeFileSync(settings, readFileSync(settings, 'utf8') + '\n[native_tools.write]\napproval = "never"\n');
+    if (['web_agent_continuation', 'web_child_capabilities'].includes(scenario)) {
       mkdirSync(join(workspaceA, '.agents/agents'), { recursive: true });
-      writeFileSync(join(workspaceA, '.agents/agents/reviewer.toml'), 'description = "Continuable reviewer"\ninstructions = "Review requests carefully."\n');
+      writeFileSync(join(workspaceA, '.agents/agents/reviewer.toml'), 'description = "Continuable reviewer"\ninstructions = "Review requests carefully."\n' + (scenario === 'web_child_capabilities' ? '[tools]\nbuiltin = ["read", "write", "present"]\n[tools.sources]\nimage_fixture = ["render_image"]\n' : ''));
       writeFileSync(join(workspaceA, 'rustx.toml'), '[agent]\nagents = ["reviewer"]\n');
     }
     if (scenario === 'web_workflow_conformance') {

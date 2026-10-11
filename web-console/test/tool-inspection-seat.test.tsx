@@ -1,0 +1,21 @@
+import { renderHook, act } from '@testing-library/react';
+import { expect, it, vi } from 'vitest';
+import { useToolTraceNavigation } from '../src/app/agent/tool-inspection';
+const locator = { occurrence: { assistant_message_id: 'assistant', block_index: 0 }, call_id: 'call', tool_id: 'tool-bash' };
+it('a late location cannot change the tab of another Session or a hidden resident child', async () => {
+  let complete!: (located: boolean) => void;
+  const locate = vi.fn(() => new Promise<boolean>(resolve => complete = resolve)), open = vi.fn();
+  const hook = renderHook(({ seat, enabled }) => useToolTraceNavigation(locate, open, enabled, seat), { initialProps: { seat: 'A:child', enabled: true } });
+  const work = hook.result.current!(locator);
+  hook.rerender({ seat: 'B:child', enabled: true });
+  await act(async () => { complete(true); await work; });
+  expect(open).not.toHaveBeenCalled();
+  const second = hook.result.current!(locator);
+  hook.rerender({ seat: 'B:child', enabled: false });
+  await act(async () => { complete(true); await second; });
+  expect(open).not.toHaveBeenCalled();
+  hook.rerender({ seat: 'B:child', enabled: true });
+  const current = hook.result.current!(locator);
+  await act(async () => { complete(true); await current; });
+  expect(open).toHaveBeenCalledExactlyOnceWith('trajectory');
+});

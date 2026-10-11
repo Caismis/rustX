@@ -135,6 +135,7 @@ pub(crate) enum ChildControlEvent {
         guidance_id: u64,
         /// The bounded parent-authored guidance text.
         message: String,
+        attachments: Vec<crate::message::content::UploadedFileRef>,
     },
     /// The parent violated the bounded control protocol.
     ProtocolViolation(String),
@@ -621,6 +622,7 @@ impl ChildControlDispatcher {
                             .send(ChildControlEvent::Guidance {
                                 guidance_id: guidance.guidance_id,
                                 message: guidance.message,
+                                attachments: guidance.attachments,
                             })
                             .await
                             .is_err()
@@ -1118,6 +1120,7 @@ mod tests {
         write_parent_frame(
             &mut parent,
             &ParentFrame::Delegate(DelegationFrame {
+                attachments: Vec::new(),
                 task: "inspect".to_owned(),
                 context: None,
                 interaction_provider_available: false,

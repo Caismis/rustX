@@ -86,3 +86,19 @@ ownership. Its exact native receipt can later commit proven RolledBack and relea
 only that reservation's physical exclusion. An unproven rollback fact leaves this
 obligation open. Finite Workflow resource records retain their durable ownership
 and physical evidence; retained workspace metadata never supplies execution proof.
+
+## Terminal control evidence
+
+A child Result is one semantic terminal candidate, not physical settlement. The
+parent continues reading the reliable control channel through the physical
+epilogue: AnchorReleased and non-semantic Diagnostic frames remain admissible.
+Duplicate Results and other post-Result frames are protocol violations and take
+precedence over the earlier candidate. They settle through the existing Lost
+outcome, never successful terminal publication. A valid anchor offered after
+Result is retained for containment without an acknowledgement that could admit
+new work. If the anchor cannot be retained, the existing ControlFailure outcome
+refuses physical settlement proof. The driver still reaps the direct
+process and contains every outstanding nested anchor or reports it unresolved
+before the registry can publish and release counted capacity. Existing
+cancellation commit points and bounded drain/termination escalation remain in
+force; a kill signal alone is not settlement proof.

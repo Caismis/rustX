@@ -38,12 +38,15 @@ use rustx::runtime::subagent::{
 const KEY_ENV: &str = "RUSTX_ISSUE258_KEY";
 
 #[tokio::test]
-async fn present_root_inventory_remains_available_but_named_profile_and_override_refuse_it() {
+async fn present_is_admitted_for_selected_named_child_and_invocation_override() {
     let lab = Lab::new();
-    lab.write_config(&serde_json::json!({
-        "delivery_child": {"description": "Unsupported child delivery", "tools": {"builtin": ["present"]}},
-        "plain": {"description": "Ordinary child", "tools": {"builtin": ["read"]}}
-    }), &["present"]);
+    lab.write_config(
+        &serde_json::json!({
+            "delivery_child": {"description": "Child delivery", "tools": {"builtin": ["present"]}},
+            "plain": {"description": "Ordinary child", "tools": {"builtin": ["read"]}}
+        }),
+        &["present"],
+    );
     let product = lab.compose().await;
     assert!(
         product
@@ -56,13 +59,15 @@ async fn present_root_inventory_remains_available_but_named_profile_and_override
     );
     let resources = product.runtime().runtime_resources();
     assert!(
-        delegate(&resources, "delivery_child", None).is_err(),
-        "explicit unsupported child profile fails admission"
+        tool_names(&delegate(&resources, "delivery_child", None).unwrap())
+            .contains(&"builtin:present".to_owned()),
+        "the selected child owns its delivery tool"
     );
     let override_ = parse_override(serde_json::json!({"tools": {"builtin": ["present"]}}));
     assert!(
-        delegate(&resources, "plain", Some(&override_)).is_err(),
-        "root selection cannot grant delivery to child"
+        tool_names(&delegate(&resources, "plain", Some(&override_)).unwrap())
+            .contains(&"builtin:present".to_owned()),
+        "an admitted override selects child delivery"
     );
     assert!(
         !tool_names(&delegate(&resources, "plain", None).unwrap())

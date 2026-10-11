@@ -7,6 +7,7 @@ import { connectRemote, openEmptySession, choose } from './shell-actions';
 import { wireProbe } from './wire-probe';
 
 test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard geometry and detached reading', async ({ page }, info) => {
+  page.setDefaultTimeout(15_000);
   const fixture = await startDogfood('web_preview_workspace');
   let passed = false;
   const errors: string[] = [];
@@ -285,7 +286,12 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     await page.screenshot({ animations: 'disabled', path: info.outputPath('workspace-two-heavy-dark-zh.png') });
     await info.attach('workspace-two-heavy-dark-zh', { path: info.outputPath('workspace-two-heavy-dark-zh.png'), contentType: 'image/png' });
     await expect(chinesePanel).toBeVisible();
-    while (await tabs.count()) await workspace.getByRole('button', { name: /^关闭预览 / }).first().click();
+    while (await tabs.count()) {
+      const closeTab = workspace.getByRole('button', { name: /^关闭预览 / }).first();
+      // Harness reveals an inactive tab's close action on hover or keyboard focus.
+      await closeTab.locator('..').hover();
+      await closeTab.click();
+    }
     await expect(chinesePanel).not.toBeVisible(); await expect.poll(liveWorkers).toBe(0); await expect.poll(liveUrls).toBe(0);
     expect(await page.evaluate(() => document.activeElement !== document.body && !document.activeElement?.closest('[inert]'))).toBe(true);
     await expandDeliveries(); await page.getByRole('button', { name: '在侧边栏预览 sample.pdf', exact: true }).first().click();
