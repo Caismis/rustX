@@ -88,20 +88,24 @@ fn unrelated_history(store: &SqliteConversationStore, count: u32, after: u32) {
 }
 
 fn unrelated_assistants(store: &SqliteConversationStore, count: u32, after: u32) {
-    for index in after..after + count {
-        let message_id = MessageId::new(format!("unrelated-{index}"));
-        store
-            .append_canonical_with_event(
-                &assistant_message(message_id.as_str(), "unrelated"),
-                envelope(
-                    store.conversation_id(),
-                    &format!("assistant-{index}"),
-                    None,
-                    RuntimeEvent::AssistantMessageCommitted { message_id },
-                ),
-            )
-            .unwrap();
-    }
+    let history = (after..after + count)
+        .map(|index| {
+            let message_id = MessageId::new(format!("unrelated-{index}"));
+            let MessageBlock::Assistant(assistant) =
+                assistant_message(message_id.as_str(), "unrelated")
+            else {
+                unreachable!()
+            };
+            let committed = envelope(
+                store.conversation_id(),
+                &format!("assistant-{index}"),
+                None,
+                RuntimeEvent::AssistantMessageCommitted { message_id },
+            );
+            (assistant, committed)
+        })
+        .collect::<Vec<_>>();
+    append_assistant_history_fixture(store, &history).unwrap();
 }
 
 #[test]
@@ -624,4 +628,78 @@ fn bootstrap_reinitialization_rejects_a_different_immutable_surface_with_the_sam
         store.load_inherited_occupancy().unwrap(),
         crate::context::occupancy::inherit(seed.turns(), seed.surface_history())
     );
+}
+
+#[test]
+fn assistant_history_fixture_matches_native_appends_and_rolls_back_invalid_pairs() {
+    let id = ConversationId::generate();
+    let ordinary = SqliteConversationStore::in_memory(id.clone()).unwrap();
+    let bulk = SqliteConversationStore::in_memory(id).unwrap();
+    let history = (0..4)
+        .map(|index| {
+            let message_id = MessageId::new(format!("fixture-{index}"));
+            let MessageBlock::Assistant(message) = assistant_message(message_id.as_str(), "text")
+            else {
+                unreachable!()
+            };
+            let event = envelope(
+                ordinary.conversation_id(),
+                &format!("fixture-event-{index}"),
+                Some(AttemptId::new("owner")),
+                RuntimeEvent::AssistantMessageCommitted { message_id },
+            );
+            (message, event)
+        })
+        .collect::<Vec<_>>();
+    for (assistant, event) in &history {
+        ordinary
+            .append_canonical_with_event(&MessageBlock::Assistant(assistant.clone()), event.clone())
+            .unwrap();
+    }
+    append_assistant_history_fixture(&bulk, &history).unwrap();
+    assert_eq!(
+        bulk.load_canonical().unwrap(),
+        ordinary.load_canonical().unwrap()
+    );
+    assert_eq!(bulk.load_head().unwrap(), ordinary.load_head().unwrap());
+    assert_eq!(
+        serde_json::to_value(bulk.load_transcript_page(None, 64).unwrap()).unwrap(),
+        serde_json::to_value(ordinary.load_transcript_page(None, 64).unwrap()).unwrap()
+    );
+    for through in 0..=4 {
+        assert_eq!(
+            bulk.load_surface_history(SurfaceRevision::new(through))
+                .unwrap(),
+            ordinary
+                .load_surface_history(SurfaceRevision::new(through))
+                .unwrap()
+        );
+        let selected = query(
+            FactScope::Attempt(AttemptId::new("owner")),
+            vec!["assistant_message_committed"],
+            through,
+        );
+        assert_eq!(
+            serde_json::to_value(bulk.read_presentation_events(&selected).unwrap()).unwrap(),
+            serde_json::to_value(ordinary.read_presentation_events(&selected).unwrap()).unwrap()
+        );
+    }
+    let mut failed = history[..2].to_vec();
+    for (index, (assistant, event)) in failed.iter_mut().enumerate() {
+        assistant.id = MessageId::new(format!("future-{index}"));
+        event.event_id = EventId::new(format!("future-event-{index}"));
+        event.event = RuntimeEvent::AssistantMessageCommitted {
+            message_id: assistant.id.clone(),
+        };
+    }
+    failed[1].1.event = RuntimeEvent::AssistantMessageCommitted {
+        message_id: MessageId::new("wrong"),
+    };
+    assert!(append_assistant_history_fixture(&bulk, &failed).is_err());
+    assert_eq!(
+        bulk.load_canonical().unwrap(),
+        ordinary.load_canonical().unwrap()
+    );
+    assert_eq!(bulk.load_head().unwrap(), ordinary.load_head().unwrap());
+    assert_eq!(bulk.presentation_frontier().unwrap(), 4);
 }

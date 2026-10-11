@@ -10164,6 +10164,65 @@ fn is_terminal(event: &RuntimeEvent) -> bool {
     )
 }
 
+/// Seed irrelevant text-Assistant history for read-cost regressions without
+/// reconstructing and validating the whole growing Surface on every append.
+/// Native Ledger, Surface and Journal writers still own every persisted fact.
+#[cfg(test)]
+pub(crate) fn append_assistant_history_fixture(
+    store: &SqliteConversationStore,
+    history: &[(
+        crate::message::types::AssistantMessageBlock,
+        RuntimeEventEnvelope,
+    )],
+) -> Result<(), ConversationStoreError> {
+    let mut connection = store.lock()?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| storage(format!("Assistant history fixture: {error}")))?;
+    ensure_surface_head(&transaction)?;
+    let mut head = load_head(&transaction)?;
+    for (assistant, event) in history {
+        if !assistant
+            .content
+            .iter()
+            .all(|block| matches!(block, AssistantContentBlock::Text(_)))
+        {
+            return Err(storage("the Assistant history fixture accepts only text"));
+        }
+        let message = MessageBlock::Assistant(assistant.clone());
+        validate_canonical_event_for_message(&message, &event.event)?;
+        append_message_ledger(&transaction, &message, None)?;
+        head.active_message_ids.push(assistant.id.clone());
+        head.revision = head.revision.next();
+        append_surface_op(
+            &transaction,
+            head.revision,
+            head.compaction_generation,
+            &SurfaceOp::Append {
+                message_id: assistant.id.clone(),
+            },
+        )?;
+        persist_event_tx(&transaction, store.conversation_id(), event.clone())?;
+    }
+    update_surface_head(
+        &transaction,
+        head.revision,
+        head.compaction_generation,
+        &head.active_message_ids,
+    )?;
+    update_checkpoint(
+        &transaction,
+        head.revision,
+        head.compaction_generation,
+        &head.active_message_ids,
+    )?;
+    // Verify the same final durable invariants as ordinary appends, once.
+    load_head(&transaction)?;
+    transaction
+        .commit()
+        .map_err(|error| storage(format!("Assistant history fixture commit: {error}")))
+}
+
 const TRANSCRIPT_ATTEMPTS_SQL: &str = "SELECT attempt_id FROM events INDEXED BY events_message_id_kind_idx WHERE json_extract(event_json,'$.event.message_id')=?1 AND json_extract(event_json,'$.event.type')='assistant_message_committed' AND sequence<=?2";
 const INHERITED_OCCUPANCY_SQL: &str = "SELECT s.bootstrap_initialized,b.message_count,b.history_digest,b.occupancy_json,b.occupancy_digest FROM rustx_store s LEFT JOIN bootstrap_identity b ON b.id=s.id WHERE s.id=1";
 

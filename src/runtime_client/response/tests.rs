@@ -1005,9 +1005,30 @@ fn exact_window_decoration_keeps_attempt_tool_occurrences_and_response_identity(
     }
     let expected = page(&store, Some(crate::durable::TranscriptCursor::new(5)), 4);
     let outline = store.conversation_turns(0, 64).unwrap();
-    for index in 0..2048 {
-        assistant(&store, "unrelated", &format!("unrelated-{index}"));
-    }
+    let frontier = store.presentation_frontier().unwrap();
+    let unrelated = (0..2048)
+        .map(|index| {
+            let id = MessageId::new(format!("unrelated-{index}"));
+            let mut committed = event(
+                &store,
+                "unrelated",
+                RuntimeEvent::AssistantMessageCommitted {
+                    message_id: id.clone(),
+                },
+            );
+            committed.event_id = EventId::new(format!("event-{}", frontier + index + 1));
+            (
+                AssistantMessageBlock {
+                    id: id.clone(),
+                    content: vec![AssistantContentBlock::Text(TextBlock {
+                        text: id.to_string(),
+                    })],
+                },
+                committed,
+            )
+        })
+        .collect::<Vec<_>>();
+    crate::durable::sqlite::append_assistant_history_fixture(&store, &unrelated).unwrap();
     // The four rows of Attempt a: the page before Attempt b's location.
     let read = store
         .conversation_window(
