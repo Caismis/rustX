@@ -58,18 +58,10 @@ export function workflowDetails(run: WorkflowRunView): string[] {
     if (row.child != null) text += ` · child ${row.child} (read-only child inspector)`;
     if (row.tool_id != null) text += ` · Tool ${row.tool_id} · visit ${row.visit}`;
     if (row.interaction != null) text += ` · interaction ${row.interaction.interaction_id} (root HITL)`;
-    if (row.checks_passed != null || row.review_accepted != null) {
-      const applicable = run.candidate_users === 0 && row.candidate != null && run.candidate != null
-        && row.candidate.content === run.candidate.content && row.candidate.version === run.candidate.version
-        && JSON.stringify(row.candidate.run) === JSON.stringify(run.candidate.run);
-      if (row.checks_passed != null) text += ` · business checks ${row.checks_passed ? "passed" : "failed"}`;
-      if (row.review_accepted != null) text += ` · Review ${row.review_accepted ? "accepted" : "rejected"}`;
-      if (row.candidate != null) text += ` · candidate v${row.candidate.version} · ${applicable ? "current" : "historical"}`;
-    }
+    if (row.checks_passed != null) text += ` · business checks ${row.checks_passed ? "passed" : "failed"}`;
+    if (row.review_accepted != null) text += ` · Review ${row.review_accepted ? "accepted" : "rejected"}`;
     lines.push(text);
   }
-  if (run.candidate != null) lines.push(`candidate v${run.candidate.version} · ${run.candidate.content}`);
-  if (run.handoff != null) lines.push(`handoff ${run.handoff.state} · ${run.handoff.path}${run.handoff.truncated ? " [path truncated]" : ""}`);
   if (run.omitted_instances > 0) lines.push(`${run.omitted_instances} execution instances omitted by native retention`);
   lines.push("Human responses use the root HITL queue. Cancel stops the foreground attempt.");
   return lines;

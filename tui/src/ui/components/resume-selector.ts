@@ -236,7 +236,6 @@ export class ResumeSelector implements PopupContent {
       case "blocked": {
         const reason = result.reason;
         const text = reason.kind === "resource_conflict" ? "An external resource owner prevents deletion. Inspect the ownership conflict before trying again."
-          : reason.kind === "workspace" ? `${reason.resource_count} retained workspace resources block deletion. Use the existing workspace/subagent disposal action explicitly first.`
           : "Native ownership could not be validated. The Session remains available; deletion is blocked.";
         this.#state = { kind: "notice", text };
         break;

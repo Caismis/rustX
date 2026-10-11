@@ -87,9 +87,11 @@ test("Welcome consumes native origins, complete tools, extensions and admitted d
     { ...tool, id: "m", name: "web_search", origin: { mcp: { server_id: "exa" } } },
     { ...tool, id: "p", name: "dataframe", origin: { managed_python: { package: "data-tools" } } },
   ];
-  state.resources.inspection.main = { identity: { kind: "main" }, tools: [], tool_selection: [], skills: [], agents: ["researcher"], workflows: ["audit"], plugins: [], diagnostics: [] };
+  const controls = ["subagent", "list_agents", "send_message", "wait_agent", "interrupt_agent"]
+    .map((name) => ({ id: `tool-${name}`, name, origin: "builtin" as const }));
+  state.resources.inspection.main = { identity: { kind: "main" }, tools: [], agent_controls: controls, tool_selection: [], skills: [], agents: ["researcher"], workflows: ["audit"], plugins: [], diagnostics: [] };
   const banner = plain(renderResourceBanner(state));
-  for (const fact of ["Extensions", "Agents", "researcher", "Skills", "Tools", "Builtin", "builtin_tool", "MCP · exa", "web_search", "Managed Python · data-tools", "dataframe", "Workflows", "audit"]) assert.ok(banner.includes(fact), fact);
+  for (const fact of ["Extensions", "Agents", "researcher", "Agent controls · automatic", "send_message, wait_agent", "Skills", "Tools", "Builtin", "builtin_tool", "MCP · exa", "web_search", "Managed Python · data-tools", "dataframe", "Workflows", "audit"]) assert.ok(banner.includes(fact), fact);
   state.transcript = [];
   assert.equal(plain(renderResourceBanner(state)), banner);
 });

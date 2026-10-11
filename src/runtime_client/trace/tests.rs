@@ -1926,9 +1926,6 @@ fn older_records_are_repaired_and_settle_by_identity() {
         steps_consumed: 0,
         steps_max: 10,
         agents_consumed: 0,
-        candidate: None,
-        candidate_users: 0,
-        handoff: None,
     });
     let projection = TraceProjection::new(&store).unwrap();
     snapshot.trace = projection.page(None, 32).unwrap();
@@ -3097,11 +3094,7 @@ fn tool_owned_domains_carry_their_exact_originating_tool_call() {
             admitted_authority: None,
             parent_agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
             ownership: crate::events::types::SubagentOwnershipKind::Normal,
-            workspace: crate::runtime::workspace::WorkspaceSnapshot {
-                borrowed_from: None,
-                logical_workspace: std::path::PathBuf::from("/workspace"),
-                isolation: crate::runtime::workspace::WorkspaceIsolation::Shared,
-            },
+            workspace: std::path::PathBuf::from("/workspace"),
         },
         3,
     );
@@ -4296,7 +4289,7 @@ fn child_lifecycle_repair_uses_exact_attempt_and_request_and_never_revives_termi
         "activation_id": "activation", "current_activation": "activation", "agent": "worker", "definition_digest": "d", "profile_digest": "p",
         "state": "active", "activation_state": "running", "started_at": "2026-10-10T00:00:00Z",
         "observation": { "revision": 1, "attempt_id": "attempt-a", "activity": { "type": "model", "request_id": request.request_id, "retry": 0 }, "counters": { "model_requests": 1, "model_retries": 0, "tool_executions": 0 } },
-        "workspace": { "logical_workspace": "/workspace", "isolation": { "type": "shared" }, "resource_state": "none" }
+        "workspace": "/workspace"
     })).unwrap();
     let original = page(&store).records;
     let mut records = original.clone();

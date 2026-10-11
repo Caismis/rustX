@@ -10,8 +10,8 @@ Issue #254 establishes authority, not a deletion operation.
 | Child lineage | Typed SubagentOwnershipCommitted in parent's durable store | Yes | External access after managed retirement | No | Yes |
 | Child private execution roots | Exclusively allocated incarnation inside the child's semantic allocation | Yes | External access after managed retirement | No | Yes |
 | Child inspection socket / liveness | Identity-derived routing; OS lock is liveness only | Disposable sidecars | External access after managed retirement | Not ownership evidence | Marker survives, lock does not |
-| Subagent worktree / branch | Durable workspace ownership, terminal resource and disposal facts | Never implicit | Until fully disposed | User source may be present | Yes |
-| Workflow worktree / branch / candidate | Durable Workflow workspace ownership, settlement and disposal | Never implicit | Until fully disposed | User source may be present | Yes |
+| Shared Session workspace | User/project authority; frozen as the absolute binding in ownership facts | Never | No | External project files | Yes |
+| Agent activation physical settlement | Terminal `physical_settlement_proven`, later `SubagentPhysicalSettlementProven`, proven admission rollback | No | Until proven | No | Yes |
 | Environments / capability resources / caches | Runtime resource composition, independent of node artifacts | No | No | Shared | Yes |
 | Config / credentials / source | User and project authority | No | No | External | Yes |
 
@@ -29,8 +29,9 @@ root must not become an unconditional recursive deletion target.
 
 ## Final authority and exclusion contract
 
-`DeletionTargetSnapshot::inspect` returns a finite native target, workspace
-blockers, and semantic ownership revision without destructive allocation exclusion.
+`DeletionTargetSnapshot::inspect` returns a finite native target and semantic
+ownership revision without destructive allocation exclusion, or fails closed on
+an unproven activation barrier.
 `DeletionExclusion::acquire` separately claims private allocations only after the
 runtime manager fences admission and proves writer retirement. It never
 traverses provenance, scans directories for ownership, or performs deletion.
@@ -39,8 +40,8 @@ Catalog-wide unique ownership is owned by
 inspection. It derives graph roots, typed child relationships, identity validity,
 parents and Session attribution under the product ownership freeze. Ambiguity,
 cycles, missing stores and unsafe identities fail closed before selecting a
-Session. Deletion then adds workspace disposal blockers and revision semantics
-under that same freeze; archive adds only historical cut frontiers. Neither owns
+Session. Deletion then adds activation settlement barriers and revision
+semantics under that same freeze; archive adds only historical cut frontiers. Neither owns
 a separate descendant traversal. The Session graph stays above linear stores.
 
 ### Canonical allocation authority
@@ -59,8 +60,7 @@ no second absolute runtime root. The child derives
 `subagents/<ConversationId>/<incarnation>/` and requires that exact private
 allocation to exist. Artifacts, output, Skills and child-private environments
 are derived beneath it; the stable database and inspection sidecars derive from
-the Conversation identity. Native `WorkspaceManager::for_local_conversation`
-derives its workspace allocation from the composed Conversation access.
+the Conversation identity.
 
 ### Four separate responsibilities
 
@@ -77,9 +77,8 @@ derives its workspace allocation from the composed Conversation access.
   acquire the same allocation access before touching private state.
 - `OwnershipSnapshot` exclusively locks the canonical product-root directory
   against **ownership transitions only**. Catalog publication and typed durable
-  child/workspace ownership transactions take compatible `OwnershipMutation`
-  guards. Explicit Workflow disposal retains its guard across physical cleanup
-  and durable settlement, rather than just individual event commits. Ordinary
+  child ownership transactions take compatible `OwnershipMutation`
+  guards. Ordinary
   user/model/assistant/tool execution facts
   do not take this root lock. Runtime child identity reservation takes waitable
   `runtime_ownership_admission()` before Conversation allocation serialization;
@@ -128,55 +127,11 @@ unrelated ordinary execution continues. Preview callers must drop the snapshot
 before awaiting human confirmation. A later operation reacquires and compares
 the semantic token under fresh authority; #255 owns that product workflow.
 
-`WorkspaceManager` owns physical workspace lifecycle and its optional local
-`Arc<ConversationAccess>`. Local Conversation composition binds the same access
-to the manager and the concrete SQLite store. The manager takes its process-local
-disposal mutex, then acquires `OwnershipMutation` from its own local access before
-reading retained facts. It retains authority through the durable Started commit,
-physical worktree removal, branch compare-delete and durable Settled commit.
-Every retry takes this authority even when Started is already durable. SQLite
-transaction locks are acquired only after lifecycle authority; nested event
-commits take compatible shared mutation guards. All OS acquisitions remain
-nonblocking, so there is no SQLite/lifecycle wait cycle or lock upgrade.
-
 `ConversationStore` contains only backend-independent durable semantic operations.
 It returns no local OS lifecycle authority. Concrete `SqliteConversationStore`
 retains its composed access internally to exclude individual ownership-sensitive
-transactions, including Started; this complements the manager's spanning guard.
-Synchronization wraps durable operations, rather than being supplied by them.
-
-The production manager is composed with the native parent Conversation and shared
-by its subagent registry and Workflow execution. Child composition currently
-creates no WorkspaceManager or nested subagent/Workflow registry; its physical
-workspace use remains parent-owned. Embedded/headless fixture managers can use
-`WorkspaceManager::new` without local Session coordination. Native management
-uses `with_local_lifecycle` with `ConversationAccess::existing` for the selected
-catalog-owned allocation and canonical `ProductRoot`. This existing-only binding
-works for historical Conversations without activating or switching their runtime
-and without reading synchronization authority from a durable backend or workspace
-path. The disposal race fixtures use this historical-management binding.
-
-`WorkflowWorkspaceDisposalStarted` is the durable destructive admission boundary
-and independently participates in event-level ownership exclusion, like the
-subagent disposal Started event. If preflight wins the ownership freeze first,
-disposal fails admission without publishing Started or touching Git; retry after
-snapshot release can proceed. If disposal wins first, preflight returns
-`WouldBlock` throughout physical cleanup and settlement. Guard drop (including
-error return) or OS process death releases live authority. The store's ordinary
-Conversation access also remains alive for the complete call. Recovery of a
-previous interrupted disposal still uses existing durable intent and settlement
-semantics; this adds no recovery transaction or deletion state machine.
-
-Started alone does not change the final blocker semantics and is not added to
-`ownership_revision` or the preflight blocker projection. The spanning exclusion
-prevents observation of an in-flight live disposal; settled physical/disposal
-state remains the revision authority. The real WorkspaceManager path is covered
-by `inspect_deletion_first_excludes_workflow_destructive_admission_until_release`
-and `deletion_workflow_disposal_first_excludes_preflight_through_physical_settlement`,
-using barriers before removal and between worktree and branch removal.
-`deletion_workspace_owner_excludes_preflight_without_store_lifecycle` additionally
-proves the local manager supplies spanning authority when its semantic store has
-no local lifecycle binding; no fake lock capability is implemented by the store.
+transactions. Synchronization wraps durable operations, rather than being
+supplied by them.
 
 A live product controlling A can call `DeletionTargetSnapshot::inspect` (the
 native preflight behind App Server `session/deletePreview`) for either A or B
@@ -187,26 +142,22 @@ blocks destructive exclusion; unrelated live children do not.
 Equivalent root spellings and symlinks resolve to the same inode; distinct roots
 are independent. Stable lock/allocation inodes must not be replaced by product
 cleanup while authority is retained. This is local Unix coordination, not a
-boundary against an administrator replacing inodes. Retained workspace blockers
-still prohibit future physical cleanup even with target exclusivity.
+boundary against an administrator replacing inodes.
 
 ### Semantic ownership revision
 
 The length-delimited canonical vocabulary starts with
-`rustx/session-deletion-ownership/v1`, followed by target SessionId, sorted node
-membership `(node id, parent node id, ConversationId)`, sorted owned Conversation
-edges and root-relative private allocation identities, and sorted workspace
-blockers. Each blocker includes owning Conversation, native resource identity,
-repository/worktree/branch authority, and final disposal-relevant state (owned,
-retained exact head/dirty state, unresolved safety reason, or branch-only).
-Diagnostics are excluded. Fully disposed resources disappear from blockers.
+`rustx/session-deletion-ownership/v2`, followed by target SessionId, sorted node
+membership `(node id, parent node id, ConversationId)`, and sorted owned
+Conversation edges and root-relative private allocation identities. Issue #462
+removed workspace blockers from the vocabulary and bumped its tag; a v1 token
+never matches. Unproven activation barriers fail inspection instead of
+contributing to the revision.
 
-The revision changes for target node/child/nested ownership changes and blocker
-transitions. It does not change for unrelated activity or metadata, target
+The revision changes for target node/child/nested ownership changes. It does not change for unrelated activity or metadata, target
 ordinary execution, messages, model/tool history, timestamps, journal sequence,
 request identities, provenance, selection, catalog formatting/order or mtimes.
-A Workflow run's attempt identity is included only as part of its actual native
-workspace resource identity. Global uniqueness checks inspect broader state but
+Global uniqueness checks inspect broader state but
 never hash that unrelated state. A conflicting claim fails closed instead of
 producing a normal new revision.
 
@@ -217,46 +168,16 @@ owner reuses it, and its socket bind replaces stale routing only after obtaining
 the lease. The product lifecycle lock also covers this lease.
 
 
-### Workflow-owned workspaces and borrowing children
+### Shared workspace and activation barriers (Issue #462)
 
-A Workflow Agent borrowing a Workflow-owned candidate/worktree does not acquire
-independent physical workspace disposal authority.
-
-```text
-Session
-  +-- Workflow W
-  |     +-- owns worktree X (sole disposal authority)
-  +-- child C
-        +-- owns child Conversation/private runtime state
-        +-- borrows X from W; cannot own or dispose X
-```
-
-Preflight validates `WorkspaceSnapshot.borrowed_from` against the preceding
-native `WorkflowWorkspaceOwned` fact in the same Conversation: valid run and
-canonical ownership-event identity, Workflow child ownership kind, and exact
-owner snapshot equality after removing only the borrow marker. The Workflow
-snapshot must itself be independently owned and isolated. Missing, foreign or
-mismatched authority fails closed; paths alone never prove the relationship.
-The immutable Workflow ownership fact remains available for this validation
-after its physical blocker is disposed.
-
-Every child Conversation remains in the target, but any number of valid
-borrowers produce only the Workflow's single physical workspace blocker. Only
-Workflow disposal changes that blocker to branch-only and then removes it.
-No child terminal publication is needed, including after a crash immediately
-following child ownership commit. Borrowing adds no extra workspace resource to
-the semantic revision; new child Conversations still change target scope.
-
-The real subprocess regression
-`deletion_borrowed_workspace_crash_before_child_terminal_disposes_only_workflow`
-uses a committed-facts gate and kill/reap before reopening preflight, then
-verifies one Workflow blocker, branch-only settlement and zero blockers after
-complete Workflow disposal, without any child terminal event. The
-`deletion_borrowed_workspace_missing_workflow_owner_fails_closed`,
-`deletion_borrowed_workspace_mismatched_workspace_fails_closed`,
-`deletion_borrowed_workspace_foreign_or_invalid_run_fails_closed`, and
-`deletion_borrowed_workspace_multiple_children_share_one_disposal_owner`
-regressions cover invalid authority and multiple legitimate borrowers.
+Agents and Workflows run in the Session's frozen workspace binding and own no
+workspace resource, so deletion never removes, inspects or blocks on project
+files. Preflight still validates every ownership fact: a durable Agent's
+resumed activations must repeat its admitted identity and exact binding, and a
+Workflow child can never hold durable Agent authority. An activation terminal
+without proven physical settlement, or an activation admission whose rollback
+was not proven, keeps the Session undeletable. A pre-reserved activation's
+parent physical lease also blocks destructive exclusion until its exact proof.
 
 ## Development storage boundary
 
@@ -287,7 +208,6 @@ runtime/                              stable ownership-transition lock inode
     conversation.sqlite
     inspection liveness sidecar
     incarnation-*/                    exclusively allocated child-private resources
-  workspaces/worktrees/               separate explicit workspace disposal domain
   environments/                       shared; outside the cascade
 ```
 
@@ -297,14 +217,12 @@ prefix resembles an identity. An unreferenced allocation is not assigned to a
 Session by scanning. Project files, shared capability and environment state,
 cache, configuration and credentials never enter this projection. The shared
 catalog file and stable lifecycle/controller lock inodes are not Session-owned
-files. Retained or undisposed worktrees and branches remain blockers, with their
-durable disposal records intact.
+files.
 
 ## Deterministic regression map
 
 The original tree/fork/clone, nested restart ownership, unknown/missing lookup,
-malformed/cyclic metadata, retained workspace and stale-inspection regressions
-remain. The revised exclusion and semantic-token contracts are proved by:
+malformed/cyclic metadata and stale-inspection regressions remain. The revised exclusion and semantic-token contracts are proved by:
 
 | Contract | Exact regression |
 | --- | --- |
@@ -318,7 +236,8 @@ remain. The revised exclusion and semantic-token contracts are proved by:
 | Non-creating identity/access lookup and confinement | `management_lock_lookup_is_noncreating_and_paths_fail_closed`, `deletion_unknown_and_missing_lookup_never_creates_state` |
 | Unrelated metadata/activity, target ordinary events and catalog encoding preserve token | `deletion_revision_ignores_unrelated_metadata_and_irrelevant_execution_history`, plus the real A/B product test |
 | Target nodes, children and nested children change token | `deletion_revision_changes_for_target_nodes_children_and_nested_children` |
-| Retention, partial disposal and full disposal change token | `deletion_revision_tracks_retained_and_partial_and_complete_disposal` |
+| Deletion never removes the shared Session workspace or a settled Agent's effects | `deletion_never_removes_the_shared_session_workspace` |
+| Unproven terminal, unproven rollback and pre-reserved leases block deletion | `cold_shared_agent_deletion_retains_unproven_terminal_evidence`, `resumed_admission_deletion_requires_exact_generation_settlement_proof`, `pre_reserved_allocation_blocks_destructive_deletion_until_exact_proof` |
 | No ownership transition races the snapshot; ordinary events still succeed | `deletion_snapshot_freezes_native_ownership_commits_but_not_ordinary_events` |
 | Detached artifact/output stores and streaming writers retain access | `deletion_detached_private_stores_and_writers_retain_target_access` |
 | Cross-Session claims fail rather than yield a token | `deletion_cross_session_child_claim_is_ambiguous_not_a_revision_change` |
@@ -333,8 +252,8 @@ composer. The recursive projection consumes native descendant facts if present;
 the test exercises this contract without introducing another executor or graph.
 Session deletion transactions, logical commit, interrupted-delete recovery,
 physical cleanup and App Server/TUI deletion control are specified separately in
-[Session deletion lifecycle](session-deletion-lifecycle.md). Force-kill, automatic
-workspace disposal, batch deletion, trash and distributed coordination are outside
+[Session deletion lifecycle](session-deletion-lifecycle.md). Force-kill, batch
+deletion, trash and distributed coordination are outside
 this ownership contract.
 
 The real-process regression
@@ -354,8 +273,8 @@ Existing-only Surface-head validation runs in one SQLite read transaction. The h
 Version 32 on main freezes Issue #258’s effective child `profile_digest`; version
 33 additionally requires this Session deletion and local management contract.
 A v32 database is rejected, without migration or compatibility decoding.
-Invocation overrides affect tools, skills, and extensions, never ProductRoot,
-workspace borrowing, or disposal ownership. Capability-profile metadata, including
+Invocation overrides affect tools, skills, and extensions, never ProductRoot or
+the Session workspace binding. Capability-profile metadata, including
 `definition_digest` and `profile_digest`, is excluded from deletion revisions.
 
 ## SESSION-DELETE-02 lifecycle extension

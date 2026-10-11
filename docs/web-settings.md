@@ -62,7 +62,8 @@ replacement edits complete objects. Native Tools use an explicit checkbox whitel
 MCP, Python and Skill selections have all/exact/none controls. Skill guidance explains
 prompt visibility and displays absolute collection roots. Plugins default off.
 Named-Agent editing writes the complete resource profile, including its independent
-Tools/Skills/Plugins, delegation lists, model inheritance, timeout and worktree settings.
+Tools/Skills/Plugins, delegation lists, model inheritance and timeout. There is no
+worktree setting: every Agent runs in the shared Session workspace (#462).
 Description and instructions remain optional; native projection and serialization
 keep empty defaults omitted during unrelated profile edits. Root and named-Agent explicit Summary
 Models each support independent model, profile, output limit and request

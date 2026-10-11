@@ -217,14 +217,7 @@ export function renderSubagentSection(
     return "";
   }
   const active = activeSubagents(state);
-  const retained = state.agents.filter(
-    (subagent) =>
-      subagent.workspace != null &&
-      subagent.workspace.resource_state !== "none" &&
-      subagent.workspace.resource_state !== "disposed",
-  ).length;
   const actions = ["Ctrl+↑↓ select", "Enter conversation", "i details", "/send-message", "/wait-agent", "/interrupt-agent", "Esc Main"];
-  if (retained > 0) actions.push("D dispose retained");
   return [
     role.strong(
       `Agents · ${active.length} active of ${state.agents.length} known · ${actions.join(" · ")}`,
@@ -264,7 +257,7 @@ export function renderSubagentDetail(subagent: RuntimeClientAgent): string {
     `- profile digest: \`${subagent.profile_digest}\``,
   ];
   if (subagent.state === "unavailable") {
-    lines.push("- unavailable: physical settlement, publication, or workspace authority requires explicit repair");
+    lines.push("- unavailable: physical settlement or publication requires explicit repair");
   }
   if (subagent.detail != null) {
     lines.push(`- detail: ${subagent.detail}`);
@@ -288,12 +281,7 @@ export function renderSubagentDetail(subagent: RuntimeClientAgent): string {
       );
     }
   }
-  if (workspace != null) {
-    lines.push(`- workspace resource state: ${workspace.resource_state}`);
-    if (workspace.handoff != null) {
-      lines.push(`- workspace handoff: retained`);
-    }
-  }
+  lines.push(`- workspace: \`${workspace}\` (shared Session workspace)`);
   return ["### Agent", ...lines].join("\n");
 }
 

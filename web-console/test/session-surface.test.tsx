@@ -9,7 +9,7 @@ import { sessionDeletionNotice } from '../src/bindings/session-deletion';
 import { deriveSessionProductState } from '../src/bindings/session-product';
 import { Server, endpoint, interaction, snapshot } from './fixture';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
-import type { RuntimeClientSnapshot, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v44';
+import type { RuntimeClientSnapshot, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v45';
 
 let server: Server;
 beforeEach(() => {
@@ -33,7 +33,6 @@ it.each([
   [{ status: 'committed_cleanup_pending', session_id: 'private-id' }, 'committed, but cleanup is still pending'],
   [{ status: 'committed_durability_uncertain', session_id: 'private-id' }, 'Deletion needs verification'],
   [{ status: 'blocked', session_id: 'private-id', reason: { kind: 'resource_conflict' } }, 'external resource owner'],
-  [{ status: 'blocked', session_id: 'private-id', reason: { kind: 'workspace', resource_count: 2 } }, 'Retained workspaces'],
   [{ status: 'blocked', session_id: 'private-id', reason: { kind: 'invalid_ownership' } }, 'could not be verified'],
 ] as const)('preserves the native deletion outcome without raw DTOs: %j', (result, copy) => {
   const notice = displayText(translator('en'), sessionDeletionNotice(result as RuntimeClientSessionDeletionResult));
@@ -699,7 +698,7 @@ const reads = (id?: string) => server.requests.filter(({ request }) => request.m
   && (!id || ('session_id' in request.params && request.params.session_id === id))).length;
 /** Freeze a held response against native state now, so releasing it later
  * cannot recompute a newer one. */
-function freeze(request: import('../../protocol/app-server/v44').Request) { server.commit(request); return request; }
+function freeze(request: import('../../protocol/app-server/v45').Request) { server.commit(request); return request; }
 /** Let every automatic follow-up the client decided to issue run to completion. */
 async function settle() { for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve(); }); }
 

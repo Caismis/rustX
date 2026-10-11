@@ -36,14 +36,15 @@ SQLite store under its owning Session. `AgentId` is the durable child identity. 
 activation and retains parent-scoped ordinal ordering; it is not the Conversation
 locator and is never reused for a later activation.
 Tool outputs belong to that Conversation allocation. Parent/child ownership
-commits, execution settlement, process supervision and retained-worktree disposal
-remain native runtime responsibilities. See [Session deletion ownership](session-deletion-ownership.md).
+commits, execution settlement and process supervision remain native runtime
+responsibilities. Every child runs in the Session's shared workspace and owns
+no workspace resource (Issue #462). See [Session deletion ownership](session-deletion-ownership.md).
 
 ## Durable Agent authority across activations
 
 The resolved contract freezes at Agent creation, not each resume. The durable
-Agent owns the same child ConversationId and workspace authority across multiple
-finite activation IDs. `send_message` to an inactive Agent reuses that admitted
+Agent owns the same child ConversationId and frozen Session workspace binding
+across multiple finite activation IDs. `send_message` to an inactive Agent reuses that admitted
 profile, model, Tools, Skills, resources and policies; it does not consult current
 settings or reread a named definition. Parent resource/configuration reload cannot
 mutate existing Agent authority. See [Jobs and continuable Agents](jobs-and-agents.md).
@@ -53,8 +54,9 @@ explicit `interrupt_agent` settles as Cancelled after native physical settlement
 and leaves the Agent resumable. Crash reconciliation records Interrupted without
 proof that the old direct child and nested processes settled. It preserves the
 same Agent identity and history, projects Unavailable, and refuses another physical activation;
-clean Git inspection or a shared workspace does not supply that missing proof.
-Disposed or unresolved workspace authority likewise cannot be reacquired by resume.
+inspecting the shared workspace does not supply that missing proof. A missing or
+unusable workspace binding fails resume before allocation, without falling back
+to another directory.
 
 Resume preparation has its own durable `AgentActivationAdmission` obligation.
 Reserved commits before staging, under the same product ownership fence used by
@@ -64,28 +66,22 @@ unproven rollback reconstructs Unavailable with the exact reserved activation ID
 blocks further admission, and prevents Session deletion from removing resources.
 A prior successful activation cannot settle this later physical obligation.
 
-`AgentRetained` is Agent-lifetime ownership, not an activation-level `Retained`
-handoff. Normal completion neither deletes nor disposes this workspace. Finite
-`subagent/disposeWorkspace` cannot delete it; a future Agent-deletion lifecycle
-would need its own explicit owner and is not introduced here.
-
 Publication and containment remain independent: a committed Interrupted terminal
 may later acquire durable physical proof without changing its unknown logical
-outcome. Only native process-incarnation evidence can discharge that obligation;
-workspace inspection alone cannot grant resume authority.
+outcome. Only native process-incarnation evidence can discharge that obligation.
 
 Recovery retains exact incarnation lease/receipt evidence until Session deletion.
 The registry's bounded reconciliation owner commits
 `SubagentPhysicalSettlementProven` only after native Quiescent evidence and lease
-release exclude the old writer. This releases only the recovered physical
-exclusion; an independently poisoned workspace remains unavailable. Session
+release exclude the old writer. This releases only that exact activation's
+physical exclusion; an independent publication or admission failure keeps the
+Agent unavailable. Session
 deletion folds later proof before deciding whether containment is still unresolved.
 
 Recovery also retains a reserved generation that never committed activation
 ownership. Its exact native receipt can later commit proven RolledBack and release
 only that reservation's physical exclusion. An unproven rollback fact leaves this
-obligation open. Finite Workflow resource records retain their durable ownership
-and physical evidence; retained workspace metadata never supplies execution proof.
+obligation open.
 
 ## Terminal control evidence
 

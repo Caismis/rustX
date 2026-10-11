@@ -354,7 +354,6 @@ fn invalidates_read_domains(observation: &ConversationObservation) -> bool {
         | ConversationObservation::Background(_)
         | ConversationObservation::ToolProgress { .. }
         | ConversationObservation::SubagentLifecycle { .. }
-        | ConversationObservation::SubagentWorkspace(_)
         | ConversationObservation::SubagentActivity(_)
         | ConversationObservation::Capability { .. }
         | ConversationObservation::Resources { .. }
@@ -1066,40 +1065,6 @@ impl RuntimeClientProjection {
                 }
                 events
             }
-            ConversationObservation::SubagentWorkspace(snapshot) => {
-                if !matches!(
-                    snapshot.ownership,
-                    crate::events::types::SubagentOwnershipKind::Normal
-                ) {
-                    return Vec::new();
-                }
-                // A retained-workspace disposal is a reliable resource
-                // projection update. It must not repeat the terminal
-                // lifecycle branch or remove pending child interactions as a
-                // second logical terminal transition.
-                let Some(existing) = self.snapshot.agents.iter().find(|agent| {
-                    agent.agent_id == snapshot.child_agent_id
-                        && agent.activation_id == snapshot.subagent_id
-                }) else {
-                    return Vec::new();
-                };
-                let view = activation_view(
-                    &snapshot,
-                    existing.state,
-                    existing.current_activation.clone(),
-                    &existing.title,
-                );
-                if !upsert_subagent(
-                    &mut self.snapshot.agents,
-                    &mut self.seen_activations,
-                    view.clone(),
-                ) {
-                    return Vec::new();
-                }
-                vec![RuntimeClientEvent::AgentUpdated {
-                    agent: Box::new(view),
-                }]
-            }
             ConversationObservation::SubagentActivity(snapshot) => {
                 if !matches!(
                     snapshot.ownership,
@@ -1624,9 +1589,7 @@ impl RuntimeClientProjection {
             | RuntimeEvent::SubagentOwnershipCommitted { .. }
             | RuntimeEvent::SubagentTerminalPublished { .. }
             | RuntimeEvent::SubagentTerminalSettled { .. }
-            | RuntimeEvent::SubagentPhysicalSettlementProven { .. }
-            | RuntimeEvent::SubagentWorkspaceDisposalStarted { .. }
-            | RuntimeEvent::SubagentWorkspaceDisposalSettled { .. } => Vec::new(),
+            | RuntimeEvent::SubagentPhysicalSettlementProven { .. } => Vec::new(),
             // The interaction requested/settled facts are durable audit
             // evidence (Issue #109). The client already learns the live
             // pending/settled transitions from the coordinator's own
@@ -1644,12 +1607,7 @@ impl RuntimeClientProjection {
             // project the bounded parent Tool call/result and does not expose
             // workflow-local values or child transcripts as a second
             // conversation surface.
-            RuntimeEvent::WorkflowWorkspaceOwned { .. }
-            | RuntimeEvent::WorkflowWorkspaceDisposalStarted { .. }
-            | RuntimeEvent::WorkflowWorkspaceDisposalSettled { .. }
-            | RuntimeEvent::WorkflowWorkspaceSettled { .. }
-            | RuntimeEvent::WorkflowCandidateInvocation { .. }
-            | RuntimeEvent::WorkflowStarted { .. }
+            RuntimeEvent::WorkflowStarted { .. }
             | RuntimeEvent::WorkflowBlockStarted { .. }
             | RuntimeEvent::WorkflowBlockSettled { .. }
             | RuntimeEvent::WorkflowLoopIterationAdmitted { .. }
@@ -2655,42 +2613,7 @@ fn activation_view(
         observation: snapshot.observation.clone(),
         execution_profile: snapshot.profile.clone(),
         started_at: snapshot.started_at,
-        workspace: subagent_workspace_view(snapshot),
-    }
-}
-
-pub(crate) fn subagent_workspace_view(
-    snapshot: &crate::runtime::subagent::SubagentSnapshot,
-) -> super::snapshot::RuntimeClientAgentWorkspace {
-    super::snapshot::RuntimeClientAgentWorkspace {
-        borrowed_from: snapshot.workspace.borrowed_from.clone(),
-        logical_workspace: snapshot.workspace.logical_workspace.clone(),
-        isolation: match &snapshot.workspace.isolation {
-            crate::runtime::workspace::WorkspaceIsolation::Shared => {
-                super::snapshot::RuntimeClientWorkspaceIsolation::Shared
-            }
-            crate::runtime::workspace::WorkspaceIsolation::GitWorktree(worktree) => {
-                super::snapshot::RuntimeClientWorkspaceIsolation::GitWorktree {
-                    source_repository_root: worktree.source_repository_root.clone(),
-                    repository_relative_workspace: worktree.repository_relative_workspace.clone(),
-                    physical_worktree_root: worktree.physical_worktree_root.clone(),
-                    base_commit: worktree.base_commit.clone(),
-                    branch: worktree.branch.clone(),
-                    parent_had_uncommitted_changes: worktree.parent_had_uncommitted_changes,
-                }
-            }
-        },
-        resource_state: snapshot.workspace_resource_state,
-        handoff: snapshot.handoff.as_ref().map(|handoff| {
-            super::snapshot::RuntimeClientWorkspaceHandoff {
-                logical_workspace: handoff.logical_workspace.clone(),
-                physical_worktree_root: handoff.physical_worktree_root.clone(),
-                branch: handoff.branch.clone(),
-                base_commit: handoff.base_commit.clone(),
-                head_commit: handoff.head_commit.clone(),
-                dirty: handoff.dirty,
-            }
-        }),
+        workspace: snapshot.workspace.clone(),
     }
 }
 
@@ -6665,11 +6588,7 @@ mod tests {
     fn agent_activation_snapshot(
         observation: crate::runtime::subagent::SubagentObservation,
     ) -> crate::runtime::subagent::SubagentSnapshot {
-        use crate::runtime::subagent::{
-            SubagentExecutionProfile, SubagentSnapshot, SubagentState,
-            SubagentWorkspaceResourceState,
-        };
-        use crate::runtime::workspace::WorkspaceSnapshot;
+        use crate::runtime::subagent::{SubagentExecutionProfile, SubagentSnapshot, SubagentState};
         SubagentSnapshot {
             ownership: crate::events::types::SubagentOwnershipKind::Normal,
             parent_agent_id: AgentId::new("agent-parent"),
@@ -6684,9 +6603,7 @@ mod tests {
             agent: "explore".to_owned(),
             definition_digest: "sha256:d1".to_owned(),
             profile_digest: "sha256:p1".to_owned(),
-            workspace: WorkspaceSnapshot::shared(std::path::PathBuf::from("<shared-workspace>")),
-            handoff: None,
-            workspace_resource_state: SubagentWorkspaceResourceState::None,
+            workspace: std::path::PathBuf::from("/shared-workspace"),
             state: SubagentState::Running,
             cancel_reason: None,
             detail: None,

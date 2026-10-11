@@ -53,9 +53,6 @@ pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistrati
 pub struct EditTool;
 
 impl ToolExecutor for EditTool {
-    fn workspace_use(&self) -> crate::tools::executor::WorkspaceUse {
-        crate::tools::executor::WorkspaceUse::ConsumesProvided
-    }
     fn start<'a>(
         &'a self,
         invocation: ToolInvocation,

@@ -20,9 +20,8 @@ use rustx::runtime::interaction::{
 use rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION;
 use rustx::runtime_client::RuntimeClientHost;
 use rustx::runtime_client::{
-    RuntimeClientAgentWorkspace, RuntimeClientCursor, RuntimeClientError, RuntimeClientEvent,
-    RuntimeClientProtocolEvent, RuntimeClientRequest, RuntimeClientResponse, RuntimeClientResult,
-    RuntimeClientWorkspaceHandoff, RuntimeClientWorkspaceIsolation,
+    RuntimeClientCursor, RuntimeClientError, RuntimeClientEvent, RuntimeClientProtocolEvent,
+    RuntimeClientRequest, RuntimeClientResponse, RuntimeClientResult,
 };
 
 fn request_id(value: u64) -> rustx::runtime_client::RequestId {
@@ -430,7 +429,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
             requested: 24,
         })
     ));
-    // v39's GoalView still has `armed`, so it could represent an Active Goal
+    // v40's GoalView still has `armed`, so it could represent an Active Goal
     // that is not actually authorized to continue. Issue #351 removed that
     // member; the prior version is refused, not shimmed.
     assert!(matches!(
@@ -684,83 +683,6 @@ async fn attachment_raii_drop_detaches() {
     let (_, _) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach after drop");
-}
-
-/// The subagent workspace projection serializes exactly as the shared
-/// `tests/fixtures/runtime-client/*.json` fixtures the TUI protocol mirror
-/// is validated against. This is the cross-language regression for the
-/// Issue #187 wire shape, carried into v15 with the authoritative retained
-/// handoff identity fields and unchanged into v16: if either side drifts
-/// back to the pre-#187 flat `workspace`/`isolated` schema, or Issue #190
-/// silently drops a workspace field, or the Issue #202 renumbering drops
-/// one, one of the two fixture assertions fails.
-#[test]
-fn v15_workspace_wire_shape_matches_the_shared_fixtures() {
-    let shared = RuntimeClientAgentWorkspace {
-        borrowed_from: None,
-        logical_workspace: std::path::PathBuf::from("/repo"),
-        isolation: RuntimeClientWorkspaceIsolation::Shared,
-        resource_state: rustx::runtime::subagent::SubagentWorkspaceResourceState::None,
-        handoff: None,
-    };
-    let isolated_subdirectory = RuntimeClientAgentWorkspace {
-        borrowed_from: None,
-        logical_workspace: std::path::PathBuf::from("/runtime-root/worktrees/subagent-1/backend"),
-        isolation: RuntimeClientWorkspaceIsolation::GitWorktree {
-            source_repository_root: std::path::PathBuf::from("/repo"),
-            repository_relative_workspace: std::path::PathBuf::from("backend"),
-            physical_worktree_root: std::path::PathBuf::from("/runtime-root/worktrees/subagent-1"),
-            base_commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
-            branch: "rustx/subagent-1".to_owned(),
-            parent_had_uncommitted_changes: true,
-        },
-        resource_state: rustx::runtime::subagent::SubagentWorkspaceResourceState::Retained,
-        handoff: Some(RuntimeClientWorkspaceHandoff {
-            logical_workspace: std::path::PathBuf::from(
-                "/runtime-root/worktrees/subagent-1/backend",
-            ),
-            physical_worktree_root: std::path::PathBuf::from("/runtime-root/worktrees/subagent-1"),
-            branch: "rustx/subagent-1".to_owned(),
-            base_commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
-            head_commit: "89abcdef012345670123456789abcdef01234567".to_owned(),
-            dirty: false,
-        }),
-    };
-    let preserved_unresolved = RuntimeClientAgentWorkspace {
-        borrowed_from: None,
-        logical_workspace: isolated_subdirectory.logical_workspace.clone(),
-        isolation: isolated_subdirectory.isolation.clone(),
-        resource_state:
-            rustx::runtime::subagent::SubagentWorkspaceResourceState::PreservedUnresolved,
-        handoff: None,
-    };
-
-    for (fixture, workspace) in [
-        (
-            "tests/fixtures/runtime-client/workspace-shared-v15.json",
-            &shared,
-        ),
-        (
-            "tests/fixtures/runtime-client/workspace-git-worktree-v15.json",
-            &isolated_subdirectory,
-        ),
-        (
-            "tests/fixtures/runtime-client/workspace-git-worktree-preserved-unresolved-v15.json",
-            &preserved_unresolved,
-        ),
-    ] {
-        let expected = std::fs::read_to_string(fixture).expect("read fixture");
-        let serialized = serde_json::to_string_pretty(workspace).expect("serialize workspace");
-        assert_eq!(
-            serialized,
-            expected.trim_end(),
-            "{fixture}: the serialized v15 workspace shape drifted from the \
-             fixture the TUI mirror is validated against"
-        );
-        let decoded: RuntimeClientAgentWorkspace =
-            serde_json::from_str(&expected).expect("deserialize fixture");
-        assert_eq!(&decoded, workspace, "{fixture}: fixture round-trip");
-    }
 }
 
 #[test]

@@ -66,18 +66,17 @@ continue to derive from the authoritative Rust authoring types.
 ## Templates and execution invariants
 
 Start with [the three small templates](../examples/local-runtime/workflow-templates/README.md).
-All support non-Git operation. Candidate isolation is explicit, not a universal
-prerequisite. Keep the full implementation/review/repair reference stack and its
+All support non-Git operation: every Workflow runs in the shared Session
+workspace. Keep the full implementation/review/repair reference stack and its
 native conformance scenarios as execution evidence.
 
 Workflow remains a concrete foreground-only Tool with Sequential outer siblings,
 no automatic replay, native progression/value/budget/settlement ownership, frozen
-admission, typed terminal output, candidate identity and bounded loops. Question,
+admission, typed terminal output and bounded loops. Question,
 approval and Review remain distinct. Cancellation, terminal uniqueness and
 terminal-last ordering are unchanged. Inspection creates no model/provider
 request, process/helper, Python environment, package synchronization, network/MCP
-connection, Session, WorkflowRun, interaction waiter/request, worktree/candidate,
-runtime-state write, catalog/exposure mutation or resource publication.
+connection, Session, WorkflowRun, interaction waiter/request, runtime-state write, catalog/exposure mutation or resource publication.
 
 ## Deterministic regression map
 
@@ -102,18 +101,16 @@ The existing `cfg235_checked_in_schemas_match_authoritative_generation` drift
 test, duplicate-YAML-key compiler tests, CFG-04 redaction/causal-output-bound tests,
 and complete native Workflow suites remain authoritative. In particular,
 `tests/conformance/workflow.rs` retains the shipped repair, exhaustion, frozen
-verification, candidate tampering, root human interaction, resource freeze and
+verification, checker tampering, root human interaction, resource freeze and
 non-Git parallel scenarios. TUI opaque forwarding remains covered by
 `tui/test/configuration-command.test.ts`.
 
-Offline tests measure thirteen effect-owner entries: process supervision, MCP
+Offline tests measure the effect-owner entries: process supervision, MCP
 connection, provider construction, Session/state, trust, Python preparation,
-credentials, WorkflowRun, interaction publication/waiter creation, workspace
-acquisition, resource generation construction, and Tool registration/domain
-admission mutation. Measurement wraps the synchronous inspection entry point;
+credentials, WorkflowRun, interaction publication/waiter creation, resource
+generation construction, and Tool registration/domain admission mutation. Measurement wraps the synchronous inspection entry point;
 no sleep or live provider serves as correctness evidence.
 
-Invocation overrides never change `borrowed_from`, Workflow run identity, or
-physical disposal authority. Borrowing Agent children own their Conversations,
-while a shared Workflow-owned worktree contributes exactly one Session deletion
-blocker. See [capability identity and Session ownership](subagent-resources.md#capability-identity-and-session-ownership).
+Invocation overrides never change Workflow run identity. Workflow Agent children
+own their Conversations and run in the shared Session workspace; a Workflow owns
+no workspace resource and contributes no Session deletion blocker. See [capability identity and Session ownership](subagent-resources.md#capability-identity-and-session-ownership).

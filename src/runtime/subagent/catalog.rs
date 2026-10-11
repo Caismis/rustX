@@ -184,7 +184,9 @@ pub struct NamedAgentDefinitionDigest(String);
 /// It is part of the hashed preimage: a later milestone that admits a new
 /// behavior-affecting field bumps this constant, so two framings can never
 /// collide into the same digest.
-pub const SUBAGENT_DEFINITION_DIGEST_VERSION: &str = "rustx-agent-definition-v5";
+///
+/// v6 (#462) removed the retired workspace policy from the preimage.
+pub const SUBAGENT_DEFINITION_DIGEST_VERSION: &str = "rustx-agent-definition-v6";
 
 impl NamedAgentDefinitionDigest {
     /// The stable textual form `sha256:<64 lowercase hex characters>`.
@@ -335,7 +337,6 @@ impl NamedAgentDefinition {
             tools,
             skills,
             project_instructions,
-            workspace_policy,
             extensions,
             agents,
             workflows,
@@ -379,7 +380,6 @@ impl NamedAgentDefinition {
             &tools,
             &skills,
             &project_instructions,
-            workspace_policy,
             &extensions,
             &agents,
             &workflows,
@@ -399,7 +399,6 @@ impl NamedAgentDefinition {
                 agents,
                 workflows,
                 project_instructions,
-                workspace_policy,
             },
         })
     }
@@ -466,12 +465,6 @@ impl NamedAgentDefinition {
         &self.profile.project_instructions
     }
 
-    /// The resolved project-workspace policy of this definition.
-    #[must_use]
-    pub const fn workspace_policy(&self) -> crate::runtime::workspace::WorkspacePolicy {
-        self.profile.workspace_policy
-    }
-
     /// The frozen native Agent Extension composition this role authored.
     ///
     /// Independently authored per role: the invoking root Agent's own
@@ -487,16 +480,6 @@ impl NamedAgentDefinition {
         &self.digest
     }
 }
-
-/// Nested Agent ownership is not part of the child runtime composition.
-/// Child file deliveries use their own conversation and workspace authority.
-/// Finite Job controls remain available to a child's own background registry.
-pub const CHILD_UNSAFE_BUILTIN_TOOLS: [&str; 4] = [
-    "list_agents",
-    "send_message",
-    "wait_agent",
-    "interrupt_agent",
-];
 
 /// A definition-level validation failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -745,7 +728,6 @@ fn compute_digest(
     tools: &[AgentToolSelection],
     skills: &crate::runtime::agent_profile::AgentSkillSelection,
     project_instructions: &crate::runtime::agent_profile::AgentProjectInstructionPolicy,
-    workspace_policy: crate::runtime::workspace::WorkspacePolicy,
     extensions: &crate::extensions::NativeAgentExtensions,
     agents: &BTreeSet<SubagentName>,
     workflows: &BTreeSet<crate::runtime::workflow::WorkflowId>,
@@ -825,13 +807,6 @@ fn compute_digest(
         );
         field(&mut hasher, "project_instruction_content", &file.content);
     }
-    let workspace = match workspace_policy {
-        crate::runtime::workspace::WorkspacePolicy::SharedWorkspace => "shared".to_owned(),
-        crate::runtime::workspace::WorkspacePolicy::GitWorktree {
-            require_clean_parent,
-        } => format!("git_worktree:require_clean_parent={require_clean_parent}"),
-    };
-    field(&mut hasher, "workspace_policy", &workspace);
     // The role's native Agent Extension composition is part of its semantic
     // identity: two roles that differ only in Agent Status settings are
     // different definitions and must resolve to different frozen children.
@@ -864,7 +839,6 @@ mod tests {
     };
     use crate::capabilities::selection::AgentToolSelection;
     use crate::runtime::resources::ProjectContextFile;
-    use crate::runtime::workspace::WorkspacePolicy;
 
     fn policy() -> crate::runtime::agent_profile::AgentProjectInstructionPolicy {
         crate::runtime::agent_profile::AgentProjectInstructionPolicy {
@@ -888,7 +862,6 @@ mod tests {
                 tools,
                 skills: crate::runtime::agent_profile::AgentSkillSelection::Exact(skills),
                 project_instructions: policy(),
-                workspace_policy: WorkspacePolicy::SharedWorkspace,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
                 agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
@@ -913,7 +886,6 @@ mod tests {
                 tools: Vec::new(),
                 skills,
                 project_instructions: policy(),
-                workspace_policy: WorkspacePolicy::SharedWorkspace,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
                 agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
@@ -1109,7 +1081,6 @@ mod tests {
                         inherit: false,
                         files: Vec::new(),
                     },
-                workspace_policy: WorkspacePolicy::SharedWorkspace,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
                 agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
@@ -1134,7 +1105,6 @@ mod tests {
                             content: "explicit".to_owned(),
                         }],
                     },
-                workspace_policy: WorkspacePolicy::SharedWorkspace,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
                 agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
@@ -1159,7 +1129,6 @@ mod tests {
                             content: "explicit, revised".to_owned(),
                         }],
                     },
-                workspace_policy: WorkspacePolicy::SharedWorkspace,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
                 agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
@@ -1177,7 +1146,6 @@ mod tests {
                 tools: Vec::new(),
                 skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                 project_instructions: policy(),
-                workspace_policy: WorkspacePolicy::SharedWorkspace,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
                 agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
@@ -1185,22 +1153,16 @@ mod tests {
             std::path::PathBuf::from("/w/.agents/agents/explore.toml"),
         )
         .expect("definition");
-        let isolated = NamedAgentDefinition::new(SubagentName::parse("explore").expect("name"), crate::runtime::agent_profile::AgentProfile { description: "a description".to_owned(), instructions: "instructions".to_owned(), model: None, execution_deadline: None, tools: Vec::new(), skills: crate::runtime::agent_profile::AgentSkillSelection::default(), project_instructions: policy(), workspace_policy: // The default isolated definition (Issue #188) is strict.
-            WorkspacePolicy::GitWorktree {
-                require_clean_parent: true,
-            }, extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(), agents: std::collections::BTreeSet::default(), workflows: std::collections::BTreeSet::default() }, std::path::PathBuf::from("/w/.agents/agents/explore.toml"))
-        .expect("definition");
         let mut digests = vec![
             inherit.digest().clone(),
             explicit_only.digest().clone(),
             with_file.digest().clone(),
             changed_content.digest().clone(),
             changed_instructions.digest().clone(),
-            isolated.digest().clone(),
         ];
         digests.sort();
         digests.dedup();
-        assert_eq!(digests.len(), 6);
+        assert_eq!(digests.len(), 5);
     }
 
     #[test]
@@ -1215,7 +1177,6 @@ mod tests {
                 tools: Vec::new(),
                 skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                 project_instructions: policy(),
-                workspace_policy: WorkspacePolicy::SharedWorkspace,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
                 agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
@@ -1233,7 +1194,6 @@ mod tests {
                 tools: Vec::new(),
                 skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                 project_instructions: policy(),
-                workspace_policy: WorkspacePolicy::SharedWorkspace,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
                 agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
@@ -1279,7 +1239,6 @@ mod tests {
                 tools: Vec::new(),
                 skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                 project_instructions: policy(),
-                workspace_policy: WorkspacePolicy::SharedWorkspace,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
                 agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),

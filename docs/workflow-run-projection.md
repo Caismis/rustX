@@ -27,11 +27,10 @@ queue is the only response surface. Child inspection remains read-only.
 Execution completed is not a business acceptance. Structured check `passed`
 facts, Review decisions and Loop satisfied/exhausted exits are shown separately.
 Full Workflow-local values and arguments are not copied into the read model.
-The canonical outer ToolResult remains the declared business result.
-Candidate references contain native content identity and version, not just HEAD.
-During admitted candidate use, old checks/Review do not certify mutable contents.
-After native settlement, references for different candidates remain historical.
-The retained handoff is a bounded path/disposition reference, not workspace data.
+The canonical outer ToolResult is exactly the declared business result. Runs
+carry no Candidate or handoff fields: Workflow Agents and Tools act in the
+shared Session workspace, and a check or Review row reports an observation, not
+certification of current files.
 
 ## Synchronization
 
@@ -73,7 +72,6 @@ replacement converge without a client-side Workflow interpreter.
 | Serialized run record | 256 KiB |
 | Native coherent cuts | 128 and 8 MiB, whichever is reached first |
 | Runtime Client replay | configured event count (default 4096); Workflow payloads additionally capped at 16 MiB |
-| Handoff path | 1024 bytes with explicit truncation flag |
 | Program block nesting | existing maximum 8 |
 
 Finished rows retire first, then pending rows, then other rows if necessary to
@@ -99,7 +97,7 @@ settlement; it does not reconstruct it from journal events or catalog names.
 The full native run view wins when available. Otherwise the card identifies a
 Workflow invocation and explicitly displays “Historical Workflow details
 unavailable (retired or process reopened)”. This says nothing about execution
-success, business acceptance, current candidate applicability or control rights.
+success, business acceptance or control rights.
 
 There is no tombstone registry. The additional identity is at most 192 serialized
 bytes (64-byte configured ID and 64-character digest), exactly one per existing
@@ -132,7 +130,7 @@ then awaits the same execution future. Node and iteration frontiers still use
 the original cancellation/budget admission checks. Local native owners drain;
 terminal cancellation is published only after actual Workflow settlement.
 Repeated cancellation intent does not publish another draining transition.
-Cancellation does not roll back candidate contents or remove useful handoff.
+Cancellation does not roll back completed workspace effects.
 
 Live detach/reconnect/resync reads the same process-owned records and pending
 coordinator references. It admits no work or human requests. Fresh process
@@ -157,8 +155,8 @@ checks exact starts, exhaustion, truncation and canonical isolation.
 
 The existing Parallel child tests now assert simultaneous concrete child rows
 and observe draining before releasing staged child cancellation settlement.
-The nested Loop and candidate acceptance tests inspect native concrete
-iterations and historical accepted candidate references. Separate identity
+The nested Loop and Review tests inspect native concrete iterations and the
+recorded Review decision. Separate identity
 tests reject old runs, blocks, iterations and visits; a coordinator projection
 test rejects a queued old Review against a settled native row.
 

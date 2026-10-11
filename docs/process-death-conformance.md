@@ -15,9 +15,10 @@ never a fabricated runtime outcome.
 Session deletion cascades along durable ownership, never provenance. `/tree`
 nodes belong to the same Session; `/fork` and `/clone` materialize independent
 Sessions. Catalog membership and native typed child ownership commits establish
-the finite target. Retained worktrees and branches are blockers requiring
-explicit disposal, not implicit cleanup targets. Shared environments, capability
-resources, caches, config, credentials and project files remain outside it.
+the finite target. Agents and Workflows share the Session workspace and own no
+workspace resource, so deletion never removes project files. Shared
+environments, capability resources, caches, config, credentials and project
+files remain outside it.
 
 Canonical `ProductRoot` identity, `ProductController` admission and target
 Conversation lifecycle access are separate. Preflight freezes ownership

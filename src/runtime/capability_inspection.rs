@@ -38,6 +38,10 @@ pub struct AgentInspection {
     pub identity: AgentIdentity,
     pub source: Option<std::path::PathBuf>,
     pub tools: Vec<ToolInspection>,
+    /// The runtime-composed Agent control group. It is derived from the
+    /// admitted `agents` alone, never from `tool_selection`, and is either
+    /// empty or all five controls.
+    pub agent_controls: Vec<ToolInspection>,
     pub tool_selection: Vec<crate::capabilities::selection::AgentToolSelection>,
     pub skills: Vec<SkillProvenance>,
     pub agents: Vec<SubagentName>,
@@ -141,6 +145,18 @@ impl AgentInspection {
                 .filter(|entry| profile.skills.contains(&entry.name))
                 .cloned()
                 .collect(),
+            agent_controls: if profile.agents.is_empty() {
+                Vec::new()
+            } else {
+                crate::tools::native::AGENT_CONTROL_TOOL_NAMES
+                    .iter()
+                    .map(|name| ToolInspection {
+                        id: crate::tools::native::agent_control_tool_id(name),
+                        name: (*name).to_owned(),
+                        origin: ToolOrigin::Builtin,
+                    })
+                    .collect()
+            },
             agents: profile.agents.iter().cloned().collect(),
             workflows: profile.workflows.iter().cloned().collect(),
             extensions: vec![

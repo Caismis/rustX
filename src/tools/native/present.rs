@@ -1,9 +1,7 @@
 //! Declare existing files through ordinary foreground Tool settlement.
 use super::registration::{NativeToolRegistration, native_definition};
 use super::support::{cancelled_result, failed_result, success_text};
-use crate::tools::executor::{
-    ToolExecutionContext, ToolExecutionHandle, ToolExecutor, WorkspaceUse,
-};
+use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::types::{
     ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolInvocation,
     ToolInvocationPolicy,
@@ -56,9 +54,6 @@ struct DeclarationGate {
     release: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
 }
 impl ToolExecutor for Present {
-    fn workspace_use(&self) -> WorkspaceUse {
-        WorkspaceUse::ConsumesProvided
-    }
     fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
         crate::tools::deadline::ToolProgressCapability::None
     }

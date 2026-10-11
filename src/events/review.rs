@@ -1,6 +1,9 @@
 //! Bounded business review facts. Decisions cannot replace a frozen subject.
+//!
+//! The digest binds the complete presented structured subject and its
+//! context values, never mutable files: a Review decision certifies nothing
+//! about the current workspace.
 use crate::runtime::workflow::WorkflowNodeInstance;
-use crate::runtime::workspace::CandidateReference;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -12,24 +15,7 @@ pub const MAX_REVIEW_FEEDBACK_CHARS: usize = 2_000;
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub enum ReviewSubject {
-    Plan {
-        content: Value,
-        candidate: Option<CandidateReference>,
-    },
-    /// The native owner keeps this checkout exclusively borrowed while pending.
-    /// This is an inspection reference, not an inlined or truncated diff.
-    Candidate {
-        reference: CandidateReference,
-        inspection_path: String,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub struct ReviewFact {
-    pub value: Value,
-    pub candidate: Option<CandidateReference>,
+    Plan { content: Value },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,7 +24,8 @@ pub struct ReviewFact {
 pub struct ReviewSpecification {
     pub instance: Box<WorkflowNodeInstance>,
     pub subject: ReviewSubject,
-    pub context: Vec<ReviewFact>,
+    /// Bounded committed Workflow values presented beside the subject.
+    pub context: Vec<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,7 +56,7 @@ impl ReviewSpecification {
         )
     }
     /// # Errors
-    /// Refuses oversized facts and malformed candidate identity.
+    /// Refuses oversized facts.
     pub fn validate(&self) -> Result<(), String> {
         if serde_json::to_vec(&self.instance)
             .map_err(|e| e.to_string())?
@@ -78,35 +65,17 @@ impl ReviewSpecification {
         {
             return Err("Review instance exceeds 8192 bytes".into());
         }
-        match &self.subject {
-            ReviewSubject::Plan { content, .. } => {
-                if !content.is_object()
-                    || serde_json::to_vec(content)
-                        .map_err(|e| e.to_string())?
-                        .len()
-                        > MAX_REVIEW_PLAN_BYTES
-                {
-                    return Err(
-                        "Review plan must be a complete structured object of at most 32768 bytes"
-                            .into(),
-                    );
-                }
-            }
-            ReviewSubject::Candidate {
-                reference,
-                inspection_path,
-            } => {
-                if reference.run != self.instance.block.run
-                    || reference.content.len() != 64
-                    || !reference.content.bytes().all(|b| b.is_ascii_hexdigit())
-                    || inspection_path.is_empty()
-                    || inspection_path.len() > 4096
-                {
-                    return Err("invalid candidate Review reference".into());
-                }
-            }
+        let ReviewSubject::Plan { content } = &self.subject;
+        if !content.is_object()
+            || serde_json::to_vec(content)
+                .map_err(|e| e.to_string())?
+                .len()
+                > MAX_REVIEW_PLAN_BYTES
+        {
+            return Err(
+                "Review plan must be a complete structured object of at most 32768 bytes".into(),
+            );
         }
-        self.candidate()?;
         if self.context.len() > 8
             || serde_json::to_vec(&self.context)
                 .map_err(|e| e.to_string())?
@@ -116,33 +85,6 @@ impl ReviewSpecification {
             return Err("Review context exceeds eight entries or 8192 bytes".into());
         }
         Ok(())
-    }
-    /// Collect the single exact candidate dependency of the complete subject.
-    /// # Errors
-    /// Conflicting versions and foreign/malformed identities fail before publication.
-    pub fn candidate(&self) -> Result<Option<&CandidateReference>, String> {
-        let mut candidate = match &self.subject {
-            ReviewSubject::Candidate { reference, .. } => Some(reference),
-            ReviewSubject::Plan { candidate, .. } => candidate.as_ref(),
-        };
-        for reference in self
-            .context
-            .iter()
-            .filter_map(|fact| fact.candidate.as_ref())
-        {
-            if candidate.is_some_and(|current| current != reference) {
-                return Err("Review facts name incompatible candidates".into());
-            }
-            candidate = Some(reference);
-        }
-        if let Some(reference) = candidate
-            && (reference.run != self.instance.block.run
-                || reference.content.len() != 64
-                || !reference.content.bytes().all(|b| b.is_ascii_hexdigit()))
-        {
-            return Err("invalid Review fact candidate identity".into());
-        }
-        Ok(candidate)
     }
 
     /// # Errors
@@ -167,7 +109,6 @@ mod tests {
         ReviewSpecification {
             instance: Box::new(crate::runtime::workflow::test_instance("review", "human")),
             subject: ReviewSubject::Plan {
-                candidate: None,
                 content: serde_json::json!({"steps":["inspect"]}),
             },
             context: vec![],
@@ -192,55 +133,63 @@ mod tests {
         assert!(spec.validate_response(&response).is_err());
         let mut oversized = spec.clone();
         oversized.subject = ReviewSubject::Plan {
-            candidate: None,
             content: serde_json::json!({"plan":"x".repeat(MAX_REVIEW_PLAN_BYTES)}),
         };
         assert!(oversized.validate().is_err());
         oversized = spec.clone();
-        oversized.context = vec![
-            ReviewFact {
-                value: Value::Null,
-                candidate: None
-            };
-            9
-        ];
+        oversized.context = vec![Value::Null; 9];
         assert!(oversized.validate().is_err());
-        oversized.context = vec![ReviewFact {
-            value: Value::String("x".repeat(MAX_REVIEW_CONTEXT_BYTES)),
-            candidate: None,
-        }];
+        oversized.context = vec![Value::String("x".repeat(MAX_REVIEW_CONTEXT_BYTES))];
         assert!(oversized.validate().is_err());
         let mut changed = spec.clone();
         changed.subject = ReviewSubject::Plan {
-            candidate: None,
             content: serde_json::json!({"steps":["replace"]}),
         };
         assert_ne!(spec.digest(), changed.digest());
     }
+
+    /// Issue #462 C14: a wrong instance (node visit) or a stale subject digest
+    /// is refused; changed context changes the digest exactly like the plan.
     #[test]
-    fn same_check_json_different_candidate_changes_digest_and_mismatch_fails() {
-        let mut a = specification();
-        let reference = CandidateReference {
-            run: a.instance.block.run.clone(),
-            version: 1,
-            content: "a".repeat(64),
+    fn review_response_is_bound_to_exact_visit_and_presented_subject() {
+        let spec = specification();
+        let mut other_visit = spec.instance.clone();
+        other_visit.visit += 1;
+        for response in [
+            ReviewResponse {
+                instance: other_visit,
+                subject_digest: spec.digest(),
+                decision: ReviewDecision::Accepted,
+            },
+            ReviewResponse {
+                instance: spec.instance.clone(),
+                subject_digest: "0".repeat(64),
+                decision: ReviewDecision::Accepted,
+            },
+        ] {
+            assert!(spec.validate_response(&response).is_err());
+        }
+        let mut with_context = spec.clone();
+        with_context.context = vec![serde_json::json!({"passed": true})];
+        with_context.validate().unwrap();
+        assert_ne!(spec.digest(), with_context.digest());
+        let stale = ReviewResponse {
+            instance: spec.instance.clone(),
+            subject_digest: spec.digest(),
+            decision: ReviewDecision::Accepted,
         };
-        a.context.push(ReviewFact {
-            value: serde_json::json!({"passed":true}),
-            candidate: Some(reference.clone()),
-        });
-        a.validate().unwrap();
-        let mut b = a.clone();
-        b.context[0].candidate.as_mut().unwrap().content = "b".repeat(64);
-        b.validate().unwrap();
-        assert_eq!(a.context[0].value, b.context[0].value);
-        assert_ne!(a.digest(), b.digest());
-        a.context.push(b.context[0].clone());
-        assert!(a.validate().is_err());
-        b.subject = ReviewSubject::Candidate {
-            reference,
-            inspection_path: "/trusted/native/candidate".into(),
-        };
-        assert!(b.validate().is_err());
+        assert!(with_context.validate_response(&stale).is_err());
+    }
+
+    /// Issue #462 C02: the retired Candidate subject and Candidate-bearing
+    /// facts are not part of the vocabulary.
+    #[test]
+    fn retired_candidate_review_vocabulary_is_refused() {
+        for subject in [
+            serde_json::json!({"type":"candidate","reference":{},"inspection_path":"/x"}),
+            serde_json::json!({"type":"plan","content":{},"candidate":null}),
+        ] {
+            assert!(serde_json::from_value::<ReviewSubject>(subject).is_err());
+        }
     }
 }

@@ -266,7 +266,10 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// request-only context seat with a measured-or-compacted `occupancy` reading.
 /// Version 66 adds exact Tool-occurrence navigation in child Trace domains, and
 /// general Model Profiles in model selection, invocation and catalog views.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 66;
+/// Version 67 retains native child input/inspection/provenance and composes
+/// Root-only Agent controls over a frozen shared Session workspace, with no
+/// Candidate, worktree disposal or resource lifecycle vocabulary.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 67;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -567,15 +570,6 @@ pub enum RuntimeClientRequest {
         offset: Option<usize>,
         limit: usize,
     },
-    /// Dispose the exact retained workspace owned by one terminal subagent.
-    /// The request names only the authoritative subagent identity; it never
-    /// carries a filesystem path or Git ref.
-    SubagentWorkspaceDispose {
-        /// Attachment-scoped request id.
-        id: RequestId,
-        /// The terminal subagent whose retained resource is being disposed.
-        subagent_id: crate::runtime::identity::SubagentId,
-    },
     /// Release the attachment.
     Detach {
         /// Attachment-scoped request id.
@@ -626,7 +620,6 @@ impl RuntimeClientRequest {
             | Self::AgentTraceLocateTool { id, .. }
             | Self::AgentTranscript { id, .. }
             | Self::AgentTurns { id, .. }
-            | Self::SubagentWorkspaceDispose { id, .. }
             | Self::Detach { id, .. }
             | Self::Shutdown { id, .. } => *id,
         }
@@ -665,7 +658,6 @@ impl RuntimeClientRequest {
             Self::AgentTraceLocateTool { .. } => "agent_trace_locate_tool",
             Self::AgentTranscript { .. } => "agent_transcript",
             Self::AgentTurns { .. } => "agent_turns",
-            Self::SubagentWorkspaceDispose { .. } => "subagent_workspace_dispose",
             Self::Detach { .. } => "detach",
             Self::Shutdown { .. } => "shutdown",
         }
@@ -688,7 +680,6 @@ impl RuntimeClientRequest {
                 | Self::AgentSendMessage { .. }
                 | Self::AgentWait { .. }
                 | Self::AgentInterrupt { .. }
-                | Self::SubagentWorkspaceDispose { .. }
                 | Self::Shutdown { .. }
         )
     }
@@ -711,7 +702,6 @@ impl RuntimeClientRequest {
                 | Self::JobCancel { .. }
                 | Self::AgentSendMessage { .. }
                 | Self::AgentInterrupt { .. }
-                | Self::SubagentWorkspaceDispose { .. }
                 | Self::Shutdown { .. }
         )
     }
@@ -733,24 +723,6 @@ pub struct RuntimeClientResponse {
     /// The typed protocol error, when the request failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<RuntimeClientError>,
-}
-
-/// The public result of disposing a retained subagent workspace.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[derive(schemars::JsonSchema)]
-pub enum RuntimeClientAgentWorkspaceDisposalOutcome {
-    /// The retained physical worktree and its exact runtime branch were
-    /// removed by this request.
-    Disposed,
-    /// The same child resource was disposed by an earlier request. No
-    /// physical deletion is attempted for this result.
-    AlreadyDisposed,
-    /// The exact worktree was removed, but branch compare-delete settlement
-    /// remains pending and the identity-based request may be retried.
-    DisposalPending,
-    /// The child has no retained isolated resource to dispose.
-    NoRetainedWorkspace,
 }
 
 /// The typed success payloads of the Runtime Client protocol.
@@ -893,15 +865,6 @@ pub enum RuntimeClientResult {
         outcome: Option<crate::runtime::subagent::SubagentState>,
         agent: RuntimeClientAgent,
     },
-    /// `subagent_workspace_dispose` completed its resource transition or its
-    /// deterministic idempotent/no-resource outcome.
-    SubagentWorkspaceDisposed {
-        /// Finite activation identity and its authoritative resource projection.
-        subagent_id: crate::runtime::identity::SubagentId,
-        workspace: super::snapshot::RuntimeClientAgentWorkspace,
-        /// The physical-resource result, independent of logical lifecycle.
-        outcome: RuntimeClientAgentWorkspaceDisposalOutcome,
-    },
     /// `detach` succeeded.
     Detached,
     /// `shutdown` succeeded: the conversation runtime reached quiescence.
@@ -1006,15 +969,6 @@ pub enum RuntimeClientError {
         /// The referenced subagent identity.
         subagent_id: crate::runtime::identity::SubagentId,
     },
-    /// The Runtime Client requested disposal, but the recorded handoff and
-    /// current Git registration did not prove one exact runtime-owned
-    /// resource. The operation failed closed before destructive mutation.
-    SubagentWorkspaceOwnershipMismatch {
-        /// The retained child whose resource could not be proven.
-        subagent_id: crate::runtime::identity::SubagentId,
-        /// The bounded proof diagnostic.
-        message: String,
-    },
     /// The requested cursor is not serviceable by the bounded projection
     /// replay buffer; the client must take a fresh snapshot from the runtime
     /// projection. The durable Event Journal is not represented by this
@@ -1069,10 +1023,7 @@ pub struct RuntimeClientProtocolEvent {
 }
 
 // Re-exported for use by the public protocol docs.
-pub use super::snapshot::{
-    RuntimeClientAgent, RuntimeClientAgentWorkspace, RuntimeClientJob,
-    RuntimeClientWorkspaceHandoff, RuntimeClientWorkspaceIsolation,
-};
+pub use super::snapshot::{RuntimeClientAgent, RuntimeClientJob};
 
 #[cfg(test)]
 mod tests {
@@ -1143,7 +1094,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 66);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 67);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {
@@ -1179,13 +1130,7 @@ mod tests {
             started_at: DateTime::parse_from_rfc3339("2026-09-02T10:00:00Z")
                 .expect("timestamp")
                 .with_timezone(&Utc),
-            workspace: super::RuntimeClientAgentWorkspace {
-                borrowed_from: None,
-                logical_workspace: std::path::PathBuf::from("<shared-workspace>"),
-                isolation: super::RuntimeClientWorkspaceIsolation::Shared,
-                resource_state: crate::runtime::subagent::SubagentWorkspaceResourceState::None,
-                handoff: None,
-            },
+            workspace: std::path::PathBuf::from("/workspace/project"),
         };
 
         let value = serde_json::to_value(&subagent).expect("serialize subagent projection");

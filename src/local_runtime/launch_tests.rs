@@ -95,7 +95,7 @@ fn cfg279_structured_parameters_check_show_and_project_overlay_are_side_effect_f
             let ((report, launch), effects) = super::static_effects::measure(|| {
                 super::diagnostics::inspect(operation, &f.request, &f.host)
             });
-            assert_eq!(effects, [0; 12]);
+            assert_eq!(effects, [0; 11]);
             assert!(!report.render(true).contains("SECRET_PROVIDER_VALUE"));
             if let Some(path) = expected_path {
                 assert_eq!(report.validity, super::diagnostics::Validity::Invalid);
@@ -139,7 +139,7 @@ fn cfg237_check_explain_zero_effects_precise_errors_and_authority() {
     f.role(
         false,
         "reviewer",
-        json!({"description":"Review","tools":{"builtin":[]},"worktree":{"enabled":false}}),
+        json!({"description":"Review","tools":{"builtin":[]}}),
         "SECRET_ROLE_PROMPT",
     );
     let config = json!({"subagents": {}, "agent": {"workflows": []}});
@@ -184,7 +184,7 @@ fn cfg237_check_explain_zero_effects_precise_errors_and_authority() {
                     &f.host,
                 )
             });
-            assert_eq!(effects, [0; 12]);
+            assert_eq!(effects, [0; 11]);
             assert_eq!(report.validity, validity, "{:?}", report.diagnostics);
             assert_eq!(
                 report.exit_code(),
@@ -220,7 +220,7 @@ fn cfg237_check_explain_zero_effects_precise_errors_and_authority() {
         let (report, effects) = super::static_effects::measure(|| {
             super::workflow_inspection::inspect(&id, explain, &f.request, &f.host)
         });
-        assert_eq!(effects, [0; 12]);
+        assert_eq!(effects, [0; 11]);
         assert_eq!(report.validity, Validity::Invalid);
         assert!(report.workflow.is_none());
     }
@@ -272,7 +272,7 @@ fn cfg237_graph_paths_reach_diagnostics_with_zero_side_effects() {
                     &f.host,
                 )
             });
-            assert_eq!(effects, [0; 12]);
+            assert_eq!(effects, [0; 11]);
             assert_eq!(report.validity, super::diagnostics::Validity::Invalid);
             assert_eq!(report.exit_code(), 2);
             assert_eq!(report.diagnostics[0].path, expected);
@@ -317,7 +317,7 @@ block:
                 &f.host,
             )
         });
-        assert_eq!(effects, [0; 12]);
+        assert_eq!(effects, [0; 11]);
         assert_eq!(report.validity, super::diagnostics::Validity::Incomplete);
         let crate::runtime::capability_inspection::WorkflowInspection::Disabled(facts) =
             &report.workflow.as_ref().unwrap().admission
@@ -453,7 +453,7 @@ fn cfg3_offline_agent_shadowing_has_zero_external_effects() {
         let ((report, launch), effects) = super::static_effects::measure(|| {
             super::diagnostics::inspect(operation, &f.request, &f.host)
         });
-        assert_eq!(effects, [0; 12]);
+        assert_eq!(effects, [0; 11]);
         let roles = &report.launch.unwrap().roles;
         let role = roles.values().next().unwrap();
         assert_eq!(role.identity.as_str(), "reviewer");
@@ -469,7 +469,7 @@ fn cfg3_offline_agent_shadowing_has_zero_external_effects() {
     let ((report, _), effects) = super::static_effects::measure(|| {
         super::diagnostics::inspect("config_check", &f.request, &f.host)
     });
-    assert_eq!(effects, [0; 12]);
+    assert_eq!(effects, [0; 11]);
     assert_eq!(report.validity, super::diagnostics::Validity::Valid);
     assert!(
         report
@@ -501,7 +501,7 @@ fn cfg236_user_role_authority_resolves_alias_once_for_launch_and_diagnostics() {
         let ((report, prospective), effects) = super::static_effects::measure(|| {
             super::diagnostics::inspect(operation, &f.request, &f.host)
         });
-        assert_eq!(effects, [0; 12]);
+        assert_eq!(effects, [0; 11]);
         assert_eq!(prospective.unwrap().agent_root, launch.agent_root);
         assert_eq!(
             report
@@ -566,7 +566,7 @@ fn cfg3_offline_python_discovery_parses_inert_bytes_without_preparing_packages()
     let ((report, launch), effects) = super::static_effects::measure(|| {
         super::diagnostics::inspect("config_check", &f.request, &f.host)
     });
-    assert_eq!(effects, [0; 12]);
+    assert_eq!(effects, [0; 11]);
     crate::tools::python::PACKAGE_PARSE_COUNT.with(|count| assert_eq!(count.get(), 1));
     assert!(
         !report
@@ -605,7 +605,7 @@ fn cfg235_provider_readiness_is_unresolved_without_credential_lookup() {
                 let ((report, _), counts) = super::static_effects::measure(|| {
                     super::diagnostics::inspect(operation, &f.request, &f.host)
                 });
-                assert_eq!(counts, [0; 12]);
+                assert_eq!(counts, [0; 11]);
                 assert_eq!(report.validity, super::diagnostics::Validity::Valid);
                 assert_eq!(
                     report.readiness,
@@ -658,7 +658,7 @@ fn cfg235_static_check_show_have_zero_effects_and_redacted_outputs() {
             let ((report, _), counts) = super::static_effects::measure(|| {
                 super::diagnostics::inspect(operation, &f.request, &f.host)
             });
-            assert_eq!(counts, [0; 12]);
+            assert_eq!(counts, [0; 11]);
             if let Some(projection) = &report.capabilities {
                 for name in projection.sources.keys() {
                     let diagnostic = report
@@ -687,7 +687,7 @@ fn cfg235_static_check_show_have_zero_effects_and_redacted_outputs() {
     let ((report, launch), counts) = super::static_effects::measure(|| {
         super::diagnostics::inspect("config_show", &f.request, &f.host)
     });
-    assert_eq!(counts, [0; 12]);
+    assert_eq!(counts, [0; 11]);
     assert_eq!(report.exit_code(), 3);
     let admitted = launch.unwrap().admit(|| f.credentials.clone()).unwrap();
 
@@ -1120,7 +1120,7 @@ fn cfg235_incomplete_missing_explicit_workflow_and_credential_reference_states()
     let ((report, _), counts) = super::static_effects::measure(|| {
         super::diagnostics::inspect("config_check", &f.request, &f.host)
     });
-    assert_eq!(counts, [0; 12]);
+    assert_eq!(counts, [0; 11]);
     assert_eq!(
         report.exit_code(),
         3,
@@ -1148,7 +1148,7 @@ fn cfg235_incomplete_missing_explicit_workflow_and_credential_reference_states()
     let ((report, _), counts) = super::static_effects::measure(|| {
         super::diagnostics::inspect("config_check", &f.request, &f.host)
     });
-    assert_eq!(counts, [0; 12]);
+    assert_eq!(counts, [0; 11]);
     assert_eq!(report.exit_code(), 2);
     assert_eq!(report.diagnostics[0].file, Some(workflow));
     assert!(
@@ -1173,7 +1173,7 @@ fn cfg235_incomplete_missing_explicit_workflow_and_credential_reference_states()
     let ((report, _), counts) = super::static_effects::measure(|| {
         super::diagnostics::inspect("config_check", &f.request, &f.host)
     });
-    assert_eq!(counts, [0; 12]);
+    assert_eq!(counts, [0; 11]);
     assert_eq!(
         report.exit_code(),
         2,
@@ -2181,7 +2181,7 @@ async fn cfg3_mcp_absolute_working_directory_is_captured_without_connection() {
         json!({"external":{"command":"must-not-spawn", "cwd":outside}}),
     );
     let (launch, effects) = super::static_effects::measure(|| f.resolve());
-    assert_eq!(effects, [0; 12]);
+    assert_eq!(effects, [0; 11]);
     let bindings =
         super::composition::captured_mcp_bindings(&launch.config, &f.credentials).unwrap();
     let binding = bindings.values().next().unwrap();
@@ -2350,7 +2350,7 @@ fn cfg275_offline_generation_projects_native_facts_once_without_effects_or_secre
     let ((report, launch), effects) = super::static_effects::measure(|| {
         super::diagnostics::inspect("config_show", &f.request, &f.host)
     });
-    assert_eq!(effects, [0; 12]);
+    assert_eq!(effects, [0; 11]);
     let launch = launch.unwrap_or_else(|| panic!("{}", report.render(true)));
     let facts = &launch.inspection;
     let root = facts.main.as_ref().unwrap();
@@ -2393,7 +2393,7 @@ fn cfg275_offline_generation_projects_native_facts_once_without_effects_or_secre
         let ((again, candidate), effects) = super::static_effects::measure(|| {
             super::diagnostics::inspect("config_show", &f.request, &f.host)
         });
-        assert_eq!(effects, [0; 12]);
+        assert_eq!(effects, [0; 11]);
         assert_eq!(
             serde_json::to_value(candidate.unwrap().inspection).unwrap(),
             expected
@@ -2420,7 +2420,7 @@ fn cfg275_committed_end_to_end_example_uses_final_authoring_and_offline_admissio
     let ((report, launch), effects) = super::static_effects::measure(|| {
         super::diagnostics::inspect("config_show", &f.request, &f.host)
     });
-    assert_eq!(effects, [0; 12]);
+    assert_eq!(effects, [0; 11]);
     let launch = launch.unwrap_or_else(|| panic!("{}", report.render(true)));
     assert_eq!(
         launch.config.initial_model().model.to_string(),
@@ -2480,7 +2480,7 @@ mod session_resolution {
         let ((), effects) = crate::local_runtime::static_effects::measure(|| {
             assert!(manager.resolve_session(&b.input()).is_err());
         });
-        assert_eq!(effects, [0; 12]);
+        assert_eq!(effects, [0; 11]);
     }
     use super::*;
     use crate::model::{catalog::ModelRef, session::SessionModelConfig};
@@ -2571,7 +2571,7 @@ mod session_resolution {
         let (invalid, effects) =
             super::super::static_effects::measure(|| manager.resolve_session(&input));
         assert!(invalid.is_err());
-        assert_eq!(effects, [0; 12]);
+        assert_eq!(effects, [0; 11]);
     }
 
     #[test]
@@ -2588,7 +2588,7 @@ mod session_resolution {
             let (result, effects) =
                 super::super::static_effects::measure(|| manager.resolve_session(&input));
             assert!(result.is_err());
-            assert_eq!(effects, [0; 12]);
+            assert_eq!(effects, [0; 11]);
         }
         f.mcp(
             true,
@@ -2598,7 +2598,7 @@ mod session_resolution {
         let (result, effects) =
             super::super::static_effects::measure(|| manager.resolve_session(&input));
         result.unwrap();
-        assert_eq!(effects, [0; 12]);
+        assert_eq!(effects, [0; 11]);
 
         let prospective = manager.resolve_session(&input).unwrap();
         let admitted = prospective.admit(|| f.credentials.clone()).unwrap();
@@ -2620,7 +2620,7 @@ mod session_resolution {
             result.map(|_| ()).unwrap_err().to_string(),
             "Session cwd must be absolute"
         );
-        assert_eq!(effects, [0; 12]);
+        assert_eq!(effects, [0; 11]);
     }
 
     /// The CLI adds no configuration semantics of its own: for the same

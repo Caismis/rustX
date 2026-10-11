@@ -4,7 +4,7 @@ import { modelRetryNotices, modelRetryPlacements } from '../src/bindings/model-r
 import { useModelRetryFeedback } from '../src/app/agent/ModelRetry';
 import { ConversationLive } from '../src/app/agent/ConversationLive';
 import type { AppServerClient } from '../src/client/app-server';
-import type { RuntimeClientTranscriptEntry } from '../../protocol/app-server/v44';
+import type { RuntimeClientTranscriptEntry } from '../../protocol/app-server/v45';
 import { Server, snapshot } from './fixture';
 import { requestDetail, traceRecord } from './trace-fixture';
 

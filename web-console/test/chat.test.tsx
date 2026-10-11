@@ -70,7 +70,7 @@ it('Subagent and Workflow cards bind native identities and lifecycle facts witho
     activation_id, agent_id: `agent-${activation_id}`, parent_agent_id: 'parent-agent', current_activation: activation_id, activation_state: 'running', child_conversation_id: `conv-${activation_id}`, agent: 'Same agent',
     definition_digest: 'private-digest', profile_digest: 'private-profile', state: 'active', started_at: '2026-09-15T00:00:00Z',
     observation: { attempt_id: null, revision: '1', activity: { type: 'waiting', on: { type: 'approval', tool_id: 'bash' } }, counters: { model_requests: 1, model_retries: 0, tool_executions: 0 } },
-    workspace: { logical_workspace: '/private/workspace', isolation: { type: 'shared' }, resource_state: 'none' },
+    workspace: '/private/workspace',
   }));
   s.workflows.runs = ['1', '2'].map(invocation => ({
     id: { conversation_id: 'conv', attempt_id: 'attempt', invocation }, workflow_id: 'Same workflow', program_digest: 'private-program', resource_revision: '1', tool_call_id: `call-${invocation}`,
@@ -109,7 +109,7 @@ it('one Agent row survives inactive settlement and a later activation, including
     child_conversation_id: 'child-conversation', agent: 'Worker', state: 'active' as const, activation_state: 'running' as const,
     definition_digest: 'definition', profile_digest: 'profile', started_at: '2026-09-15T00:00:00Z',
     observation: { attempt_id: null, revision: '1', activity: { type: 'awaiting_activity' as const }, counters: { model_requests: 0, model_retries: 0, tool_executions: 0 } },
-    workspace: { logical_workspace: '/workspace', isolation: { type: 'shared' as const }, resource_state: 'none' as const },
+    workspace: '/workspace',
   };
   s.agents = [agent];
   const ui = render(<RuntimeFacts snapshot={s}/>);

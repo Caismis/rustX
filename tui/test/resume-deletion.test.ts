@@ -66,7 +66,7 @@ test("1–7: exact preview, safe default/cancel, immutable confirmation, focus a
 });
 for (const [reason, text] of [
   [{ kind: "resource_conflict" }, /external resource owner/],
-  [{ kind: "workspace", resource_count: 3 }, /3 retained.*disposal/], [{ kind: "invalid_ownership" }, /ownership.*blocked/],
+  [{ kind: "invalid_ownership" }, /ownership.*blocked/],
 ] as const) test(`8–10: native ${reason.kind} is a non-executable blocker`, async () => {
   const h = harness({ rows: [{ ...row("b"), }] });
   h.view.handleInput(del);

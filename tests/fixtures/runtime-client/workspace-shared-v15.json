@@ -1,7 +1,0 @@
-{
-  "logical_workspace": "/repo",
-  "isolation": {
-    "type": "shared"
-  },
-  "resource_state": "none"
-}

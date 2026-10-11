@@ -5,8 +5,7 @@ use super::{
     RegistryState, ResolvedSubagentSpec, SubagentExecutionProfile, SubagentId, SubagentLifecycle,
     SubagentObservation, SubagentRecord, SubagentRegistry, SubagentSnapshot, SubagentStartError,
     SubagentStartOutcome, SubagentStartSpec, SubagentSteerError, SubagentTerminalMode,
-    SubagentTerminalState, SubagentWorkspaceResourceState, SubagentWorkspaceTerminalResource,
-    WorkspaceUnresolvedRecord,
+    SubagentTerminalState,
 };
 use serde::{Deserialize, Serialize};
 
@@ -28,20 +27,33 @@ pub struct DurableAgentAuthority {
 pub(super) struct AgentRecord {
     pub created_sequence: u64,
     pub authority: DurableAgentAuthority,
-    pub workspace: crate::runtime::workspace::AgentWorkspace,
+    /// The Session execution binding frozen when this Agent was created.
+    /// Every later activation runs in exactly this directory; resume never
+    /// re-resolves it, substitutes a default workspace or falls back to CWD.
+    pub workspace: std::path::PathBuf,
     pub conversation_id: ConversationId,
     pub latest_activation: SubagentId,
     pub resuming: Option<ResumeReservation>,
 }
 
 impl AgentRecord {
-    fn unavailable(&self, activation: &SubagentRecord) -> bool {
-        // Native staging and cleanup may poison their workspace before the
-        // registry installs their outcome. Publish that fact only with the
-        // completed owner transition, never ahead of its observation.
-        (self.resuming.is_none()
-            && activation.lifecycle.is_terminal()
-            && self.workspace.is_poisoned())
+    /// One fail-closed admission predicate over the existing native owners:
+    ///
+    /// ```text
+    /// awaiting physical proof  any exact activation or unreserved allocation
+    ///                          of this Agent still in recovery_pending
+    /// publication failure      the latest activation abandoned its canonical
+    ///                          terminal publication
+    /// physical settlement      a logical terminal without native proof
+    /// admission failure        a reservation whose rollback was not proven
+    /// ```
+    ///
+    /// Each fact is released only by its own owner: a proof removes exactly
+    /// one activation from recovery, so a late proof for activation N can
+    /// never release activation N+1, and no proof clears an abandoned
+    /// publication or a failed admission.
+    fn unavailable(&self, activation: &SubagentRecord, awaiting_physical_proof: bool) -> bool {
+        (self.resuming.is_none() && activation.lifecycle.is_terminal() && awaiting_physical_proof)
             || activation.publication_abandoned
             || (activation.lifecycle.is_terminal() && !activation.physical_settlement_proven)
             || self.resuming.as_ref().is_some_and(|reservation| {
@@ -86,8 +98,8 @@ pub(super) struct ResumeReservation {
 
 pub(super) struct ResumeIdentity {
     pub activation_id: SubagentId,
-    pub workspace: crate::runtime::workspace::AgentWorkspace,
-    pub workspace_access: std::sync::Mutex<Option<crate::runtime::workspace::AgentWorkspaceAccess>>,
+    /// The Agent's frozen Session execution binding.
+    pub workspace: std::path::PathBuf,
     pub agent_id: AgentId,
     pub conversation_id: ConversationId,
     pub physical_owner:
@@ -151,7 +163,7 @@ pub enum AgentControlError {
     #[error("{0}")]
     Start(SubagentStartError),
     #[error(
-        "Agent is unavailable: physical settlement, canonical publication, or workspace authority requires explicit repair"
+        "Agent is unavailable: physical settlement, canonical publication, or activation admission requires explicit repair"
     )]
     Settlement,
     #[error("input delivery did not start; no input was delivered")]
@@ -193,17 +205,9 @@ impl SubagentRegistry {
             .to_path_buf(),
         )
     }
-    pub(crate) fn agent_workspace(
-        &self,
-        id: &AgentId,
-    ) -> Option<super::super::super::workspace::WorkspaceSnapshot> {
+    pub(crate) fn agent_workspace(&self, id: &AgentId) -> Option<std::path::PathBuf> {
         let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        let agent = state.agents.get(id)?;
-        if agent.workspace.is_poisoned() {
-            return None;
-        }
-        let activation = &state.records[*state.index.get(&agent.latest_activation)?];
-        Some(activation.workspace.clone())
+        Some(state.agents.get(id)?.workspace.clone())
     }
     pub(crate) fn agent_inspection_path(&self, id: &AgentId) -> Option<std::path::PathBuf> {
         let agent = self.agent_snapshot(id)?;
@@ -219,7 +223,7 @@ impl SubagentRegistry {
     ) -> Option<AgentSnapshot> {
         let agent = state.agents.get(id)?;
         let activation = &state.records[*state.index.get(&agent.latest_activation)?];
-        let lifecycle = if agent.unavailable(activation) {
+        let lifecycle = if agent.unavailable(activation, state.has_recovery_obligation_for(id)) {
             AgentState::Unavailable
         } else if agent.resuming.is_some() {
             AgentState::Admitting
@@ -361,7 +365,7 @@ impl SubagentRegistry {
             .get(id)
             .ok_or_else(|| AgentControlError::Unknown(id.clone()))?;
         let activation = &state.records[state.index[&agent.latest_activation]];
-        if agent.unavailable(activation) {
+        if agent.unavailable(activation, state.has_recovery_obligation_for(id)) {
             return Err(AgentControlError::Settlement);
         }
         if let Some(reservation) = &agent.resuming {
@@ -540,7 +544,7 @@ impl SubagentRegistry {
                         .ok_or_else(|| AgentControlError::Unknown(id.clone()))?;
                     let activation_id = agent.latest_activation.clone();
                     let activation = &state.records[state.index[&activation_id]];
-                    if agent.unavailable(activation) {
+                    if agent.unavailable(activation, state.has_recovery_obligation_for(id)) {
                         return Err(AgentControlError::Settlement);
                     }
                     if agent.resuming.is_some() {
@@ -604,7 +608,6 @@ impl SubagentRegistry {
                                 Box::new(ResumeIdentity {
                                     activation_id,
                                     workspace: agent.workspace.clone(),
-                                    workspace_access: std::sync::Mutex::new(None),
                                     agent_id: id.clone(),
                                     conversation_id: agent.conversation_id.clone(),
                                     physical_owner: None,
@@ -690,26 +693,61 @@ impl SubagentRegistry {
                     #[cfg(test)]
                     let mut test_gates = registry.state.lock().unwrap().resume_test_gates.take();
                     let mut reserved = false;
+                    let mut allocation_started = false;
                     let mut result = async {
                         #[cfg(test)]
-                        let authority_hook = registry.state.lock().unwrap().authority_install_hook.take();
+                        let preflight_hook =
+                            registry.state.lock().unwrap().resume_preflight_hook.take();
                         #[cfg(test)]
-                        if let Some(hook) = authority_hook { hook.wait(); }
+                        if let Some(hook) = preflight_hook {
+                            hook.wait();
+                        }
+                        if cancellation.is_cancelled() {
+                            return Err(SubagentStartError::Cancelled);
+                        }
+                        // The mutex reservation still owns this exact Agent/activation
+                        // and frozen authority. Filesystem I/O stays off that mutex.
+                        super::validate_execution_workspace(&identity.workspace)?;
+                        if cancellation.is_cancelled() {
+                            return Err(SubagentStartError::Cancelled);
+                        }
+                        // Allocation admission: cancellation after this point follows
+                        // the existing physical proof/rollback path, even if no
+                        // Reserved event can be committed.
+                        allocation_started = true;
+                        #[cfg(test)]
+                        let authority_hook =
+                            registry.state.lock().unwrap().authority_install_hook.take();
+                        #[cfg(test)]
+                        if let Some(hook) = authority_hook {
+                            hook.wait();
+                        }
                         // Authority exists before the first durable obligation. The same
                         // locked open-file description is inherited by the physical child.
-                        identity.physical_owner = Some(std::sync::Arc::new(
-                            registry.finish_physical_reservation(
-                                &identity.conversation_id, &identity.activation_id,
+                        identity.physical_owner =
+                            Some(std::sync::Arc::new(registry.finish_physical_reservation(
+                                &identity.conversation_id,
+                                &identity.activation_id,
                                 super::super::physical_recovery::ParentPhysicalLease::reserve(
-                                    &registry.config.spawn.product_root, &registry.config.spawn.session_id,
-                                    &identity.conversation_id, &identity.activation_id,
+                                    &registry.config.spawn.product_root,
+                                    &registry.config.spawn.session_id,
+                                    &identity.conversation_id,
+                                    &identity.activation_id,
                                 ),
-                            )?
-                        ));
+                            )?));
                         {
-                            let mut state = registry.state.lock().unwrap_or_else(PoisonError::into_inner);
-                            let agent = state.agents.get_mut(&identity.agent_id).expect("reserved Agent remains owned");
-                            let reservation = agent.resuming.as_mut().expect("admission owner retains its reservation");
+                            let mut state = registry
+                                .state
+                                .lock()
+                                .unwrap_or_else(PoisonError::into_inner);
+                            let agent = state
+                                .agents
+                                .get_mut(&identity.agent_id)
+                                .expect("reserved Agent remains owned");
+                            let reservation = agent
+                                .resuming
+                                .as_mut()
+                                .expect("admission owner retains its reservation");
                             assert_eq!(reservation.activation_id, identity.activation_id);
                             reservation.identity_persisted = true;
                             let latest = agent.latest_activation.clone();
@@ -718,46 +756,58 @@ impl SubagentRegistry {
                             // activation ID. Its consumed allocation is already durable.
                             super::publish_snapshot(&mut state, &registry.state_version, index);
                         }
-                        // The complete recovered verification uses supervised Git.
-                        // Each helper receives durable continuation authority before spawn,
-                        // including this pre-Reserved physical lifetime.
-                        let access = crate::runtime::workspace::with_physical_settlement_authority(
-                            identity.physical_owner.clone(), identity.workspace.acquire(&cancellation),
-                        ).await;
-                        let _helper_proof = identity.physical_owner.as_ref().unwrap()
-                            .prove_continuations()
-                            .map_err(|error| SubagentStartError::Rollback { detail: error.to_string() })?
-                            .ok_or_else(|| SubagentStartError::Rollback {
-                                detail: "recovered workspace verification has unresolved physical helpers".into(),
+                        if cancellation.is_cancelled() {
+                            return Err(SubagentStartError::Cancelled);
+                        }
+                        #[cfg(test)]
+                        let reserved_hook =
+                            registry.state.lock().unwrap().reserved_commit_hook.take();
+                        #[cfg(test)]
+                        if let Some(hook) = reserved_hook {
+                            hook.wait();
+                        }
+                        let receipt = registry
+                            .config
+                            .mailbox
+                            .commit_agent_activation_admission(
+                                &ownership,
+                                super::super::admission_event(
+                                    &registry.config.conversation_id,
+                                    &identity.agent_id,
+                                    &identity.activation_id,
+                                    &spec.admission.origin,
+                                    crate::events::types::AgentActivationAdmissionPhase::Reserved,
+                                    registry.config.clock.now(),
+                                ),
+                            )
+                            .map_err(|error| SubagentStartError::Durability {
+                                detail: error.to_string(),
                             })?;
-                        if cancellation.is_cancelled() { return Err(SubagentStartError::Cancelled); }
-                        *identity.workspace_access.get_mut().unwrap() = Some(
-                            access.map_err(|detail| SubagentStartError::Workspace { detail })?
-                        );
-                        #[cfg(test)]
-                        let reserved_hook = registry.state.lock().unwrap().reserved_commit_hook.take();
-                        #[cfg(test)]
-                        if let Some(hook) = reserved_hook { hook.wait(); }
-                        let receipt = registry.config.mailbox.commit_agent_activation_admission(
-                            &ownership,
-                            super::super::admission_event(
-                                &registry.config.conversation_id, &identity.agent_id,
-                                &identity.activation_id, &spec.admission.origin,
-                                crate::events::types::AgentActivationAdmissionPhase::Reserved,
-                                registry.config.clock.now(),
-                            ),
-                        ).map_err(|error| SubagentStartError::Durability { detail: error.to_string() })?;
                         reserved = true;
                         {
-                            let mut state = registry.state.lock().unwrap_or_else(PoisonError::into_inner);
+                            let mut state = registry
+                                .state
+                                .lock()
+                                .unwrap_or_else(PoisonError::into_inner);
                             let agent = &state.agents[&identity.agent_id];
-                            assert!(agent.resuming.as_ref().is_some_and(|reservation| reservation.activation_id == identity.activation_id));
+                            assert!(
+                                agent
+                                    .resuming
+                                    .as_ref()
+                                    .is_some_and(|reservation| reservation.activation_id
+                                        == identity.activation_id)
+                            );
                             let index = state.index[&agent.latest_activation];
-                            super::publish_committed_snapshot(&mut state, &registry.state_version, index, receipt.sequence);
+                            super::publish_committed_snapshot(
+                                &mut state,
+                                &registry.state_version,
+                                index,
+                                receipt.sequence,
+                            );
                         }
                         drop(ownership);
                         let prepared = registry
-                            .prepare_inner(&spec, &cancellation, &mut None, Some(&identity))
+                            .prepare_inner(&spec, &cancellation, Some(&identity))
                             .await?;
                         #[cfg(test)]
                         if let Some(gates) = test_gates.as_mut() {
@@ -776,10 +826,6 @@ impl SubagentRegistry {
                             hook(owner);
                         }
                     }
-                    // A pre-prepare cancellation may leave the verified access
-                    // unconsumed. Release it before publishing Inactive so a
-                    // later activation observes the same completed owner cut.
-                    drop(identity.workspace_access.get_mut().unwrap().take());
                     if !reserved && result.is_err() && identity.physical_owner.is_some() {
                         registry.retain_unreserved_allocation(
                             &identity.conversation_id,
@@ -840,11 +886,13 @@ impl SubagentRegistry {
                             .get_mut(&identity.agent_id)
                             .expect("durable Agent survives activation");
                         if unreserved {
-                            // Recovery now owns this consumed identity. Its workspace
-                            // fence keeps the Agent unavailable without inventing Reserved.
+                            // Recovery now owns this consumed identity. Its exact
+                            // pending allocation keeps the Agent unavailable
+                            // without inventing Reserved.
                             agent.finish_resume(&identity.activation_id);
                         } else if matches!(&result, Err(SubagentStartError::Rollback { .. })) {
-                            agent.workspace.poison();
+                            // The unproven rollback stays this reservation's own
+                            // absorbing admission failure.
                             if let Some(reservation) = &agent.resuming {
                                 reservation
                                     .completion
@@ -869,7 +917,10 @@ impl SubagentRegistry {
                     let had_physical_owner = identity.physical_owner.is_some();
                     // No executable handle survives the transfer. Reconciliation must
                     // acquire native proof; dropping the parent alone is not settlement.
-                    if !reserved && !matches!(&result, Ok(SubagentStartOutcome::Accepted(_))) {
+                    if allocation_started
+                        && !reserved
+                        && !matches!(&result, Ok(SubagentStartOutcome::Accepted(_)))
+                    {
                         drop(identity.physical_owner.take());
                         registry.reconcile_recovered_settlements();
                         registry.start_recovery_reconciliation();
@@ -884,6 +935,9 @@ impl SubagentRegistry {
                         .recovery_pending
                         .contains(&identity.activation_id);
                     let completion_outcome = match &result {
+                        // A retired memory-only reservation acquired no physical
+                        // obligations. Its waiters must not invent uncertain cleanup.
+                        _ if !allocation_started => AdmissionSettlement::RolledBack,
                         _ if recovery_pending || !had_physical_owner => AdmissionSettlement::Failed,
                         Err(SubagentStartError::Rollback { .. }) => AdmissionSettlement::Failed,
                         Ok(SubagentStartOutcome::Accepted(_)) => AdmissionSettlement::Committed,
@@ -1052,19 +1106,14 @@ impl SubagentRegistry {
                         let authority = authorities
                             .remove(&child_agent_id)
                             .expect("referenced Agent authority loaded before registry replay");
-                        let scope = crate::runtime::workspace::AgentWorkspace::recovered(
-                            self.config.workspace.clone(),
-                            subagent_id.clone(),
-                            authority.resolved.workspace_policy,
-                            workspace.clone(),
-                            false,
-                        );
                         state.agents.insert(
                             child_agent_id.clone(),
                             AgentRecord {
                                 created_sequence: envelope.sequence,
                                 authority,
-                                workspace: scope,
+                                // The binding frozen by the creating ownership
+                                // fact, never current configuration.
+                                workspace: workspace.clone(),
                                 conversation_id: child_conversation_id.clone(),
                                 latest_activation: subagent_id.clone(),
                                 resuming: None,
@@ -1140,41 +1189,17 @@ impl SubagentRegistry {
                 RuntimeEvent::SubagentTerminalPublished {
                     subagent_id,
                     state: terminal,
-                    workspace_resource,
                     physical_settlement_proven,
                     ..
                 }
                 | RuntimeEvent::SubagentTerminalSettled {
                     subagent_id,
                     state: terminal,
-                    workspace_resource,
                     physical_settlement_proven,
                     ..
                 } => {
                     unsettled.remove(&subagent_id);
                     if let Some(&index) = state.index.get(&subagent_id) {
-                        let record = &mut state.records[index];
-                        let child_agent_id = record.child_agent_id.clone();
-                        match workspace_resource {
-                            SubagentWorkspaceTerminalResource::PreservedUnresolved {
-                                reason,
-                                detail,
-                            } => {
-                                record.workspace_resource_state =
-                                    SubagentWorkspaceResourceState::PreservedUnresolved;
-                                record.workspace_unresolved =
-                                    Some(WorkspaceUnresolvedRecord { reason, detail });
-                                if let Some(agent) = state.agents.get(&child_agent_id) {
-                                    agent.workspace.poison();
-                                }
-                            }
-                            SubagentWorkspaceTerminalResource::Retained { handoff } => {
-                                record.workspace_resource_state =
-                                    SubagentWorkspaceResourceState::Retained;
-                                record.handoff = Some(handoff);
-                            }
-                            SubagentWorkspaceTerminalResource::None => {}
-                        }
                         state.records[index].physical_settlement_proven =
                             physical_settlement_proven;
                         state.records[index].lifecycle = match terminal {
@@ -1184,9 +1209,8 @@ impl SubagentRegistry {
                             SubagentTerminalState::Interrupted => SubagentLifecycle::Interrupted,
                         };
                         if !physical_settlement_proven {
-                            if let Some(agent) = state.agents.get(&child_agent_id) {
-                                agent.workspace.await_recovered_physical_proof();
-                            }
+                            // Only native proof for this exact activation
+                            // releases the Agent; see AgentRecord::unavailable.
                             state.recovery_pending.insert(subagent_id);
                         }
                     }
@@ -1195,64 +1219,6 @@ impl SubagentRegistry {
                     state.recovery_pending.remove(&subagent_id);
                     if let Some(&index) = state.index.get(&subagent_id) {
                         state.records[index].physical_settlement_proven = true;
-                        if let Some(agent) = state.agents.get(&state.records[index].child_agent_id)
-                        {
-                            agent.workspace.prove_recovered_physical_settlement();
-                        }
-                    }
-                }
-                RuntimeEvent::SubagentWorkspaceDisposalStarted {
-                    subagent_id,
-                    workspace_handoff,
-                } => {
-                    if let Some(&index) = state.index.get(&subagent_id) {
-                        let record = &mut state.records[index];
-                        record.workspace_resource_state =
-                            SubagentWorkspaceResourceState::DisposalInProgress;
-                        // Disposal intent transfers the retained handoff
-                        // into the exact private cleanup authority. It is
-                        // no longer an available public handoff, including
-                        // when replay follows the historical terminal.
-                        record.handoff = None;
-                        record.workspace_unresolved = None;
-                        record.workspace_disposal = Some(super::WorkspaceDisposalRecord {
-                            handoff: workspace_handoff,
-                            phase: super::WorkspaceDisposalPhase::Authorized,
-                        });
-                        let child = record.child_agent_id.clone();
-                        if let Some(agent) = state.agents.get(&child) {
-                            agent.workspace.poison();
-                        }
-                    }
-                }
-                RuntimeEvent::SubagentWorkspaceDisposalSettled {
-                    subagent_id,
-                    workspace_handoff,
-                    settlement,
-                } => {
-                    if let Some(&index) = state.index.get(&subagent_id) {
-                        let record = &mut state.records[index];
-                        match settlement {
-                                crate::events::types::SubagentWorkspaceDisposalSettlement::WorktreeRemoved => {
-                                    record.workspace_resource_state = SubagentWorkspaceResourceState::WorktreeRemoved;
-                                    record.handoff = None;
-                                    record.workspace_unresolved = None;
-                                    record.workspace_disposal = Some(super::WorkspaceDisposalRecord {
-                                        handoff: workspace_handoff,
-                                        phase: super::WorkspaceDisposalPhase::WorktreeRemoved,
-                                    });
-                                }
-                                crate::events::types::SubagentWorkspaceDisposalSettlement::Disposed => {
-                                    record.workspace_resource_state = SubagentWorkspaceResourceState::Disposed;
-                                    record.workspace_disposal = None;
-                                    record.workspace_unresolved = None;
-                                    record.handoff = None;
-                                }
-                            }
-                        let child = record.child_agent_id.clone();
-                        if let Some(agent) = state.agents.get(&child) {
-                            agent.workspace.poison();
-                        }
                     }
                 }
                 _ => {}
@@ -1265,13 +1231,6 @@ impl SubagentRegistry {
                 || recorded.contains(&activation)
             {
                 continue;
-            }
-            if let Some(agent) = state
-                .agents
-                .values()
-                .find(|agent| agent.conversation_id == conversation)
-            {
-                agent.workspace.await_recovered_physical_proof();
             }
             if let Some(previous) = state
                 .recovery_unreserved
@@ -1286,7 +1245,6 @@ impl SubagentRegistry {
         }
         for (activation_id, (agent_id, origin)) in pending_admissions {
             if let Some(agent) = state.agents.get_mut(&agent_id) {
-                agent.workspace.await_recovered_physical_proof();
                 let (completion, _) = tokio::sync::watch::channel(AdmissionSettlement::Failed);
                 agent.resuming = Some(ResumeReservation {
                     activation_id: activation_id.clone(),
@@ -1300,11 +1258,15 @@ impl SubagentRegistry {
         }
         for activation in unsettled {
             if let Some(&index) = state.index.get(&activation)
-                && let Some(agent) = state.agents.get(&state.records[index].child_agent_id)
+                && state
+                    .agents
+                    .contains_key(&state.records[index].child_agent_id)
             {
-                // An orphan without reconciliation evidence is not proof of
-                // physical containment. Never silently grant a fresh lease.
-                agent.workspace.poison();
+                // Recovery terminalizes every orphan before this replay, so an
+                // ownership without any terminal fact has an unresolvable
+                // canonical publication obligation. Fail closed on its own
+                // record; no later proof can make it a completed activation.
+                state.records[index].publication_abandoned = true;
             }
         }
         drop(state);

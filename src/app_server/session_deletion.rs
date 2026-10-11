@@ -1,6 +1,6 @@
 //! App Server-owned bounded Session deletion wire projections. Native recovery authority is
 //! deliberately absent: clients confirm identity and revision, never a workset.
-// Schema names are pinned to the published App Server v39 definitions. They
+// Schema names are pinned to the published App Server v45 definitions. They
 // do not imply Runtime Client ownership or expose a Runtime Client alias.
 use crate::local_runtime::SessionId;
 use serde::{Deserialize, Serialize};
@@ -30,10 +30,6 @@ pub struct SessionDeletePreview {
 #[schemars(rename = "RuntimeClientSessionDeletionBlocker")]
 pub enum SessionDeletionBlocker {
     ResourceConflict,
-    Workspace {
-        #[schemars(range(max = 9_007_199_254_740_991_u64))]
-        resource_count: u64,
-    },
     InvalidOwnership,
 }
 
@@ -105,9 +101,6 @@ pub(crate) fn project(
             session_id,
             reason: match reason {
                 Blocker::ResourceConflict => Reason::ResourceConflict,
-                Blocker::Workspace { resources } => Reason::Workspace {
-                    resource_count: resources.len() as u64,
-                },
                 Blocker::InvalidOwnership { .. } => Reason::InvalidOwnership,
             },
         },
@@ -192,7 +185,6 @@ mod tests {
             assert!(text.len() < 600);
             assert!(!text.contains("scopes"));
             let record = DeletionRecord {
-                agent_workspaces: vec![],
                 upload_workspaces: vec![],
                 session_id: session_id.clone(),
                 target_revision: "a".repeat(64),
@@ -209,8 +201,8 @@ mod tests {
                 },
                 SessionDeleteResult::Blocked {
                     session_id: session_id.clone(),
-                    reason: DeletionBlocker::Workspace {
-                        resources: vec!["private resource".into(); size],
+                    reason: DeletionBlocker::InvalidOwnership {
+                        detail: "private resource".repeat(size),
                     },
                 },
             ];

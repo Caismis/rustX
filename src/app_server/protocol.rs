@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v44 envelope and method vocabulary.
+//! Rust authority for the App Server v45 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 44;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 45;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -310,11 +310,6 @@ pub enum Method {
         offset: Option<usize>,
         #[schemars(range(min = 1, max = 64))]
         limit: usize,
-    },
-    #[serde(rename = "subagent/disposeWorkspace")]
-    SubagentDispose {
-        target: AttachmentTarget,
-        subagent_id: crate::runtime::identity::SubagentId,
     },
     #[serde(rename = "initialize")]
     Initialize(InitializeParams),
@@ -746,11 +741,6 @@ pub enum MethodResult {
         activation_id: Option<crate::runtime::identity::SubagentId>,
         outcome: Option<crate::runtime::subagent::SubagentState>,
         agent: Box<crate::runtime_client::snapshot::RuntimeClientAgent>,
-    },
-    WorkspaceDisposed {
-        subagent_id: crate::runtime::identity::SubagentId,
-        workspace: crate::runtime_client::snapshot::RuntimeClientAgentWorkspace,
-        outcome: crate::runtime_client::types::RuntimeClientAgentWorkspaceDisposalOutcome,
     },
     Initialized {
         /// Opaque process-owner identity, stable across transport reconnects. Not permission.

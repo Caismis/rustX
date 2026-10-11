@@ -571,13 +571,6 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                             steps_consumed: 1,
                             steps_max: 10,
                             agents_consumed: 0,
-                            candidate: Some(crate::runtime::workspace::CandidateReference {
-                                run,
-                                version: EXACT,
-                                content: "content-fixture".into(),
-                            }),
-                            candidate_users: 0,
-                            handoff: None,
                         }],
                         omitted_runs: 0,
                     },
@@ -853,9 +846,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v44.schema.json", "v44.ts"]);
+        assert_eq!(generations, ["v45.schema.json", "v45.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v44.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v45.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

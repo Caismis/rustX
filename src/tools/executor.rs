@@ -24,17 +24,6 @@
 //! metadata subsystem: only the concrete contracts the current tool plane
 //! needs.
 
-/// Executor authority under a caller-provided workspace binding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WorkspaceUse {
-    /// Uses the supplied cwd/file authority.
-    ConsumesProvided,
-    /// Consumes no workspace authority.
-    Independent,
-    /// Cannot honor caller workspace binding.
-    Incompatible,
-}
-
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -333,11 +322,6 @@ impl<'a> ToolExecutionContext<'a> {
 ///
 /// [`ToolExecutionStatus::Failed`]: crate::tools::types::ToolExecutionStatus::Failed
 pub trait ToolExecutor: Send + Sync {
-    /// How this executor relates to a caller-provided workspace.
-    /// External servers and fixed-cwd executors default to failing closed.
-    fn workspace_use(&self) -> WorkspaceUse {
-        WorkspaceUse::Incompatible
-    }
     /// Constructs the handle of one caller-neutral native invocation.
     ///
     /// This method must not dispatch physical work. Dispatch and its cleanup
@@ -625,6 +609,9 @@ pub enum ToolRegistryError {
     InvalidPolicy(String),
     /// The model-facing name belongs to a runtime-owned protocol.
     ReservedName(String),
+    /// A composed capability requires a runtime service this composition
+    /// does not own. This is never a valid zero-tool configuration.
+    MissingService(String),
 }
 
 impl core::fmt::Display for ToolRegistryError {
@@ -636,7 +623,9 @@ impl core::fmt::Display for ToolRegistryError {
                 "model-facing tool name {name:?} is already registered; \
                  tool names must be unambiguous"
             ),
-            Self::InvalidIdentity(message) => write!(f, "{message}"),
+            Self::InvalidIdentity(message) | Self::MissingService(message) => {
+                write!(f, "{message}")
+            }
             Self::InvalidSchema(message) => write!(f, "invalid tool schema: {message}"),
             Self::ModelSelectableSchema { name, reason } => write!(
                 f,

@@ -15,7 +15,8 @@ async fn finish_finite_workflow_child(
         InheritedExecutionPolicy, SubagentPublication, SubagentStartOutcome, SubagentStartSpec,
         SubagentTerminalMode,
     };
-    let node = crate::runtime::workflow::test_instance("finite_recovery", "child");
+    let mut node = crate::runtime::workflow::test_instance("finite_recovery", "child");
+    node.block.run.conversation_id = store.conversation_id().clone();
     let spec = SubagentStartSpec {
         authority: DurableAgentAuthority {
             title: "Explore task".to_owned(),

@@ -77,4 +77,4 @@ template: runtime readiness stays unresolved offline.
 
 Tool invocation input: `{"topic":"How this repository organizes tests"}`.
 Expected output shape: `{"summary":"..."}`. Content is a future model result.
-This example requires no Git repository, workspace candidate, Python, or MCP.
+This example requires no Git repository, Python, or MCP.

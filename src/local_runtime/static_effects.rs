@@ -12,12 +12,11 @@ pub(crate) enum Effect {
     Credentials,
     WorkflowRun,
     Interaction,
-    Workspace,
     ResourcePublication,
     AuthorityMutation,
 }
 
-thread_local! { static COUNTS: RefCell<Option<[usize; 12]>> = const { RefCell::new(None) }; }
+thread_local! { static COUNTS: RefCell<Option<[usize; 11]>> = const { RefCell::new(None) }; }
 
 pub(crate) fn observe(effect: Effect) {
     COUNTS.with(|counts| {
@@ -27,7 +26,7 @@ pub(crate) fn observe(effect: Effect) {
     });
 }
 
-pub(crate) fn measure<T>(operation: impl FnOnce() -> T) -> (T, [usize; 12]) {
+pub(crate) fn measure<T>(operation: impl FnOnce() -> T) -> (T, [usize; 11]) {
     struct Reset;
     impl Drop for Reset {
         fn drop(&mut self) {
@@ -36,7 +35,7 @@ pub(crate) fn measure<T>(operation: impl FnOnce() -> T) -> (T, [usize; 12]) {
     }
     COUNTS.with(|counts| {
         assert!(counts.borrow().is_none());
-        *counts.borrow_mut() = Some([0; 12]);
+        *counts.borrow_mut() = Some([0; 11]);
     });
     let _reset = Reset;
     let value = operation();

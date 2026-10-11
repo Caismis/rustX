@@ -78,7 +78,6 @@ import {
   type SessionModelView,
   type SessionNodeId,
   type SessionUserMessageBoundary,
-  type SubagentId,
   type AgentId,
   type SurfaceRevision,
   type ToolExecutionId,
@@ -622,7 +621,7 @@ export class AppServerSession {
     return result.agent;
   }
 
-  async sendMessage(agentId: AgentId, message: string, attachments: import("../../../protocol/app-server/v44.js").UploadReceipt[] = []) {
+  async sendMessage(agentId: AgentId, message: string, attachments: import("../../../protocol/app-server/v45.js").UploadReceipt[] = []) {
     return this.#client.call("agent/sendMessage", { target: this.#target, agent_id: agentId, message, attachments }, "agent_message");
   }
 
@@ -632,16 +631,6 @@ export class AppServerSession {
 
   async interruptAgent(agentId: AgentId) {
     return this.#client.call("agent/interrupt", { target: this.#target, agent_id: agentId }, "agent_wait");
-  }
-
-  /** Disposes one retained subagent workspace through the runtime authority. */
-  async disposeSubagent(subagentId: SubagentId) {
-    const disposed = await this.#client.call(
-      "subagent/disposeWorkspace",
-      { target: this.#target, subagent_id: subagentId },
-      "workspace_disposed",
-    );
-    return { subagent_id: disposed.subagent_id, workspace: disposed.workspace, outcome: disposed.outcome };
   }
 
   // -------------------------------------------------------------------------

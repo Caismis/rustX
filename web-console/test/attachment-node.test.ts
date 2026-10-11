@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import type { MethodResult } from '../../protocol/app-server/v44';
+import type { MethodResult } from '../../protocol/app-server/v45';
 import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
 import { Server, snapshot } from './fixture';
 import { traceRecord, requestDetail } from './trace-fixture';

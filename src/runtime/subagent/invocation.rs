@@ -48,7 +48,7 @@ use serde::{Deserialize, Serialize};
 use crate::capabilities::selection::{AgentToolSelection, ToolSelectionDocument};
 use crate::extensions::{NativeAgentExtensionSelection, NativeAgentExtensions};
 
-use super::catalog::{CHILD_UNSAFE_BUILTIN_TOOLS, NamedAgentDefinition};
+use super::catalog::NamedAgentDefinition;
 
 /// The maximum number of Skills one invocation override may select.
 ///
@@ -197,17 +197,12 @@ impl SubagentInvocationOverride {
                 });
             }
             for selector in &selectors {
-                if let AgentToolSelection::Builtin { name } = selector {
-                    if name == crate::tools::native::SUBAGENT_TOOL_NAME {
-                        return Err(SubagentOverrideError::RecursiveSelector {
-                            selector: selector.canonical(),
-                        });
-                    }
-                    if CHILD_UNSAFE_BUILTIN_TOOLS.contains(&name.as_str()) {
-                        return Err(SubagentOverrideError::ChildUnsafeSelector {
-                            selector: selector.canonical(),
-                        });
-                    }
+                if let AgentToolSelection::Builtin { name } = selector
+                    && crate::tools::native::is_agent_control(name)
+                {
+                    return Err(SubagentOverrideError::RecursiveSelector {
+                        selector: selector.canonical(),
+                    });
                 }
             }
             selection
@@ -233,8 +228,7 @@ impl SubagentInvocationOverride {
         match error {
             SubagentOverrideError::InvalidTools { .. }
             | SubagentOverrideError::TooManyTools { .. }
-            | SubagentOverrideError::RecursiveSelector { .. }
-            | SubagentOverrideError::ChildUnsafeSelector { .. } => "override.tools",
+            | SubagentOverrideError::RecursiveSelector { .. } => "override.tools",
             SubagentOverrideError::TooManySkills { .. }
             | SubagentOverrideError::EmptySkillSelector => "override.skills",
         }
@@ -285,12 +279,6 @@ pub enum SubagentOverrideError {
         /// The offending selector.
         selector: String,
     },
-    /// The override selects a capability whose lifecycle owner cannot exist
-    /// in a headless child runtime.
-    ChildUnsafeSelector {
-        /// The offending selector.
-        selector: String,
-    },
     /// The override selects more Skills than the bound admits.
     TooManySkills {
         /// The offending count.
@@ -311,13 +299,8 @@ impl core::fmt::Display for SubagentOverrideError {
             ),
             Self::RecursiveSelector { selector } => write!(
                 formatter,
-                "the invocation override selects {selector}: nested subagent delegation is \
-                 unsupported"
-            ),
-            Self::ChildUnsafeSelector { selector } => write!(
-                formatter,
-                "the invocation override selects {selector}, whose lifecycle owner does not \
-                 exist in a headless child runtime"
+                "the invocation override selects {selector}: Agent controls are Root-only \
+                 and nested subagent delegation is unsupported"
             ),
             Self::TooManySkills { count } => write!(
                 formatter,
@@ -361,7 +344,6 @@ mod tests {
                         inherit: true,
                         files: Vec::new(),
                     },
-                workspace_policy: crate::runtime::workspace::WorkspacePolicy::SharedWorkspace,
                 extensions,
                 agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
@@ -513,20 +495,20 @@ mod tests {
             .unwrap()
             .validate_spelling();
         assert!(delivery.is_ok(), "child deliveries have native ownership");
-        let recursive = parse(serde_json::json!({"tools": {"builtin": ["subagent"]}}))
-            .expect("parses")
-            .validate_spelling();
-        assert!(matches!(
-            recursive,
-            Err(SubagentOverrideError::RecursiveSelector { .. })
-        ));
-        let unsafe_owner = parse(serde_json::json!({"tools": {"builtin": ["send_message"]}}))
-            .expect("parses")
-            .validate_spelling();
-        assert!(matches!(
-            unsafe_owner,
-            Err(SubagentOverrideError::ChildUnsafeSelector { .. })
-        ));
+        // Issue #462 A15: no override can individually author any of the
+        // Root-only Agent controls; they are never child capabilities.
+        for control in crate::tools::native::AGENT_CONTROL_TOOL_NAMES {
+            let recursive = parse(serde_json::json!({"tools": {"builtin": [control]}}))
+                .expect("parses")
+                .validate_spelling();
+            assert!(
+                matches!(
+                    recursive,
+                    Err(SubagentOverrideError::RecursiveSelector { .. })
+                ),
+                "{control}"
+            );
+        }
         let empty_skill = parse(serde_json::json!({"skills": ["  "]}))
             .expect("parses")
             .validate_spelling();

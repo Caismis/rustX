@@ -203,47 +203,10 @@ fn runtime_error(error: &crate::runtime::types::RuntimeError) -> Value {
     };
     json!({"type":kind,"diagnostic_unavailable":"runtime diagnostic excluded"})
 }
-fn subagent_resource(resource: &crate::events::types::SubagentWorkspaceTerminalResource) -> Value {
-    use crate::events::types::SubagentWorkspaceTerminalResource;
-    match resource {
-        SubagentWorkspaceTerminalResource::None
-        | SubagentWorkspaceTerminalResource::Retained { .. } => json!(resource),
-        SubagentWorkspaceTerminalResource::PreservedUnresolved { reason, .. } => {
-            json!({"state":"preserved_unresolved", "reason":reason,"diagnostic_unavailable":"physical settlement diagnostic excluded"})
-        }
-    }
-}
-fn workspace(workspace: &crate::runtime::workspace::WorkspaceSettlement) -> Value {
-    use crate::runtime::workspace::WorkspaceSettlementDisposition;
-    let disposition = match &workspace.disposition {
-        WorkspaceSettlementDisposition::AgentRetained
-        | WorkspaceSettlementDisposition::Borrowed
-        | WorkspaceSettlementDisposition::Shared
-        | WorkspaceSettlementDisposition::Removed => json!(workspace.disposition),
-        WorkspaceSettlementDisposition::Retained {
-            handoff,
-            cleanup_error,
-        } => json!({"type":"retained", "handoff":handoff,"cleanup_failed":cleanup_error.is_some()}),
-        WorkspaceSettlementDisposition::PreservedUnresolved { reason, .. } => {
-            json!({"type":"preserved_unresolved", "reason":reason})
-        }
-    };
-    json!({"snapshot":workspace.snapshot,"disposition":disposition})
-}
 #[allow(clippy::too_many_lines)] // Exhaustive authority audit; new event variants require a decision.
 fn event(event: &crate::events::types::RuntimeEvent) -> Value {
     use crate::events::types::RuntimeEvent;
     match event {
-        RuntimeEvent::WorkflowWorkspaceDisposalSettled { run_id, settlement } => {
-            use crate::runtime::workspace::WorkspaceDisposalSettlement;
-            let kind = match settlement {
-                WorkspaceDisposalSettlement::NothingRemoved { .. } => "nothing_removed",
-                WorkspaceDisposalSettlement::WorktreeRemoved { .. } => "worktree_removed",
-                WorkspaceDisposalSettlement::Disposed => "disposed",
-                WorkspaceDisposalSettlement::AlreadyDisposed => "already_disposed",
-            };
-            json!({"type":"workflow_workspace_disposal_settled","run_id":run_id,"settlement":{"type":kind}})
-        }
         RuntimeEvent::AttemptCompleted {
             attempt_id,
             finish_reason: reason,
@@ -293,14 +256,6 @@ fn event(event: &crate::events::types::RuntimeEvent) -> Value {
         } => {
             json!({"type":"tool_execution_completed", "tool_call_id":tool_call_id, "tool_id":tool_id, "result":tool_execution_result(result)})
         }
-        RuntimeEvent::WorkflowCandidateInvocation {
-            node,
-            input,
-            result,
-            candidate_unchanged,
-        } => {
-            json!({"type":"workflow_candidate_invocation", "node":node, "input":input, "result":tool_execution_status(result), "candidate_unchanged":candidate_unchanged})
-        }
         RuntimeEvent::WorkflowFailed {
             workflow_id,
             run_id,
@@ -308,34 +263,6 @@ fn event(event: &crate::events::types::RuntimeEvent) -> Value {
             ..
         } => {
             json!({"type":"workflow_failed","workflow_id":workflow_id,"run_id":run_id,"status":tool_execution_status(status),"diagnostic_unavailable":"runtime diagnostic excluded"})
-        }
-        RuntimeEvent::SubagentTerminalPublished {
-            subagent_id,
-            child_agent_id,
-            message_id,
-            state,
-            workspace_resource,
-            physical_settlement_proven,
-            ..
-        } => {
-            json!({"type":"subagent_terminal_published","subagent_id":subagent_id,"child_agent_id":child_agent_id,"message_id":message_id,"state":state,"workspace_resource":subagent_resource(workspace_resource),"physical_settlement_proven":physical_settlement_proven})
-        }
-        RuntimeEvent::SubagentTerminalSettled {
-            subagent_id,
-            child_agent_id,
-            state,
-            workspace_resource,
-            physical_settlement_proven,
-        } => {
-            json!({"type":"subagent_terminal_settled","subagent_id":subagent_id,"child_agent_id":child_agent_id,"state":state,"workspace_resource":subagent_resource(workspace_resource),"physical_settlement_proven":physical_settlement_proven})
-        }
-        RuntimeEvent::WorkflowWorkspaceSettled {
-            run_id,
-            workspace: settlement,
-            candidate,
-            ..
-        } => {
-            json!({"type":"workflow_workspace_settled","run_id":run_id,"workspace":workspace(settlement),"candidate":candidate})
         }
         RuntimeEvent::NativeToolInvocation {
             invocation_id,
@@ -390,11 +317,9 @@ fn event(event: &crate::events::types::RuntimeEvent) -> Value {
         | RuntimeEvent::BackgroundTerminalPublished { .. }
         | RuntimeEvent::AgentActivationAdmission { .. }
         | RuntimeEvent::SubagentOwnershipCommitted { .. }
+        | RuntimeEvent::SubagentTerminalPublished { .. }
+        | RuntimeEvent::SubagentTerminalSettled { .. }
         | RuntimeEvent::SubagentPhysicalSettlementProven { .. }
-        | RuntimeEvent::SubagentWorkspaceDisposalStarted { .. }
-        | RuntimeEvent::SubagentWorkspaceDisposalSettled { .. }
-        | RuntimeEvent::WorkflowWorkspaceOwned { .. }
-        | RuntimeEvent::WorkflowWorkspaceDisposalStarted { .. }
         | RuntimeEvent::WorkflowStarted { .. }
         | RuntimeEvent::WorkflowBlockStarted { .. }
         | RuntimeEvent::WorkflowLoopIterationAdmitted { .. }

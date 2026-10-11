@@ -1,13 +1,13 @@
 //! WF-02 boundary tests. Gates identify the interleaving; no sleeps establish order.
 #![cfg(unix)]
-#[path = "candidate.rs"]
-mod candidate;
 #[path = "tool_composition.rs"]
 mod composition;
 #[path = "human.rs"]
 mod human;
 #[path = "loops.rs"]
 mod loops;
+#[path = "shared_workspace.rs"]
+mod shared_workspace;
 use super::*;
 use crate::tools::executor::{
     ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolRegistration,
@@ -146,20 +146,6 @@ fn context_with_registration(
     registration: ToolRegistration,
     lifecycle: crate::agent::AttemptLifecycle,
 ) -> crate::runtime::subagent::AttemptSubagentContext {
-    context_with_workspace_policy(
-        plane,
-        registration,
-        lifecycle,
-        WorkspacePolicy::SharedWorkspace,
-    )
-}
-
-fn context_with_workspace_policy(
-    plane: &WorkflowTestPlane,
-    registration: ToolRegistration,
-    lifecycle: crate::agent::AttemptLifecycle,
-    workspace_policy: WorkspacePolicy,
-) -> crate::runtime::subagent::AttemptSubagentContext {
     let model_catalog = ModelCatalog::from_toml_slice(WORKFLOW_TEST_MODELS.as_bytes()).unwrap();
     let models = ModelBindingRegistry::new(
         model_catalog
@@ -183,12 +169,11 @@ fn context_with_workspace_policy(
         Arc::new(McpRuntimeLeaseAuthority::empty()),
         Arc::new(BTreeMap::new()),
     ));
-    let agents = workflow_test_context_with_policy(
+    let agents = workflow_test_context_for_generation(
         plane,
         1,
-        "Frozen candidate instructions",
+        "Frozen workflow agent instructions",
         WorkflowCatalog::empty(),
-        workspace_policy,
     );
     let resources = Arc::new(
         crate::runtime::RuntimeResourceSnapshot::new(
@@ -898,7 +883,6 @@ fn authority_rejects_changed_identity_and_unadmitted_selection() {
             .is_err()
     );
     let definition = WorkflowDefinition {
-        workspace: None,
         description: "unadmitted".into(),
 
         timeout_ms: 100,

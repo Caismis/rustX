@@ -1,5 +1,5 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v44.js';
+import type {ProtocolMessage} from './v45.js';
 export const fixtures = [
   {
     "jsonrpc": "2.0",
@@ -115,7 +115,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 44,
+      "protocol_version": 45,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -133,7 +133,7 @@ export const fixtures = [
     "result": {
       "type": "initialized",
       "authority_id": "fixture-app-server-authority",
-      "protocol_version": 44,
+      "protocol_version": 45,
       "capabilities": {
         "upload_policy": {
           "max_file_bytes": 2097152,
@@ -897,18 +897,7 @@ export const fixtures = [
               "omitted_instances": 0,
               "steps_consumed": 1,
               "steps_max": 10,
-              "agents_consumed": 0,
-              "candidate": {
-                "run": {
-                  "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
-                  "attempt_id": "attempt-fixture",
-                  "invocation": "9007199254740993"
-                },
-                "version": "9007199254740993",
-                "content": "content-fixture"
-              },
-              "candidate_users": 0,
-              "handoff": null
+              "agents_consumed": 0
             }
           ],
           "omitted_runs": 0

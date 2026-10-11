@@ -43,7 +43,28 @@ async fn real_child_resumes_same_identity_history_and_frozen_authority() {
     tokio::time::timeout(LIVENESS, first_gate.wait_entered())
         .await
         .unwrap();
-    let first = snapshot(&mut process).await.agents.remove(0);
+    let mut admitted = snapshot(&mut process).await;
+    // Issue #462: the Root admits `explore`, so the whole Agent control group
+    // is active, exactly once each.
+    for control in [
+        "subagent",
+        "list_agents",
+        "send_message",
+        "wait_agent",
+        "interrupt_agent",
+    ] {
+        assert_eq!(
+            admitted
+                .capabilities
+                .tools
+                .iter()
+                .filter(|tool| tool.name == control)
+                .count(),
+            1,
+            "{control}"
+        );
+    }
+    let first = admitted.agents.remove(0);
     assert_eq!(first.state, AgentState::Active);
     first_gate.release();
     let waited = process
@@ -276,15 +297,32 @@ async fn real_child_resumes_same_identity_history_and_frozen_authority() {
 
     // Recovery reconstructs Agent ownership and the latest activation from
     // durable execution facts; resuming still opens the same child history.
+    // Issue #462 A11: the reopened Root admits no named Agent, so it composes
+    // none of the five model-facing controls, yet the existing durable
+    // identity keeps its authorized typed controls.
+    let unadmitted = SESSION_TOML.replace(r#"agents = ["explore"]"#, "agents = []");
+    assert_ne!(unadmitted, SESSION_TOML);
     let mut recovered = reopen_parent(
         root.path(),
         &models,
-        SESSION_TOML,
+        &unadmitted,
         "continuation-secret",
         &session_id,
     )
     .await;
     let restored = recovered.attach().await;
+    assert!(
+        restored.capabilities.tools.iter().all(|tool| ![
+            "subagent",
+            "list_agents",
+            "send_message",
+            "wait_agent",
+            "interrupt_agent"
+        ]
+        .contains(&tool.name.as_str())),
+        "{:?}",
+        restored.capabilities.tools
+    );
     assert_eq!(restored.agents.len(), 1);
     assert_eq!(restored.agents[0].agent_id, first.agent_id);
     assert_eq!(

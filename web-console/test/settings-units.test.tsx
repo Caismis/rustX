@@ -6,7 +6,7 @@ import { AgentPage } from '../src/app/settings/agent/AgentPage';
 import { ToolsPage } from '../src/app/settings/tools/ToolsPage';
 import { ExtensionDetail } from '../src/app/settings/extensions/ExtensionDetail';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
-import type { ModelLayer, RuntimeLayer, SourceScope, SourceSettings } from '../../protocol/app-server/v44';
+import type { ModelLayer, RuntimeLayer, SourceScope, SourceSettings } from '../../protocol/app-server/v45';
 import { chooseOption, confirmAction, renderEditor, sameRevision } from './settings-harness';
 import type { WriteOutcome } from '../src/app/settings/machines/port';
 import { act } from '@testing-library/react';
@@ -102,6 +102,31 @@ it.each(['all', 'none', 'exact'] as const)('writes exact native %s Skill selecti
   await waitFor(() => expect(write).toHaveBeenCalledWith({ kind: 'config', mutation: { unit: 'skills', authored: mode === 'all' ? 'all' : mode === 'none' ? [] : ['review'] } }, 's1'));
 });
 
+it('presents the five Agent controls as one automatic group, never as ordinary Tool selections', async () => {
+  // Issue #462 D03: native composes the group from the Agent allowlist alone.
+  const controls = ['subagent', 'list_agents', 'send_message', 'wait_agent', 'interrupt_agent'];
+  const source = workspaceSource();
+  await renderEditor(toolsPage(source, {}, 'workspace', 'c1'), { source, context: source });
+  const whitelist = within(screen.getByRole('group', { name: 'Explicit whitelist' }));
+  expect(whitelist.getByRole('checkbox', { name: 'read' })).toBeTruthy();
+  for (const name of controls) expect(whitelist.queryByRole('checkbox', { name })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Advanced Tool policies' }));
+  for (const name of controls) expect(screen.queryByRole('form', { name: `${name} policy` })).toBeNull();
+  expect(screen.getByRole('note', { name: 'Agent controls' }).textContent).toContain('Admitting at least one named Agent');
+  cleanup();
+  const composed = workspaceSource();
+  composed.prospective_resources = {
+    definitions: [], resource_diagnostics: [], agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [],
+    main: {
+      identity: { kind: 'main' }, tools: [], tool_selection: [], skills: [], agents: ['reviewer'], workflows: [], plugins: [], diagnostics: [],
+      agent_controls: controls.map(name => ({ id: `tool-${name}`, name, origin: 'builtin' as const })),
+    },
+  };
+  await renderEditor(toolsPage(composed, {}, 'workspace', 'c2'), { source: composed, context: composed });
+  expect(screen.getByRole('note', { name: 'Agent controls' }).textContent)
+    .toBe('Composed automatically from the Agent allowlist: subagent, list_agents, send_message, wait_agent, interrupt_agent. These controls cannot be selected or configured individually.');
+});
+
 it('writes Native and MCP invocation policies independently, and an empty policy only when explicitly authored', async () => {
   const context = workspaceSource();
   const { writes: write } = await renderEditor(toolsPage(context, {}, 'workspace', 'p1'), { source: context, context });
@@ -126,9 +151,9 @@ it('writes Native and MCP invocation policies independently, and an empty policy
   await waitFor(() => expect(write.mock.calls[1][0]).toEqual({ kind: 'config', mutation: { unit: 'mcp_policy', id: 'search', authored: {} } }));
 });
 
-it('round-trips an independent Agent profile with delegation, guidance, model and worktree', async () => {
+it('round-trips an independent Agent profile with delegation, guidance and model', async () => {
   const source = cfg3Source();
-  const authored = { description: 'Review', instructions: 'Inspect', agents: ['helper'], workflows: ['audit'], model: { model: 'main', profile: 'deep', max_output_tokens: { mode: 'catalog_default' as const }, summary_model: { mode: 'session' as const }, request_params: { temperature: .5, nested: [null] } }, tools: { builtin: ['read'], sources: { 'python:analysis': 'all' as const, search: [] } }, skills: 'all' as const, agents_md: { inherit: false, files: ['REVIEW.md'] }, timeout_ms: '30000', worktree: { enabled: true, require_clean_parent: false }, plugins: { todo: { enabled: true }, goal: { enabled: false }, agent_status: { enabled: true, time: { enabled: false }, background: { enabled: true } } } };
+  const authored = { description: 'Review', instructions: 'Inspect', agents: ['helper'], workflows: ['audit'], model: { model: 'main', profile: 'deep', max_output_tokens: { mode: 'catalog_default' as const }, summary_model: { mode: 'session' as const }, request_params: { temperature: .5, nested: [null] } }, tools: { builtin: ['read'], sources: { 'python:analysis': 'all' as const, search: [] } }, skills: 'all' as const, agents_md: { inherit: false, files: ['REVIEW.md'] }, timeout_ms: '30000', plugins: { todo: { enabled: true }, goal: { enabled: false }, agent_status: { enabled: true, time: { enabled: false }, background: { enabled: true } } } };
   source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/workspace/.agents/agents/reviewer.toml', revision: 'agent-r1', authored } }];
   const { writes: write } = await renderEditor(<ExtensionDetail source={source} scope="workspace" revision="r1" models={['main']} profiles={{}} family="agent" name="reviewer" onFocus={noop} />, { source, context: source });
   // Opening an authored profile authors nothing new, so a no-op Save is

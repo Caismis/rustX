@@ -3274,9 +3274,7 @@ fn commit_subagent_ownership(store: &SqliteConversationStore, subagent: &Subagen
             definition_digest: "sha256:definition".to_owned(),
             profile_digest: "sha256:profile".to_owned(),
             ownership: rustx::events::types::SubagentOwnershipKind::Normal,
-            workspace: rustx::runtime::workspace::WorkspaceSnapshot::shared(
-                std::path::PathBuf::from("<shared-workspace>"),
-            ),
+            workspace: std::path::PathBuf::from("/shared-workspace"),
         },
     );
     let (event, authority) = crate::agent_authority::admit_agent(event);
@@ -3322,9 +3320,7 @@ fn commit_workflow_ownership(store: &SqliteConversationStore, subagent: &Subagen
                 definition_digest: "sha256:workflow-definition".to_owned(),
                 profile_digest: "sha256:profile".to_owned(),
                 ownership: rustx::events::types::SubagentOwnershipKind::Workflow,
-                workspace: rustx::runtime::workspace::WorkspaceSnapshot::shared(
-                    std::path::PathBuf::from("<shared-workspace>"),
-                ),
+                workspace: std::path::PathBuf::from("/shared-workspace"),
             },
         ))
         .expect("Workflow ownership");
@@ -3484,7 +3480,6 @@ fn a_durably_settled_subagent_needs_no_recovery() {
             &AgentId::new(format!("agent-{subagent}")),
             "explore",
             "sha256:definition",
-            &rustx::events::types::SubagentWorkspaceTerminalResource::None,
             fixed_time(),
         );
         store

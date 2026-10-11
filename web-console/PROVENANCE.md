@@ -2254,3 +2254,16 @@ change at every formerly allowed site in both current English and Chinese
 references. Other noise entries, global thresholds, retries, settle schedule
 and browser pins remain unchanged. The source inventory retains the Harness
 pin and records this concrete local CSS adaptation.
+
+## PR #463 integration with native child inspection
+
+The integration keeps PR #461's native child conversation, Trace, attachment
+and file-delivery presentation. Agent workspace values now carry the frozen
+Session path, and retired worktree disposal and Candidate controls are absent.
+The historical entries above retain the versions reviewed at those snapshots.
+The combined current contracts are App Server v45, Runtime Client v67, SQLite 56
+and Child IPC 32; see the [format inventory](../docs/agent-workflow-shared-workspace.md#format-and-version-inventory)
+for owners and rejection behavior. Imports and generated client contracts use
+App Server v45. The source inventory
+records the resulting local hashes and actual dependency closure; upstream
+Harness pins, licenses and source attribution remain unchanged.

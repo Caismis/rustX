@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { RuntimeClientSnapshot } from '../../protocol/app-server/v44';
+import type { RuntimeClientSnapshot } from '../../protocol/app-server/v45';
 import { interactionKey, OutcomeUncertain, RequestNotDispatched, RpcFailure } from '../src/client/app-server';
 import { conversation } from '../src/bindings/projection';
 import { deriveSessionProductState } from '../src/bindings/session-product';
@@ -14,7 +14,7 @@ describe('native App Server connection', () => {
     const s = server(); await s.connect();
     expect(s.client.getSnapshot().connection).toBe('connected');
     expect(s.client.getSnapshot().capabilities).toEqual(capabilities);
-    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 44 } });
+    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 45 } });
     expect(JSON.stringify(s.client.log.getSnapshot())).not.toContain(TOKEN);
   });
   it('rejects incompatible versions and missing native capabilities', async () => {
@@ -346,7 +346,7 @@ it.each(['preview', 'blocked', 'stale', 'not_found'] as const)('recovery settles
   await s.client.deleteSession('A', 'confirmed');
   s.handlers.set('session/recoverDeletion', () => ({ type: 'deletion', result: status === 'preview'
     ? { status, preview: { session_id: 'A', target_revision: 'fresh', owned_node_count: 1, owned_conversation_count: 1, owned_child_count: 0 } }
-    : status === 'blocked' ? { status, session_id: 'A', reason: { kind: 'workspace', resource_count: 1 } }
+    : status === 'blocked' ? { status, session_id: 'A', reason: { kind: 'invalid_ownership' } }
     : { status, session_id: 'A' } }));
   expect((await s.client.recoverSessionDeletion('A'))?.status).toBe(status);
   expect(s.client.getSnapshot().views.A?.deletionRecovery).toBeUndefined();

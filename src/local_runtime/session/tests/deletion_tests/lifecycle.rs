@@ -644,9 +644,16 @@ fn deletion_cleanup_path_failure_preserves_external_data_and_retries_same_work()
     ));
 }
 
+/// B12: Session deletion removes only the Session-private allocations it owns.
+/// A settled durable Agent adds no workspace blocker, a child admitted after
+/// the preview is a stale revision, and the shared Session workspace and the
+/// Agent's file effects in it survive the completed deletion.
 #[test]
-fn deletion_workspace_transition_is_stale_and_preview_blockers_are_typed() {
+fn deletion_never_removes_the_shared_session_workspace() {
     let (dir, mut catalog, preview) = fixture();
+    let workspace = dir.path().join("external-project");
+    fs::create_dir_all(&workspace).unwrap();
+    fs::write(workspace.join("user-work.txt"), b"preserve").unwrap();
     let node = catalog.document.sessions[&preview.session_id]
         .nodes
         .values()
@@ -656,24 +663,35 @@ fn deletion_workspace_transition_is_stale_and_preview_blockers_are_typed() {
     child(dir.path(), &store, 2, true);
     drop(store);
     assert!(matches!(
-        catalog.delete_preview(&preview.session_id),
-        SessionDeleteResult::Blocked {
-            reason: DeletionBlocker::Workspace { .. },
-            ..
-        }
-    ));
-    assert!(matches!(
         catalog
             .commit_delete(&preview.session_id, &preview.target_revision)
             .unwrap(),
         Err(SessionDeleteResult::Stale { .. })
     ));
-    assert!(
-        dir.path()
-            .join("workspaces/worktrees/retained/user-work.txt")
-            .exists()
-    );
     assert!(catalog.document.deletions.is_empty());
+    let SessionDeleteResult::Preview { preview: current } =
+        catalog.delete_preview(&preview.session_id)
+    else {
+        panic!("a settled shared-workspace Agent adds no deletion blocker");
+    };
+    let work = catalog
+        .commit_delete(&current.session_id, &current.target_revision)
+        .unwrap()
+        .unwrap();
+    let result = work.run();
+    assert!(matches!(
+        catalog.finish_delete(&work.record, result),
+        SessionDeleteResult::Deleted { .. }
+    ));
+    assert_eq!(
+        fs::read(workspace.join("user-work.txt")).unwrap(),
+        b"preserve"
+    );
+}
+
+#[test]
+fn deletion_preview_blockers_are_typed() {
+    let (_dir, catalog, preview) = fixture();
     let node = catalog.document.sessions[&preview.session_id]
         .nodes
         .values()

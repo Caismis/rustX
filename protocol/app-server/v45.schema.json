@@ -1285,35 +1285,6 @@
           "properties": {
             "method": {
               "type": "string",
-              "const": "subagent/disposeWorkspace"
-            },
-            "params": {
-              "type": "object",
-              "properties": {
-                "target": {
-                  "$ref": "#/$defs/AttachmentTarget"
-                },
-                "subagent_id": {
-                  "$ref": "#/$defs/SubagentId"
-                }
-              },
-              "additionalProperties": false,
-              "required": [
-                "target",
-                "subagent_id"
-              ]
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "method": {
-              "type": "string",
               "const": "initialize"
             },
             "params": {
@@ -5794,7 +5765,7 @@
       "additionalProperties": false
     },
     "AgentProfileDocument": {
-      "description": "Strict Agent Profile authoring shared by root and named Agents.\n\nComplete selected intent resolves against admitted resources. Execution\nscope controls child lifecycle/worktree applicability. Dynamic child\ninvocations may replace only Tools, Skills and Extensions within their\nfrozen delegation ceiling; the other dimensions remain authored defaults.",
+      "description": "Strict Agent Profile authoring shared by root and named Agents.\n\nComplete selected intent resolves against admitted resources. Execution\nscope controls child lifecycle applicability. Dynamic child\ninvocations may replace only Tools, Skills and Extensions within their\nfrozen delegation ceiling; the other dimensions remain authored defaults.",
       "type": "object",
       "properties": {
         "agents": {
@@ -5865,14 +5836,6 @@
             "files": []
           }
         },
-        "worktree": {
-          "description": "The bounded project-workspace policy of this agent.",
-          "$ref": "#/$defs/AgentWorktreeDocument",
-          "default": {
-            "enabled": false,
-            "require_clean_parent": true
-          }
-        },
         "plugins": {
           "description": "Closed native Extension composition. Omission selects none. Root\nproduct defaults are an explicit lower-priority authoring layer,\nindependent of this complete document's semantics.",
           "$ref": "#/$defs/NativeAgentExtensionsDocument",
@@ -5914,23 +5877,6 @@
             "$ref": "#/$defs/SourceToolSelection"
           },
           "default": {}
-        }
-      },
-      "additionalProperties": false
-    },
-    "AgentWorktreeDocument": {
-      "description": "The resource representation of a named subagent's optional Git worktree\nisolation. An omitted or disabled value is the existing shared-workspace\nbehavior; there is no model-facing per-call override.\n\nIssue #188: when enabled, isolation runs the child from the committed\nparent `HEAD` snapshot. `require_clean_parent` defaults to `true`\n(strict): the parent source workspace must be clean, otherwise the child\nis rejected rather than silently dropping parent-local changes. Only an\nexplicit `\"require_clean_parent\": false` permits a dirty parent while the\nchild still receives exactly the committed snapshot.",
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "description": "Whether this named definition uses an isolated Git worktree.",
-          "type": "boolean",
-          "default": false
-        },
-        "require_clean_parent": {
-          "description": "Whether acquisition rejects a dirty parent workspace/index.\n\nThis is the one authoritative strictness switch, normalized at the\nconfiguration boundary: it defaults to `true` whenever isolation is\nenabled, and an explicit `false` is the intentional opt-out that runs\nfrom the captured committed `HEAD` while excluding dirty parent bytes.",
-          "type": "boolean",
-          "default": true
         }
       },
       "additionalProperties": false
@@ -6715,31 +6661,6 @@
             "type",
             "agent_id",
             "agent"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "subagent_id": {
-              "$ref": "#/$defs/SubagentId"
-            },
-            "workspace": {
-              "$ref": "#/$defs/RuntimeClientAgentWorkspace"
-            },
-            "outcome": {
-              "$ref": "#/$defs/RuntimeClientAgentWorkspaceDisposalOutcome"
-            },
-            "type": {
-              "type": "string",
-              "const": "workspace_disposed"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "subagent_id",
-            "workspace",
-            "outcome"
           ]
         },
         {
@@ -14080,10 +14001,9 @@
           "$ref": "#/$defs/ReviewSubject"
         },
         "context": {
+          "description": "Bounded committed Workflow values presented beside the subject.",
           "type": "array",
-          "items": {
-            "$ref": "#/$defs/ReviewFact"
-          }
+          "items": true
         }
       },
       "additionalProperties": false,
@@ -14099,16 +14019,6 @@
           "type": "object",
           "properties": {
             "content": true,
-            "candidate": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/CandidateReference"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "type": {
               "type": "string",
               "const": "plan"
@@ -14119,71 +14029,7 @@
             "type",
             "content"
           ]
-        },
-        {
-          "description": "The native owner keeps this checkout exclusively borrowed while pending.\nThis is an inspection reference, not an inlined or truncated diff.",
-          "type": "object",
-          "properties": {
-            "reference": {
-              "$ref": "#/$defs/CandidateReference"
-            },
-            "inspection_path": {
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "candidate"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "reference",
-            "inspection_path"
-          ]
         }
-      ]
-    },
-    "CandidateReference": {
-      "description": "Historical source identity. Possession of this value grants no access.",
-      "type": "object",
-      "properties": {
-        "run": {
-          "$ref": "#/$defs/WorkflowRunId"
-        },
-        "version": {
-          "type": "string",
-          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-        },
-        "content": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "run",
-        "version",
-        "content"
-      ]
-    },
-    "ReviewFact": {
-      "type": "object",
-      "properties": {
-        "value": true,
-        "candidate": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/CandidateReference"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "value"
       ]
     },
     "ToolInvocationId": {
@@ -14565,19 +14411,6 @@
           ]
         },
         {
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "review_invalidated"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "additionalProperties": false
-        },
-        {
           "description": "A native execution deadline interrupted the approval rendezvous.",
           "type": "object",
           "properties": {
@@ -14868,8 +14701,8 @@
           "format": "date-time"
         },
         "workspace": {
-          "description": "The model-independent project workspace facts.",
-          "$ref": "#/$defs/RuntimeClientAgentWorkspace"
+          "description": "The Session execution binding this Agent froze at creation.",
+          "type": "string"
         }
       },
       "additionalProperties": false,
@@ -15244,189 +15077,6 @@
       "required": [
         "model",
         "reasoning_enabled"
-      ]
-    },
-    "RuntimeClientAgentWorkspace": {
-      "description": "User-recoverable facts about the project workspace authority of one\nsubagent. Acquisition and settlement policy remain native runtime\nresponsibilities; this is only a read-model projection.",
-      "type": "object",
-      "properties": {
-        "borrowed_from": {
-          "description": "Present when the Workflow run, rather than this child, owns the lease.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/WorkflowRunId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "logical_workspace": {
-          "description": "The authoritative logical project workspace used by the child.",
-          "type": "string"
-        },
-        "isolation": {
-          "description": "The closed shared/isolated execution facts.",
-          "$ref": "#/$defs/RuntimeClientWorkspaceIsolation"
-        },
-        "resource_state": {
-          "description": "The post-terminal physical-resource lifecycle, independent of the\nchild's absorbing logical terminal state.",
-          "$ref": "#/$defs/SubagentWorkspaceResourceState"
-        },
-        "handoff": {
-          "description": "Retained child work-product facts, if the worktree was handed off.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RuntimeClientWorkspaceHandoff"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "logical_workspace",
-        "isolation",
-        "resource_state"
-      ]
-    },
-    "RuntimeClientWorkspaceIsolation": {
-      "description": "The external read-model projection of a child workspace's isolation mode.",
-      "oneOf": [
-        {
-          "description": "No runtime-owned physical checkout exists.",
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "shared"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "description": "A physical Git worktree backs the preserved logical project scope.",
-          "type": "object",
-          "properties": {
-            "source_repository_root": {
-              "description": "The canonical source repository root.",
-              "type": "string"
-            },
-            "repository_relative_workspace": {
-              "description": "The logical project scope relative to the source repository root.",
-              "type": "string"
-            },
-            "physical_worktree_root": {
-              "description": "The runtime-owned physical worktree root.",
-              "type": "string"
-            },
-            "base_commit": {
-              "description": "The exact committed source snapshot selected before ownership.",
-              "type": "string"
-            },
-            "branch": {
-              "description": "The runtime-created branch/ref.",
-              "type": "string"
-            },
-            "parent_had_uncommitted_changes": {
-              "description": "Whether the parent had uncommitted changes at selection time.",
-              "type": "boolean"
-            },
-            "type": {
-              "type": "string",
-              "const": "git_worktree"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "source_repository_root",
-            "repository_relative_workspace",
-            "physical_worktree_root",
-            "base_commit",
-            "branch",
-            "parent_had_uncommitted_changes"
-          ]
-        }
-      ]
-    },
-    "SubagentWorkspaceResourceState": {
-      "description": "The post-terminal physical-resource lifecycle of one subagent workspace.\n\nThis is deliberately separate from [`SubagentState`]. A child remains in\nits absorbing logical terminal state while its retained worktree moves\nthrough this bounded resource protocol.",
-      "oneOf": [
-        {
-          "description": "No retained isolated worktree exists for this child.",
-          "type": "string",
-          "const": "none"
-        },
-        {
-          "description": "A changed isolated worktree is available for handoff.",
-          "type": "string",
-          "const": "retained"
-        },
-        {
-          "description": "A runtime-created physical workspace may remain, but terminal\nsettlement did not establish a complete handoff proof.",
-          "type": "string",
-          "const": "preserved_unresolved"
-        },
-        {
-          "description": "Disposal intent is durable, but physical settlement is unfinished.",
-          "type": "string",
-          "const": "disposal_in_progress"
-        },
-        {
-          "description": "The worktree was runtime-authorized and removed; branch settlement is\nstill pending or was refused by compare-and-delete.",
-          "type": "string",
-          "const": "worktree_removed"
-        },
-        {
-          "description": "The exact authorized worktree and branch are durably settled.",
-          "type": "string",
-          "const": "disposed"
-        }
-      ]
-    },
-    "RuntimeClientWorkspaceHandoff": {
-      "description": "The Git facts needed to recover a preserved child worktree.",
-      "type": "object",
-      "properties": {
-        "logical_workspace": {
-          "description": "The child's preserved logical project scope.",
-          "type": "string"
-        },
-        "physical_worktree_root": {
-          "description": "The preserved physical Git worktree root.",
-          "type": "string"
-        },
-        "branch": {
-          "description": "The runtime-created branch/ref.",
-          "type": "string"
-        },
-        "base_commit": {
-          "description": "The selected source commit.",
-          "type": "string"
-        },
-        "head_commit": {
-          "description": "The final child `HEAD`.",
-          "type": "string"
-        },
-        "dirty": {
-          "description": "Whether ordinary tracked/index/untracked-non-ignored child state is\ndirty. A changed child `HEAD` is reported independently by\n`head_commit` and `base_commit`.",
-          "type": "boolean"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "logical_workspace",
-        "physical_worktree_root",
-        "branch",
-        "base_commit",
-        "head_commit",
-        "dirty"
       ]
     },
     "AgentConversation": {
@@ -15855,33 +15505,6 @@
           "format": "uint",
           "minimum": 0,
           "maximum": 9007199254740991
-        },
-        "candidate": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/CandidateReference"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "candidate_users": {
-          "description": "Admitted candidate users, including serialized workspace waiters.\nWhile nonzero no historical check certifies the mutable workspace.",
-          "type": "integer",
-          "format": "uint",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "handoff": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/WorkflowHandoff"
-            },
-            {
-              "type": "null"
-            }
-          ]
         }
       },
       "additionalProperties": false,
@@ -15896,8 +15519,7 @@
         "omitted_instances",
         "steps_consumed",
         "steps_max",
-        "agents_consumed",
-        "candidate_users"
+        "agents_consumed"
       ]
     },
     "RuntimeResourceRevision": {
@@ -15988,7 +15610,6 @@
         "tool",
         "agent",
         "capacity",
-        "workspace",
         "questionnaire",
         "approval",
         "review",
@@ -16102,16 +15723,6 @@
             }
           ]
         },
-        "candidate": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/CandidateReference"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "checks_passed": {
           "type": [
             "boolean",
@@ -16151,26 +15762,6 @@
       "enum": [
         "satisfied",
         "exhausted"
-      ]
-    },
-    "WorkflowHandoff": {
-      "type": "object",
-      "properties": {
-        "state": {
-          "type": "string"
-        },
-        "path": {
-          "type": "string"
-        },
-        "truncated": {
-          "type": "boolean"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "state",
-        "path",
-        "truncated"
       ]
     },
     "AdoptionEligibility": {
@@ -17298,6 +16889,13 @@
             "$ref": "#/$defs/ToolInspection"
           }
         },
+        "agent_controls": {
+          "description": "The runtime-composed Agent control group. It is derived from the\nadmitted `agents` alone, never from `tool_selection`, and is either\nempty or all five controls.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ToolInspection"
+          }
+        },
         "tool_selection": {
           "type": "array",
           "items": {
@@ -17339,6 +16937,7 @@
       "required": [
         "identity",
         "tools",
+        "agent_controls",
         "tool_selection",
         "skills",
         "agents",
@@ -18696,31 +18295,6 @@
         "running"
       ]
     },
-    "RuntimeClientAgentWorkspaceDisposalOutcome": {
-      "description": "The public result of disposing a retained subagent workspace.",
-      "oneOf": [
-        {
-          "description": "The retained physical worktree and its exact runtime branch were\nremoved by this request.",
-          "type": "string",
-          "const": "disposed"
-        },
-        {
-          "description": "The same child resource was disposed by an earlier request. No\nphysical deletion is attempted for this result.",
-          "type": "string",
-          "const": "already_disposed"
-        },
-        {
-          "description": "The exact worktree was removed, but branch compare-delete settlement\nremains pending and the identity-based request may be retried.",
-          "type": "string",
-          "const": "disposal_pending"
-        },
-        {
-          "description": "The child has no retained isolated resource to dispose.",
-          "type": "string",
-          "const": "no_retained_workspace"
-        }
-      ]
-    },
     "ServerCapabilities": {
       "type": "object",
       "properties": {
@@ -19244,26 +18818,6 @@
             "kind"
           ],
           "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "resource_count": {
-              "type": "integer",
-              "format": "uint64",
-              "minimum": 0,
-              "maximum": 9007199254740991
-            },
-            "kind": {
-              "type": "string",
-              "const": "workspace"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "kind",
-            "resource_count"
-          ]
         },
         {
           "type": "object",
@@ -22617,20 +22171,6 @@
     "InteractionOutcome": {
       "description": "The terminal outcome delivered to the semantic waiter.",
       "oneOf": [
-        {
-          "description": "Native source interference invalidated the pending business subject.",
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "review_invalidated"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "additionalProperties": false
-        },
         {
           "description": "A native ancestor deadline won the rendezvous.",
           "type": "object",

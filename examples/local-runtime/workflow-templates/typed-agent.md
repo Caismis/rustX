@@ -27,4 +27,4 @@ of one provider request. The Agent Loop may make multiple requests.
 
 Tool invocation input: `{"topic":"Why explicit typed boundaries help"}`.
 Expected output shape: `{"summary":"..."}`. Content is a future model result.
-This example requires no Git repository, workspace candidate, Python or MCP.
+This example requires no Git repository, Python or MCP.

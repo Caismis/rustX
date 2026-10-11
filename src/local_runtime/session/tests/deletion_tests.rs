@@ -1,12 +1,9 @@
-mod borrowed_workspace;
 mod durable_agents;
 mod lifecycle;
-mod workflow_disposal;
 
 use super::*;
 use crate::local_runtime::session_deletion::DeletionTargetSnapshot;
 use crate::runtime::identity::{AgentId, SubagentId};
-use crate::runtime::workspace::{GitWorktreeSnapshot, WorkspaceIsolation, WorkspaceSnapshot};
 
 /// Current native Agent admission fixture. Workflow children have no durable
 /// continuation authority and keep their finite Workflow owner unchanged.
@@ -22,7 +19,6 @@ pub(crate) fn admit_agent(
         ownership: crate::events::types::SubagentOwnershipKind::Normal,
         agent,
         definition_digest,
-        workspace,
         ..
     } = &mut envelope.event
     {
@@ -38,13 +34,6 @@ pub(crate) fn admit_agent(
                 definition_digest: serde_json::from_value(serde_json::json!(definition_digest))
                     .unwrap(),
                 execution_deadline: None,
-                workspace_policy: if workspace.is_isolated() {
-                    crate::runtime::workspace::WorkspacePolicy::GitWorktree {
-                        require_clean_parent: true,
-                    }
-                } else {
-                    crate::runtime::workspace::WorkspacePolicy::SharedWorkspace
-                },
                 instructions: "fixture".into(),
                 model: crate::model::frozen::test_frozen_model_spec(
                     serde_json::from_value(serde_json::json!("local/model")).unwrap(),
@@ -67,33 +56,21 @@ pub(crate) fn admit_agent(
     panic!("fixture requires native Agent ownership")
 }
 
+/// Admits one durable native Agent child bound to the shared Session
+/// workspace `<root>/external-project`. A `settled` child also publishes its
+/// physically proven terminal, so it holds no deletion barrier.
 pub(super) fn child(
     root: &std::path::Path,
     parent: &SqliteConversationStore,
     ordinal: u64,
-    isolated: bool,
+    settled: bool,
 ) -> ConversationId {
     let session =
         crate::local_runtime::session_ownership::conversation_owner(root, parent.conversation_id())
             .unwrap();
     let subagent = SubagentId::for_conversation(parent.conversation_id(), ordinal);
     let id = ConversationId::generate();
-    let workspace = if isolated {
-        WorkspaceSnapshot {
-            borrowed_from: None,
-            logical_workspace: root.join("workspaces/worktrees/retained"),
-            isolation: WorkspaceIsolation::GitWorktree(GitWorktreeSnapshot {
-                source_repository_root: root.join("external-project"),
-                repository_relative_workspace: std::path::PathBuf::new(),
-                physical_worktree_root: root.join("workspaces/worktrees/retained"),
-                base_commit: "a".repeat(40),
-                branch: "rustx/retained".into(),
-                parent_had_uncommitted_changes: false,
-            }),
-        }
-    } else {
-        WorkspaceSnapshot::shared(root.join("external-project"))
-    };
+    let workspace = root.join("external-project");
     let (event, authority) = crate::local_runtime::session::tests::deletion_tests::admit_agent(
         crate::runtime::subagent::ownership_event(
             &crate::runtime::identity::AgentId::new("agent-parent"),
@@ -114,24 +91,7 @@ pub(super) fn child(
         ),
     );
     parent.append_agent_admission(event, &authority).unwrap();
-    if isolated {
-        let tree = workspace.git_worktree().unwrap();
-        std::fs::create_dir_all(&tree.physical_worktree_root).unwrap();
-        std::fs::write(
-            tree.physical_worktree_root.join("user-work.txt"),
-            "preserve",
-        )
-        .unwrap();
-        let resource = crate::events::types::SubagentWorkspaceTerminalResource::Retained {
-            handoff: crate::runtime::workspace::WorkspaceHandoff {
-                logical_workspace: workspace.logical_workspace.clone(),
-                physical_worktree_root: tree.physical_worktree_root.clone(),
-                branch: tree.branch.clone(),
-                base_commit: tree.base_commit.clone(),
-                head_commit: tree.base_commit.clone(),
-                dirty: true,
-            },
-        };
+    if settled {
         let (draft, event) = crate::runtime::subagent::terminal_publication(
             parent.conversation_id(),
             &subagent,
@@ -142,7 +102,6 @@ pub(super) fn child(
                     text: "fixture physical settlement proven".into(),
                 },
             )],
-            &resource,
             true,
             Utc::now(),
         );
@@ -251,7 +210,7 @@ fn deletion_tree_membership_excludes_independent_fork_clone_and_shared_resources
 }
 
 #[test]
-fn deletion_nested_durable_children_restart_and_workspace_blocker() {
+fn deletion_nested_durable_children_restart_without_owning_the_shared_workspace() {
     let (directory, catalog, _) = open_catalog();
     let (session, node, _) = catalog
         .lineage(&first_session(&catalog), None)
@@ -291,21 +250,13 @@ fn deletion_nested_durable_children_restart_and_workspace_blocker() {
             .collect::<BTreeSet<_>>(),
         BTreeSet::from([node.conversation_id, child_id, grandchild])
     );
-    assert_eq!(preflight.workspace_blockers().len(), 1);
-    let worktree = &preflight.workspace_blockers()[0]
-        .workspace
-        .git_worktree()
-        .unwrap()
-        .physical_worktree_root;
+    let workspace = directory.path().join("external-project");
     assert!(
         preflight
             .conversations()
             .iter()
-            .all(|c| !worktree.starts_with(&c.private_root))
-    );
-    assert_eq!(
-        std::fs::read_to_string(worktree.join("user-work.txt")).unwrap(),
-        "preserve"
+            .all(|c| !workspace.starts_with(&c.private_root)),
+        "the shared Session workspace is never a deletion-owned private root"
     );
 }
 
@@ -528,7 +479,7 @@ fn deletion_duplicate_and_cyclic_child_identity_fail_closed() {
             &serde_json::from_value(serde_json::json!(format!("sha256:{}", "a".repeat(64))))
                 .unwrap(),
             crate::events::types::SubagentOwnershipKind::Normal,
-            &WorkspaceSnapshot::shared(root.path().join("external")),
+            &root.path().join("external"),
             Utc::now(),
         ),
     );
@@ -789,54 +740,6 @@ fn deletion_revision_changes_for_target_nodes_children_and_nested_children() {
 }
 
 #[test]
-fn activation_disposal_cannot_release_durable_agent_workspace_ownership() {
-    use crate::events::types::SubagentWorkspaceDisposalSettlement;
-    let (root, catalog, _) = open_catalog();
-    let session = first_session(&catalog);
-    let (node, _) = catalog.lineage(&session, None).unwrap();
-    let parent = store_for(&catalog, &session, &node.conversation_id);
-    child(root.path(), &parent, 1, true);
-    let preflight = DeletionTargetSnapshot::inspect(root.path(), &session).unwrap();
-    let workspace = &preflight.workspace_blockers()[0].workspace;
-    let tree = workspace.git_worktree().unwrap();
-    let handoff = crate::runtime::workspace::WorkspaceHandoff {
-        logical_workspace: workspace.logical_workspace.clone(),
-        physical_worktree_root: tree.physical_worktree_root.clone(),
-        branch: tree.branch.clone(),
-        base_commit: tree.base_commit.clone(),
-        head_commit: tree.base_commit.clone(),
-        dirty: true,
-    };
-    drop(preflight);
-    let id = SubagentId::for_conversation(&node.conversation_id, 1);
-    parent
-        .commit_subagent_workspace_disposal_intent(
-            crate::runtime::subagent::workspace_disposal_started_event(
-                &node.conversation_id,
-                &id,
-                &handoff,
-                Utc::now(),
-            ),
-        )
-        .unwrap();
-    parent
-        .commit_subagent_workspace_disposal_settlement(
-            crate::runtime::subagent::workspace_disposal_settled_event(
-                &node.conversation_id,
-                &id,
-                &handoff,
-                SubagentWorkspaceDisposalSettlement::Disposed,
-                Utc::now(),
-            ),
-        )
-        .unwrap();
-    assert!(
-        DeletionTargetSnapshot::inspect(root.path(), &session).is_err(),
-        "finite activation disposal must not erase its durable Agent's resource"
-    );
-}
-
-#[test]
 fn deletion_target_child_access_blocks_but_unrelated_child_access_does_not() {
     use crate::runtime::local_storage::{ConversationAccess, ProductRoot};
     let (root, mut catalog, _) = open_catalog();
@@ -928,7 +831,7 @@ fn deletion_snapshot_freezes_native_ownership_commits_but_not_ordinary_events() 
             &serde_json::from_value(serde_json::json!(format!("sha256:{}", "a".repeat(64))))
                 .unwrap(),
             crate::events::types::SubagentOwnershipKind::Normal,
-            &WorkspaceSnapshot::shared(root.path().join("external")),
+            &root.path().join("external"),
             Utc::now(),
         ),
     );
@@ -975,7 +878,7 @@ fn deletion_cross_session_child_claim_is_ambiguous_not_a_revision_change() {
             &serde_json::from_value(serde_json::json!(format!("sha256:{}", "a".repeat(64))))
                 .unwrap(),
             crate::events::types::SubagentOwnershipKind::Normal,
-            &WorkspaceSnapshot::shared(root.path().join("external")),
+            &root.path().join("external"),
             Utc::now(),
         ),
     );

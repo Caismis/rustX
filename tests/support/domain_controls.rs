@@ -5,7 +5,6 @@ use std::sync::Arc;
 use rustx::runtime::identity::{AgentId, ConversationId, ToolCallId};
 use rustx::runtime::subagent::{SubagentRegistry, SubagentRegistryConfig, SubagentSpawnPlan};
 use rustx::runtime::types::SystemClock;
-use rustx::runtime::workspace::WorkspaceManager;
 use rustx::tools::types::{
     ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolResultContent,
 };
@@ -58,7 +57,7 @@ pub(crate) fn subagent_plane_for(conversation: &str) -> SubagentPlane {
             product_root: crate::runtime::local_storage::ProductRoot::create(&runtime_root.clone())
                 .expect("product root"),
         },
-        workspace: WorkspaceManager::new(&workspace, &runtime_root),
+        workspace: workspace.clone(),
         max_active: 4,
     });
     SubagentPlane {

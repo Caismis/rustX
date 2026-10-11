@@ -199,7 +199,7 @@ pub(crate) fn select_tools(
     let available_catalog = AvailableToolCatalog::new(
         available
             .iter()
-            .filter(|entry| !crate::runtime::agent_profile::is_dispatcher(&entry.definition))
+            .filter(|entry| !crate::runtime::agent_profile::is_profile_composed(&entry.definition))
             .cloned()
             .collect(),
     );
@@ -301,7 +301,8 @@ fn selected_definitions<'a>(
                     .iter()
                     .any(|id| definition.id == crate::tools::native::workflow_tool_id(id))
                 || (!profile.agents.is_empty()
-                    && definition.id == crate::tools::native::subagent_tool_id())
+                    && definition.origin == crate::tools::types::ToolOrigin::Builtin
+                    && crate::tools::native::is_agent_control(&definition.name))
         })
         .collect()
 }
@@ -496,26 +497,70 @@ mod tests {
         assert!(intent.validate().unwrap_err().contains("Plugin"));
     }
 
+    /// Issue #462 A02/A04/A05/A06/A15: the Agent control group is composed
+    /// from the Root `agents` admission alone. Discovered-but-unselected
+    /// definitions and Workflow-only admissions compose none of it; an empty
+    /// ordinary selection does not suppress it; no ordinary selection can
+    /// author any of its five names.
     #[test]
     fn dispatch_allowlists_do_not_expose_child_or_workflow_private_tools() {
         use crate::runtime::subagent::SubagentName;
         use crate::runtime::workflow::WorkflowId;
         let agent = SubagentName::parse("reviewer").unwrap();
         let workflow = WorkflowId::parse("review").unwrap();
-        let mut delegate = definition("subagent", ToolOrigin::Builtin);
-        delegate.id = crate::tools::native::subagent_tool_id();
         let mut run = definition("review", ToolOrigin::Builtin);
         run.id = crate::tools::native::workflow_tool_id(&workflow);
-        let available = [delegate, run, definition("private", ToolOrigin::Builtin)]
-            .map(|tool| ToolRegistration::plain(tool, Arc::new(NoopTool)));
+        let available = crate::tools::native::AGENT_CONTROL_TOOL_NAMES
+            .into_iter()
+            .map(|name| definition(name, ToolOrigin::Builtin))
+            .chain([run, definition("private", ToolOrigin::Builtin)])
+            .map(|tool| ToolRegistration::plain(tool, Arc::new(NoopTool)))
+            .collect::<Vec<_>>();
         let mut intent = profile(&[]);
         intent.admitted_agents.insert(agent.clone());
         intent.admitted_workflows.insert(workflow.clone());
+        // Discovered and admissible, but not selected by `agents`.
         assert!(select_tools(&available, &[], &intent).unwrap().1.is_empty());
-        intent.profile.agents = vec![agent];
+        // A Workflow-only admission is not a Root Agent admission.
         intent.profile.workflows = vec![workflow];
+        let (catalog, active) = select_tools(&available, &[], &intent).unwrap();
+        assert_eq!(names(&active), ["review"]);
+        // The composed group never enters the ordinary selectable universe.
+        assert!(
+            catalog
+                .definitions()
+                .iter()
+                .all(|tool| !crate::tools::native::is_agent_control(&tool.name))
+        );
+        intent.profile.agents = vec![agent];
+        assert!(intent.profile.tools.builtin.is_empty());
         let (_, active) = select_tools(&available, &[], &intent).unwrap();
-        assert_eq!(names(&active), ["subagent", "review"]);
+        assert_eq!(
+            names(&active),
+            [
+                "subagent",
+                "list_agents",
+                "send_message",
+                "wait_agent",
+                "interrupt_agent",
+                "review"
+            ]
+        );
+        for control in crate::tools::native::AGENT_CONTROL_TOOL_NAMES {
+            let mut authored = intent.clone();
+            authored.profile.tools.builtin = vec![control.into()];
+            assert!(
+                authored
+                    .validate()
+                    .unwrap_err()
+                    .contains("composed automatically"),
+                "{control}"
+            );
+            assert!(
+                select_tools(&available, &[], &authored).is_err(),
+                "{control}"
+            );
+        }
     }
 
     #[test]
