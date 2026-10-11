@@ -1836,7 +1836,7 @@ TanStack/XState unit bridge); invalid, non-object or duplicate-key text stays a
 local buffer that blocks submission, and formatting-only edits begin no draft.
 Native Rust remains the configuration authority. No upstream source is added.
 Inventory hashes and dependency closures describe this final source, including
-the v39 import renames.
+the v40 import renames.
 
 The #456 selection review separates configured from effective Profiles in the
 Harness-derived `ModelSelect`: its Profile submenu gains a "Model default

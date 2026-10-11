@@ -90,6 +90,11 @@ export function renderResourceBanner(
   const main = state.resources.inspection.main;
   if (main != null) {
     if (main.agents.length) sections.push(section("Agents", main.agents));
+    // The runtime composes these five controls from the Agents admission
+    // alone; they are never an ordinary Tool selection.
+    if (main.agent_controls.length) {
+      sections.push(section("Agent controls · automatic", main.agent_controls.map((tool) => tool.name)));
+    }
     if (main.workflows.length) sections.push(section("Workflows", main.workflows));
   }
   const groups = new Map<string, string[]>();

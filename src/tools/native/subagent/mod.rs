@@ -62,8 +62,8 @@ fn start_failure_result(error: &SubagentStartError) -> ToolExecutionResult {
 
 /// The canonical model-facing name of the intrinsic.
 pub const SUBAGENT_TOOL_NAME: &str = "subagent";
-pub(crate) fn tool_id() -> crate::runtime::identity::ToolId {
-    crate::runtime::identity::ToolId::new("tool-subagent")
+fn tool_id() -> crate::runtime::identity::ToolId {
+    super::agent_control_tool_id(SUBAGENT_TOOL_NAME)
 }
 
 /// The tool-owned registration of the `subagent` runtime intrinsic.
@@ -74,26 +74,22 @@ pub(crate) fn tool_id() -> crate::runtime::identity::ToolId {
 pub(super) fn registration(
     subagents: SubagentRegistry,
     catalog: &AgentCatalog,
-) -> Option<NativeToolRegistration> {
-    definition(catalog).map(|definition| {
-        NativeToolRegistration::new(
-            definition,
-            std::sync::Arc::new(SubagentExecutor { subagents }),
-        )
-    })
+) -> NativeToolRegistration {
+    NativeToolRegistration::new(
+        definition(catalog),
+        std::sync::Arc::new(SubagentExecutor { subagents }),
+    )
 }
 
-/// The canonical schema of the `subagent` intrinsic when this generation has
-/// at least one satisfiable route.
+/// The canonical schema of the `subagent` intrinsic for one nonempty
+/// admitted catalog.
 ///
-/// An empty catalog produces no definition: capability composition must never
-/// expose a model-facing Tool which every possible invocation is guaranteed
-/// to reject.
-pub(super) fn definition(catalog: &AgentCatalog) -> Option<ToolDefinition> {
-    if catalog.is_empty() {
-        return None;
-    }
-    Some(ToolDefinition {
+/// The Agent control composition never calls this for an empty catalog:
+/// capability composition must never expose a model-facing Tool which every
+/// possible invocation is guaranteed to reject.
+pub(super) fn definition(catalog: &AgentCatalog) -> ToolDefinition {
+    debug_assert!(!catalog.is_empty(), "an empty catalog composes no controls");
+    ToolDefinition {
         id: tool_id(),
         name: SUBAGENT_TOOL_NAME.to_owned(),
         description: format!(
@@ -117,7 +113,7 @@ pub(super) fn definition(catalog: &AgentCatalog) -> Option<ToolDefinition> {
         approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
-    })
+    }
 }
 
 /// The typed model-facing input contract of the `subagent` intrinsic.
@@ -1167,7 +1163,7 @@ chat_reasoning_replay = "omit"
 
     #[test]
     fn the_tool_description_is_derived_from_the_admitted_catalog() {
-        let described = definition(&catalog()).expect("a non-empty catalog has a route");
+        let described = definition(&catalog());
         assert!(
             described
                 .description
@@ -1184,8 +1180,13 @@ chat_reasoning_replay = "omit"
             described.description
         );
         assert!(
-            definition(&AgentCatalog::empty()).is_none(),
-            "an unsatisfiable subagent tool never enters the model-facing capability set"
+            crate::tools::native::definitions(
+                crate::tools::native::NativeToolPolicies::default(),
+                &AgentCatalog::empty(),
+            )
+            .iter()
+            .all(|(definition, _)| !crate::tools::native::is_agent_control(&definition.name)),
+            "an unsatisfiable Agent control group never enters the model-facing capability set"
         );
 
         // The schema stays small: exactly agent/task/context/override.
@@ -1220,7 +1221,7 @@ chat_reasoning_replay = "omit"
     /// must not advertise a spelling the deserializer refuses.
     #[test]
     fn sub258_the_override_schema_exposes_exactly_three_dimensions() {
-        let described = definition(&catalog()).expect("a non-empty catalog has a route");
+        let described = definition(&catalog());
         let over = &described.input_schema["properties"]["override"];
         let mut names = over["properties"]
             .as_object()

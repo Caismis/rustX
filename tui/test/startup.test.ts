@@ -27,7 +27,7 @@ async function connected() {
   const transport = new FakeTransport();
   const pending = AppServerClient.initialize({ transport });
   const [request] = await transport.log.awaitMethod("initialize");
-  transport.respond(request!.id, { type: "initialized", authority_id: 'fixture-app-server-authority', protocol_version: 39, capabilities: SERVER_CAPABILITIES });
+  transport.respond(request!.id, { type: "initialized", authority_id: 'fixture-app-server-authority', protocol_version: 40, capabilities: SERVER_CAPABILITIES });
   return { transport, host: new AppServerHost({ client: await pending, ownership: "external" }) };
 }
 async function catalog(transport: FakeTransport, sessions = rows, count = 1) {

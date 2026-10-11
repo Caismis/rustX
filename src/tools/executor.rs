@@ -625,6 +625,9 @@ pub enum ToolRegistryError {
     InvalidPolicy(String),
     /// The model-facing name belongs to a runtime-owned protocol.
     ReservedName(String),
+    /// A composed capability requires a runtime service this composition
+    /// does not own. This is never a valid zero-tool configuration.
+    MissingService(String),
 }
 
 impl core::fmt::Display for ToolRegistryError {
@@ -636,7 +639,9 @@ impl core::fmt::Display for ToolRegistryError {
                 "model-facing tool name {name:?} is already registered; \
                  tool names must be unambiguous"
             ),
-            Self::InvalidIdentity(message) => write!(f, "{message}"),
+            Self::InvalidIdentity(message) | Self::MissingService(message) => {
+                write!(f, "{message}")
+            }
             Self::InvalidSchema(message) => write!(f, "invalid tool schema: {message}"),
             Self::ModelSelectableSchema { name, reason } => write!(
                 f,

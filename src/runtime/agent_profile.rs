@@ -285,9 +285,14 @@ impl ResolvedAgentProfile {
     }
 }
 
-pub(crate) fn is_dispatcher(definition: &ToolDefinition) -> bool {
+/// Runtime-owned capabilities composed from a profile's `agents` and
+/// `workflows` admissions rather than from its ordinary Tool selection: the
+/// five Agent controls and the Workflow Tools. They are never part of the
+/// ordinary selectable universe, so no allowlist, exclusion or whitelist can
+/// name, enable or suppress them.
+pub(crate) fn is_profile_composed(definition: &ToolDefinition) -> bool {
     definition.origin == ToolOrigin::Builtin
-        && (definition.id == crate::tools::native::subagent_tool_id()
+        && (crate::tools::native::is_agent_control(&definition.name)
             || definition
                 .id
                 .as_str()
@@ -344,7 +349,7 @@ pub fn resolve_agent_profile(
                 .tools()
                 .iter()
                 .map(|entry| &entry.definition)
-                .filter(|definition| !is_dispatcher(definition)),
+                .filter(|definition| !is_profile_composed(definition)),
             authority.availability,
         ) {
             Ok(selected) => {
@@ -392,7 +397,7 @@ pub fn resolve_agent_profile(
             let unsupported = tool.origin == ToolOrigin::Builtin
                 && (crate::runtime::subagent::catalog::CHILD_UNSAFE_BUILTIN_TOOLS
                     .contains(&tool.name.as_str())
-                    || tool.name == crate::tools::native::SUBAGENT_TOOL_NAME);
+                    || crate::tools::native::is_agent_control(&tool.name));
             if unsupported {
                 diagnostics.push(AgentProfileDiagnostic::ScopeUnsupported {
                     capability: ScopeCapability::BuiltinTool(tool.id.clone()),
@@ -438,7 +443,7 @@ mod tests {
         AvailableToolCatalog::metadata(
             crate::tools::native::definitions(
                 crate::tools::native::NativeToolPolicies::default(),
-                Some(&crate::runtime::subagent::AgentCatalog::empty()),
+                &crate::runtime::subagent::AgentCatalog::empty(),
             )
             .into_iter()
             .map(|(definition, _)| definition),
@@ -700,6 +705,34 @@ mod tests {
 #[cfg(test)]
 mod composition_tests {
     use super::*;
+    /// Issue #462 A05: Root and named Profiles reject every explicitly
+    /// authored Agent control name instead of silently ignoring it.
+    #[test]
+    fn agent_controls_cannot_be_authored_in_root_or_named_profiles() {
+        for control in crate::tools::native::AGENT_CONTROL_TOOL_NAMES {
+            // Strict named-resource parsing refuses it at the file boundary.
+            let error = crate::local_runtime::agent_resources::parse(&format!(
+                "description = 'd'\ninstructions = 'i'\n[tools]\nbuiltin = ['read', '{control}']"
+            ))
+            .expect_err("an authored Agent control is invalid");
+            assert!(
+                error.to_string().contains("composed automatically"),
+                "{control}: {error}"
+            );
+            // The shared profile boundary refuses it for either kind.
+            let mut document = crate::local_runtime::config::AgentProfileDocument::default();
+            document.tools.builtin = vec!["read".into(), control.into()];
+            for kind in [AgentProfileKind::Root, AgentProfileKind::Named] {
+                let error = AgentProfile::from_document(&document, kind, Vec::new())
+                    .expect_err("an authored Agent control is invalid");
+                assert!(
+                    error.contains("composed automatically"),
+                    "{control}: {error}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn cfg273_delegation_composes_dispatcher_without_granting_child_tools() {
         let reviewer = SubagentName::parse("reviewer").unwrap();
@@ -715,7 +748,7 @@ mod composition_tests {
         .unwrap();
         let definitions = crate::tools::native::definitions(
             crate::tools::native::NativeToolPolicies::default(),
-            Some(&catalog),
+            &catalog,
         )
         .into_iter()
         .map(|(definition, _)| definition)
@@ -735,14 +768,18 @@ mod composition_tests {
             &CapabilityAvailability::new(),
         )
         .unwrap();
-        assert!(
-            selected
-                .iter()
-                .any(|tool| tool.id == crate::tools::native::subagent_tool_id())
-        );
+        // The whole Agent control group is composed from `agents`, exactly
+        // once each, independently of the ordinary `builtin` selection.
+        for name in crate::tools::native::AGENT_CONTROL_TOOL_NAMES {
+            assert_eq!(
+                selected.iter().filter(|tool| tool.name == name).count(),
+                1,
+                "{name}"
+            );
+        }
         assert!(selected.iter().any(|tool| tool.name == "read"));
         assert!(!selected.iter().any(|tool| tool.name == "grep"));
-        assert_eq!(selected.len(), 2);
+        assert_eq!(selected.len(), 6);
         let mut root_registry = crate::tools::executor::ToolRegistry::new();
         crate::tools::native::register_subagent_child_tools(
             &mut root_registry,
@@ -791,7 +828,7 @@ mod composition_tests {
         let tools = AvailableToolCatalog::metadata(
             crate::tools::native::definitions(
                 crate::tools::native::NativeToolPolicies::default(),
-                Some(&crate::runtime::subagent::AgentCatalog::empty()),
+                &crate::runtime::subagent::AgentCatalog::empty(),
             )
             .into_iter()
             .map(|(definition, _)| definition),
@@ -873,7 +910,7 @@ mod composition_tests {
         let tools = AvailableToolCatalog::metadata(
             crate::tools::native::definitions(
                 crate::tools::native::NativeToolPolicies::default(),
-                Some(&crate::runtime::subagent::AgentCatalog::empty()),
+                &crate::runtime::subagent::AgentCatalog::empty(),
             )
             .into_iter()
             .map(|(definition, _)| definition),
@@ -976,7 +1013,7 @@ mod composition_tests {
         let tools = AvailableToolCatalog::metadata(
             crate::tools::native::definitions(
                 crate::tools::native::NativeToolPolicies::default(),
-                Some(&crate::runtime::subagent::AgentCatalog::empty()),
+                &crate::runtime::subagent::AgentCatalog::empty(),
             )
             .into_iter()
             .map(|(definition, _)| definition),

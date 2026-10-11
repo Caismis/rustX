@@ -8,7 +8,7 @@ physical settlement, bounded output, watches and Event Journal primitives.
 | Domain | Identity | Owner | Lifecycle | Model tools |
 | --- | --- | --- | --- | --- |
 | Job | `ToolExecutionId`, exposed as `job_id` | Conversation's `ConversationBackgroundRegistry` | Active → terminal, permanently | `job_list`, `job_status`, `job_wait`, `job_cancel` |
-| Agent | `AgentId`, exposed as `agent_id` | Parent Conversation's `SubagentRegistry` | Inactive → Admitting → Active → Stopping → Inactive; unresolved authority → Unavailable | `subagent`, `list_agents`, `send_message`, `wait_agent`, `interrupt_agent` |
+| Agent | `AgentId`, exposed as `agent_id` | Parent Conversation's `SubagentRegistry` | Inactive → Admitting → Active → Stopping → Inactive; unresolved authority → Unavailable | `subagent`, `list_agents`, `send_message`, `wait_agent`, `interrupt_agent`, composed automatically as one Root-only group when `agent.agents` is nonempty |
 | Activation | Internal `SubagentId`, exposed as `activation_id` | One Agent and the shared finite child supervisor | Admission → running → stopping/settlement → terminal | Controlled through its owning Agent |
 
 An ordinary foreground Tool invocation is not a Job. One Job ID identifies one

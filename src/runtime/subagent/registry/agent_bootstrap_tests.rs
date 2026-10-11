@@ -150,9 +150,35 @@ async fn proven_child_loss_has_identical_resume_authority_before_and_after_reope
         .unwrap();
 }
 
+fn admitted_catalog(names: &[&str]) -> super::super::AgentCatalog {
+    super::super::AgentCatalog::new(names.iter().map(|name| {
+        let document = crate::local_runtime::agent_resources::parse(&format!(
+            "description = '{name} role'\ninstructions = 'Act as {name}'\n[tools]\nbuiltin = ['read']"
+        ))
+        .unwrap();
+        super::super::NamedAgentDefinition::new(
+            super::super::SubagentName::parse(name).unwrap(),
+            crate::runtime::agent_profile::AgentProfile::from_document(
+                &document,
+                crate::runtime::agent_profile::AgentProfileKind::Named,
+                Vec::new(),
+            )
+            .unwrap(),
+            format!("{name}.toml").into(),
+        )
+        .unwrap()
+    }))
+    .unwrap()
+}
+
+/// Issue #462 A01/A03/A13: one Root decision over one admitted catalog
+/// drives metadata and executable registrations. Zero admissions compose
+/// none of the five controls, any admission composes all five exactly once,
+/// and an admission without the registry service fails composition instead
+/// of publishing a degraded zero-tool state.
 #[tokio::test]
 async fn domain_tool_metadata_matches_registered_authority() {
-    use crate::tools::native::{NativeToolPolicies, NativeToolResources};
+    use crate::tools::native::{AGENT_CONTROL_TOOL_NAMES, NativeToolPolicies, NativeToolResources};
     let plane = plane(4);
     let artifacts = plane.dir.path().join("tool-artifacts");
     let background = crate::tools::background::ConversationBackgroundRegistry::new(
@@ -175,16 +201,20 @@ async fn domain_tool_metadata_matches_registered_authority() {
             event_sink: None,
         },
     );
-    let catalog = super::super::AgentCatalog::empty();
-    for owns_agents in [false, true] {
-        let policies = NativeToolPolicies::default();
-        let metadata = crate::tools::native::definitions(policies, owns_agents.then_some(&catalog));
+    let policies = NativeToolPolicies::default();
+    for (catalog, owns_registry) in [
+        (super::super::AgentCatalog::empty(), false),
+        (super::super::AgentCatalog::empty(), true),
+        (admitted_catalog(&["reviewer"]), true),
+        (admitted_catalog(&["reviewer", "explorer"]), true),
+    ] {
+        let metadata = crate::tools::native::definitions(policies, &catalog);
         let mut executable = crate::tools::executor::ToolRegistry::new();
         crate::tools::native::register_native_tools(
             &mut executable,
             NativeToolResources {
                 background: background.clone(),
-                subagents: owns_agents.then(|| plane.registry.clone()),
+                subagents: owns_registry.then(|| plane.registry.clone()),
                 subagent_catalog: catalog.clone(),
             },
             policies,
@@ -198,7 +228,13 @@ async fn domain_tool_metadata_matches_registered_authority() {
             executable.definitions()
         );
         let names = executable.names();
-        assert_eq!(names.contains(&"send_message"), owns_agents);
+        for control in AGENT_CONTROL_TOOL_NAMES {
+            assert_eq!(
+                names.iter().filter(|name| **name == control).count(),
+                usize::from(!catalog.is_empty()),
+                "{control} follows the admitted catalog alone"
+            );
+        }
         assert!(names.contains(&"job_wait"));
         // Both native and Workflow children share the frozen child registration
         // boundary, which must reject every domain control lacking its owner.
@@ -215,6 +251,21 @@ async fn domain_tool_metadata_matches_registered_authority() {
             assert!(child.definitions().is_empty());
         }
     }
+    let mut degraded = crate::tools::executor::ToolRegistry::new();
+    let error = crate::tools::native::register_native_tools(
+        &mut degraded,
+        NativeToolResources {
+            background: background.clone(),
+            subagents: None,
+            subagent_catalog: admitted_catalog(&["reviewer"]),
+        },
+        policies,
+    )
+    .expect_err("a nonempty admission without the registry is a composition failure");
+    assert!(matches!(
+        error,
+        crate::tools::executor::ToolRegistryError::MissingService(_)
+    ));
 }
 
 #[tokio::test]

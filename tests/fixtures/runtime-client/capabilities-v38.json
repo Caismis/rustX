@@ -11,6 +11,33 @@
         "origin": "builtin"
       }
     ],
+    "agent_controls": [
+      {
+        "id": "tool-subagent",
+        "name": "subagent",
+        "origin": "builtin"
+      },
+      {
+        "id": "tool-list_agents",
+        "name": "list_agents",
+        "origin": "builtin"
+      },
+      {
+        "id": "tool-send_message",
+        "name": "send_message",
+        "origin": "builtin"
+      },
+      {
+        "id": "tool-wait_agent",
+        "name": "wait_agent",
+        "origin": "builtin"
+      },
+      {
+        "id": "tool-interrupt_agent",
+        "name": "interrupt_agent",
+        "origin": "builtin"
+      }
+    ],
     "skills": [
       {
         "name": "rust-review",

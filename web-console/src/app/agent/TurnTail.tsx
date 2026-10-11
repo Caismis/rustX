@@ -1,7 +1,7 @@
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from MessageIconActions; see PROVENANCE.md. */
 import { useEffect, useState } from 'react';
-import type { CompletedResponseView } from '../../../../protocol/app-server/v39';
+import type { CompletedResponseView } from '../../../../protocol/app-server/v40';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
 import { IconCopyOutline16, IconCheckOutline16, IconBranchOutline16, IconRefreshOutline16 } from '../../presentation/primitives/icons';

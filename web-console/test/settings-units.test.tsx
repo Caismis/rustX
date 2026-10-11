@@ -6,7 +6,7 @@ import { AgentPage } from '../src/app/settings/agent/AgentPage';
 import { ToolsPage } from '../src/app/settings/tools/ToolsPage';
 import { ExtensionDetail } from '../src/app/settings/extensions/ExtensionDetail';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
-import type { ModelLayer, RuntimeLayer, SourceScope, SourceSettings } from '../../protocol/app-server/v39';
+import type { ModelLayer, RuntimeLayer, SourceScope, SourceSettings } from '../../protocol/app-server/v40';
 import { chooseOption, confirmAction, renderEditor, sameRevision } from './settings-harness';
 import type { WriteOutcome } from '../src/app/settings/machines/port';
 import { act } from '@testing-library/react';
@@ -100,6 +100,31 @@ it.each(['all', 'none', 'exact'] as const)('writes exact native %s Skill selecti
   if (mode === 'exact') fireEvent.change(form.getByLabelText('Visible Skills identities 1'), { target: { value: 'review' } });
   fireEvent.click(form.getByRole('button', { name: 'Save Skill visibility' }));
   await waitFor(() => expect(write).toHaveBeenCalledWith({ kind: 'config', mutation: { unit: 'skills', authored: mode === 'all' ? 'all' : mode === 'none' ? [] : ['review'] } }, 's1'));
+});
+
+it('presents the five Agent controls as one automatic group, never as ordinary Tool selections', async () => {
+  // Issue #462 D03: native composes the group from the Agent allowlist alone.
+  const controls = ['subagent', 'list_agents', 'send_message', 'wait_agent', 'interrupt_agent'];
+  const source = workspaceSource();
+  await renderEditor(toolsPage(source, {}, 'workspace', 'c1'), { source, context: source });
+  const whitelist = within(screen.getByRole('group', { name: 'Explicit whitelist' }));
+  expect(whitelist.getByRole('checkbox', { name: 'read' })).toBeTruthy();
+  for (const name of controls) expect(whitelist.queryByRole('checkbox', { name })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Advanced Tool policies' }));
+  for (const name of controls) expect(screen.queryByRole('form', { name: `${name} policy` })).toBeNull();
+  expect(screen.getByRole('note', { name: 'Agent controls' }).textContent).toContain('Admitting at least one named Agent');
+  cleanup();
+  const composed = workspaceSource();
+  composed.prospective_resources = {
+    definitions: [], resource_diagnostics: [], agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [],
+    main: {
+      identity: { kind: 'main' }, tools: [], tool_selection: [], skills: [], agents: ['reviewer'], workflows: [], plugins: [], diagnostics: [],
+      agent_controls: controls.map(name => ({ id: `tool-${name}`, name, origin: 'builtin' as const })),
+    },
+  };
+  await renderEditor(toolsPage(composed, {}, 'workspace', 'c2'), { source: composed, context: composed });
+  expect(screen.getByRole('note', { name: 'Agent controls' }).textContent)
+    .toBe('Composed automatically from the Agent allowlist: subagent, list_agents, send_message, wait_agent, interrupt_agent. These controls cannot be selected or configured individually.');
 });
 
 it('writes Native and MCP invocation policies independently, and an empty policy only when explicitly authored', async () => {

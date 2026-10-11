@@ -9441,6 +9441,12 @@ export interface AgentInspection {
   identity: AgentIdentity;
   source?: string | null;
   tools: ToolInspection[];
+  /**
+   * The runtime-composed Agent control group. It is derived from the
+   * admitted `agents` alone, never from `tool_selection`, and is either
+   * empty or all five controls.
+   */
+  agent_controls: ToolInspection[];
   tool_selection: AgentToolSelection[];
   skills: SkillProvenance[];
   agents: SubagentName[];

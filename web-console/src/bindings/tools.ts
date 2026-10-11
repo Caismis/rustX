@@ -1,4 +1,4 @@
-import type { ForegroundToolExecution } from '../../../protocol/app-server/v39';
+import type { ForegroundToolExecution } from '../../../protocol/app-server/v40';
 import type { ToolCardView } from '../presentation/agent/ToolCard';
 import { json } from './projection';
 const variants: Record<string, ToolCardView['variant']> = { 'tool-bash': 'bash', 'tool-read': 'read', 'tool-read-image': 'image', 'tool-write': 'write', 'tool-edit': 'edit', 'tool-glob': 'search', 'tool-grep': 'search' };

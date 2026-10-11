@@ -488,15 +488,13 @@ impl NamedAgentDefinition {
     }
 }
 
-/// Nested Agent ownership and published Session-file delivery mappings are not
-/// part of the child runtime composition.
-/// Finite Job controls remain available to a child's own background registry.
-pub const CHILD_UNSAFE_BUILTIN_TOOLS: [&str; 5] = [
+/// Published Session-file delivery mappings are not part of the child runtime
+/// composition. The Agent controls are not ordinary capabilities at all: they
+/// are the Root-only automatically composed group, so no child selection can
+/// name them. Finite Job controls remain available to a child's own
+/// background registry.
+pub const CHILD_UNSAFE_BUILTIN_TOOLS: [&str; 1] = [
     "present", // Delivery requires published native Session filesystem ownership.
-    "list_agents",
-    "send_message",
-    "wait_agent",
-    "interrupt_agent",
 ];
 
 /// A definition-level validation failure.

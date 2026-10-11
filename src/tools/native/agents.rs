@@ -2,7 +2,7 @@
 use super::input::decode;
 use super::registration::{NativeToolRegistration, input_schema};
 use super::support::{cancelled_result, failed_result, success_json};
-use crate::runtime::identity::{AgentId, ToolId};
+use crate::runtime::identity::AgentId;
 use crate::runtime::subagent::{AgentControlError, MAX_AGENT_LIST_LIMIT, SubagentRegistry};
 use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
@@ -45,7 +45,7 @@ pub(super) fn definitions() -> Vec<ToolDefinition> {
         (NAMES[2], "Wait for the reserved or current activation captured by this operation to physically settle. A later resumed activation cannot extend this wait. Inactive returns immediately.", input_schema::<TargetInput>()),
         (NAMES[3], "Interrupt the exact reserved admission or current activation captured by this operation and wait for physical settlement. The durable Agent remains available for later send_message.", input_schema::<TargetInput>()),
     ].into_iter().map(|(name, description, input_schema)| ToolDefinition {
-        id: ToolId::new(format!("tool-{name}")), name: name.into(), description: description.into(), input_schema,
+        id: super::agent_control_tool_id(name), name: name.into(), description: description.into(), input_schema,
         execution_policy: ToolExecutionPolicy::ForegroundOnly, concurrency_policy: ToolConcurrencyPolicy::Sequential,
         approval_policy: ToolApprovalPolicy::Never, replay_policy: ToolReplayPolicy::Never, origin: ToolOrigin::Builtin,
     }).collect()

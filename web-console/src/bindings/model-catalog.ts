@@ -1,4 +1,4 @@
-import type { ModelCatalogView, SessionModelConfig } from '../../../protocol/app-server/v39';
+import type { ModelCatalogView, SessionModelConfig } from '../../../protocol/app-server/v40';
 import type { ModelChoice, ModelSelectionIntent } from '../presentation/agent/ModelSelect';
 /** Native catalog order, Model Profiles and default profile, unchanged. */
 export function catalogChoices(catalog?: ModelCatalogView): ModelChoice[] {

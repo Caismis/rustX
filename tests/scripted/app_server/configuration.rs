@@ -9492,3 +9492,197 @@ async fn issue459_mixed_generations_keep_the_summary_policy_and_clients_agree() 
     }))
     .await;
 }
+
+/// The Agent control names and the `subagent` routing description of every
+/// provider request body after `from`.
+fn issue462_offered_controls(fixture: &Fixture, from: usize) -> Vec<(Vec<String>, String)> {
+    fixture.provider.request_bodies()[from..]
+        .iter()
+        .map(|body| {
+            let request: serde_json::Value = serde_json::from_str(body).unwrap();
+            let tools = request["tools"].as_array().cloned().unwrap_or_default();
+            let names = tools
+                .iter()
+                .filter_map(|tool| tool["function"]["name"].as_str())
+                .filter(|name| crate::tools::native::AGENT_CONTROL_TOOL_NAMES.contains(name))
+                .map(str::to_owned)
+                .collect();
+            let routing = tools
+                .iter()
+                .find(|tool| tool["function"]["name"] == "subagent")
+                .map(|tool| tool["function"]["description"].as_str().unwrap().to_owned())
+                .unwrap_or_default();
+            (names, routing)
+        })
+        .collect()
+}
+
+async fn issue462_admit(fixture: &Fixture, agents: &[&str]) -> ConfigurationApplication {
+    let agents: Vec<toml::Value> = agents.iter().map(|name| toml::Value::from(*name)).collect();
+    issue459_edit(fixture, move |document| {
+        document["agent"]
+            .as_table_mut()
+            .unwrap()
+            .insert("agents".into(), agents.into());
+    })
+    .await;
+    settled(fixture, 0).await
+}
+
+fn issue462_adopt(fixture: &Fixture, application: ConfigurationApplication) {
+    if let Some(candidate) = application.candidate {
+        fixture
+            .manager
+            .adopt_configuration(
+                &fixture.sessions[0].id,
+                &candidate.identity,
+                candidate.expected_binding,
+            )
+            .unwrap();
+    }
+}
+
+/// Issue #462 A01/A02/A08/A09/A10/A14: the five Agent controls reach the
+/// provider's `tools[]` exactly when the Root admits at least one valid named
+/// Agent, as one group of one admitted generation. Discovered but unselected
+/// definitions compose nothing; `0 -> 5 -> 0` and a nonempty-to-nonempty
+/// change publish matching names and routing atomically; an admitted Attempt
+/// keeps its original group and routing across a publication; an invalid
+/// selection publishes nothing and leaves the previous generation effective.
+#[allow(clippy::too_many_lines)] // one ordered publication sequence
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue462_agent_control_group_follows_one_admitted_generation() {
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_tool(Some("read")).await;
+        let id = fixture.sessions[0].id.clone();
+        let agents = fixture.workspaces[0].join(".agents/agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        for (name, description) in [("reviewer", "Review code"), ("explorer", "Explore code")] {
+            std::fs::write(
+                agents.join(format!("{name}.toml")),
+                format!("description='{description}'\ninstructions='Act as {name}'\n"),
+            )
+            .unwrap();
+        }
+        // The launch generation admits `reviewer` only.
+        let user = fixture
+            .manager
+            .source_settings(&SourceTarget::User, None)
+            .await
+            .unwrap()
+            .user
+            .path;
+        let mut document: toml::Value =
+            toml::from_str(&std::fs::read_to_string(&user).unwrap()).unwrap();
+        document["agent"]
+            .as_table_mut()
+            .unwrap()
+            .insert("agents".into(), vec![toml::Value::from("reviewer")].into());
+        std::fs::write(&user, toml::to_string(&document).unwrap()).unwrap();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        let five = |names: &[String]| {
+            let mut sorted = names.to_vec();
+            sorted.sort();
+            let mut expected = crate::tools::native::AGENT_CONTROL_TOOL_NAMES.to_vec();
+            expected.sort_unstable();
+            sorted == expected
+        };
+
+        // The first Attempt (the only one this fixture drives through a Tool
+        // call) is held while a nonempty-to-nonempty publication lands.
+        runtime.submit_inbound(input("request-B held")).unwrap();
+        fixture.gates[1].wait_entered().await;
+        let admitted = runtime
+            .configuration_view()
+            .unwrap()
+            .admitted_attempt
+            .unwrap();
+        let replacement = issue462_admit(&fixture, &["explorer"]).await;
+        assert_eq!(
+            runtime
+                .configuration_view()
+                .unwrap()
+                .admitted_attempt
+                .unwrap(),
+            admitted
+        );
+        let settlement = runtime.settlement_signal();
+        fixture.gates[1].release();
+        settlement.notified().await;
+        runtime.wait_for_configuration_admissions().await;
+        let held = issue462_offered_controls(&fixture, 0);
+        assert_eq!(held.len(), 2, "the held Attempt made a second request");
+        for (names, routing) in held {
+            assert!(five(&names), "exactly once each: {names:?}");
+            assert!(routing.contains("- reviewer: Review code"), "{routing}");
+            assert!(!routing.contains("explorer"), "{routing}");
+        }
+        issue462_adopt(&fixture, replacement);
+        fixture.gates[0].release();
+        let attempt = |text: &'static str| {
+            let runtime = runtime.clone();
+            async move {
+                let done = runtime.settlement_signal().notified();
+                runtime.submit_inbound(input(text)).unwrap();
+                done.await;
+                runtime.wait_for_configuration_admissions().await;
+            }
+        };
+        let from = fixture.provider.request_bodies().len();
+        attempt("request-A explorer").await;
+        let offered = issue462_offered_controls(&fixture, from);
+        assert!(!offered.is_empty());
+        for (names, routing) in offered {
+            assert!(five(&names), "exactly once each: {names:?}");
+            assert!(routing.contains("- explorer: Explore code"), "{routing}");
+            assert!(!routing.contains("reviewer"), "{routing}");
+        }
+
+        // An invalid selection fails preparation and publishes nothing.
+        let tools = runtime
+            .runtime_resources()
+            .capability()
+            .tool_registry()
+            .clone();
+        let invalid = issue462_admit(&fixture, &["missing"]).await;
+        assert!(invalid.candidate.is_none(), "{invalid:?}");
+        assert!(Arc::ptr_eq(
+            &tools,
+            runtime.runtime_resources().capability().tool_registry()
+        ));
+        let from = fixture.provider.request_bodies().len();
+        attempt("request-A after invalid").await;
+        for (names, routing) in issue462_offered_controls(&fixture, from) {
+            assert!(five(&names), "{names:?}");
+            assert!(routing.contains("- explorer: Explore code"), "{routing}");
+        }
+
+        // 5 -> 0: no admission composes none of the group, although both
+        // definitions are still discovered.
+        issue462_adopt(&fixture, issue462_admit(&fixture, &[]).await);
+        let from = fixture.provider.request_bodies().len();
+        attempt("request-A zero").await;
+        let offered = issue462_offered_controls(&fixture, from);
+        assert!(!offered.is_empty());
+        assert!(
+            offered.iter().all(|(names, _)| names.is_empty()),
+            "{offered:?}"
+        );
+
+        // 0 -> 5 again from the same discovered set.
+        issue462_adopt(&fixture, issue462_admit(&fixture, &["reviewer"]).await);
+        let from = fixture.provider.request_bodies().len();
+        attempt("request-A reviewer").await;
+        let offered = issue462_offered_controls(&fixture, from);
+        assert!(!offered.is_empty());
+        for (names, routing) in offered {
+            assert!(five(&names), "exactly once each: {names:?}");
+            assert!(routing.contains("- reviewer: Review code"), "{routing}");
+            assert!(!routing.contains("explorer"), "{routing}");
+        }
+        fixture.close().await;
+    }))
+    .await;
+}

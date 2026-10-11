@@ -198,7 +198,7 @@ impl SubagentInvocationOverride {
             }
             for selector in &selectors {
                 if let AgentToolSelection::Builtin { name } = selector {
-                    if name == crate::tools::native::SUBAGENT_TOOL_NAME {
+                    if crate::tools::native::is_agent_control(name) {
                         return Err(SubagentOverrideError::RecursiveSelector {
                             selector: selector.canonical(),
                         });
@@ -311,8 +311,8 @@ impl core::fmt::Display for SubagentOverrideError {
             ),
             Self::RecursiveSelector { selector } => write!(
                 formatter,
-                "the invocation override selects {selector}: nested subagent delegation is \
-                 unsupported"
+                "the invocation override selects {selector}: Agent controls are Root-only \
+                 and nested subagent delegation is unsupported"
             ),
             Self::ChildUnsafeSelector { selector } => write!(
                 formatter,
@@ -516,20 +516,20 @@ mod tests {
             delivery,
             Err(SubagentOverrideError::ChildUnsafeSelector { .. })
         ));
-        let recursive = parse(serde_json::json!({"tools": {"builtin": ["subagent"]}}))
-            .expect("parses")
-            .validate_spelling();
-        assert!(matches!(
-            recursive,
-            Err(SubagentOverrideError::RecursiveSelector { .. })
-        ));
-        let unsafe_owner = parse(serde_json::json!({"tools": {"builtin": ["send_message"]}}))
-            .expect("parses")
-            .validate_spelling();
-        assert!(matches!(
-            unsafe_owner,
-            Err(SubagentOverrideError::ChildUnsafeSelector { .. })
-        ));
+        // Issue #462 A15: no override can individually author any of the
+        // Root-only Agent controls; they are never child capabilities.
+        for control in crate::tools::native::AGENT_CONTROL_TOOL_NAMES {
+            let recursive = parse(serde_json::json!({"tools": {"builtin": [control]}}))
+                .expect("parses")
+                .validate_spelling();
+            assert!(
+                matches!(
+                    recursive,
+                    Err(SubagentOverrideError::RecursiveSelector { .. })
+                ),
+                "{control}"
+            );
+        }
         let empty_skill = parse(serde_json::json!({"skills": ["  "]}))
             .expect("parses")
             .validate_spelling();

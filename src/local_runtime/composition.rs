@@ -2306,7 +2306,7 @@ chat_reasoning_replay = "omit"
         );
         let present = crate::tools::native::definitions(
             crate::tools::native::NativeToolPolicies::default(),
-            None,
+            &crate::runtime::subagent::AgentCatalog::empty(),
         )
         .into_iter()
         .map(|(tool, _)| tool)
