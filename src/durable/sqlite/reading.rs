@@ -41,10 +41,10 @@ fn require_cut(
 // Bootstrap order is immutable native provenance order. Local Attempt starts
 // use their indexed Journal order, independent of compaction or model steps.
 const OWNERS: &str = "WITH owners AS (
-    SELECT 0 AS source, CAST(p.key AS INTEGER) AS ordering,
-      json_extract(p.value,'$.id.conversation_id') AS conversation,
-      json_extract(p.value,'$.id.attempt_id') AS attempt, p.value AS inherited
-    FROM bootstrap_identity b,json_each(b.turn_provenance) p
+    SELECT 0 AS source, p.ordinal AS ordering,
+      json_extract(p.payload,'$.id.conversation_id') AS conversation,
+      json_extract(p.payload,'$.id.attempt_id') AS attempt, p.payload AS inherited
+    FROM inherited_turn_provenance p
     UNION ALL
     SELECT 1,sequence,conversation_id,attempt_id,NULL
     FROM events INDEXED BY events_kind_idx
@@ -60,7 +60,7 @@ fn location(
     let position: Option<i64> = if let Some(inherited) = inherited {
         let turn: crate::durable::reading::TurnReadingProvenance = super::decode(inherited, "turn location")?;
         if turn.process_message_ids.is_empty() {
-            connection.query_row("SELECT t.position FROM bootstrap_identity b,json_each(b.turn_provenance) p JOIN transcript_order t ON t.reference_kind='inherited_turn' AND t.reference_id=CAST(p.key AS TEXT) WHERE p.value=?1 AND t.position<=?2", params![inherited,seq_to_i64(cut.transcript)?], |row| row.get(0)).optional()
+            connection.query_row("SELECT t.position FROM inherited_turn_provenance p INDEXED BY inherited_turn_identity_idx JOIN transcript_order t ON t.reference_kind='inherited_turn' AND t.reference_id=CAST(p.ordinal AS TEXT) WHERE json_extract(p.payload,'$.id.conversation_id')=?1 AND json_extract(p.payload,'$.id.attempt_id')=?2 AND t.position<=?3", params![id.conversation_id.as_str(),id.attempt_id.as_str(),seq_to_i64(cut.transcript)?], |row| row.get(0)).optional()
         } else {
             connection.query_row("SELECT MIN(t.position) FROM json_each(?1,'$.process_message_ids') m JOIN transcript_order t ON t.reference_kind='message' AND t.reference_id=m.value WHERE t.position<=?2", params![inherited,seq_to_i64(cut.transcript)?], |row| row.get(0))
         }
@@ -252,6 +252,7 @@ pub(super) fn turns(
         return Err(storage("turn page limit must be between 1 and 64"));
     }
     let cut = cut(connection, conversation)?;
+    super::provenance::turns(connection)?;
     let total: usize = connection
         .query_row(
             &format!("{OWNERS}SELECT COUNT(*) FROM owners"),
@@ -344,8 +345,8 @@ pub(super) fn window(
             let inherited: Option<Option<String>> = connection.query_row(
                 "SELECT NULL FROM events INDEXED BY events_attempt_idx
                  WHERE attempt_id=?3 AND conversation_id=?2 AND sequence<=?1 AND json_extract(event_json,'$.event.type')='attempt_started'
-                 UNION ALL SELECT p.value FROM bootstrap_identity b,json_each(b.turn_provenance) p
-                 WHERE json_extract(p.value,'$.id.conversation_id')=?2 AND json_extract(p.value,'$.id.attempt_id')=?3 LIMIT 1",
+                 UNION ALL SELECT p.payload FROM inherited_turn_provenance p INDEXED BY inherited_turn_identity_idx
+                 WHERE json_extract(p.payload,'$.id.conversation_id')=?2 AND json_extract(p.payload,'$.id.attempt_id')=?3 LIMIT 1",
                 params![seq_to_i64(cut.journal)?,id.conversation_id.as_str(),id.attempt_id.as_str()], |row| row.get(0),
             ).optional().map_err(|error| storage(error.to_string()))?;
             let inherited = inherited.ok_or_else(|| {
@@ -539,17 +540,7 @@ fn turn_execution(
 pub(super) fn inherited_turns(
     connection: &Connection,
 ) -> Result<Vec<crate::durable::reading::TurnReadingProvenance>, ConversationStoreError> {
-    let json: Option<String> = connection
-        .query_row(
-            "SELECT turn_provenance FROM bootstrap_identity WHERE id=1",
-            [],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|error| storage(error.to_string()))?;
-    json.map(|json| super::decode(&json, "bootstrap turns"))
-        .transpose()
-        .map(Option::unwrap_or_default)
+    super::provenance::turns(connection)
 }
 
 pub(super) fn lineage_turns(

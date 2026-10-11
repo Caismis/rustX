@@ -316,8 +316,8 @@ fn count_conversation_store_open() {
 /// and Session model configuration. Older development stores are refused.
 /// Version 52 requires identity-bearing message fact lookup and a qualifying
 /// context-reading expression index over immutable Journal evidence.
-/// Version 53 atomically retains validated immutable inherited occupancy metadata.
-pub const SQLITE_SCHEMA_VERSION: i64 = 53;
+/// Version 54 normalizes immutable lineage provenance with indexed membership.
+pub const SQLITE_SCHEMA_VERSION: i64 = 54;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -1399,21 +1399,9 @@ impl ConversationStore for SqliteConversationStore {
         messages: &[MessageId],
     ) -> Result<Vec<super::response::CompletedResponseProvenance>, ConversationStoreError> {
         let connection = self.lock()?;
-        let mut statement = connection.prepare("SELECT p.value FROM bootstrap_identity b,json_each(b.response_provenance) p WHERE EXISTS(SELECT 1 FROM json_each(p.value,'$.process_message_ids') m WHERE m.value IN (SELECT value FROM json_each(?1)))").map_err(|error| storage(error.to_string()))?;
-        let rows = statement
-            .query_map(
-                [serde_json::to_string(messages).map_err(|error| storage(error.to_string()))?],
-                |row| row.get::<_, String>(0),
-            )
-            .map_err(|error| storage(error.to_string()))?;
-        rows.map(|row| {
-            decode(
-                &row.map_err(|error| storage(error.to_string()))?,
-                "selected inherited response",
-            )
-        })
-        .collect()
+        provenance::selected_responses(&connection, messages)
     }
+
     fn load_inherited_turns(
         &self,
     ) -> Result<Vec<super::reading::TurnReadingProvenance>, ConversationStoreError> {
@@ -1425,21 +1413,9 @@ impl ConversationStore for SqliteConversationStore {
         messages: &[MessageId],
     ) -> Result<Vec<super::reading::TurnReadingProvenance>, ConversationStoreError> {
         let connection = self.lock()?;
-        let mut statement = connection.prepare("SELECT p.value FROM bootstrap_identity b,json_each(b.turn_provenance) p WHERE EXISTS(SELECT 1 FROM json_each(p.value,'$.process_message_ids') m WHERE m.value IN (SELECT value FROM json_each(?1)))").map_err(|error| storage(error.to_string()))?;
-        let rows = statement
-            .query_map(
-                [serde_json::to_string(messages).map_err(|error| storage(error.to_string()))?],
-                |row| row.get::<_, String>(0),
-            )
-            .map_err(|error| storage(error.to_string()))?;
-        rows.map(|row| {
-            decode(
-                &row.map_err(|error| storage(error.to_string()))?,
-                "selected inherited turn",
-            )
-        })
-        .collect()
+        provenance::selected_turns(&connection, messages)
     }
+
     fn read_lineage_cut(
         &self,
         revision: SurfaceRevision,
@@ -2006,6 +1982,14 @@ impl ConversationStore for SqliteConversationStore {
 
     #[allow(clippy::too_many_lines)] // One atomic bootstrap owns Ledger, Surface and inherited facts.
     fn initialize_lineage(&self, seed: &LineageSeed) -> Result<(), ConversationStoreError> {
+        let validated = LineageSeed::replayed(
+            seed.canonical().to_vec(),
+            seed.surface_history().to_vec(),
+            seed.checkpoints().clone(),
+        )?
+        .with_completed_responses(seed.completed_responses().to_vec())?
+        .with_turns(seed.turns().to_vec())?;
+        let seed = &validated;
         let messages = seed.canonical();
         // Semantics belong to the Context Engine; persistence has no alternate selection rule.
         let occupancy = crate::context::occupancy::inherit(seed.turns(), seed.surface_history());
@@ -2020,17 +2004,15 @@ impl ConversationStore for SqliteConversationStore {
         // Fail closed if initialized metadata is missing or damaged. The marker
         // and identity are written in this same transaction, never independently.
         read_inherited_occupancy(&transaction)?;
-        let bootstrap: Option<(i64, String, String, String, String, String)> = transaction
+        let bootstrap: Option<(i64, String, String, String)> = transaction
             .query_row(
-                "SELECT message_count,history_digest,response_provenance,turn_provenance,occupancy_json,occupancy_digest FROM bootstrap_identity WHERE id=1",
+                "SELECT message_count,history_digest,occupancy_json,occupancy_digest FROM bootstrap_identity WHERE id=1",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .optional()
             .map_err(|error| storage(format!("bootstrap probe: {error}")))?;
-        if let Some((count, digest, responses, turns, retained_occupancy, retained_digest)) =
-            bootstrap
-        {
+        if let Some((count, digest, retained_occupancy, retained_digest)) = bootstrap {
             for message in messages {
                 if let MessageBlock::User(user) = message
                     && user.kind.is_compaction_summary()
@@ -2058,15 +2040,12 @@ impl ConversationStore for SqliteConversationStore {
                 || retained_digest != occupancy_digest
                 || count != supplied_count
                 || digest != history_digest
-                || decode::<Vec<super::response::CompletedResponseProvenance>>(
-                    &responses,
-                    "bootstrap responses",
-                )? != seed.completed_responses()
-                || decode::<Vec<super::reading::TurnReadingProvenance>>(&turns, "bootstrap turns")?
-                    != seed.turns()
+                || provenance::responses(&transaction)? != seed.completed_responses()
+                || provenance::turns(&transaction)? != seed.turns()
             {
                 return Err(ConversationStoreError::InitialHistoryMismatch);
             }
+            provenance::verify_seed_membership(&transaction, seed)?;
         } else {
             for message in messages {
                 if let MessageBlock::User(user) = message
@@ -2154,17 +2133,19 @@ impl ConversationStore for SqliteConversationStore {
             }
             transaction
                 .execute(
-                    "INSERT INTO bootstrap_identity(id,message_count,history_digest,response_provenance,turn_provenance,occupancy_json,occupancy_digest) VALUES(1,?1,?2,?3,?4,?5,?6)",
+                    "INSERT INTO bootstrap_identity(id,message_count,history_digest,turn_count,response_count,occupancy_json,occupancy_digest,provenance_digest) VALUES(1,?1,?2,?3,?4,?5,?6,?7)",
                     params![
                         i64::try_from(messages.len()).map_err(|_| storage("initial message count is not representable"))?,
                         history_digest,
-                        encode(&seed.completed_responses(), "bootstrap responses")?,
-                        encode(&seed.turns(), "bootstrap turns")?,
+                        seq_to_i64(seed.turns().len() as u64)?,
+                        seq_to_i64(seed.completed_responses().len() as u64)?,
                         occupancy_json,
-                        occupancy_digest
+                        occupancy_digest,
+                        provenance::counts_digest(&history_digest,seq_to_i64(seed.turns().len() as u64)?,seq_to_i64(seed.completed_responses().len() as u64)?)
                     ],
                 )
                 .map_err(|error| storage(format!("insert bootstrap identity: {error}")))?;
+            provenance::persist(&transaction, seed)?;
             transaction
                 .execute(
                     "UPDATE rustx_store SET bootstrap_initialized=1 WHERE id=1",
@@ -2180,18 +2161,8 @@ impl ConversationStore for SqliteConversationStore {
     fn load_inherited_responses(
         &self,
     ) -> Result<Vec<super::response::CompletedResponseProvenance>, ConversationStoreError> {
-        let json: Option<String> = self
-            .lock()?
-            .query_row(
-                "SELECT response_provenance FROM bootstrap_identity WHERE id=1",
-                [],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| storage(format!("bootstrap responses: {error}")))?;
-        json.map(|json| decode(&json, "bootstrap responses"))
-            .transpose()
-            .map(Option::unwrap_or_default)
+        let connection = self.lock()?;
+        provenance::responses(&connection)
     }
 
     fn load_inherited_occupancy(
@@ -5599,8 +5570,27 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 history_digest TEXT NOT NULL,
                 occupancy_json TEXT NOT NULL,
                 occupancy_digest TEXT NOT NULL,
-                response_provenance TEXT NOT NULL,
-                turn_provenance TEXT NOT NULL
+                turn_count INTEGER NOT NULL CHECK(turn_count>=0),
+                response_count INTEGER NOT NULL CHECK(response_count>=0),
+                provenance_digest TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS inherited_turn_provenance (
+                ordinal INTEGER PRIMARY KEY CHECK(ordinal>=0),
+                payload TEXT NOT NULL,
+                payload_digest TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS inherited_turn_identity_idx ON inherited_turn_provenance(json_extract(payload,'$.id.conversation_id'),json_extract(payload,'$.id.attempt_id'));
+            CREATE TABLE IF NOT EXISTS inherited_response_provenance (
+                ordinal INTEGER PRIMARY KEY CHECK(ordinal>=0),
+                payload TEXT NOT NULL,
+                payload_digest TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS inherited_response_closing_idx ON inherited_response_provenance(json_extract(payload,'$.closing_message_id'));
+            CREATE TABLE IF NOT EXISTS inherited_message_membership (
+                assistant_message_id TEXT PRIMARY KEY REFERENCES message_ledger(message_id),
+                turn_ordinal INTEGER REFERENCES inherited_turn_provenance(ordinal),
+                response_ordinal INTEGER REFERENCES inherited_response_provenance(ordinal),
+                membership_digest TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS surface_ops (
                 revision INTEGER PRIMARY KEY,
@@ -5728,8 +5718,8 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
 
 #[allow(clippy::too_many_lines)] // One required-shape table, one place.
 fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreError> {
-    // Compact lookup fields precede large provenance payloads, so accessing them
-    // does not walk overflow pages belonging to unrelated inherited history.
+    // Bootstrap metadata stays compact; provenance payloads have their own rows.
+    // Refuse obsolete inline arrays and require the native keyed representation.
     let bootstrap_columns = connection
         .prepare("PRAGMA table_info(bootstrap_identity)")
         .map_err(|error| storage(error.to_string()))?
@@ -5744,8 +5734,9 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
             "history_digest",
             "occupancy_json",
             "occupancy_digest",
-            "response_provenance",
-            "turn_provenance",
+            "turn_count",
+            "response_count",
+            "provenance_digest",
         ]
     {
         return Err(ConversationStoreError::IncompatibleSchema(
@@ -5760,6 +5751,74 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "missing or invalid presentation index {name}"
             )));
         }
+    }
+    for sql in [
+        "CREATE UNIQUE INDEX inherited_turn_identity_idx ON inherited_turn_provenance(json_extract(payload,'$.id.conversation_id'),json_extract(payload,'$.id.attempt_id'))",
+        "CREATE UNIQUE INDEX inherited_response_closing_idx ON inherited_response_provenance(json_extract(payload,'$.closing_message_id'))",
+    ] {
+        let name = sql.split_whitespace().nth(3).expect("literal index name");
+        let retained: Option<String> = connection
+            .query_row(
+                "SELECT sql FROM sqlite_schema WHERE type='index' AND name=?1",
+                [name],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| storage(error.to_string()))?;
+        if retained.as_deref() != Some(sql) {
+            return Err(ConversationStoreError::IncompatibleSchema(format!(
+                "missing or invalid inherited index {name}"
+            )));
+        }
+    }
+    for table in ["inherited_turn_provenance", "inherited_response_provenance"] {
+        let primary: (String, i64) = connection
+            .query_row(
+                &format!("SELECT type,pk FROM pragma_table_info('{table}') WHERE name='ordinal'"),
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(|error| storage(error.to_string()))?;
+        if primary != ("INTEGER".into(), 1) {
+            return Err(ConversationStoreError::IncompatibleSchema(format!(
+                "invalid inherited ordinal primary key in {table}"
+            )));
+        }
+    }
+    let foreign = connection
+        .prepare("PRAGMA foreign_key_list(inherited_message_membership)")
+        .map_err(|error| storage(error.to_string()))?
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })
+        .map_err(|error| storage(error.to_string()))?
+        .collect::<Result<BTreeSet<_>, _>>()
+        .map_err(|error| storage(error.to_string()))?;
+    let expected = BTreeSet::from([
+        (
+            "message_ledger".into(),
+            "assistant_message_id".into(),
+            "message_id".into(),
+        ),
+        (
+            "inherited_turn_provenance".into(),
+            "turn_ordinal".into(),
+            "ordinal".into(),
+        ),
+        (
+            "inherited_response_provenance".into(),
+            "response_ordinal".into(),
+            "ordinal".into(),
+        ),
+    ]);
+    if foreign != expected {
+        return Err(ConversationStoreError::IncompatibleSchema(
+            "invalid inherited membership foreign keys".into(),
+        ));
     }
     let required = [
         (
@@ -5813,10 +5872,28 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
             &[
                 "message_count",
                 "history_digest",
-                "response_provenance",
-                "turn_provenance",
+                "turn_count",
+                "response_count",
+                "provenance_digest",
                 "occupancy_json",
                 "occupancy_digest",
+            ],
+        ),
+        (
+            "inherited_turn_provenance",
+            &["ordinal", "payload", "payload_digest"],
+        ),
+        (
+            "inherited_response_provenance",
+            &["ordinal", "payload", "payload_digest"],
+        ),
+        (
+            "inherited_message_membership",
+            &[
+                "assistant_message_id",
+                "turn_ordinal",
+                "response_ordinal",
+                "membership_digest",
             ],
         ),
         (
@@ -5922,6 +5999,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         ("inbound_correlation", "message_id"),
         ("message_ledger", "message_id"),
         ("canonical_tool_calls", "result_message_id"),
+        ("inherited_message_membership", "assistant_message_id"),
         ("agent_authorities", "agent_id"),
         ("events", "event_id"),
         ("request_snapshots", "request_id"),
@@ -6961,20 +7039,15 @@ fn load_transcript_item(
     reference_id: &str,
 ) -> Result<TranscriptItem, ConversationStoreError> {
     match reference_kind {
-        "inherited_turn" => {
-            let json: String = connection
-                .query_row(
-                    "SELECT value FROM bootstrap_identity,json_each(turn_provenance) WHERE key=?1",
-                    [reference_id
-                        .parse::<i64>()
-                        .map_err(|error| storage(error.to_string()))?],
-                    |row| row.get(0),
-                )
-                .map_err(|error| storage(error.to_string()))?;
-            Ok(TranscriptItem::InheritedTurn {
-                provenance: decode(&json, "inherited turn")?,
-            })
-        }
+        "inherited_turn" => Ok(TranscriptItem::InheritedTurn {
+            provenance: provenance::turn_at(
+                connection,
+                reference_id
+                    .parse::<i64>()
+                    .map_err(|error| storage(error.to_string()))?,
+            )?,
+        }),
+
         "message" => {
             let ledger_json: Option<String> = connection
                 .query_row(
@@ -15298,7 +15371,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 53);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 54);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -15367,7 +15440,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 53);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 54);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
@@ -16013,6 +16086,7 @@ mod tests {
 // Finite archive readers share the concrete durable schema, never transport DTOs.
 pub(crate) mod archive;
 mod lineage;
+mod provenance;
 mod reading;
 #[cfg(test)]
 mod reading_tests;

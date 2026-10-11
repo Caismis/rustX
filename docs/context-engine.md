@@ -1016,7 +1016,7 @@ later checkpoint retires that summary. Lineage copies retain those values and
 omit local completion correlation. Transcript decoration uses one keyed Ledger
 lookup and at most one keyed local Journal lookup per requested summary; it never
 reconstructs the retired Surface, hydrates retired messages, or scans the Journal.
-Missing or malformed checkpoint facts are explicit read errors. SQLite schema 53
+Missing or malformed checkpoint facts are explicit read errors. SQLite schema 54
 requires these facts; older development stores are refused without migration.
 
 ## Indexed historical occupancy
@@ -1046,15 +1046,15 @@ generations and Artifact remapping, without consulting current source state.
 
 SQLite writes the derivative, its history-bound integrity digest, and the
 bootstrap-initialized marker in the same transaction as canonical history,
-Surface operations, checkpoints and Turn provenance. Compact fields precede large
-provenance JSON in the SQLite record; schema validation enforces that ordering so
-cold lookups do not traverse history payload overflow pages. Initialization validates
+Surface operations, checkpoints and Turn provenance. Bootstrap metadata contains
+only compact fields; inherited provenance payloads live in their own immutable
+indexed rows. Initialization validates
 the supplied immutable evidence and rejects mismatched reinitialization. Runtime
 reads check the compact payload's integrity and shape; damaged or missing
 initialized metadata fails explicitly. The marker distinguishes an uninitialized
 store from a missing bootstrap identity. There is no independent update path.
 Later local events cannot change this immutable fallback at an earlier Journal
-cut. Schema 53 rejects obsolete development stores without migration.
+cut. Schema 54 rejects obsolete development stores without migration.
 
 Finite transcript decoration seeks each unique selected Assistant identity using
 `events_message_id_kind_idx`, with the Journal cut in each SQL predicate, and
@@ -1069,3 +1069,38 @@ and Assistant commits. Exact message fact queries use
 `events_message_id_kind_idx(message identity, event kind, sequence)`; Trace still
 joins the exact canonical occurrence to the native Step and Tool start, without
 creating an independent execution record.
+
+## Indexed inherited transcript provenance
+
+Schema 54 replaces the bootstrap Turn and Completed Response JSON arrays with
+`inherited_turn_provenance` and `inherited_response_provenance`. Each complete
+validated payload is stored once under its stable zero-based bootstrap ordinal.
+Original execution identity, outcome, timing, statistics and process membership
+remain immutable evidence, never destination execution or configuration.
+
+`inherited_message_membership` has one primary-key row for each inherited
+canonical Assistant. Its nullable foreign keys name the owning Turn and Response
+ordinals; a null reference records intentional absence, while a missing membership
+row is an error. This single index stores references, not semantic payload copies.
+Native initialization derives it from the validated selected LineageSeed in the
+same transaction as canonical history, Surface operations, checkpoint statistics,
+provenance, occupancy metadata and the bootstrap-initialized marker. There is no
+runtime writer or alternate provenance source. Integrity digests protect payloads,
+record counts and membership references; idempotent admission verifies the exact
+seed and maps.
+
+Finite windows seek each distinct requested canonical identity in the Ledger and
+membership primary-key indexes, then read only its referenced provenance rows.
+Results are deduplicated by ordinal and returned in original bootstrap order.
+Selected records validate their directly relevant memberships. Missing rows,
+dangling references, inconsistent membership and corrupt payloads fail explicitly.
+The whole-lineage readers additionally verify contiguous ordinals and recorded
+counts; those explicit complete-history operations may traverse the lineage.
+
+Inherited evidence is independent of the local Journal cut. Locally committed
+ownership still comes exclusively from `events_message_id_kind_idx` at the exact
+`through` sequence. Later execution and compaction cannot mutate inherited
+membership or manufacture destination Attempts. Clone/Fork/Tree and Artifact
+remapping populate the same validated representation; cold reads consult only the
+destination store. Development stores with an older schema are rejected, without
+migration or compatibility paths.

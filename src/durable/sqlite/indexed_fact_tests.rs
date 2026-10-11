@@ -703,3 +703,612 @@ fn assistant_history_fixture_matches_native_appends_and_rolls_back_invalid_pairs
     assert_eq!(bulk.load_head().unwrap(), ordinary.load_head().unwrap());
     assert_eq!(bulk.presentation_frontier().unwrap(), 4);
 }
+
+fn response_seed(count: usize) -> LineageSeed {
+    use crate::durable::response::{
+        CompletedResponseProvenance, CompletedResponseTiming, ResponseOrigin,
+    };
+    let base = inherited_seed(count, false, true);
+    let mut canonical = base.canonical().to_vec();
+    let mut history = base.surface_history().to_vec();
+    let mut checkpoints = base.checkpoints().clone();
+    let mut turns = base.turns().to_vec();
+    let call = ToolCall {
+        id: ToolCallId::new("early-call"),
+        tool_id: ToolId::new("tool-bash"),
+        name: "bash".into(),
+        arguments: serde_json::json!({}),
+    };
+    let MessageBlock::Assistant(first) = &mut canonical[0] else {
+        unreachable!()
+    };
+    first.content = vec![AssistantContentBlock::ToolCall(call.clone())];
+    let result = MessageBlock::Tool(ToolMessageBlock {
+        id: MessageId::new("early-result"),
+        occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+            MessageId::new("inherited-0"),
+            ContentBlockIndex::new(0),
+        ),
+        tool_call_id: call.id,
+        tool_id: call.tool_id,
+        result: ToolExecutionResult {
+            deliveries: vec![],
+            status: ToolExecutionStatus::Success,
+            content: vec![],
+            duration_ms: 1,
+            exit_code: None,
+            artifacts: vec![],
+            truncation: None,
+            workflow: None,
+            managed_output: None,
+        },
+    });
+    canonical.splice(
+        1..1,
+        [result, assistant_message("early-closing", "final answer")],
+    );
+    history.splice(
+        1..1,
+        [
+            SurfaceOp::Append {
+                message_id: MessageId::new("early-result"),
+            },
+            SurfaceOp::Append {
+                message_id: MessageId::new("early-closing"),
+            },
+        ],
+    );
+    let SurfaceOp::Replace { end, .. } = &mut history[3] else {
+        unreachable!()
+    };
+    *end = MessageId::new("early-closing");
+    checkpoints
+        .get_mut(&MessageId::new("summary-0"))
+        .unwrap()
+        .retired_messages = 3;
+    turns[0]
+        .process_message_ids
+        .push(MessageId::new("early-closing"));
+    let seed = LineageSeed::replayed(canonical, history, checkpoints)
+        .unwrap()
+        .with_turns(turns)
+        .unwrap();
+    let responses = seed
+        .turns()
+        .iter()
+        .map(|turn| {
+            let closing = turn.process_message_ids.last().unwrap().clone();
+            CompletedResponseProvenance {
+                process_message_ids: turn.process_message_ids.clone(),
+                closing_message_id: closing.clone(),
+                origin: ResponseOrigin {
+                    conversation_id: turn.id.conversation_id.clone(),
+                    attempt_id: turn.id.attempt_id.clone(),
+                    closing_message_id: closing,
+                },
+                completed_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+                retry_message_id: None,
+                usage: Some(crate::model::ModelUsage {
+                    input_tokens: 12,
+                    output_tokens: 3,
+                    total_tokens: 15,
+                    details: None,
+                }),
+                timing: Some(CompletedResponseTiming {
+                    total_duration_ms: Some(120),
+                    ..Default::default()
+                }),
+                models: vec!["historical/model".into()],
+            }
+        })
+        .collect();
+    seed.with_completed_responses(responses).unwrap()
+}
+
+fn measured_vm<T>(store: &SqliteConversationStore, read: impl FnOnce() -> T) -> (T, usize) {
+    let count = Arc::new(AtomicUsize::new(0));
+    let progress = count.clone();
+    store.conn.lock().unwrap().progress_handler(
+        1,
+        Some(move || {
+            progress.fetch_add(1, Ordering::Relaxed);
+            false
+        }),
+    );
+    let result = read();
+    store
+        .conn
+        .lock()
+        .unwrap()
+        .progress_handler(0, None::<fn() -> bool>);
+    (result, count.load(Ordering::Relaxed))
+}
+
+#[test]
+fn inherited_provenance_identity_queries_and_real_window_cost_are_constant() {
+    use crate::durable::reading::ConversationWindowAt;
+    let mut costs = Vec::new();
+    let mut expected = None;
+    for count in [8, 128, 2048] {
+        let seed = response_seed(count);
+        let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+        store.initialize_lineage(&seed).unwrap();
+        let wanted = [
+            MessageId::new("inherited-0"),
+            MessageId::new("early-closing"),
+            MessageId::new("inherited-0"),
+        ];
+        let (turns, turn_cost) =
+            measured_vm(&store, || store.inherited_turns_for(&wanted[..1]).unwrap());
+        let (responses, response_cost) = measured_vm(&store, || {
+            store.inherited_responses_for(&wanted[..1]).unwrap()
+        });
+        assert_eq!(turns, seed.turns()[..1]);
+        assert_eq!(responses, seed.completed_responses()[..1]);
+        assert_eq!(store.inherited_turns_for(&wanted).unwrap(), turns);
+        assert_eq!(store.inherited_responses_for(&wanted).unwrap(), responses);
+        let different = [MessageId::new("inherited-0"), MessageId::new("inherited-1")];
+        assert_eq!(
+            store.inherited_turns_for(&different).unwrap(),
+            seed.turns()[..2]
+        );
+        assert_eq!(
+            store.inherited_responses_for(&different).unwrap(),
+            seed.completed_responses()[..2]
+        );
+        assert!(store.inherited_turns_for(&[]).unwrap().is_empty());
+        assert!(
+            store
+                .inherited_responses_for(&[MessageId::new("summary-0")])
+                .unwrap()
+                .is_empty()
+        );
+
+        for sql in [provenance::TURN_LOOKUP, provenance::RESPONSE_LOOKUP] {
+            let plan = store
+                .lock()
+                .unwrap()
+                .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+                .unwrap()
+                .query_map(["inherited-0"], |row| row.get::<_, String>(3))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+                .join("\n");
+            println!("{plan}");
+            assert!(
+                plan.contains(
+                    "SEARCH m USING INDEX sqlite_autoindex_inherited_message_membership_1"
+                ),
+                "{plan}"
+            );
+            assert!(
+                plan.contains("SEARCH p USING INTEGER PRIMARY KEY"),
+                "{plan}"
+            );
+            assert!(
+                !plan.contains("SCAN") && !plan.contains("VIRTUAL TABLE"),
+                "{plan}"
+            );
+        }
+        let (window, window_cost) = measured_vm(&store, || {
+            let read = store
+                .conversation_window(
+                    &ConversationWindowAt::Older {
+                        cut: None,
+                        before: TranscriptCursor::new(2),
+                    },
+                    1,
+                )
+                .unwrap();
+            let mut page =
+                crate::runtime_client::snapshot::transcript_page_view(read.page).unwrap();
+            crate::runtime_client::response::decorate_window(&store, &mut page, read.cut.journal)
+                .unwrap();
+            page
+        });
+        if let Some(expected) = &expected {
+            assert_eq!(&window, expected);
+        } else {
+            expected = Some(window);
+        }
+        assert!(store.transcript_attempts(&wanted, 0).unwrap().is_empty());
+        assert_eq!(store.presentation_frontier().unwrap(), 0);
+        println!(
+            "{count} inherited Turns and Responses: actual Turn {turn_cost}, Response {response_cost}, entire window {window_cost} VM instructions"
+        );
+        costs.push((turn_cost, response_cost, window_cost));
+        assert_eq!(store.load_inherited_turns().unwrap(), seed.turns());
+        assert_eq!(
+            store.load_inherited_responses().unwrap(),
+            seed.completed_responses()
+        );
+        store.initialize(seed.canonical()).unwrap();
+    }
+    assert!(costs.iter().all(|cost| cost == &costs[0]), "{costs:?}");
+}
+
+#[test]
+fn inherited_provenance_bootstrap_failures_roll_back_every_native_authority() {
+    let seed = response_seed(8);
+    for stage in [
+        "inherited_turn_provenance",
+        "inherited_response_provenance",
+        "inherited_message_membership",
+        "rustx_store",
+    ] {
+        let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+        let predicate = if stage == "rustx_store" {
+            String::new()
+        } else {
+            format!(" WHEN (SELECT count(*) FROM {stage})>0")
+        };
+        let timing = if stage == "rustx_store" {
+            "UPDATE OF bootstrap_initialized"
+        } else {
+            "INSERT"
+        };
+        store.lock().unwrap().execute_batch(&format!("CREATE TRIGGER reject_stage BEFORE {timing} ON {stage}{predicate} BEGIN SELECT RAISE(ABORT,'scripted failure'); END;")).unwrap();
+        assert!(store.initialize_lineage(&seed).is_err());
+        for table in [
+            "message_ledger",
+            "surface_ops",
+            "transcript_order",
+            "bootstrap_identity",
+            "inherited_turn_provenance",
+            "inherited_response_provenance",
+            "inherited_message_membership",
+        ] {
+            assert_eq!(
+                store
+                    .lock()
+                    .unwrap()
+                    .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row
+                        .get::<_, i64>(0))
+                    .unwrap(),
+                0,
+                "{stage}: {table}"
+            );
+        }
+        assert_eq!(store.load_inherited_occupancy().unwrap(), None);
+        store
+            .lock()
+            .unwrap()
+            .execute_batch("DROP TRIGGER reject_stage")
+            .unwrap();
+        store.initialize_lineage(&seed).unwrap();
+        store.initialize_lineage(&seed).unwrap();
+    }
+}
+
+#[test]
+fn inherited_provenance_corruption_and_mismatched_reinitialization_fail_closed() {
+    let seed = response_seed(8);
+    let wanted = [MessageId::new("inherited-0")];
+    for damage in [
+        "DELETE FROM inherited_message_membership WHERE assistant_message_id='inherited-0'",
+        "UPDATE inherited_message_membership SET turn_ordinal=NULL WHERE assistant_message_id='inherited-0'",
+        "UPDATE inherited_message_membership SET response_ordinal=999 WHERE assistant_message_id='inherited-0'",
+        "DELETE FROM inherited_turn_provenance WHERE ordinal=0",
+        "DELETE FROM inherited_response_provenance WHERE ordinal=0",
+        "UPDATE inherited_turn_provenance SET payload='{}' WHERE ordinal=0",
+        "UPDATE inherited_response_provenance SET payload='{}' WHERE ordinal=0",
+        "DELETE FROM bootstrap_identity",
+        "UPDATE bootstrap_identity SET turn_count=turn_count+1",
+        "UPDATE bootstrap_identity SET response_count=response_count+1",
+    ] {
+        let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+        store.initialize_lineage(&seed).unwrap();
+        store
+            .lock()
+            .unwrap()
+            .execute_batch(&format!("PRAGMA foreign_keys=OFF; {damage};"))
+            .unwrap();
+        assert!(
+            store.inherited_turns_for(&wanted).is_err()
+                || store.inherited_responses_for(&wanted).is_err(),
+            "{damage}"
+        );
+        assert!(store.initialize_lineage(&seed).is_err(), "{damage}");
+    }
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    store.initialize_lineage(&seed).unwrap();
+    assert!(store.lock().unwrap().execute("INSERT INTO inherited_message_membership SELECT * FROM inherited_message_membership WHERE assistant_message_id='inherited-0'",[]).is_err());
+    assert!(store.lock().unwrap().execute("UPDATE inherited_message_membership SET turn_ordinal=999 WHERE assistant_message_id='inherited-0'",[]).is_err());
+    let mut turns = seed.turns().to_vec();
+    turns[0].started_at = chrono::DateTime::from_timestamp(1_700_000_002, 0);
+    let different = LineageSeed::replayed(
+        seed.canonical().to_vec(),
+        seed.surface_history().to_vec(),
+        seed.checkpoints().clone(),
+    )
+    .unwrap()
+    .with_turns(turns)
+    .unwrap()
+    .with_completed_responses(seed.completed_responses().to_vec())
+    .unwrap();
+    assert!(matches!(
+        store.initialize_lineage(&different),
+        Err(ConversationStoreError::InitialHistoryMismatch)
+    ));
+    let mut responses = seed.completed_responses().to_vec();
+    responses[0].models.push("other/model".into());
+    let different = LineageSeed::replayed(
+        seed.canonical().to_vec(),
+        seed.surface_history().to_vec(),
+        seed.checkpoints().clone(),
+    )
+    .unwrap()
+    .with_turns(seed.turns().to_vec())
+    .unwrap()
+    .with_completed_responses(responses)
+    .unwrap();
+    assert!(matches!(
+        store.initialize_lineage(&different),
+        Err(ConversationStoreError::InitialHistoryMismatch)
+    ));
+}
+
+#[test]
+fn inherited_provenance_selected_cuts_survive_destination_only_cold_reopen() {
+    let directory = tempfile::tempdir().unwrap();
+    for (revision, incomplete) in [(1, false), (3, false), (4, false), (1, true), (3, true)] {
+        let source_path = directory
+            .path()
+            .join(format!("source-{revision}-{incomplete}.sqlite"));
+        let source =
+            SqliteConversationStore::open(ConversationId::generate(), &source_path).unwrap();
+        let original = response_seed(128);
+        let mut turns = original.turns().to_vec();
+        let mut responses = original.completed_responses().to_vec();
+        if incomplete {
+            turns[0].outcome = crate::durable::reading::InheritedTurnOutcome::IncompleteAtCut;
+            responses.remove(0);
+        }
+        let original = LineageSeed::replayed(
+            original.canonical().to_vec(),
+            original.surface_history().to_vec(),
+            original.checkpoints().clone(),
+        )
+        .unwrap()
+        .with_turns(turns)
+        .unwrap()
+        .with_completed_responses(responses)
+        .unwrap();
+        source.initialize_lineage(&original).unwrap();
+        let selected = source
+            .read_lineage_cut(SurfaceRevision::new(revision))
+            .unwrap();
+        let destination_id = ConversationId::generate();
+        let seed = crate::local_runtime::session::remap_seed(
+            &destination_id,
+            &selected.canonical,
+            &selected.surface_history,
+            &selected.checkpoints,
+            &selected.completed_responses,
+            &selected.turns,
+        )
+        .unwrap();
+        assert_eq!(
+            seed.completed_responses().len(),
+            usize::from(revision > 1 && !incomplete)
+        );
+        assert_eq!(
+            seed.turns()[0].outcome,
+            if incomplete {
+                crate::durable::reading::InheritedTurnOutcome::IncompleteAtCut
+            } else {
+                crate::durable::reading::InheritedTurnOutcome::Completed
+            }
+        );
+        let path = directory
+            .path()
+            .join(format!("destination-{revision}-{incomplete}.sqlite"));
+        let destination = SqliteConversationStore::open(destination_id.clone(), &path).unwrap();
+        destination.initialize_lineage(&seed).unwrap();
+        drop(destination);
+        drop(source);
+        std::fs::remove_file(source_path).unwrap();
+        let destination = SqliteConversationStore::open_existing(destination_id, &path).unwrap();
+        assert_eq!(destination.load_inherited_turns().unwrap(), seed.turns());
+        assert_eq!(
+            destination.load_inherited_responses().unwrap(),
+            seed.completed_responses()
+        );
+        assert_eq!(
+            destination
+                .inherited_turns_for(&seed.turns()[0].process_message_ids)
+                .unwrap(),
+            seed.turns()
+        );
+        assert_eq!(
+            destination
+                .inherited_responses_for(&seed.turns()[0].process_message_ids)
+                .unwrap(),
+            seed.completed_responses()
+        );
+        destination.initialize(seed.canonical()).unwrap();
+        assert_eq!(destination.presentation_frontier().unwrap(), 0);
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // One captured-cut contract across inherited, Tool, Human and local windows.
+fn inherited_window_membership_is_independent_of_local_finite_execution_cuts() {
+    use crate::durable::reading::ConversationWindowAt;
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    let base = response_seed(8);
+    let mut canonical = base.canonical().to_vec();
+    canonical.insert(0, user_message("human-input", "input"));
+    let mut history = base.surface_history().to_vec();
+    history.insert(
+        0,
+        SurfaceOp::Append {
+            message_id: MessageId::new("human-input"),
+        },
+    );
+    let seed = LineageSeed::replayed(canonical, history, base.checkpoints().clone())
+        .unwrap()
+        .with_turns(base.turns().to_vec())
+        .unwrap()
+        .with_completed_responses(base.completed_responses().to_vec())
+        .unwrap();
+    store.initialize_lineage(&seed).unwrap();
+    let cut = store.conversation_read_cut().unwrap();
+    let window = || {
+        let read = store
+            .conversation_window(
+                &ConversationWindowAt::Older {
+                    cut: Some(cut.clone()),
+                    before: TranscriptCursor::new(5),
+                },
+                3,
+            )
+            .unwrap();
+        let mut page = crate::runtime_client::snapshot::transcript_page_view(read.page).unwrap();
+        crate::runtime_client::response::decorate_window(&store, &mut page, cut.journal).unwrap();
+        page
+    };
+    let before = window();
+    for (before, limit, expected) in [(1, 3, 0), (2, 1, 1), (4, 1, 1), (6, 4, 4)] {
+        let read = store
+            .conversation_window(
+                &ConversationWindowAt::Older {
+                    cut: Some(cut.clone()),
+                    before: TranscriptCursor::new(before),
+                },
+                limit,
+            )
+            .unwrap();
+        let mut page = crate::runtime_client::snapshot::transcript_page_view(read.page).unwrap();
+        crate::runtime_client::response::decorate_window(&store, &mut page, cut.journal).unwrap();
+        assert_eq!(page.entries.len(), expected);
+        if before == 2 {
+            assert!(page.entries[0].turn_process.is_none());
+            assert!(page.entries[0].completed_response.is_none());
+        }
+        if before == 4 {
+            assert!(page.entries[0].turn_process.is_some());
+        }
+    }
+
+    store
+        .append_event(envelope(
+            store.conversation_id(),
+            "local-start",
+            Some(AttemptId::new("local")),
+            RuntimeEvent::AttemptStarted {
+                attempt_id: AttemptId::new("local"),
+            },
+        ))
+        .unwrap();
+    store
+        .append_canonical_with_event(
+            &assistant_message("local-answer", "local response"),
+            envelope(
+                store.conversation_id(),
+                "local-commit",
+                Some(AttemptId::new("local")),
+                RuntimeEvent::AssistantMessageCommitted {
+                    message_id: MessageId::new("local-answer"),
+                },
+            ),
+        )
+        .unwrap();
+    assert_eq!(window(), before);
+    assert!(
+        store
+            .transcript_attempts(&[MessageId::new("local-answer")], cut.journal)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        store
+            .transcript_attempts(
+                &[MessageId::new("local-answer")],
+                store.presentation_frontier().unwrap()
+            )
+            .unwrap(),
+        vec![AttemptId::new("local")]
+    );
+    let wanted = [
+        MessageId::new("inherited-0"),
+        MessageId::new("early-closing"),
+        MessageId::new("inherited-1"),
+        MessageId::new("local-answer"),
+    ];
+    assert_eq!(
+        store.inherited_turns_for(&wanted).unwrap(),
+        seed.turns()[..2]
+    );
+    assert_eq!(
+        store.inherited_responses_for(&wanted).unwrap(),
+        seed.completed_responses()[..2]
+    );
+    let frontier = store.presentation_frontier().unwrap();
+    let read = store
+        .conversation_window(&ConversationWindowAt::Latest, 3)
+        .unwrap();
+    let mut mixed = crate::runtime_client::snapshot::transcript_page_view(read.page).unwrap();
+    crate::runtime_client::response::decorate_window(&store, &mut mixed, read.cut.journal).unwrap();
+    assert_eq!(
+        store.presentation_frontier().unwrap(),
+        frontier,
+        "inspection cannot publish execution"
+    );
+    assert!(mixed.statistics.is_none());
+    for entry in &mixed.entries {
+        if let crate::runtime_client::snapshot::RuntimeClientTranscriptItem::Message {
+            message: MessageBlock::Assistant(message),
+        } = &entry.item
+        {
+            let owner = entry.turn_process.as_ref().unwrap();
+            if message.id.as_str() == "local-answer" {
+                assert_eq!(&owner.conversation_id, store.conversation_id());
+            } else {
+                assert_eq!(owner.conversation_id, seed.turns()[0].id.conversation_id);
+            }
+        }
+    }
+
+    assert!(
+        store
+            .inherited_turns_for(&[MessageId::new("local-answer")])
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn inherited_provenance_schema_requires_native_indexes_and_rejects_schema_53() {
+    for index in [
+        "inherited_turn_identity_idx",
+        "inherited_response_closing_idx",
+    ] {
+        let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+        store
+            .lock()
+            .unwrap()
+            .execute_batch(&format!("DROP INDEX {index}"))
+            .unwrap();
+        assert!(verify_schema_shape(&store.lock().unwrap()).is_err());
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("obsolete.sqlite");
+    let id = ConversationId::generate();
+    let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+    store.initialize_lineage(&response_seed(8)).unwrap();
+    store
+        .lock()
+        .unwrap()
+        .execute("UPDATE rustx_store SET schema_version=53", [])
+        .unwrap();
+    drop(store);
+    assert!(matches!(
+        SqliteConversationStore::open_existing(id, &path),
+        Err(ConversationStoreError::SchemaVersionMismatch {
+            stored: 53,
+            expected: 54
+        })
+    ));
+}

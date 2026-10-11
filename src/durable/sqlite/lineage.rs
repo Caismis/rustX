@@ -1,5 +1,5 @@
 //! One native lineage linearization point, never a destination execution replay.
-use super::{Connection, ConversationStoreError, OptionalExtension, decode, seq_to_i64, storage};
+use super::{Connection, ConversationStoreError, decode, seq_to_i64, storage};
 use crate::conversation::{SurfaceOp, SurfaceRevision};
 use crate::durable::reading::LineageReadCut;
 use crate::durable::response::{
@@ -96,22 +96,12 @@ fn responses(
             _ => None,
         })
         .collect();
-    let inherited: Option<String> = connection
-        .query_row(
-            "SELECT response_provenance FROM bootstrap_identity WHERE id=1",
-            [],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|error| storage(error.to_string()))?;
-    let mut completed: BTreeMap<MessageId, CompletedResponseProvenance> = inherited
-        .map(|json| decode::<Vec<CompletedResponseProvenance>>(&json, "lineage responses"))
-        .transpose()?
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|response| wanted.contains(&response.closing_message_id))
-        .map(|response| (response.closing_message_id.clone(), response))
-        .collect();
+    let mut completed: BTreeMap<MessageId, CompletedResponseProvenance> =
+        super::provenance::responses(connection)?
+            .into_iter()
+            .filter(|response| wanted.contains(&response.closing_message_id))
+            .map(|response| (response.closing_message_id.clone(), response))
+            .collect();
     let mut attempts: BTreeMap<AttemptId, AttemptEvidence> = BTreeMap::new();
     let mut statement = connection.prepare("SELECT event_json FROM events WHERE sequence<=?1 AND json_extract(event_json,'$.event.type') IN ('attempt_started','assistant_message_committed','model_request_started','model_request_completed','model_request_failed','attempt_completed','attempt_cancelled','attempt_failed','attempt_timed_out','attempt_limit_exceeded') ORDER BY sequence")
         .map_err(|error|storage(error.to_string()))?;
