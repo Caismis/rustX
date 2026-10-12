@@ -49,6 +49,7 @@ import { SessionDeletion } from './SessionDeletion';
 import { userSettingsTarget, workspaceSettingsTarget, type SettingsTarget } from './settings/projection';
 import { createOwnerLookup, settingsNavigationMachine } from './settings/machines/navigation';
 import { RepairNotice } from './RepairNotice';
+import { inspectionAcknowledger, RepairAcknowledgements } from './repair-notices';
 
 const PREFERENCES = 'rustx-console-view-v2';
 function readPreferences(): { endpoint?: string; openViews: string[] } {
@@ -78,7 +79,13 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   // completion path at all, so neither its success nor its failure can
   // overwrite a newer decision, reopen a closed dialog or publish an obsolete
   // error. Async resolution is preparation, never ongoing navigation authority.
-  const navigationActor = useActorRef(settingsNavigationMachine, { input: { lookup: createOwnerLookup(workspaceHost, client) } });
+  // Repair acknowledgements of this browser, shared by the notice and by
+  // Settings, which completes a View details inspection.
+  const repairAcknowledgements = useMemo(() => new RepairAcknowledgements(), []);
+  const navigationActor = useActorRef(settingsNavigationMachine, { input: {
+    lookup: createOwnerLookup(workspaceHost, client),
+    inspected: inspectionAcknowledger(client, repairAcknowledgements),
+  } });
   const openSettings = (target: SettingsTarget) => navigationActor.send({ type: 'OPEN', target });
   const openConnectionSettings = () => navigationActor.send({ type: 'OPEN.CONNECTION' });
   const previewOwner = useMemo(() => new PreviewWorkspaceOwner(client, workspaceHost, workspaceAuthority), [client, workspaceHost, workspaceAuthority]);
@@ -315,8 +322,10 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     {(previews.problem || previews.downloadError) && <div className="notice error" role="alert">{previews.problem ? tx(`artifacts:workspace.limit-${previews.problem}`) : previews.downloadError}<Button size="sm" onClick={() => previewOwner.dismissProblem()}>{tx('common:app.dismiss-notice')}</Button></div>}
     {error && <div className="notice error" role="alert">{error}<Button size="sm" onClick={() => setError('')}>{tx('common:app.dismiss-notice')}</Button></div>}
     {/* Native automatic configuration repairs: nonblocking, never a modal,
-        and silent for a healthy source. View details opens the exact owner. */}
-    <RepairNotice client={client} viewDetails={source => navigationActor.send({ type: 'OPEN.REPAIRS', source })} />
+        and silent for a healthy source. View details opens the exact owner,
+        which acknowledges the receipt once it has presented its details. */}
+    <RepairNotice client={client} acknowledgements={repairAcknowledgements}
+      viewDetails={({ source, authorityId, receiptId }) => navigationActor.send({ type: 'OPEN.REPAIRS', source, inspection: { authorityId, receiptId } })} />
     {state.uncertain.some(item => !item.sessionId) && <div className="notice" role="status">{tx('common:app.a-global-operation-needs-verification-inspect-global-other-sessi')}</div>}
     {deletingSession && <SessionDeletion key={JSON.stringify([state.authorityRevision, deletingSession])} client={client} sessionId={deletingSession} title={sessionDisplayTitle(tx, state.sessions.find(session => session.id === deletingSession) ?? state.views[deletingSession]?.summary)} close={() => setDeletingSession(undefined)} deleted={() => {
       const remaining = openViews.filter(id => id !== deletingSession);

@@ -856,7 +856,7 @@ impl UserConfigManager {
         // the bound User directory, or the admitted Workspace itself.
         let opened;
         let source = match (target, &scope.workspace) {
-            (SourceTarget::User, _) => match SourceDirectory::open(&path, false) {
+            (SourceTarget::User, _) => match SourceDirectory::open(&path) {
                 Ok(Some(source)) => {
                     opened = source;
                     &opened
@@ -930,12 +930,15 @@ impl UserConfigManager {
     /// The User alone needs no admission. A selected Workspace must be a
     /// canonical directory lexically disjoint from the bound runtime root
     /// under the rule Session resolution applies — checked before anything is
-    /// created — and then physically disjoint from it: both are admitted as
-    /// no-follow directory handles (the runtime root created the same way
-    /// when missing) and neither may lie within the other. The returned scope
-    /// carries the admitted Workspace handle to every transaction of the
-    /// boundary. Any failure admits nothing: the boundary repairs neither
-    /// source, and the fresh resolution that follows reports the scope.
+    /// created — and then physically disjoint from it: both are observed as
+    /// no-follow directory handles and neither may lie within the other.
+    /// Admission creates and syncs nothing, so a healthy boundary costs no
+    /// durability I/O; runtime storage that does not exist yet is checked
+    /// against the Workspace handle by the backup that creates it. The
+    /// returned scope carries the admitted Workspace handle to every
+    /// transaction of the boundary. Any failure admits nothing: the boundary
+    /// repairs neither source, and the fresh resolution that follows reports
+    /// the scope.
     pub(crate) fn admit_repair_scope(&self, scope: &SourceTarget) -> Result<RepairScope, String> {
         fn refused<E>(_: E) -> String {
             String::from("the selected Workspace could not be admitted for repair")
@@ -945,11 +948,14 @@ impl UserConfigManager {
         };
         scope.validate().map_err(refused)?;
         super::storage_disjoint(self.runtime_root(), directory)?;
-        let workspace = SourceDirectory::open(&self.config_path(scope), false)
+        let workspace = SourceDirectory::open(&self.config_path(scope))
             .map_err(refused)?
             .ok_or_else(|| refused(()))?;
-        let root = SourceDirectory::create(self.runtime_root()).map_err(refused)?;
-        if !isolated(&root, &workspace) {
+        // Observed, never created: a healthy boundary costs no durability
+        // I/O. Runtime storage that does not exist yet is checked against
+        // this Workspace handle by the backup that creates it.
+        let root = SourceDirectory::observe(self.runtime_root()).map_err(refused)?;
+        if root.is_some_and(|root| !isolated(&root, &workspace)) {
             return Err("runtime_root must be disjoint from the workspace".into());
         }
         #[cfg(test)]
@@ -1201,12 +1207,12 @@ impl UserConfigManager {
     /// Workspace, named by source identity and original revision so repeated
     /// repairs of the same bytes keep exactly one copy.
     ///
-    /// The bound runtime root is admitted the way a source directory is:
-    /// walked from `/` one component at a time without following any
-    /// symlink, missing components created relative to their verified
-    /// parent. With a selected Workspace — `workspace`, the handle its scope
-    /// admitted, whichever source is being repaired — the runtime root must
-    /// again be physically disjoint from it. The backup directory is then
+    /// The bound runtime root is admitted for durable writes: walked from `/`
+    /// one component at a time without following any symlink, missing
+    /// components created relative to their verified parent. With a selected
+    /// Workspace — `workspace`, the handle its scope admitted, whichever
+    /// source is being repaired — the runtime root must be physically
+    /// disjoint from it. The backup directory is then
     /// created or opened relative to that handle and verified as this user's
     /// `0700` directory.
     /// The staged copy, the no-clobber link that publishes it, the comparison
@@ -1214,10 +1220,12 @@ impl UserConfigManager {
     /// handle, so a symlink in any ancestor, or any replacement after
     /// admission, can never redirect the bytes.
     ///
-    /// The backup is durable only once every name leading to it is: each
-    /// directory created on the way has its parent synced before use (see
-    /// [`SourceDirectory`]), and the backup directory is synced after the
-    /// link. Any failed sync is a backup failure.
+    /// The backup is durable only once every name leading to it is, as this
+    /// transaction itself confirmed them: every directory on the way has its
+    /// entry confirmed by syncing its parent before use, whether this
+    /// transaction created it, another writer just did, or it was merely
+    /// visible (see [`SourceDirectory`]); the backup directory is synced after
+    /// the link. Any failed sync is a backup failure.
     ///
     /// Physical safety does not depend on the pathname afterwards; whether
     /// the backup is confirmed does. The copy counts only if, once durable,
@@ -1245,7 +1253,7 @@ impl UserConfigManager {
         }
         #[cfg(test)]
         self.test_hooks.reach("before_backup");
-        let root = SourceDirectory::create(self.runtime_root()).map_err(failed)?;
+        let root = SourceDirectory::admit_directory(self.runtime_root()).map_err(failed)?;
         if workspace.is_some_and(|workspace| !isolated(&root, workspace)) {
             return Err(outside());
         }

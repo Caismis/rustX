@@ -26,17 +26,32 @@ export function repairCount(tx: Translate, count: number): string {
  * nothing else. It owns no repair rule, writes nothing and touches no editing
  * transaction: a receipt arriving while a unit holds an unsaved draft changes
  * what this section says, never the draft, its CAS base or its submission. */
-export function AutoRepairSection({ receipt, malformed, focused }: {
+export function AutoRepairSection({ receipt, malformed, focused, inspection, presented }: {
   receipt?: ConfigRepairReceipt | null;
   /** Whether the document still fails its source contract, so the manual
    * repair editor is the remaining way to correct it. */
   malformed: boolean;
   /** Opened from a repair notification's View details. */
   focused: boolean;
+  /** The View details inspection awaiting these details; a new one is a new
+   * request to report them. */
+  inspection?: unknown;
+  /** Reports the receipt these details present, once they are on screen. */
+  presented?: (receiptId: string) => void;
 }) {
   const tx = useTranslation();
   const section = useRef<HTMLElement>(null);
+  const report = useRef(presented);
+  report.current = presented;
   useEffect(() => { if (focused) section.current?.scrollIntoView?.({ block: 'start' }); }, [focused]);
+  // After commit, the details of `receipt` are on screen: report them for the
+  // pending inspection, which the navigation machine completes only when the
+  // receipt and source are exactly the ones it asked for.
+  const receiptId = receipt?.id;
+  const reportable = !!presented;
+  useEffect(() => {
+    if (focused && inspection && receiptId && reportable) report.current?.(receiptId);
+  }, [focused, inspection, receiptId, reportable]);
   return <section ref={section} id="settings-auto-repair" aria-label={tx('settings:auto-repair.title')} data-focused={focused || undefined}>
     <h4>{tx('settings:auto-repair.title')}</h4>
     <p className={css.hint}>{tx('settings:auto-repair.intro')}</p>

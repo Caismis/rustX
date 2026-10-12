@@ -3,9 +3,11 @@
  *
  * The App Server owns repair: classification, candidate validation, backup,
  * publication and the receipt itself. This module only words those bounded,
- * redacted receipts for the terminal, and deduplicates notices by the native
- * receipt identity so a reconnect, a repeated read, or the same receipt from
- * both a notification and a read never announces one repair twice.
+ * redacted receipts for the terminal, and deduplicates notices by the App
+ * Server authority and native receipt identity, so a reconnect, a repeated
+ * read, or the same receipt from both a notification and a read never
+ * announces one repair twice, while an equal content-derived receipt id from
+ * another App Server — or a replacement process — is announced on its own.
  *
  * Nothing here reads a configuration file, applies a rule, or reaches a model:
  * a repair notice is presentation only and never becomes a conversation Turn.
@@ -33,16 +35,19 @@ function sourceLabel(target: SourceTarget): string {
   return target.kind === "user" ? "User" : "Workspace";
 }
 
-/** Which receipts this client already announced, by native receipt identity. */
+/** Which receipts this client already announced, by the negotiated App Server
+ * authority and native receipt identity. In memory only. */
 export class SourceRepairNotices {
+  static readonly LIMIT = 256;
   readonly #announced = new Set<string>();
 
-  /** True exactly once per receipt identity. */
-  fresh(receipt: ConfigRepairReceipt): boolean {
-    if (this.#announced.has(receipt.id)) return false;
-    this.#announced.add(receipt.id);
+  /** True exactly once per `(authorityId, receipt.id)`. */
+  fresh(authorityId: string, receipt: ConfigRepairReceipt): boolean {
+    const identity = JSON.stringify([authorityId, receipt.id]);
+    if (this.#announced.has(identity)) return false;
+    this.#announced.add(identity);
     // Finite: receipts are per source, so a small window suffices.
-    if (this.#announced.size > 256) {
+    if (this.#announced.size > SourceRepairNotices.LIMIT) {
       const oldest = this.#announced.values().next().value;
       if (oldest !== undefined) this.#announced.delete(oldest);
     }

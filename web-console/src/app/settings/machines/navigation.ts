@@ -2,6 +2,8 @@ import { message, type DisplayText } from '../../../locale/translation';
 import { assign, fromPromise, setup, type ActorRefFrom } from 'xstate';
 import type { AppServerClient } from '../../../client/app-server';
 import type { ProductHostWorkspaces } from '../../../workspaces/host';
+import type { SourceTarget } from '../../../../../protocol/app-server/v46';
+import type { RepairIdentity } from '../../repair-notices';
 import {
   settingsTargetKey, userSettingsTarget, workspaceSettingsTarget,
   type ExtensionFamily, type SettingsTarget,
@@ -113,8 +115,23 @@ export function createOwnerLookup(host: ProductHostWorkspaces, client: AppServer
   };
 }
 
+/** One View details request: the exact receipt of one App Server authority,
+ * and the configuration source whose Auto Repair details show it. */
+export interface RepairInspection extends RepairIdentity {
+  source: SourceTarget;
+}
+
+function sameSource(left: SourceTarget, right: SourceTarget): boolean {
+  return left.kind === 'user' ? right.kind === 'user' : right.kind === 'workspace' && left.directory === right.directory;
+}
+
 export interface SettingsNavigationContext {
   lookup: OwnerLookup;
+  /** Completes a View details inspection: called once the exact source's Auto
+   * Repair details were presented for the receipt it names, and never
+   * otherwise. Acknowledgement is the caller's; this machine only decides
+   * when an inspection happened. */
+  inspected?: (inspection: RepairInspection) => void;
   /** The open primary product page, or `undefined` while Settings is closed.
    * Always a page `target` authorizes. */
   page?: SettingsPage;
@@ -133,6 +150,12 @@ export interface SettingsNavigationContext {
   /** Where an owner lookup in flight lands once it resolves: the landing page
    * by default, or Advanced → Auto Repair for `OPEN.REPAIRS`. */
   landing?: 'auto_repair';
+  /** A View details inspection whose Workspace owner lookup is in flight. */
+  pendingInspection?: RepairInspection;
+  /** A View details inspection whose navigation has landed at the exact
+   * owner's Advanced → Auto Repair, awaiting the details being presented.
+   * Every other navigation decision discards it. */
+  inspection?: RepairInspection;
   error: DisplayText;
 }
 
@@ -143,7 +166,11 @@ export type SettingsNavigationEvent =
   /** Open the exact owner of one native configuration source at Advanced →
    * Auto Repair. A Workspace source resolves its owner through the Product
    * Host like `OPEN.OWNER`; nothing is guessed from a path or a Session. */
-  | { type: 'OPEN.REPAIRS'; source: { kind: 'user' } | { kind: 'workspace'; directory: string } }
+  | { type: 'OPEN.REPAIRS'; source: SourceTarget; inspection?: RepairIdentity }
+  /** The Auto Repair details of `source` were presented for `receiptId` from a
+   * current authoritative read. Completes the landed inspection it matches
+   * exactly, and nothing else. */
+  | { type: 'INSPECTED'; receiptId: string; source: SourceTarget }
   /** Select another primary page of the open dialog, keeping its target and
    * every page's own focus. A page the target does not authorize is refused. */
   | { type: 'SELECT'; page: SettingsPage }
@@ -185,7 +212,7 @@ export const settingsNavigationMachine = setup({
   types: {
     context: {} as SettingsNavigationContext,
     events: {} as SettingsNavigationEvent,
-    input: {} as { lookup: OwnerLookup },
+    input: {} as { lookup: OwnerLookup; inspected?: (inspection: RepairInspection) => void },
   },
   actors: {
     resolveOwner: fromPromise(({ input }: { input: { lookup: OwnerLookup; directory: string } }) => input.lookup(input.directory)),
@@ -202,8 +229,16 @@ export const settingsNavigationMachine = setup({
      * the dialog's owner authorizes it there. Leaving a detail is always legal. */
     focusAdmitted: ({ context, event }) => context.page !== undefined && event.type === 'FOCUS'
       && (event.focus === undefined || admitsFocus(context.target, context.page, event.focus)),
+    /** The presented details are exactly those the landed inspection asked
+     * for: the same receipt of the same source, still displayed at Advanced →
+     * Auto Repair. A stale presentation, or a newer receipt, matches nothing. */
+    inspectionPresented: ({ context, event }) => event.type === 'INSPECTED' && context.inspection !== undefined
+      && context.page === 'advanced' && context.focus.advanced?.kind === 'auto_repair'
+      && event.receiptId === context.inspection.receiptId && sameSource(event.source, context.inspection.source),
   },
   actions: {
+    discardInspection: assign({ inspection: () => undefined, pendingInspection: () => undefined }),
+    completeInspection: ({ context }) => { if (context.inspection) context.inspected?.(context.inspection); },
     openTarget: assign({
       target: ({ context, event }) => event.type === 'OPEN' ? event.target : context.target,
       // The landing page is derived from the pages that owner authorizes, so a
@@ -252,9 +287,16 @@ export const settingsNavigationMachine = setup({
         advanced: autoRepairFocus,
       }),
       landing: () => undefined,
+      inspection: ({ event }) => event.type === 'OPEN.REPAIRS' && event.inspection ? { ...event.inspection, source: event.source } : undefined,
+      pendingInspection: () => undefined,
       error: () => '',
     }),
-    landOnRepairs: assign({ landing: () => 'auto_repair' as const, error: () => '' }),
+    landOnRepairs: assign({
+      landing: () => 'auto_repair' as const,
+      inspection: () => undefined,
+      pendingInspection: ({ event }) => event.type === 'OPEN.REPAIRS' && event.inspection ? { ...event.inspection, source: event.source } : undefined,
+      error: () => '',
+    }),
     landOnOwner: assign({ landing: () => undefined }),
     openResolvedOwner: assign({
       target: ({ context, event }) => {
@@ -269,6 +311,10 @@ export const settingsNavigationMachine = setup({
       focus: ({ context, event }) => (event as unknown as { output: OwnerResolution }).output.kind === 'resolved' && context.landing === 'auto_repair'
         ? { advanced: autoRepairFocus } : {},
       landing: () => undefined,
+      // The inspection lands with its owner; it completes only once the
+      // owner's details are presented.
+      inspection: ({ context }) => context.landing === 'auto_repair' ? context.pendingInspection : undefined,
+      pendingInspection: () => undefined,
       error: () => '',
     }),
     reportOwnerLookup: assign({
@@ -281,7 +327,7 @@ export const settingsNavigationMachine = setup({
   },
 }).createMachine({
   id: 'settingsNavigation',
-  context: ({ input }) => ({ lookup: input.lookup, target: userSettingsTarget, focus: {}, error: '' }),
+  context: ({ input }) => ({ lookup: input.lookup, inspected: input.inspected, target: userSettingsTarget, focus: {}, error: '' }),
   initial: 'idle',
   states: {
     idle: {},
@@ -297,29 +343,34 @@ export const settingsNavigationMachine = setup({
         }),
         onDone: [
           { guard: 'ownerResolved', target: 'idle', actions: 'openResolvedOwner' },
-          { guard: 'ownerUnregistered', target: 'idle', actions: 'reportOwnerLookup' },
-          { guard: 'ownerFailed', target: 'idle', actions: 'reportOwnerLookup' },
+          { guard: 'ownerUnregistered', target: 'idle', actions: ['reportOwnerLookup', 'discardInspection'] },
+          { guard: 'ownerFailed', target: 'idle', actions: ['reportOwnerLookup', 'discardInspection'] },
           // A retired authority commits nothing and reports nothing.
-          { target: 'idle' },
+          { target: 'idle', actions: 'discardInspection' },
         ],
       },
     },
   },
+  // Every navigation decision other than the inspection itself discards a
+  // pending or landed View details inspection: it was not, and can no longer
+  // become, the presentation that inspection asked for.
   on: {
-    OPEN: { target: '.idle', reenter: true, actions: 'openTarget' },
-    'OPEN.CONNECTION': { target: '.idle', reenter: true, actions: 'openConnection' },
-    'OPEN.OWNER': { target: '.resolvingOwner', reenter: true, actions: ['clearError', 'landOnOwner'] },
+    OPEN: { target: '.idle', reenter: true, actions: ['discardInspection', 'openTarget'] },
+    'OPEN.CONNECTION': { target: '.idle', reenter: true, actions: ['discardInspection', 'openConnection'] },
+    'OPEN.OWNER': { target: '.resolvingOwner', reenter: true, actions: ['discardInspection', 'clearError', 'landOnOwner'] },
     'OPEN.REPAIRS': [
       { guard: ({ event }) => event.source.kind === 'workspace', target: '.resolvingOwner', reenter: true, actions: 'landOnRepairs' },
       { target: '.idle', reenter: true, actions: 'openRepairs' },
     ],
-    SELECT: { guard: 'pageAdmitted', target: '.idle', reenter: true, actions: 'select' },
-    FOCUS: { guard: 'focusAdmitted', target: '.idle', reenter: true, actions: 'focus' },
-    CLOSE: { target: '.idle', reenter: true, actions: 'close' },
+    SELECT: { guard: 'pageAdmitted', target: '.idle', reenter: true, actions: ['discardInspection', 'select'] },
+    FOCUS: { guard: 'focusAdmitted', target: '.idle', reenter: true, actions: ['discardInspection', 'focus'] },
+    CLOSE: { target: '.idle', reenter: true, actions: ['discardInspection', 'close'] },
     // Authority replacement retires the lookup without reinterpreting the
-    // presentation decision the user already made.
-    RETIRE: { target: '.idle', reenter: true, actions: 'clearError' },
+    // presentation decision the user already made; an inspection of the old
+    // authority's receipt cannot complete under the new one.
+    RETIRE: { target: '.idle', reenter: true, actions: ['discardInspection', 'clearError'] },
     DISMISS: { actions: 'clearError' },
+    INSPECTED: { guard: 'inspectionPresented', actions: ['completeInspection', 'discardInspection'] },
   },
 });
 

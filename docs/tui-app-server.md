@@ -12,7 +12,12 @@ inspect native automatic repair receipts (#464) read-only — changes are listed
 as applied, eligible but not applied, or possibly published with durability not
 confirmed, never an uncertain publication as applied; the host routes
 `configuration/sourceRepairChanged` without a Session and retains notices that
-arrive before any presentation subscribes.
+arrive before any presentation subscribes. A notice is announced once per
+`(authority_id, receipt id)`, the authority being the one this connection's
+`initialize` negotiated (`AppServerClient.authorityId`, exposed read-only by the
+host): a reconnect to the same App Server repeats nothing, while a replacement
+process, or another server, announcing an equal receipt id is announced again.
+Deduplication is bounded and in memory only.
 `/session settings` inspects Session selections, binding, pending candidate and
 the runtime's published adoption eligibility (Runtime Client state, never part of
 the application). `/session adopt` sends only the last inspected candidate and

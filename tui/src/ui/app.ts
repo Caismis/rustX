@@ -338,14 +338,16 @@ export class RustxTuiApp {
 
   /**
    * Presents source repair receipts this connection observed: those already
-   * held by the host, then each new one. A receipt identity is announced once
-   * per client, so reconnects and rereads never repeat a status line.
+   * held by the host, then each new one. A receipt of one App Server authority
+   * is announced once per client, so reconnects to it and rereads never repeat
+   * a status line; a replacement authority's receipts are its own.
    */
   #watchSourceRepairs(): void {
     this.#removeRepairListener();
+    const authority = this.#host.authorityId;
     const observe = ({ target, receipt }: SourceRepairObservation) => {
       if (receipt === undefined) this.#repairStatus.withdraw(sourceKey(target));
-      else if (this.#repairNotices.fresh(receipt)) this.#repairStatus.observe(receipt);
+      else if (this.#repairNotices.fresh(authority, receipt)) this.#repairStatus.observe(receipt);
       else return;
       if (this.#started) this.#tui.requestRender();
     };

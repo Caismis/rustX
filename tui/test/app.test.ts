@@ -28,6 +28,8 @@ import { TransientFeedbackSurface } from "../src/ui/components/transient-feedbac
 import { DeliverySelector } from "../src/ui/components/delivery-selector.ts";
 import type { AppServerHost } from "../src/app-server/host.ts";
 import type { AppServerSession } from "../src/app-server/session.ts";
+import type { SourceRepairObservation } from "../src/presentation/source-repairs.ts";
+import { SourceRepairStatus } from "../src/ui/components/source-repair-status.ts";
 import type {
   AttachmentTarget,
   SessionDeleteResult,
@@ -126,6 +128,10 @@ interface FakeHostOptions {
   /** Answers `host.readSession` for the footer. */
   readSession?: (sessionId: string) => Promise<SessionSnapshot>;
   exitCode?: number;
+  /** The authority this connection negotiated in `initialize`. */
+  authorityId?: string;
+  /** Source repair observations the host already holds. */
+  sourceRepairs?: SourceRepairObservation[];
 }
 
 function fakeHost(options: FakeHostOptions = {}): AppServerHost {
@@ -133,6 +139,7 @@ function fakeHost(options: FakeHostOptions = {}): AppServerHost {
   const log = options.log ?? [];
   const host = {
     ownership,
+    authorityId: options.authorityId ?? "fixture-app-server-authority",
     client: {
       closed: undefined,
       pendingCount: 0,
@@ -157,7 +164,7 @@ function fakeHost(options: FakeHostOptions = {}): AppServerHost {
       (async (sessionId: string) => fakeSession(undefined, sessionId)),
     attachment: () => undefined,
     detach: async () => {},
-    sourceRepairs: () => [],
+    sourceRepairs: () => options.sourceRepairs ?? [],
     onSourceRepair: () => () => {},
     readSession:
       options.readSession ?? (async () => sessionView()),
@@ -2279,6 +2286,44 @@ it("remote recovery installs a fresh attachment and fences old callbacks without
   assert.equal(submissions, 2, "new input uses the replacement attachment");
   await app.quit();
   await running;
+});
+
+it("repair notices are announced once per App Server authority across reconnects", async () => {
+  let close!: (error: TransportClosedError) => void;
+  const repaired: SourceRepairObservation = { target: { kind: "user" }, receipt: {
+    id: "receipt-user-1", target: { kind: "user" }, status: "repaired", before_revision: "sha256:before",
+    after_revision: "sha256:after", changed_count: 1, changes: [{ kind: "updated_schema_version", from: 8, to: 10 }],
+    truncated: false, backup_available: true, diagnostic: null,
+  } };
+  const connection = (authorityId: string) => fakeHost({ ownership: "external", authorityId, sourceRepairs: [repaired], onClose: listener => { close = listener; } });
+  const hosts = [connection("authority-a"), connection("authority-b")];
+  const announced: string[] = [];
+  const original = SourceRepairStatus.prototype.observe;
+  SourceRepairStatus.prototype.observe = function(receipt) { announced.push(receipt.id); return original.call(this, receipt); };
+  const app = new RustxTuiApp({ host: connection("authority-a"), session: fakeSession(), sessionSettings: SESSION_SETTINGS,
+    reconnect: async () => hosts.shift()! });
+  const running = app.run();
+  const reconnect = async () => {
+    const error = new TransportClosedError("input_eof", "lost connection");
+    close(error);
+    await waitForApplicationContinuation();
+    await waitForApplicationContinuation();
+  };
+  try {
+    await waitForApplicationContinuation();
+    assert.deepEqual(announced, ["receipt-user-1"]);
+    // The same authority announces the same receipt again: no new notice.
+    await reconnect();
+    assert.equal(hosts.length, 1);
+    assert.deepEqual(announced, ["receipt-user-1"]);
+    // A replacement process at the same endpoint is another authority.
+    await reconnect();
+    assert.equal(hosts.length, 0);
+    assert.deepEqual(announced, ["receipt-user-1", "receipt-user-1"]);
+  } finally {
+    SourceRepairStatus.prototype.observe = original;
+    await app.quit(); await running;
+  }
 });
 
 it("quitting while remote recovery is pending closes the late connection", async () => {

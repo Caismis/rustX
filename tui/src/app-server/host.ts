@@ -263,6 +263,11 @@ export class AppServerHost {
   // Configuration source repair observations (Issue #464)
   // -------------------------------------------------------------------------
 
+  /** The App Server authority this connection negotiated; read-only. */
+  get authorityId(): string {
+    return this.client.authorityId;
+  }
+
   /** The latest receipt of every source observed on this connection. */
   sourceRepairs(): SourceRepairObservation[] {
     return [...this.#sourceRepairs.values()];

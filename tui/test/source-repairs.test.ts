@@ -24,6 +24,7 @@ import { FakeTransport, notification, paramsOf } from "./support/app-server-peer
 import { plain } from "./support/render.ts";
 
 const WORKSPACE: SourceTarget = { kind: "workspace", directory: "/work/project" };
+const AUTHORITY = "fixture-app-server-authority";
 
 function receipt(overrides: Partial<ConfigRepairReceipt> = {}): ConfigRepairReceipt {
   return {
@@ -113,9 +114,9 @@ it("never presents an uncertain publication as a confirmed application", () => {
 
 it("announces each receipt identity once and acknowledges on input", () => {
   const notices = new SourceRepairNotices();
-  assert.equal(notices.fresh(receipt()), true);
-  assert.equal(notices.fresh(receipt()), false);
-  assert.equal(notices.fresh(receipt({ id: "receipt-user-2" })), true);
+  assert.equal(notices.fresh(AUTHORITY, receipt()), true);
+  assert.equal(notices.fresh(AUTHORITY, receipt()), false);
+  assert.equal(notices.fresh(AUTHORITY, receipt({ id: "receipt-user-2" })), true);
   const status = new SourceRepairStatus();
   assert.deepEqual(status.render(120), []);
   status.observe(receipt());
@@ -150,6 +151,67 @@ it("routes a source notice sent before the host existed, with no Session", async
   assert.deepEqual(observed, ["w", "cleared"]);
   assert.equal(host.attached.length, 0);
   assert.equal(transport.log.requests.length, 1, "observing notices issues no request");
+});
+
+it("deduplicates notices by negotiated App Server authority and receipt id", () => {
+  const notices = new SourceRepairNotices();
+  // The same authority repeating, or announcing again after a reconnect.
+  assert.equal(notices.fresh("authority-a", receipt()), true);
+  assert.equal(notices.fresh("authority-a", receipt()), false);
+  // An equal content-derived id from another authority is its own repair.
+  assert.equal(notices.fresh("authority-b", receipt()), true);
+  assert.equal(notices.fresh("authority-b", receipt()), false);
+  // Bounded: the oldest identity is forgotten beyond the window.
+  for (let index = 0; index < SourceRepairNotices.LIMIT; index++) notices.fresh("authority-c", receipt({ id: `r${index}` }));
+  assert.equal(notices.fresh("authority-a", receipt()), true, "forgotten beyond the bound");
+  assert.equal(notices.fresh("authority-c", receipt({ id: `r${SourceRepairNotices.LIMIT - 1}` })), false);
+});
+
+/** One initialized connection negotiating `authority`, with its host. */
+async function connect(authority: string, early?: ConfigRepairReceipt) {
+  const transport = new FakeTransport();
+  const connecting = AppServerClient.initialize({ transport });
+  const initialize = (await transport.log.awaitMethod("initialize")).at(-1)!;
+  transport.respond(initialize.id, {
+    type: "initialized", authority_id: authority,
+    protocol_version: APP_SERVER_PROTOCOL_VERSION, capabilities: SERVER_CAPABILITIES,
+  });
+  if (early) transport.notify(notification("configuration/sourceRepairChanged", { target: early.target, receipt: early }));
+  const client = await connecting;
+  return { transport, host: new AppServerHost({ client, ownership: "external" }) };
+}
+
+it("each connection carries the authority its initialize negotiated", async () => {
+  const notices = new SourceRepairNotices();
+  const announced = (host: AppServerHost) => host.sourceRepairs()
+    .filter(({ receipt: value }) => value !== undefined && notices.fresh(host.authorityId, value))
+    .map(({ receipt: value }) => value!.id);
+  // A startup notice before the host exists is attributed to its connection.
+  const first = await connect("authority-a", receipt());
+  assert.equal(first.host.authorityId, "authority-a");
+  assert.equal(first.host.client.authorityId, "authority-a");
+  assert.deepEqual(announced(first.host), ["receipt-user-1"]);
+  // Reconnecting to the same server process: nothing is announced again.
+  const reconnected = await connect("authority-a", receipt());
+  assert.deepEqual(announced(reconnected.host), []);
+  // A replacement process at the same endpoint negotiates a new authority.
+  const replaced = await connect("authority-b", receipt());
+  assert.deepEqual(announced(replaced.host), ["receipt-user-1"]);
+  // A withdrawn receipt is an observation without a receipt, never a notice.
+  replaced.transport.notify(notification("configuration/sourceRepairChanged", { target: { kind: "user" }, receipt: null }));
+  assert.deepEqual(replaced.host.sourceRepairs(), [{ target: { kind: "user" }, receipt: undefined }]);
+  assert.deepEqual(announced(replaced.host), []);
+});
+
+it("refuses a connection that negotiates no authority", async () => {
+  const transport = new FakeTransport();
+  const connecting = AppServerClient.initialize({ transport });
+  const initialize = (await transport.log.awaitMethod("initialize")).at(-1)!;
+  transport.respond(initialize.id, {
+    type: "initialized", authority_id: "",
+    protocol_version: APP_SERVER_PROTOCOL_VERSION, capabilities: SERVER_CAPABILITIES,
+  });
+  await assert.rejects(connecting, /did not negotiate an authority identity/);
 });
 
 it("source notices never reach an attached Session's conversation", async () => {

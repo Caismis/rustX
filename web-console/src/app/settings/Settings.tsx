@@ -125,6 +125,8 @@ function SettingsDialog({ client, host, associations, theme = 'system', setTheme
   // never treated as current — the machine owes a fresh read on every ATTACH,
   // and authoring stays closed until that read is adopted.
   const observed = useSelector(actor, snapshot => snapshot.context.observation);
+  // A View details inspection awaiting this owner's Auto Repair details.
+  const inspection = useSelector(navigation, snapshot => snapshot.context.inspection);
   const source = useSelector(actor, snapshot => snapshot.context.observation ?? snapshot.context.staleObservation);
   const mcpProbes = useMcpProbes(client, host, activeTarget, observed, current === 'mcp' && !focus.mcp, associations);
   const readError = useSelector(actor, snapshot => snapshot.context.readError);
@@ -189,6 +191,8 @@ function SettingsDialog({ client, host, associations, theme = 'system', setTheme
     {current === 'advanced' && <AdvancedPage source={source} scope={scope}
       config={structured ? { document: config.document, revision: config.revision } : undefined}
       repairFocused={focus.advanced?.kind === 'auto_repair'}
+      inspection={inspection}
+      repairPresented={observed && targetValid ? receiptId => navigation.send({ type: 'INSPECTED', receiptId, source: scope === 'user' ? { kind: 'user' } : observed.target }) : undefined}
       closed={<MalformedNotice config={config} diagnostic={false} />}
       processPolicyImpacts={source.process_policy_impacts} busy={busy} targetValid={targetValid} />}
     {/* The one mutation a malformed `rustx.toml` admits, fenced on its exact

@@ -1114,9 +1114,8 @@ impl UserConfigManager {
         };
         // The physical source of this transaction; see `publish_locked`. A
         // target redirected since entry is invalid, as at entry.
-        let source = SourceDirectory::open(&path, true)
-            .map_err(|_| target.validate().err().unwrap_or(SettingsError::Io))?
-            .ok_or(SettingsError::Io)?;
+        let source = SourceDirectory::admit(&path)
+            .map_err(|_| target.validate().err().unwrap_or(SettingsError::Io))?;
         let name = path.file_name().ok_or(SettingsError::Invalid)?;
         #[cfg(test)]
         self.test_hooks.reach("write_before_lock");

@@ -94,10 +94,21 @@ pub(super) fn revision(bytes: Option<&[u8]>) -> String {
 /// Entry names are native [`OsStr`] bytes, never text: a document is read,
 /// locked, replaced and removed under exactly the basename it is bound to.
 ///
-/// Every directory entry a transaction creates on its way — a missing
-/// ancestor, the directory itself, private backup storage — is made durable
-/// by syncing its parent before the walk continues, so a later durability
-/// sync of the directory's contents is reachable after a crash. See [`child`].
+/// A directory is either observed or admitted for durable writes.
+/// Observation ([`SourceDirectory::open`], [`SourceDirectory::observe`]) only
+/// opens what exists: it creates nothing and syncs nothing, so reading a
+/// source, or finding it healthy, costs no durability I/O. Durable-write
+/// admission ([`SourceDirectory::admit`], [`SourceDirectory::admit_directory`],
+/// [`SourceDirectory::private_child`]) is what a transaction that publishes
+/// into the directory uses: it creates missing components and syncs the
+/// parent of every component on the path — created, created concurrently by
+/// another writer, or merely visible — before descending. Visibility is not
+/// durability: an entry another process just created may not be durable yet,
+/// and an entry left behind by a failed transaction never was, so the
+/// admitting transaction establishes the barrier itself and trusts no earlier
+/// creator, sync or cleanup. Once admitted, every name leading to the
+/// directory is durable, and a later sync of its own entries is reachable
+/// after a crash.
 ///
 /// What the handle cannot do is stop the directory itself from being renamed.
 /// [`SourceDirectory::holds`] therefore asks whether the admitted pathname
@@ -110,34 +121,36 @@ pub(super) struct SourceDirectory {
 }
 
 impl SourceDirectory {
-    /// Admit the parent directory of `document`. A missing directory is
-    /// `None` unless `create`, which creates the missing components the same
-    /// no-follow way. Any symlink, non-directory or noncanonical component
-    /// fails: the pathname no longer names the directory it was admitted as.
-    pub(super) fn open(document: &Path, create: bool) -> std::io::Result<Option<Self>> {
-        let path = document
-            .parent()
-            .ok_or_else(|| std::io::Error::other("invalid document"))?;
-        Self::admit(path, create)
+    /// Observe the parent directory of `document`: `None` when missing. Any
+    /// symlink, non-directory or noncanonical component fails: the pathname
+    /// no longer names the directory it would be admitted as.
+    pub(super) fn open(document: &Path) -> std::io::Result<Option<Self>> {
+        Self::observe(parent(document)?)
     }
 
-    /// Admit the directory `path` itself, creating missing components the
-    /// same no-follow way.
-    pub(super) fn create(path: &Path) -> std::io::Result<Self> {
-        Self::admit(path, true)?.ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))
+    /// Observe the directory `path` itself: `None` when missing.
+    pub(super) fn observe(path: &Path) -> std::io::Result<Option<Self>> {
+        Self::walked(path, Walk::Observe)
+    }
+
+    /// Admit the parent directory of `document` for durable writes.
+    pub(super) fn admit(document: &Path) -> std::io::Result<Self> {
+        Self::admit_directory(parent(document)?)
+    }
+
+    /// Admit the directory `path` itself for durable writes, creating missing
+    /// components and confirming every entry on the path.
+    pub(super) fn admit_directory(path: &Path) -> std::io::Result<Self> {
+        Self::walked(path, Walk::Durable)?
+            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))
     }
 
     /// Admit the child directory `name` as this user's private (`0700`)
-    /// storage, creating it relative to this handle when missing — durably,
-    /// as [`child`] creates every entry.
+    /// storage for durable writes: created relative to this handle when
+    /// missing, and its entry confirmed by syncing this directory either way.
     pub(super) fn private_child(&self, name: &str) -> std::io::Result<Self> {
-        let directory = child(
-            &self.directory,
-            &self.path,
-            OsStr::new(name),
-            Some(Mode::S_IRWXU),
-        )?
-        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
+        let directory = child(&self.directory, &self.path, OsStr::new(name), Walk::Durable)?
+            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
         let status = nix::sys::stat::fstat(&directory)?;
         if status.st_uid != nix::unistd::geteuid().as_raw() {
             return Err(std::io::Error::other("directory is not owned by this user"));
@@ -150,8 +163,8 @@ impl SourceDirectory {
         })
     }
 
-    fn admit(path: &Path, create: bool) -> std::io::Result<Option<Self>> {
-        let Some(directory) = walk(path, create)? else {
+    fn walked(path: &Path, mode: Walk) -> std::io::Result<Option<Self>> {
+        let Some(directory) = walk(path, mode)? else {
             return Ok(None);
         };
         let identity = identity(&directory)?;
@@ -164,7 +177,7 @@ impl SourceDirectory {
 
     /// Whether the admitted pathname still names this physical directory.
     pub(super) fn holds(&self) -> bool {
-        walk(&self.path, false)
+        walk(&self.path, Walk::Observe)
             .ok()
             .flatten()
             .is_some_and(|directory| identity(&directory).is_ok_and(|id| id == self.identity))
@@ -315,16 +328,30 @@ const DIRECTORY_FLAGS: OFlag = OFlag::O_RDONLY
     .union(OFlag::O_NOFOLLOW)
     .union(OFlag::O_CLOEXEC);
 
-/// Open `path` from `/` one component at a time, never following a symlink.
-/// With `create`, a missing component is created relative to its verified
-/// parent handle, durably (see [`child`]).
-fn walk(path: &Path, create: bool) -> std::io::Result<Option<std::os::fd::OwnedFd>> {
+/// How a walk treats the components of its path.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Walk {
+    /// Open what exists; create and sync nothing.
+    Observe,
+    /// Create what is missing, and confirm every component's entry by syncing
+    /// its parent before descending, however the component came to exist.
+    Durable,
+}
+
+fn parent(document: &Path) -> std::io::Result<&Path> {
+    document
+        .parent()
+        .ok_or_else(|| std::io::Error::other("invalid document"))
+}
+
+/// Open `path` from `/` one component at a time, never following a symlink,
+/// as `mode` treats each component (see [`child`]).
+fn walk(path: &Path, mode: Walk) -> std::io::Result<Option<std::os::fd::OwnedFd>> {
     use std::path::Component;
     let mut components = path.components();
     if components.next() != Some(Component::RootDir) {
         return Err(std::io::Error::other("source directory must be absolute"));
     }
-    let mode = create.then(|| Mode::from_bits_truncate(0o777));
     let mut directory = nix::fcntl::open("/", DIRECTORY_FLAGS, Mode::empty())?;
     let mut reached = std::path::PathBuf::from("/");
     for component in components {
@@ -341,49 +368,41 @@ fn walk(path: &Path, create: bool) -> std::io::Result<Option<std::os::fd::OwnedF
 }
 
 /// Open the directory `name` below `parent` (whose path is `path`) without
-/// following a symlink. A missing entry is `None`, unless `mode` creates it.
+/// following a symlink. A missing entry is `None` when observing.
 ///
-/// A created entry is durable only once its parent is synced, so the parent
-/// is synced before the child is used; an entry another writer created
-/// concurrently (`EEXIST`) is synced the same way, never assumed durable. A
-/// failed sync fails the step and withdraws the entry this call created, so
-/// no later walk mistakes it for an established one. An entry already
-/// present when first looked up was made durable by the walk that created it.
+/// A durable walk creates a missing entry (`0777` before the umask; private
+/// storage narrows it afterwards) and then syncs `parent` — always, not only
+/// after creating it. The entry may have been created a moment ago by another
+/// writer that has not synced yet, or left behind by a transaction whose sync
+/// failed; neither is durable merely because it is visible, so this walk
+/// establishes the barrier itself and never relies on another writer's sync
+/// or cleanup. A failed sync fails the walk and removes nothing.
 fn child(
     parent: &std::os::fd::OwnedFd,
     path: &Path,
     name: &OsStr,
-    mode: Option<Mode>,
+    mode: Walk,
 ) -> std::io::Result<Option<std::os::fd::OwnedFd>> {
-    match nix::fcntl::openat(parent, name, DIRECTORY_FLAGS, Mode::empty()) {
-        Ok(next) => return Ok(Some(next)),
-        Err(nix::errno::Errno::ENOENT) => {}
-        Err(error) => return Err(error.into()),
-    }
-    let Some(mode) = mode else {
-        return Ok(None);
-    };
-    let created = match nix::sys::stat::mkdirat(parent, name, mode) {
-        Ok(()) => true,
-        Err(nix::errno::Errno::EEXIST) => false,
-        Err(error) => return Err(error.into()),
-    };
-    #[cfg(test)]
-    if created {
-        durability::step(durability::Step::Created(path.join(name)));
-    }
-    if let Err(error) = sync(parent, path) {
-        if created {
-            let _ = nix::unistd::unlinkat(parent, name, nix::unistd::UnlinkatFlags::RemoveDir);
+    let next = match nix::fcntl::openat(parent, name, DIRECTORY_FLAGS, Mode::empty()) {
+        Ok(next) => next,
+        Err(nix::errno::Errno::ENOENT) if mode == Walk::Durable => {
+            match nix::sys::stat::mkdirat(parent, name, Mode::from_bits_truncate(0o777)) {
+                Ok(()) => {
+                    #[cfg(test)]
+                    durability::created(&path.join(name));
+                }
+                Err(nix::errno::Errno::EEXIST) => {}
+                Err(error) => return Err(error.into()),
+            }
+            nix::fcntl::openat(parent, name, DIRECTORY_FLAGS, Mode::empty())?
         }
-        return Err(error);
+        Err(nix::errno::Errno::ENOENT) => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if mode == Walk::Durable {
+        sync(parent, path)?;
     }
-    Ok(Some(nix::fcntl::openat(
-        parent,
-        name,
-        DIRECTORY_FLAGS,
-        Mode::empty(),
-    )?))
+    Ok(Some(next))
 }
 
 /// Make the entries of `directory` (at `path`) durable.
@@ -416,11 +435,40 @@ fn identity(directory: &std::os::fd::OwnedFd) -> std::io::Result<(u64, u64)> {
 }
 
 /// Test-only trace of this thread's durability-relevant directory steps, with
-/// one injectable directory sync failure.
+/// one injectable directory sync failure, and a cross-thread hook between a
+/// directory's creation and its parent's sync.
 #[cfg(test)]
 pub(super) mod durability {
     use std::cell::RefCell;
     use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    type CreatedHook = Box<dyn FnOnce() + Send>;
+    /// Keyed by absolute path; tests use distinct temporary directories.
+    static CREATED_HOOKS: Mutex<Vec<(PathBuf, CreatedHook)>> = Mutex::new(Vec::new());
+
+    /// Run `hook` on whichever thread next creates the directory `path`,
+    /// after its `mkdirat` and before its parent is synced.
+    pub(crate) fn after_creating(path: &Path, hook: impl FnOnce() + Send + 'static) {
+        CREATED_HOOKS
+            .lock()
+            .unwrap()
+            .push((path.to_path_buf(), Box::new(hook)));
+    }
+
+    pub(super) fn created(path: &Path) {
+        step(Step::Created(path.to_path_buf()));
+        let hook = {
+            let mut hooks = CREATED_HOOKS.lock().unwrap();
+            hooks
+                .iter()
+                .position(|(target, _)| target == path)
+                .map(|index| hooks.remove(index).1)
+        };
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub(crate) enum Step {

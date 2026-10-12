@@ -583,9 +583,10 @@ reading. It presents two native facts:
 ```text
 configuration/sourceRepairChanged ──▶ client `sourceRepairs` (per source key)
                                        └─▶ RepairNotice: one nonblocking notice
-                                             View details ─▶ OPEN.REPAIRS(source)
+                                             View details ─▶ OPEN.REPAIRS(source, inspection)
 configuration/sourcesRead ──▶ SourceSettings.user_repair / workspace_repair
                                └─▶ Advanced → Auto Repair (AutoRepairSection)
+                                     presented ─▶ INSPECTED ─▶ acknowledge one receipt
 ```
 
 - The client keeps the latest receipt of each source this connection observed,
@@ -601,13 +602,39 @@ configuration/sourcesRead ──▶ SourceSettings.user_repair / workspace_repai
 - `RepairNotice` (`app/RepairNotice.tsx`) presents each unacknowledged receipt
   once: a combined sentence for simultaneous User and Workspace repairs, an
   alert for `unresolved` / `commit_uncertain` naming the first failing source,
-  and nothing at all for a source without a receipt. View details opens and
-  acknowledges only the source it names, so the other source of a combined
-  notice stays presented; Dismiss acknowledges every receipt presented.
-  Acknowledgements are opaque `(authorityId, receipt id)` pairs in a bounded
-  browser-local list (in memory when storage is denied), so reconnects,
-  rereads, reloads and other tabs of the same authority never repeat a notice.
-  There is no dialog and no automatic navigation.
+  and nothing at all for a source without a receipt. Dismiss acknowledges every
+  receipt presented, immediately. View details acknowledges nothing itself: it
+  sends `OPEN.REPAIRS` with the inspection `(authorityId, receipt id)` of the
+  one source it names, and that receipt is acknowledged only once the exact
+  owner's Advanced → Auto Repair has presented it (see below), so the other
+  source of a combined notice stays presented, and a navigation that fails or
+  is abandoned acknowledges nothing. Acknowledgements are opaque
+  `(authorityId, receipt id)` pairs in one bounded `RepairAcknowledgements`
+  ledger that `App` shares between the notice and Settings, so reconnects,
+  rereads and reloads of the same authority never repeat a notice. There is no
+  dialog and no automatic navigation.
+- Tabs converge without being linearizable. The ledger persists to
+  `localStorage`; every write first merges the identities currently persisted,
+  so a tab never erases another tab's earlier acknowledgements with a stale
+  snapshot, and a `storage` event from another tab merges its acknowledgements
+  and re-renders the notice. `localStorage` has no compare-and-swap: two tabs
+  writing at the same instant can each persist a list lacking the other's
+  newest entry, which stays in that tab's memory, is persisted by its next
+  write, and at worst presents one notice once more elsewhere. Where storage is
+  denied, the ledger lives in the page's memory.
+- The navigation machine owns the inspection. `OPEN.REPAIRS` records it — as
+  `pendingInspection` while a Workspace owner lookup is in flight, as
+  `inspection` once navigation has landed at the owner's Advanced → Auto
+  Repair — and every other navigation decision (`OPEN`, `OPEN.OWNER`,
+  `OPEN.CONNECTION`, `SELECT`, `FOCUS`, `CLOSE`, `RETIRE` on authority
+  replacement, or an unregistered, failed or retired lookup) discards it.
+  `AutoRepairSection` reports `INSPECTED` with the receipt id it displays and
+  the source of the authoritative read, only after it rendered from a current
+  read (not stale data, not a failed read). The machine completes the
+  inspection only when that receipt and source equal the landed inspection, so
+  an older navigation never acknowledges a newer receipt; `App` then
+  acknowledges it, and only while the client is still connected to the
+  authority that produced it.
 - `OPEN.REPAIRS` is a navigation event: the User owner opens directly at
   Advanced with the `{ kind: 'auto_repair' }` focus, which every owner admits;
   a Workspace source resolves its exact owner through the Product Host lookup

@@ -687,15 +687,21 @@ exact copy of the original bytes is written to private storage under the bound
 runtime root (`<runtime_root>/configuration-backups/`, directory `0700`, file
 `0600`, never inside the Workspace), named by source identity and original
 revision; a backup failure leaves the source unchanged. The backup is confirmed
-only once every name leading to it is durable: each directory created on the
-way — a missing runtime-root ancestor, the runtime root, the backup directory —
-has its parent synced before it is used (so is one another writer created at the
-same moment), the copy is linked, and the backup directory is synced. A failed
-sync fails the backup and withdraws the directory entry it could not confirm, so
-a later attempt creates and confirms it again; only then may the source be
-replaced, and only then does a receipt report a backup. The same primitive makes
-a source directory created by `configuration/sourceWrite` durable before the
-document is published into it. The bound runtime root is
+only by the transaction that publishes the source, and only once every name
+leading to it is durable. Backup storage is admitted for durable writes: walking
+from `/`, a missing component — runtime-root ancestor, runtime root or backup
+directory — is created, and every component's entry is then confirmed by
+syncing its parent before the walk descends, whether this transaction created
+it, another writer created it a moment earlier without syncing yet, or it was
+merely visible. Visibility is not durability, so nothing relies on another
+writer's sync or cleanup: a failed sync fails the backup and removes nothing,
+and the next transaction confirms a leftover entry before using it. The copy is
+then linked and the backup directory synced; only then may the source be
+replaced, and only then does a receipt report a backup. Observation is separate
+and creates and syncs nothing: reading a source, finding it healthy and
+admitting a Session's scope cost no durability I/O. `configuration/sourceWrite`
+admits its source directory for durable writes the same way before publishing
+into it. The bound runtime root is
 the trust anchor (canonical when bound). Each backup admits it the way a source
 directory is admitted: walked from `/` one component at a time without following
 any symlink, missing components created relative to their verified parent, and,
@@ -733,9 +739,10 @@ Repair runs only at native source boundaries:
 A boundary that has selected a Workspace admits it before either source is
 touched. The Workspace must be a canonical directory disjoint from the bound
 runtime root under the rule Session resolution applies (neither contains the
-other, checked on the canonical paths before anything is created), and then
-physically: both are opened as no-follow directory handles and neither may lie
-within the other. A Session locates its Workspace exactly as its resolution
+other, checked on the canonical paths), and then physically: both are observed
+as no-follow directory handles and neither may lie within the other. Admission
+creates nothing; runtime storage that does not exist yet is checked against the
+admitted Workspace by the backup that creates it. A Session locates its Workspace exactly as its resolution
 does, so a request whose Workspace does not resolve selects none. A scope that
 fails admission, or a request that selects no Workspace, repairs neither source —
 no backup, no rewrite, no receipt, nothing for the coordinator — and the Session

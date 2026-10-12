@@ -30,7 +30,7 @@ import css from '../../../presentation/settings/SettingsContent.module.css';
  * The diagnostics and the rescan never depend on this scope's `rustx.toml`
  * parsing: a document that does not parse is exactly when its path, revision
  * and native diagnostic are needed. Only the semantic-unit editors close. */
-export function AdvancedPage({ source, config, closed, scope, processPolicyImpacts, busy, targetValid, repairFocused = false }: {
+export function AdvancedPage({ source, config, closed, scope, processPolicyImpacts, busy, targetValid, repairFocused = false, inspection, repairPresented }: {
   source: SourceSettings; scope: SourceScope;
   /** This scope's parsed `rustx.toml` and its exact revision, when it parses. */
   config?: { document: RuntimeLayer; revision: string };
@@ -39,6 +39,11 @@ export function AdvancedPage({ source, config, closed, scope, processPolicyImpac
   processPolicyImpacts: Record<string, 'hot' | 'restart'>; busy: boolean; targetValid: boolean;
   /** Opened at Auto Repair, from a repair notification's View details. */
   repairFocused?: boolean;
+  /** The View details inspection awaiting these details, if any. */
+  inspection?: unknown;
+  /** Reports Auto Repair details presented from a current authoritative
+   * read; absent while `source` is only stale presentation data. */
+  repairPresented?: (receiptId: string) => void;
 }) {
   const tx = useTranslation();
   const actor = useSettingsActor();
@@ -54,7 +59,7 @@ export function AdvancedPage({ source, config, closed, scope, processPolicyImpac
         A receipt never touches an editor above: drafts, CAS bases and saves
         stay exactly where they were. */}
     <AutoRepairSection receipt={scope === 'user' ? source.user_repair : source.workspace_repair}
-      malformed={!config} focused={repairFocused} />
+      malformed={!config} focused={repairFocused} inspection={inspection} presented={repairPresented} />
 
     <h4>{tx('settings:advanced-page.native-diagnostics')}</h4>
     {view && <p>{view.path} {tx('settings:advanced-page.revision')}{' '}{view.revision}</p>}

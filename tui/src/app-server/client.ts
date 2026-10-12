@@ -291,6 +291,7 @@ export class AppServerClient {
   readonly #closeListeners = new Set<CloseListener>();
   #nextRequestId = 1;
   #capabilities: ServerCapabilities | undefined;
+  #authorityId = "";
   #closed: TransportClosedError | undefined;
 
   private constructor(transport: AppServerTransport) {
@@ -320,8 +321,22 @@ export class AppServerClient {
         `the App Server negotiated protocol ${initialized.protocol_version}, this client speaks ${APP_SERVER_PROTOCOL_VERSION}`,
       );
     }
+    if (!initialized.authority_id) {
+      throw new Error("the App Server did not negotiate an authority identity");
+    }
     client.#capabilities = initialized.capabilities;
+    client.#authorityId = initialized.authority_id;
     return client;
+  }
+
+  /**
+   * The App Server authority this connection negotiated in `initialize`.
+   * Stable across reconnects to the same server process; a replacement process
+   * at the same endpoint negotiates another. Never derived from the endpoint,
+   * the transport or a Session.
+   */
+  get authorityId(): string {
+    return this.#authorityId;
   }
 
   /** The server capabilities advertised at initialization. */
