@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { waitFor as waitActor } from 'xstate';
 import { AgentComposer } from '../src/app/agent/AgentComposer';
 import { ComposerDraft } from '../src/app/composer/draft';
@@ -8,7 +8,7 @@ import { Server, snapshot } from './fixture';
 import { routeFixture } from './shell-navigation-fixture';
 
 let server: Server;
-afterEach(() => { cleanup(); server?.client.disconnect(); localStorage.clear(); });
+afterEach(() => { cleanup(); server?.client.disconnect(); localStorage.clear(); vi.restoreAllMocks(); });
 async function fixture() {
   server = new Server();
   const origin = { type: 'fork' as const, source_session: 'B', source_node: 'source-node', source_message: 'source-message', source_surface_revision: '1', side: 'after' as const };
@@ -299,4 +299,65 @@ it('a late native reply after terminal uncertain First Submission Discard cannot
   expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
   expect(server.requests.filter(row => row.request.method === 'session/uploadPrepare')).toHaveLength(1);
   expect(server.client.target('A')).toBe(f.target);
+});
+
+it('reselecting the already committed Session and unrelated publication preserve the exact editor and intake', async () => {
+  const f = await fixture(), file = new File(['local'], 'local.txt');
+  await act(async () => fireEvent.change(f.ui.getByLabelText('Attach files'), { target: { files: [file] } }));
+  await waitFor(() => expect(f.intake.snapshot()[0].status).toBe('ready'));
+  const selected = f.intake.snapshot(), before = server.requests.length;
+  const card = f.editor().closest('[data-editor-incarnation]')!, incarnation = card.getAttribute('data-editor-incarnation'), revision = card.getAttribute('data-editor-revision');
+  for (let click = 0; click < 2; click++) await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Open Session A' })));
+  expect(mutations(before)).toEqual([]);
+  await act(async () => server.update('A', { ...server.snapshots.get('A')!, pending_interactions: [] }));
+  expect(f.editor().value).toBe(f.text); expect([f.editor().selectionStart, f.editor().selectionEnd, f.editor().selectionDirection]).toEqual([7, 12, 'backward']);
+  expect(f.intake.snapshot()).toBe(selected); expect(card.getAttribute('data-editor-incarnation')).toBe(incarnation); expect(card.getAttribute('data-editor-revision')).toBe(revision);
+  // The fixture's explicit resync publication legitimately requests a snapshot.
+  expect(mutations(before).filter(row => row.request.method !== 'session/snapshot')).toEqual([]); expect(server.client.target('A')).toBe(f.target);
+});
+it.each(['reattach', 'switch'] as const)('known C1 acceptance after explicit lifecycle %s records the fact under exact canonical identity', async kind => {
+  const f = await fixture(), submit = vi.spyOn(ComposerDraft.prototype, 'submit');
+  server.held.add('turn/start'); await act(async () => fireEvent.keyDown(f.editor(), { key: 'Enter' }));
+  const sent = await server.waitFor('turn/start', 1), reply = server.commit(sent), ticket = submit.mock.results[0].value!;
+  const card = f.editor().closest('[data-editor-incarnation]')!, incarnation = card.getAttribute('data-editor-incarnation'), revision = card.getAttribute('data-editor-revision');
+  await act(async () => {
+    if (kind === 'switch') { server.nodeSnapshots.set('C2-node', snapshot('C2')); await server.client.switchNode('A', 'C2-node'); await server.client.attach('A', 'C2-node'); }
+    else { await server.client.release('A'); await server.client.attach('A'); }
+  });
+  const target = server.client.target('A'), before = server.requests.length;
+  expect(target).not.toEqual(f.target); expect(card.getAttribute('data-editor-incarnation')).toBe(incarnation); expect(card.getAttribute('data-editor-revision')).toBe(revision);
+  await act(async () => { server.socket.deliver(reply); await server.client.request({ method: 'server/info', params: {} }, 'server_info'); });
+  expect(ticket.outcome).toBe('accepted'); expect(ticket.conversation?.conversation_id).toBe(f.target.conversation_id);
+  expect(f.editor().value).toBe(kind === 'switch' ? f.text : ''); expect(server.client.target('A')).toBe(target); expect(mutations(before)).toEqual([]);
+  expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
+});
+
+it('connection authority replacement leaves a transmitted input uncertain and ignores its old acknowledgement', async () => {
+  const f = await fixture(), submit = vi.spyOn(ComposerDraft.prototype, 'submit');
+  server.held.add('turn/start'); await act(async () => fireEvent.keyDown(f.editor(), { key: 'Enter' }));
+  const sent = await server.waitFor('turn/start', 1), oldSocket = server.socket, reply = server.commit(sent), ticket = submit.mock.results[0].value!;
+  await act(async () => { await server.client.disconnect(); server.authorityId = 'replacement-native-authority'; await server.connect(); await server.client.attach('A'); });
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Open Session A' })));
+  fireEvent.change(f.editor(), { target: { value: 'Replacement authority draft' } });
+  const target = server.client.target('A'), before = server.requests.length;
+  expect(ticket.outcome).toBe('uncertain'); expect(ticket.acceptance).toBeUndefined();
+  await act(async () => { oldSocket.deliver(reply); await server.client.request({ method: 'server/info', params: {} }, 'server_info'); });
+  expect(ticket.outcome).toBe('uncertain'); expect(ticket.acceptance).toBeUndefined();
+  expect(f.editor().value).toBe('Replacement authority draft'); expect(server.client.target('A')).toBe(target);
+  expect(mutations(before)).toEqual([]); expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
+});
+
+it('C1 acceptance during history cannot consume text retained for an authoritatively selected C2', async () => {
+  const f = await fixture(), submit = vi.spyOn(ComposerDraft.prototype, 'submit');
+  server.held.add('turn/start'); await act(async () => fireEvent.keyDown(f.editor(), { key: 'Enter' }));
+  const sent = await server.waitFor('turn/start', 1), reply = server.commit(sent), ticket = submit.mock.results[0].value!;
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'View source' })));
+  await waitFor(() => expect(f.ui.getByText('Exact historical source')).toBeTruthy());
+  await act(async () => { server.nodeSnapshots.set('C2-node', snapshot('C2')); await server.client.switchNode('A', 'C2-node'); await server.client.attach('A', 'C2-node'); });
+  const target = server.client.target('A'), before = server.requests.length;
+  await act(async () => { server.socket.deliver(reply); await server.client.request({ method: 'server/info', params: {} }, 'server_info'); });
+  expect(ticket.outcome).toBe('accepted'); expect(ticket.conversation?.conversation_id).toBe(f.target.conversation_id);
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Return to conversation' })));
+  expect(f.editor().value).toBe(f.text); expect(server.client.target('A')).toBe(target); expect(mutations(before)).toEqual([]);
+  expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
 });

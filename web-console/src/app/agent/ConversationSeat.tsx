@@ -49,7 +49,7 @@ export function ConversationSeat({ client, host, authority, associations, sessio
       <ConversationComposer draftOwner={draftOwner} client={client} host={host} authority={authority} associations={associations} initialWorkspace={initialWorkspace} workspacePicked={workspacePicked} binding={binding} activeView={view} current={current} consumed={consumed} preparePublication={preparePublication}
         context={view && <><ContextSeat client={client} sessionId={view.id}/><ConversationDocks key={view.id} client={client} sessionId={view.id} disabled={disabled}/></>}
         active={view ? {
-          initialContent: restored?.conversation === view.snapshot?.conversation_id ? restored?.content : undefined,
+          initialContent: restored?.conversation === (view.nodeConversationId ?? view.target?.conversation_id ?? view.snapshot?.conversation_id) ? restored?.content : undefined,
           submissionTarget: view.target, submitDisabled: false, disabled, busy: sending === owner, active: activeAttempt(view.snapshot),
           lineageSwitchSafe: lineageSwitchSafe(view), hasGoal: !!goalDock(view.snapshot), onCommand,
           consumed, cancellationAvailable: !!cancellation,
@@ -65,7 +65,15 @@ export function ConversationSeat({ client, host, authority, associations, sessio
           onSend: async (text, receipts, delivery, acknowledged) => {
             if (!uploadCurrent()) return false;
             setFailure(undefined); setSending(owner);
-            try { await client.send(view.id, text, receipts, delivery, acknowledged, uploadCurrent); return true; }
+            try {
+              await client.send(view.id, text, receipts, delivery, acceptance => {
+                const native = client.getSnapshot().views[view.id];
+                const conversation = native?.nodeConversationId ?? native?.target?.conversation_id ?? native?.snapshot?.conversation_id;
+                // This native callback survives history unmounting. Its evidence
+                // accompanies settlement; it never authorizes another route's draft.
+                acknowledged?.(acceptance, conversation ? { session_id: view.id, conversation_id: conversation } : undefined);
+              }, uploadCurrent); return true;
+            }
             finally { setSending(value => value === owner ? undefined : value); }
           },
         } : undefined}/>

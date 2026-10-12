@@ -33,6 +33,16 @@ if (new URL(location.href).searchParams.has('fork')) {
   });
 }
 
+if (new URL(location.href).searchParams.has('editor-seed')) {
+  const source = server.snapshots.get('A')!;
+  source.transcript.entries![0].completed_response = { closing_message_id: 'message-A', origin: { conversation_id: 'conversation-A', closing_message_id: 'message-A', attempt_id: 'attempt-A' }, completed_at: '2026-09-25T00:00:00Z', surface_revision: '7', retry_message_id: 'user-A' };
+  server.handlers.set('session/fork', request => {
+    if (request.method !== 'session/fork' || request.params.session_id !== 'A' || request.params.node_id !== 'node-A' || request.params.boundary !== 'message-A' || request.params.side !== 'after' || request.params.surface_revision !== '7') throw new Error('Different native Fork cut');
+    const child = snapshot('seed-child'); server.snapshots.set('seed-child', child); server.nodeSnapshots.set('node-seed-child', child);
+    return { type: 'session_transition', session: { id: 'seed-child', active_node: 'node-seed-child', active_conversation_id: child.conversation_id, node_count: 1, created_at: '0', updated_at: '0' }, editor_content: [{ type: 'upload', session_id: 'seed-child', batch_id: 'restored-batch', token: 'restored-token' }, { type: 'text', text: 'Native restored Fork draft' }] };
+  });
+}
+
 server.workspaceHost.listWorkspaces = async () => ({ authorityId: 'fixture-host', endpoint, workspaces: [{ id: 'project', displayName: 'rustX', displayPath: '/workspace', location: 'project' }], picker: { kind: 'unavailable', reason: 'Fixture has one authorized project' } });
 // Reference tests explicitly release the cold display baseline after its first paint.
 // Other shell consumers keep the ordinary immediate fixture response.

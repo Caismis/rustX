@@ -51,7 +51,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "42e92bc5bf66dd2b9bed474aa60049e4dcf4e60937be82f6339ded5c7360bd5a",
+      "local_sha256": "46e76e11ce31d396a8a34089e53bc9670fd5c60e918d1350390bcdbb3431a636",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
@@ -2831,7 +2831,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "2b8f229e0ed7d9b3740fd5167d455660a57e1e78c4d5326516a8194e8edcf83f",
+      "local_sha256": "837e7d2f2229484a4bcdbd4621d2f5f386b88bfff63b46c21bf7bdc784d306a6",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-workspace/src/client/WorkspacePicker.tsx",

@@ -51,3 +51,36 @@ it('older acceptance cannot unblock a newer already submitted revision', () => {
   expect(f.owner.submit(f.incarnation, f.intake, 'send')).toBeUndefined(); second.accepted(accepted);
   expect(f.owner.snapshot()?.text).toBe('');
 });
+
+it('initial content is adopted once; equivalent, empty and cleared presentation arrays cannot reset authored content', () => {
+  const owner = new ComposerDraft(), initial = [{ type: 'upload' as const, session_id: 'A', batch_id: 'batch', token: 'token' }, { type: 'text' as const, text: 'Native seed' }];
+  const identity = { session_id: 'A', conversation_id: 'C1' };
+  const state = owner.activate('A', initial, 'proof', identity);
+  owner.edit(state.incarnation, 'Authored replacement'); owner.select(state.incarnation, { start: 2, end: 7, direction: 'backward' });
+  const authored = owner.snapshot();
+  for (const value of [initial, structuredClone(initial), [], [], [{ type: 'text' as const, text: 'Late native seed' }]]) {
+    owner.activate('A', value, 'proof', { ...identity }); expect(owner.snapshot()).toBe(authored);
+  }
+  owner.replace(state.incarnation); owner.edit(owner.snapshot()!.incarnation, 'After Discard');
+  owner.activate('A', initial, 'proof', identity); expect(owner.snapshot()?.text).toBe('After Discard'); expect(owner.snapshot()?.restored).toEqual([]);
+  const next = owner.activate('B', [{ type: 'text', text: 'New authorized seed' }], 'proof-B', { session_id: 'B', conversation_id: 'C2' });
+  expect(next.text).toBe('New authorized seed'); expect(next.revision).toBe(0); expect(next.incarnation).not.toBe(state.incarnation);
+});
+it('C1 acceptance is recorded without changing a retained same-revision editor now owned by C2', () => {
+  const f = editor(), c1 = { session_id: 'A', conversation_id: 'C1' }, c2 = { session_id: 'A', conversation_id: 'C2' };
+  f.owner.activate('A', content, 'proof-A', c1);
+  const ticket = f.owner.submit(f.incarnation, f.intake, 'send')!;
+  f.owner.activate('A', content, 'proof-A', c2); const replacement = f.owner.snapshot();
+  expect(replacement?.incarnation).toBe(ticket.incarnation); expect(replacement?.revision).toBe(ticket.revision);
+  ticket.accepted(accepted); expect(ticket.outcome).toBe('accepted'); expect(ticket.acceptance).toBe(accepted);
+  expect(f.owner.snapshot()).toBe(replacement); expect(replacement?.text).toBe('R1'); expect(f.owner.blocked()).toBe(false);
+});
+it('same canonical Conversation permits text settlement after reattachment but never consumes replacement receipt selections', () => {
+  const f = editor(), c1 = { session_id: 'A', conversation_id: 'C1' };
+  f.owner.activate('A', content, 'proof-A', c1);
+  const file = new File(['one'], 'one.txt'); f.intake.add([{ file }], capabilities.upload_policy);
+  const ticket = f.owner.submit(f.incarnation, f.intake, 'send')!;
+  f.intake.bind('replacement', 'replacement'); const selections = f.intake.snapshot();
+  f.owner.activate('A', content, 'replacement', { ...c1 }); ticket.accepted(accepted);
+  expect(f.owner.snapshot()?.text).toBe(''); expect(f.intake.snapshot()).toBe(selections); expect(ticket.outcome).toBe('accepted');
+});

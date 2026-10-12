@@ -844,3 +844,49 @@ test('Discard creates a stable replacement editor through repeated read-only his
   }
   expect(nativeMutations((await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length))).toEqual([]);
 });
+
+for (const width of [390, 1440]) test(`reselecting the current Session preserves unsent text, caret and file: ${width}px`, async ({ page }) => {
+  const { errors } = await openForkOwnershipFixture(page, width);
+  const editor = page.getByRole('textbox', { name: 'Message', exact: true });
+  await editor.fill('Authored current Session draft');
+  await page.getByLabel('Attach files', { exact: true }).setInputFiles({ name: 'retained.txt', mimeType: 'text/plain', buffer: Buffer.from('local') });
+  await expect(page.getByText('Uploaded', { exact: true })).toHaveCount(1);
+  await editor.evaluate((element: HTMLTextAreaElement) => { element.focus(); element.setSelectionRange(4, 9, 'backward'); element.dispatchEvent(new Event('select', { bubbles: true })); });
+  const incarnation = await page.locator('[data-editor-incarnation]').getAttribute('data-editor-incarnation'), revision = await page.locator('[data-editor-revision]').getAttribute('data-editor-revision');
+  const requests = await page.evaluate(() => window.sessionFixture.requests()), facts = await page.evaluate(() => window.sessionFixture.navigationFacts());
+  for (let click = 0; click < 2; click++) {
+    if (width === 390) await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
+    await page.getByRole('button', { name: 'Open Session A', exact: true }).click();
+    await expect(editor).toHaveValue('Authored current Session draft'); await expect(editor).toBeEditable();
+    if (width === 390) await expect(page.locator('[data-harness-frame]')).not.toHaveAttribute('data-sidebar-overlay');
+  }
+  await expect(page.getByText('retained.txt', { exact: true })).toBeVisible();
+  await expect(page.locator('[data-editor-incarnation]')).toHaveAttribute('data-editor-incarnation', incarnation!); await expect(page.locator('[data-editor-revision]')).toHaveAttribute('data-editor-revision', revision!);
+  expect(await editor.evaluate((element: HTMLTextAreaElement) => [element.selectionStart, element.selectionEnd, element.selectionDirection])).toEqual([4, 9, 'backward']);
+  expect(await page.evaluate(() => window.sessionFixture.navigationFacts())).toEqual(facts);
+  expect((await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length).filter(row => /^(turn\/|session\/(attach|detach|switchNode|uploadPrepare|snapshot)$)/.test(row.method))).toEqual([]);
+  expect(errors).toEqual([]);
+});
+for (const width of [390, 1440]) test(`a native Fork seed remains authored after destination reselect: ${width}px`, async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message)); page.on('console', item => { if (item.type() === 'error' || item.type() === 'warning') errors.push(item.text()); });
+  await page.setViewportSize({ width, height: 900 }); await page.goto('http://127.0.0.1:5174/test/fixtures/shell.html?editor-seed');
+  await expect(page.getByLabel('Session title')).toHaveText('Session A');
+  await page.getByRole('button', { name: 'Branch into a new Session', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: 'Message', exact: true });
+  await expect(page.getByLabel('Session title')).toHaveText('Session seed-child'); await expect(editor).toHaveValue('Native restored Fork draft');
+  await expect(page.getByText('Native restored upload batch restored-batch', { exact: true })).toBeVisible();
+  await editor.fill('Edited native Fork draft'); await editor.evaluate((element: HTMLTextAreaElement) => { element.focus(); element.setSelectionRange(3, 8, 'backward'); element.dispatchEvent(new Event('select', { bubbles: true })); });
+  const incarnation = await page.locator('[data-editor-incarnation]').getAttribute('data-editor-incarnation'), revision = await page.locator('[data-editor-revision]').getAttribute('data-editor-revision');
+  const requests = await page.evaluate(() => window.sessionFixture.requests()), facts = await page.evaluate(() => window.sessionFixture.navigationFacts());
+  for (let click = 0; click < 2; click++) {
+    if (width === 390) await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
+    await page.getByRole('button', { name: 'Open Session seed-child', exact: true }).click(); await expect(editor).toHaveValue('Edited native Fork draft');
+  }
+  await expect(page.getByText('Native restored upload batch restored-batch', { exact: true })).toBeVisible();
+  await expect(page.locator('[data-editor-incarnation]')).toHaveAttribute('data-editor-incarnation', incarnation!); await expect(page.locator('[data-editor-revision]')).toHaveAttribute('data-editor-revision', revision!);
+  expect(await editor.evaluate((element: HTMLTextAreaElement) => [element.selectionStart, element.selectionEnd, element.selectionDirection])).toEqual([3, 8, 'backward']);
+  expect(await page.evaluate(() => window.sessionFixture.navigationFacts())).toEqual(facts);
+  expect((await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length).filter(row => /^(turn\/|session\/(attach|detach|switchNode|uploadPrepare|snapshot)$)/.test(row.method))).toEqual([]);
+  expect(requests.filter(row => row.method === 'session/fork')).toHaveLength(1); expect(errors).toEqual([]);
+  await page.screenshot({ path: `/tmp/pr458-seed-reselect-${width}.png` });
+});

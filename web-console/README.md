@@ -296,6 +296,28 @@ Discard alone replaces the incarnation and clears the discarded draft; refused
 Discard and obsolete settlement cannot replace the current editor. Deliberate
 executable route replacement establishes a separate editor identity.
 
+Initial restored content is adopted once when a new logical editor key is
+published. An authorized native Fork/Branch transition publishes that fresh key
+and its exact Conversation seed together; ConversationSeat validates the native
+Conversation before exposing the seed. Refocusing the current Session preserves
+its valid seed association. Later prop references, cleared presentation fields,
+remounts and discarded incarnations cannot reinitialize an existing key or
+overwrite an authored revision.
+
+Submission tickets retain typed Session/Conversation identity separately from
+attachment-specific receipt authority. Known acceptance always records the
+historical ticket's native evidence, but edits the current projection only when
+its editor incarnation and canonical Conversation match. Same-Conversation
+reattachment may settle the exact text revision; it cannot consume replacement
+attachment receipts. A Node/Conversation replacement fences all old consumption
+without manufacturing an authored edit. Connection retirement makes a transmitted
+unacknowledged input uncertain and old-generation replies cannot invent acceptance.
+The normal CommandSession lineage frontier excludes Branch/Retry/Node navigation
+while inbound acknowledgement remains outstanding. Real-native held-response tests
+also exercise an explicit lower-level lifecycle Switch, proving the draft identity
+fence independently of that UI admission exclusion. No settlement attaches,
+refreshes, switches, executes or replays input.
+
 Historical file references remain metadata; executable workspace/Artifact byte
 preview callbacks are not inherited by that route.
 

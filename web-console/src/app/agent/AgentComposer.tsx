@@ -1,4 +1,4 @@
-import { ComposerDraft, type ComposerSubmission, type InputAcceptance } from '../composer/draft';
+import { ComposerDraft, type ComposerSubmission, type ComposerConversation, type InputAcceptance } from '../composer/draft';
 import { isOutcomeUncertain, RpcFailure } from '../../client/app-server';
 import type { FirstSubmission } from '../new-conversation/first-submit';
 import { message } from '../../locale/translation';
@@ -24,15 +24,15 @@ import { Button } from '../../presentation/primitives/Button';
 import css from '../../presentation/agent/Composer.module.css';
 import { observeControlRow } from '../../presentation/agent/control-row-layout';
 const emptyContent: UserInputBlock[] = [];
-export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, modelPicker, onRetainedRemove, onRetainedRecover, intakeOwner, uploadPolicy, onReconcile, draftOwner, draftIdentity, receiptAuthority, submissionTarget, binding = 'default', firstSubmission, disabled, submitDisabled = false, busy, active, onSend, onUpload, onCancel, onCommand, commandAvailable, hasGoal = false, lineageSwitchSafe = false, initialContent = emptyContent, consumed, model, permission, onDraftSend, cancellationAvailable = !disabled, cancellationScope }: {
+export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, modelPicker, onRetainedRemove, onRetainedRecover, intakeOwner, uploadPolicy, onReconcile, draftOwner, draftIdentity, receiptAuthority, conversationIdentity, submissionTarget, binding = 'default', firstSubmission, disabled, submitDisabled = false, busy, active, onSend, onUpload, onCancel, onCommand, commandAvailable, hasGoal = false, lineageSwitchSafe = false, initialContent = emptyContent, consumed, model, permission, onDraftSend, cancellationAvailable = !disabled, cancellationScope }: {
   placeholder?: string; messageLabel?: string; busyEnterBehavior?: import('../composer/preferences').BusyEnterBehavior;
   modelPicker?: ModelPickerState;
   onRetainedRemove?: (id: string) => void; onRetainedRecover?: (retry: boolean) => void;
   intakeOwner?: AttachmentIntake; uploadPolicy?: UploadPolicy; onReconcile?: UploadPort['status'];
-  draftOwner?: ComposerDraft; draftIdentity?: string; receiptAuthority?: string; submissionTarget?: AttachmentTarget;
+  draftOwner?: ComposerDraft; draftIdentity?: string; receiptAuthority?: string; conversationIdentity?: ComposerConversation; submissionTarget?: AttachmentTarget;
   firstSubmission?: FirstSubmission; binding?: string; submitDisabled?: boolean; disabled: boolean; busy: boolean; active: boolean; model?: ReactNode; permission?: ReactNode;
   onDraftSend?: (text: string, files: readonly File[], ids?: readonly string[], submission?: ComposerSubmission) => Promise<boolean>; cancellationAvailable?: boolean; cancellationScope?: StopScope;
-  onSend: (text: string, receipts: readonly UploadReceipt[], delivery: 'send' | 'steer', acknowledged?: (acceptance?: InputAcceptance) => void) => Promise<boolean>;
+  onSend: (text: string, receipts: readonly UploadReceipt[], delivery: 'send' | 'steer', acknowledged?: (acceptance?: InputAcceptance, conversation?: ComposerConversation) => void) => Promise<boolean>;
   onUpload: (files: readonly File[], operation?: string) => Promise<UploadedFile[]>; onCancel: () => void;
   onCommand?: (id: CommandId) => void; commandAvailable?: (id: CommandId) => boolean; hasGoal?: boolean; lineageSwitchSafe?: boolean; initialContent?: UserInputBlock[];
   consumed?: { id: string; sequence: number };
@@ -47,7 +47,8 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
   const [localDraft] = useState(() => new ComposerDraft());
   const owner = draftOwner ?? localDraft;
   const state = useSyncExternalStore(owner.subscribe, owner.snapshot);
-  useLayoutEffect(() => { owner.activate(editorIdentity, initialContent, receiptAuthority); }, [owner, editorIdentity, initialContent, receiptAuthority]);
+  const conversation = conversationIdentity ?? submissionTarget;
+  useLayoutEffect(() => { owner.activate(editorIdentity, initialContent, receiptAuthority, conversation); }, [owner, editorIdentity, initialContent, receiptAuthority, conversation?.session_id, conversation?.conversation_id]);
   const editor = state?.key === editorIdentity ? state : undefined;
   const restoreSupported = editor?.supported ?? editableContent(initialContent);
   disabled = disabled || !restoreSupported;

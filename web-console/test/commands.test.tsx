@@ -110,7 +110,7 @@ function nativeFixture() {
   server.handlers.set('session/tree', request => ({ type: 'tree', nodes: request.method === 'session/tree' && request.params.session_id === 'B' ? [{ id: 'node-B', conversation_id: 'conversation-B', ordinal: '1', origin: { type: 'new' } }] : nodes }));
   const transition = (request: Request): MethodResult => {
     if (request.method !== 'session/fork' && request.method !== 'session/branch') throw new Error('wrong method');
-    if (request.params.surface_revision !== boundary.surface_revision || request.params.boundary !== boundary.message.id) throw new RpcFailure({ code: -32602, message: 'Invalid historical Surface revision or user boundary' });
+    if (request.params.surface_revision !== boundary.surface_revision || !(request.params.boundary === boundary.message.id || request.method === 'session/fork' && request.params.side === 'after' && request.params.boundary === 'original-assistant')) throw new RpcFailure({ code: -32602, message: 'Invalid historical Surface revision or user boundary' });
     const id = request.method === 'session/fork' ? 'child' : 'A';
     const nodeId = request.method === 'session/fork' ? 'node-child' : 'branch-A';
     const conversation = request.method === 'session/fork' ? 'conversation-child' : 'conversation-branch-A';
@@ -335,6 +335,28 @@ describe('restored native editor content', () => {
     const request = await server.waitFor('turn/start', 1);
     expect(request.params).toMatchObject({ content: [uploads[1 - index], { type: 'text', text: 'unchanged text' }] });
     expect(errors).not.toHaveBeenCalled();
+  });
+  it('a genuine Fork seeds once and sidebar reselect preserves authored text, native uploads, selection and incarnation', async () => {
+    const f = nativeFixture(); f.content.splice(0, f.content.length, { type: 'upload', session_id: 'A', batch_id: 'seed-batch', token: 'seed-token' }, { type: 'text', text: 'Authorized Fork input' });
+    await server.attached('A');
+    localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
+    await act(async () => render(<App client={server.client} workspaceHost={server.workspaceHost}/>));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Branch into a new Session' })).toHaveProperty('disabled', false));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Branch into a new Session' })));
+    const input = await screen.findByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
+    await act(async () => { await server.client.request({ method: 'server/info', params: {} }, 'server_info'); });
+    await waitFor(() => expect(input.value).toBe('Authorized Fork input'));
+    expect(screen.getByText('Native restored upload batch seed-batch')).toBeTruthy();
+    fireEvent.change(input, { target: { value: 'Edited Fork input' } }); input.setSelectionRange(2, 8, 'backward'); fireEvent.select(input);
+    const card = input.closest('[data-editor-incarnation]')!, incarnation = card.getAttribute('data-editor-incarnation'), revision = card.getAttribute('data-editor-revision');
+    const target = server.client.target('child'), before = server.requests.length;
+    for (let click = 0; click < 2; click++) await act(async () => fireEvent.click(await screen.findByRole('button', { name: 'Open Session child' })));
+    expect(input.value).toBe('Edited Fork input'); expect(screen.getByText('Native restored upload batch seed-batch')).toBeTruthy();
+    expect([input.selectionStart, input.selectionEnd, input.selectionDirection]).toEqual([2, 8, 'backward']);
+    expect(card.getAttribute('data-editor-incarnation')).toBe(incarnation); expect(card.getAttribute('data-editor-revision')).toBe(revision);
+    expect(server.client.target('child')).toBe(target);
+    expect(server.requests.slice(before).filter(row => /^(turn\/|session\/(attach|detach|switchNode|uploadPrepare|snapshot)$)/.test(row.request.method))).toEqual([]);
+    expect(methods().filter(method => method === 'session/fork')).toHaveLength(1);
   });
   it('supported restored input round-trips exact native order without changes', async () => {
     await server.attached('A');
