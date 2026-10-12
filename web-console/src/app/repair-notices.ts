@@ -13,7 +13,7 @@ export class RepairAcknowledgements {
   readonly #storage: Pick<Storage, 'getItem' | 'setItem'> | undefined;
   #ids: string[];
 
-  constructor(storage: Pick<Storage, 'getItem' | 'setItem'> | undefined = globalThis.localStorage) {
+  constructor(storage: Pick<Storage, 'getItem' | 'setItem'> | undefined = browserStorage()) {
     this.#storage = storage;
     let ids: unknown;
     try { ids = JSON.parse(storage?.getItem(RepairAcknowledgements.KEY) ?? '[]'); } catch { ids = []; }
@@ -29,6 +29,13 @@ export class RepairAcknowledgements {
     this.#ids = this.#ids.slice(-RepairAcknowledgements.LIMIT);
     try { this.#storage?.setItem(RepairAcknowledgements.KEY, JSON.stringify(this.#ids)); } catch { /* storage is a convenience only */ }
   }
+}
+
+/** The browser's persistent storage, when this document may use it. Reading
+ * `localStorage` itself throws a `SecurityError` where storage is denied; the
+ * acknowledgements then live in memory for this page only. */
+function browserStorage(): Storage | undefined {
+  try { return globalThis.localStorage; } catch { return undefined; }
 }
 
 /** The receipts a notification presents now: each source's latest receipt

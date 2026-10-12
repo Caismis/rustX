@@ -110,6 +110,39 @@ it('notifies once per receipt identity, opens the exact owner, and is silent whe
   s.client.disconnect();
 });
 
+it('presents and acknowledges receipts when browser storage is denied or failing', async () => {
+  // Normal persistent storage: acknowledgements survive a fresh ledger.
+  new RepairAcknowledgements(localStorage).acknowledge(['kept']);
+  expect(new RepairAcknowledgements(localStorage).has('kept')).toBe(true);
+  // getItem and setItem throwing: the ledger reads empty and stays in memory.
+  const failing = { getItem: () => { throw new DOMException('denied', 'SecurityError'); }, setItem: () => { throw new DOMException('full', 'QuotaExceededError'); } };
+  const memory = new RepairAcknowledgements(failing);
+  expect(memory.has('kept')).toBe(false);
+  for (let index = 0; index < RepairAcknowledgements.LIMIT + 2; index++) memory.acknowledge([`r${index}`]);
+  expect(memory.has('r0')).toBe(false);
+  expect(memory.has(`r${RepairAcknowledgements.LIMIT + 1}`)).toBe(true);
+  // Reading the storage property itself throwing must not stop the notice.
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')!;
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, get: () => { throw new DOMException('denied', 'SecurityError'); } });
+  const s = new Server(); await s.connect();
+  const viewDetails = vi.fn();
+  try {
+    render(<RepairNotice client={s.client} viewDetails={viewDetails} />);
+    await announce(s, { kind: 'user' }, receipt());
+    const notice = screen.getByRole('status', { name: 'Configuration repair' });
+    fireEvent.click(within(notice).getByRole('button', { name: 'View details' }));
+    expect(viewDetails).toHaveBeenCalledWith({ kind: 'user' });
+    expect(screen.queryByRole('status', { name: 'Configuration repair' })).toBeNull();
+    // The in-memory acknowledgement still deduplicates the same receipt.
+    await announce(s, { kind: 'user' }, receipt());
+    expect(screen.queryByRole('status', { name: 'Configuration repair' })).toBeNull();
+    expect(sent(s, 'configuration/sourceWrite')).toHaveLength(0);
+  } finally {
+    Object.defineProperty(globalThis, 'localStorage', descriptor);
+    s.client.disconnect();
+  }
+});
+
 it('opens the exact source owner at Advanced → Auto Repair', async () => {
   let resolve!: (value: { kind: 'resolved'; id: string; displayName: string }) => void;
   const lookup = vi.fn(() => new Promise<{ kind: 'resolved'; id: string; displayName: string }>(done => { resolve = done; }));
