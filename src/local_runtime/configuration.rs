@@ -1060,11 +1060,7 @@ impl UserConfigManager {
         ]);
         // Binding authoring remains strictly validated, but cannot rebind this manager.
 
-        if locations.runtime_root.starts_with(&locations.workspace)
-            || locations.workspace.starts_with(&locations.runtime_root)
-        {
-            return Err("runtime_root must be disjoint from the workspace".into());
-        }
+        storage_disjoint(&locations.runtime_root, &locations.workspace)?;
 
         let mut merged = RuntimeLayer {
             app_server: user.app_server.clone(),
@@ -1656,6 +1652,16 @@ pub(super) fn canonical_directory(path: &Path) -> Result<PathBuf, String> {
         return Err(format!("{} is not a directory", path.display()));
     }
     Ok(path)
+}
+
+/// The storage-isolation rule between the bound runtime root and one selected
+/// Workspace: neither contains the other. Session resolution and repair scope
+/// admission apply this one rule to the same canonical pathnames.
+pub(super) fn storage_disjoint(runtime_root: &Path, workspace: &Path) -> Result<(), String> {
+    if runtime_root.starts_with(workspace) || workspace.starts_with(runtime_root) {
+        return Err("runtime_root must be disjoint from the workspace".into());
+    }
+    Ok(())
 }
 
 pub(super) fn normalize_missing(path: &Path) -> Result<PathBuf, String> {

@@ -1739,7 +1739,9 @@ async fn app_server_delivery_access_is_explicit_transport_composition() {
 
 /// Issue #464: a real App Server repairs its bound User source before it
 /// parses process policy or opens a transport, and the first client to
-/// connect reads the receipt.
+/// connect reads the receipt. Startup selects no Workspace (ISO-05): its
+/// working directory, which here encloses the runtime root, is neither
+/// scanned nor treated as one, and the backup is private.
 #[tokio::test]
 async fn app_server_startup_repairs_the_user_source_before_process_policy() {
     use rustx::app_server::protocol::{
@@ -1757,6 +1759,9 @@ async fn app_server_startup_repairs_the_user_source_before_process_policy() {
             "schema_version = 8\nlegacy_root = true\n{valid}\n[app_server]\nmax_connections = 7\nfuture_isolation = \"none\"\n"
         );
         std::fs::write(&authored, &original).unwrap();
+        let cwd_source = f.root.path().join("rustx.toml");
+        let cwd_text = "[agent]\nlegacy_cwd = 1\n";
+        std::fs::write(&cwd_source, cwd_text).unwrap();
         let mut child = f.command("stdio").spawn().unwrap();
         let driver = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
         let call = |id: i64, call: Method| {
@@ -1804,6 +1809,13 @@ async fn app_server_startup_repairs_the_user_source_before_process_policy() {
             .collect();
         assert_eq!(backups.len(), 1);
         assert_eq!(std::fs::read_to_string(&backups[0]).unwrap(), original);
+        let mode = |path: &std::path::Path| {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+        };
+        assert_eq!(mode(&backups[0]), 0o600);
+        assert_eq!(mode(backups[0].parent().unwrap()), 0o700);
+        assert_eq!(std::fs::read_to_string(&cwd_source).unwrap(), cwd_text);
         driver.close().await;
         detach_then_shutdown(&mut child).await;
         assert!(child.wait().await.unwrap().success());

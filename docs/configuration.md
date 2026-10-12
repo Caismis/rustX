@@ -485,7 +485,11 @@ document is `.rustx-lock-<sha256 of the exact basename bytes>.lock`: every nativ
 writer of that document — source authoring, automatic repair, capture and
 create-only initialization — locks the same inode, and distinct documents never
 share one. A staged candidate is `.rustx-stage-<uuid>.tmp`, created exclusively
-and removed unless it is renamed into place.
+and removed unless it is renamed into place. A document's basename is a native
+filesystem name, not text: reading, locking, staging, replacement and removal use
+its exact bytes, so a name that is not UTF-8 — where the operating system and
+filesystem allow one — is written like any other. The App Server process
+bindings still require a lossless UTF-8 representation for the JSON protocol.
 
 After persistence, native configuration coordination captures a finite immutable
 input manifest and owns reconciliation independently of the RPC. Save requires no
@@ -675,12 +679,12 @@ exact copy of the original bytes is written to private storage under the bound
 runtime root (`<runtime_root>/configuration-backups/`, directory `0700`, file
 `0600`, never inside the Workspace), named by source identity and original
 revision; a backup failure leaves the source unchanged. The bound runtime root is
-the trust anchor (canonical when bound, disjoint from every Workspace). Each
-backup admits it the way a source directory is admitted: walked from `/` one
-component at a time without following any symlink, missing components created
-relative to their verified parent, and for a Workspace target checked to lie
-physically outside the admitted Workspace (following `..` from the handle). The
-backup directory is then created or opened relative to that handle and verified
+the trust anchor (canonical when bound). Each backup admits it the way a source
+directory is admitted: walked from `/` one component at a time without following
+any symlink, missing components created relative to their verified parent, and,
+whenever the boundary has selected a Workspace — for the User source as much as
+for the Workspace source — checked to be physically disjoint from that admitted
+Workspace (following `..` from both handles). The backup directory is then created or opened relative to that handle and verified
 as the current user's `0700` directory; the staged copy, its no-clobber
 publication link, the comparison with an existing copy and the directory sync all
 go through that one handle, so a symlink in any ancestor, or replacing any
@@ -708,6 +712,24 @@ Repair runs only at native source boundaries:
   repair the User source and the exact selected Workspace document first;
 - `configuration/reconcile` repairs the User source and, for a Workspace target,
   that Workspace before it captures them.
+
+A boundary that has selected a Workspace admits it before either source is
+touched. The Workspace must be a canonical directory disjoint from the bound
+runtime root under the rule Session resolution applies (neither contains the
+other, checked on the canonical paths before anything is created), and then
+physically: both are opened as no-follow directory handles and neither may lie
+within the other. A Session locates its Workspace exactly as its resolution
+does, so a request whose Workspace does not resolve selects none. A scope that
+fails admission, or a request that selects no Workspace, repairs neither source —
+no backup, no rewrite, no receipt, nothing for the coordinator — and the Session
+resolution that follows rejects it as before. The admitted Workspace handle is
+the one every transaction of the boundary uses: the Workspace source is
+published through it, and both sources' backups are checked against it, so a
+Workspace pathname replaced after admission can neither receive the Workspace
+repair nor host a backup. Startup has no selected Workspace and proves nothing
+about Workspaces chosen later; it neither scans nor invents one, and later
+boundaries admit their own. Once a scope is admitted, User and Workspace remain
+independent transactions: a later failure of one never rolls back the other.
 
 `rustx config check`, `rustx config show --sources`, `configuration/sourcesRead`
 and every client navigation stay read-only. There is no watcher and no periodic

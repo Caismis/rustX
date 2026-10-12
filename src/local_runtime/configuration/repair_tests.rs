@@ -92,6 +92,12 @@ impl Fixture {
         paths
     }
 
+    /// One repair transaction of `target` within the admitted `scope`.
+    fn repair(&self, target: &SourceTarget, scope: &SourceTarget) -> RepairOutcome {
+        let scope = self.manager.admit_repair_scope(scope).expect("admitted");
+        self.manager.repair_source(target, &scope)
+    }
+
     fn receipt(&self, target: &SourceTarget) -> Option<ConfigRepairReceipt> {
         self.manager.repairs().latest(target)
     }
@@ -394,10 +400,7 @@ fn identical_rules_apply_to_user_and_workspace_sources() {
     let text = format!("legacy = true\n{USER}[agent.plugins.todo]\nenabled = true\nstale = 1\n");
     for target in [SourceTarget::User, fixture.workspace.clone()] {
         fixture.write(&target, &text);
-        assert_eq!(
-            fixture.manager.repair_source(&target, &target),
-            RepairOutcome::Committed
-        );
+        assert_eq!(fixture.repair(&target, &target), RepairOutcome::Committed);
         let receipt = fixture.receipt(&target).unwrap();
         assert_eq!(receipt.status, ConfigRepairStatus::Repaired);
         assert_eq!(receipt.target, target);
@@ -417,9 +420,7 @@ fn a_process_bound_config_override_is_repaired_in_place() {
     let fixture = Fixture::with_config_path(|home| home.join("elsewhere/custom-name.toml"));
     fixture.write(&SourceTarget::User, &format!("{USER}\nlegacy = 1\n"));
     assert_eq!(
-        fixture
-            .manager
-            .repair_source(&SourceTarget::User, &SourceTarget::User),
+        fixture.repair(&SourceTarget::User, &SourceTarget::User),
         RepairOutcome::Committed
     );
     assert_eq!(fixture.read(&SourceTarget::User), USER);
@@ -438,9 +439,7 @@ fn a_committed_repair_keeps_one_exact_private_backup_outside_the_workspace() {
     fixture.write(&fixture.workspace, &original);
     fixture.write(&SourceTarget::User, USER);
     assert_eq!(
-        fixture
-            .manager
-            .repair_source(&fixture.workspace, &fixture.workspace),
+        fixture.repair(&fixture.workspace, &fixture.workspace),
         RepairOutcome::Committed
     );
     let backups = fixture.backups();
@@ -478,9 +477,7 @@ fn healthy_and_repaired_sources_are_disk_and_ledger_no_ops() {
         .modified()
         .unwrap();
     assert_eq!(
-        fixture
-            .manager
-            .repair_source(&SourceTarget::User, &SourceTarget::User),
+        fixture.repair(&SourceTarget::User, &SourceTarget::User),
         RepairOutcome::Unchanged
     );
     assert_eq!(fixture.read(&SourceTarget::User), USER);
@@ -499,9 +496,7 @@ fn healthy_and_repaired_sources_are_disk_and_ledger_no_ops() {
 
     fixture.write(&SourceTarget::User, &format!("{USER}legacy = 1\n"));
     assert_eq!(
-        fixture
-            .manager
-            .repair_source(&SourceTarget::User, &SourceTarget::User),
+        fixture.repair(&SourceTarget::User, &SourceTarget::User),
         RepairOutcome::Committed
     );
     let repaired = fixture.read(&SourceTarget::User);
@@ -509,9 +504,7 @@ fn healthy_and_repaired_sources_are_disk_and_ledger_no_ops() {
     let sequence = fixture.sequence();
     for _ in 0..3 {
         assert_eq!(
-            fixture
-                .manager
-                .repair_source(&SourceTarget::User, &SourceTarget::User),
+            fixture.repair(&SourceTarget::User, &SourceTarget::User),
             RepairOutcome::Unchanged
         );
     }
@@ -545,9 +538,7 @@ fn nonrepairable_sources_stay_unchanged_with_a_safe_unresolved_receipt() {
     for text in &cases {
         fixture.write(&fixture.workspace, text);
         assert_eq!(
-            fixture
-                .manager
-                .repair_source(&fixture.workspace, &fixture.workspace),
+            fixture.repair(&fixture.workspace, &fixture.workspace),
             RepairOutcome::Unchanged,
             "{text}"
         );
@@ -567,9 +558,7 @@ fn nonrepairable_sources_stay_unchanged_with_a_safe_unresolved_receipt() {
         "[app_server]\nmax_connections = 4\n[agent]\nlegacy = 1\n",
     );
     assert_eq!(
-        fixture
-            .manager
-            .repair_source(&fixture.workspace, &fixture.workspace),
+        fixture.repair(&fixture.workspace, &fixture.workspace),
         RepairOutcome::Unchanged
     );
     let receipt = fixture.receipt(&fixture.workspace).unwrap();
@@ -584,9 +573,7 @@ fn a_partial_source_is_incomplete_not_invalid() {
     let user = USER.replace("[agent.model]\nmodel = \"local/a\"\n", "");
     fixture.write(&SourceTarget::User, &format!("{user}legacy = 1\n"));
     assert_eq!(
-        fixture
-            .manager
-            .repair_source(&SourceTarget::User, &SourceTarget::User),
+        fixture.repair(&SourceTarget::User, &SourceTarget::User),
         RepairOutcome::Committed
     );
     // A Workspace selecting a User-defined Model validates over the User.
@@ -595,9 +582,7 @@ fn a_partial_source_is_incomplete_not_invalid() {
         "[agent.model]\nmodel = \"local/a\"\nstale = true\n",
     );
     assert_eq!(
-        fixture
-            .manager
-            .repair_source(&fixture.workspace, &fixture.workspace),
+        fixture.repair(&fixture.workspace, &fixture.workspace),
         RepairOutcome::Committed
     );
     assert_eq!(
@@ -610,18 +595,14 @@ fn a_partial_source_is_incomplete_not_invalid() {
 fn a_source_found_healthy_clears_its_unresolved_receipt() {
     let fixture = Fixture::new();
     fixture.write(&SourceTarget::User, "[broken");
-    fixture
-        .manager
-        .repair_source(&SourceTarget::User, &SourceTarget::User);
+    fixture.repair(&SourceTarget::User, &SourceTarget::User);
     assert_eq!(
         fixture.receipt(&SourceTarget::User).unwrap().status,
         ConfigRepairStatus::Unresolved
     );
     let sequence = fixture.sequence();
     // The same invalid bytes are the same observation.
-    fixture
-        .manager
-        .repair_source(&SourceTarget::User, &SourceTarget::User);
+    fixture.repair(&SourceTarget::User, &SourceTarget::User);
     assert_eq!(fixture.sequence(), sequence);
     fixture.write(&SourceTarget::User, USER);
     fixture
@@ -644,15 +625,11 @@ fn user_and_workspace_repairs_are_independent_transactions() {
     fixture.write(&SourceTarget::User, &format!("{USER}legacy = 1\n"));
     fixture.write(&fixture.workspace, "[agent\n");
     assert_eq!(
-        fixture
-            .manager
-            .repair_source(&SourceTarget::User, &SourceTarget::User),
+        fixture.repair(&SourceTarget::User, &SourceTarget::User),
         RepairOutcome::Committed
     );
     assert_eq!(
-        fixture
-            .manager
-            .repair_source(&fixture.workspace, &fixture.workspace),
+        fixture.repair(&fixture.workspace, &fixture.workspace),
         RepairOutcome::Unchanged
     );
     assert_eq!(
@@ -680,9 +657,7 @@ fn an_external_edit_before_the_writer_lock_supersedes_the_candidate() {
             std::fs::write(&path, edit).unwrap();
         });
     assert_eq!(
-        fixture
-            .manager
-            .repair_source(&SourceTarget::User, &SourceTarget::User),
+        fixture.repair(&SourceTarget::User, &SourceTarget::User),
         RepairOutcome::Superseded
     );
     assert_eq!(fixture.read(&SourceTarget::User), external);
@@ -704,18 +679,14 @@ fn an_external_edit_before_publication_is_never_overwritten() {
             std::fs::write(&path, edit).unwrap();
         });
     assert_eq!(
-        fixture
-            .manager
-            .repair_source(&SourceTarget::User, &SourceTarget::User),
+        fixture.repair(&SourceTarget::User, &SourceTarget::User),
         RepairOutcome::Superseded
     );
     assert_eq!(fixture.read(&SourceTarget::User), external);
     assert!(fixture.receipt(&SourceTarget::User).is_none());
     // The next observation plans from the external bytes; nothing is replayed.
     assert_eq!(
-        fixture
-            .manager
-            .repair_source(&SourceTarget::User, &SourceTarget::User),
+        fixture.repair(&SourceTarget::User, &SourceTarget::User),
         RepairOutcome::Unchanged
     );
     assert_eq!(fixture.read(&SourceTarget::User), external);
@@ -729,9 +700,7 @@ fn failures_before_publication_leave_the_source_unchanged() {
         fixture.write(&SourceTarget::User, &original);
         fixture.manager.test_hooks.fail_once(point);
         assert_eq!(
-            fixture
-                .manager
-                .repair_source(&SourceTarget::User, &SourceTarget::User),
+            fixture.repair(&SourceTarget::User, &SourceTarget::User),
             RepairOutcome::Unchanged,
             "{point}"
         );
@@ -753,9 +722,7 @@ fn an_uncertain_publication_is_reported_and_never_replayed() {
         fixture.write(&SourceTarget::User, &format!("{USER}legacy = 1\n"));
         fixture.manager.test_hooks.fail_once(point);
         assert_eq!(
-            fixture
-                .manager
-                .repair_source(&SourceTarget::User, &SourceTarget::User),
+            fixture.repair(&SourceTarget::User, &SourceTarget::User),
             RepairOutcome::Committed,
             "{point}"
         );
@@ -772,9 +739,7 @@ fn an_uncertain_publication_is_reported_and_never_replayed() {
         let sequence = fixture.sequence();
         // A later observation sees healthy bytes: no write, no new receipt.
         assert_eq!(
-            fixture
-                .manager
-                .repair_source(&SourceTarget::User, &SourceTarget::User),
+            fixture.repair(&SourceTarget::User, &SourceTarget::User),
             RepairOutcome::Unchanged
         );
         assert_eq!(fixture.read(&SourceTarget::User), published);
@@ -793,9 +758,7 @@ fn receipts_are_bounded_and_sanitized() {
     writeln!(text, "\"{}\\u0007\" = 1", "k".repeat(300)).unwrap();
     fixture.write(&SourceTarget::User, &text);
     assert_eq!(
-        fixture
-            .manager
-            .repair_source(&SourceTarget::User, &SourceTarget::User),
+        fixture.repair(&SourceTarget::User, &SourceTarget::User),
         RepairOutcome::Committed
     );
     let receipt = fixture.receipt(&SourceTarget::User).unwrap();
@@ -992,9 +955,7 @@ fn semantic_diagnostics_never_echo_authored_values_or_identities() {
         let text = format!("legacy_field = true\n{source}");
         fixture.write(&SourceTarget::User, &text);
         assert_eq!(
-            fixture
-                .manager
-                .repair_source(&SourceTarget::User, &SourceTarget::User),
+            fixture.repair(&SourceTarget::User, &SourceTarget::User),
             RepairOutcome::Unchanged,
             "{text}"
         );
@@ -1021,9 +982,7 @@ fn a_composition_reference_diagnostic_names_its_field_only() {
     let text = "legacy_field = true\n[agent.model]\nmodel = \"local/SECRET_MISSING\"\n";
     fixture.write(&fixture.workspace, text);
     assert_eq!(
-        fixture
-            .manager
-            .repair_source(&fixture.workspace, &fixture.workspace),
+        fixture.repair(&fixture.workspace, &fixture.workspace),
         RepairOutcome::Unchanged
     );
     let diagnostic = unresolved_diagnostic(&fixture, &fixture.workspace);
@@ -1043,9 +1002,7 @@ fn a_user_may_select_a_model_its_workspace_defines() {
     fixture.write(&SourceTarget::User, USER_SELECTING_WORKSPACE_MODEL);
     fixture.write(&fixture.workspace, WORKSPACE_MODEL);
     assert_eq!(
-        fixture
-            .manager
-            .repair_source(&SourceTarget::User, &SourceTarget::User),
+        fixture.repair(&SourceTarget::User, &SourceTarget::User),
         RepairOutcome::Committed
     );
     let expected = "\n# keep\n[agent.model]\nmodel = \"workspace-provider/model-a\"\n";
@@ -1071,9 +1028,7 @@ fn a_user_may_select_a_model_its_workspace_defines() {
     fixture.write(&SourceTarget::User, USER_SELECTING_WORKSPACE_MODEL);
     fixture.write(&fixture.workspace, WORKSPACE_MODEL);
     assert_eq!(
-        fixture
-            .manager
-            .repair_source(&SourceTarget::User, &fixture.workspace),
+        fixture.repair(&SourceTarget::User, &fixture.workspace),
         RepairOutcome::Committed
     );
     assert_eq!(fixture.read(&SourceTarget::User), expected);
@@ -1089,9 +1044,7 @@ fn an_available_composition_is_checked_like_session_resolution() {
     fixture.write(&fixture.workspace, WORKSPACE_MODEL);
     let directory = fixture.workspace.workspace().unwrap().to_path_buf();
     assert_eq!(
-        fixture
-            .manager
-            .repair_source(&SourceTarget::User, &fixture.workspace),
+        fixture.repair(&SourceTarget::User, &fixture.workspace),
         RepairOutcome::Unchanged
     );
     assert_eq!(fixture.read(&SourceTarget::User), user);
@@ -1135,7 +1088,7 @@ fn independent_constraints_hold_without_a_default_model() {
             fixture.write(&target, source);
             let applications = fixture.sequence();
             assert_eq!(
-                fixture.manager.repair_source(&target, &scope),
+                fixture.repair(&target, &scope),
                 RepairOutcome::Unchanged,
                 "{source}"
             );
@@ -1185,9 +1138,7 @@ fn a_partial_intrinsically_valid_source_is_repaired_without_inventing_facts() {
     let text = "legacy_field = true\n[agent]\ninstructions = \"Be brief.\"\n";
     fixture.write(&SourceTarget::User, text);
     assert_eq!(
-        fixture
-            .manager
-            .repair_source(&SourceTarget::User, &SourceTarget::User),
+        fixture.repair(&SourceTarget::User, &SourceTarget::User),
         RepairOutcome::Committed
     );
     assert_eq!(
@@ -1208,9 +1159,7 @@ fn a_planted_backup_symlink_is_refused_before_publication() {
     let workspace = fixture.workspace.workspace().unwrap().to_path_buf();
     std::os::unix::fs::symlink(&workspace, root.join(BACKUP_DIRECTORY)).unwrap();
     assert_eq!(
-        fixture
-            .manager
-            .repair_source(&SourceTarget::User, &SourceTarget::User),
+        fixture.repair(&SourceTarget::User, &SourceTarget::User),
         RepairOutcome::Unchanged
     );
     assert_eq!(fixture.read(&SourceTarget::User), text);
@@ -1242,9 +1191,7 @@ fn a_backup_directory_replaced_after_opening_cannot_redirect_the_copy() {
             std::os::unix::fs::symlink(&target, &directory).unwrap();
         });
     assert_eq!(
-        fixture
-            .manager
-            .repair_source(&SourceTarget::User, &SourceTarget::User),
+        fixture.repair(&SourceTarget::User, &SourceTarget::User),
         RepairOutcome::Unchanged
     );
     // Nothing reached the Workspace: the exact private copy is in the
@@ -1338,103 +1285,195 @@ impl Redirect {
         files
     }
 
-    /// The repair of `target` failed closed before any publication.
-    fn assert_refused(&self, target: &SourceTarget, original: &str, diagnostic: &str) {
+    /// Nothing reached the Workspace: no file but its source and that
+    /// source's writer lock, no backup directory.
+    fn assert_workspace_untouched(&self) {
+        assert_eq!(self.workspace_files(), Vec::<PathBuf>::new());
+        assert!(!self.workspace.join("rustx").join(BACKUP_DIRECTORY).exists());
+    }
+
+    /// The repair of `target` within `scope` failed closed before any
+    /// publication, with an unresolved receipt naming `diagnostic`.
+    fn assert_refused(&self, case: &Case, diagnostic: &str) {
         let fixture = &self.fixture;
         assert_eq!(
-            fixture.manager.repair_source(target, target),
+            fixture.repair(&case.target, &case.scope),
             RepairOutcome::Unchanged
         );
-        assert_eq!(fixture.read(target), original);
-        let receipt = fixture.receipt(target).unwrap();
+        assert_eq!(fixture.read(&case.target), case.original);
+        let receipt = fixture.receipt(&case.target).unwrap();
         assert_eq!(receipt.status, ConfigRepairStatus::Unresolved);
         assert!(!receipt.backup_available);
         assert!(receipt.after_revision.is_none());
         let found = receipt.diagnostic.unwrap();
         assert!(found.contains(diagnostic), "{found}");
-        assert_eq!(self.workspace_files(), Vec::<PathBuf>::new());
-        assert!(!self.workspace.join("rustx").join(BACKUP_DIRECTORY).exists());
+        self.assert_workspace_untouched();
+    }
+
+    /// `scope` is refused at admission: no transaction of it begins, so no
+    /// source changes and no receipt or ledger change is recorded.
+    fn assert_scope_refused(&self, case: &Case) {
+        let fixture = &self.fixture;
+        let sequence = fixture.sequence();
+        assert!(fixture.manager.admit_repair_scope(&case.scope).is_err());
+        assert_eq!(fixture.read(&case.target), case.original);
+        assert!(fixture.receipt(&case.target).is_none());
+        assert_eq!(fixture.sequence(), sequence);
+        self.assert_workspace_untouched();
     }
 }
 
-fn redirect_cases(redirect: &Redirect) -> [(SourceTarget, String); 2] {
+/// One repair transaction: its source, its scope and the source's bytes.
+#[derive(Clone)]
+struct Case {
+    target: SourceTarget,
+    scope: SourceTarget,
+    original: String,
+}
+
+/// The User alone, the User within the selected Workspace, and the
+/// Workspace, each holding a repairable sensitive value.
+fn redirect_cases(redirect: &Redirect) -> [Case; 3] {
     let user = format!("{USER}legacy = 'SECRET_X'\n");
     let workspace = "# Workspace\n[agent]\nlegacy = 'SECRET_X'\n".to_string();
+    let selected = redirect.fixture.workspace.clone();
     redirect.fixture.write(&SourceTarget::User, &user);
-    redirect
-        .fixture
-        .write(&redirect.fixture.workspace, &workspace);
+    redirect.fixture.write(&selected, &workspace);
     [
-        (SourceTarget::User, user),
-        (redirect.fixture.workspace.clone(), workspace),
+        Case {
+            target: SourceTarget::User,
+            scope: SourceTarget::User,
+            original: user.clone(),
+        },
+        Case {
+            target: SourceTarget::User,
+            scope: selected.clone(),
+            original: user,
+        },
+        Case {
+            target: selected.clone(),
+            scope: selected,
+            original: workspace,
+        },
     ]
 }
 
 #[test]
 fn an_intermediate_runtime_root_symlink_is_never_followed_for_backups() {
     let redirect = Redirect::new();
-    let cases = redirect_cases(&redirect);
+    let [user, within, workspace] = redirect_cases(&redirect);
     Redirect::redirect(&redirect.data, &redirect.workspace);
-    for (target, original) in &cases {
-        redirect.assert_refused(target, original, "could not be backed up");
-    }
+    // A selected Workspace is refused before either of its sources; the
+    // User alone reaches its backup, which refuses the symlink.
+    redirect.assert_scope_refused(&within);
+    redirect.assert_scope_refused(&workspace);
+    redirect.assert_refused(&user, "could not be backed up");
 }
 
 #[test]
-fn an_ancestor_redirected_after_validation_cannot_reach_the_workspace() {
-    for index in 0..2 {
+fn an_ancestor_redirected_after_scope_admission_cannot_reach_the_workspace() {
+    for index in 0..3 {
         let redirect = Redirect::new();
-        let (target, original) = redirect_cases(&redirect)[index].clone();
-        redirect.hook("backup_validated");
-        redirect.assert_refused(&target, &original, "could not be backed up");
-        assert!(!redirect.data.join("state.moved/rustx").exists());
+        let case = redirect_cases(&redirect)[index].clone();
+        redirect.hook("before_backup");
+        redirect.assert_refused(&case, "could not be backed up");
+        // A selected Workspace's admission created the runtime root; no
+        // backup storage was created in it or anywhere else.
+        let moved = redirect.data.join("state.moved/rustx");
+        assert_eq!(moved.exists(), index > 0);
+        assert!(!moved.join(BACKUP_DIRECTORY).exists());
     }
 }
 
 #[test]
 fn a_workspace_moved_onto_the_runtime_root_path_never_receives_a_backup() {
-    let redirect = Redirect::new();
-    let [_, (target, original)] = redirect_cases(&redirect);
-    // No symlink anywhere: the selected Workspace itself is renamed onto
-    // `data/state`, so a no-follow walk reaches `<workspace>/rustx`.
-    let (data, workspace) = (redirect.data.clone(), redirect.workspace.clone());
-    redirect
-        .fixture
-        .manager
-        .test_hooks
-        .insert("backup_validated", move || {
-            std::fs::rename(data.join("state"), data.join("state.moved")).unwrap();
-            std::fs::rename(&workspace, data.join("state")).unwrap();
-        });
-    let fixture = &redirect.fixture;
-    assert_eq!(
-        fixture.manager.repair_source(&target, &target),
-        RepairOutcome::Unchanged
-    );
-    let moved = redirect.data.join("state");
-    assert_eq!(
-        std::fs::read_to_string(moved.join("rustx.toml")).unwrap(),
-        original
-    );
-    assert!(!moved.join("rustx").join(BACKUP_DIRECTORY).exists());
-    let receipt = fixture.receipt(&target).unwrap();
-    assert_eq!(receipt.status, ConfigRepairStatus::Unresolved);
-    assert!(!receipt.backup_available);
-    assert!(
-        receipt
-            .diagnostic
-            .unwrap()
-            .contains("outside the Workspace")
-    );
+    // The User within the selected Workspace, and the Workspace itself.
+    for index in 1..3 {
+        let redirect = Redirect::new();
+        let case = redirect_cases(&redirect)[index].clone();
+        // No symlink anywhere: the selected Workspace itself is renamed onto
+        // `data/state` after admission, so a no-follow walk reaches
+        // `<workspace>/rustx`.
+        let (data, workspace) = (redirect.data.clone(), redirect.workspace.clone());
+        redirect
+            .fixture
+            .manager
+            .test_hooks
+            .insert("before_backup", move || {
+                std::fs::rename(data.join("state"), data.join("state.moved")).unwrap();
+                std::fs::rename(&workspace, data.join("state")).unwrap();
+            });
+        let fixture = &redirect.fixture;
+        assert_eq!(
+            fixture.repair(&case.target, &case.scope),
+            RepairOutcome::Unchanged
+        );
+        let moved = redirect.data.join("state");
+        let source = match case.target {
+            SourceTarget::User => fixture.path(&SourceTarget::User),
+            SourceTarget::Workspace { .. } => moved.join("rustx.toml"),
+        };
+        assert_eq!(std::fs::read_to_string(source).unwrap(), case.original);
+        assert!(!moved.join("rustx").join(BACKUP_DIRECTORY).exists());
+        let receipt = fixture.receipt(&case.target).unwrap();
+        assert_eq!(receipt.status, ConfigRepairStatus::Unresolved);
+        assert!(!receipt.backup_available);
+        assert!(
+            receipt
+                .diagnostic
+                .unwrap()
+                .contains("outside the Workspace")
+        );
+    }
+}
+
+#[test]
+fn a_workspace_moved_into_the_runtime_root_after_admission_receives_no_backup() {
+    for index in 1..3 {
+        let redirect = Redirect::new();
+        let case = redirect_cases(&redirect)[index].clone();
+        let (root, workspace) = (
+            redirect.fixture.manager.runtime_root().to_path_buf(),
+            redirect.workspace.clone(),
+        );
+        redirect
+            .fixture
+            .manager
+            .test_hooks
+            .insert("before_backup", move || {
+                std::fs::create_dir_all(&root).unwrap();
+                std::fs::rename(&workspace, root.join("moved-workspace")).unwrap();
+            });
+        let fixture = &redirect.fixture;
+        assert_eq!(
+            fixture.repair(&case.target, &case.scope),
+            RepairOutcome::Unchanged
+        );
+        let receipt = fixture.receipt(&case.target).unwrap();
+        assert!(!receipt.backup_available);
+        assert!(
+            receipt
+                .diagnostic
+                .unwrap()
+                .contains("outside the Workspace")
+        );
+        assert!(fixture.backups().is_empty());
+        let moved = fixture.manager.runtime_root().join("moved-workspace");
+        let source = match case.target {
+            SourceTarget::User => fixture.path(&SourceTarget::User),
+            SourceTarget::Workspace { .. } => moved.join("rustx.toml"),
+        };
+        assert_eq!(std::fs::read_to_string(source).unwrap(), case.original);
+    }
 }
 
 #[test]
 fn an_ancestor_redirected_after_admission_cannot_redirect_the_copy() {
-    for index in 0..2 {
+    for index in 0..3 {
         let redirect = Redirect::new();
-        let (target, original) = redirect_cases(&redirect)[index].clone();
+        let case = redirect_cases(&redirect)[index].clone();
         redirect.hook("backup_directory_opened");
-        redirect.assert_refused(&target, &original, "backup storage moved");
+        redirect.assert_refused(&case, "backup storage moved");
         // The exact copy is in the physical directory that was admitted, now
         // reachable only under its moved ancestor.
         let directory = redirect
@@ -1446,11 +1485,116 @@ fn an_ancestor_redirected_after_admission_cannot_redirect_the_copy() {
             .map(|entry| entry.unwrap().path())
             .collect();
         assert_eq!(copies.len(), 1);
-        assert_eq!(std::fs::read(&copies[0]).unwrap(), original.as_bytes());
+        assert_eq!(std::fs::read(&copies[0]).unwrap(), case.original.as_bytes());
         let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&copies[0]), 0o600);
         assert_eq!(mode(&directory), 0o700);
     }
+}
+
+// Repair scope admission (ISO-01..06). A selected Workspace is admitted
+// against the runtime root before either of its sources is touched.
+
+/// A Fixture whose runtime root is placed relative to its Workspace, with a
+/// repairable sensitive value in both sources.
+fn overlapping(runtime: impl FnOnce(&Path) -> PathBuf) -> (Fixture, [String; 2]) {
+    let fixture = Fixture::with_paths(|home| home.join("rustx/rustx.toml"), runtime);
+    let user = format!("{USER}legacy = 'SECRET_X'\n");
+    let workspace = "# Workspace\n[agent]\nlegacy = 'SECRET_X'\n".to_string();
+    fixture.write(&SourceTarget::User, &user);
+    fixture.write(&fixture.workspace, &workspace);
+    (fixture, [user, workspace])
+}
+
+#[test]
+fn an_overlapping_runtime_root_is_refused_before_anything_is_created() {
+    for runtime in [
+        // The runtime root inside the selected Workspace.
+        (|root: &Path| root.join("workspace/.rustx/state")) as fn(&Path) -> PathBuf,
+        // The selected Workspace inside the runtime root.
+        |root: &Path| root.to_path_buf(),
+    ] {
+        let (fixture, [user, workspace]) = overlapping(runtime);
+        let root = fixture.manager.runtime_root().to_path_buf();
+        let existed = root.exists();
+        let refused = fixture
+            .manager
+            .admit_repair_scope(&fixture.workspace)
+            .err()
+            .unwrap();
+        assert_eq!(refused, "runtime_root must be disjoint from the workspace");
+        assert_eq!(root.exists(), existed, "nothing is created");
+        assert_eq!(fixture.read(&SourceTarget::User), user);
+        assert_eq!(fixture.read(&fixture.workspace), workspace);
+        assert!(fixture.backups().is_empty());
+        assert_eq!(fixture.sequence(), 0);
+        // Startup's User-only scope selects no Workspace, so it proves
+        // nothing about directories a later boundary may select, and still
+        // repairs the User alone.
+        assert_eq!(
+            fixture.repair(&SourceTarget::User, &SourceTarget::User),
+            RepairOutcome::Committed
+        );
+        assert_eq!(fixture.read(&SourceTarget::User), USER);
+        assert_eq!(fixture.backups().len(), 1);
+    }
+}
+
+#[test]
+fn a_workspace_target_is_repaired_only_through_its_own_admitted_scope() {
+    let fixture = Fixture::new();
+    fixture.write(&fixture.workspace, REPAIRABLE);
+    let other = fixture
+        .workspace
+        .workspace()
+        .unwrap()
+        .with_file_name("other");
+    std::fs::create_dir(&other).unwrap();
+    let other = SourceTarget::Workspace {
+        directory: other.canonicalize().unwrap(),
+    };
+    for scope in [SourceTarget::User, other] {
+        let scope = fixture.manager.admit_repair_scope(&scope).unwrap();
+        assert_eq!(
+            fixture.manager.repair_source(&fixture.workspace, &scope),
+            RepairOutcome::Unchanged
+        );
+    }
+    assert_eq!(fixture.read(&fixture.workspace), REPAIRABLE);
+    assert_eq!(fixture.sequence(), 0);
+}
+
+#[test]
+fn a_workspace_replaced_after_admission_is_never_repaired_through_its_scope() {
+    let fixture = Fixture::new();
+    let user = format!("{USER}legacy = 1\n");
+    fixture.write(&SourceTarget::User, &user);
+    fixture.write(&fixture.workspace, REPAIRABLE);
+    let swap = Swap::prepare(&fixture, REPAIRABLE);
+    swap.hook(&fixture, "repair_scope_admitted");
+    let scope = fixture
+        .manager
+        .admit_repair_scope(&fixture.workspace)
+        .unwrap();
+    // The Workspace pathname now names another directory: the admitted
+    // Workspace is never published through a pathname it no longer owns,
+    // and the other directory is never written.
+    assert_eq!(
+        fixture.manager.repair_source(&fixture.workspace, &scope),
+        RepairOutcome::Unchanged
+    );
+    assert_eq!(swap.moved(), REPAIRABLE);
+    assert_eq!(swap.other(), REPAIRABLE);
+    assert_eq!(Swap::entries(&swap.other), ["rustx.toml"]);
+    assert!(fixture.receipt(&fixture.workspace).is_none());
+    // The User is its own transaction; its backup is checked against the
+    // admitted (moved) Workspace, which the runtime root is disjoint from.
+    assert_eq!(
+        fixture.manager.repair_source(&SourceTarget::User, &scope),
+        RepairOutcome::Committed
+    );
+    assert_eq!(fixture.read(&SourceTarget::User), USER);
+    assert_eq!(fixture.backups().len(), 1);
 }
 
 #[test]
@@ -1460,16 +1604,12 @@ fn an_existing_backup_is_reused_only_when_it_is_exactly_the_original() {
     // An identical copy from an earlier attempt is kept, not duplicated.
     fixture.write(&SourceTarget::User, &original);
     fixture.manager.test_hooks.fail_once("replace_refused");
-    fixture
-        .manager
-        .repair_source(&SourceTarget::User, &SourceTarget::User);
+    fixture.repair(&SourceTarget::User, &SourceTarget::User);
     assert_eq!(fixture.read(&SourceTarget::User), original);
     let backups = fixture.backups();
     assert_eq!(backups.len(), 1);
     assert_eq!(
-        fixture
-            .manager
-            .repair_source(&SourceTarget::User, &SourceTarget::User),
+        fixture.repair(&SourceTarget::User, &SourceTarget::User),
         RepairOutcome::Committed
     );
     assert_eq!(fixture.backups(), backups);
@@ -1479,15 +1619,11 @@ fn an_existing_backup_is_reused_only_when_it_is_exactly_the_original() {
     let fixture = Fixture::new();
     fixture.write(&SourceTarget::User, &original);
     fixture.manager.test_hooks.fail_once("replace_refused");
-    fixture
-        .manager
-        .repair_source(&SourceTarget::User, &SourceTarget::User);
+    fixture.repair(&SourceTarget::User, &SourceTarget::User);
     let backup = fixture.backups().remove(0);
     std::fs::write(&backup, "tampered").unwrap();
     assert_eq!(
-        fixture
-            .manager
-            .repair_source(&SourceTarget::User, &SourceTarget::User),
+        fixture.repair(&SourceTarget::User, &SourceTarget::User),
         RepairOutcome::Unchanged
     );
     assert_eq!(fixture.read(&SourceTarget::User), original);
@@ -1507,17 +1643,15 @@ fn name_max(directory: &Path) -> usize {
         .unwrap()
 }
 
-/// A long source basename is repaired, backed up and authored like any other,
+/// A source basename is repaired, backed up and authored like any other,
 /// leaving only the document and its writer lock beside it.
-fn assert_long_name_writable(name: &str) {
+fn assert_basename_writable(name: &std::ffi::OsStr) {
     let fixture = Fixture::with_config_path(|home| home.join("long").join(name));
     let path = fixture.path(&SourceTarget::User);
     let original = format!("{USER}legacy = 'SECRET_X'\n");
     fixture.write(&SourceTarget::User, &original);
     assert_eq!(
-        fixture
-            .manager
-            .repair_source(&SourceTarget::User, &SourceTarget::User),
+        fixture.repair(&SourceTarget::User, &SourceTarget::User),
         RepairOutcome::Committed
     );
     assert_eq!(fixture.read(&SourceTarget::User), USER);
@@ -1555,7 +1689,7 @@ fn a_long_utf8_source_basename_is_repaired_and_authored() {
     // 225 bytes: the old `.<name>.<uuid>.tmp` staging name was 263.
     let name = format!("{}{}.toml", "設定".repeat(36), "a".repeat(4));
     assert_eq!(name.len(), 225);
-    assert_long_name_writable(&name);
+    assert_basename_writable(name.as_ref());
 }
 
 #[test]
@@ -1564,7 +1698,107 @@ fn a_source_basename_at_the_filesystem_limit_is_writable() {
     let limit = name_max(probe.path());
     let name = format!("{}.toml", "n".repeat(limit - ".toml".len()));
     assert_eq!(name.len(), limit);
-    assert_long_name_writable(&name);
+    assert_basename_writable(name.as_ref());
+}
+
+/// Basenames that are not UTF-8, exactly as Linux filesystems store them.
+/// Both decode lossily to the same text, so only exact bytes tell them apart.
+#[cfg(target_os = "linux")]
+fn non_utf8_names() -> [std::ffi::OsString; 2] {
+    use std::os::unix::ffi::OsStringExt;
+    [
+        std::ffi::OsString::from_vec(b"rustx-\xff.toml".to_vec()),
+        std::ffi::OsString::from_vec(b"rustx-\xfe.toml".to_vec()),
+    ]
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_non_utf8_source_basename_is_repaired_and_authored() {
+    let [name, other] = non_utf8_names();
+    assert!(name.to_str().is_none());
+    assert_eq!(name.to_string_lossy(), other.to_string_lossy());
+    assert_basename_writable(&name);
+}
+
+/// PATH-01..03: a User source bound under a non-UTF-8 basename is read,
+/// repaired, backed up, receipted, fenced and authored under exactly that
+/// name; nothing appears under any other name.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_non_utf8_user_source_keeps_its_exact_name_through_every_transaction() {
+    let [name, other] = non_utf8_names();
+    let fixture = Fixture::with_config_path(|home| home.join("native").join(&name));
+    let path = fixture.path(&SourceTarget::User);
+    assert_eq!(path.file_name(), Some(name.as_os_str()));
+    let directory = path.parent().unwrap().to_path_buf();
+    // A neighbour whose name differs only in bytes a lossy decoding erases.
+    let neighbour = format!("{USER}legacy = 'NEIGHBOUR'\n");
+    std::fs::write(directory.join(&other), &neighbour).unwrap();
+    let original = format!("{USER}legacy = 'SECRET_X'\n");
+    fixture.write(&SourceTarget::User, &original);
+    assert_eq!(
+        fixture.repair(&SourceTarget::User, &SourceTarget::User),
+        RepairOutcome::Committed
+    );
+    assert_eq!(fixture.read(&SourceTarget::User), USER);
+    assert_eq!(
+        std::fs::read_to_string(directory.join(&other)).unwrap(),
+        neighbour
+    );
+    let backups = fixture.backups();
+    assert_eq!(backups.len(), 1);
+    assert_eq!(std::fs::read(&backups[0]).unwrap(), original.as_bytes());
+    let receipt = fixture.receipt(&SourceTarget::User).unwrap();
+    let revision = |text: &str| super::super::super::settings::revision(Some(text.as_bytes()));
+    assert_eq!(receipt.status, ConfigRepairStatus::Repaired);
+    assert_eq!(receipt.before_revision, revision(&original));
+    assert_eq!(receipt.after_revision, Some(revision(USER)));
+    assert_eq!(receipt.changes, vec![removed("agent.model.legacy")]);
+    assert!(receipt.backup_available);
+    let entries = || {
+        let mut names: Vec<_> = std::fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        names
+    };
+    let mut expected = vec![
+        name.clone(),
+        other.clone(),
+        lock_of(&path).file_name().unwrap().to_os_string(),
+    ];
+    expected.sort();
+    assert_eq!(entries(), expected);
+    // Ordinary authoring reads the exact revision and is fenced by it.
+    let read = fixture
+        .manager
+        .read_source_settings(&SourceTarget::User)
+        .unwrap();
+    assert_eq!(read.user.path, path);
+    assert_eq!(read.user.revision, revision(USER));
+    assert!(matches!(
+        fixture.manager.write_source_settings(
+            &SourceTarget::User,
+            &revision(&original),
+            capacity(3)
+        ),
+        Err(super::super::settings::SettingsError::Conflict { .. })
+    ));
+    assert_eq!(fixture.read(&SourceTarget::User), USER);
+    let written = fixture
+        .manager
+        .write_source_settings(&SourceTarget::User, &read.user.revision, capacity(3))
+        .unwrap();
+    let authored = fixture.read(&SourceTarget::User);
+    assert!(authored.contains("max_concurrent = 3"));
+    assert_eq!(written.user.revision, revision(&authored));
+    assert_eq!(
+        std::fs::read_to_string(directory.join(&other)).unwrap(),
+        neighbour
+    );
+    assert_eq!(entries(), expected);
 }
 
 #[test]
@@ -1573,8 +1807,13 @@ fn every_writer_takes_one_bounded_lock_per_document() {
     let root = tempfile::tempdir().unwrap();
     let directory = root.path().canonicalize().unwrap();
     let limit = name_max(&directory);
-    let long = "x".repeat(limit);
-    let names = ["rustx.toml", "rustx.toml.", "Rustx.toml", long.as_str()];
+    let mut names: Vec<std::ffi::OsString> = ["rustx.toml", "rustx.toml.", "Rustx.toml"]
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    names.push("x".repeat(limit).into());
+    #[cfg(target_os = "linux")]
+    names.extend(non_utf8_names());
     let source = SourceDirectory::open(&directory.join("rustx.toml"), false)
         .unwrap()
         .unwrap();
@@ -1585,7 +1824,7 @@ fn every_writer_takes_one_bounded_lock_per_document() {
             Err(std::fs::TryLockError::WouldBlock)
         )
     };
-    for name in names {
+    for name in &names {
         // The handle-relative lock of source transactions and the path lock
         // of initialization and capture are one bounded inode.
         let lock = lock_of(&directory.join(name));
@@ -1608,7 +1847,7 @@ fn every_writer_takes_one_bounded_lock_per_document() {
         // Distinct documents never share a lock.
         assert!(
             inodes.insert(std::fs::metadata(&lock).unwrap().ino()),
-            "{name}"
+            "{name:?}"
         );
     }
     assert_eq!(std::fs::read_dir(&directory).unwrap().count(), names.len());
@@ -1623,9 +1862,7 @@ fn a_failed_staging_leaves_no_candidate_and_the_source_unchanged() {
         let path = fixture.path(&SourceTarget::User);
         fixture.manager.test_hooks.fail_once(point);
         assert_eq!(
-            fixture
-                .manager
-                .repair_source(&SourceTarget::User, &SourceTarget::User),
+            fixture.repair(&SourceTarget::User, &SourceTarget::User),
             RepairOutcome::Unchanged,
             "{point}"
         );
@@ -1748,9 +1985,7 @@ fn a_workspace_replaced_before_the_writer_lock_is_never_written() {
     let swap = Swap::prepare(&fixture, REPAIRABLE);
     swap.hook(&fixture, "repair_before_lock");
     assert_eq!(
-        fixture
-            .manager
-            .repair_source(&fixture.workspace, &fixture.workspace),
+        fixture.repair(&fixture.workspace, &fixture.workspace),
         RepairOutcome::Superseded
     );
     assert_eq!(swap.other(), REPAIRABLE);
@@ -1768,9 +2003,7 @@ fn a_workspace_replaced_before_publication_cannot_redirect_it() {
     let swap = Swap::prepare(&fixture, REPAIRABLE);
     swap.hook(&fixture, "before_publication");
     assert_eq!(
-        fixture
-            .manager
-            .repair_source(&fixture.workspace, &fixture.workspace),
+        fixture.repair(&fixture.workspace, &fixture.workspace),
         RepairOutcome::Superseded
     );
     assert_eq!(swap.other(), REPAIRABLE);
@@ -1788,9 +2021,7 @@ fn a_workspace_renamed_after_replacement_is_uncertain_and_never_replayed() {
     let swap = Swap::prepare(&fixture, REPAIRABLE);
     swap.hook(&fixture, "after_publication");
     assert_eq!(
-        fixture
-            .manager
-            .repair_source(&fixture.workspace, &fixture.workspace),
+        fixture.repair(&fixture.workspace, &fixture.workspace),
         RepairOutcome::Committed
     );
     // The bytes are in the physical directory the transaction admitted; the
@@ -1800,13 +2031,14 @@ fn a_workspace_renamed_after_replacement_is_uncertain_and_never_replayed() {
     let receipt = fixture.receipt(&fixture.workspace).unwrap();
     assert_eq!(receipt.status, ConfigRepairStatus::CommitUncertain);
     assert_eq!(receipt.after_revision, None);
-    // A redirected target is no source of this owner: nothing is replayed.
+    // A redirected target is no source of this owner: its scope is not
+    // admitted, so nothing is replayed.
     let sequence = fixture.sequence();
-    assert_eq!(
+    assert!(
         fixture
             .manager
-            .repair_source(&fixture.workspace, &fixture.workspace),
-        RepairOutcome::Unchanged
+            .admit_repair_scope(&fixture.workspace)
+            .is_err()
     );
     assert_eq!(swap.other(), REPAIRABLE);
     assert_eq!(fixture.sequence(), sequence);
@@ -1917,10 +2149,7 @@ fn nothing_eligible_is_not_proof_of_health() {
     let fixture = Fixture::new();
     for target in [SourceTarget::User, fixture.workspace.clone()] {
         fixture.write(&target, INTRINSICALLY_INVALID);
-        assert_eq!(
-            fixture.manager.repair_source(&target, &target),
-            RepairOutcome::Unchanged
-        );
+        assert_eq!(fixture.repair(&target, &target), RepairOutcome::Unchanged);
         assert_eq!(fixture.read(&target), INTRINSICALLY_INVALID);
         let receipt = fixture.receipt(&target).unwrap();
         assert_eq!(receipt.status, ConfigRepairStatus::Unresolved);
@@ -1935,10 +2164,7 @@ fn nothing_eligible_is_not_proof_of_health() {
         // No source transaction began: no writer lock, no backup.
         assert!(!lock_of(&fixture.path(&target)).exists());
         let sequence = fixture.sequence();
-        assert_eq!(
-            fixture.manager.repair_source(&target, &target),
-            RepairOutcome::Unchanged
-        );
+        assert_eq!(fixture.repair(&target, &target), RepairOutcome::Unchanged);
         assert_eq!(fixture.sequence(), sequence);
     }
     assert!(fixture.backups().is_empty());
@@ -1950,7 +2176,7 @@ fn an_unresolved_receipt_is_withdrawn_only_on_proven_recovery() {
     let fixture = Fixture::new();
     let target = fixture.workspace.clone();
     fixture.write(&target, "[agent\n");
-    fixture.manager.repair_source(&target, &target);
+    fixture.repair(&target, &target);
     let malformed = fixture.receipt(&target).unwrap();
     assert_eq!(malformed.status, ConfigRepairStatus::Unresolved);
 
@@ -2004,10 +2230,7 @@ fn an_unresolved_receipt_is_withdrawn_only_on_proven_recovery() {
     );
     // Later observations are no-ops.
     fixture.manager.refresh_repair_observation(&target);
-    assert_eq!(
-        fixture.manager.repair_source(&target, &target),
-        RepairOutcome::Unchanged
-    );
+    assert_eq!(fixture.repair(&target, &target), RepairOutcome::Unchanged);
     assert_eq!(fixture.sequence(), sequence + 1);
 }
 
@@ -2034,10 +2257,7 @@ fn a_valid_partial_source_is_healthy_without_composition_facts() {
     let partial = "[subagents]\nmax_concurrent = 2\n[agent]\ndescription = \"partial\"\n";
     for target in [SourceTarget::User, fixture.workspace.clone()] {
         fixture.write(&target, partial);
-        assert_eq!(
-            fixture.manager.repair_source(&target, &target),
-            RepairOutcome::Unchanged
-        );
+        assert_eq!(fixture.repair(&target, &target), RepairOutcome::Unchanged);
         assert!(fixture.receipt(&target).is_none());
     }
     assert_eq!(fixture.sequence(), 0);

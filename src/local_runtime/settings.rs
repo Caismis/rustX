@@ -91,6 +91,8 @@ pub(super) fn revision(bytes: Option<&[u8]>) -> String {
 /// writer lock, staging, atomic replacement and durability sync — is relative
 /// to this one handle, so replacing or redirecting any component of the
 /// pathname afterwards can never move the transaction to another directory.
+/// Entry names are native [`OsStr`] bytes, never text: a document is read,
+/// locked, replaced and removed under exactly the basename it is bound to.
 ///
 /// What the handle cannot do is stop the directory itself from being renamed.
 /// [`SourceDirectory::holds`] therefore asks whether the admitted pathname
@@ -167,7 +169,7 @@ impl SourceDirectory {
 
     /// Read `name` in this directory: absent is `None`; a symlink, FIFO or
     /// other non-regular file is refused, as [`read_document`] refuses it.
-    pub(super) fn read(&self, name: &str) -> Result<Option<Vec<u8>>, RuntimeClientError> {
+    pub(super) fn read(&self, name: &OsStr) -> Result<Option<Vec<u8>>, RuntimeClientError> {
         match self.open_file(name, OFlag::O_RDONLY | OFlag::O_NONBLOCK, Mode::empty()) {
             Ok(file) => crate::bounded_file::read_bounded_file(file)
                 .map(Some)
@@ -183,9 +185,9 @@ impl SourceDirectory {
     /// The persistent writer lock of `name`, the same inode
     /// [`lock_document`] locks while this directory holds. Advisory: it
     /// serializes rustX writers, never an external rename.
-    pub(super) fn lock(&self, name: &str) -> std::io::Result<File> {
+    pub(super) fn lock(&self, name: &OsStr) -> std::io::Result<File> {
         let file = self.open_file(
-            &lock_name(OsStr::new(name)),
+            OsStr::new(&lock_name(name)),
             OFlag::O_RDWR | OFlag::O_CREAT | OFlag::O_NONBLOCK,
             Mode::S_IRUSR | Mode::S_IWUSR,
         )?;
@@ -201,7 +203,7 @@ impl SourceDirectory {
     pub(super) fn stage(&self, bytes: &[u8]) -> std::io::Result<Staged<'_>> {
         let name = format!("{STAGE_PREFIX}{}.tmp", uuid::Uuid::now_v7().simple());
         let mut file = self.open_file(
-            &name,
+            OsStr::new(&name),
             OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_EXCL,
             Mode::S_IRUSR | Mode::S_IWUSR,
         )?;
@@ -217,7 +219,7 @@ impl SourceDirectory {
     }
 
     /// Atomically replace `name` with `staged`, inside this directory.
-    pub(super) fn replace(&self, mut staged: Staged<'_>, name: &str) -> std::io::Result<()> {
+    pub(super) fn replace(&self, mut staged: Staged<'_>, name: &OsStr) -> std::io::Result<()> {
         nix::fcntl::renameat(&self.directory, staged.name.as_str(), &self.directory, name)?;
         staged.published = true;
         Ok(())
@@ -226,7 +228,7 @@ impl SourceDirectory {
     /// Publish `staged` under `name` without replacing any existing entry:
     /// an existing `name` fails with [`std::io::ErrorKind::AlreadyExists`].
     /// The staged name remains and is removed when `staged` drops.
-    pub(super) fn link(&self, staged: &Staged<'_>, name: &str) -> std::io::Result<()> {
+    pub(super) fn link(&self, staged: &Staged<'_>, name: &OsStr) -> std::io::Result<()> {
         Ok(nix::unistd::linkat(
             &self.directory,
             staged.name.as_str(),
@@ -261,7 +263,7 @@ impl SourceDirectory {
         }
     }
 
-    pub(super) fn remove(&self, name: &str) -> std::io::Result<()> {
+    pub(super) fn remove(&self, name: &OsStr) -> std::io::Result<()> {
         Ok(nix::unistd::unlinkat(
             &self.directory,
             name,
@@ -274,7 +276,7 @@ impl SourceDirectory {
         Ok(nix::unistd::fsync(&self.directory)?)
     }
 
-    fn open_file(&self, name: &str, flags: OFlag, mode: Mode) -> nix::Result<File> {
+    fn open_file(&self, name: &OsStr, flags: OFlag, mode: Mode) -> nix::Result<File> {
         nix::fcntl::openat(
             &self.directory,
             name,
@@ -295,7 +297,7 @@ pub(super) struct Staged<'a> {
 impl Drop for Staged<'_> {
     fn drop(&mut self) {
         if !self.published {
-            let _ = self.directory.remove(&self.name);
+            let _ = self.directory.remove(OsStr::new(&self.name));
         }
     }
 }

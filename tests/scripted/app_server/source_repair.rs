@@ -386,7 +386,10 @@ async fn a_late_workspace_interest_wakes_a_parked_reader_once() {
         )
         .unwrap();
         assert_eq!(
-            f.manager.configuration.repair_source(&target, &target),
+            f.manager.configuration.repair_source(
+                &target,
+                &f.manager.configuration.admit_repair_scope(&target).unwrap()
+            ),
             crate::local_runtime::configuration::repair::RepairOutcome::Committed
         );
         let receipt = f.manager.source_repairs().latest(&target).unwrap();
@@ -525,6 +528,287 @@ async fn a_source_write_into_a_replaced_workspace_is_refused_before_application(
         assert!(connection.next_source_repair().is_none());
         drop(runtime);
         f.close().await;
+    })
+    .await;
+}
+
+/// Every file below `directory` whose bytes contain `needle`.
+fn files_containing(directory: &std::path::Path, needle: &[u8]) -> Vec<std::path::PathBuf> {
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(directory).unwrap() {
+        let path = entry.unwrap().path();
+        let kind = std::fs::symlink_metadata(&path).unwrap().file_type();
+        if kind.is_dir() {
+            found.extend(files_containing(&path, needle));
+        } else if kind.is_file()
+            && std::fs::read(&path)
+                .unwrap()
+                .windows(needle.len())
+                .any(|window| window == needle)
+        {
+            found.push(path);
+        }
+    }
+    found
+}
+
+/// An external User edit no live Session has captured: new instructions,
+/// which a captured commit prepares for every Session composed over the User,
+/// beside a repairable field holding `secret`.
+fn edit_user(f: &Fixture, secret: &str) -> String {
+    let mut document: toml_edit::DocumentMut = std::fs::read_to_string(user_path(f))
+        .unwrap()
+        .parse()
+        .unwrap();
+    document["agent"]["instructions"] = toml_edit::value("User instructions");
+    document["agent"]["legacy_trust"] = toml_edit::value(secret);
+    let user = document.to_string();
+    std::fs::write(user_path(f), &user).unwrap();
+    user
+}
+
+/// ISO-01..04 at the real native Session creation boundary: a selected
+/// Workspace that is not isolated from the runtime root — the runtime root
+/// inside it, or it inside the runtime root — is refused before the User
+/// source is touched. Neither source changes, no credential-bearing backup is
+/// written, no receipt is recorded and no repair commit reaches the
+/// configuration coordinator of the live Session.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn session_creation_admits_the_selected_workspace_before_any_repair() {
+    const SENTINEL: &str = "SECRET_SENTINEL_464";
+    for overlap in [
+        "runtime root inside the Workspace",
+        "Workspace inside the runtime root",
+    ] {
+        bounded(async {
+            let f = Fixture::new().await;
+            let runtime = f.load(0).await.unwrap().unwrap();
+            let connection = AppServerConnection::new(f.host.clone());
+            initialize(&connection).await;
+            call(
+                &connection,
+                1,
+                Method::ConfigurationReconcile {
+                    target: workspace(&f, 0),
+                },
+            )
+            .await;
+            let probe = f.manager.probe(&f.id(0).await);
+            let baseline = super::configuration::settled(&f, 0).await;
+            let before = probe.configuration_preparations.load(Ordering::SeqCst);
+            let root = f.archive_root.clone();
+            let selected = if overlap.starts_with("runtime root") {
+                // HOME: the runtime root is `HOME/rustx/runtime`.
+                root.ancestors().nth(2).unwrap().to_path_buf()
+            } else {
+                let inside = root.join("project");
+                std::fs::create_dir(&inside).unwrap();
+                inside
+            };
+            let workspace_file = selected.join("rustx.toml");
+            let workspace_text = format!("[agent]\nlegacy = \"{SENTINEL}\"\n");
+            std::fs::write(&workspace_file, &workspace_text).unwrap();
+            // A Workspace enclosing HOME also encloses the User source.
+            let mut sentinel_files = vec![workspace_file.clone()];
+            if user_path(&f).starts_with(&selected) {
+                sentinel_files.push(user_path(&f));
+            }
+            sentinel_files.sort();
+            let user = edit_user(&f, SENTINEL);
+            let sequence = *f.manager.source_repairs().subscribe().borrow();
+            let Response::Failure(_) = connection
+                .handle_request(Request {
+                    jsonrpc: JsonRpcVersion::V2,
+                    id: RequestId::Integer(2),
+                    call: Method::SessionCreate {
+                        settings: SessionPersistentState::from_input(&SessionConfigInput::new(
+                            selected.clone(),
+                        )),
+                    },
+                })
+                .await
+            else {
+                panic!("{overlap}: Session admission fails")
+            };
+            assert_eq!(
+                std::fs::read_to_string(user_path(&f)).unwrap(),
+                user,
+                "{overlap}"
+            );
+            assert_eq!(
+                std::fs::read_to_string(&workspace_file).unwrap(),
+                workspace_text,
+                "{overlap}"
+            );
+            assert!(!root.join("configuration-backups").exists(), "{overlap}");
+            // Only the sources themselves carry the sentinel there.
+            let mut found = files_containing(&selected, SENTINEL.as_bytes());
+            found.sort();
+            assert_eq!(found, sentinel_files, "{overlap}");
+            assert!(
+                f.manager
+                    .source_repairs()
+                    .latest(&SourceTarget::User)
+                    .is_none()
+            );
+            assert_eq!(
+                *f.manager.source_repairs().subscribe().borrow(),
+                sequence,
+                "{overlap}"
+            );
+            assert!(connection.next_source_repair().is_none(), "{overlap}");
+            assert_eq!(
+                super::configuration::settled(&f, 0).await.desired,
+                baseline.desired,
+                "{overlap}"
+            );
+            assert_eq!(
+                probe.configuration_preparations.load(Ordering::SeqCst),
+                before,
+                "{overlap}"
+            );
+            std::fs::remove_file(&workspace_file).unwrap();
+            drop(runtime);
+            f.close().await;
+        })
+        .await;
+    }
+}
+
+/// ISO-06 with a valid, disjoint selected Workspace: both sources are
+/// repaired as independent transactions with their own revisions and
+/// receipts, both backups are private and outside the Workspace, and each
+/// commit reaches the coordinator exactly as a source write would: the User
+/// commit once for the live Session composed over it, the other Workspace's
+/// commit not at all.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_valid_selected_workspace_repairs_both_sources_independently() {
+    use std::os::unix::fs::PermissionsExt;
+    bounded(async {
+        let f = Fixture::new().await;
+        let runtime = f.load(0).await.unwrap().unwrap();
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        call(
+            &connection,
+            1,
+            Method::ConfigurationReconcile {
+                target: workspace(&f, 0),
+            },
+        )
+        .await;
+        let probe = f.manager.probe(&f.id(0).await);
+        let baseline = super::configuration::settled(&f, 0).await;
+        let before = probe.configuration_preparations.load(Ordering::SeqCst);
+        let user = edit_user(&f, "SECRET_SENTINEL_464");
+        let target = workspace(&f, 1);
+        let workspace_file = f.workspaces[1].join("rustx.toml");
+        let workspace_text = format!(
+            "{}[agent]\nlegacy = \"SECRET_SENTINEL_464\"\n",
+            std::fs::read_to_string(&workspace_file).unwrap()
+        );
+        std::fs::write(&workspace_file, &workspace_text).unwrap();
+        let MethodResult::SessionTransition { .. } = call(
+            &connection,
+            2,
+            Method::SessionCreate {
+                settings: SessionPersistentState::from_input(&SessionConfigInput::new(
+                    f.workspaces[1].clone(),
+                )),
+            },
+        )
+        .await
+        else {
+            panic!("Session created")
+        };
+        let user_receipt = f
+            .manager
+            .source_repairs()
+            .latest(&SourceTarget::User)
+            .unwrap();
+        let workspace_receipt = f.manager.source_repairs().latest(&target).unwrap();
+        let revision = |bytes: &[u8]| {
+            use sha2::Digest;
+            format!("sha256:{:x}", sha2::Sha256::digest(bytes))
+        };
+        for (receipt, path, original) in [
+            (&user_receipt, user_path(&f), &user),
+            (&workspace_receipt, workspace_file.clone(), &workspace_text),
+        ] {
+            let repaired = std::fs::read(&path).unwrap();
+            assert_eq!(receipt.status, ConfigRepairStatus::Repaired);
+            assert!(receipt.backup_available);
+            assert_eq!(receipt.before_revision, revision(original.as_bytes()));
+            assert_eq!(receipt.after_revision, Some(revision(&repaired)));
+        }
+        assert_ne!(user_receipt.id, workspace_receipt.id);
+        let directory = f.archive_root.join("configuration-backups");
+        let mut copies: Vec<_> = std::fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+            .collect();
+        copies.sort();
+        let mut originals = vec![user, workspace_text];
+        originals.sort();
+        assert_eq!(copies, originals);
+        let mode = std::fs::metadata(&directory).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+        for selected in &f.workspaces {
+            assert!(
+                files_containing(selected, b"SECRET_SENTINEL_464").is_empty(),
+                "{}",
+                selected.display()
+            );
+        }
+        // The User commit was captured once for the live Session in A; B's
+        // Workspace commit is not one of its sources.
+        let applied = super::configuration::settled(&f, 0).await;
+        assert_ne!(
+            applied.desired.input_revision,
+            baseline.desired.input_revision
+        );
+        assert_eq!(
+            probe.configuration_preparations.load(Ordering::SeqCst),
+            before + 1
+        );
+        drop(runtime);
+        f.close().await;
+    })
+    .await;
+}
+
+/// ISO-04: a Session request whose Workspace does not resolve selects none,
+/// so its boundary repairs nothing — never the User alone — before the
+/// resolution rejects it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unresolvable_session_workspace_repairs_no_source() {
+    bounded(async {
+        let f = Fixture::with_session_count(None, 0).await;
+        let user = edit_user(&f, "SECRET_SENTINEL_464");
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let missing = f.workspaces[0].with_file_name("missing");
+        let Response::Failure(_) = connection
+            .handle_request(Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(1),
+                call: Method::SessionCreate {
+                    settings: SessionPersistentState::from_input(&SessionConfigInput::new(missing)),
+                },
+            })
+            .await
+        else {
+            panic!("Session admission fails")
+        };
+        assert_eq!(std::fs::read_to_string(user_path(&f)).unwrap(), user);
+        assert!(!f.archive_root.join("configuration-backups").exists());
+        assert!(
+            f.manager
+                .source_repairs()
+                .latest(&SourceTarget::User)
+                .is_none()
+        );
+        assert!(connection.next_source_repair().is_none());
     })
     .await;
 }

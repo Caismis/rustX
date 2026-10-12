@@ -1117,10 +1117,7 @@ impl UserConfigManager {
         let source = SourceDirectory::open(&path, true)
             .map_err(|_| target.validate().err().unwrap_or(SettingsError::Io))?
             .ok_or(SettingsError::Io)?;
-        let name = path
-            .file_name()
-            .and_then(std::ffi::OsStr::to_str)
-            .ok_or(SettingsError::Invalid)?;
+        let name = path.file_name().ok_or(SettingsError::Invalid)?;
         #[cfg(test)]
         self.test_hooks.reach("write_before_lock");
         {
@@ -1248,7 +1245,7 @@ impl UserConfigManager {
     pub(super) fn publish_locked(
         &self,
         source: &SourceDirectory,
-        name: &str,
+        name: &std::ffi::OsStr,
         scope: SourceScope,
         expected: &str,
         candidate: Option<&[u8]>,
@@ -1323,7 +1320,7 @@ impl UserConfigManager {
     /// outcome is unknown.
     fn classify_failed_replacement(
         source: &SourceDirectory,
-        name: &str,
+        name: &std::ffi::OsStr,
         expected: &str,
     ) -> SettingsError {
         match source.read(name) {

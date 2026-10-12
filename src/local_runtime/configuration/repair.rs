@@ -133,6 +133,43 @@ pub(crate) enum RepairOutcome {
     Superseded,
 }
 
+/// The composition one repair boundary serves, admitted against the storage
+/// isolation contract before any of its source transactions begins.
+///
+/// Process startup repairs the bound User source before any Workspace is
+/// selected: its scope is the User alone ([`RepairScope::user`]), and nothing
+/// can be proven about Workspaces not yet chosen. A Session or reconciliation
+/// boundary knows its selected Workspace; [`UserConfigManager::admit_repair_scope`]
+/// admits that Workspace's physical directory once, and every transaction of
+/// the boundary — the User source as much as the Workspace source — uses that
+/// one handle: the Workspace source is published through it, and every
+/// backup is checked against it.
+pub(crate) struct RepairScope {
+    target: SourceTarget,
+    workspace: Option<SourceDirectory>,
+}
+
+impl RepairScope {
+    /// The User alone, at process startup.
+    pub(crate) const fn user() -> Self {
+        Self {
+            target: SourceTarget::User,
+            workspace: None,
+        }
+    }
+
+    pub(crate) const fn target(&self) -> &SourceTarget {
+        &self.target
+    }
+}
+
+/// Whether admitted runtime storage and an admitted Workspace are physically
+/// disjoint: neither directory lies within the other, followed by `..` from
+/// the handles. Unknown is not disjoint.
+fn isolated(root: &SourceDirectory, workspace: &SourceDirectory) -> bool {
+    !root.within(workspace).unwrap_or(true) && !workspace.within(root).unwrap_or(true)
+}
+
 /// One finite repair plan of exact source bytes.
 #[derive(Debug)]
 pub(crate) struct RepairPlan {
@@ -798,31 +835,42 @@ impl UserConfigManager {
     /// backup of the original bytes. The caller serializes this with source
     /// writes and coordinator capture.
     ///
-    /// `scope` is the composition this observation serves, as in
+    /// `scope` is the admitted composition this observation serves, as in
     /// [`UserConfigManager::capture_source_settings`]: the User alone (process
-    /// startup) or the User with one selected Workspace. A Workspace target's
-    /// scope is that Workspace.
+    /// startup) or the User with one selected Workspace. A Workspace target
+    /// must be that admitted Workspace.
     pub(crate) fn repair_source(
         &self,
         target: &SourceTarget,
-        scope: &SourceTarget,
+        scope: &RepairScope,
     ) -> RepairOutcome {
         if target.validate().is_err() {
             return RepairOutcome::Unchanged;
         }
         let key = SourceKey::from(target);
         let path = self.config_path(target);
-        let Some(name) = path.file_name().and_then(std::ffi::OsStr::to_str) else {
+        let Some(name) = path.file_name() else {
             return RepairOutcome::Unchanged;
         };
-        // The physical source this transaction observes, and may publish to.
-        let source = match SourceDirectory::open(&path, false) {
-            Ok(Some(source)) => source,
-            Ok(None) => {
-                self.repairs.clear_unresolved(&key);
-                return RepairOutcome::Unchanged;
+        // The physical source this transaction observes, and may publish to:
+        // the bound User directory, or the admitted Workspace itself.
+        let opened;
+        let source = match (target, &scope.workspace) {
+            (SourceTarget::User, _) => match SourceDirectory::open(&path, false) {
+                Ok(Some(source)) => {
+                    opened = source;
+                    &opened
+                }
+                Ok(None) => {
+                    self.repairs.clear_unresolved(&key);
+                    return RepairOutcome::Unchanged;
+                }
+                Err(_) => return RepairOutcome::Unchanged,
+            },
+            (SourceTarget::Workspace { .. }, Some(workspace)) if *target == scope.target => {
+                workspace
             }
-            Err(_) => return RepairOutcome::Unchanged,
+            (SourceTarget::Workspace { .. }, _) => return RepairOutcome::Unchanged,
         };
         let original = match source.read(name) {
             Ok(Some(original)) => original,
@@ -867,10 +915,49 @@ impl UserConfigManager {
                 Err(diagnostic) => unresolved(Vec::new(), diagnostic),
             };
         }
-        if let Err(diagnostic) = self.validate_candidate(target, scope, &path, &plan.candidate) {
+        if let Err(diagnostic) =
+            self.validate_candidate(target, &scope.target, &path, &plan.candidate)
+        {
             return unresolved(plan.changes, diagnostic);
         }
-        self.commit_repair(target, &source, name, &before, &original, plan)
+        let workspace = scope.workspace.as_ref();
+        self.commit_repair(target, source, workspace, name, &before, &original, plan)
+    }
+
+    /// Admit the composition of one repair boundary before any of its source
+    /// transactions (ISO-01..04).
+    ///
+    /// The User alone needs no admission. A selected Workspace must be a
+    /// canonical directory lexically disjoint from the bound runtime root
+    /// under the rule Session resolution applies — checked before anything is
+    /// created — and then physically disjoint from it: both are admitted as
+    /// no-follow directory handles (the runtime root created the same way
+    /// when missing) and neither may lie within the other. The returned scope
+    /// carries the admitted Workspace handle to every transaction of the
+    /// boundary. Any failure admits nothing: the boundary repairs neither
+    /// source, and the fresh resolution that follows reports the scope.
+    pub(crate) fn admit_repair_scope(&self, scope: &SourceTarget) -> Result<RepairScope, String> {
+        fn refused<E>(_: E) -> String {
+            String::from("the selected Workspace could not be admitted for repair")
+        }
+        let Some(directory) = scope.workspace() else {
+            return Ok(RepairScope::user());
+        };
+        scope.validate().map_err(refused)?;
+        super::storage_disjoint(self.runtime_root(), directory)?;
+        let workspace = SourceDirectory::open(&self.config_path(scope), false)
+            .map_err(refused)?
+            .ok_or_else(|| refused(()))?;
+        let root = SourceDirectory::create(self.runtime_root()).map_err(refused)?;
+        if !isolated(&root, &workspace) {
+            return Err("runtime_root must be disjoint from the workspace".into());
+        }
+        #[cfg(test)]
+        self.test_hooks.reach("repair_scope_admitted");
+        Ok(RepairScope {
+            target: scope.clone(),
+            workspace: Some(workspace),
+        })
     }
 
     /// After a committed source write, observe the source again under the
@@ -979,11 +1066,16 @@ impl UserConfigManager {
         Some(merged)
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one transaction's admitted handles and its planned revision"
+    )]
     fn commit_repair(
         &self,
         target: &SourceTarget,
         source: &SourceDirectory,
-        name: &str,
+        workspace: Option<&SourceDirectory>,
+        name: &std::ffi::OsStr,
         before: &str,
         original: &[u8],
         plan: RepairPlan,
@@ -1018,7 +1110,7 @@ impl UserConfigManager {
             Ok(bytes) if super::super::settings::revision(bytes.as_deref()) == before => {}
             _ => return RepairOutcome::Superseded,
         }
-        if let Err(diagnostic) = self.backup_original(target, source, before, original) {
+        if let Err(diagnostic) = self.backup_original(target, workspace, before, original) {
             record(Observation {
                 status: ConfigRepairStatus::Unresolved,
                 after_revision: None,
@@ -1095,16 +1187,18 @@ impl UserConfigManager {
         )
     }
 
-    /// Keep one exact private copy of the original bytes outside every
+    /// Keep one exact private copy of the original bytes outside the selected
     /// Workspace, named by source identity and original revision so repeated
     /// repairs of the same bytes keep exactly one copy.
     ///
     /// The bound runtime root is admitted the way a source directory is:
     /// walked from `/` one component at a time without following any
     /// symlink, missing components created relative to their verified
-    /// parent. For a Workspace target it must lie physically outside the
-    /// admitted Workspace. The backup directory is then created or opened
-    /// relative to that handle and verified as this user's `0700` directory.
+    /// parent. With a selected Workspace — `workspace`, the handle its scope
+    /// admitted, whichever source is being repaired — the runtime root must
+    /// again be physically disjoint from it. The backup directory is then
+    /// created or opened relative to that handle and verified as this user's
+    /// `0700` directory.
     /// The staged copy, the no-clobber link that publishes it, the comparison
     /// with an existing copy and the durability sync all go through that one
     /// handle, so a symlink in any ancestor, or any replacement after
@@ -1118,7 +1212,7 @@ impl UserConfigManager {
     fn backup_original(
         &self,
         target: &SourceTarget,
-        source: &SourceDirectory,
+        workspace: Option<&SourceDirectory>,
         before: &str,
         original: &[u8],
     ) -> Result<(), String> {
@@ -1134,17 +1228,10 @@ impl UserConfigManager {
         if self.test_hooks.fault("backup") {
             return Err(failed(()));
         }
-        let root = self.runtime_root();
-        let workspace = target.workspace();
-        if workspace
-            .is_some_and(|workspace| root.starts_with(workspace) || workspace.starts_with(root))
-        {
-            return Err(outside());
-        }
         #[cfg(test)]
-        self.test_hooks.reach("backup_validated");
-        let root = SourceDirectory::create(root).map_err(failed)?;
-        if workspace.is_some() && root.within(source).unwrap_or(true) {
+        self.test_hooks.reach("before_backup");
+        let root = SourceDirectory::create(self.runtime_root()).map_err(failed)?;
+        if workspace.is_some_and(|workspace| !isolated(&root, workspace)) {
             return Err(outside());
         }
         let directory = root.private_child(BACKUP_DIRECTORY).map_err(failed)?;
@@ -1153,12 +1240,13 @@ impl UserConfigManager {
         self.test_hooks.reach("backup_directory_opened");
         let name = self.backup_name(target, before);
         let staged = directory.stage(original).map_err(failed)?;
-        match directory.link(&staged, &name) {
+        let name = std::ffi::OsStr::new(&name);
+        match directory.link(&staged, name) {
             Ok(()) => {}
             // The same original bytes were backed up before: keep that copy,
             // but only if it really is those bytes.
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                if directory.read(&name).map_err(failed)?.as_deref() != Some(original) {
+                if directory.read(name).map_err(failed)?.as_deref() != Some(original) {
                     return Err(failed(()));
                 }
             }
