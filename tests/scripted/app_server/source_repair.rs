@@ -434,3 +434,97 @@ async fn a_late_workspace_interest_wakes_a_parked_reader_once() {
     })
     .await;
 }
+
+/// PHY-03: ordinary authoring publishes under the same physical source
+/// authority as automatic repair. A Workspace pathname replaced by a symlink
+/// to another Workspace with identical bytes, after the write admitted its
+/// directory, is refused as a redirected target: nothing is written anywhere
+/// and nothing reaches the configuration coordinator.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_source_write_into_a_replaced_workspace_is_refused_before_application() {
+    use crate::app_server::protocol::{ErrorData, Failure, RpcError};
+    use crate::local_runtime::authoring::SubagentsLayer;
+    use crate::local_runtime::configuration::settings::ConfigMutation;
+    bounded(async {
+        let f = Fixture::new().await;
+        let target = workspace(&f, 0);
+        let runtime = f.load(0).await.unwrap().unwrap();
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        call(
+            &connection,
+            1,
+            Method::ConfigurationReconcile {
+                target: target.clone(),
+            },
+        )
+        .await;
+        let probe = f.manager.probe(&f.id(0).await);
+        let baseline = super::configuration::settled(&f, 0).await;
+        let before = probe.configuration_preparations.load(Ordering::SeqCst);
+        let read = sources(&connection, 2, &target).await;
+        let directory = target.workspace().unwrap().to_path_buf();
+        let text = std::fs::read_to_string(directory.join("rustx.toml")).unwrap();
+        let moved = directory.with_file_name("moved-workspace");
+        let other = directory.with_file_name("other-workspace");
+        std::fs::create_dir(&other).unwrap();
+        std::fs::write(other.join("rustx.toml"), &text).unwrap();
+        let (from, to, link) = (directory.clone(), moved.clone(), other.clone());
+        f.manager
+            .configuration
+            .test_hooks
+            .insert("before_publication", move || {
+                std::fs::rename(&from, &to).unwrap();
+                std::os::unix::fs::symlink(&link, &from).unwrap();
+            });
+        let Response::Failure(Failure {
+            error: RpcError {
+                data: Some(data), ..
+            },
+            ..
+        }) = connection
+            .handle_request(Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(3),
+                call: Method::SourcesWrite {
+                    target: target.clone(),
+                    expected_revision: read.workspace.unwrap().revision,
+                    mutation: SourceMutation::Config {
+                        mutation: ConfigMutation::Capacity {
+                            authored: Some(SubagentsLayer {
+                                max_concurrent: Some(3),
+                            }),
+                        },
+                    },
+                },
+            })
+            .await
+        else {
+            panic!("a redirected source write is refused")
+        };
+        assert!(matches!(data, ErrorData::InvalidParams), "{data:?}");
+        assert_eq!(
+            std::fs::read_to_string(other.join("rustx.toml")).unwrap(),
+            text
+        );
+        assert_eq!(
+            std::fs::read_to_string(moved.join("rustx.toml")).unwrap(),
+            text
+        );
+        assert_eq!(
+            probe.configuration_preparations.load(Ordering::SeqCst),
+            before
+        );
+        // Put the admitted Workspace back for the live Session's teardown.
+        std::fs::remove_file(&directory).unwrap();
+        std::fs::rename(&moved, &directory).unwrap();
+        assert_eq!(
+            super::configuration::settled(&f, 0).await.desired,
+            baseline.desired
+        );
+        assert!(connection.next_source_repair().is_none());
+        drop(runtime);
+        f.close().await;
+    })
+    .await;
+}

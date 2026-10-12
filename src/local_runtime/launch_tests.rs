@@ -754,6 +754,84 @@ fn cfg235_oversized_invalid_projection_preserves_authoritative_diagnostics() {
     assert_bounded_cause(&report, "agents.bad", "invalid");
 }
 
+/// The analyzed failure of a composition without a default model.
+fn analyzed_failure(f: &Fixture) -> super::diagnostics::LaunchFailure {
+    match analyze(&f.request, &f.host) {
+        Ok(_) => panic!("the composition resolved"),
+        Err(failure) => failure,
+    }
+}
+
+#[test]
+fn issue464_semantic_diagnostics_name_the_document_that_authored_the_field() {
+    let invalid = json!({"subagents":{"max_concurrent":0}});
+    let valid = json!({"subagents":{"max_concurrent":2}});
+    for (user, workspace, owner) in [
+        (Some(invalid.clone()), None, Some(true)),
+        (None, Some(invalid.clone()), Some(false)),
+        // The Workspace unit replaces the User unit: it authored the value.
+        (Some(valid.clone()), Some(invalid.clone()), Some(false)),
+        (Some(invalid.clone()), Some(valid.clone()), None),
+    ] {
+        let f = Fixture::new();
+        let user_path = f.host.config_directory.join("rustx.toml");
+        let workspace_path = f.host.launch_directory.join("rustx.toml");
+        match &user {
+            // The User authors only this value; no default model anywhere.
+            Some(value) => f.user(value.clone()),
+            None => std::fs::write(&user_path, "").unwrap(),
+        }
+        if let Some(value) = &workspace {
+            f.project(value.clone());
+        }
+        let failure = analyzed_failure(&f);
+        let Some(user_owned) = owner else {
+            // The Workspace corrected the User value: only the default model
+            // is missing.
+            assert!(failure.incomplete, "{user:?} {workspace:?}");
+            assert_eq!(failure.diagnostic.path, "agent.model.model");
+            continue;
+        };
+        assert!(!failure.incomplete, "{user:?} {workspace:?}");
+        assert_eq!(failure.diagnostic.category, "invalid");
+        assert_eq!(failure.diagnostic.path, "subagents.max_concurrent");
+        assert_eq!(
+            failure.diagnostic.file,
+            Some(if user_owned {
+                user_path
+            } else {
+                workspace_path
+            }),
+            "{user:?} {workspace:?}"
+        );
+    }
+}
+
+#[test]
+fn issue464_a_failure_spanning_both_documents_belongs_to_the_composition() {
+    let f = Fixture::new();
+    // The User defines `host` and its Models; the Workspace adds a Model of a
+    // Provider nobody defines. The failing field `models.*.provider` covers
+    // Models of both documents, so neither owns the failure.
+    f.user(json!({}));
+    f.project(json!({"models":{"ws/x":{"provider":"missing","id":"x",
+        "protocol":"openai_responses","context_window":128_000,"max_output_tokens":4096,
+        "capabilities":{"input_modalities":["text"],"output_modalities":["text"],
+        "tool_calls":true,"reasoning":false}}}}));
+    let failure = analyzed_failure(&f);
+    assert!(!failure.incomplete);
+    assert_eq!(failure.diagnostic.category, "invalid");
+    assert_eq!(failure.diagnostic.path, "models.*.provider");
+    assert_eq!(failure.diagnostic.file, None);
+    assert!(!failure.diagnostic.reason.contains("missing"));
+
+    // A valid partial composition is incomplete, not invalid.
+    std::fs::remove_file(f.host.launch_directory.join("rustx.toml")).unwrap();
+    let failure = analyzed_failure(&f);
+    assert!(failure.incomplete);
+    assert_eq!(failure.diagnostic.path, "agent.model.model");
+}
+
 #[test]
 fn cfg235_oversized_incomplete_projection_preserves_incomplete_diagnostic() {
     let f = Fixture::new();

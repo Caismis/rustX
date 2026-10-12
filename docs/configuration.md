@@ -459,6 +459,26 @@ checks the exact byte revision, validates and canonicalizes TOML, stages and syn
 it, checks again, renames it, and syncs its parent. External edits invalidate stale
 drafts. Secret retention is scoped to the same authored source.
 
+Every source transaction has a physical authority as well as a byte revision.
+When it begins, the writer opens the document's directory from `/` one
+component at a time without following any symlink (source paths are canonical:
+a Workspace is validated canonical, the User binding is normalized when bound)
+and keeps that directory handle and its device/inode identity. The read, the
+writer lock, the staged file, the atomic replacement (`renameat` inside the
+handle — the linearization point) and the directory sync all go through that
+one handle, so replacing or redirecting any component of the pathname cannot
+move the write into another directory. Immediately before the replacement the
+pathname must still name the admitted directory and the document must still
+have exactly the expected bytes; a redirected target is refused as
+`invalid_params`, as an invalid target is at entry, and changed bytes are a
+`source_conflict` — both leave every source unchanged. The writer lock is
+advisory: it orders rustX writers, not an external rename of the directory
+itself. A directory renamed between that check and the replacement still
+receives the bytes, but only the physical directory the transaction admitted;
+the writer checks the pathname again after the replacement and reports
+`committed_durability_uncertain` when it no longer names that directory, as it
+does when the directory sync fails. An uncertain write is never replayed.
+
 After persistence, native configuration coordination captures a finite immutable
 input manifest and owns reconciliation independently of the RPC. Save requires no
 second action. Saved source is desired state; it is not proof of effective state.
@@ -638,9 +658,11 @@ are not source facts. Nothing here resolves credentials, connects MCP, prepares
 Python, creates a Session or calls a model.
 
 A changed source is committed through the same native writer primitive as
-`configuration/sourceWrite`: the source writer lock, an exact revision check
-before the candidate is used and again immediately before publication, a staged
-and synced file, atomic replacement and a parent-directory sync. Before that, an
+`configuration/sourceWrite`, under the same physical authority: the directory
+admitted when the observation read the source, the source writer lock, an exact
+revision and identity check before the candidate is used and again immediately
+before publication, a staged and synced file, atomic replacement and a
+parent-directory sync. Before that, an
 exact copy of the original bytes is written to private storage under the bound
 runtime root (`<runtime_root>/configuration-backups/`, directory `0700`, file
 `0600`, never inside the Workspace), named by source identity and original
@@ -652,11 +674,14 @@ publication link, the comparison with an existing copy and the directory sync al
 go through that handle, so replacing the directory or planting a symlink cannot
 redirect the bytes. A healthy source is read
 once without a lock or any write, so it gets no lock file, no backup and no
-receipt. An external edit that races the repair supersedes it: nothing is written
-and the next boundary plans from the new bytes. A failure before replacement
-leaves the source unchanged; a replacement that may have happened, or a parent
-sync that failed, is reported `commit_uncertain` with the revision observed by
-rereading the file, and is never replayed. User and Workspace are independent
+receipt. An external edit that races the repair, or a Workspace pathname that no
+longer names the admitted directory, supersedes it: nothing is published, nothing
+is reported and the next boundary plans from whatever the target names then. A
+failure before replacement leaves the source unchanged; a replacement that may
+have happened, a parent sync that failed, or a pathname that stopped naming the
+written directory after the replacement is reported `commit_uncertain` with the
+revision observed by rereading the admitted document (unknown once the pathname
+names another directory), and is never replayed. User and Workspace are independent
 transactions, so one may be repaired while the other stays unresolved.
 
 Repair runs only at native source boundaries:
@@ -686,9 +711,27 @@ native constants: the parser's or the semantic owner's fixed category, line and
 column, and a schema location in which every Provider, Model, Profile or other
 open-map identity is `*` (a path the schema cannot explain is dropped). It never
 holds a removed value, an invalid value or identity, a domain error message, a
-source excerpt, a credential, a `request_params` payload or backup content. Re-observing the same bytes is the same receipt. An unresolved receipt is
-withdrawn once the source is found healthy at a later boundary or a committed
-`configuration/sourceWrite` leaves it satisfying its source contract.
+source excerpt, a credential, a `request_params` payload or backup content. Re-observing the same bytes is the same receipt.
+
+A source is healthy under one source-intrinsic contract: the production strict
+parser and source restrictions accept it, every source-intrinsic constraint
+above holds, and no repair is eligible. Nothing being eligible proves nothing on
+its own: a parsable document violating a source-intrinsic constraint (for
+example `subagents.max_concurrent = 0`) is left unchanged and reported
+`unresolved` with that constraint's location. Facts another scope may supply —
+Model definitions, the default selection — are never part of it. An unresolved
+receipt is withdrawn only when the source satisfies this contract, at a later
+boundary or after a committed `configuration/sourceWrite`; a committed write that
+leaves it still invalid replaces the receipt with the current observation. A
+write never creates a receipt for a source that had none.
+
+A semantic failure of Session resolution names the document that authored the
+failing field, decided from the overlay provenance of the composition: every
+authored unit containing the field, or contained in it, must come from the same
+User or Workspace document (process `app_server` policy is User-only). A failure
+whose field spans both documents — such as a Model naming an undefined Provider
+when both documents define Models — names no file: it belongs to the
+composition.
 
 Manual `repair_config` remains the editor for documents that fail their own source
 contract — syntax, types, Workspace `app_server`, a foreign schema version —

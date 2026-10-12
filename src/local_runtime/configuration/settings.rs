@@ -4,13 +4,13 @@ use super::super::authoring::{
     ContextLayer, McpAuthoring, ModelLayer, RuntimeLayer, SubagentsLayer, TimeoutLayer,
     ToolDeadlineLayer,
 };
+use super::super::settings::SourceDirectory;
 use super::UserConfigManager;
 use crate::model::authoring::{Model, Provider};
 use crate::model::catalog::{CredentialSource, CredentialSourceView};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
-    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -38,8 +38,9 @@ impl SourceTarget {
         }
     }
 
-    /// Revalidate the physical authority on every operation; do not follow a
-    /// replaced directory to a different source owner.
+    /// Revalidate the target on every operation; do not follow a replaced
+    /// directory to a different source owner. A source transaction then holds
+    /// the physical directory it admits (see `publish_locked`).
     /// # Errors
     /// Rejects relative, removed, redirected, or noncanonical Workspace paths.
     pub fn validate(&self) -> Result<(), SettingsError> {
@@ -1111,12 +1112,20 @@ impl UserConfigManager {
                 .join("agents")
                 .join(format!("{name}.toml")),
         };
-        std::fs::create_dir_all(path.parent().ok_or(SettingsError::Io)?)
-            .map_err(|_| SettingsError::Io)?;
+        // The physical source of this transaction; see `publish_locked`. A
+        // target redirected since entry is invalid, as at entry.
+        let source = SourceDirectory::open(&path, true)
+            .map_err(|_| target.validate().err().unwrap_or(SettingsError::Io))?
+            .ok_or(SettingsError::Io)?;
+        let name = path
+            .file_name()
+            .and_then(std::ffi::OsStr::to_str)
+            .ok_or(SettingsError::Invalid)?;
+        #[cfg(test)]
+        self.test_hooks.reach("write_before_lock");
         {
-            let _lock =
-                super::super::settings::lock_document(&path).map_err(|_| SettingsError::Io)?;
-            let original = read(&path)?;
+            let _lock = source.lock(name).map_err(|_| SettingsError::Io)?;
+            let original = source.read(name).map_err(|_| SettingsError::Io)?;
             let actual = revision(original.as_deref());
             if actual != expected {
                 return Err(SettingsError::Conflict {
@@ -1187,16 +1196,9 @@ impl UserConfigManager {
                     })
                     .transpose()?,
             };
-            let actual = revision(read(&path)?.as_deref());
-            if actual != expected {
-                return Err(SettingsError::Conflict {
-                    scope,
-                    expected: expected.into(),
-                    actual,
-                });
-            }
             self.publish_locked(
-                &path,
+                &source,
+                name,
                 scope,
                 expected,
                 candidate.as_deref(),
@@ -1213,16 +1215,29 @@ impl UserConfigManager {
 
     /// The one native source publication primitive. Ordinary authoring and
     /// automatic repair both publish through it, so every source commit has
-    /// the same revision fence, staging, durability and uncertainty rules.
+    /// the same physical authority, revision fence, staging, durability and
+    /// uncertainty rules.
     ///
-    /// The caller holds the document writer lock and has verified `expected`.
-    /// `candidate` replaces the document; `None` removes a present document.
-    /// The candidate is staged beside the document and synced, the revision is
-    /// verified again immediately before the atomic replacement, and the
-    /// parent directory is synced afterwards. A failure before replacement
-    /// leaves the source unchanged (`Io`); a failed replacement is classified
-    /// by rereading the source; anything after replacement is `Committed`
-    /// (published, durability unconfirmed). Nothing here retries or replays.
+    /// The caller admitted `source` (the document's physical directory) when
+    /// its transaction began, holds the writer lock of `name` in it and has
+    /// verified `expected`. `candidate` replaces the document; `None` removes
+    /// a present document. Everything goes through the admitted directory
+    /// handle: the candidate is staged in it and synced; immediately before
+    /// the atomic replacement the pathname must still name that directory and
+    /// the document must still have exactly `expected` bytes; the replacement
+    /// is a `renameat` inside it — the linearization point — and the directory
+    /// is synced afterwards.
+    ///
+    /// A pathname that no longer names the admitted directory before the
+    /// replacement is `Invalid`, exactly as [`SourceTarget::validate`] rejects
+    /// a redirected target; changed bytes are a `Conflict`. Both leave every
+    /// source unchanged, as does any other failure before replacement (`Io`).
+    /// A failed replacement is classified by rereading the admitted document.
+    /// After replacement the bytes are in the admitted physical directory —
+    /// never in a directory the pathname was redirected to — but the outcome
+    /// is `Committed` (published, unconfirmed) when the directory sync fails
+    /// or the pathname no longer names that directory. Nothing here retries or
+    /// replays.
     #[cfg_attr(
         not(test),
         allow(
@@ -1232,14 +1247,18 @@ impl UserConfigManager {
     )]
     pub(super) fn publish_locked(
         &self,
-        path: &Path,
+        source: &SourceDirectory,
+        name: &str,
         scope: SourceScope,
         expected: &str,
         candidate: Option<&[u8]>,
         present: bool,
     ) -> Result<(), SettingsError> {
         let verify = || {
-            let actual = revision(read(path)?.as_deref());
+            if !source.holds() {
+                return Err(SettingsError::Invalid);
+            }
+            let actual = revision(source.read(name).map_err(|_| SettingsError::Io)?.as_deref());
             if actual == expected {
                 Ok(())
             } else {
@@ -1250,20 +1269,16 @@ impl UserConfigManager {
                 })
             }
         };
-        let parent = path.parent().ok_or(SettingsError::Io)?;
         if let Some(bytes) = candidate {
-            let mut staged =
-                tempfile::NamedTempFile::new_in(parent).map_err(|_| SettingsError::Io)?;
             #[cfg(test)]
             if self.test_hooks.fault("stage_write") {
                 return Err(SettingsError::Io);
             }
-            staged.write_all(bytes).map_err(|_| SettingsError::Io)?;
             #[cfg(test)]
             if self.test_hooks.fault("stage_sync") {
                 return Err(SettingsError::Io);
             }
-            staged.as_file().sync_all().map_err(|_| SettingsError::Io)?;
+            let staged = source.stage(name, bytes).map_err(|_| SettingsError::Io)?;
             #[cfg(test)]
             self.test_hooks.reach("before_publication");
             verify()?;
@@ -1271,35 +1286,47 @@ impl UserConfigManager {
             // reported after it already happened.
             #[cfg(test)]
             if self.test_hooks.fault("replace_refused") {
-                return Err(Self::classify_failed_replacement(path, expected));
+                return Err(Self::classify_failed_replacement(source, name, expected));
             }
             #[cfg(test)]
             if self.test_hooks.fault("replace") {
-                staged.persist(path).map_err(|_| SettingsError::Io)?;
-                return Err(Self::classify_failed_replacement(path, expected));
+                source
+                    .replace(staged, name)
+                    .map_err(|_| SettingsError::Io)?;
+                return Err(Self::classify_failed_replacement(source, name, expected));
             }
-            staged
-                .persist(path)
-                .map_err(|_| Self::classify_failed_replacement(path, expected))?;
+            source
+                .replace(staged, name)
+                .map_err(|_| Self::classify_failed_replacement(source, name, expected))?;
         } else if present {
             #[cfg(test)]
             self.test_hooks.reach("before_publication");
             verify()?;
-            std::fs::remove_file(path).map_err(|_| SettingsError::Io)?;
+            source.remove(name).map_err(|_| SettingsError::Io)?;
         }
+        #[cfg(test)]
+        self.test_hooks.reach("after_publication");
         #[cfg(test)]
         if self.test_hooks.fault("directory_sync") {
             return Err(SettingsError::Committed);
         }
-        std::fs::File::open(parent)
-            .and_then(|dir| dir.sync_all())
-            .map_err(|_| SettingsError::Committed)
+        source.sync().map_err(|_| SettingsError::Committed)?;
+        if source.holds() {
+            Ok(())
+        } else {
+            Err(SettingsError::Committed)
+        }
     }
 
-    /// A replacement that reported failure is unchanged only while the source
-    /// still has exactly the expected bytes; otherwise its outcome is unknown.
-    fn classify_failed_replacement(path: &Path, expected: &str) -> SettingsError {
-        match read(path) {
+    /// A replacement that reported failure is unchanged only while the
+    /// admitted document still has exactly the expected bytes; otherwise its
+    /// outcome is unknown.
+    fn classify_failed_replacement(
+        source: &SourceDirectory,
+        name: &str,
+        expected: &str,
+    ) -> SettingsError {
+        match source.read(name) {
             Ok(bytes) if revision(bytes.as_deref()) == expected => SettingsError::Io,
             _ => SettingsError::Committed,
         }

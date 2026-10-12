@@ -18,15 +18,20 @@ pub(crate) fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
         .custom_flags(libc::O_NONBLOCK)
         .open(path)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    read_bounded_file(file).map_err(|reason| format!("{} {reason}", path.display()))
+}
+
+/// The bounded contents of an already opened file, which must be regular.
+pub(crate) fn read_bounded_file(file: std::fs::File) -> Result<Vec<u8>, String> {
     if !file.metadata().map_err(|e| e.to_string())?.is_file() {
-        return Err(format!("{} must be a regular file", path.display()));
+        return Err("must be a regular file".into());
     }
     let mut bytes = Vec::new();
     file.take(MAX_RESOURCE_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
     if bytes.len() as u64 > MAX_RESOURCE_BYTES {
-        return Err(format!("{} exceeds 1 MiB", path.display()));
+        return Err("exceeds 1 MiB".into());
     }
     Ok(bytes)
 }

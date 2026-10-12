@@ -1194,6 +1194,12 @@ reject older notifications. Versions are native `u64` counters, comparable only
 within one source scope, authority and connection lifetime, and never against a
 source revision. Reconnect rereads authority without mutation replay.
 
+A `configuration/sourceWrite` publishes only into the physical directory it
+admitted when it began: a Workspace pathname replaced or redirected before the
+publication is refused as `invalid_params` (nothing written), distinct from a
+`source_conflict` on changed bytes, and one that stops naming the written
+directory after the replacement is `committed_durability_uncertain`.
+
 A successful `configuration/sourceWrite` acknowledgement is proof of **authoring**
 — the committed source revision — and not proof that the application projection it
 carries is the latest. Native application publishes on its own schedule, so a
@@ -1271,7 +1277,8 @@ A healthy source that never needed repair has no receipt. `repaired` proves only
 that authored bytes were committed; whether the configuration was prepared,
 applied or adopted stays the `ConfigurationApplication` of `configuration/changed`,
 `configuration/reconcile` and `session/configuration`. `unresolved` means the
-source is unchanged, either because nothing eligible could fix it or because the
+source is unchanged, either because nothing eligible could fix it — including a
+parsable source that violates a source-intrinsic constraint — or because the
 candidate failed validation; its `changes` are then the eligible, unapplied ones.
 `commit_uncertain` reports the revision observed after a publication that may have
 happened; nothing is replayed. Receipts carry field paths, Tool names and version
@@ -1296,7 +1303,8 @@ first read.
 
 The notification is source-scoped: it names a `SourceTarget`, never a Session,
 attachment or application scope, and is distinct from `configuration/changed`.
-`receipt: null` withdraws an unresolved receipt once the source is healthy. A
+`receipt: null` withdraws an unresolved receipt once the source is healthy under
+the source-intrinsic contract, never merely because it parses again. A
 connection observes the User source and each Workspace source it addressed in a
 request (`configuration/sourcesRead`, `configuration/sourceWrite`,
 `configuration/reconcile`, `mcp/probe`, `session/create`, `session/attach`) —

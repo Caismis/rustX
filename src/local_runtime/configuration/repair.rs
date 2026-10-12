@@ -26,6 +26,7 @@
 //! A committed repair proves only that authored bytes changed. Runtime
 //! application and Session adoption stay with the configuration coordinator.
 
+use super::super::settings::SourceDirectory;
 use super::UserConfigManager;
 use super::settings::{SettingsError, SourceScope, SourceTarget};
 use crate::local_runtime::authoring::RuntimeLayer;
@@ -688,6 +689,20 @@ impl RepairLedger {
         self.changed.send_replace(sequence);
     }
 
+    /// Replace an unresolved observation of the same source with `receipt`,
+    /// itself unresolved. A source without one gains nothing.
+    fn replace_unresolved(&self, receipt: ConfigRepairReceipt) {
+        let unresolved = self
+            .lock()
+            .entries
+            .get(&SourceKey::from(&receipt.target))
+            .and_then(|entry| entry.receipt.as_ref())
+            .is_some_and(|current| current.status == ConfigRepairStatus::Unresolved);
+        if unresolved {
+            self.record(receipt);
+        }
+    }
+
     /// A source found healthy no longer reports an unresolved repair.
     fn clear_unresolved(&self, key: &SourceKey) {
         let mut state = self.lock();
@@ -797,8 +812,19 @@ impl UserConfigManager {
         }
         let key = SourceKey::from(target);
         let path = self.config_path(target);
-        let workspace = target.scope() == SourceScope::Workspace;
-        let original = match super::super::settings::read_document(&path) {
+        let Some(name) = path.file_name().and_then(std::ffi::OsStr::to_str) else {
+            return RepairOutcome::Unchanged;
+        };
+        // The physical source this transaction observes, and may publish to.
+        let source = match SourceDirectory::open(&path, false) {
+            Ok(Some(source)) => source,
+            Ok(None) => {
+                self.repairs.clear_unresolved(&key);
+                return RepairOutcome::Unchanged;
+            }
+            Err(_) => return RepairOutcome::Unchanged,
+        };
+        let original = match source.read(name) {
             Ok(Some(original)) => original,
             // An absent document is healthy: there is nothing to repair.
             Ok(None) => {
@@ -829,39 +855,62 @@ impl UserConfigManager {
             Err(uneditable) => return unresolved(Vec::new(), uneditable.diagnostic()),
         };
         if plan.changes.is_empty() {
-            // Nothing is eligible. A source failing its own source contract is
-            // reported; any other semantic failure belongs to composition.
-            return match super::parse_layer(&path, &original, workspace) {
+            // Nothing is eligible, which proves nothing: the source is healthy
+            // only under the source-intrinsic contract. Composition facts
+            // another scope may supply are never this source's failure.
+            let workspace = target.scope() == SourceScope::Workspace;
+            return match intrinsic_health(&path, &original, workspace) {
                 Ok(_) => {
                     self.repairs.clear_unresolved(&key);
                     RepairOutcome::Unchanged
                 }
-                Err(failure) => unresolved(Vec::new(), source_contract_diagnostic(&failure)),
+                Err(diagnostic) => unresolved(Vec::new(), diagnostic),
             };
         }
         if let Err(diagnostic) = self.validate_candidate(target, scope, &path, &plan.candidate) {
             return unresolved(plan.changes, diagnostic);
         }
-        self.commit_repair(target, &path, &before, &original, plan)
+        self.commit_repair(target, &source, name, &before, &original, plan)
     }
 
-    /// After a committed source write: a source that now satisfies its source
-    /// contract with nothing eligible no longer reports an unresolved repair.
-    /// Read-only; it never plans a write and never records a receipt.
+    /// After a committed source write, observe the source again under the
+    /// same source-intrinsic contract without repairing it. An unresolved
+    /// receipt is withdrawn only when the source is now intrinsically
+    /// healthy, and replaced by the current unresolved observation while it
+    /// is not. A source without an unresolved receipt gains none here, and a
+    /// source with eligible repairs is left to the next repair observation.
     pub(crate) fn refresh_repair_observation(&self, target: &SourceTarget) {
         let path = self.config_path(target);
         let workspace = target.scope() == SourceScope::Workspace;
-        let healthy = match super::super::settings::read_document(&path) {
-            Ok(None) => true,
-            Ok(Some(bytes)) => {
-                plan(&bytes).is_ok_and(|plan| plan.changes.is_empty())
-                    && super::parse_layer(&path, &bytes, workspace).is_ok()
-            }
-            Err(_) => false,
+        let Ok(bytes) = super::super::settings::read_document(&path) else {
+            return;
         };
-        if healthy {
+        let Some(bytes) = bytes else {
             self.repairs.clear_unresolved(&SourceKey::from(target));
-        }
+            return;
+        };
+        let diagnostic = match plan(&bytes) {
+            Err(uneditable) => uneditable.diagnostic(),
+            Ok(plan) if !plan.changes.is_empty() => return,
+            Ok(_) => match intrinsic_health(&path, &bytes, workspace) {
+                Ok(_) => {
+                    self.repairs.clear_unresolved(&SourceKey::from(target));
+                    return;
+                }
+                Err(diagnostic) => diagnostic,
+            },
+        };
+        self.repairs.replace_unresolved(receipt(
+            target,
+            &super::super::settings::revision(Some(&bytes)),
+            Observation {
+                status: ConfigRepairStatus::Unresolved,
+                after_revision: None,
+                changes: Vec::new(),
+                backup_available: false,
+                diagnostic: Some(diagnostic),
+            },
+        ));
     }
 
     /// Validate a complete candidate under its applicable contract.
@@ -880,12 +929,10 @@ impl UserConfigManager {
         candidate: &[u8],
     ) -> Result<(), String> {
         let workspace = target.scope() == SourceScope::Workspace;
-        let layer = super::parse_layer(path, candidate, workspace)
-            .map_err(|failure| source_contract_diagnostic(&failure))?;
         if plan(candidate).map_or(true, |again| !again.changes.is_empty()) {
             return Err("automatic repair did not converge; the source is unchanged".into());
         }
-        super::source_semantics(&layer).map_err(|failure| semantic_diagnostic(&failure))?;
+        let layer = intrinsic_health(path, candidate, workspace)?;
         match self.composition(target, scope, layer) {
             Some(merged) => super::composition_semantics(&merged)
                 .map(drop)
@@ -915,11 +962,7 @@ impl UserConfigManager {
         let other_layer = match super::super::settings::read_document(&path).ok()? {
             None => RuntimeLayer::default(),
             Some(bytes) => {
-                let layer =
-                    super::parse_layer(&path, &bytes, other.scope() == SourceScope::Workspace)
-                        .ok()?;
-                super::source_semantics(&layer).ok()?;
-                layer
+                intrinsic_health(&path, &bytes, other.scope() == SourceScope::Workspace).ok()?
             }
         };
         let (user, workspace) = match target {
@@ -939,7 +982,8 @@ impl UserConfigManager {
     fn commit_repair(
         &self,
         target: &SourceTarget,
-        path: &Path,
+        source: &SourceDirectory,
+        name: &str,
         before: &str,
         original: &[u8],
         plan: RepairPlan,
@@ -952,7 +996,7 @@ impl UserConfigManager {
         };
         #[cfg(test)]
         self.test_hooks.reach("repair_before_lock");
-        let Ok(_lock) = super::super::settings::lock_document(path) else {
+        let Ok(_lock) = source.lock(name) else {
             record(Observation {
                 status: ConfigRepairStatus::Unresolved,
                 after_revision: None,
@@ -964,9 +1008,13 @@ impl UserConfigManager {
             });
             return RepairOutcome::Unchanged;
         };
-        // The candidate was planned from `before`; it is publishable only while
-        // the locked source still has exactly those bytes.
-        match super::super::settings::read_document(path) {
+        // The candidate was planned from `before` in this physical source; it
+        // is publishable only while the target still names that source and
+        // the locked document still has exactly those bytes.
+        if !source.holds() {
+            return RepairOutcome::Superseded;
+        }
+        match source.read(name) {
             Ok(bytes) if super::super::settings::revision(bytes.as_deref()) == before => {}
             _ => return RepairOutcome::Superseded,
         }
@@ -980,7 +1028,7 @@ impl UserConfigManager {
             });
             return RepairOutcome::Unchanged;
         }
-        let outcome = self.publish_locked(path, scope, before, Some(&candidate), true);
+        let outcome = self.publish_locked(source, name, scope, before, Some(&candidate), true);
         let (status, after_revision, diagnostic, result) = match outcome {
             Ok(()) => (
                 ConfigRepairStatus::Repaired,
@@ -988,11 +1036,19 @@ impl UserConfigManager {
                 None,
                 RepairOutcome::Committed,
             ),
-            Err(SettingsError::Conflict { .. }) => return RepairOutcome::Superseded,
+            // Changed bytes, or a target that no longer names this physical
+            // source: nothing was published and nothing is reported.
+            Err(SettingsError::Conflict { .. } | SettingsError::Invalid) => {
+                return RepairOutcome::Superseded;
+            }
             Err(SettingsError::Committed) => {
-                // Possibly published: report what is there now; never replay.
-                let observed = super::super::settings::read_document(path)
-                    .ok()
+                // Possibly published: report what the target's source holds
+                // now, unknown once the target names another directory; never
+                // replay.
+                let observed = source
+                    .holds()
+                    .then(|| source.read(name).ok())
+                    .flatten()
                     .map(|bytes| super::super::settings::revision(bytes.as_deref()));
                 (
                     ConfigRepairStatus::CommitUncertain,
@@ -1004,7 +1060,7 @@ impl UserConfigManager {
                     RepairOutcome::Committed,
                 )
             }
-            Err(SettingsError::Io | SettingsError::Invalid) => (
+            Err(SettingsError::Io) => (
                 ConfigRepairStatus::Unresolved,
                 None,
                 Some("the staged candidate could not be written; the source is unchanged".into()),
@@ -1152,6 +1208,18 @@ impl UserConfigManager {
         published?;
         nix::unistd::fsync(&directory).map_err(failed)
     }
+}
+
+/// The source-intrinsic health contract, the one predicate for "healthy":
+/// the strict parser, the source restrictions and every native constraint a
+/// source decides on its own ([`super::source_semantics`]). Facts another
+/// scope may supply — Model definitions, the default selection — are not
+/// part of it. Failures are safe diagnostics.
+fn intrinsic_health(path: &Path, bytes: &[u8], workspace: bool) -> Result<RuntimeLayer, String> {
+    let layer = super::parse_layer(path, bytes, workspace)
+        .map_err(|failure| source_contract_diagnostic(&failure))?;
+    super::source_semantics(&layer).map_err(|failure| semantic_diagnostic(&failure))?;
+    Ok(layer)
 }
 
 /// A source-contract failure, safe to show: the parser's structured location

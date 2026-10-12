@@ -1288,3 +1288,375 @@ fn an_unsupported_user_version_is_invalid_in_projection_and_resolution_alike() {
     assert!(settings.resolved.is_some());
     assert!(settings.prospective_diagnostic.is_none());
 }
+
+// Physical source authority (PHY-01..04): a source transaction publishes only
+// into the directory it admitted. Each case replaces the Workspace pathname
+// with a symlink to another Workspace holding identical bytes, so a
+// content-only revision check would accept it.
+
+struct Swap {
+    directory: PathBuf,
+    moved: PathBuf,
+    other: PathBuf,
+}
+
+impl Swap {
+    fn prepare(fixture: &Fixture, text: &str) -> Self {
+        let directory = fixture.workspace.workspace().unwrap().to_path_buf();
+        let swap = Self {
+            moved: directory.with_file_name("moved"),
+            other: directory.with_file_name("other"),
+            directory,
+        };
+        std::fs::create_dir(&swap.other).unwrap();
+        std::fs::write(swap.other.join("rustx.toml"), text).unwrap();
+        swap
+    }
+
+    /// Rename the admitted Workspace away and put a symlink to the other
+    /// Workspace at its pathname.
+    fn hook(&self, fixture: &Fixture, point: &'static str) {
+        let (directory, moved, other) = (
+            self.directory.clone(),
+            self.moved.clone(),
+            self.other.clone(),
+        );
+        fixture.manager.test_hooks.insert(point, move || {
+            std::fs::rename(&directory, &moved).unwrap();
+            std::os::unix::fs::symlink(&other, &directory).unwrap();
+        });
+    }
+
+    fn moved(&self) -> String {
+        std::fs::read_to_string(self.moved.join("rustx.toml")).unwrap()
+    }
+
+    fn other(&self) -> String {
+        std::fs::read_to_string(self.other.join("rustx.toml")).unwrap()
+    }
+
+    /// Only documents and lock files remain: no staged candidate leaked.
+    fn entries(directory: &Path) -> Vec<String> {
+        let mut names: Vec<_> = std::fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        names
+    }
+}
+
+const REPAIRABLE: &str = "# Workspace\n[agent]\nlegacy = 1\n";
+
+#[test]
+fn a_workspace_replaced_before_the_writer_lock_is_never_written() {
+    let fixture = Fixture::new();
+    fixture.write(&fixture.workspace, REPAIRABLE);
+    let swap = Swap::prepare(&fixture, REPAIRABLE);
+    swap.hook(&fixture, "repair_before_lock");
+    assert_eq!(
+        fixture
+            .manager
+            .repair_source(&fixture.workspace, &fixture.workspace),
+        RepairOutcome::Superseded
+    );
+    assert_eq!(swap.other(), REPAIRABLE);
+    assert_eq!(swap.moved(), REPAIRABLE);
+    assert_eq!(Swap::entries(&swap.other), ["rustx.toml"]);
+    assert!(fixture.receipt(&fixture.workspace).is_none());
+    assert!(fixture.backups().is_empty());
+    assert_eq!(fixture.sequence(), 0);
+}
+
+#[test]
+fn a_workspace_replaced_before_publication_cannot_redirect_it() {
+    let fixture = Fixture::new();
+    fixture.write(&fixture.workspace, REPAIRABLE);
+    let swap = Swap::prepare(&fixture, REPAIRABLE);
+    swap.hook(&fixture, "before_publication");
+    assert_eq!(
+        fixture
+            .manager
+            .repair_source(&fixture.workspace, &fixture.workspace),
+        RepairOutcome::Superseded
+    );
+    assert_eq!(swap.other(), REPAIRABLE);
+    assert_eq!(swap.moved(), REPAIRABLE);
+    assert_eq!(Swap::entries(&swap.other), ["rustx.toml"]);
+    assert_eq!(
+        Swap::entries(&swap.moved),
+        [".rustx.toml.lock", "rustx.toml"]
+    );
+    assert!(fixture.receipt(&fixture.workspace).is_none());
+    assert_eq!(fixture.sequence(), 0);
+}
+
+#[test]
+fn a_workspace_renamed_after_replacement_is_uncertain_and_never_replayed() {
+    let fixture = Fixture::new();
+    fixture.write(&fixture.workspace, REPAIRABLE);
+    let swap = Swap::prepare(&fixture, REPAIRABLE);
+    swap.hook(&fixture, "after_publication");
+    assert_eq!(
+        fixture
+            .manager
+            .repair_source(&fixture.workspace, &fixture.workspace),
+        RepairOutcome::Committed
+    );
+    // The bytes are in the physical directory the transaction admitted; the
+    // pathname now names another one, so success cannot be claimed for it.
+    assert_eq!(swap.moved(), "# Workspace\n[agent]\n");
+    assert_eq!(swap.other(), REPAIRABLE);
+    let receipt = fixture.receipt(&fixture.workspace).unwrap();
+    assert_eq!(receipt.status, ConfigRepairStatus::CommitUncertain);
+    assert_eq!(receipt.after_revision, None);
+    // A redirected target is no source of this owner: nothing is replayed.
+    let sequence = fixture.sequence();
+    assert_eq!(
+        fixture
+            .manager
+            .repair_source(&fixture.workspace, &fixture.workspace),
+        RepairOutcome::Unchanged
+    );
+    assert_eq!(swap.other(), REPAIRABLE);
+    assert_eq!(fixture.sequence(), sequence);
+}
+
+fn capacity(value: usize) -> super::super::settings::SourceMutation {
+    super::super::settings::SourceMutation::Config {
+        mutation: super::super::settings::ConfigMutation::Capacity {
+            authored: Some(crate::local_runtime::authoring::SubagentsLayer {
+                max_concurrent: Some(value),
+            }),
+        },
+    }
+}
+
+#[test]
+fn ordinary_source_writes_obey_the_same_physical_authority() {
+    let text = "[subagents]\nmax_concurrent = 2\n";
+    for point in [
+        "write_before_lock",
+        "before_publication",
+        "after_publication",
+    ] {
+        let fixture = Fixture::new();
+        fixture.write(&fixture.workspace, text);
+        let revision = fixture
+            .manager
+            .read_source_settings(&fixture.workspace)
+            .unwrap()
+            .workspace
+            .unwrap()
+            .revision;
+        let swap = Swap::prepare(&fixture, text);
+        swap.hook(&fixture, point);
+        let result =
+            fixture
+                .manager
+                .write_source_settings(&fixture.workspace, &revision, capacity(3));
+        // The other Workspace is never written, whatever the outcome.
+        assert_eq!(swap.other(), text, "{point}");
+        assert_eq!(Swap::entries(&swap.other), ["rustx.toml"], "{point}");
+        if point == "after_publication" {
+            // Published into the admitted directory, unconfirmed for the
+            // target pathname: uncertain, never success.
+            assert!(
+                matches!(result, Err(SettingsError::Committed)),
+                "{point}: {result:?}"
+            );
+            assert_eq!(swap.moved(), "[subagents]\nmax_concurrent = 3\n");
+        } else {
+            // Definitely unpublished, and distinct from a revision conflict.
+            assert!(
+                matches!(result, Err(SettingsError::Invalid)),
+                "{point}: {result:?}"
+            );
+            assert_eq!(swap.moved(), text, "{point}");
+        }
+    }
+}
+
+#[test]
+fn a_valid_source_write_replaces_atomically_under_its_exact_revision() {
+    use std::os::unix::fs::MetadataExt;
+    let fixture = Fixture::new();
+    let text = "[subagents]\nmax_concurrent = 2\n";
+    fixture.write(&fixture.workspace, text);
+    let path = fixture.path(&fixture.workspace);
+    let stale = super::super::super::settings::revision(Some(b"stale"));
+    assert!(matches!(
+        fixture
+            .manager
+            .write_source_settings(&fixture.workspace, &stale, capacity(3)),
+        Err(SettingsError::Conflict { .. })
+    ));
+    assert_eq!(fixture.read(&fixture.workspace), text);
+    let before = std::fs::metadata(&path).unwrap().ino();
+    let revision = super::super::super::settings::revision(Some(text.as_bytes()));
+    let written = fixture
+        .manager
+        .write_source_settings(&fixture.workspace, &revision, capacity(3))
+        .unwrap();
+    let published = "[subagents]\nmax_concurrent = 3\n";
+    assert_eq!(fixture.read(&fixture.workspace), published);
+    assert_eq!(
+        written.workspace.unwrap().revision,
+        super::super::super::settings::revision(Some(published.as_bytes()))
+    );
+    // A new inode renamed into place; no staged file is left behind.
+    assert_ne!(std::fs::metadata(&path).unwrap().ino(), before);
+    assert_eq!(
+        Swap::entries(path.parent().unwrap()),
+        [".rustx.toml.lock", "rustx.toml"]
+    );
+    // An unconfirmed directory sync is uncertain, never success.
+    fixture.manager.test_hooks.fail_once("directory_sync");
+    let revision = super::super::super::settings::revision(Some(published.as_bytes()));
+    assert!(matches!(
+        fixture
+            .manager
+            .write_source_settings(&fixture.workspace, &revision, capacity(4)),
+        Err(SettingsError::Committed)
+    ));
+}
+
+// Source-intrinsic health (VAL-01..04).
+
+const INTRINSICALLY_INVALID: &str = "[subagents]\nmax_concurrent = 0\n";
+
+#[test]
+fn nothing_eligible_is_not_proof_of_health() {
+    let fixture = Fixture::new();
+    for target in [SourceTarget::User, fixture.workspace.clone()] {
+        fixture.write(&target, INTRINSICALLY_INVALID);
+        assert_eq!(
+            fixture.manager.repair_source(&target, &target),
+            RepairOutcome::Unchanged
+        );
+        assert_eq!(fixture.read(&target), INTRINSICALLY_INVALID);
+        let receipt = fixture.receipt(&target).unwrap();
+        assert_eq!(receipt.status, ConfigRepairStatus::Unresolved);
+        assert!(receipt.changes.is_empty());
+        assert!(!receipt.backup_available);
+        let diagnostic = receipt.diagnostic.unwrap();
+        assert!(
+            diagnostic.contains("subagents.max_concurrent"),
+            "{diagnostic}"
+        );
+        assert!(!diagnostic.contains("TOML"), "{diagnostic}");
+        // No source transaction began: no writer lock, no backup.
+        assert!(
+            !fixture
+                .path(&target)
+                .with_file_name(".rustx.toml.lock")
+                .exists()
+        );
+        let sequence = fixture.sequence();
+        assert_eq!(
+            fixture.manager.repair_source(&target, &target),
+            RepairOutcome::Unchanged
+        );
+        assert_eq!(fixture.sequence(), sequence);
+    }
+    assert!(fixture.backups().is_empty());
+}
+
+#[test]
+fn an_unresolved_receipt_is_withdrawn_only_on_proven_recovery() {
+    use super::super::settings::SourceMutation;
+    let fixture = Fixture::new();
+    let target = fixture.workspace.clone();
+    fixture.write(&target, "[agent\n");
+    fixture.manager.repair_source(&target, &target);
+    let malformed = fixture.receipt(&target).unwrap();
+    assert_eq!(malformed.status, ConfigRepairStatus::Unresolved);
+
+    // Manual repair to a parsable document that is still intrinsically
+    // invalid: no success is claimed, the source stays unresolved, now with
+    // its current diagnostic.
+    let revision = super::super::super::settings::revision(Some(b"[agent\n"));
+    let manual = fixture
+        .manager
+        .write_source_settings(
+            &target,
+            &revision,
+            SourceMutation::RepairConfig {
+                document: INTRINSICALLY_INVALID.into(),
+            },
+        )
+        .unwrap();
+    let still = fixture.receipt(&target).unwrap();
+    assert_eq!(still.status, ConfigRepairStatus::Unresolved);
+    assert_ne!(still.id, malformed.id);
+    assert_eq!(
+        still.before_revision,
+        manual.workspace.as_ref().unwrap().revision
+    );
+    assert!(
+        still
+            .diagnostic
+            .as_deref()
+            .unwrap()
+            .contains("subagents.max_concurrent")
+    );
+    // A semantically invalid but parsable source stays editable.
+    let workspace = manual.workspace.unwrap();
+    assert!(workspace.authored.is_some());
+    assert!(workspace.diagnostic.is_none());
+
+    // Ordinary editing corrects it: exactly one withdrawal.
+    let sequence = fixture.sequence();
+    fixture
+        .manager
+        .write_source_settings(&target, &workspace.revision, capacity(2))
+        .unwrap();
+    assert!(fixture.receipt(&target).is_none());
+    assert_eq!(fixture.sequence(), sequence + 1);
+    assert_eq!(
+        fixture
+            .manager
+            .repairs()
+            .changed_after(&SourceKey::from(&target), sequence),
+        Some((sequence + 1, None))
+    );
+    // Later observations are no-ops.
+    fixture.manager.refresh_repair_observation(&target);
+    assert_eq!(
+        fixture.manager.repair_source(&target, &target),
+        RepairOutcome::Unchanged
+    );
+    assert_eq!(fixture.sequence(), sequence + 1);
+}
+
+#[test]
+fn an_ordinary_edit_of_a_source_without_a_receipt_records_none() {
+    let fixture = Fixture::new();
+    let target = fixture.workspace.clone();
+    fixture.write(&target, "[subagents]\nmax_concurrent = 2\n");
+    let revision =
+        super::super::super::settings::revision(Some(b"[subagents]\nmax_concurrent = 2\n"));
+    fixture
+        .manager
+        .write_source_settings(&target, &revision, capacity(0))
+        .unwrap();
+    assert!(fixture.receipt(&target).is_none());
+    assert_eq!(fixture.sequence(), 0);
+}
+
+#[test]
+fn a_valid_partial_source_is_healthy_without_composition_facts() {
+    let fixture = Fixture::new();
+    // No Provider, no Model, no default selection: facts another scope may
+    // supply. Nothing here is intrinsically invalid.
+    let partial = "[subagents]\nmax_concurrent = 2\n[agent]\ndescription = \"partial\"\n";
+    for target in [SourceTarget::User, fixture.workspace.clone()] {
+        fixture.write(&target, partial);
+        assert_eq!(
+            fixture.manager.repair_source(&target, &target),
+            RepairOutcome::Unchanged
+        );
+        assert!(fixture.receipt(&target).is_none());
+    }
+    assert_eq!(fixture.sequence(), 0);
+}

@@ -1134,9 +1134,19 @@ impl UserConfigManager {
         }
         let user_path = self.sources.config_path.clone();
         let model_result = ModelCatalog::from_document(catalog_document(&merged));
+        // A semantic failure names the document that authored its field.
+        let owner = |failure: &SemanticFailure| {
+            // Process policy stays outside the overlay; its source contract
+            // admits it in the bound User document only.
+            if failure.field == "app_server" {
+                Some(user_path.clone())
+            } else {
+                failure.owner(&provenance)
+            }
+        };
         let model_failure = |e: crate::model::catalog::ModelCatalogError| {
             LaunchFailure::at(
-                Some(user_path.clone()),
+                owner(&SemanticFailure::catalog(&e)),
                 "models",
                 "invalid model catalog semantics",
                 "define Providers and Models in rustx.toml",
@@ -1152,7 +1162,10 @@ impl UserConfigManager {
             // Incomplete only when everything the composition decides holds;
             // an independently invalid value is invalid with or without a
             // default model.
-            composition_semantics(&merged).map_err(|failure| failure.launch(&user_path))?;
+            composition_semantics(&merged).map_err(|failure| {
+                let document = owner(&failure);
+                failure.launch(document)
+            })?;
             let mut error = LaunchFailure::at(
                 Some(user_path.clone()),
                 "agent.model.model",
@@ -1754,9 +1767,45 @@ impl SemanticFailure {
         format!("{} at {}", self.reason, self.field)
     }
 
-    fn launch(self, document: &Path) -> LaunchFailure {
+    /// The one document that authored the failing field, from the overlay
+    /// provenance of the composition: every authored unit containing the
+    /// field, or contained in it, must come from the same User or Workspace
+    /// document. A field spanning both documents, or one no document
+    /// authored, has no owner: its failure belongs to the composition.
+    fn owner(&self, provenance: &BTreeMap<String, Origin>) -> Option<PathBuf> {
+        /// Whether one path is a prefix of the other; a `*` in the field
+        /// stands for one identity, which may itself contain dots.
+        fn overlaps(field: &[&str], unit: &[&str]) -> bool {
+            match (field.split_first(), unit.split_first()) {
+                (None, _) | (_, None) => true,
+                (Some((&"*", field)), Some((_, _))) => {
+                    (1..=unit.len()).any(|taken| overlaps(field, &unit[taken..]))
+                }
+                (Some((segment, field)), Some((name, unit))) => {
+                    segment == name && overlaps(field, unit)
+                }
+            }
+        }
+        let field: Vec<_> = self.field.split('.').collect();
+        let mut owners = provenance.iter().filter_map(|(unit, origin)| {
+            let unit: Vec<_> = unit.split('.').collect();
+            overlaps(&field, &unit).then_some(origin)
+        });
+        let first = owners.next()?;
+        let document = match first {
+            Origin::User { document, .. } | Origin::Workspace { document, .. } => document,
+            Origin::Builtin | Origin::Process { .. } => return None,
+        };
+        owners
+            .all(|origin| origin == first)
+            .then(|| document.clone())
+    }
+
+    /// A launch failure at the authoring document, or at the composition
+    /// (no file) when no single document authored the field.
+    fn launch(self, document: Option<PathBuf>) -> LaunchFailure {
         LaunchFailure::at(
-            Some(document.into()),
+            document,
             self.field,
             self.reason,
             "correct this value in User or Workspace rustx.toml",
