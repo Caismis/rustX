@@ -561,7 +561,9 @@ jobs:
   web-console:
     name: Full Web conformance
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    # Include native builds/toolchain setup and the complete pinned browser suite.
+    # Per-test deadlines, fixture budgets and required assertions stay unchanged.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
