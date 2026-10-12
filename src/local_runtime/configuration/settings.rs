@@ -1278,7 +1278,7 @@ impl UserConfigManager {
             if self.test_hooks.fault("stage_sync") {
                 return Err(SettingsError::Io);
             }
-            let staged = source.stage(name, bytes).map_err(|_| SettingsError::Io)?;
+            let staged = source.stage(bytes).map_err(|_| SettingsError::Io)?;
             #[cfg(test)]
             self.test_hooks.reach("before_publication");
             verify()?;

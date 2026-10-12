@@ -41,6 +41,13 @@ impl Fixture {
     }
 
     fn with_config_path(config: impl FnOnce(&Path) -> PathBuf) -> Self {
+        Self::with_paths(config, |root| root.join("state"))
+    }
+
+    fn with_paths(
+        config: impl FnOnce(&Path) -> PathBuf,
+        runtime: impl FnOnce(&Path) -> PathBuf,
+    ) -> Self {
         let root = tempfile::tempdir().unwrap();
         let home = root.path().join("home");
         let workspace = root.path().join("workspace");
@@ -51,7 +58,7 @@ impl Fixture {
         let manager = UserConfigManager::new(UserConfigSources {
             home_directory: home.clone(),
             config_path,
-            runtime_root: root.path().join("state"),
+            runtime_root: runtime(root.path()),
         })
         .unwrap();
         Self {
@@ -92,6 +99,22 @@ impl Fixture {
     fn sequence(&self) -> u64 {
         *self.manager.repairs().subscribe().borrow()
     }
+}
+
+/// The writer lock beside `document`.
+fn lock_of(document: &Path) -> PathBuf {
+    document.with_file_name(super::super::super::settings::lock_name(
+        document.file_name().unwrap(),
+    ))
+}
+
+/// The directory entries of a written `rustx.toml`: the document and its
+/// writer lock, no staged candidate.
+fn document_entries() -> [String; 2] {
+    [
+        super::super::super::settings::lock_name(std::ffi::OsStr::new("rustx.toml")),
+        "rustx.toml".into(),
+    ]
 }
 
 fn changes(text: &str) -> Vec<ConfigRepairChange> {
@@ -471,12 +494,7 @@ fn healthy_and_repaired_sources_are_disk_and_ledger_no_ops() {
     assert!(fixture.backups().is_empty());
     assert!(fixture.receipt(&SourceTarget::User).is_none());
     // A healthy check takes no writer lock, so it creates no lock file.
-    assert!(
-        !fixture
-            .path(&SourceTarget::User)
-            .with_file_name(".rustx.toml.lock")
-            .exists()
-    );
+    assert!(!lock_of(&fixture.path(&SourceTarget::User)).exists());
     assert_eq!(fixture.sequence(), 0);
 
     fixture.write(&SourceTarget::User, &format!("{USER}legacy = 1\n"));
@@ -1227,9 +1245,9 @@ fn a_backup_directory_replaced_after_opening_cannot_redirect_the_copy() {
         fixture
             .manager
             .repair_source(&SourceTarget::User, &SourceTarget::User),
-        RepairOutcome::Committed
+        RepairOutcome::Unchanged
     );
-    // Nothing reached the Workspace; the exact private copy is in the
+    // Nothing reached the Workspace: the exact private copy is in the
     // directory that was opened.
     assert_eq!(std::fs::read_dir(&workspace).unwrap().count(), 0);
     let copies: Vec<_> = std::fs::read_dir(root.join("moved-backups"))
@@ -1242,12 +1260,387 @@ fn a_backup_directory_replaced_after_opening_cannot_redirect_the_copy() {
         std::fs::metadata(&copies[0]).unwrap().permissions().mode() & 0o777,
         0o600
     );
+    // The bound backup path no longer reaches it, so the backup is not
+    // confirmed: the source is unchanged and nothing claims a backup.
+    assert_eq!(fixture.read(&SourceTarget::User), text);
+    let receipt = fixture.receipt(&SourceTarget::User).unwrap();
+    assert_eq!(receipt.status, ConfigRepairStatus::Unresolved);
+    assert!(!receipt.backup_available);
+    assert!(receipt.diagnostic.unwrap().contains("backup storage moved"));
+}
+
+// Backup root physical authority (BACKUP-01..06). The bound runtime root is
+// `data/state/rustx`; the Workspace holds a `rustx` directory, so an
+// ancestor redirected into the Workspace would resolve.
+
+struct Redirect {
+    fixture: Fixture,
+    data: PathBuf,
+    workspace: PathBuf,
+}
+
+impl Redirect {
+    fn new() -> Self {
+        let fixture = Fixture::with_paths(
+            |home| home.join("rustx/rustx.toml"),
+            |root| root.join("data/state/rustx"),
+        );
+        let data = fixture
+            .manager
+            .runtime_root()
+            .ancestors()
+            .nth(2)
+            .unwrap()
+            .to_path_buf();
+        std::fs::create_dir_all(data.join("state")).unwrap();
+        let workspace = fixture.workspace.workspace().unwrap().to_path_buf();
+        std::fs::create_dir(workspace.join("rustx")).unwrap();
+        Self {
+            fixture,
+            data,
+            workspace,
+        }
+    }
+
+    /// Rename `data/state` away and put a symlink into the Workspace in its
+    /// place.
+    fn redirect(data: &Path, workspace: &Path) {
+        std::fs::rename(data.join("state"), data.join("state.moved")).unwrap();
+        std::os::unix::fs::symlink(workspace, data.join("state")).unwrap();
+    }
+
+    fn hook(&self, point: &'static str) {
+        let (data, workspace) = (self.data.clone(), self.workspace.clone());
+        self.fixture
+            .manager
+            .test_hooks
+            .insert(point, move || Self::redirect(&data, &workspace));
+    }
+
+    /// Every file below the Workspace other than its source and that
+    /// source's writer lock.
+    fn workspace_files(&self) -> Vec<PathBuf> {
+        fn walk(directory: &Path, files: &mut Vec<PathBuf>) {
+            for entry in std::fs::read_dir(directory).unwrap() {
+                let path = entry.unwrap().path();
+                let kind = std::fs::symlink_metadata(&path).unwrap().file_type();
+                if kind.is_dir() {
+                    walk(&path, files);
+                } else {
+                    files.push(path);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        walk(&self.workspace, &mut files);
+        let source = self.workspace.join("rustx.toml");
+        files.retain(|path| *path != source && *path != lock_of(&source));
+        files
+    }
+
+    /// The repair of `target` failed closed before any publication.
+    fn assert_refused(&self, target: &SourceTarget, original: &str, diagnostic: &str) {
+        let fixture = &self.fixture;
+        assert_eq!(
+            fixture.manager.repair_source(target, target),
+            RepairOutcome::Unchanged
+        );
+        assert_eq!(fixture.read(target), original);
+        let receipt = fixture.receipt(target).unwrap();
+        assert_eq!(receipt.status, ConfigRepairStatus::Unresolved);
+        assert!(!receipt.backup_available);
+        assert!(receipt.after_revision.is_none());
+        let found = receipt.diagnostic.unwrap();
+        assert!(found.contains(diagnostic), "{found}");
+        assert_eq!(self.workspace_files(), Vec::<PathBuf>::new());
+        assert!(!self.workspace.join("rustx").join(BACKUP_DIRECTORY).exists());
+    }
+}
+
+fn redirect_cases(redirect: &Redirect) -> [(SourceTarget, String); 2] {
+    let user = format!("{USER}legacy = 'SECRET_X'\n");
+    let workspace = "# Workspace\n[agent]\nlegacy = 'SECRET_X'\n".to_string();
+    redirect.fixture.write(&SourceTarget::User, &user);
+    redirect
+        .fixture
+        .write(&redirect.fixture.workspace, &workspace);
+    [
+        (SourceTarget::User, user),
+        (redirect.fixture.workspace.clone(), workspace),
+    ]
+}
+
+#[test]
+fn an_intermediate_runtime_root_symlink_is_never_followed_for_backups() {
+    let redirect = Redirect::new();
+    let cases = redirect_cases(&redirect);
+    Redirect::redirect(&redirect.data, &redirect.workspace);
+    for (target, original) in &cases {
+        redirect.assert_refused(target, original, "could not be backed up");
+    }
+}
+
+#[test]
+fn an_ancestor_redirected_after_validation_cannot_reach_the_workspace() {
+    for index in 0..2 {
+        let redirect = Redirect::new();
+        let (target, original) = redirect_cases(&redirect)[index].clone();
+        redirect.hook("backup_validated");
+        redirect.assert_refused(&target, &original, "could not be backed up");
+        assert!(!redirect.data.join("state.moved/rustx").exists());
+    }
+}
+
+#[test]
+fn a_workspace_moved_onto_the_runtime_root_path_never_receives_a_backup() {
+    let redirect = Redirect::new();
+    let [_, (target, original)] = redirect_cases(&redirect);
+    // No symlink anywhere: the selected Workspace itself is renamed onto
+    // `data/state`, so a no-follow walk reaches `<workspace>/rustx`.
+    let (data, workspace) = (redirect.data.clone(), redirect.workspace.clone());
+    redirect
+        .fixture
+        .manager
+        .test_hooks
+        .insert("backup_validated", move || {
+            std::fs::rename(data.join("state"), data.join("state.moved")).unwrap();
+            std::fs::rename(&workspace, data.join("state")).unwrap();
+        });
+    let fixture = &redirect.fixture;
+    assert_eq!(
+        fixture.manager.repair_source(&target, &target),
+        RepairOutcome::Unchanged
+    );
+    let moved = redirect.data.join("state");
+    assert_eq!(
+        std::fs::read_to_string(moved.join("rustx.toml")).unwrap(),
+        original
+    );
+    assert!(!moved.join("rustx").join(BACKUP_DIRECTORY).exists());
+    let receipt = fixture.receipt(&target).unwrap();
+    assert_eq!(receipt.status, ConfigRepairStatus::Unresolved);
+    assert!(!receipt.backup_available);
+    assert!(
+        receipt
+            .diagnostic
+            .unwrap()
+            .contains("outside the Workspace")
+    );
+}
+
+#[test]
+fn an_ancestor_redirected_after_admission_cannot_redirect_the_copy() {
+    for index in 0..2 {
+        let redirect = Redirect::new();
+        let (target, original) = redirect_cases(&redirect)[index].clone();
+        redirect.hook("backup_directory_opened");
+        redirect.assert_refused(&target, &original, "backup storage moved");
+        // The exact copy is in the physical directory that was admitted, now
+        // reachable only under its moved ancestor.
+        let directory = redirect
+            .data
+            .join("state.moved/rustx")
+            .join(BACKUP_DIRECTORY);
+        let copies: Vec<_> = std::fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(copies.len(), 1);
+        assert_eq!(std::fs::read(&copies[0]).unwrap(), original.as_bytes());
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&copies[0]), 0o600);
+        assert_eq!(mode(&directory), 0o700);
+    }
+}
+
+#[test]
+fn an_existing_backup_is_reused_only_when_it_is_exactly_the_original() {
+    let fixture = Fixture::new();
+    let original = format!("{USER}legacy = 1\n");
+    // An identical copy from an earlier attempt is kept, not duplicated.
+    fixture.write(&SourceTarget::User, &original);
+    fixture.manager.test_hooks.fail_once("replace_refused");
+    fixture
+        .manager
+        .repair_source(&SourceTarget::User, &SourceTarget::User);
+    assert_eq!(fixture.read(&SourceTarget::User), original);
+    let backups = fixture.backups();
+    assert_eq!(backups.len(), 1);
+    assert_eq!(
+        fixture
+            .manager
+            .repair_source(&SourceTarget::User, &SourceTarget::User),
+        RepairOutcome::Committed
+    );
+    assert_eq!(fixture.backups(), backups);
+    assert_eq!(std::fs::read(&backups[0]).unwrap(), original.as_bytes());
+
+    // A different file under that name is never trusted as the backup.
+    let fixture = Fixture::new();
+    fixture.write(&SourceTarget::User, &original);
+    fixture.manager.test_hooks.fail_once("replace_refused");
+    fixture
+        .manager
+        .repair_source(&SourceTarget::User, &SourceTarget::User);
+    let backup = fixture.backups().remove(0);
+    std::fs::write(&backup, "tampered").unwrap();
+    assert_eq!(
+        fixture
+            .manager
+            .repair_source(&SourceTarget::User, &SourceTarget::User),
+        RepairOutcome::Unchanged
+    );
+    assert_eq!(fixture.read(&SourceTarget::User), original);
+    assert!(
+        unresolved_diagnostic(&fixture, &SourceTarget::User).contains("could not be backed up")
+    );
+    assert_eq!(fixture.backups(), [backup]);
+}
+
+// Bounded internal filenames (NAME-01..05).
+
+/// The longest component the filesystem holding `directory` accepts.
+fn name_max(directory: &Path) -> usize {
+    nix::unistd::pathconf(directory, nix::unistd::PathconfVar::NAME_MAX)
+        .unwrap()
+        .and_then(|limit| usize::try_from(limit).ok())
+        .unwrap()
+}
+
+/// A long source basename is repaired, backed up and authored like any other,
+/// leaving only the document and its writer lock beside it.
+fn assert_long_name_writable(name: &str) {
+    let fixture = Fixture::with_config_path(|home| home.join("long").join(name));
+    let path = fixture.path(&SourceTarget::User);
+    let original = format!("{USER}legacy = 'SECRET_X'\n");
+    fixture.write(&SourceTarget::User, &original);
+    assert_eq!(
+        fixture
+            .manager
+            .repair_source(&SourceTarget::User, &SourceTarget::User),
+        RepairOutcome::Committed
+    );
+    assert_eq!(fixture.read(&SourceTarget::User), USER);
+    let backups = fixture.backups();
+    assert_eq!(backups.len(), 1);
+    assert_eq!(std::fs::read(&backups[0]).unwrap(), original.as_bytes());
+    let receipt = fixture.receipt(&SourceTarget::User).unwrap();
+    assert_eq!(receipt.status, ConfigRepairStatus::Repaired);
+    let entries = || {
+        let mut names: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        names.sort();
+        names
+    };
+    let mut expected = vec![lock_of(&path), path.clone()];
+    expected.sort();
+    assert_eq!(entries(), expected);
+    let revision = super::super::super::settings::revision(Some(USER.as_bytes()));
+    fixture
+        .manager
+        .write_source_settings(&SourceTarget::User, &revision, capacity(3))
+        .unwrap();
     assert!(
         fixture
-            .receipt(&SourceTarget::User)
-            .unwrap()
-            .backup_available
+            .read(&SourceTarget::User)
+            .contains("max_concurrent = 3")
     );
+    assert_eq!(entries(), expected);
+}
+
+#[test]
+fn a_long_utf8_source_basename_is_repaired_and_authored() {
+    // 225 bytes: the old `.<name>.<uuid>.tmp` staging name was 263.
+    let name = format!("{}{}.toml", "設定".repeat(36), "a".repeat(4));
+    assert_eq!(name.len(), 225);
+    assert_long_name_writable(&name);
+}
+
+#[test]
+fn a_source_basename_at_the_filesystem_limit_is_writable() {
+    let probe = tempfile::tempdir().unwrap();
+    let limit = name_max(probe.path());
+    let name = format!("{}.toml", "n".repeat(limit - ".toml".len()));
+    assert_eq!(name.len(), limit);
+    assert_long_name_writable(&name);
+}
+
+#[test]
+fn every_writer_takes_one_bounded_lock_per_document() {
+    use std::os::unix::fs::MetadataExt;
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().canonicalize().unwrap();
+    let limit = name_max(&directory);
+    let long = "x".repeat(limit);
+    let names = ["rustx.toml", "rustx.toml.", "Rustx.toml", long.as_str()];
+    let source = SourceDirectory::open(&directory.join("rustx.toml"), false)
+        .unwrap()
+        .unwrap();
+    let mut inodes = BTreeSet::new();
+    let excluded = |lock: &Path| {
+        matches!(
+            std::fs::File::open(lock).unwrap().try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        )
+    };
+    for name in names {
+        // The handle-relative lock of source transactions and the path lock
+        // of initialization and capture are one bounded inode.
+        let lock = lock_of(&directory.join(name));
+        assert!(lock.file_name().unwrap().len() <= limit);
+        let held = source.lock(name).unwrap();
+        assert_eq!(
+            std::fs::metadata(&lock).unwrap().ino(),
+            held.metadata().unwrap().ino()
+        );
+        assert!(excluded(&lock));
+        drop(held);
+        assert!(!excluded(&lock));
+        let held = super::super::super::settings::lock_document(&directory.join(name)).unwrap();
+        assert_eq!(
+            std::fs::metadata(&lock).unwrap().ino(),
+            held.metadata().unwrap().ino()
+        );
+        assert!(excluded(&lock));
+        drop(held);
+        // Distinct documents never share a lock.
+        assert!(
+            inodes.insert(std::fs::metadata(&lock).unwrap().ino()),
+            "{name}"
+        );
+    }
+    assert_eq!(std::fs::read_dir(&directory).unwrap().count(), names.len());
+}
+
+#[test]
+fn a_failed_staging_leaves_no_candidate_and_the_source_unchanged() {
+    for point in ["replace_refused", "stage_write"] {
+        let fixture = Fixture::new();
+        let original = format!("{USER}legacy = 1\n");
+        fixture.write(&SourceTarget::User, &original);
+        let path = fixture.path(&SourceTarget::User);
+        fixture.manager.test_hooks.fail_once(point);
+        assert_eq!(
+            fixture
+                .manager
+                .repair_source(&SourceTarget::User, &SourceTarget::User),
+            RepairOutcome::Unchanged,
+            "{point}"
+        );
+        assert_eq!(fixture.read(&SourceTarget::User), original, "{point}");
+        assert_eq!(
+            fixture.receipt(&SourceTarget::User).unwrap().status,
+            ConfigRepairStatus::Unresolved,
+            "{point}"
+        );
+        assert_eq!(
+            Swap::entries(path.parent().unwrap()),
+            document_entries(),
+            "{point}"
+        );
+    }
 }
 
 #[test]
@@ -1383,10 +1776,7 @@ fn a_workspace_replaced_before_publication_cannot_redirect_it() {
     assert_eq!(swap.other(), REPAIRABLE);
     assert_eq!(swap.moved(), REPAIRABLE);
     assert_eq!(Swap::entries(&swap.other), ["rustx.toml"]);
-    assert_eq!(
-        Swap::entries(&swap.moved),
-        [".rustx.toml.lock", "rustx.toml"]
-    );
+    assert_eq!(Swap::entries(&swap.moved), document_entries());
     assert!(fixture.receipt(&fixture.workspace).is_none());
     assert_eq!(fixture.sequence(), 0);
 }
@@ -1506,10 +1896,7 @@ fn a_valid_source_write_replaces_atomically_under_its_exact_revision() {
     );
     // A new inode renamed into place; no staged file is left behind.
     assert_ne!(std::fs::metadata(&path).unwrap().ino(), before);
-    assert_eq!(
-        Swap::entries(path.parent().unwrap()),
-        [".rustx.toml.lock", "rustx.toml"]
-    );
+    assert_eq!(Swap::entries(path.parent().unwrap()), document_entries());
     // An unconfirmed directory sync is uncertain, never success.
     fixture.manager.test_hooks.fail_once("directory_sync");
     let revision = super::super::super::settings::revision(Some(published.as_bytes()));
@@ -1546,12 +1933,7 @@ fn nothing_eligible_is_not_proof_of_health() {
         );
         assert!(!diagnostic.contains("TOML"), "{diagnostic}");
         // No source transaction began: no writer lock, no backup.
-        assert!(
-            !fixture
-                .path(&target)
-                .with_file_name(".rustx.toml.lock")
-                .exists()
-        );
+        assert!(!lock_of(&fixture.path(&target)).exists());
         let sequence = fixture.sequence();
         assert_eq!(
             fixture.manager.repair_source(&target, &target),

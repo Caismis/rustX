@@ -479,6 +479,14 @@ the writer checks the pathname again after the replacement and reports
 `committed_durability_uncertain` when it no longer names that directory, as it
 does when the directory sync fails. An uncertain write is never replayed.
 
+Writer artifacts have fixed-length names, so every basename the filesystem
+accepts for a source document stays writable. The persistent writer lock beside a
+document is `.rustx-lock-<sha256 of the exact basename bytes>.lock`: every native
+writer of that document — source authoring, automatic repair, capture and
+create-only initialization — locks the same inode, and distinct documents never
+share one. A staged candidate is `.rustx-stage-<uuid>.tmp`, created exclusively
+and removed unless it is renamed into place.
+
 After persistence, native configuration coordination captures a finite immutable
 input manifest and owns reconciliation independently of the RPC. Save requires no
 second action. Saved source is desired state; it is not proof of effective state.
@@ -667,12 +675,20 @@ exact copy of the original bytes is written to private storage under the bound
 runtime root (`<runtime_root>/configuration-backups/`, directory `0700`, file
 `0600`, never inside the Workspace), named by source identity and original
 revision; a backup failure leaves the source unchanged. The bound runtime root is
-the trust anchor (canonical, disjoint from every Workspace, rechecked before each
-backup). The backup directory is opened once without following a symlink and
-verified as the current user's directory; the staged copy, its no-clobber
+the trust anchor (canonical when bound, disjoint from every Workspace). Each
+backup admits it the way a source directory is admitted: walked from `/` one
+component at a time without following any symlink, missing components created
+relative to their verified parent, and for a Workspace target checked to lie
+physically outside the admitted Workspace (following `..` from the handle). The
+backup directory is then created or opened relative to that handle and verified
+as the current user's `0700` directory; the staged copy, its no-clobber
 publication link, the comparison with an existing copy and the directory sync all
-go through that handle, so replacing the directory or planting a symlink cannot
-redirect the bytes. A healthy source is read
+go through that one handle, so a symlink in any ancestor, or replacing any
+component after admission, cannot redirect the bytes. Physical safety does not
+depend on the pathname afterwards; confirmation does: the backup counts only if,
+once durable, the bound path still names the directory holding it. Otherwise the
+copy stays in the admitted (moved) directory, the receipt is `unresolved` without
+a backup and the source is unchanged. A healthy source is read
 once without a lock or any write, so it gets no lock file, no backup and no
 receipt. An external edit that races the repair, or a Workspace pathname that no
 longer names the admitted directory, supersedes it: nothing is published, nothing

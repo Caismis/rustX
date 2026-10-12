@@ -3,6 +3,7 @@ use crate::runtime_client::types::RuntimeClientError;
 use nix::fcntl::OFlag;
 use nix::sys::stat::Mode;
 use sha2::{Digest, Sha256};
+use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
@@ -18,12 +19,34 @@ fn io_failure(_: impl std::fmt::Debug) -> RuntimeClientError {
         "authored source I/O failed before publication; inspect document permissions and retry after reading its revision",
     )
 }
+// Writer artifacts beside a source document have fixed-length names, so
+// every basename the filesystem accepts stays writable. The persistent writer
+// lock is named by a digest of the document's exact basename bytes: one lock
+// per document, distinct for distinct documents. A staged candidate is named
+// by a fresh UUID.
+const LOCK_PREFIX: &str = ".rustx-lock-";
+const STAGE_PREFIX: &str = ".rustx-stage-";
+
+/// The writer lock name of the document named `document` in its directory.
+pub(super) fn lock_name(document: &OsStr) -> String {
+    format!(
+        "{LOCK_PREFIX}{:x}.lock",
+        Sha256::digest(document.as_encoded_bytes())
+    )
+}
+
+/// Whether `name` is a writer lock or staged candidate, never a document.
+pub(super) fn is_writer_artifact(name: &OsStr) -> bool {
+    let name = name.as_encoded_bytes();
+    name.starts_with(LOCK_PREFIX.as_bytes()) || name.starts_with(STAGE_PREFIX.as_bytes())
+}
+
 /// Shared with create-only initialization. Never unlink the lock inode.
 pub(super) fn lock_document(target: &Path) -> std::io::Result<File> {
     let name = target
         .file_name()
         .ok_or_else(|| std::io::Error::other("invalid document"))?;
-    let lock = target.with_file_name(format!(".{}.lock", name.to_string_lossy()));
+    let lock = target.with_file_name(lock_name(name));
     let file = OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -58,9 +81,9 @@ pub(super) fn revision(bytes: Option<&[u8]>) -> String {
     )
 }
 
-/// The physical authority of one source document: its parent directory,
-/// opened once when the source transaction is admitted, and the (device,
-/// inode) identity of that directory.
+/// The physical authority of one directory — a source document's parent, or
+/// private backup storage — opened once when its transaction is admitted, and
+/// the (device, inode) identity of that directory.
 ///
 /// Source paths are canonical (a Workspace is validated canonical; the User
 /// binding is normalized when bound), so the directory is reached from `/`
@@ -88,6 +111,41 @@ impl SourceDirectory {
         let path = document
             .parent()
             .ok_or_else(|| std::io::Error::other("invalid document"))?;
+        Self::admit(path, create)
+    }
+
+    /// Admit the directory `path` itself, creating missing components the
+    /// same no-follow way.
+    pub(super) fn create(path: &Path) -> std::io::Result<Self> {
+        Self::admit(path, true)?.ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))
+    }
+
+    /// Admit the child directory `name` as this user's private (`0700`)
+    /// storage, creating it relative to this handle when missing.
+    pub(super) fn private_child(&self, name: &str) -> std::io::Result<Self> {
+        match nix::sys::stat::mkdirat(&self.directory, name, Mode::S_IRWXU) {
+            Ok(()) | Err(nix::errno::Errno::EEXIST) => {}
+            Err(error) => return Err(error.into()),
+        }
+        let directory = nix::fcntl::openat(
+            &self.directory,
+            name,
+            OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+            Mode::empty(),
+        )?;
+        let status = nix::sys::stat::fstat(&directory)?;
+        if status.st_uid != nix::unistd::geteuid().as_raw() {
+            return Err(std::io::Error::other("directory is not owned by this user"));
+        }
+        nix::sys::stat::fchmod(&directory, Mode::S_IRWXU)?;
+        Ok(Self {
+            path: self.path.join(name),
+            identity: identity(&directory)?,
+            directory,
+        })
+    }
+
+    fn admit(path: &Path, create: bool) -> std::io::Result<Option<Self>> {
         let Some(directory) = walk(path, create)? else {
             return Ok(None);
         };
@@ -127,7 +185,7 @@ impl SourceDirectory {
     /// serializes rustX writers, never an external rename.
     pub(super) fn lock(&self, name: &str) -> std::io::Result<File> {
         let file = self.open_file(
-            &format!(".{name}.lock"),
+            &lock_name(OsStr::new(name)),
             OFlag::O_RDWR | OFlag::O_CREAT | OFlag::O_NONBLOCK,
             Mode::S_IRUSR | Mode::S_IWUSR,
         )?;
@@ -140,17 +198,19 @@ impl SourceDirectory {
 
     /// Write and sync `bytes` to a new private file in this directory. The
     /// staged file is removed again unless it is published.
-    pub(super) fn stage(&self, name: &str, bytes: &[u8]) -> std::io::Result<Staged<'_>> {
-        let staged = Staged {
-            directory: self,
-            name: format!(".{name}.{}.tmp", uuid::Uuid::now_v7().simple()),
-            published: false,
-        };
+    pub(super) fn stage(&self, bytes: &[u8]) -> std::io::Result<Staged<'_>> {
+        let name = format!("{STAGE_PREFIX}{}.tmp", uuid::Uuid::now_v7().simple());
         let mut file = self.open_file(
-            &staged.name,
+            &name,
             OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_EXCL,
             Mode::S_IRUSR | Mode::S_IWUSR,
         )?;
+        // Created exclusively above, so only this entry is ever removed.
+        let staged = Staged {
+            directory: self,
+            name,
+            published: false,
+        };
         file.write_all(bytes)?;
         file.sync_all()?;
         Ok(staged)
@@ -161,6 +221,44 @@ impl SourceDirectory {
         nix::fcntl::renameat(&self.directory, staged.name.as_str(), &self.directory, name)?;
         staged.published = true;
         Ok(())
+    }
+
+    /// Publish `staged` under `name` without replacing any existing entry:
+    /// an existing `name` fails with [`std::io::ErrorKind::AlreadyExists`].
+    /// The staged name remains and is removed when `staged` drops.
+    pub(super) fn link(&self, staged: &Staged<'_>, name: &str) -> std::io::Result<()> {
+        Ok(nix::unistd::linkat(
+            &self.directory,
+            staged.name.as_str(),
+            &self.directory,
+            name,
+            nix::fcntl::AtFlags::empty(),
+        )?)
+    }
+
+    /// Whether this physical directory is `ancestor` or lies below it,
+    /// following `..` from the handle, never a pathname.
+    pub(super) fn within(&self, ancestor: &SourceDirectory) -> std::io::Result<bool> {
+        let flags = OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
+        let mut current = self.identity;
+        let mut parent: Option<std::os::fd::OwnedFd> = None;
+        loop {
+            if current == ancestor.identity {
+                return Ok(true);
+            }
+            let next = nix::fcntl::openat(
+                parent.as_ref().unwrap_or(&self.directory),
+                "..",
+                flags,
+                Mode::empty(),
+            )?;
+            let id = identity(&next)?;
+            if id == current {
+                return Ok(false);
+            }
+            current = id;
+            parent = Some(next);
+        }
     }
 
     pub(super) fn remove(&self, name: &str) -> std::io::Result<()> {
@@ -203,6 +301,8 @@ impl Drop for Staged<'_> {
 }
 
 /// Open `path` from `/` one component at a time, never following a symlink.
+/// With `create`, a missing component is created relative to its verified
+/// parent handle.
 fn walk(path: &Path, create: bool) -> std::io::Result<Option<std::os::fd::OwnedFd>> {
     use std::path::Component;
     let flags = OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;

@@ -1018,7 +1018,7 @@ impl UserConfigManager {
             Ok(bytes) if super::super::settings::revision(bytes.as_deref()) == before => {}
             _ => return RepairOutcome::Superseded,
         }
-        if let Err(diagnostic) = self.backup_original(target, before, original) {
+        if let Err(diagnostic) = self.backup_original(target, source, before, original) {
             record(Observation {
                 status: ConfigRepairStatus::Unresolved,
                 after_revision: None,
@@ -1099,114 +1099,80 @@ impl UserConfigManager {
     /// Workspace, named by source identity and original revision so repeated
     /// repairs of the same bytes keep exactly one copy.
     ///
-    /// The bound runtime root is the trust anchor: canonical at binding,
-    /// disjoint from every Workspace, and rechecked here. Below it nothing is
-    /// resolved by path more than once. The backup directory is opened without
-    /// following a symlink and verified as this user's directory; the staged
-    /// copy, the no-clobber link that publishes it, the comparison with an
-    /// existing copy and the durability sync all go through that one
-    /// directory handle. Renaming or replacing the directory, or planting a
-    /// symlink, after it is opened can never redirect the bytes.
+    /// The bound runtime root is admitted the way a source directory is:
+    /// walked from `/` one component at a time without following any
+    /// symlink, missing components created relative to their verified
+    /// parent. For a Workspace target it must lie physically outside the
+    /// admitted Workspace. The backup directory is then created or opened
+    /// relative to that handle and verified as this user's `0700` directory.
+    /// The staged copy, the no-clobber link that publishes it, the comparison
+    /// with an existing copy and the durability sync all go through that one
+    /// handle, so a symlink in any ancestor, or any replacement after
+    /// admission, can never redirect the bytes.
+    ///
+    /// Physical safety does not depend on the pathname afterwards; whether
+    /// the backup is confirmed does. The copy counts only if, once durable,
+    /// the bound pathname still names the directory holding it. Otherwise the
+    /// copy stays in the admitted (moved) directory and the source is left
+    /// unchanged.
     fn backup_original(
         &self,
         target: &SourceTarget,
+        source: &SourceDirectory,
         before: &str,
         original: &[u8],
     ) -> Result<(), String> {
-        use nix::errno::Errno;
-        use nix::fcntl::{AtFlags, OFlag, open, openat};
-        use nix::sys::stat::{Mode, fchmod, fstat, mkdirat};
-        use nix::unistd::{UnlinkatFlags, linkat, unlinkat};
-        use std::io::{Read, Write};
         fn failed<E>(_: E) -> String {
             String::from("the original could not be backed up; the source is unchanged")
         }
+        let outside = || {
+            String::from(
+                "backup storage would not be private rustX storage outside the Workspace; the source is unchanged",
+            )
+        };
         #[cfg(test)]
         if self.test_hooks.fault("backup") {
             return Err(failed(()));
         }
         let root = self.runtime_root();
-        if super::normalize_missing(root).ok().as_deref() != Some(root)
-            || target
-                .workspace()
-                .is_some_and(|workspace| root.starts_with(workspace) || workspace.starts_with(root))
+        let workspace = target.workspace();
+        if workspace
+            .is_some_and(|workspace| root.starts_with(workspace) || workspace.starts_with(root))
         {
+            return Err(outside());
+        }
+        #[cfg(test)]
+        self.test_hooks.reach("backup_validated");
+        let root = SourceDirectory::create(root).map_err(failed)?;
+        if workspace.is_some() && root.within(source).unwrap_or(true) {
+            return Err(outside());
+        }
+        let directory = root.private_child(BACKUP_DIRECTORY).map_err(failed)?;
+        drop(root);
+        #[cfg(test)]
+        self.test_hooks.reach("backup_directory_opened");
+        let name = self.backup_name(target, before);
+        let staged = directory.stage(original).map_err(failed)?;
+        match directory.link(&staged, &name) {
+            Ok(()) => {}
+            // The same original bytes were backed up before: keep that copy,
+            // but only if it really is those bytes.
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if directory.read(&name).map_err(failed)?.as_deref() != Some(original) {
+                    return Err(failed(()));
+                }
+            }
+            Err(error) => return Err(failed(error)),
+        }
+        drop(staged);
+        directory.sync().map_err(failed)?;
+        if !directory.holds() {
             return Err(
-                "backup storage would not be private rustX storage outside the Workspace; the source is unchanged"
+                "backup storage moved while the original was backed up; the source is unchanged"
                     .into(),
             );
         }
-        std::fs::create_dir_all(root).map_err(failed)?;
-        let directory_flags =
-            OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
-        let root = open(root, directory_flags, Mode::empty()).map_err(failed)?;
-        match mkdirat(&root, BACKUP_DIRECTORY, Mode::S_IRWXU) {
-            Ok(()) | Err(Errno::EEXIST) => {}
-            Err(error) => return Err(failed(error)),
-        }
-        let directory =
-            openat(&root, BACKUP_DIRECTORY, directory_flags, Mode::empty()).map_err(failed)?;
-        #[cfg(test)]
-        self.test_hooks.reach("backup_directory_opened");
-        let status = fstat(&directory).map_err(failed)?;
-        if status.st_uid != nix::unistd::geteuid().as_raw() {
-            return Err(failed(()));
-        }
-        fchmod(&directory, Mode::S_IRWXU).map_err(failed)?;
-        let name = self.backup_name(target, before);
-        let staged = format!(".{name}.{}", uuid::Uuid::now_v7().simple());
-        let file_flags = OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
-        let mut file = std::fs::File::from(
-            openat(
-                &directory,
-                staged.as_str(),
-                file_flags | OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_EXCL,
-                Mode::S_IRUSR | Mode::S_IWUSR,
-            )
-            .map_err(failed)?,
-        );
-        let published = file
-            .write_all(original)
-            .and_then(|()| file.sync_all())
-            .map_err(failed)
-            .and_then(|()| {
-                match linkat(
-                    &directory,
-                    staged.as_str(),
-                    &directory,
-                    name.as_str(),
-                    AtFlags::empty(),
-                ) {
-                    Ok(()) => Ok(()),
-                    // The same original bytes were backed up before: keep that
-                    // copy, but only if it really is those bytes.
-                    Err(Errno::EEXIST) => {
-                        let mut existing = Vec::new();
-                        std::fs::File::from(
-                            openat(
-                                &directory,
-                                name.as_str(),
-                                // A FIFO in its place must not block.
-                                file_flags | OFlag::O_RDONLY | OFlag::O_NONBLOCK,
-                                Mode::empty(),
-                            )
-                            .map_err(failed)?,
-                        )
-                        .take(original.len() as u64 + 1)
-                        .read_to_end(&mut existing)
-                        .map_err(failed)?;
-                        if existing == original {
-                            Ok(())
-                        } else {
-                            Err(failed(()))
-                        }
-                    }
-                    Err(error) => Err(failed(error)),
-                }
-            });
-        let _ = unlinkat(&directory, staged.as_str(), UnlinkatFlags::NoRemoveDir);
-        published?;
-        nix::unistd::fsync(&directory).map_err(failed)
+        Ok(())
     }
 }
 
