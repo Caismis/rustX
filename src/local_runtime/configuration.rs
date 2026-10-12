@@ -1025,13 +1025,7 @@ impl UserConfigManager {
     fn resolve_runtime_configuration(
         capture: SourceCapture,
     ) -> Result<SourceCapture, LaunchFailure> {
-        let config = &capture.config;
-        config.validate().map_err(|e| e.to_string())?;
-        config
-            .tool_deadline_policy
-            .to_policy()
-            .map_err(|e| e.clone())?;
-        config.tool_environment().map_err(|e| e.to_string())?;
+        capture.config.validate().map_err(|e| e.to_string())?;
         Ok(capture)
     }
 
@@ -1139,14 +1133,7 @@ impl UserConfigManager {
             revisions.insert(root.clone(), super::resource_directory::revision(&root));
         }
         let user_path = self.sources.config_path.clone();
-        let model_result = ModelCatalog::from_document(
-            crate::model::authoring::Catalog {
-                schema_version: crate::model::catalog::MODEL_CATALOG_SCHEMA_VERSION,
-                providers: merged.providers.clone().unwrap_or_default(),
-                models: merged.models.clone().unwrap_or_default(),
-            }
-            .into(),
-        );
+        let model_result = ModelCatalog::from_document(catalog_document(&merged));
         let model_failure = |e: crate::model::catalog::ModelCatalogError| {
             LaunchFailure::at(
                 Some(user_path.clone()),
@@ -1162,20 +1149,10 @@ impl UserConfigManager {
             .and_then(|agent| agent.model.as_ref())
             .is_none_or(|model| model.model.is_none())
         {
-            if let Err(error) = &model_result
-                && !matches!(
-                    error,
-                    crate::model::catalog::ModelCatalogError::EmptyCatalog
-                )
-            {
-                return Err(LaunchFailure::at(
-                    Some(user_path.clone()),
-                    "models",
-                    "invalid model catalog semantics",
-                    "define Providers and Models in rustx.toml",
-                    error.to_string(),
-                ));
-            }
+            // Incomplete only when everything the composition decides holds;
+            // an independently invalid value is invalid with or without a
+            // default model.
+            composition_semantics(&merged).map_err(|failure| failure.launch(&user_path))?;
             let mut error = LaunchFailure::at(
                 Some(user_path.clone()),
                 "agent.model.model",
@@ -1745,60 +1722,125 @@ pub(super) fn source_restrictions(
     Ok(())
 }
 
-/// Native semantic validation of one authored composition, independent of
-/// `.agents` resources, credentials and preparation.
+/// A native semantic constraint an authored source or composition fails.
 ///
-/// It applies the validators Session resolution applies to the composed
-/// document. A composition that selects no default model is incomplete rather
-/// than invalid — the other scope may still select one — so, exactly like
-/// resolution, only its Model Catalog and its root Native Tool selection are
-/// decidable here.
-pub(super) fn source_semantics(merged: &RuntimeLayer) -> Result<(), String> {
-    use crate::capabilities::selection::{BuiltinSelectionClass, classify_builtin_selection};
-    if let Some(policy) = &merged.app_server {
-        policy.validate()?;
+/// `field` (identities only as `*`) and `reason` are native constants, safe to
+/// show anywhere, including automatic repair receipts. `detail` is the native
+/// domain message, which may quote authored values; it stays inside launch
+/// diagnostics.
+#[derive(Debug, Clone)]
+pub(crate) struct SemanticFailure {
+    pub(crate) field: &'static str,
+    pub(crate) reason: &'static str,
+    detail: String,
+}
+
+impl SemanticFailure {
+    fn new(field: &'static str, reason: &'static str, detail: String) -> Self {
+        Self {
+            field,
+            reason,
+            detail,
+        }
     }
-    let catalog = ModelCatalog::from_document(
-        crate::model::authoring::Catalog {
-            schema_version: crate::model::catalog::MODEL_CATALOG_SCHEMA_VERSION,
-            providers: merged.providers.clone().unwrap_or_default(),
-            models: merged.models.clone().unwrap_or_default(),
-        }
-        .into(),
-    );
-    let selected = merged
-        .agent
-        .as_ref()
-        .and_then(|agent| agent.model.as_ref())
-        .is_some_and(|model| model.model.is_some());
-    if !selected {
-        if let Err(error) = &catalog
-            && !matches!(
-                error,
-                crate::model::catalog::ModelCatalogError::EmptyCatalog
-            )
-        {
-            return Err(error.to_string());
-        }
-        if let Some(tools) = merged.agent.as_ref().and_then(|agent| agent.tools.clone()) {
-            let tools = tools.resolve();
-            tools.validate_spelling()?;
-            if let Some(name) = tools
-                .builtin
-                .iter()
-                .find(|name| classify_builtin_selection(name) == BuiltinSelectionClass::Unknown)
-            {
-                return Err(format!("unknown Native Tool {name:?}"));
+
+    fn catalog(error: &crate::model::catalog::ModelCatalogError) -> Self {
+        let (field, reason) = error.classification();
+        Self::new(field, reason, error.to_string())
+    }
+
+    /// The safe one-line summary: category and location, never values.
+    pub(crate) fn summary(&self) -> String {
+        format!("{} at {}", self.reason, self.field)
+    }
+
+    fn launch(self, document: &Path) -> LaunchFailure {
+        LaunchFailure::at(
+            Some(document.into()),
+            self.field,
+            self.reason,
+            "correct this value in User or Workspace rustx.toml",
+            self.detail,
+        )
+    }
+}
+
+impl From<super::config::ConstraintFailure> for SemanticFailure {
+    fn from(failure: super::config::ConstraintFailure) -> Self {
+        Self::new(failure.field, failure.reason, failure.error.to_string())
+    }
+}
+
+/// How complete a composition that satisfies every decidable constraint is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Composition {
+    /// A default model is selected and every model-dependent constraint holds.
+    Complete,
+    /// No default model is selected: the composition is incomplete, not
+    /// invalid, because a Session request may still select one.
+    NoDefaultModel,
+}
+
+fn catalog_document(layer: &RuntimeLayer) -> crate::model::catalog::ModelCatalogDocument {
+    crate::model::authoring::Catalog {
+        schema_version: crate::model::catalog::MODEL_CATALOG_SCHEMA_VERSION,
+        providers: layer.providers.clone().unwrap_or_default(),
+        models: layer.models.clone().unwrap_or_default(),
+    }
+    .into()
+}
+
+/// Source-intrinsic native semantics: every constraint an authored document
+/// decides on its own (Issue #464).
+///
+/// A source may leave facts to the other scope it is composed with — the
+/// default model, the Provider of a Model, the rest of the Model Catalog — but
+/// everything else it authors is decided here, whether or not a default model
+/// is selected: App Server process policy, each Provider and Model entry, and
+/// every [`CurrentRuntimeConfig::validate_authored`] constraint. `.agents`
+/// resources, credentials and preparation are never consulted.
+pub(super) fn source_semantics(layer: &RuntimeLayer) -> Result<(), SemanticFailure> {
+    if let Some(policy) = &layer.app_server {
+        policy.validate().map_err(|detail| {
+            SemanticFailure::new("app_server", "invalid App Server process policy", detail)
+        })?;
+    }
+    ModelCatalog::validate_entries(catalog_document(layer))
+        .map_err(|error| SemanticFailure::catalog(&error))?;
+    let config = layer
+        .clone()
+        .resolve()
+        .map_err(|detail| SemanticFailure::new("agent.model", "invalid model selection", detail))?;
+    config.validate_authored()?;
+    Ok(())
+}
+
+/// Native semantics of one complete User + Workspace composition: its
+/// source-intrinsic constraints and the references between its scopes — Model
+/// Catalog closure and, once a default model is selected, the selected models
+/// and the context budgets they bound. Session resolution applies the same
+/// validators to the same composition.
+pub(super) fn composition_semantics(merged: &RuntimeLayer) -> Result<Composition, SemanticFailure> {
+    source_semantics(merged)?;
+    let catalog = ModelCatalog::from_document(catalog_document(merged));
+    let config = merged
+        .clone()
+        .resolve()
+        .map_err(|detail| SemanticFailure::new("agent.model", "invalid model selection", detail))?;
+    let Some(model) = &config.agent.model else {
+        return match catalog {
+            Ok(_) | Err(crate::model::catalog::ModelCatalogError::EmptyCatalog) => {
+                Ok(Composition::NoDefaultModel)
             }
-        }
-        return Ok(());
-    }
-    let config = merged.clone().resolve()?;
-    config.validate().map_err(|error| error.to_string())?;
-    let models = catalog.map_err(|error| error.to_string())?;
-    let (primary, summary) =
-        crate::model::session::analyze_session_model_config(&models, config.initial_model())
-            .map_err(|error| error.to_string())?;
+            Err(error) => Err(SemanticFailure::catalog(&error)),
+        };
+    };
+    let models = catalog.map_err(|error| SemanticFailure::catalog(&error))?;
+    let (primary, summary) = crate::model::session::analyze_session_model_config(&models, model)
+        .map_err(|error| {
+            let (field, reason) = error.classification();
+            SemanticFailure::new(field, reason, error.to_string())
+        })?;
     let summary = summary.as_ref().unwrap_or(&primary);
     config
         .context_policy()
@@ -1806,12 +1848,14 @@ pub(super) fn source_semantics(merged: &RuntimeLayer) -> Result<(), String> {
             (primary.context_window, primary.max_output_tokens),
             (summary.context_window, summary.max_output_tokens),
         )
-        .map_err(|error| error.message)?;
-    config.tool_deadline_policy.to_policy()?;
-    config
-        .tool_environment()
-        .map_err(|error| error.to_string())?;
-    Ok(())
+        .map_err(|error| {
+            SemanticFailure::new(
+                "context",
+                "context budgets cannot fit the selected models",
+                error.message,
+            )
+        })?;
+    Ok(Composition::Complete)
 }
 
 fn rebase_paths(

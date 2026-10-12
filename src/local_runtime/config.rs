@@ -338,13 +338,13 @@ impl CurrentRuntimeConfig {
             .expect("validated root Agent model")
     }
 
-    pub(super) fn defaults(model: SessionModelConfig) -> Self {
+    pub(super) fn defaults(model: Option<SessionModelConfig>) -> Self {
         Self {
             schema_version: default_schema_version(),
             agent_id: default_agent_id(),
             approval_mode: ApprovalMode::default(),
             agent: AgentProfileDocument {
-                model: Some(model),
+                model,
                 ..builtin_root_profile()
             },
             context: ContextPolicyDocument::default(),
@@ -382,79 +382,110 @@ impl CurrentRuntimeConfig {
     ///
     /// Returns the first validation failure.
     pub fn validate(&self) -> Result<(), CurrentRuntimeConfigError> {
-        if self.schema_version != CURRENT_RUNTIME_SCHEMA_VERSION {
-            return Err(CurrentRuntimeConfigError::UnsupportedSchemaVersion {
-                supported: CURRENT_RUNTIME_SCHEMA_VERSION,
-                found: self.schema_version,
-            });
-        }
-        if self.agent_id.as_str().is_empty() {
-            return Err(CurrentRuntimeConfigError::Invalid {
-                detail: "agent_id must be non-empty".to_owned(),
-            });
-        }
-        self.context.validate()?;
-        self.timeout_policy()?;
+        self.validate_authored().map_err(|failure| failure.error)?;
+        // Composition facts: a root model and the `.agents` MCP servers that
+        // policy overlays name.
         if self.agent.model.is_none() {
             return Err(CurrentRuntimeConfigError::Invalid {
                 detail: "agent.model.model is required for root".into(),
             });
         }
-        crate::runtime::agent_profile::AgentProfile::from_document(
-            &self.agent,
-            crate::runtime::agent_profile::AgentProfileKind::Root,
-            Vec::new(),
-        )
-        .map_err(|detail| CurrentRuntimeConfigError::Invalid { detail })?;
-        if self.agent.timeout_ms.is_some() {
-            return Err(CurrentRuntimeConfigError::Invalid {
-                detail: "root scope cannot declare a child lifecycle deadline".into(),
-            });
-        }
-        self.agent
-            .tools
-            .validate_spelling()
-            .map_err(|detail| CurrentRuntimeConfigError::Invalid { detail })?;
-        for name in &self.agent.tools.builtin {
-            if crate::capabilities::selection::classify_builtin_selection(name)
-                == crate::capabilities::selection::BuiltinSelectionClass::Unknown
-            {
-                return Err(CurrentRuntimeConfigError::Invalid {
-                    detail: format!("unknown Native Tool {name:?}"),
-                });
-            }
-        }
-        self.agent
-            .execution_deadline()
-            .map_err(|detail| CurrentRuntimeConfigError::Invalid { detail })?;
         // Duplicate MCP identity is structurally impossible: `mcpServers` is
         // a keyed map. Normalization is the remaining semantic gate, and it
         // runs here so a malformed entry fails at parse time rather than at
         // composition time.
         self.mcp_bindings()?;
-        self.validate_subagents()?;
-        self.validate_workflows()?;
         Ok(())
     }
 
-    /// Validates the structural constraints of the named-subagent plane.
+    /// Validates every constraint the authored configuration decides on its
+    /// own (Issue #464).
     ///
-    /// Capability, Skill, and model *authority* is validated later, against
-    /// the prepared resource generation that will admit the catalog: this
-    /// gate covers only what the document can decide on its own.
-    fn validate_subagents(&self) -> Result<(), CurrentRuntimeConfigError> {
+    /// This needs no root model and no `.agents` resource: a partial source,
+    /// which leaves those to another scope, is still checked completely here.
+    /// Capability, Skill, subagent and model *authority* is validated later,
+    /// against the prepared resource generation that admits it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first failure with the authored field it concerns.
+    pub fn validate_authored(&self) -> Result<(), ConstraintFailure> {
+        let at = |field, reason| {
+            move |error| ConstraintFailure {
+                field,
+                reason,
+                error,
+            }
+        };
+        let invalid = |detail| CurrentRuntimeConfigError::Invalid { detail };
+        if self.schema_version != CURRENT_RUNTIME_SCHEMA_VERSION {
+            return Err(at("schema_version", "unsupported runtime schema version")(
+                CurrentRuntimeConfigError::UnsupportedSchemaVersion {
+                    supported: CURRENT_RUNTIME_SCHEMA_VERSION,
+                    found: self.schema_version,
+                },
+            ));
+        }
+        if self.agent_id.as_str().is_empty() {
+            return Err(at("agent_id", "agent_id must be non-empty")(invalid(
+                "agent_id must be non-empty".to_owned(),
+            )));
+        }
+        self.context
+            .validate()
+            .map_err(at("context", "invalid context policy"))?;
+        self.timeout_policy()
+            .map_err(at("model_timeout_policy", "invalid model timeout policy"))?;
+        self.tool_deadline_policy()
+            .map_err(at("tool_deadline_policy", "invalid tool deadline policy"))?;
+        self.tool_environment()
+            .map_err(at("environment", "invalid Tool environment entry"))?;
+        crate::runtime::agent_profile::AgentProfile::from_document(
+            &self.agent,
+            crate::runtime::agent_profile::AgentProfileKind::Root,
+            Vec::new(),
+        )
+        .map_err(|detail| at("agent", "invalid root Agent profile")(invalid(detail)))?;
+        if self.agent.timeout_ms.is_some() {
+            return Err(at(
+                "agent.timeout_ms",
+                "the root Agent cannot declare a child lifecycle deadline",
+            )(invalid(
+                "root scope cannot declare a child lifecycle deadline".into(),
+            )));
+        }
+        self.agent
+            .tools
+            .validate_spelling()
+            .map_err(|detail| at("agent.tools", "invalid Tool selection")(invalid(detail)))?;
+        for name in &self.agent.tools.builtin {
+            if crate::capabilities::selection::classify_builtin_selection(name)
+                == crate::capabilities::selection::BuiltinSelectionClass::Unknown
+            {
+                return Err(at("agent.tools.builtin", "unknown Native Tool")(invalid(
+                    format!("unknown Native Tool {name:?}"),
+                )));
+            }
+        }
+        self.agent
+            .execution_deadline()
+            .map_err(|detail| at("agent", "invalid Agent execution deadline")(invalid(detail)))?;
         if self.subagents.max_concurrent == 0
             || self.subagents.max_concurrent > MAX_MAX_CONCURRENT_SUBAGENTS
         {
-            return Err(CurrentRuntimeConfigError::Invalid {
-                detail: format!(
-                    "subagents.max_concurrent must be between 1 and \
-                     {MAX_MAX_CONCURRENT_SUBAGENTS}, found {}",
-                    self.subagents.max_concurrent
-                ),
-            });
+            return Err(at(
+                "subagents.max_concurrent",
+                "subagents.max_concurrent is outside its native range",
+            )(invalid(format!(
+                "subagents.max_concurrent must be between 1 and \
+                 {MAX_MAX_CONCURRENT_SUBAGENTS}, found {}",
+                self.subagents.max_concurrent
+            ))));
         }
-        Self::validate_subagent_admission("agent.agents", &self.agent.agents)?;
+        Self::validate_subagent_admission("agent.agents", &self.agent.agents)
+            .map_err(at("agent.agents", "duplicate subagent profile"))?;
+        validate_unique_workflow_ids("agent.workflows", &self.agent.workflows)
+            .map_err(at("agent.workflows", "duplicate Workflow identity"))?;
         Ok(())
     }
 
@@ -471,12 +502,6 @@ impl CurrentRuntimeConfig {
                 });
             }
         }
-        Ok(())
-    }
-
-    /// Validates Workflow selection identity uniqueness.
-    fn validate_workflows(&self) -> Result<(), CurrentRuntimeConfigError> {
-        validate_unique_workflow_ids("agent.workflows", &self.agent.workflows)?;
         Ok(())
     }
 
@@ -1158,6 +1183,20 @@ impl McpServerDocument {
     }
 }
 
+/// A source-intrinsic constraint failure of [`CurrentRuntimeConfig::validate_authored`].
+///
+/// `field` and `reason` are native constants, safe to show anywhere; `error`
+/// is the native failure, whose text may quote authored values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConstraintFailure {
+    /// The authored field the constraint concerns.
+    pub field: &'static str,
+    /// The fixed category of the failure.
+    pub reason: &'static str,
+    /// The native failure.
+    pub error: CurrentRuntimeConfigError,
+}
+
 /// A current runtime configuration failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CurrentRuntimeConfigError {
@@ -1448,9 +1487,7 @@ tool_deadline_policy = { "hard_deadline_ms" = 7000, "idle_liveness_ms" = { "mode
             r#"agent_id = "agent-a"
 tool_deadline_policy = { "hard_deadline_ms" = 0, "idle_liveness_ms" = { "mode" = "window", "milliseconds" = 1500 } }"#,
         );
-        let config = CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect("valid");
-        let error = config
-            .tool_deadline_policy()
+        let error = CurrentRuntimeConfig::from_toml_slice(json.as_bytes())
             .expect_err("zero hard deadline must fail");
         assert!(matches!(error, CurrentRuntimeConfigError::Invalid { .. }));
         assert!(
@@ -1469,9 +1506,7 @@ tool_deadline_policy = { "hard_deadline_ms" = 0, "idle_liveness_ms" = { "mode" =
             r#"agent_id = "agent-a"
 tool_deadline_policy = { "hard_deadline_ms" = 7000, "idle_liveness_ms" = { "mode" = "window", "milliseconds" = 0 } }"#,
         );
-        let config = CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect("valid");
-        let error = config
-            .tool_deadline_policy()
+        let error = CurrentRuntimeConfig::from_toml_slice(json.as_bytes())
             .expect_err("zero idle liveness must fail");
         assert!(matches!(error, CurrentRuntimeConfigError::Invalid { .. }));
         assert!(

@@ -636,15 +636,20 @@ impl RuntimeLayer {
         ))
     }
     /// Resolve the winning semantic units with their domain defaults.
+    ///
+    /// A root model is a composition fact: a partial document may leave it to
+    /// another scope, so it may be absent here and
+    /// [`CurrentRuntimeConfig::validate`] requires it.
     /// # Errors
-    /// Rejects missing required model intent and invalid runtime policy.
+    /// Rejects invalid runtime policy.
     pub fn resolve(self) -> Result<CurrentRuntimeConfig, String> {
         let mut config = CurrentRuntimeConfig::defaults(
             self.agent
                 .as_ref()
                 .and_then(|agent| agent.model.clone())
-                .ok_or("missing agent.model.model")?
-                .resolve()?,
+                .filter(|model| model.model.is_some())
+                .map(ModelLayer::resolve)
+                .transpose()?,
         );
         apply!(
             self,
@@ -676,9 +681,6 @@ impl RuntimeLayer {
             // was handled by the typed overlay before this final resolution.
             if let Some(skills) = layer.skills {
                 profile.skills = Some(skills);
-            }
-            if let Some(model) = layer.model {
-                profile.model = Some(model.resolve()?);
             }
             config.agent = profile;
         }

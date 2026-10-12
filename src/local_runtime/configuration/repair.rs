@@ -782,7 +782,16 @@ impl UserConfigManager {
     /// source writer lock and exact revision fences, after an exact private
     /// backup of the original bytes. The caller serializes this with source
     /// writes and coordinator capture.
-    pub(crate) fn repair_source(&self, target: &SourceTarget) -> RepairOutcome {
+    ///
+    /// `scope` is the composition this observation serves, as in
+    /// [`UserConfigManager::capture_source_settings`]: the User alone (process
+    /// startup) or the User with one selected Workspace. A Workspace target's
+    /// scope is that Workspace.
+    pub(crate) fn repair_source(
+        &self,
+        target: &SourceTarget,
+        scope: &SourceTarget,
+    ) -> RepairOutcome {
         if target.validate().is_err() {
             return RepairOutcome::Unchanged;
         }
@@ -830,7 +839,7 @@ impl UserConfigManager {
                 Err(failure) => unresolved(Vec::new(), source_contract_diagnostic(&failure)),
             };
         }
-        if let Err(diagnostic) = self.validate_candidate(target, &path, &plan.candidate) {
+        if let Err(diagnostic) = self.validate_candidate(target, scope, &path, &plan.candidate) {
             return unresolved(plan.changes, diagnostic);
         }
         self.commit_repair(target, &path, &before, &original, plan)
@@ -855,16 +864,18 @@ impl UserConfigManager {
         }
     }
 
-    /// Validate a complete candidate under the applicable source contract.
+    /// Validate a complete candidate under its applicable contract.
     ///
-    /// The production strict parser and source restrictions always apply. Native
-    /// semantics apply to the candidate composed as consumers compose it: a
-    /// Workspace over the current User source, the User alone. A composition
-    /// that selects no default model is incomplete, not invalid, because the
-    /// other scope may still select it.
+    /// The production strict parser, the source restrictions and every
+    /// source-intrinsic native constraint always apply. Composition-dependent
+    /// constraints apply to the candidate composed with the other source of
+    /// `scope`, exactly as Session resolution composes them, once that source
+    /// is known: never at startup for the User, which may leave its default
+    /// model or Model definitions to a Workspace not yet selected.
     fn validate_candidate(
         &self,
         target: &SourceTarget,
+        scope: &SourceTarget,
         path: &Path,
         candidate: &[u8],
     ) -> Result<(), String> {
@@ -874,23 +885,55 @@ impl UserConfigManager {
         if plan(candidate).map_or(true, |again| !again.changes.is_empty()) {
             return Err("automatic repair did not converge; the source is unchanged".into());
         }
-        let merged = if workspace {
-            let user = self.config_path(&SourceTarget::User);
-            let complement = super::super::settings::read_document(&user)
-                .ok()
-                .flatten()
-                .and_then(|bytes| super::parse_layer(&user, &bytes, false).ok());
-            let mut merged = RuntimeLayer::default();
-            let mut origins = BTreeMap::new();
-            if let Some(user) = complement {
-                merged.overlay(user, &super::Origin::Builtin, &mut origins);
-            }
-            merged.overlay(layer, &super::Origin::Builtin, &mut origins);
-            merged
-        } else {
-            layer
+        super::source_semantics(&layer).map_err(|failure| semantic_diagnostic(&failure))?;
+        match self.composition(target, scope, layer) {
+            Some(merged) => super::composition_semantics(&merged)
+                .map(drop)
+                .map_err(|failure| semantic_diagnostic(&failure)),
+            None => Ok(()),
+        }
+    }
+
+    /// The candidate layer composed with the other source of `scope` (User,
+    /// then Workspace). `None` when that source is not known — the User alone
+    /// at startup — or is unavailable or invalid on its own terms: those are
+    /// missing external facts, never failures of this candidate. An absent
+    /// document is known: it contributes nothing.
+    fn composition(
+        &self,
+        target: &SourceTarget,
+        scope: &SourceTarget,
+        candidate: RuntimeLayer,
+    ) -> Option<RuntimeLayer> {
+        let other = match target {
+            SourceTarget::User => scope.workspace().map(|directory| SourceTarget::Workspace {
+                directory: directory.to_path_buf(),
+            })?,
+            SourceTarget::Workspace { .. } => SourceTarget::User,
         };
-        super::source_semantics(&merged)
+        let path = self.config_path(&other);
+        let other_layer = match super::super::settings::read_document(&path).ok()? {
+            None => RuntimeLayer::default(),
+            Some(bytes) => {
+                let layer =
+                    super::parse_layer(&path, &bytes, other.scope() == SourceScope::Workspace)
+                        .ok()?;
+                super::source_semantics(&layer).ok()?;
+                layer
+            }
+        };
+        let (user, workspace) = match target {
+            SourceTarget::User => (candidate, other_layer),
+            SourceTarget::Workspace { .. } => (other_layer, candidate),
+        };
+        let mut merged = RuntimeLayer {
+            app_server: user.app_server.clone(),
+            ..RuntimeLayer::default()
+        };
+        let mut origins = BTreeMap::new();
+        merged.overlay(user, &super::Origin::Builtin, &mut origins);
+        merged.overlay(workspace, &super::Origin::Builtin, &mut origins);
+        Some(merged)
     }
 
     fn commit_repair(
@@ -978,48 +1021,14 @@ impl UserConfigManager {
         result
     }
 
-    /// Keep one exact private copy of the original bytes outside every
-    /// Workspace, named by source identity and original revision so repeated
-    /// repairs of the same bytes keep exactly one copy.
-    fn backup_original(
-        &self,
-        target: &SourceTarget,
-        before: &str,
-        original: &[u8],
-    ) -> Result<(), String> {
-        use std::io::Write;
-        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-        let failed =
-            |()| String::from("the original could not be backed up; the source is unchanged");
-        #[cfg(test)]
-        if self.test_hooks.fault("backup") {
-            return Err(failed(()));
-        }
-        let directory = self.runtime_root().join(BACKUP_DIRECTORY);
-        if target
-            .workspace()
-            .is_some_and(|workspace| directory.starts_with(workspace))
-        {
-            return Err(
-                "backup storage would be inside the Workspace; the source is unchanged".into(),
-            );
-        }
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&directory)
-            .map_err(|_| failed(()))?;
-        let metadata = std::fs::symlink_metadata(&directory).map_err(|_| failed(()))?;
-        if !metadata.is_dir() {
-            return Err(failed(()));
-        }
-        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
-            .map_err(|_| failed(()))?;
+    /// The backup of one source revision: its scope, a digest of the source
+    /// path (never the path itself) and the original revision.
+    fn backup_name(&self, target: &SourceTarget, before: &str) -> String {
         let source = format!(
             "{:x}",
             Sha256::digest(self.config_path(target).as_os_str().as_bytes())
         );
-        let name = format!(
+        format!(
             "{}-{}-{}.toml",
             match target.scope() {
                 SourceScope::User => "user",
@@ -1027,25 +1036,121 @@ impl UserConfigManager {
             },
             &source[..16],
             before.trim_start_matches("sha256:")
-        );
-        let destination = directory.join(name);
-        let mut staged = tempfile::NamedTempFile::new_in(&directory).map_err(|_| failed(()))?;
-        staged.write_all(original).map_err(|_| failed(()))?;
-        staged.as_file().sync_all().map_err(|_| failed(()))?;
-        match staged.persist_noclobber(&destination) {
-            Ok(_) => {}
-            Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
-                let existing =
-                    crate::bounded_file::read_bounded(&destination).map_err(|_| failed(()))?;
-                if existing != original {
-                    return Err(failed(()));
-                }
-            }
-            Err(_) => return Err(failed(())),
+        )
+    }
+
+    /// Keep one exact private copy of the original bytes outside every
+    /// Workspace, named by source identity and original revision so repeated
+    /// repairs of the same bytes keep exactly one copy.
+    ///
+    /// The bound runtime root is the trust anchor: canonical at binding,
+    /// disjoint from every Workspace, and rechecked here. Below it nothing is
+    /// resolved by path more than once. The backup directory is opened without
+    /// following a symlink and verified as this user's directory; the staged
+    /// copy, the no-clobber link that publishes it, the comparison with an
+    /// existing copy and the durability sync all go through that one
+    /// directory handle. Renaming or replacing the directory, or planting a
+    /// symlink, after it is opened can never redirect the bytes.
+    fn backup_original(
+        &self,
+        target: &SourceTarget,
+        before: &str,
+        original: &[u8],
+    ) -> Result<(), String> {
+        use nix::errno::Errno;
+        use nix::fcntl::{AtFlags, OFlag, open, openat};
+        use nix::sys::stat::{Mode, fchmod, fstat, mkdirat};
+        use nix::unistd::{UnlinkatFlags, linkat, unlinkat};
+        use std::io::{Read, Write};
+        fn failed<E>(_: E) -> String {
+            String::from("the original could not be backed up; the source is unchanged")
         }
-        std::fs::File::open(&directory)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|_| failed(()))
+        #[cfg(test)]
+        if self.test_hooks.fault("backup") {
+            return Err(failed(()));
+        }
+        let root = self.runtime_root();
+        if super::normalize_missing(root).ok().as_deref() != Some(root)
+            || target
+                .workspace()
+                .is_some_and(|workspace| root.starts_with(workspace) || workspace.starts_with(root))
+        {
+            return Err(
+                "backup storage would not be private rustX storage outside the Workspace; the source is unchanged"
+                    .into(),
+            );
+        }
+        std::fs::create_dir_all(root).map_err(failed)?;
+        let directory_flags =
+            OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
+        let root = open(root, directory_flags, Mode::empty()).map_err(failed)?;
+        match mkdirat(&root, BACKUP_DIRECTORY, Mode::S_IRWXU) {
+            Ok(()) | Err(Errno::EEXIST) => {}
+            Err(error) => return Err(failed(error)),
+        }
+        let directory =
+            openat(&root, BACKUP_DIRECTORY, directory_flags, Mode::empty()).map_err(failed)?;
+        #[cfg(test)]
+        self.test_hooks.reach("backup_directory_opened");
+        let status = fstat(&directory).map_err(failed)?;
+        if status.st_uid != nix::unistd::geteuid().as_raw() {
+            return Err(failed(()));
+        }
+        fchmod(&directory, Mode::S_IRWXU).map_err(failed)?;
+        let name = self.backup_name(target, before);
+        let staged = format!(".{name}.{}", uuid::Uuid::now_v7().simple());
+        let file_flags = OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
+        let mut file = std::fs::File::from(
+            openat(
+                &directory,
+                staged.as_str(),
+                file_flags | OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_EXCL,
+                Mode::S_IRUSR | Mode::S_IWUSR,
+            )
+            .map_err(failed)?,
+        );
+        let published = file
+            .write_all(original)
+            .and_then(|()| file.sync_all())
+            .map_err(failed)
+            .and_then(|()| {
+                match linkat(
+                    &directory,
+                    staged.as_str(),
+                    &directory,
+                    name.as_str(),
+                    AtFlags::empty(),
+                ) {
+                    Ok(()) => Ok(()),
+                    // The same original bytes were backed up before: keep that
+                    // copy, but only if it really is those bytes.
+                    Err(Errno::EEXIST) => {
+                        let mut existing = Vec::new();
+                        std::fs::File::from(
+                            openat(
+                                &directory,
+                                name.as_str(),
+                                // A FIFO in its place must not block.
+                                file_flags | OFlag::O_RDONLY | OFlag::O_NONBLOCK,
+                                Mode::empty(),
+                            )
+                            .map_err(failed)?,
+                        )
+                        .take(original.len() as u64 + 1)
+                        .read_to_end(&mut existing)
+                        .map_err(failed)?;
+                        if existing == original {
+                            Ok(())
+                        } else {
+                            Err(failed(()))
+                        }
+                    }
+                    Err(error) => Err(failed(error)),
+                }
+            });
+        let _ = unlinkat(&directory, staged.as_str(), UnlinkatFlags::NoRemoveDir);
+        published?;
+        nix::unistd::fsync(&directory).map_err(failed)
     }
 }
 
@@ -1055,14 +1160,72 @@ fn source_contract_diagnostic(failure: &super::super::diagnostics::LaunchFailure
     use std::fmt::Write;
     let diagnostic = &failure.diagnostic;
     let mut text = diagnostic.reason.clone();
-    if diagnostic.path != "$" {
-        let _ = write!(text, " at {}", bounded(&diagnostic.path, MAX_PATH_CHARS));
+    if let Some(path) = schema_path(&diagnostic.path) {
+        let _ = write!(text, " at {}", bounded(&path, MAX_PATH_CHARS));
     }
     if let (Some(line), Some(column)) = (diagnostic.line, diagnostic.column) {
         let _ = write!(text, " (line {line}, column {column})");
     }
     text.push_str("; it is not an automatically repairable construct");
     text
+}
+
+/// A candidate that parses but fails a native semantic constraint: the
+/// native category and schema location only, never the domain message.
+fn semantic_diagnostic(failure: &super::SemanticFailure) -> String {
+    format!(
+        "{}; automatic repair never corrects an invalid value, so the source is unchanged",
+        failure.summary()
+    )
+}
+
+/// A parser path projected onto the source schema: each segment is either a
+/// schema property name or `*` for an open-map identity. A path the schema
+/// does not explain segment by segment is dropped, never echoed, so the result
+/// holds native names only.
+fn schema_path(path: &str) -> Option<String> {
+    if path == "$" || path.is_empty() {
+        return None;
+    }
+    let walker = Walker {
+        root: source_schema(),
+        path: Vec::new(),
+        changes: Vec::new(),
+    };
+    let mut node = walker.root;
+    let mut projected = Vec::new();
+    for segment in path.split('.') {
+        let resolved = walker.resolve(node);
+        let candidates: Vec<&Value> = match resolved
+            .get("anyOf")
+            .or_else(|| resolved.get("oneOf"))
+            .and_then(Value::as_array)
+        {
+            Some(branches) => branches
+                .iter()
+                .map(|branch| walker.resolve(branch))
+                .collect(),
+            None => vec![resolved],
+        };
+        let property = candidates.iter().find_map(|candidate| {
+            candidate
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get_key_value(segment))
+        });
+        if let Some((name, next)) = property {
+            projected.push(name.as_str());
+            node = next;
+        } else {
+            node = candidates.iter().find_map(|candidate| {
+                candidate
+                    .get("additionalProperties")
+                    .filter(|entry| entry.is_object())
+            })?;
+            projected.push("*");
+        }
+    }
+    Some(projected.join("."))
 }
 
 #[cfg(test)]

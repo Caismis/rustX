@@ -125,7 +125,8 @@ fn compose(options: &Request) -> Result<AppServerHost, String> {
     // Automatic repair of the bound User source precedes process policy
     // parsing and every transport. Its outcome is a ledger observation the
     // first client reads; an unrepairable source keeps its strict failure.
-    configuration.repair_source(&crate::local_runtime::configuration::settings::SourceTarget::User);
+    let user = crate::local_runtime::configuration::settings::SourceTarget::User;
+    configuration.repair_source(&user, &user);
     let policy = configuration.app_server_policy()?;
     let manager = SessionRuntimeManager::new(
         sessions,

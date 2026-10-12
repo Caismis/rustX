@@ -372,7 +372,7 @@ fn identical_rules_apply_to_user_and_workspace_sources() {
     for target in [SourceTarget::User, fixture.workspace.clone()] {
         fixture.write(&target, &text);
         assert_eq!(
-            fixture.manager.repair_source(&target),
+            fixture.manager.repair_source(&target, &target),
             RepairOutcome::Committed
         );
         let receipt = fixture.receipt(&target).unwrap();
@@ -394,7 +394,9 @@ fn a_process_bound_config_override_is_repaired_in_place() {
     let fixture = Fixture::with_config_path(|home| home.join("elsewhere/custom-name.toml"));
     fixture.write(&SourceTarget::User, &format!("{USER}\nlegacy = 1\n"));
     assert_eq!(
-        fixture.manager.repair_source(&SourceTarget::User),
+        fixture
+            .manager
+            .repair_source(&SourceTarget::User, &SourceTarget::User),
         RepairOutcome::Committed
     );
     assert_eq!(fixture.read(&SourceTarget::User), USER);
@@ -413,7 +415,9 @@ fn a_committed_repair_keeps_one_exact_private_backup_outside_the_workspace() {
     fixture.write(&fixture.workspace, &original);
     fixture.write(&SourceTarget::User, USER);
     assert_eq!(
-        fixture.manager.repair_source(&fixture.workspace),
+        fixture
+            .manager
+            .repair_source(&fixture.workspace, &fixture.workspace),
         RepairOutcome::Committed
     );
     let backups = fixture.backups();
@@ -451,7 +455,9 @@ fn healthy_and_repaired_sources_are_disk_and_ledger_no_ops() {
         .modified()
         .unwrap();
     assert_eq!(
-        fixture.manager.repair_source(&SourceTarget::User),
+        fixture
+            .manager
+            .repair_source(&SourceTarget::User, &SourceTarget::User),
         RepairOutcome::Unchanged
     );
     assert_eq!(fixture.read(&SourceTarget::User), USER);
@@ -475,7 +481,9 @@ fn healthy_and_repaired_sources_are_disk_and_ledger_no_ops() {
 
     fixture.write(&SourceTarget::User, &format!("{USER}legacy = 1\n"));
     assert_eq!(
-        fixture.manager.repair_source(&SourceTarget::User),
+        fixture
+            .manager
+            .repair_source(&SourceTarget::User, &SourceTarget::User),
         RepairOutcome::Committed
     );
     let repaired = fixture.read(&SourceTarget::User);
@@ -483,7 +491,9 @@ fn healthy_and_repaired_sources_are_disk_and_ledger_no_ops() {
     let sequence = fixture.sequence();
     for _ in 0..3 {
         assert_eq!(
-            fixture.manager.repair_source(&SourceTarget::User),
+            fixture
+                .manager
+                .repair_source(&SourceTarget::User, &SourceTarget::User),
             RepairOutcome::Unchanged
         );
     }
@@ -517,7 +527,9 @@ fn nonrepairable_sources_stay_unchanged_with_a_safe_unresolved_receipt() {
     for text in &cases {
         fixture.write(&fixture.workspace, text);
         assert_eq!(
-            fixture.manager.repair_source(&fixture.workspace),
+            fixture
+                .manager
+                .repair_source(&fixture.workspace, &fixture.workspace),
             RepairOutcome::Unchanged,
             "{text}"
         );
@@ -537,7 +549,9 @@ fn nonrepairable_sources_stay_unchanged_with_a_safe_unresolved_receipt() {
         "[app_server]\nmax_connections = 4\n[agent]\nlegacy = 1\n",
     );
     assert_eq!(
-        fixture.manager.repair_source(&fixture.workspace),
+        fixture
+            .manager
+            .repair_source(&fixture.workspace, &fixture.workspace),
         RepairOutcome::Unchanged
     );
     let receipt = fixture.receipt(&fixture.workspace).unwrap();
@@ -552,7 +566,9 @@ fn a_partial_source_is_incomplete_not_invalid() {
     let user = USER.replace("[agent.model]\nmodel = \"local/a\"\n", "");
     fixture.write(&SourceTarget::User, &format!("{user}legacy = 1\n"));
     assert_eq!(
-        fixture.manager.repair_source(&SourceTarget::User),
+        fixture
+            .manager
+            .repair_source(&SourceTarget::User, &SourceTarget::User),
         RepairOutcome::Committed
     );
     // A Workspace selecting a User-defined Model validates over the User.
@@ -561,7 +577,9 @@ fn a_partial_source_is_incomplete_not_invalid() {
         "[agent.model]\nmodel = \"local/a\"\nstale = true\n",
     );
     assert_eq!(
-        fixture.manager.repair_source(&fixture.workspace),
+        fixture
+            .manager
+            .repair_source(&fixture.workspace, &fixture.workspace),
         RepairOutcome::Committed
     );
     assert_eq!(
@@ -574,14 +592,18 @@ fn a_partial_source_is_incomplete_not_invalid() {
 fn a_source_found_healthy_clears_its_unresolved_receipt() {
     let fixture = Fixture::new();
     fixture.write(&SourceTarget::User, "[broken");
-    fixture.manager.repair_source(&SourceTarget::User);
+    fixture
+        .manager
+        .repair_source(&SourceTarget::User, &SourceTarget::User);
     assert_eq!(
         fixture.receipt(&SourceTarget::User).unwrap().status,
         ConfigRepairStatus::Unresolved
     );
     let sequence = fixture.sequence();
     // The same invalid bytes are the same observation.
-    fixture.manager.repair_source(&SourceTarget::User);
+    fixture
+        .manager
+        .repair_source(&SourceTarget::User, &SourceTarget::User);
     assert_eq!(fixture.sequence(), sequence);
     fixture.write(&SourceTarget::User, USER);
     fixture
@@ -604,11 +626,15 @@ fn user_and_workspace_repairs_are_independent_transactions() {
     fixture.write(&SourceTarget::User, &format!("{USER}legacy = 1\n"));
     fixture.write(&fixture.workspace, "[agent\n");
     assert_eq!(
-        fixture.manager.repair_source(&SourceTarget::User),
+        fixture
+            .manager
+            .repair_source(&SourceTarget::User, &SourceTarget::User),
         RepairOutcome::Committed
     );
     assert_eq!(
-        fixture.manager.repair_source(&fixture.workspace),
+        fixture
+            .manager
+            .repair_source(&fixture.workspace, &fixture.workspace),
         RepairOutcome::Unchanged
     );
     assert_eq!(
@@ -636,7 +662,9 @@ fn an_external_edit_before_the_writer_lock_supersedes_the_candidate() {
             std::fs::write(&path, edit).unwrap();
         });
     assert_eq!(
-        fixture.manager.repair_source(&SourceTarget::User),
+        fixture
+            .manager
+            .repair_source(&SourceTarget::User, &SourceTarget::User),
         RepairOutcome::Superseded
     );
     assert_eq!(fixture.read(&SourceTarget::User), external);
@@ -658,14 +686,18 @@ fn an_external_edit_before_publication_is_never_overwritten() {
             std::fs::write(&path, edit).unwrap();
         });
     assert_eq!(
-        fixture.manager.repair_source(&SourceTarget::User),
+        fixture
+            .manager
+            .repair_source(&SourceTarget::User, &SourceTarget::User),
         RepairOutcome::Superseded
     );
     assert_eq!(fixture.read(&SourceTarget::User), external);
     assert!(fixture.receipt(&SourceTarget::User).is_none());
     // The next observation plans from the external bytes; nothing is replayed.
     assert_eq!(
-        fixture.manager.repair_source(&SourceTarget::User),
+        fixture
+            .manager
+            .repair_source(&SourceTarget::User, &SourceTarget::User),
         RepairOutcome::Unchanged
     );
     assert_eq!(fixture.read(&SourceTarget::User), external);
@@ -679,7 +711,9 @@ fn failures_before_publication_leave_the_source_unchanged() {
         fixture.write(&SourceTarget::User, &original);
         fixture.manager.test_hooks.fail_once(point);
         assert_eq!(
-            fixture.manager.repair_source(&SourceTarget::User),
+            fixture
+                .manager
+                .repair_source(&SourceTarget::User, &SourceTarget::User),
             RepairOutcome::Unchanged,
             "{point}"
         );
@@ -701,7 +735,9 @@ fn an_uncertain_publication_is_reported_and_never_replayed() {
         fixture.write(&SourceTarget::User, &format!("{USER}legacy = 1\n"));
         fixture.manager.test_hooks.fail_once(point);
         assert_eq!(
-            fixture.manager.repair_source(&SourceTarget::User),
+            fixture
+                .manager
+                .repair_source(&SourceTarget::User, &SourceTarget::User),
             RepairOutcome::Committed,
             "{point}"
         );
@@ -718,7 +754,9 @@ fn an_uncertain_publication_is_reported_and_never_replayed() {
         let sequence = fixture.sequence();
         // A later observation sees healthy bytes: no write, no new receipt.
         assert_eq!(
-            fixture.manager.repair_source(&SourceTarget::User),
+            fixture
+                .manager
+                .repair_source(&SourceTarget::User, &SourceTarget::User),
             RepairOutcome::Unchanged
         );
         assert_eq!(fixture.read(&SourceTarget::User), published);
@@ -737,7 +775,9 @@ fn receipts_are_bounded_and_sanitized() {
     writeln!(text, "\"{}\\u0007\" = 1", "k".repeat(300)).unwrap();
     fixture.write(&SourceTarget::User, &text);
     assert_eq!(
-        fixture.manager.repair_source(&SourceTarget::User),
+        fixture
+            .manager
+            .repair_source(&SourceTarget::User, &SourceTarget::User),
         RepairOutcome::Committed
     );
     let receipt = fixture.receipt(&SourceTarget::User).unwrap();
@@ -826,4 +866,425 @@ fn array_removals_keep_neighbouring_layout_and_comments() {
             "{before}"
         );
     }
+}
+
+/// A Workspace that defines a Provider and Model the User selects.
+const WORKSPACE_MODEL: &str = r#"[providers.workspace-provider]
+base_url = "https://example.com/v1"
+api_key = "$MODEL_API_KEY"
+
+[models."workspace-provider/model-a"]
+provider = "workspace-provider"
+id = "model-a"
+protocol = "openai_responses"
+context_window = 128000
+max_output_tokens = 8192
+
+[models."workspace-provider/model-a".capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = false
+"#;
+
+const USER_SELECTING_WORKSPACE_MODEL: &str =
+    "legacy_field = true\n\n# keep\n[agent.model]\nmodel = \"workspace-provider/model-a\"\n";
+
+fn unresolved_diagnostic(fixture: &Fixture, target: &SourceTarget) -> String {
+    let receipt = fixture.receipt(target).unwrap();
+    assert_eq!(receipt.status, ConfigRepairStatus::Unresolved);
+    assert!(receipt.after_revision.is_none());
+    assert!(!receipt.backup_available);
+    receipt.diagnostic.unwrap()
+}
+
+#[test]
+fn semantic_diagnostics_never_echo_authored_values_or_identities() {
+    let provider = |name: &str, url: &str| {
+        format!("[providers.{name}]\nbase_url = \"{url}\"\napi_key = \"$MODEL_API_KEY\"\n")
+    };
+    let model = |key: &str, extra: &str| {
+        format!(
+            "[models.\"{key}\"]\nprovider = \"local\"\nid = \"wire\"\nprotocol = \"openai_responses\"\ncontext_window = 128000\nmax_output_tokens = 8192\n{extra}[models.\"{key}\".capabilities]\ninput_modalities = [\"text\"]\noutput_modalities = [\"text\"]\ntool_calls = true\nreasoning = false\n"
+        )
+    };
+    let local = provider("local", "https://example.com/v1");
+    // (source, expected safe location in the diagnostic)
+    let cases = [
+        // Provider URL carrying a credential-like query.
+        (
+            provider("local", "https://example.com/?token=SECRET_URL"),
+            "providers.*.base_url",
+        ),
+        // A Provider identity is never quoted, valid or not.
+        (
+            provider("SECRET_PROVIDER", "ftp://SECRET_HOST/"),
+            "providers.*.base_url",
+        ),
+        (
+            provider("\"SECRET PROVIDER\"", "https://example.com/v1"),
+            "providers",
+        ),
+        // Model identities and references.
+        (
+            format!("{local}{}", model("local/SECRET MODEL", "")),
+            "models",
+        ),
+        (
+            format!(
+                "{local}{}",
+                model("local/SECRET_MODEL", "")
+                    .replace("max_output_tokens = 8192", "max_output_tokens = 999999")
+            ),
+            "models.*",
+        ),
+        (
+            format!(
+                "{local}{}",
+                model(
+                    "local/SECRET_PARAMS",
+                    "request_params = '{\"model\":\"SECRET_VALUE\"}'\n"
+                )
+            ),
+            "models.*.request_params",
+        ),
+        // A request_params parse failure under a Model identity.
+        (
+            format!(
+                "{local}{}",
+                model(
+                    "local/SECRET_JSON",
+                    "request_params = '{\"SECRET_KEY\": }'\n"
+                )
+            ),
+            "models.*.request_params",
+        ),
+        // Invalid known-field values.
+        (
+            "[environment]\n\"SECRET=ENV\" = \"SECRET_LITERAL\"\n".to_owned(),
+            "environment",
+        ),
+        (
+            "[agent]\nagents = [\"sentinelagent\", \"sentinelagent\"]\n".to_owned(),
+            "agent.agents",
+        ),
+    ];
+    for (source, location) in &cases {
+        let fixture = Fixture::new();
+        let text = format!("legacy_field = true\n{source}");
+        fixture.write(&SourceTarget::User, &text);
+        assert_eq!(
+            fixture
+                .manager
+                .repair_source(&SourceTarget::User, &SourceTarget::User),
+            RepairOutcome::Unchanged,
+            "{text}"
+        );
+        assert_eq!(fixture.read(&SourceTarget::User), text);
+        let diagnostic = unresolved_diagnostic(&fixture, &SourceTarget::User);
+        assert!(
+            diagnostic.contains(&format!(" at {location}")),
+            "{diagnostic} / {text}"
+        );
+        let wire = serde_json::to_string(&fixture.receipt(&SourceTarget::User)).unwrap();
+        for sentinel in ["SECRET", "sentinelagent", "example.com", "MODEL_API_KEY"] {
+            assert!(!wire.contains(sentinel), "{wire}");
+        }
+        assert!(fixture.backups().is_empty());
+    }
+}
+
+#[test]
+fn a_composition_reference_diagnostic_names_its_field_only() {
+    // A Model reference resolved against the composition: the selected
+    // reference is named by its field, never quoted.
+    let fixture = Fixture::new();
+    fixture.write(&SourceTarget::User, USER);
+    let text = "legacy_field = true\n[agent.model]\nmodel = \"local/SECRET_MISSING\"\n";
+    fixture.write(&fixture.workspace, text);
+    assert_eq!(
+        fixture
+            .manager
+            .repair_source(&fixture.workspace, &fixture.workspace),
+        RepairOutcome::Unchanged
+    );
+    let diagnostic = unresolved_diagnostic(&fixture, &fixture.workspace);
+    assert!(diagnostic.contains(" at agent.model"), "{diagnostic}");
+    assert!(
+        !serde_json::to_string(&fixture.receipt(&fixture.workspace))
+            .unwrap()
+            .contains("SECRET")
+    );
+}
+
+#[test]
+fn a_user_may_select_a_model_its_workspace_defines() {
+    // At startup no Workspace is known: the reference is a missing external
+    // fact, never an intrinsic failure.
+    let fixture = Fixture::new();
+    fixture.write(&SourceTarget::User, USER_SELECTING_WORKSPACE_MODEL);
+    fixture.write(&fixture.workspace, WORKSPACE_MODEL);
+    assert_eq!(
+        fixture
+            .manager
+            .repair_source(&SourceTarget::User, &SourceTarget::User),
+        RepairOutcome::Committed
+    );
+    let expected = "\n# keep\n[agent.model]\nmodel = \"workspace-provider/model-a\"\n";
+    assert_eq!(fixture.read(&SourceTarget::User), expected);
+    assert_eq!(fixture.read(&fixture.workspace), WORKSPACE_MODEL);
+    let receipt = fixture.receipt(&SourceTarget::User).unwrap();
+    assert_eq!(receipt.status, ConfigRepairStatus::Repaired);
+    assert_eq!(receipt.changes, vec![removed("legacy_field")]);
+    assert!(fixture.receipt(&fixture.workspace).is_none());
+    // The composition Session resolution builds is complete and valid.
+    let directory = fixture.workspace.workspace().unwrap().to_path_buf();
+    let session = fixture
+        .manager
+        .resolve_session(&super::super::SessionConfigInput::new(directory))
+        .unwrap();
+    assert_eq!(
+        session.config().initial_model().model.to_string(),
+        "workspace-provider/model-a"
+    );
+
+    // With that Workspace selected, the composition is checked and passes.
+    let fixture = Fixture::new();
+    fixture.write(&SourceTarget::User, USER_SELECTING_WORKSPACE_MODEL);
+    fixture.write(&fixture.workspace, WORKSPACE_MODEL);
+    assert_eq!(
+        fixture
+            .manager
+            .repair_source(&SourceTarget::User, &fixture.workspace),
+        RepairOutcome::Committed
+    );
+    assert_eq!(fixture.read(&SourceTarget::User), expected);
+}
+
+#[test]
+fn an_available_composition_is_checked_like_session_resolution() {
+    // The User's context reserve cannot fit the Workspace Model's window:
+    // decidable only once both scopes are known.
+    let user = format!("{USER_SELECTING_WORKSPACE_MODEL}[context]\nreserve_tokens = 127000\n");
+    let fixture = Fixture::new();
+    fixture.write(&SourceTarget::User, &user);
+    fixture.write(&fixture.workspace, WORKSPACE_MODEL);
+    let directory = fixture.workspace.workspace().unwrap().to_path_buf();
+    assert_eq!(
+        fixture
+            .manager
+            .repair_source(&SourceTarget::User, &fixture.workspace),
+        RepairOutcome::Unchanged
+    );
+    assert_eq!(fixture.read(&SourceTarget::User), user);
+    let diagnostic = unresolved_diagnostic(&fixture, &SourceTarget::User);
+    assert!(
+        diagnostic.contains("context budgets cannot fit the selected models at context"),
+        "{diagnostic}"
+    );
+    assert!(fixture.backups().is_empty());
+    // Session resolution rejects the same composition for the same reason.
+    std::fs::write(
+        fixture.path(&SourceTarget::User),
+        user.replace("legacy_field = true\n", ""),
+    )
+    .unwrap();
+    let failure = fixture
+        .manager
+        .resolve_session(&super::super::SessionConfigInput::new(directory))
+        .unwrap_err();
+    assert_eq!(failure.diagnostic.path, "context");
+    assert!(!failure.incomplete);
+}
+
+#[test]
+fn independent_constraints_hold_without_a_default_model() {
+    for source in [
+        "legacy_field = true\n[subagents]\nmax_concurrent = 0\n",
+        "legacy_field = true\n[tool_deadline_policy]\nhard_deadline_ms = 0\n",
+    ] {
+        for (target, scope) in [
+            (SourceTarget::User, SourceTarget::User),
+            (Fixture::new().workspace, SourceTarget::User),
+        ] {
+            let fixture = Fixture::new();
+            let (target, scope) = match target {
+                SourceTarget::User => (SourceTarget::User, scope),
+                SourceTarget::Workspace { .. } => {
+                    (fixture.workspace.clone(), fixture.workspace.clone())
+                }
+            };
+            fixture.write(&target, source);
+            let applications = fixture.sequence();
+            assert_eq!(
+                fixture.manager.repair_source(&target, &scope),
+                RepairOutcome::Unchanged,
+                "{source}"
+            );
+            assert_eq!(fixture.read(&target), source);
+            let diagnostic = unresolved_diagnostic(&fixture, &target);
+            assert!(
+                diagnostic.contains("automatic repair never corrects an invalid value"),
+                "{diagnostic}"
+            );
+            assert!(fixture.backups().is_empty());
+            assert_eq!(fixture.sequence(), applications + 1);
+        }
+    }
+    // Resolution agrees: invalid, never merely incomplete.
+    let fixture = Fixture::new();
+    fixture.write(&fixture.workspace, "[subagents]\nmax_concurrent = 0\n");
+    let directory = fixture.workspace.workspace().unwrap().to_path_buf();
+    let failure = fixture
+        .manager
+        .resolve_session(&super::super::SessionConfigInput::new(directory.clone()))
+        .unwrap_err();
+    assert!(!failure.incomplete);
+    assert_eq!(failure.diagnostic.path, "subagents.max_concurrent");
+    // And so does source inspection.
+    let settings = fixture
+        .manager
+        .read_source_settings(&fixture.workspace)
+        .unwrap();
+    assert!(
+        settings
+            .prospective_diagnostic
+            .unwrap()
+            .contains("at subagents.max_concurrent")
+    );
+    // Without the invalid value the same partial composition is incomplete.
+    fixture.write(&fixture.workspace, "[subagents]\nmax_concurrent = 2\n");
+    let failure = fixture
+        .manager
+        .resolve_session(&super::super::SessionConfigInput::new(directory))
+        .unwrap_err();
+    assert!(failure.incomplete);
+}
+
+#[test]
+fn a_partial_intrinsically_valid_source_is_repaired_without_inventing_facts() {
+    let fixture = Fixture::new();
+    let text = "legacy_field = true\n[agent]\ninstructions = \"Be brief.\"\n";
+    fixture.write(&SourceTarget::User, text);
+    assert_eq!(
+        fixture
+            .manager
+            .repair_source(&SourceTarget::User, &SourceTarget::User),
+        RepairOutcome::Committed
+    );
+    assert_eq!(
+        fixture.read(&SourceTarget::User),
+        "[agent]\ninstructions = \"Be brief.\"\n"
+    );
+    let receipt = fixture.receipt(&SourceTarget::User).unwrap();
+    assert_eq!(receipt.changes, vec![removed("legacy_field")]);
+}
+
+#[test]
+fn a_planted_backup_symlink_is_refused_before_publication() {
+    let fixture = Fixture::new();
+    let text = format!("{USER}legacy = 1\n");
+    fixture.write(&SourceTarget::User, &text);
+    let root = fixture.manager.runtime_root().to_path_buf();
+    std::fs::create_dir_all(&root).unwrap();
+    let workspace = fixture.workspace.workspace().unwrap().to_path_buf();
+    std::os::unix::fs::symlink(&workspace, root.join(BACKUP_DIRECTORY)).unwrap();
+    assert_eq!(
+        fixture
+            .manager
+            .repair_source(&SourceTarget::User, &SourceTarget::User),
+        RepairOutcome::Unchanged
+    );
+    assert_eq!(fixture.read(&SourceTarget::User), text);
+    assert!(
+        unresolved_diagnostic(&fixture, &SourceTarget::User).contains("could not be backed up")
+    );
+    assert_eq!(std::fs::read_dir(&workspace).unwrap().count(), 0);
+}
+
+#[test]
+fn a_backup_directory_replaced_after_opening_cannot_redirect_the_copy() {
+    let fixture = Fixture::new();
+    let text = format!("{USER}legacy = 1\n");
+    fixture.write(&SourceTarget::User, &text);
+    let root = fixture.manager.runtime_root().to_path_buf();
+    let workspace = fixture.workspace.workspace().unwrap().to_path_buf();
+    let (directory, moved, target) = (
+        root.join(BACKUP_DIRECTORY),
+        root.join("moved-backups"),
+        workspace.clone(),
+    );
+    // Between opening the directory and writing through it, the name is
+    // renamed away and replaced by a symlink into the Workspace.
+    fixture
+        .manager
+        .test_hooks
+        .insert("backup_directory_opened", move || {
+            std::fs::rename(&directory, &moved).unwrap();
+            std::os::unix::fs::symlink(&target, &directory).unwrap();
+        });
+    assert_eq!(
+        fixture
+            .manager
+            .repair_source(&SourceTarget::User, &SourceTarget::User),
+        RepairOutcome::Committed
+    );
+    // Nothing reached the Workspace; the exact private copy is in the
+    // directory that was opened.
+    assert_eq!(std::fs::read_dir(&workspace).unwrap().count(), 0);
+    let copies: Vec<_> = std::fs::read_dir(root.join("moved-backups"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(copies.len(), 1);
+    assert_eq!(std::fs::read(&copies[0]).unwrap(), text.as_bytes());
+    assert_eq!(
+        std::fs::metadata(&copies[0]).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert!(
+        fixture
+            .receipt(&SourceTarget::User)
+            .unwrap()
+            .backup_available
+    );
+}
+
+#[test]
+fn an_unsupported_user_version_is_invalid_in_projection_and_resolution_alike() {
+    let fixture = Fixture::new();
+    let text = format!("schema_version = 9\n{USER}");
+    fixture.write(&SourceTarget::User, &text);
+    let settings = fixture
+        .manager
+        .read_source_settings(&fixture.workspace)
+        .unwrap();
+    assert!(settings.user.authored.is_none());
+    assert!(settings.user.diagnostic.unwrap().contains("schema_version"));
+    assert!(settings.resolved.is_none());
+    assert!(settings.prospective_diagnostic.is_some());
+    assert!(
+        fixture.receipt(&SourceTarget::User).is_none(),
+        "reads are read-only"
+    );
+    assert_eq!(fixture.read(&SourceTarget::User), text);
+    // Manual repair stays available; afterwards both views agree again.
+    let repaired = fixture
+        .manager
+        .write_source_settings(
+            &SourceTarget::User,
+            &settings.user.revision,
+            super::super::settings::SourceMutation::RepairConfig {
+                document: USER.into(),
+            },
+        )
+        .unwrap();
+    assert!(repaired.user.authored.is_some());
+    let settings = fixture
+        .manager
+        .read_source_settings(&fixture.workspace)
+        .unwrap();
+    assert!(settings.user.authored.is_some());
+    assert!(settings.resolved.is_some());
+    assert!(settings.prospective_diagnostic.is_none());
 }

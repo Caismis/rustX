@@ -363,27 +363,17 @@ fn read(path: &Path) -> Result<Option<Vec<u8>>, SettingsError> {
 fn revision(bytes: Option<&[u8]>) -> String {
     super::super::settings::revision(bytes)
 }
-fn parse(bytes: Option<&[u8]>) -> Result<RuntimeLayer, SettingsError> {
-    crate::toml_authoring::parse(bytes.unwrap_or(b"")).map_err(|_| SettingsError::Invalid)
-}
+/// The prospective composition's native semantics, as Session resolution and
+/// automatic repair decide them; safe text only.
 fn source_resolution_diagnostic(document: &RuntimeLayer) -> Option<String> {
-    let validate = || -> Result<(), String> {
-        let config = document.clone().resolve()?;
-        let catalog = crate::model::catalog::ModelCatalog::from_document(
-            crate::model::authoring::Catalog {
-                schema_version: crate::model::catalog::MODEL_CATALOG_SCHEMA_VERSION,
-                providers: document.providers.clone().unwrap_or_default(),
-                models: document.models.clone().unwrap_or_default(),
-            }
-            .into(),
-        )
-        .map_err(|error| error.to_string())?;
-        catalog
-            .model(&config.initial_model().model)
-            .map_err(|error| error.to_string())?;
-        Ok(())
-    };
-    validate().err()
+    match super::composition_semantics(document) {
+        Ok(super::Composition::Complete) => None,
+        Ok(super::Composition::NoDefaultModel) => Some(
+            "no unambiguous default model selected; set agent.model.model in User or Workspace rustx.toml"
+                .into(),
+        ),
+        Err(failure) => Some(failure.summary()),
+    }
 }
 fn view(path: PathBuf, bytes: Option<&[u8]>, workspace: bool) -> SourceView<SourceDocumentView> {
     let (authored, diagnostic) =
@@ -976,8 +966,11 @@ impl UserConfigManager {
         let input_revision = super::source_manifest_revision(&manifest);
         let mut provenance = BTreeMap::new();
         let resolved = (|| {
+            // Composition reads each document under its own source contract,
+            // exactly as its source view and Session resolution do.
             let mut merged = RuntimeLayer::default();
-            let user_layer = parse(user_bytes.as_deref())?;
+            let user_layer = super::parse_layer(&user, user_bytes.as_deref().unwrap_or(b""), false)
+                .map_err(|_| SettingsError::Invalid)?;
             merged.overlay(
                 user_layer,
                 &super::Origin::User {

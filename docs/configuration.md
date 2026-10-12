@@ -613,12 +613,29 @@ revision: comments, formatting, quoting, secrets and every unrelated value stay 
 the editing model allows, and a second plan of the candidate must find nothing
 left to do. The candidate is valid only if the production source parser accepts
 it (types, required fields, `request_params`, Workspace `app_server`, the current
-schema version) and native semantics accept the composition consumers actually
-use: a Workspace over the current User source, the User source on its own. A
-composition that selects no default model is incomplete, not invalid, because the
-other scope may select it; then only its Model Catalog and root Tool selection
-are decided. Nothing here resolves credentials, connects MCP, prepares Python,
-creates a Session or calls a model.
+schema version) and it satisfies one native semantic contract that Session
+resolution and source inspection share:
+
+- **Source-intrinsic constraints always apply**, with or without a default
+  model: App Server process policy, every Provider and Model entry on its own
+  terms (identities, endpoint, credential source, limits, capabilities, Profiles,
+  compatibility fields, Model `request_params`), and every root runtime
+  constraint the document decides alone (context and deadline policies, the Tool
+  environment, the root Agent profile and Tool selection, subagent concurrency,
+  admission and Workflow identities).
+- **Composition-dependent constraints apply once the composition is known**: a
+  Model's Provider, a non-empty catalog, the selected models, their Profiles and
+  overrides, and the context budgets they bound. A source may leave these facts
+  to the other scope. A Workspace is composed over the current User source; the
+  User is composed with the selected Workspace at Session creation, load and
+  reconcile, and is checked on its own terms only at startup, where no Workspace
+  is selected and none is scanned. An unreadable or itself invalid other source
+  supplies no facts, so it never blocks this source's repair. A composition
+  without a default model is incomplete, not invalid, once everything else holds.
+
+`.agents` resources (MCP servers named by `mcp_tool_policies`, Agents, Skills)
+are not source facts. Nothing here resolves credentials, connects MCP, prepares
+Python, creates a Session or calls a model.
 
 A changed source is committed through the same native writer primitive as
 `configuration/sourceWrite`: the source writer lock, an exact revision check
@@ -627,7 +644,13 @@ and synced file, atomic replacement and a parent-directory sync. Before that, an
 exact copy of the original bytes is written to private storage under the bound
 runtime root (`<runtime_root>/configuration-backups/`, directory `0700`, file
 `0600`, never inside the Workspace), named by source identity and original
-revision; a backup failure leaves the source unchanged. A healthy source is read
+revision; a backup failure leaves the source unchanged. The bound runtime root is
+the trust anchor (canonical, disjoint from every Workspace, rechecked before each
+backup). The backup directory is opened once without following a symlink and
+verified as the current user's directory; the staged copy, its no-clobber
+publication link, the comparison with an existing copy and the directory sync all
+go through that handle, so replacing the directory or planting a symlink cannot
+redirect the bytes. A healthy source is read
 once without a lock or any write, so it gets no lock file, no backup and no
 receipt. An external edit that races the repair supersedes it: nothing is written
 and the next boundary plans from the new bytes. A failure before replacement
@@ -658,10 +681,12 @@ Each source keeps its latest repair observation in a finite, process-local
 ledger: `repaired`, `unresolved` or `commit_uncertain`, the exact before and
 committed revisions, the change count and up to 64 changes (removed field paths,
 removed Tool names with reason, the schema version update), whether more were
-omitted, whether a backup exists, and for a failure a diagnostic built from the
-parser's location and classification or the native semantic message — never a
-removed value, source excerpt, credential, `request_params` payload or backup
-content. Re-observing the same bytes is the same receipt. An unresolved receipt is
+omitted, whether a backup exists, and for a failure a diagnostic built only from
+native constants: the parser's or the semantic owner's fixed category, line and
+column, and a schema location in which every Provider, Model, Profile or other
+open-map identity is `*` (a path the schema cannot explain is dropped). It never
+holds a removed value, an invalid value or identity, a domain error message, a
+source excerpt, a credential, a `request_params` payload or backup content. Re-observing the same bytes is the same receipt. An unresolved receipt is
 withdrawn once the source is found healthy at a later boundary or a committed
 `configuration/sourceWrite` leaves it satisfying its source contract.
 

@@ -758,7 +758,9 @@ fn cfg235_oversized_invalid_projection_preserves_authoritative_diagnostics() {
 fn cfg235_oversized_incomplete_projection_preserves_incomplete_diagnostic() {
     let f = Fixture::new();
     f.user(json!({}));
-    f.project(json!({"environment": {"PRIVATE":"RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"}, "agent": {"tools": {"builtin": (0..12000).map(|index| format!("unresolved_tool_identity_{index}")).collect::<Vec<_>>()}}}));
+    // Policies naming `.agents` MCP servers are composition facts: valid in
+    // the source, unresolved here, and large enough to omit the projection.
+    f.project(json!({"environment": {"PRIVATE":"RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"}, "mcp_tool_policies": (0..12000).map(|index| (format!("unresolved_server_identity_{index}"), json!({"execution": "background_only"}))).collect::<serde_json::Map<_,_>>()}));
     let (report, _) = super::diagnostics::inspect("config_show", &f.request, &f.host);
     assert_eq!(report.exit_code(), 3);
     assert!(report.partial.is_some());

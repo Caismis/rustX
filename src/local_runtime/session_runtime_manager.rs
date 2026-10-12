@@ -1151,11 +1151,7 @@ impl SessionRuntimeManager {
             target.validate().map_err(SourceSettingsError::Source)?;
             // Explicit reconciliation observes external edits: the User source
             // composes every target, the Workspace only its own.
-            let mut sources = vec![super::configuration::settings::SourceTarget::User];
-            if target.workspace().is_some() {
-                sources.push(target.clone());
-            }
-            owner.repair_sources(&sources);
+            owner.repair_sources(&target);
             let mut application = owner.applications.lock();
             owner.capture_source_consumers(&mut application, &target);
             owner.applications.notify(&application);
@@ -1176,13 +1172,18 @@ impl SessionRuntimeManager {
     /// transfers to the coordinator exactly like a committed source write, so
     /// one commit is captured once; a healthy or already-repaired source takes
     /// no lock on disk, writes nothing and captures nothing.
-    pub(super) fn repair_sources(&self, targets: &[super::configuration::settings::SourceTarget]) {
+    pub(super) fn repair_sources(&self, scope: &super::configuration::settings::SourceTarget) {
         use super::configuration::repair::RepairOutcome;
+        use super::configuration::settings::SourceTarget;
+        // User first: the Workspace composes over the User it will be
+        // resolved with.
+        let targets =
+            std::iter::once(SourceTarget::User).chain(scope.workspace().map(|_| scope.clone()));
         for target in targets {
             let mut application = self.applications.lock();
-            let outcome = self.configuration.repair_source(target);
+            let outcome = self.configuration.repair_source(&target, scope);
             if outcome == RepairOutcome::Committed {
-                self.capture_source_consumers(&mut application, target);
+                self.capture_source_consumers(&mut application, &target);
                 self.applications.notify(&application);
             }
             drop(application);
@@ -1196,11 +1197,11 @@ impl SessionRuntimeManager {
     /// its fresh resolution. No ancestor or other Workspace is consulted.
     fn repair_session_sources(&self, cwd: &std::path::Path) {
         use super::configuration::settings::SourceTarget;
-        let mut targets = vec![SourceTarget::User];
-        if let Ok(directory) = super::configuration::canonical_directory(cwd) {
-            targets.push(SourceTarget::Workspace { directory });
-        }
-        self.repair_sources(&targets);
+        let scope = super::configuration::canonical_directory(cwd)
+            .map_or(SourceTarget::User, |directory| SourceTarget::Workspace {
+                directory,
+            });
+        self.repair_sources(&scope);
     }
 
     fn capture_source_consumers(
