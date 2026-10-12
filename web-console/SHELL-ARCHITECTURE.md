@@ -82,7 +82,15 @@ preparation before the separate Settings actor opens its overlay. AppServerClien
 and Session Lifecycle own authoritative reconnect/resync and admitted mutation
 settlement. Fork View Source publishes a read-only history route using authorized
 exact native Node and Message reads; it never attaches or switches the source.
-ChatViewport owns its exact anchor landing and scroll cancellation. Unmount/collapse/search/navigation never cancel committed work.
+The browser-session Composer snapshot retains unsent text, selection and restored
+uploads across history unmounts; the existing AttachmentIntakes owner retains
+local Files. History and Return preserve this draft binding while each route
+publication replaces control authority. Native attachment/generation replacement
+keeps recoverable local text/Files but retires receipts and upload operations;
+restoration never replays them. Other executable destinations replace the draft.
+ChatViewport owns its exact anchor landing and scroll cancellation. View Source
+registers cancellation in the initiating click stack against the exact Shell
+pending intent. A correlated CANCEL cannot retire a newer or committed route. Unmount/collapse/search/navigation never cancel committed work.
 Only widths, collapse, menus, theme, search text and section selection are local.
 
 ## Exclusions and deviations

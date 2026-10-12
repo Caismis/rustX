@@ -1,3 +1,4 @@
+import type { ComposerDraft } from '../composer/draft';
 import type { FirstSubmission } from '../new-conversation/first-submit';
 import { message } from '../../locale/translation';
 import { useTranslation, useNotice } from '../../locale/react';
@@ -22,11 +23,12 @@ import { Button } from '../../presentation/primitives/Button';
 import css from '../../presentation/agent/Composer.module.css';
 import { observeControlRow } from '../../presentation/agent/control-row-layout';
 const emptyContent: UserInputBlock[] = [];
-export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, modelPicker, onRetainedRemove, onRetainedRecover, intakeOwner, uploadPolicy, onReconcile, binding = 'default', firstSubmission, disabled, submitDisabled = false, busy, active, onSend, onUpload, onCancel, onCommand, commandAvailable, hasGoal = false, lineageSwitchSafe = false, initialContent = emptyContent, consumed, model, permission, onDraftSend, cancellationAvailable = !disabled, cancellationScope }: {
+export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, modelPicker, onRetainedRemove, onRetainedRecover, intakeOwner, uploadPolicy, onReconcile, draftOwner, draftIdentity, receiptAuthority, binding = 'default', firstSubmission, disabled, submitDisabled = false, busy, active, onSend, onUpload, onCancel, onCommand, commandAvailable, hasGoal = false, lineageSwitchSafe = false, initialContent = emptyContent, consumed, model, permission, onDraftSend, cancellationAvailable = !disabled, cancellationScope }: {
   placeholder?: string; messageLabel?: string; busyEnterBehavior?: import('../composer/preferences').BusyEnterBehavior;
   modelPicker?: ModelPickerState;
   onRetainedRemove?: (id: string) => void; onRetainedRecover?: (retry: boolean) => void;
   intakeOwner?: AttachmentIntake; uploadPolicy?: UploadPolicy; onReconcile?: UploadPort['status'];
+  draftOwner?: ComposerDraft; draftIdentity?: string; receiptAuthority?: string;
   firstSubmission?: FirstSubmission; binding?: string; submitDisabled?: boolean; disabled: boolean; busy: boolean; active: boolean; model?: ReactNode; permission?: ReactNode;
   onDraftSend?: (text: string, files: readonly File[], ids?: readonly string[]) => Promise<boolean>; cancellationAvailable?: boolean; cancellationScope?: StopScope;
   onSend: (text: string, receipts: readonly UploadReceipt[], delivery: 'send' | 'steer', acknowledged?: () => void) => Promise<boolean>;
@@ -40,7 +42,9 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
   const [stopSequence] = useState(() => new StopSequence());
   const composing = useRef(false);
   const escapePress = useRef<{ event: KeyboardEvent; accept: ReturnType<StopSequence['prepare']> } | undefined>(undefined);
-  const [restoreSupported, setRestoreSupported] = useState(() => editableContent(initialContent));
+  const editorIdentity = draftIdentity ?? binding;
+  const saved = draftOwner?.snapshot?.identity === editorIdentity ? draftOwner.snapshot : undefined;
+  const [restoreSupported, setRestoreSupported] = useState(() => saved?.supported ?? editableContent(initialContent));
   disabled = disabled || !restoreSupported;
   const [localIntake] = useState(() => new AttachmentIntake());
   const intake = intakeOwner ?? localIntake;
@@ -56,7 +60,7 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
   const pick = (picked: IntakeInput[]) => {
     if (!disabled && !busy) intake.add(picked, uploadPolicy, onDraftSend ? undefined : port);
   };
-  const [draft, setDraft] = useState(() => (inTranscript ? '' : firstSubmission?.draft.text) ?? (restoreSupported ? initialContent.flatMap(block => block.type === 'text' ? [block.text] : []).join('') : ''));
+  const [draft, setDraft] = useState(() => saved?.text ?? (inTranscript ? '' : firstSubmission?.draft.text) ?? (restoreSupported ? initialContent.flatMap(block => block.type === 'text' ? [block.text] : []).join('') : ''));
   const draftBinding = useRef(binding);
   const restoredInput = useRef(initialContent);
   const retainedInput = useRef(retained);
@@ -72,7 +76,9 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
     invocation.current = undefined;
     setDraft(current => current === invoked.draft ? '' : current);
   }, [consumed]);
-  const [restored, setRestored] = useState(() => restoreSupported ? initialContent.flatMap(block => block.type === 'upload' ? [block] : []) : []);
+  const [restored, setRestored] = useState(() => saved ? saved.receiptAuthority === receiptAuthority ? saved.restored : [] : restoreSupported ? initialContent.flatMap(block => block.type === 'upload' ? [block] : []) : []);
+  const receiptsAt = useRef(receiptAuthority);
+  if (receiptsAt.current !== receiptAuthority) { receiptsAt.current = receiptAuthority; setRestored([]); }
   const row = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => observeControlRow(row.current!), []);
   const picker = useRef<HTMLInputElement>(null);
@@ -80,6 +86,17 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
   const pastedCaret = useRef<{ binding: string; caret: number } | undefined>(undefined);
   useLayoutEffect(() => { const next = pastedCaret.current; pastedCaret.current = undefined; if (next?.binding === binding) input.current?.setSelectionRange(next.caret, next.caret); }, [draft, binding]);
   const trigger = useInputTrigger(input);
+  const rememberSelection = () => {
+    const element = input.current, snapshot = draftOwner?.snapshot;
+    if (element && snapshot?.identity === editorIdentity) snapshot.selection = { start: element.selectionStart, end: element.selectionEnd, direction: element.selectionDirection };
+  };
+  useLayoutEffect(() => {
+    if (draftOwner) draftOwner.snapshot = { identity: editorIdentity, text: draft, restored, supported: restoreSupported, receiptAuthority, selection: draftOwner.snapshot?.identity === editorIdentity ? draftOwner.snapshot.selection : undefined };
+  }, [draftOwner, editorIdentity, draft, restored, restoreSupported, receiptAuthority]);
+  useLayoutEffect(() => {
+    const selection = draftOwner?.snapshot?.selection;
+    if (selection) input.current?.setSelectionRange(selection.start, selection.end, selection.direction);
+  }, [draftOwner, editorIdentity]);
   if (draftBinding.current !== binding || restoredInput.current !== initialContent) {
     draftBinding.current = binding;
     restoredInput.current = initialContent;
@@ -190,7 +207,8 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
             setDraft(next.value); trigger.track(next.value);
             pastedCaret.current = { binding, caret: next.caret };
           }}
-          onBlur={() => { composing.current = false; stopSequence.reset(); }}
+          onSelect={rememberSelection}
+          onBlur={() => { rememberSelection(); composing.current = false; stopSequence.reset(); }}
           onCompositionStart={() => { composing.current = true; stopSequence.reset(); }} onCompositionEnd={() => { composing.current = false; }}
           onKeyDownCapture={event => {
             if (event.key === 'Escape') escapePress.current = { event: event.nativeEvent, accept: stopSequence.prepare() };

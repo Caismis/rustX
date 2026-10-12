@@ -1,5 +1,6 @@
 import { useTranslation } from '../../locale/react';
 import { useState } from 'react';
+import { UploadFailure } from '../../client/uploads';
 import { sameTarget, type AppServerClient } from '../../client/app-server';
 import { useClientSelector, sameValue, transportSelection } from '../../client/selectors';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
@@ -15,6 +16,7 @@ import { ConversationDocks, ConversationTotals } from './ConversationLive';
 import { ContextSeat } from './ContextSeat';
 import { Interactions } from './Interactions';
 import type { CommandId } from '../commands/registry';
+import type { ComposerDraft } from '../composer/draft';
 import { ComposerSeat } from './ComposerSeat';
 
 export function ConversationStatus({ client, sessionId, recover }: { client: AppServerClient; sessionId: string; recover: (action: SessionRecovery) => void }) {
@@ -24,17 +26,18 @@ export function ConversationStatus({ client, sessionId, recover }: { client: App
 }
 
 /** Execution admission belongs at the resident composer seat, never the shell. */
-export function ConversationSeat({ client, host, authority, associations, sessionId, initialWorkspace, workspacePicked, binding, current, executable, consumed, restored, preparePublication, onCommand }: {
+export function ConversationSeat({ client, host, authority, associations, sessionId, initialWorkspace, workspacePicked, draftOwner, binding, current, executable, consumed, restored, preparePublication, onCommand }: {
   client: AppServerClient; host: ProductHostWorkspaces; authority: WorkspaceAuthority; associations: WorkspaceAssociations; sessionId?: string; initialWorkspace?: string;
   workspacePicked?: (id: string) => void;
-  executable: boolean; binding: string; current: () => boolean; consumed?: { id: string; sequence: number };
+  draftOwner?: ComposerDraft; executable: boolean; binding: string; current: () => boolean; consumed?: { id: string; sequence: number };
   restored?: { conversation: string; content: UserInputBlock[] }; preparePublication: () => ((id: string) => (() => boolean) | void);
   onCommand: (id: CommandId) => void;
 }) {
   const state = useClientSelector(client, state => ({ ...transportSelection(state), composer: composerFacts(sessionId ? state.views[sessionId] : undefined) }), sameValue);
   const view = sessionId ? client.getSnapshot().views[sessionId] : undefined;
   const owner = JSON.stringify([state.generation, sessionId, binding]);
-  const uploadCurrent = () => current() && state.generation === client.getSnapshot().generation && sameTarget(view?.target, sessionId ? client.getSnapshot().views[sessionId]?.target : undefined);
+  const nativeUploadCurrent = () => !!view && client.isAttachmentControlCurrent(view.id, view.attachmentObservation) && state.generation === client.getSnapshot().generation && sameTarget(view?.target, sessionId ? client.getSnapshot().views[sessionId]?.target : undefined);
+  const uploadCurrent = () => current() && nativeUploadCurrent();
   const cancellation = view && executable && current() ? client.cancellationTarget(view.id) : undefined;
   const [sending, setSending] = useState<string>();
   const [failure, setFailure] = useState<{ owner: string; message: string }>();
@@ -43,7 +46,7 @@ export function ConversationSeat({ client, host, authority, associations, sessio
   const disabled = !attached || !executable || !!view?.modelMutation || !!view?.snapshot?.shutting_down || !!view?.snapshot?.durability_failure;
   return <ComposerSeat>
     <div hidden={!!view?.snapshot?.pending_interactions?.length}>
-      <ConversationComposer client={client} host={host} authority={authority} associations={associations} initialWorkspace={initialWorkspace} workspacePicked={workspacePicked} binding={binding} activeView={view} current={current} consumed={consumed} preparePublication={preparePublication}
+      <ConversationComposer draftOwner={draftOwner} client={client} host={host} authority={authority} associations={associations} initialWorkspace={initialWorkspace} workspacePicked={workspacePicked} binding={binding} activeView={view} current={current} consumed={consumed} preparePublication={preparePublication}
         context={view && <><ContextSeat client={client} sessionId={view.id}/><ConversationDocks key={view.id} client={client} sessionId={view.id} disabled={disabled}/></>}
         active={view ? {
           initialContent: restored?.conversation === view.snapshot?.conversation_id ? restored?.content : undefined,
@@ -52,11 +55,17 @@ export function ConversationSeat({ client, host, authority, associations, sessio
           consumed, cancellationAvailable: !!cancellation,
           cancellationScope: cancellation ? { authority: client, identity: JSON.stringify([binding, cancellation]) } : undefined,
           onCancel: () => { setFailure(undefined); if (!cancellation || !current()) return; void client.cancelTurn(cancellation).catch(cause => setFailure({ owner, message: String(cause) })); },
-          onUpload: (files, operation) => client.upload(view.id, files, { current: uploadCurrent, acknowledged: () => {} }, operation),
-          onReconcile: async operation => { if (!uploadCurrent()) throw new Error('Upload view replaced'); const result = await client.uploadStatus(view.id, operation); if (!uploadCurrent()) throw new Error('Upload view replaced'); return result; },
+          onUpload: (files, operation) => {
+            if (!uploadCurrent()) return Promise.reject(new UploadFailure('failed', 'Upload view replaced'));
+            // The current gesture admits work. Once sent, its native result
+            // belongs to this draft/attachment, independently of route rendering.
+            return client.upload(view.id, files, { current: nativeUploadCurrent, acknowledged: () => {} }, operation);
+          },
+          onReconcile: async operation => { if (!uploadCurrent()) throw new Error('Upload view replaced'); const result = await client.uploadStatus(view.id, operation); if (!nativeUploadCurrent()) throw new Error('Upload view replaced'); return result; },
           onSend: async (text, receipts, delivery, acknowledged) => {
+            if (!uploadCurrent()) return false;
             const generation = client.getSnapshot().generation; setFailure(undefined); setSending(owner);
-            try { await client.send(view.id, text, receipts, delivery, acknowledged); return generation === client.getSnapshot().generation; }
+            try { await client.send(view.id, text, receipts, delivery, () => { if (uploadCurrent()) acknowledged?.(); }, uploadCurrent); return uploadCurrent() && generation === client.getSnapshot().generation; }
             finally { setSending(value => value === owner ? undefined : value); }
           },
         } : undefined}/>

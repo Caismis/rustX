@@ -508,14 +508,18 @@ it('a user scroll retires disposable history preparation without touching active
  const v=await clippedReading('completed');v.ui.unmount();
  try {
   const retired=vi.fn();
-  const props={client:v.server.client,sessionId:'A',mode:'chat' as const,disabled:false,onHistorical:()=>{}};
+  const state=structuredClone(v.server.snapshots.get('A')!); state.transcript.inherited_through='0';
+  await v.server.update('A', state);
+  v.server.handlers.set('session/node', () => ({type:'node',node:{id:v.server.client.getSnapshot().views.A.nodeId!, ordinal:'1',conversation_id:state.conversation_id,origin:{type:'fork',source_session:'B',source_node:'source',source_message:'source-message',source_surface_revision:'1',side:'after'}}}));
+  const props={client:v.server.client,sessionId:'A',mode:'chat' as const,disabled:false,onHistorical:()=>{},onOpenSource:(_origin: unknown, begin?: ChatViewport['beginNavigation'])=>{begin?.(retired);}};
   const ui=await act(async()=>render(<ConversationLive {...props}/>));
   const viewport=ui.container.querySelector<HTMLElement>('.conversation-scroll')!;
   Object.defineProperties(viewport,{scrollHeight:{value:2200},clientHeight:{value:200}});
   v.flush();viewport.scrollTop=1300;fireEvent.scroll(viewport);v.flush();
   const before=v.server.client.getSnapshot().views.A;
-  await act(async()=>ui.rerender(<ConversationLive {...props} pendingHistory={{}} retireHistory={retired}/>));
-  viewport.scrollTop=1400;fireEvent.scroll(viewport);
+  // Both events occur in one synchronous act stack. No render or passive
+  // effect can register cancellation between the click and the scroll.
+  act(()=>{ fireEvent.click(ui.getByRole('button',{name:'View source'})); viewport.scrollTop=1400;fireEvent.scroll(viewport); });
   expect(retired).toHaveBeenCalledTimes(1);
   expect(v.server.client.getSnapshot().views.A.target).toBe(before.target);
   expect(v.server.client.getSnapshot().views.A.history).toBe(before.history);

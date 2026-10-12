@@ -120,7 +120,8 @@ const settings = createActor(settingsNavigationMachine, { input: { lookup: creat
 const navigation = createActor(shellNavigationMachine, { input: { client: server.client, settings } }).start();
 const connection = new ConnectionController(server.client);
 let root = createRoot(document.getElementById('root')!);
-const render = () => root.render(<AppSurface client={server.client} workspaceHost={server.workspaceHost} workspaceAuthority={workspaceAuthority} connection={connection} navigation={navigation}/>);
+const composerDraft = {};
+const render = () => root.render(<AppSurface composerDraft={composerDraft} client={server.client} workspaceHost={server.workspaceHost} workspaceAuthority={workspaceAuthority} connection={connection} navigation={navigation}/>);
 render();
 const handled = new Set<Request>(server.requests.filter(row => row.request.method === 'initialize' || row.request.method === 'session/list').map(row => row.request));
 (window as any).startupFixture = {

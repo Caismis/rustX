@@ -17,7 +17,7 @@ async function fixture(source = 'C', authorized = true) {
   const before = server.requests.length, target = server.client.target('A'), claims = server.claims();
   return { ...f, server, origin, before, target, claims };
 }
-const forbidden = (f: Awaited<ReturnType<typeof fixture>>) => f.server.requests.slice(f.before).filter(row => ['session/attach', 'session/detach', 'session/switchNode', 'turn/start', 'inbound/steer'].includes(row.request.method));
+const forbidden = (f: Awaited<ReturnType<typeof fixture>>) => f.server.requests.slice(f.before).filter(row => ['session/attach', 'session/detach', 'session/switchNode', 'turn/start', 'turn/steer'].includes(row.request.method));
 for (const source of ['A', 'B', 'C']) it(`View Source reads exact non-selected Node and distant Message without executable effects: ${source}`, async () => {
   const f = await fixture(source);
   f.actor.send({ type: 'OPEN', destination: { kind: 'history', origin: f.origin } });
@@ -85,4 +85,25 @@ for (const method of ['session/node', 'session/history'] as const) for (const su
   await waitFor(f.actor, snapshot => snapshot.matches('idle'));
   expect(f.actor.getSnapshot().context.route).toEqual({kind:'session',sessionId:'A'}); expect(f.actor.getSnapshot().context.error).toBeUndefined(); expect(controls()).toBe(true); expect(forbidden(f)).toEqual([]);
   if(method==='session/node')expect(f.server.requests.slice(f.before).some(row=>row.request.method==='session/history')).toBe(false);
+});
+
+it.each(['history', 'session'] as const)('an obsolete viewport cancellation cannot retire a newer %s intent', async newer => {
+  const f = await fixture(); f.server.held.add('session/history');
+  f.actor.send({ type: 'OPEN', destination: { kind: 'history', origin: f.origin } });
+  const older = await f.server.waitFor('session/history', f.server.requests.slice(0, f.before).filter(row => row.request.method === 'session/history').length + 1);
+  const pending = f.actor.getSnapshot().context.pending!;
+  if (newer === 'history') f.actor.send({ type: 'OPEN', destination: { kind: 'history', origin: { ...f.origin, source_message: 'source-151' } } });
+  else f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'B', sidebar: false } });
+  const next = f.actor.getSnapshot().context.pending, control = f.capture();
+  f.actor.send({ type: 'CANCEL', pending });
+  expect(f.actor.getSnapshot().context.pending).toBe(next); expect(control()).toBe(true);
+  if (newer === 'history') {
+    const request = await f.server.waitFor('session/history', f.server.requests.slice(0, f.before).filter(row => row.request.method === 'session/history').length + 2);
+    f.server.reply(request); await waitFor(f.actor, state => state.matches('idle'));
+  }
+  const route = f.actor.getSnapshot().context.route;
+  expect(route).toMatchObject(newer === 'history' ? { kind: 'history', messageId: 'source-151' } : { kind: 'session', sessionId: 'B' });
+  f.actor.send({ type: 'CANCEL', pending }); f.server.reply(older);
+  await f.server.client.request({ method: 'server/info', params: {} }, 'server_info');
+  expect(f.actor.getSnapshot().context.route).toBe(route); expect(f.actor.getSnapshot().context.error).toBeUndefined(); expect(forbidden(f)).toEqual([]);
 });

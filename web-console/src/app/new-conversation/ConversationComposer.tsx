@@ -17,6 +17,7 @@ import { IconChevronDownOutline14, IconFolderClose16 } from '../../presentation/
 import hero from '../../presentation/agent/HeroShell.module.css';
 import modal from '../../presentation/primitives/Modal.module.css';
 import { useModelPreference } from '../model-preference';
+import type { ComposerDraft } from '../composer/draft';
 import { useAttachmentIntake } from '../composer/use-attachment-intake';
 import { ComposerContextStack } from '../composer/ComposerContextStack';
 import type { ModelPickerState } from '../composer/ModelPicker';
@@ -25,7 +26,7 @@ import { AgentComposer } from '../agent/AgentComposer';
 import { firstSubmitPort } from './port';
 import { sessionModelBlock, WorkspaceControls, WorkspacePermission } from './WorkspaceControls';
 
-export function ConversationComposer({ client, host, authority, associations, initialWorkspace, workspacePicked, current, preparePublication, binding, active, activeView, context, consumed }: { authority: WorkspaceAuthority; associations: WorkspaceAssociations; activeView?: SessionView; binding: string; active?: ComponentProps<typeof AgentComposer>; context?: ReactNode; consumed?: { id: string; sequence: number }; client: AppServerClient; host: ProductHostWorkspaces; initialWorkspace?: string; workspacePicked?: (id: string) => void; current: () => boolean; preparePublication: () => ((id: string) => (() => boolean) | void) }) {
+export function ConversationComposer({ client, host, authority, associations, initialWorkspace, workspacePicked, current, preparePublication, draftOwner, binding, active, activeView, context, consumed }: { draftOwner?: ComposerDraft; authority: WorkspaceAuthority; associations: WorkspaceAssociations; activeView?: SessionView; binding: string; active?: ComponentProps<typeof AgentComposer>; context?: ReactNode; consumed?: { id: string; sequence: number }; client: AppServerClient; host: ProductHostWorkspaces; initialWorkspace?: string; workspacePicked?: (id: string) => void; current: () => boolean; preparePublication: () => ((id: string) => (() => boolean) | void) }) {
   const tx = useTranslation();
   const [workspaceId, setWorkspace] = useState(initialWorkspace);
   const [owner, setOwner] = useState(binding);
@@ -71,11 +72,12 @@ export function ConversationComposer({ client, host, authority, associations, in
     finally { if (current()) setAdopting(false); }
   };
   const chooseModel = (selection: SessionModelConfig) => setIntent(selection);
-  const intake = useAttachmentIntake(client.attachmentIntakes, JSON.stringify([client.getSnapshot().endpoint, client.getSnapshot().authorityId, binding]), JSON.stringify([client.getSnapshot().generation, activeView?.target]));
+  const receiptAuthority = JSON.stringify([transport.generation, activeView?.target]);
+  const intake = useAttachmentIntake(client.attachmentIntakes, JSON.stringify([client.getSnapshot().endpoint, client.getSnapshot().authorityId, binding]), receiptAuthority, receiptAuthority);
   // The route owns a draft; acquiring its first native attachment must not
   // retire selected files. Native target changes still fence upload operations.
   const hasDraftFiles = useSyncExternalStore(intake.subscribe, intake.snapshot).some(file => file.status === 'draft');
-  const composer = (block: () => Message | undefined, permission?: React.ReactNode, model?: React.ReactNode, modelPicker?: ModelPickerState) => <AgentComposer modelPicker={modelPicker} onRetainedRemove={flow && (flow.phase === 'paused' || ['failed', 'uncertain'].includes(flow.phase) && flow.failedPhase === 'uploading') ? id => submissions.removeUpload(flow, id) : undefined} onRetainedRecover={flow && ['failed', 'uncertain'].includes(flow.phase) ? retry => { void submissions.recoverUpload(flow, firstSubmitPort(client, host, current, preparePublication), retry); } : undefined} uploadPolicy={client.getSnapshot().capabilities?.upload_policy} intakeOwner={intake} firstSubmission={flow} consumed={active ? consumed : undefined} commandAvailable={active ? id => id === 'model' && connecting || !active.disabled : id => id === 'model'} onCommand={() => {}} submitDisabled={!!block()} active={false}
+  const composer = (block: () => Message | undefined, permission?: React.ReactNode, model?: React.ReactNode, modelPicker?: ModelPickerState) => <AgentComposer draftOwner={draftOwner} draftIdentity={JSON.stringify([binding, discarded])} receiptAuthority={receiptAuthority} modelPicker={modelPicker} onRetainedRemove={flow && (flow.phase === 'paused' || ['failed', 'uncertain'].includes(flow.phase) && flow.failedPhase === 'uploading') ? id => submissions.removeUpload(flow, id) : undefined} onRetainedRecover={flow && ['failed', 'uncertain'].includes(flow.phase) ? retry => { void submissions.recoverUpload(flow, firstSubmitPort(client, host, current, preparePublication), retry); } : undefined} uploadPolicy={client.getSnapshot().capabilities?.upload_policy} intakeOwner={intake} firstSubmission={flow} consumed={active ? consumed : undefined} commandAvailable={active ? id => id === 'model' && connecting || !active.disabled : id => id === 'model'} onCommand={() => {}} submitDisabled={!!block()} active={false}
     permission={permission} model={model} onCancel={() => {}} onUpload={async () => { throw new Error(tx('common:copy.no-session-exists-before-submit')); }} onSend={async () => false}
     onDraftSend={active && !connecting && !hasDraftFiles ? undefined : async (text, files, attachmentIds) => {
       if (activeView) return submissions.submit(binding, { workspaceId: '', text, files, attachmentIds }, firstSubmitPort(client, host, current, preparePublication, true), () => intake.clear(), (files, ids) => intake.restoreDraft(files, ids), activeView.id);

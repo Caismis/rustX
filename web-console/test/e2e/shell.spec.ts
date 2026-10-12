@@ -591,9 +591,10 @@ async function openForkOwnershipFixture(page: Page, width = 390) {
   return { before, requests, errors };
 }
 async function startHeldFork(page: Page, stage: 'node' | 'history') {
+  const before = await page.evaluate(stage => window.sessionFixture.requests().filter(request => request.method === (stage === 'node' ? 'session/node' : 'session/history') && 'session_id' in request.params && request.params.session_id === 'C').length, stage);
   await page.evaluate(stage => { if (stage === 'node') window.sessionFixture.holdNode(); else window.sessionFixture.holdHistory(); }, stage);
   await page.getByRole('button', { name: 'View source', exact: true }).click();
-  await expect.poll(() => page.evaluate(stage => window.sessionFixture.requests().filter(request => request.method === (stage === 'node' ? 'session/node' : 'session/history') && 'session_id' in request.params && request.params.session_id === 'C').length, stage)).toBe(1);
+  await expect.poll(() => page.evaluate(stage => window.sessionFixture.requests().filter(request => request.method === (stage === 'node' ? 'session/node' : 'session/history') && 'session_id' in request.params && request.params.session_id === 'C').length, stage)).toBe(before + 1);
 }
 async function proveCommittedControls(page: Page) {
   expect(await page.evaluate(() => window.sessionFixture.navigationCurrent())).toBe(true);
@@ -725,4 +726,75 @@ for (const width of [390, 1440]) test(`catalog search owns preparation without r
   const delta = (await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length);
   expect(nativeMutations(delta)).toEqual([]); expect(delta.filter(request => request.method === 'session/snapshot')).toEqual([]);
   await proveCommittedControls(page); expect(errors).toEqual([]);
+});
+
+for (const width of [390, 1440]) test(`read-only visits retain editor text, selection and attachments without reauthorizing old controls: ${width}px`, async ({ page }) => {
+  const { before, errors } = await openForkOwnershipFixture(page, width);
+  const editor = page.getByRole('textbox', { name: 'Message', exact: true });
+  const text = 'Unsent source inspection draft\nsecond line';
+  await editor.fill(text);
+  await page.getByLabel('Attach files', { exact: true }).setInputFiles([
+    { name: 'one.txt', mimeType: 'text/plain', buffer: Buffer.from('one') },
+    { name: 'two.txt', mimeType: 'text/plain', buffer: Buffer.from('two') },
+  ]);
+  await expect(page.getByText('Uploaded', { exact: true })).toHaveCount(2);
+  await editor.evaluate((element: HTMLTextAreaElement) => { element.focus(); element.setSelectionRange(7, 12, 'backward'); element.dispatchEvent(new Event('select', { bubbles: true })); });
+  const requests = await page.evaluate(() => window.sessionFixture.requests());
+  for (let visit = 0; visit < 2; visit++) {
+    await startHeldFork(page, 'history'); await page.evaluate(() => window.sessionFixture.settleHistory(true));
+    const anchor = page.locator('[data-history-session="C"] [data-chat-anchor-key="message:source-message"]');
+    await expect(anchor).toBeVisible();
+    await expect.poll(() => anchor.evaluate(element => { const port = element.closest('[data-conversation-scroll]')!; const a = element.getBoundingClientRect(), p = port.getBoundingClientRect(); return a.top >= p.top - 1 && a.top < p.bottom && a.bottom > p.top; })).toBe(true);
+    await expect(editor).toHaveCount(0);
+    await page.getByRole('button', { name: 'Return to conversation', exact: true }).click();
+    await expect(page.getByLabel('Session title')).toHaveText('Session A'); await expect(editor).toHaveValue(text); await expect(editor).toBeEditable();
+    expect(await editor.evaluate((element: HTMLTextAreaElement) => [element.selectionStart, element.selectionEnd, element.selectionDirection])).toEqual([7, 12, 'backward']);
+    await expect(page.getByText('one.txt', { exact: true })).toBeVisible(); await expect(page.getByText('two.txt', { exact: true })).toBeVisible();
+    await expect(page.getByText('Uploaded', { exact: true })).toHaveCount(2);
+    expect(await page.evaluate(() => window.sessionFixture.navigationFacts())).toEqual(before);
+  }
+  const delta = (await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length);
+  expect(nativeMutations(delta)).toEqual([]); expect(delta.filter(request => ['session/snapshot', 'session/uploadPrepare', 'session/uploadStatus'].includes(request.method))).toEqual([]);
+  await page.screenshot({ path: `/tmp/pr458-history-draft-${width}.png` });
+  await editor.focus(); await editor.press('Escape'); await editor.press('Escape');
+  await expect.poll(() => page.evaluate(() => window.sessionFixture.requests().filter(request => request.method === 'turn/cancel').length)).toBe(1);
+  expect(errors).toEqual([]);
+});
+
+test('View Source installs cancellation in the click stack before the next user scroll', async ({ page }) => {
+  const { requests, errors } = await openForkOwnershipFixture(page, 1440);
+  await page.setViewportSize({ width: 1440, height: 300 });
+  await page.evaluate(() => window.sessionFixture.stream(Array.from({ length: 80 }, (_, i) => `Reading line ${i}`).join('\n\n')));
+  await expect(page.getByText('Reading line 79', { exact: true })).toHaveCount(1);
+  await page.evaluate(() => {
+    window.sessionFixture.holdHistory();
+    document.addEventListener('click', function immediatelyScroll(event) {
+      const button = (event.target as Element).closest('button');
+      if (button?.textContent?.trim() !== 'View source') return;
+      document.removeEventListener('click', immediatelyScroll);
+      const port = document.querySelector<HTMLElement>('[data-conversation-scroll]')!;
+      if (port.scrollHeight <= port.clientHeight) throw new Error('Regression requires a real scrollable viewport');
+      // Runs after React's delegated click handler, still in the native click
+      // dispatch stack; no animation frame or later event establishes ownership.
+      port.scrollTop = port.scrollTop > 20 ? port.scrollTop - 20 : 20;
+      port.dispatchEvent(new Event('scroll'));
+    });
+  });
+  await page.getByRole('button', { name: 'View source', exact: true }).click();
+  await page.evaluate(() => window.sessionFixture.wireBarrier());
+  await expect(page.locator('[data-shell-route]')).toHaveAttribute('data-shell-route', 'session');
+  await expect(page.getByText('Opening history…', { exact: true })).toHaveCount(0);
+  await expect(page.locator('[data-history-session]')).toHaveCount(0);
+  await expect(page.getByLabel('Session title')).toHaveText('Session A');
+  const delta = (await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length);
+  // Browser microtask checkpoints between native event listeners may already
+  // transmit the read. Its held settlement must remain harmless after cancellation.
+  const reads = delta.filter(request => request.method === 'session/history');
+  expect(reads.length).toBeLessThanOrEqual(1); expect(nativeMutations(delta)).toEqual([]);
+  const port = page.locator('[data-conversation-scroll]'), position = await port.evaluate(element => element.scrollTop);
+  if (reads.length) await page.evaluate(() => window.sessionFixture.settleHistory(true));
+  await expect(page.getByRole('button', { name: 'Stay here', exact: true })).toHaveCount(0);
+  await expect(page.locator('[data-history-session]')).toHaveCount(0);
+  expect(await port.evaluate(element => element.scrollTop)).toBe(position);
+  await expect(page.getByRole('alert')).toHaveCount(0); expect(errors).toEqual([]);
 });
