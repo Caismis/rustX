@@ -192,20 +192,25 @@ impl Default for RepairInterest {
 }
 
 impl RepairInterest {
-    fn observe(&mut self, directory: std::path::PathBuf) {
+    /// Admit one Workspace source; whether it was newly admitted.
+    fn observe(&mut self, directory: std::path::PathBuf) -> bool {
         use crate::local_runtime::configuration::repair::SourceKey;
-        if let Some(position) = self.workspaces.iter().position(|known| *known == directory) {
-            self.workspaces.remove(position);
-        } else {
-            self.delivered
-                .insert(SourceKey::Workspace(directory.clone()), 0);
-        }
+        let admitted =
+            if let Some(position) = self.workspaces.iter().position(|known| *known == directory) {
+                self.workspaces.remove(position);
+                false
+            } else {
+                self.delivered
+                    .insert(SourceKey::Workspace(directory.clone()), 0);
+                true
+            };
         self.workspaces.push_back(directory);
         if self.workspaces.len() > REPAIR_INTEREST_WORKSPACES
             && let Some(forgotten) = self.workspaces.pop_front()
         {
             self.delivered.remove(&SourceKey::Workspace(forgotten));
         }
+        admitted
     }
 }
 
@@ -1205,6 +1210,13 @@ impl AppServerConnection {
     /// Admit the Workspace source a request addresses into this connection's
     /// repair observations, before the request runs: a Session open that
     /// fails on an unrepairable source still announces why.
+    ///
+    /// Admission is the linearization point: under the interest lock the
+    /// source enters at cursor zero, and the connection's notification wakeup
+    /// is signalled after the lock is released. A parked reader therefore
+    /// rechecks and delivers an observation the ledger already holds, with no
+    /// further ledger change; a reader between its check and its wait keeps
+    /// the stored permit. Re-addressing a known source changes nothing.
     async fn observe_repair_source(&self, method: &Method) {
         let directory = match method {
             Method::SourcesRead { target }
@@ -1224,10 +1236,14 @@ impl AppServerConnection {
             _ => None,
         };
         if let Some(directory) = directory.filter(|directory| directory.is_dir()) {
-            self.source_repairs
+            let admitted = self
+                .source_repairs
                 .lock()
                 .expect("source repair interest")
                 .observe(directory);
+            if admitted {
+                self.changed.notify_one();
+            }
         }
     }
 

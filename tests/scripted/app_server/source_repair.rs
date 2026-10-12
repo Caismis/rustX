@@ -339,3 +339,98 @@ async fn an_unrepairable_workspace_is_announced_and_manual_repair_clears_it() {
     })
     .await;
 }
+
+/// A waker that records whether it was woken.
+struct WakeFlag(std::sync::atomic::AtomicBool);
+
+impl std::task::Wake for WakeFlag {
+    fn wake(self: std::sync::Arc<Self>) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Drain whatever is deliverable now, with no wait, and return the parked
+/// reader. Nothing drained may concern `excluded`.
+fn park<'a>(
+    connection: &'a AppServerConnection,
+    excluded: &SourceTarget,
+) -> std::pin::Pin<
+    Box<impl std::future::Future<Output = crate::app_server::protocol::Notification> + 'a>,
+> {
+    use futures_util::FutureExt;
+    loop {
+        let mut next = Box::pin(connection.next_notification());
+        match next.as_mut().now_or_never() {
+            Some(notification) => {
+                if let NotificationMethod::SourceRepairChanged { target, .. } =
+                    notification.notification
+                {
+                    assert_ne!(&target, excluded, "an unaddressed Workspace was announced");
+                }
+            }
+            None => return next,
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_late_workspace_interest_wakes_a_parked_reader_once() {
+    use std::future::Future;
+    bounded(async {
+        let f = Fixture::with_session_count(None, 0).await;
+        let target = workspace(&f, 0);
+        // Workspace A already holds a committed repair receipt.
+        std::fs::write(
+            f.workspaces[0].join("rustx.toml"),
+            "[agent]\nfuture_trust = true\n",
+        )
+        .unwrap();
+        assert_eq!(
+            f.manager.configuration.repair_source(&target, &target),
+            crate::local_runtime::configuration::repair::RepairOutcome::Committed
+        );
+        let receipt = f.manager.source_repairs().latest(&target).unwrap();
+        let reader = AppServerConnection::new(f.host.clone());
+        let bystander = AppServerConnection::new(f.host.clone());
+        initialize(&reader).await;
+        initialize(&bystander).await;
+        // The reader is parked: every level check ran and found nothing.
+        let mut next = park(&reader, &target);
+        let flag = std::sync::Arc::new(WakeFlag(std::sync::atomic::AtomicBool::new(false)));
+        let waker = std::task::Waker::from(flag.clone());
+        let mut context = std::task::Context::from_waker(&waker);
+        assert!(next.as_mut().poll(&mut context).is_pending());
+        let sequence = *f.manager.source_repairs().subscribe().borrow();
+        // Its first operation addressing A, and nothing else happens: no
+        // source, Session or ledger event.
+        sources(&reader, 1, &target).await;
+        assert_eq!(*f.manager.source_repairs().subscribe().borrow(), sequence);
+        assert!(
+            flag.0.load(Ordering::SeqCst),
+            "admitting A woke the parked reader"
+        );
+        let std::task::Poll::Ready(notification) = next.as_mut().poll(&mut context) else {
+            panic!("A's existing receipt is deliverable")
+        };
+        let NotificationMethod::SourceRepairChanged {
+            target: announced,
+            receipt: Some(announced_receipt),
+        } = notification.notification
+        else {
+            panic!("a source repair notice")
+        };
+        assert_eq!(announced, target);
+        assert_eq!(announced_receipt.id, receipt.id);
+        drop(next);
+        // Addressing A again neither repeats the notice nor wakes anything.
+        for id in 2..4 {
+            sources(&reader, id, &target).await;
+        }
+        drop(park(&reader, &target));
+        assert!(reader.next_source_repair().is_none());
+        // A connection that never addressed A never hears of it.
+        drop(park(&bystander, &target));
+        assert!(bystander.next_source_repair().is_none());
+    })
+    .await;
+}

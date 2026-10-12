@@ -1263,7 +1263,7 @@ interface ConfigRepairReceipt {
   changes: ConfigRepairChange[]; // at most 64
   truncated: boolean;
   backup_available: boolean;  // an exact private copy of the original exists
-  diagnostic?: string;        // bounded; never a value or source excerpt
+  diagnostic?: string;        // native category and location only
 }
 ```
 
@@ -1277,7 +1277,10 @@ candidate failed validation; its `changes` are then the eligible, unapplied ones
 happened; nothing is replayed. Receipts carry field paths, Tool names and version
 numbers only — never removed values, credentials, `request_params` payloads, raw
 parser excerpts, backup paths or backup bytes; key segments are TOML-quoted and
-bounded.
+bounded. A `diagnostic` is assembled from native constants only — a fixed
+category, line and column, and a schema location whose open-map identities
+(Provider, Model, Profile and similar names) are `*` — so neither an invalid value
+nor an identity nor a domain error message can reach it.
 
 `configuration/sourcesRead` returns `user_repair` for the User source and, for a
 Workspace target, `workspace_repair` for that Workspace. Receipts live in a
@@ -1300,7 +1303,9 @@ request (`configuration/sourcesRead`, `configuration/sourceWrite`,
 exactly the sources its own reads could inspect — so no other Workspace identity
 reaches it. Notices begin after `initialize`. Delivery is level-triggered against
 the ledger with a per-connection cursor per source: a newly observed source
-announces its latest receipt once, the same receipt is never announced twice on a
+announces its latest receipt once — admitting a source wakes the connection's
+notification reader, so a receipt the ledger already holds is delivered without
+any further ledger change — the same receipt is never announced twice on a
 connection, and a reconnecting client receives each latest receipt once more and
 deduplicates by `id`. After any gap the authoritative recovery is
 `configuration/sourcesRead`. Receipts are not persisted, not Event Journal facts
