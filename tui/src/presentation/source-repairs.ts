@@ -94,6 +94,14 @@ const STATUS: Record<ConfigRepairReceipt["status"], string> = {
   commit_uncertain: "commit uncertain — reread before editing; nothing is replayed",
 };
 
+/** What the listed changes are to the source: committed, never published,
+ * or published without durable confirmation — never a confirmed application. */
+const CHANGES_HEADING: Record<ConfigRepairReceipt["status"], string> = {
+  repaired: "Applied:",
+  unresolved: "Eligible, not applied:",
+  commit_uncertain: "Possibly published; durability not confirmed:",
+};
+
 /** The scrollable `/settings … repairs` inspection body. */
 export function renderRepairInspection(observations: readonly SourceRepairObservation[]): string {
   const sections = observations.map(({ target, receipt }) => {
@@ -112,7 +120,7 @@ export function renderRepairInspection(observations: readonly SourceRepairObserv
     ];
     if (receipt.diagnostic) lines.push(`Diagnostic: ${sanitizeField(receipt.diagnostic, false)}`);
     if (receipt.changes.length > 0) {
-      lines.push("", receipt.status === "repaired" || receipt.status === "commit_uncertain" ? "Applied:" : "Eligible, not applied:");
+      lines.push("", CHANGES_HEADING[receipt.status]);
       lines.push(...receipt.changes.map(renderRepairChange));
     }
     return lines.join("\n");

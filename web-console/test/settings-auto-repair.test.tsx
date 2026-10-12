@@ -4,7 +4,7 @@
  * receipt identity, Settings → Advanced → Auto Repair, exact owner
  * navigation, and the Settings transaction fences a receipt never crosses. */
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createActor } from 'xstate';
 import type { ConfigRepairReceipt, ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v46';
 import { RepairNotice, repairNoticeText } from '../src/app/RepairNotice';
@@ -13,7 +13,7 @@ import { settingsNavigationMachine } from '../src/app/settings/machines/navigati
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { translator } from '../src/locale/translation';
 import { cfg3Source } from './cfg3-data';
-import { Server } from './fixture';
+import { endpoint, Server, TOKEN } from './fixture';
 import { openSettingsPage, settingsReady, SettingsSurface } from './settings-harness';
 
 beforeEach(() => localStorage.clear());
@@ -42,7 +42,7 @@ it('keeps source repair observations source-scoped, deduplicated and per connect
   const listener = vi.fn(); s.client.subscribe(listener);
   await announce(s, { kind: 'user' }, receipt());
   const observed = s.client.getSnapshot().sourceRepairs;
-  expect(observed).toEqual({ user: { target: { kind: 'user' }, receipt: receipt() } });
+  expect(observed).toEqual({ user: { authorityId: s.authorityId, target: { kind: 'user' }, receipt: receipt() } });
   const publications = listener.mock.calls.length;
   // The same receipt again is no change.
   await announce(s, { kind: 'user' }, receipt());
@@ -50,7 +50,7 @@ it('keeps source repair observations source-scoped, deduplicated and per connect
   expect(s.client.getSnapshot().sourceRepairs).toBe(observed);
   await announce(s, workspace, receipt({ id: 'w', target: workspace, status: 'unresolved', after_revision: null }));
   await announce(s, workspace, null);
-  expect(s.client.getSnapshot().sourceRepairs?.['workspace:/workspace/A']).toEqual({ target: workspace, receipt: undefined });
+  expect(s.client.getSnapshot().sourceRepairs?.['workspace:/workspace/A']).toEqual({ authorityId: s.authorityId, target: workspace, receipt: undefined });
   // Never Session, application or conversation state.
   expect(s.client.getSnapshot().configuration).toEqual({});
   expect(Object.keys(s.client.getSnapshot().views)).toEqual([]);
@@ -86,6 +86,9 @@ it('notifies once per receipt identity, opens the exact owner, and is silent whe
   expect(viewDetails).not.toHaveBeenCalled();
   fireEvent.click(within(notice).getByRole('button', { name: 'View details' }));
   expect(viewDetails).toHaveBeenCalledWith({ kind: 'user' });
+  // Only the inspected source is acknowledged; the Workspace stays presented.
+  expect(screen.getByRole('status', { name: 'Configuration repair' }).textContent).toMatch(/^Configuration automatically repaired · 1 change in Workspace configuration/);
+  fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
   expect(screen.queryByRole('status', { name: 'Configuration repair' })).toBeNull();
   // A reconnect announces the same receipts again; they stay acknowledged,
   // also for a fresh presentation reading the same browser storage.
@@ -111,16 +114,27 @@ it('notifies once per receipt identity, opens the exact owner, and is silent whe
 });
 
 it('presents and acknowledges receipts when browser storage is denied or failing', async () => {
-  // Normal persistent storage: acknowledgements survive a fresh ledger.
-  new RepairAcknowledgements(localStorage).acknowledge(['kept']);
-  expect(new RepairAcknowledgements(localStorage).has('kept')).toBe(true);
+  const presented = (id: string, authorityId = 'authority-1') => ({ authorityId, receipt: receipt({ id }) });
+  // Normal persistent storage: acknowledgements survive a fresh ledger, and
+  // only opaque authority and receipt identities are stored.
+  new RepairAcknowledgements(localStorage).acknowledge([presented('kept')]);
+  expect(new RepairAcknowledgements(localStorage).has(presented('kept'))).toBe(true);
+  expect(new RepairAcknowledgements(localStorage).has(presented('kept', 'authority-2'))).toBe(false);
+  expect(JSON.parse(localStorage.getItem(RepairAcknowledgements.KEY)!)).toEqual([['authority-1', 'kept']]);
+  // Entries of any other shape are ignored, never trusted.
+  localStorage.setItem(RepairAcknowledgements.KEY, JSON.stringify(['kept', ['authority-1'], ['authority-1', 7], ['authority-1', 'kept']]));
+  expect(new RepairAcknowledgements(localStorage).has(presented('kept'))).toBe(true);
   // getItem and setItem throwing: the ledger reads empty and stays in memory.
   const failing = { getItem: () => { throw new DOMException('denied', 'SecurityError'); }, setItem: () => { throw new DOMException('full', 'QuotaExceededError'); } };
   const memory = new RepairAcknowledgements(failing);
-  expect(memory.has('kept')).toBe(false);
-  for (let index = 0; index < RepairAcknowledgements.LIMIT + 2; index++) memory.acknowledge([`r${index}`]);
-  expect(memory.has('r0')).toBe(false);
-  expect(memory.has(`r${RepairAcknowledgements.LIMIT + 1}`)).toBe(true);
+  expect(memory.has(presented('kept'))).toBe(false);
+  for (let index = 0; index < RepairAcknowledgements.LIMIT + 2; index++) memory.acknowledge([presented(`r${index}`)]);
+  expect(memory.has(presented('r0'))).toBe(false);
+  expect(memory.has(presented(`r${RepairAcknowledgements.LIMIT + 1}`))).toBe(true);
+  // Persistent storage stays bounded too.
+  const bounded = new RepairAcknowledgements(localStorage);
+  for (let index = 0; index < RepairAcknowledgements.LIMIT + 2; index++) bounded.acknowledge([presented(`b${index}`)]);
+  expect(JSON.parse(localStorage.getItem(RepairAcknowledgements.KEY)!)).toHaveLength(RepairAcknowledgements.LIMIT);
   // Reading the storage property itself throwing must not stop the notice.
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')!;
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, get: () => { throw new DOMException('denied', 'SecurityError'); } });
@@ -141,6 +155,164 @@ it('presents and acknowledges receipts when browser storage is denied or failing
     Object.defineProperty(globalThis, 'localStorage', descriptor);
     s.client.disconnect();
   }
+});
+
+const notice = () => screen.queryByRole('status', { name: 'Configuration repair' }) ?? screen.queryByRole('alert', { name: 'Configuration repair' });
+async function replaceProcess(s: Server, authorityId: string) {
+  s.client.disconnect();
+  s.authorityId = authorityId;
+  await s.connect();
+}
+
+it('acknowledges a receipt only for the App Server authority that produced it', async () => {
+  const s = new Server(); await s.connect();
+  const viewDetails = vi.fn();
+  const view = render(<RepairNotice client={s.client} viewDetails={viewDetails} acknowledgements={new RepairAcknowledgements(localStorage)} />);
+  await announce(s, { kind: 'user' }, receipt());
+  fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+  expect(notice()).toBeNull();
+  // Reconnecting to the same authority re-announces the receipt: suppressed.
+  s.client.disconnect(); await s.connect();
+  await announce(s, { kind: 'user' }, receipt());
+  expect(notice()).toBeNull();
+  // A reload against the same authority reads the same browser storage.
+  view.unmount();
+  render(<RepairNotice client={s.client} viewDetails={viewDetails} acknowledgements={new RepairAcknowledgements(localStorage)} />);
+  expect(notice()).toBeNull();
+  // A new App Server process at the same endpoint is another authority: its
+  // equal content-derived receipt id is a repair of its own.
+  await replaceProcess(s, 'replacement-authority');
+  await announce(s, { kind: 'user' }, receipt());
+  expect(notice()?.textContent).toMatch(/3 changes in User configuration/);
+  fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+  expect(notice()).toBeNull();
+  // Another App Server, sharing this browser's storage, announcing the same id.
+  const other = new Server(); other.authorityId = 'other-authority'; await other.connect();
+  cleanup();
+  render(<RepairNotice client={other.client} viewDetails={viewDetails} acknowledgements={new RepairAcknowledgements(localStorage)} />);
+  await announce(other, { kind: 'user' }, receipt());
+  expect(notice()?.textContent).toMatch(/3 changes in User configuration/);
+  expect(JSON.parse(localStorage.getItem(RepairAcknowledgements.KEY)!)).toEqual([
+    ['fixture-app-server-authority', 'receipt-user-1'],
+    ['replacement-authority', 'receipt-user-1'],
+  ]);
+  expect(viewDetails).not.toHaveBeenCalled();
+  s.client.disconnect(); other.client.disconnect();
+});
+
+it('attributes a receipt delivered during initialization to the authority that connection negotiates', async () => {
+  const s = new Server(); await s.connect();
+  render(<RepairNotice client={s.client} viewDetails={vi.fn()} acknowledgements={new RepairAcknowledgements(localStorage)} />);
+  await announce(s, { kind: 'user' }, receipt());
+  fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+  const duringInitialize = async (authorityId: string) => {
+    s.client.disconnect();
+    s.authorityId = authorityId;
+    s.held.add('initialize');
+    const initialize = s.waitFor('initialize');
+    const connecting = s.client.connect(endpoint, TOKEN);
+    const request = await initialize;
+    // The client still holds the previous connection's authority here.
+    await announce(s, { kind: 'user' }, receipt());
+    expect(s.client.getSnapshot().sourceRepairs).toEqual({});
+    expect(notice()).toBeNull();
+    s.held.delete('initialize');
+    await act(async () => { s.reply(request); await connecting; });
+    expect(s.client.getSnapshot().sourceRepairs?.user).toEqual({ authorityId, target: { kind: 'user' }, receipt: receipt() });
+  };
+  // The same authority: the early receipt is the acknowledged one.
+  await duringInitialize('fixture-app-server-authority');
+  expect(notice()).toBeNull();
+  // A replacement process: the early receipt belongs to it, not to the
+  // authority the client knew when the notification arrived.
+  await duringInitialize('replacement-authority');
+  expect(notice()?.textContent).toMatch(/3 changes in User configuration/);
+  // A connection that ends before initializing attributes nothing.
+  s.client.disconnect();
+  s.held.add('initialize');
+  const initialize = s.waitFor('initialize');
+  const abandoned = s.client.connect(endpoint, TOKEN).catch(() => undefined);
+  await initialize;
+  await announce(s, workspace, receipt({ id: 'w', target: workspace }));
+  s.client.disconnect(); await abandoned;
+  s.held.delete('initialize');
+  await s.connect();
+  expect(s.client.getSnapshot().sourceRepairs).toEqual({});
+  s.client.disconnect();
+});
+
+describe('View details acknowledges only the inspected source', () => {
+  const workspaceReceipt = (overrides: Partial<ConfigRepairReceipt> = {}) => receipt({ id: 'w', target: workspace, changed_count: 1, ...overrides });
+  const unresolved = { status: 'unresolved', after_revision: null, backup_available: false, diagnostic: 'invalid value' } as const;
+  async function presented(user: ConfigRepairReceipt, work: ConfigRepairReceipt) {
+    const s = new Server(); await s.connect();
+    const viewDetails = vi.fn();
+    render(<RepairNotice client={s.client} viewDetails={viewDetails} acknowledgements={new RepairAcknowledgements(localStorage)} />);
+    await announce(s, { kind: 'user' }, user);
+    await announce(s, workspace, work);
+    return { s, viewDetails };
+  }
+
+  it('two repaired sources: the User is viewed, the Workspace stays pending across reconnects', async () => {
+    const { s, viewDetails } = await presented(receipt(), workspaceReceipt());
+    expect(notice()?.textContent).toMatch(/3 changes in User configuration and 1 change in Workspace configuration/);
+    fireEvent.click(screen.getByRole('button', { name: 'View details' }));
+    expect(viewDetails).toHaveBeenCalledWith({ kind: 'user' });
+    expect(notice()?.textContent).toMatch(/^Configuration automatically repaired · 1 change in Workspace configuration/);
+    s.client.disconnect(); await s.connect();
+    await announce(s, { kind: 'user' }, receipt());
+    await announce(s, workspace, workspaceReceipt());
+    expect(notice()?.textContent).toMatch(/^Configuration automatically repaired · 1 change in Workspace configuration/);
+    fireEvent.click(screen.getByRole('button', { name: 'View details' }));
+    expect(viewDetails).toHaveBeenLastCalledWith(workspace);
+    expect(notice()).toBeNull();
+    s.client.disconnect();
+  });
+
+  it('two unresolved sources: viewing one leaves the other failure presented', async () => {
+    const { s, viewDetails } = await presented(receipt(unresolved), workspaceReceipt(unresolved));
+    expect(screen.getByRole('alert').textContent).toMatch(/User configuration could not be repaired automatically/);
+    fireEvent.click(screen.getByRole('button', { name: 'View details' }));
+    expect(viewDetails).toHaveBeenCalledWith({ kind: 'user' });
+    expect(screen.getByRole('alert').textContent).toMatch(/Workspace configuration could not be repaired automatically/);
+    s.client.disconnect(); await s.connect();
+    await announce(s, { kind: 'user' }, receipt(unresolved));
+    await announce(s, workspace, workspaceReceipt(unresolved));
+    expect(screen.getByRole('alert').textContent).toMatch(/Workspace configuration could not be repaired automatically/);
+    s.client.disconnect();
+  });
+
+  it('User repaired, Workspace unresolved: viewing the failing Workspace leaves the User pending', async () => {
+    const { s, viewDetails } = await presented(receipt(), workspaceReceipt(unresolved));
+    expect(screen.getByRole('alert').textContent).toMatch(/Workspace configuration could not be repaired automatically/);
+    fireEvent.click(screen.getByRole('button', { name: 'View details' }));
+    expect(viewDetails).toHaveBeenCalledWith(workspace);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('status').textContent).toMatch(/^Configuration automatically repaired · 3 changes in User configuration/);
+    s.client.disconnect(); await s.connect();
+    await announce(s, { kind: 'user' }, receipt());
+    await announce(s, workspace, workspaceReceipt(unresolved));
+    expect(screen.getByRole('status').textContent).toMatch(/^Configuration automatically repaired · 3 changes in User configuration/);
+    s.client.disconnect();
+  });
+
+  it('Dismiss acknowledges the complete presented group for its authority', async () => {
+    const { s, viewDetails } = await presented(receipt(), workspaceReceipt(unresolved));
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(notice()).toBeNull();
+    expect(viewDetails).not.toHaveBeenCalled();
+    s.client.disconnect(); await s.connect();
+    await announce(s, { kind: 'user' }, receipt());
+    await announce(s, workspace, workspaceReceipt(unresolved));
+    expect(notice()).toBeNull();
+    // The same receipts from a replacement process are presented again.
+    await replaceProcess(s, 'replacement-authority');
+    await announce(s, { kind: 'user' }, receipt());
+    await announce(s, workspace, workspaceReceipt(unresolved));
+    expect(screen.getByRole('alert').textContent).toMatch(/Workspace configuration could not be repaired automatically/);
+    expect(sent(s, 'configuration/sourceWrite')).toHaveLength(0);
+    s.client.disconnect();
+  });
 });
 
 it('opens the exact source owner at Advanced → Auto Repair', async () => {

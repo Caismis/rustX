@@ -402,9 +402,13 @@ nonblocking notification — for example **Configuration automatically repaired
 · 3 changes in User configuration** — with **View details** and **Dismiss**.
 Simultaneous User and Workspace repairs share one sentence; an unresolved or
 uncertain repair is an alert naming its source. View details opens the exact
-owner at Settings → Advanced → Auto Repair; nothing opens by itself and a healthy
-source shows nothing. Each native receipt identity is acknowledged once per
-browser, so reconnects, rereads and reloads never repeat it. The notification is
+owner at Settings → Advanced → Auto Repair and acknowledges that source only, so
+the other source of a combined notice stays presented; Dismiss acknowledges the
+whole notice. Nothing opens by itself and a healthy source shows nothing. Each
+receipt is acknowledged once per browser for the App Server authority that
+produced it, so reconnects, rereads and reloads never repeat it, while the same
+receipt id from another App Server, or a new process at the same endpoint, is
+presented on its own. The notification is
 presentation of a native fact: it never edits, submits or rebases a Settings
 draft. See `SETTINGS-ARCHITECTURE.md` → Automatic repair.
 

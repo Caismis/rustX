@@ -8,7 +8,9 @@ TOML, resolve overlays or discover resources. Generated contracts live in
 "/canonical/path"` selects a native Workspace source; `rescan` and `approval
 policy|full_access|inherit` operate on that explicit target with source CAS.
 `/settings repairs`, `/settings user repairs` and `/settings workspace repairs`
-inspect native automatic repair receipts (#464) read-only; the host routes
+inspect native automatic repair receipts (#464) read-only — changes are listed
+as applied, eligible but not applied, or possibly published with durability not
+confirmed, never an uncertain publication as applied; the host routes
 `configuration/sourceRepairChanged` without a Session and retains notices that
 arrive before any presentation subscribes.
 `/session settings` inspects Session selections, binding, pending candidate and

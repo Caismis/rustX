@@ -97,6 +97,20 @@ it("words repaired, combined, unresolved and uncertain receipts without values",
   assert.doesNotMatch(renderRepairInspection([{ target: { kind: "user" }, receipt: receipt({ changes: [{ kind: "removed_field", field_path: "x\u001b[2Jy" }] }) }]), /\u001b/);
 });
 
+it("never presents an uncertain publication as a confirmed application", () => {
+  const heading = (status: ConfigRepairReceipt["status"]) => {
+    const body = renderRepairInspection([{ target: { kind: "user" }, receipt: receipt({ status }) }]);
+    return body.split("\n").filter(line => line.endsWith(":") && !line.startsWith("#"));
+  };
+  assert.deepEqual(heading("repaired"), ["Applied:"]);
+  assert.deepEqual(heading("unresolved"), ["Eligible, not applied:"]);
+  assert.deepEqual(heading("commit_uncertain"), ["Possibly published; durability not confirmed:"]);
+  const uncertain = renderRepairInspection([{ target: WORKSPACE, receipt: receipt({ target: WORKSPACE, status: "commit_uncertain", diagnostic: "publication was not durably confirmed; reread the source before editing" }) }]);
+  assert.doesNotMatch(uncertain, /^Applied:/m);
+  assert.match(uncertain, /Status: commit uncertain — reread before editing; nothing is replayed/);
+  assert.match(uncertain, /Possibly published; durability not confirmed:\n~ schema_version 8 → 10/);
+});
+
 it("announces each receipt identity once and acknowledges on input", () => {
   const notices = new SourceRepairNotices();
   assert.equal(notices.fresh(receipt()), true);

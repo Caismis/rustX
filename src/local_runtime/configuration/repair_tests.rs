@@ -2262,3 +2262,434 @@ fn a_valid_partial_source_is_healthy_without_composition_facts() {
     }
     assert_eq!(fixture.sequence(), 0);
 }
+
+// Crash-durable backup storage (DUR-01..08): every directory entry on the way
+// to the backup is durable before the source is replaced.
+
+use super::super::super::settings::durability::{self, Step};
+
+/// The durability steps of `operation` on this thread, the sync of `fail`
+/// (if given) failing once.
+fn traced<T>(fail: Option<&Path>, operation: impl FnOnce() -> T) -> (T, Vec<Step>) {
+    durability::record(fail);
+    let result = operation();
+    (result, durability::take())
+}
+
+fn created(path: &Path) -> Step {
+    Step::Created(path.into())
+}
+
+fn synced(path: &Path) -> Step {
+    Step::Synced(path.into())
+}
+
+fn published(path: &Path) -> Step {
+    Step::Published(path.into())
+}
+
+/// The exact steps of one committed User repair whose backup goes to `name`
+/// in existing backup storage: backup entry, its directory sync, then the
+/// source replacement and its directory sync.
+fn committed_user_repair(fixture: &Fixture, backup: &Path) -> Vec<Step> {
+    let source = fixture.path(&SourceTarget::User);
+    vec![
+        published(backup),
+        synced(backup.parent().unwrap()),
+        published(&source),
+        synced(source.parent().unwrap()),
+    ]
+}
+
+fn assert_backup_failed(fixture: &Fixture, original: &str, steps: &[Step]) {
+    let source = fixture.path(&SourceTarget::User);
+    assert_eq!(fixture.read(&SourceTarget::User), original);
+    assert!(!steps.contains(&published(&source)), "{steps:?}");
+    let receipt = fixture.receipt(&SourceTarget::User).unwrap();
+    assert_eq!(receipt.status, ConfigRepairStatus::Unresolved);
+    assert!(!receipt.backup_available);
+    assert!(receipt.after_revision.is_none());
+    assert!(
+        receipt
+            .diagnostic
+            .as_deref()
+            .is_some_and(|diagnostic| diagnostic.contains("could not be backed up")),
+        "{receipt:?}"
+    );
+}
+
+#[test]
+fn a_first_repair_makes_every_new_backup_entry_durable_before_publication() {
+    let fixture = Fixture::new();
+    let original = format!("{USER}legacy = 1\n");
+    fixture.write(&SourceTarget::User, &original);
+    let root = fixture.manager.runtime_root().to_path_buf();
+    let storage = root.join(BACKUP_DIRECTORY);
+    assert!(!root.exists());
+    let (outcome, steps) = traced(None, || {
+        fixture.repair(&SourceTarget::User, &SourceTarget::User)
+    });
+    assert_eq!(outcome, RepairOutcome::Committed);
+    let backups = fixture.backups();
+    assert_eq!(backups.len(), 1);
+    let mut expected = vec![
+        created(&root),
+        synced(root.parent().unwrap()),
+        created(&storage),
+        synced(&root),
+    ];
+    expected.extend(committed_user_repair(&fixture, &backups[0]));
+    assert_eq!(steps, expected);
+    // An exact private copy, reported only once confirmed.
+    assert_eq!(std::fs::read(&backups[0]).unwrap(), original.as_bytes());
+    let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&backups[0]), 0o600);
+    assert_eq!(mode(&storage), 0o700);
+    let receipt = fixture.receipt(&SourceTarget::User).unwrap();
+    assert_eq!(receipt.status, ConfigRepairStatus::Repaired);
+    assert!(receipt.backup_available);
+}
+
+#[test]
+fn missing_runtime_root_ancestors_are_each_made_durable_in_order() {
+    let fixture = Fixture::with_paths(
+        |home| home.join("rustx/rustx.toml"),
+        |root| root.join("a/b/state"),
+    );
+    let original = format!("{USER}legacy = 1\n");
+    fixture.write(&SourceTarget::User, &original);
+    let root = fixture.manager.runtime_root().to_path_buf();
+    let b = root.parent().unwrap();
+    let a = b.parent().unwrap();
+    let (outcome, steps) = traced(None, || {
+        fixture.repair(&SourceTarget::User, &SourceTarget::User)
+    });
+    assert_eq!(outcome, RepairOutcome::Committed);
+    let mut expected = vec![
+        created(a),
+        synced(a.parent().unwrap()),
+        created(b),
+        synced(a),
+        created(&root),
+        synced(b),
+        created(&root.join(BACKUP_DIRECTORY)),
+        synced(&root),
+    ];
+    expected.extend(committed_user_repair(&fixture, &fixture.backups()[0]));
+    assert_eq!(steps, expected);
+}
+
+#[test]
+fn an_unsynced_backup_directory_entry_fails_the_backup_and_is_never_trusted() {
+    let fixture = Fixture::new();
+    let original = format!("{USER}legacy = 1\n");
+    fixture.write(&SourceTarget::User, &original);
+    let root = fixture.manager.runtime_root().to_path_buf();
+    let storage = root.join(BACKUP_DIRECTORY);
+    // The runtime root is created and confirmed; syncing it to confirm the
+    // new backup directory's entry fails.
+    let (outcome, steps) = traced(Some(&root), || {
+        fixture.repair(&SourceTarget::User, &SourceTarget::User)
+    });
+    assert_eq!(outcome, RepairOutcome::Unchanged);
+    assert_eq!(
+        steps,
+        [
+            created(&root),
+            synced(root.parent().unwrap()),
+            created(&storage)
+        ]
+    );
+    assert_backup_failed(&fixture, &original, &steps);
+    // The unconfirmed entry was withdrawn, so the next attempt creates and
+    // confirms it again rather than trusting it.
+    assert!(root.exists());
+    assert!(!storage.exists());
+    let (outcome, steps) = traced(None, || {
+        fixture.repair(&SourceTarget::User, &SourceTarget::User)
+    });
+    assert_eq!(outcome, RepairOutcome::Committed);
+    let mut expected = vec![created(&storage), synced(&root)];
+    expected.extend(committed_user_repair(&fixture, &fixture.backups()[0]));
+    assert_eq!(steps, expected);
+}
+
+#[test]
+fn an_unsynced_runtime_root_ancestor_fails_admission_and_the_backup() {
+    let fixture = Fixture::with_paths(
+        |home| home.join("rustx/rustx.toml"),
+        |root| root.join("a/state"),
+    );
+    let original = format!("{USER}legacy = 1\n");
+    fixture.write(&SourceTarget::User, &original);
+    fixture.write(&fixture.workspace, "legacy = 1\n");
+    let root = fixture.manager.runtime_root().to_path_buf();
+    let a = root.parent().unwrap().to_path_buf();
+    // A Session boundary admits the runtime root before any repair: the
+    // created ancestor cannot be confirmed, so nothing is admitted.
+    let (admitted, steps) = traced(Some(a.parent().unwrap()), || {
+        fixture
+            .manager
+            .admit_repair_scope(&fixture.workspace)
+            .map(drop)
+    });
+    assert_eq!(
+        admitted.unwrap_err(),
+        "the selected Workspace could not be admitted for repair"
+    );
+    assert_eq!(steps, [created(&a)]);
+    assert!(!a.exists());
+    assert_eq!(fixture.read(&fixture.workspace), "legacy = 1\n");
+    assert!(fixture.receipt(&fixture.workspace).is_none());
+    assert!(fixture.receipt(&SourceTarget::User).is_none());
+    // At startup the backup admits the runtime root itself: the same failure
+    // is a backup failure, and the source stays unchanged.
+    let (outcome, steps) = traced(Some(&a), || {
+        fixture.repair(&SourceTarget::User, &SourceTarget::User)
+    });
+    assert_eq!(outcome, RepairOutcome::Unchanged);
+    assert_eq!(
+        steps,
+        [created(&a), synced(a.parent().unwrap()), created(&root)]
+    );
+    assert_backup_failed(&fixture, &original, &steps);
+    assert!(a.exists());
+    assert!(!root.exists());
+}
+
+#[test]
+fn an_unsynced_backup_copy_fails_the_backup() {
+    let fixture = Fixture::new();
+    let original = format!("{USER}legacy = 1\n");
+    fixture.write(&SourceTarget::User, &original);
+    let storage = fixture.manager.runtime_root().join(BACKUP_DIRECTORY);
+    let (outcome, steps) = traced(Some(&storage), || {
+        fixture.repair(&SourceTarget::User, &SourceTarget::User)
+    });
+    assert_eq!(outcome, RepairOutcome::Unchanged);
+    assert_eq!(steps.last(), Some(&published(&fixture.backups()[0])));
+    assert_backup_failed(&fixture, &original, &steps);
+}
+
+#[test]
+fn established_backup_storage_is_reused_without_creating_entries() {
+    let fixture = Fixture::new();
+    fixture.write(&SourceTarget::User, &format!("{USER}legacy = 1\n"));
+    assert_eq!(
+        fixture.repair(&SourceTarget::User, &SourceTarget::User),
+        RepairOutcome::Committed
+    );
+    // A second, different original: its entry and the source replacement are
+    // the only new names; already-confirmed directories are not re-created.
+    fixture.write(&SourceTarget::User, &format!("{USER}other_legacy = 1\n"));
+    let (outcome, steps) = traced(None, || {
+        fixture.repair(&SourceTarget::User, &SourceTarget::User)
+    });
+    assert_eq!(outcome, RepairOutcome::Committed);
+    let backups = fixture.backups();
+    assert_eq!(backups.len(), 2);
+    let new = backups
+        .iter()
+        .find(|backup| steps.contains(&published(backup)))
+        .unwrap();
+    assert_eq!(steps, committed_user_repair(&fixture, new));
+}
+
+#[test]
+fn an_existing_exact_backup_is_confirmed_again_before_reuse() {
+    let fixture = Fixture::new();
+    let original = format!("{USER}legacy = 1\n");
+    fixture.write(&SourceTarget::User, &original);
+    fixture.manager.test_hooks.fail_once("replace_refused");
+    fixture.repair(&SourceTarget::User, &SourceTarget::User);
+    let backups = fixture.backups();
+    assert_eq!(backups.len(), 1);
+    // The copy exists, so nothing new is linked; its directory is synced
+    // again before the source is replaced.
+    let (outcome, steps) = traced(None, || {
+        fixture.repair(&SourceTarget::User, &SourceTarget::User)
+    });
+    assert_eq!(outcome, RepairOutcome::Committed);
+    let source = fixture.path(&SourceTarget::User);
+    assert_eq!(
+        steps,
+        [
+            synced(backups[0].parent().unwrap()),
+            published(&source),
+            synced(source.parent().unwrap()),
+        ]
+    );
+    assert_eq!(fixture.backups(), backups);
+    assert_eq!(std::fs::read(&backups[0]).unwrap(), original.as_bytes());
+}
+
+#[test]
+fn an_ordinary_write_makes_a_created_source_directory_durable() {
+    let fixture = Fixture::with_config_path(|home| home.join("fresh/rustx.toml"));
+    let source = fixture.path(&SourceTarget::User);
+    let directory = source.parent().unwrap();
+    std::fs::remove_dir(directory).unwrap();
+    let (written, steps) = traced(None, || {
+        fixture
+            .manager
+            .write_source_settings(&SourceTarget::User, "missing", capacity(2))
+    });
+    written.unwrap();
+    assert_eq!(
+        steps,
+        [
+            created(directory),
+            synced(directory.parent().unwrap()),
+            published(&source),
+            synced(directory),
+        ]
+    );
+}
+
+// The authored file bound (SIZE-01..08): no published candidate is larger
+// than its reader accepts.
+
+/// The authored file bound, in bytes.
+fn bound() -> usize {
+    usize::try_from(crate::bounded_file::MAX_RESOURCE_BYTES).unwrap()
+}
+
+/// `prefix` padded with one comment line to exactly `size` bytes.
+fn sized(prefix: &str, size: usize) -> String {
+    let padding = size - prefix.len() - "#\n".len();
+    let text = format!("{prefix}#{}\n", "x".repeat(padding));
+    assert_eq!(text.len(), size);
+    text
+}
+
+#[test]
+fn a_repair_candidate_exactly_at_the_bound_is_published_and_readable() {
+    let fixture = Fixture::new();
+    let original = sized(&format!("schema_version = 9\n{USER}"), bound() - 1);
+    fixture.write(&SourceTarget::User, &original);
+    assert_eq!(
+        fixture.repair(&SourceTarget::User, &SourceTarget::User),
+        RepairOutcome::Committed
+    );
+    let published = std::fs::read(fixture.path(&SourceTarget::User)).unwrap();
+    assert_eq!(published.len(), bound());
+    assert!(published.starts_with(b"schema_version = 10\n"));
+    // The normal native reader accepts exactly what was published.
+    let read = fixture
+        .manager
+        .read_source_settings(&SourceTarget::User)
+        .unwrap();
+    assert!(read.user.diagnostic.is_none(), "{:?}", read.user.diagnostic);
+    assert!(read.user.authored.is_some());
+    assert_eq!(
+        read.user.revision,
+        super::super::super::settings::revision(Some(&published))
+    );
+}
+
+#[test]
+fn a_repair_growing_past_the_bound_is_unresolved_without_a_backup() {
+    let fixture = Fixture::new();
+    let original = sized(&format!("schema_version = 9\n{USER}"), bound());
+    fixture.write(&SourceTarget::User, &original);
+    // The original itself is readable at exactly the bound.
+    assert!(crate::bounded_file::read_bounded(&fixture.path(&SourceTarget::User)).is_ok());
+    let candidate = plan(original.as_bytes()).unwrap().candidate;
+    assert_eq!(candidate.len(), bound() + 1);
+    let sequence = fixture.sequence();
+    let (outcome, steps) = traced(None, || {
+        fixture.repair(&SourceTarget::User, &SourceTarget::User)
+    });
+    assert_eq!(outcome, RepairOutcome::Unchanged);
+    // Nothing was created, linked, synced or published.
+    assert_eq!(steps, []);
+    assert_eq!(fixture.read(&SourceTarget::User), original);
+    assert!(!fixture.manager.runtime_root().exists());
+    assert!(fixture.backups().is_empty());
+    let receipt = fixture.receipt(&SourceTarget::User).unwrap();
+    assert_eq!(fixture.sequence(), sequence + 1);
+    assert_eq!(receipt.status, ConfigRepairStatus::Unresolved);
+    assert_eq!(
+        receipt.changes,
+        [ConfigRepairChange::UpdatedSchemaVersion { from: 9, to: 10 }]
+    );
+    assert!(!receipt.backup_available);
+    assert!(receipt.after_revision.is_none());
+    assert_eq!(
+        receipt.diagnostic.as_deref(),
+        Some(
+            "the repaired document would exceed the authored file size limit; the source is unchanged"
+        )
+    );
+    // No writer lock was taken either: the source directory is untouched.
+    assert_eq!(
+        Swap::entries(fixture.path(&SourceTarget::User).parent().unwrap()),
+        ["rustx.toml"]
+    );
+}
+
+#[test]
+fn a_repair_shrinking_an_at_limit_source_is_published() {
+    let fixture = Fixture::new();
+    let original = sized(&format!("{USER}legacy = 1\n"), bound());
+    fixture.write(&SourceTarget::User, &original);
+    assert_eq!(
+        fixture.repair(&SourceTarget::User, &SourceTarget::User),
+        RepairOutcome::Committed
+    );
+    let published = std::fs::read(fixture.path(&SourceTarget::User)).unwrap();
+    assert_eq!(published.len(), bound() - "legacy = 1\n".len());
+    assert_eq!(
+        std::fs::read(&fixture.backups()[0]).unwrap(),
+        original.as_bytes()
+    );
+    let read = fixture
+        .manager
+        .read_source_settings(&SourceTarget::User)
+        .unwrap();
+    assert!(read.user.diagnostic.is_none(), "{:?}", read.user.diagnostic);
+}
+
+#[test]
+fn ordinary_writes_never_publish_beyond_the_bound() {
+    let fixture = Fixture::new();
+    let instructions = |length: usize| super::super::settings::SourceMutation::Config {
+        mutation: super::super::settings::ConfigMutation::Instructions {
+            authored: Some("i".repeat(length)),
+        },
+    };
+    let current = || {
+        super::super::super::settings::revision(
+            std::fs::read(fixture.path(&SourceTarget::User))
+                .ok()
+                .as_deref(),
+        )
+    };
+    // The encoded document grows by exactly one byte per instruction byte.
+    fixture
+        .manager
+        .write_source_settings(&SourceTarget::User, &current(), instructions(1))
+        .unwrap();
+    let base = fixture.read(&SourceTarget::User).len() - 1;
+    let at_bound = bound() - base;
+    fixture
+        .manager
+        .write_source_settings(&SourceTarget::User, &current(), instructions(at_bound))
+        .unwrap();
+    assert_eq!(fixture.read(&SourceTarget::User).len(), bound());
+    let before = fixture.read(&SourceTarget::User);
+    assert!(matches!(
+        fixture.manager.write_source_settings(
+            &SourceTarget::User,
+            &current(),
+            instructions(at_bound + 1)
+        ),
+        Err(SettingsError::Invalid)
+    ));
+    assert_eq!(fixture.read(&SourceTarget::User), before);
+    // Nothing was staged for the refused candidate.
+    assert_eq!(
+        Swap::entries(fixture.path(&SourceTarget::User).parent().unwrap()),
+        document_entries()
+    );
+}

@@ -665,6 +665,14 @@ resolution and source inspection share:
   supplies no facts, so it never blocks this source's repair. A composition
   without a default model is incomplete, not invalid, once everything else holds.
 
+Every candidate is also bounded in bytes: its complete serialization must fit the
+1 MiB limit every authored file reader enforces (`bounded_file`), checked before
+any lock or backup. A repair that would grow a source past it — `schema_version
+= 9` becoming `10` in a document already at the limit — is `unresolved` with no
+backup, and the source is unchanged. The source publication primitive fences the
+same bound for every write, so `configuration/sourceWrite` refuses an oversized
+document as invalid; nothing is published that its own reader would refuse.
+
 `.agents` resources (MCP servers named by `mcp_tool_policies`, Agents, Skills)
 are not source facts. Nothing here resolves credentials, connects MCP, prepares
 Python, creates a Session or calls a model.
@@ -678,7 +686,16 @@ parent-directory sync. Before that, an
 exact copy of the original bytes is written to private storage under the bound
 runtime root (`<runtime_root>/configuration-backups/`, directory `0700`, file
 `0600`, never inside the Workspace), named by source identity and original
-revision; a backup failure leaves the source unchanged. The bound runtime root is
+revision; a backup failure leaves the source unchanged. The backup is confirmed
+only once every name leading to it is durable: each directory created on the
+way — a missing runtime-root ancestor, the runtime root, the backup directory —
+has its parent synced before it is used (so is one another writer created at the
+same moment), the copy is linked, and the backup directory is synced. A failed
+sync fails the backup and withdraws the directory entry it could not confirm, so
+a later attempt creates and confirms it again; only then may the source be
+replaced, and only then does a receipt report a backup. The same primitive makes
+a source directory created by `configuration/sourceWrite` durable before the
+document is published into it. The bound runtime root is
 the trust anchor (canonical when bound). Each backup admits it the way a source
 directory is admitted: walked from `/` one component at a time without following
 any symlink, missing components created relative to their verified parent, and,

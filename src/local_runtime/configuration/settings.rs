@@ -1218,12 +1218,14 @@ impl UserConfigManager {
     /// The caller admitted `source` (the document's physical directory) when
     /// its transaction began, holds the writer lock of `name` in it and has
     /// verified `expected`. `candidate` replaces the document; `None` removes
-    /// a present document. Everything goes through the admitted directory
-    /// handle: the candidate is staged in it and synced; immediately before
-    /// the atomic replacement the pathname must still name that directory and
-    /// the document must still have exactly `expected` bytes; the replacement
-    /// is a `renameat` inside it — the linearization point — and the directory
-    /// is synced afterwards.
+    /// a present document. A candidate larger than the authored file bound
+    /// its readers enforce is `Invalid` before anything is staged: nothing is
+    /// ever published that its own reader would refuse. Everything goes
+    /// through the admitted directory handle: the candidate is staged in it
+    /// and synced; immediately before the atomic replacement the pathname
+    /// must still name that directory and the document must still have
+    /// exactly `expected` bytes; the replacement is a `renameat` inside it —
+    /// the linearization point — and the directory is synced afterwards.
     ///
     /// A pathname that no longer names the admitted directory before the
     /// replacement is `Invalid`, exactly as [`SourceTarget::validate`] rejects
@@ -1267,6 +1269,9 @@ impl UserConfigManager {
             }
         };
         if let Some(bytes) = candidate {
+            if !crate::bounded_file::within_bound(bytes) {
+                return Err(SettingsError::Invalid);
+            }
             #[cfg(test)]
             if self.test_hooks.fault("stage_write") {
                 return Err(SettingsError::Io);

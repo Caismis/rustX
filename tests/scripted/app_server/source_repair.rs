@@ -812,3 +812,86 @@ async fn an_unresolvable_session_workspace_repairs_no_source() {
     })
     .await;
 }
+
+/// SIZE-08 at the real native Session creation boundary: a User repair whose
+/// candidate would outgrow the authored file bound is unresolved before any
+/// backup, so nothing is published, nothing reaches the configuration
+/// coordinator, and the live Session prepares nothing — although the edited
+/// User source carries instructions a committed repair would prepare.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_repair_refused_by_the_size_bound_reaches_no_application() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let runtime = f.load(0).await.unwrap().unwrap();
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        call(
+            &connection,
+            1,
+            Method::ConfigurationReconcile {
+                target: workspace(&f, 0),
+            },
+        )
+        .await;
+        let probe = f.manager.probe(&f.id(0).await);
+        let baseline = super::configuration::settled(&f, 0).await;
+        let before = probe.configuration_preparations.load(Ordering::SeqCst);
+        // An exactly at-bound User source whose only eligible repair,
+        // `schema_version = 9` → `10`, adds one byte.
+        let mut document: toml_edit::DocumentMut = std::fs::read_to_string(user_path(&f))
+            .unwrap()
+            .parse()
+            .unwrap();
+        document["schema_version"] = toml_edit::value(9);
+        document["agent"]["instructions"] = toml_edit::value("User instructions");
+        let prefix = document.to_string();
+        let bound = usize::try_from(crate::bounded_file::MAX_RESOURCE_BYTES).unwrap();
+        let user = format!("{prefix}#{}\n", "x".repeat(bound - prefix.len() - 2));
+        assert_eq!(user.len(), bound);
+        std::fs::write(user_path(&f), &user).unwrap();
+        // Session creation may or may not admit the unrepaired source; either
+        // way the repair boundary has run.
+        let _ = connection
+            .handle_request(Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(2),
+                call: Method::SessionCreate {
+                    settings: SessionPersistentState::from_input(&SessionConfigInput::new(
+                        f.workspaces[1].clone(),
+                    )),
+                },
+            })
+            .await;
+        assert_eq!(std::fs::read_to_string(user_path(&f)).unwrap(), user);
+        assert!(!f.archive_root.join("configuration-backups").exists());
+        let receipt = f
+            .manager
+            .source_repairs()
+            .latest(&SourceTarget::User)
+            .unwrap();
+        assert_eq!(receipt.status, ConfigRepairStatus::Unresolved);
+        assert_eq!(
+            receipt.changes,
+            [ConfigRepairChange::UpdatedSchemaVersion { from: 9, to: 10 }]
+        );
+        assert!(!receipt.backup_available);
+        assert!(receipt.after_revision.is_none());
+        assert!(
+            receipt
+                .diagnostic
+                .as_deref()
+                .is_some_and(|diagnostic| diagnostic.contains("authored file size limit"))
+        );
+        assert_eq!(
+            super::configuration::settled(&f, 0).await.desired,
+            baseline.desired
+        );
+        assert_eq!(
+            probe.configuration_preparations.load(Ordering::SeqCst),
+            before
+        );
+        drop(runtime);
+        f.close().await;
+    })
+    .await;
+}

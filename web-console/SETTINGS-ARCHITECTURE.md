@@ -591,13 +591,23 @@ configuration/sourcesRead ──▶ SourceSettings.user_repair / workspace_repai
 - The client keeps the latest receipt of each source this connection observed,
   keyed by source and never by Session or application scope, replaced on every
   connection (whose server announces each latest receipt again). It is a
-  separate fact from `configuration`, the application publication.
+  separate fact from `configuration`, the application publication. Each
+  observation carries the `authorityId` its connection negotiated: a receipt
+  id is content-derived, so equal ids from two App Server authorities — or
+  from a new process at the same endpoint — are different repairs. A receipt
+  delivered before this connection's `initialize` succeeds is held and
+  attributed to the authority `initialize` then returns, never to the one the
+  client knew from an earlier connection.
 - `RepairNotice` (`app/RepairNotice.tsx`) presents each unacknowledged receipt
   once: a combined sentence for simultaneous User and Workspace repairs, an
-  alert for `unresolved` / `commit_uncertain`, and nothing at all for a source
-  without a receipt. View details and Dismiss acknowledge the receipt ids in a
-  bounded browser-local list, so reconnects, rereads, reloads and other tabs
-  never repeat a notice. There is no dialog and no automatic navigation.
+  alert for `unresolved` / `commit_uncertain` naming the first failing source,
+  and nothing at all for a source without a receipt. View details opens and
+  acknowledges only the source it names, so the other source of a combined
+  notice stays presented; Dismiss acknowledges every receipt presented.
+  Acknowledgements are opaque `(authorityId, receipt id)` pairs in a bounded
+  browser-local list (in memory when storage is denied), so reconnects,
+  rereads, reloads and other tabs of the same authority never repeat a notice.
+  There is no dialog and no automatic navigation.
 - `OPEN.REPAIRS` is a navigation event: the User owner opens directly at
   Advanced with the `{ kind: 'auto_repair' }` focus, which every owner admits;
   a Workspace source resolves its exact owner through the Product Host lookup

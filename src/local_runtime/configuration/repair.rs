@@ -1002,12 +1002,15 @@ impl UserConfigManager {
 
     /// Validate a complete candidate under its applicable contract.
     ///
-    /// The production strict parser, the source restrictions and every
-    /// source-intrinsic native constraint always apply. Composition-dependent
-    /// constraints apply to the candidate composed with the other source of
-    /// `scope`, exactly as Session resolution composes them, once that source
-    /// is known: never at startup for the User, which may leave its default
-    /// model or Model definitions to a Workspace not yet selected.
+    /// The serialized candidate must fit the authored file bound its reader
+    /// enforces, checked here — before any backup — although publication
+    /// fences it again. The production strict parser, the source restrictions
+    /// and every source-intrinsic native constraint always apply.
+    /// Composition-dependent constraints apply to the candidate composed with
+    /// the other source of `scope`, exactly as Session resolution composes
+    /// them, once that source is known: never at startup for the User, which
+    /// may leave its default model or Model definitions to a Workspace not
+    /// yet selected.
     fn validate_candidate(
         &self,
         target: &SourceTarget,
@@ -1016,6 +1019,12 @@ impl UserConfigManager {
         candidate: &[u8],
     ) -> Result<(), String> {
         let workspace = target.scope() == SourceScope::Workspace;
+        if !crate::bounded_file::within_bound(candidate) {
+            return Err(
+                "the repaired document would exceed the authored file size limit; the source is unchanged"
+                    .into(),
+            );
+        }
         if plan(candidate).map_or(true, |again| !again.changes.is_empty()) {
             return Err("automatic repair did not converge; the source is unchanged".into());
         }
@@ -1129,7 +1138,8 @@ impl UserConfigManager {
                 RepairOutcome::Committed,
             ),
             // Changed bytes, or a target that no longer names this physical
-            // source: nothing was published and nothing is reported.
+            // source: nothing was published and nothing is reported. (An
+            // oversized candidate never gets here: validation refused it.)
             Err(SettingsError::Conflict { .. } | SettingsError::Invalid) => {
                 return RepairOutcome::Superseded;
             }
@@ -1203,6 +1213,11 @@ impl UserConfigManager {
     /// with an existing copy and the durability sync all go through that one
     /// handle, so a symlink in any ancestor, or any replacement after
     /// admission, can never redirect the bytes.
+    ///
+    /// The backup is durable only once every name leading to it is: each
+    /// directory created on the way has its parent synced before use (see
+    /// [`SourceDirectory`]), and the backup directory is synced after the
+    /// link. Any failed sync is a backup failure.
     ///
     /// Physical safety does not depend on the pathname afterwards; whether
     /// the backup is confirmed does. The copy counts only if, once durable,

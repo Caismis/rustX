@@ -6,7 +6,7 @@ import { useTranslation } from '../locale/react';
 import type { Translate } from '../locale/translation';
 import { Button } from '../presentation/primitives/Button';
 import { repairCount } from './settings/advanced/AutoRepair';
-import { RepairAcknowledgements, unacknowledgedRepairs } from './repair-notices';
+import { type PresentedRepair, RepairAcknowledgements, unacknowledgedRepairs } from './repair-notices';
 
 /** The one concise sentence for newly observed receipts of distinct sources:
  * a failure is named first, otherwise every committed repair is counted. */
@@ -29,7 +29,9 @@ export function repairNoticeText(tx: Translate, receipts: readonly ConfigRepairR
  * It presents native receipts the client observed and nothing else: no
  * confirmation, no forced navigation, and nothing at all for a healthy
  * unchanged source. View details opens the exact source owner at Settings →
- * Advanced → Auto Repair; both actions acknowledge the receipts presented. */
+ * Advanced → Auto Repair and acknowledges only that source's receipt, so a
+ * combined notice keeps presenting the source not yet inspected; Dismiss
+ * acknowledges every receipt presented. */
 export function RepairNotice({ client, viewDetails, acknowledgements }: {
   client: AppServerClient;
   viewDetails: (source: SourceTarget) => void;
@@ -40,14 +42,15 @@ export function RepairNotice({ client, viewDetails, acknowledgements }: {
   const observations = useClientSelector(client, state => state.sourceRepairs);
   // Re-render after an acknowledgement; the ledger itself is the fact.
   const [, setRevision] = useState(0);
-  const receipts = unacknowledgedRepairs(observations, ledger);
-  if (receipts.length === 0) return null;
-  const acknowledge = () => { ledger.acknowledge(receipts.map(receipt => receipt.id)); setRevision(value => value + 1); };
+  const repairs = unacknowledgedRepairs(observations, ledger);
+  if (repairs.length === 0) return null;
+  const receipts = repairs.map(repair => repair.receipt);
+  const acknowledge = (presented: readonly PresentedRepair[]) => { ledger.acknowledge(presented); setRevision(value => value + 1); };
   const failed = receipts.some(receipt => receipt.status !== 'repaired');
-  const subject = receipts.find(receipt => receipt.status !== 'repaired') ?? receipts[0];
+  const subject = repairs.find(repair => repair.receipt.status !== 'repaired') ?? repairs[0];
   return <div className={`repair-notice${failed ? ' error' : ''}`} role={failed ? 'alert' : 'status'} aria-live={failed ? 'assertive' : 'polite'} aria-label={tx('settings:auto-repair.toast-label')}>
     <span>{repairNoticeText(tx, receipts)}</span>
-    <Button size="sm" onClick={() => { acknowledge(); viewDetails(subject.target); }}>{tx('settings:auto-repair.view-details')}</Button>
-    <Button size="sm" variant="ghost" onClick={acknowledge}>{tx('settings:auto-repair.dismiss')}</Button>
+    <Button size="sm" onClick={() => { acknowledge([subject]); viewDetails(subject.receipt.target); }}>{tx('settings:auto-repair.view-details')}</Button>
+    <Button size="sm" variant="ghost" onClick={() => acknowledge(repairs)}>{tx('settings:auto-repair.dismiss')}</Button>
   </div>;
 }

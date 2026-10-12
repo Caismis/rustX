@@ -94,6 +94,11 @@ pub(super) fn revision(bytes: Option<&[u8]>) -> String {
 /// Entry names are native [`OsStr`] bytes, never text: a document is read,
 /// locked, replaced and removed under exactly the basename it is bound to.
 ///
+/// Every directory entry a transaction creates on its way — a missing
+/// ancestor, the directory itself, private backup storage — is made durable
+/// by syncing its parent before the walk continues, so a later durability
+/// sync of the directory's contents is reachable after a crash. See [`child`].
+///
 /// What the handle cannot do is stop the directory itself from being renamed.
 /// [`SourceDirectory::holds`] therefore asks whether the admitted pathname
 /// still names this physical directory; publication requires it immediately
@@ -123,18 +128,16 @@ impl SourceDirectory {
     }
 
     /// Admit the child directory `name` as this user's private (`0700`)
-    /// storage, creating it relative to this handle when missing.
+    /// storage, creating it relative to this handle when missing — durably,
+    /// as [`child`] creates every entry.
     pub(super) fn private_child(&self, name: &str) -> std::io::Result<Self> {
-        match nix::sys::stat::mkdirat(&self.directory, name, Mode::S_IRWXU) {
-            Ok(()) | Err(nix::errno::Errno::EEXIST) => {}
-            Err(error) => return Err(error.into()),
-        }
-        let directory = nix::fcntl::openat(
+        let directory = child(
             &self.directory,
-            name,
-            OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
-            Mode::empty(),
-        )?;
+            &self.path,
+            OsStr::new(name),
+            Some(Mode::S_IRWXU),
+        )?
+        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
         let status = nix::sys::stat::fstat(&directory)?;
         if status.st_uid != nix::unistd::geteuid().as_raw() {
             return Err(std::io::Error::other("directory is not owned by this user"));
@@ -222,6 +225,8 @@ impl SourceDirectory {
     pub(super) fn replace(&self, mut staged: Staged<'_>, name: &OsStr) -> std::io::Result<()> {
         nix::fcntl::renameat(&self.directory, staged.name.as_str(), &self.directory, name)?;
         staged.published = true;
+        #[cfg(test)]
+        durability::step(durability::Step::Published(self.path.join(name)));
         Ok(())
     }
 
@@ -229,13 +234,16 @@ impl SourceDirectory {
     /// an existing `name` fails with [`std::io::ErrorKind::AlreadyExists`].
     /// The staged name remains and is removed when `staged` drops.
     pub(super) fn link(&self, staged: &Staged<'_>, name: &OsStr) -> std::io::Result<()> {
-        Ok(nix::unistd::linkat(
+        nix::unistd::linkat(
             &self.directory,
             staged.name.as_str(),
             &self.directory,
             name,
             nix::fcntl::AtFlags::empty(),
-        )?)
+        )?;
+        #[cfg(test)]
+        durability::step(durability::Step::Published(self.path.join(name)));
+        Ok(())
     }
 
     /// Whether this physical directory is `ancestor` or lies below it,
@@ -273,7 +281,7 @@ impl SourceDirectory {
 
     /// Make this directory's entries durable.
     pub(super) fn sync(&self) -> std::io::Result<()> {
-        Ok(nix::unistd::fsync(&self.directory)?)
+        sync(&self.directory, &self.path)
     }
 
     fn open_file(&self, name: &OsStr, flags: OFlag, mode: Mode) -> nix::Result<File> {
@@ -302,35 +310,99 @@ impl Drop for Staged<'_> {
     }
 }
 
+const DIRECTORY_FLAGS: OFlag = OFlag::O_RDONLY
+    .union(OFlag::O_DIRECTORY)
+    .union(OFlag::O_NOFOLLOW)
+    .union(OFlag::O_CLOEXEC);
+
 /// Open `path` from `/` one component at a time, never following a symlink.
 /// With `create`, a missing component is created relative to its verified
-/// parent handle.
+/// parent handle, durably (see [`child`]).
 fn walk(path: &Path, create: bool) -> std::io::Result<Option<std::os::fd::OwnedFd>> {
     use std::path::Component;
-    let flags = OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
     let mut components = path.components();
     if components.next() != Some(Component::RootDir) {
         return Err(std::io::Error::other("source directory must be absolute"));
     }
-    let mut directory = nix::fcntl::open("/", flags, Mode::empty())?;
+    let mode = create.then(|| Mode::from_bits_truncate(0o777));
+    let mut directory = nix::fcntl::open("/", DIRECTORY_FLAGS, Mode::empty())?;
+    let mut reached = std::path::PathBuf::from("/");
     for component in components {
         let Component::Normal(name) = component else {
             return Err(std::io::Error::other("source directory must be canonical"));
         };
-        directory = match nix::fcntl::openat(&directory, name, flags, Mode::empty()) {
-            Ok(next) => next,
-            Err(nix::errno::Errno::ENOENT) if create => {
-                match nix::sys::stat::mkdirat(&directory, name, Mode::from_bits_truncate(0o777)) {
-                    Ok(()) | Err(nix::errno::Errno::EEXIST) => {}
-                    Err(error) => return Err(error.into()),
-                }
-                nix::fcntl::openat(&directory, name, flags, Mode::empty())?
-            }
-            Err(nix::errno::Errno::ENOENT) => return Ok(None),
-            Err(error) => return Err(error.into()),
+        let Some(next) = child(&directory, &reached, name, mode)? else {
+            return Ok(None);
         };
+        directory = next;
+        reached.push(name);
     }
     Ok(Some(directory))
+}
+
+/// Open the directory `name` below `parent` (whose path is `path`) without
+/// following a symlink. A missing entry is `None`, unless `mode` creates it.
+///
+/// A created entry is durable only once its parent is synced, so the parent
+/// is synced before the child is used; an entry another writer created
+/// concurrently (`EEXIST`) is synced the same way, never assumed durable. A
+/// failed sync fails the step and withdraws the entry this call created, so
+/// no later walk mistakes it for an established one. An entry already
+/// present when first looked up was made durable by the walk that created it.
+fn child(
+    parent: &std::os::fd::OwnedFd,
+    path: &Path,
+    name: &OsStr,
+    mode: Option<Mode>,
+) -> std::io::Result<Option<std::os::fd::OwnedFd>> {
+    match nix::fcntl::openat(parent, name, DIRECTORY_FLAGS, Mode::empty()) {
+        Ok(next) => return Ok(Some(next)),
+        Err(nix::errno::Errno::ENOENT) => {}
+        Err(error) => return Err(error.into()),
+    }
+    let Some(mode) = mode else {
+        return Ok(None);
+    };
+    let created = match nix::sys::stat::mkdirat(parent, name, mode) {
+        Ok(()) => true,
+        Err(nix::errno::Errno::EEXIST) => false,
+        Err(error) => return Err(error.into()),
+    };
+    #[cfg(test)]
+    if created {
+        durability::step(durability::Step::Created(path.join(name)));
+    }
+    if let Err(error) = sync(parent, path) {
+        if created {
+            let _ = nix::unistd::unlinkat(parent, name, nix::unistd::UnlinkatFlags::RemoveDir);
+        }
+        return Err(error);
+    }
+    Ok(Some(nix::fcntl::openat(
+        parent,
+        name,
+        DIRECTORY_FLAGS,
+        Mode::empty(),
+    )?))
+}
+
+/// Make the entries of `directory` (at `path`) durable.
+#[cfg_attr(
+    not(test),
+    allow(
+        unused_variables,
+        reason = "the path names the directory in test durability traces"
+    )
+)]
+fn sync(directory: &std::os::fd::OwnedFd, path: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    if durability::sync_fails(path) {
+        return Err(std::io::Error::other("injected directory sync failure"));
+    }
+    nix::unistd::fsync(directory)?;
+    #[cfg(test)]
+    durability::step(durability::Step::Synced(path.into()));
+    Ok(())
 }
 
 fn identity(directory: &std::os::fd::OwnedFd) -> std::io::Result<(u64, u64)> {
@@ -341,4 +413,68 @@ fn identity(directory: &std::os::fd::OwnedFd) -> std::io::Result<(u64, u64)> {
         reason = "dev_t and ino_t are signed or narrower on some platforms"
     )]
     Ok((status.st_dev as u64, status.st_ino as u64))
+}
+
+/// Test-only trace of this thread's durability-relevant directory steps, with
+/// one injectable directory sync failure.
+#[cfg(test)]
+pub(super) mod durability {
+    use std::cell::RefCell;
+    use std::path::{Path, PathBuf};
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) enum Step {
+        /// A directory entry was created at this path.
+        Created(PathBuf),
+        /// This directory's entries were synced.
+        Synced(PathBuf),
+        /// A file entry was published at this path, by link or rename.
+        Published(PathBuf),
+    }
+
+    #[derive(Default)]
+    struct Trace {
+        recording: bool,
+        steps: Vec<Step>,
+        fail: Option<PathBuf>,
+    }
+
+    thread_local! {
+        static TRACE: RefCell<Trace> = RefCell::default();
+    }
+
+    /// Record this thread's steps from now on; the next sync of `fail`, if
+    /// given, fails.
+    pub(crate) fn record(fail: Option<&Path>) {
+        TRACE.with_borrow_mut(|trace| {
+            *trace = Trace {
+                recording: true,
+                steps: Vec::new(),
+                fail: fail.map(Path::to_path_buf),
+            };
+        });
+    }
+
+    /// Stop recording and return the recorded steps.
+    pub(crate) fn take() -> Vec<Step> {
+        TRACE.with_borrow_mut(std::mem::take).steps
+    }
+
+    pub(super) fn step(step: Step) {
+        TRACE.with_borrow_mut(|trace| {
+            if trace.recording {
+                trace.steps.push(step);
+            }
+        });
+    }
+
+    pub(super) fn sync_fails(path: &Path) -> bool {
+        TRACE.with_borrow_mut(|trace| {
+            let fails = trace.fail.as_deref() == Some(path);
+            if fails {
+                trace.fail = None;
+            }
+            fails
+        })
+    }
 }

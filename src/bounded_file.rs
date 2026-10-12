@@ -4,7 +4,15 @@ use std::io::Read;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
-const MAX_RESOURCE_BYTES: u64 = 1024 * 1024;
+/// The byte bound of every authored file: its readers refuse anything
+/// larger, and its writers never publish anything larger.
+pub(crate) const MAX_RESOURCE_BYTES: u64 = 1024 * 1024;
+
+/// Whether `bytes` fit the authored file bound.
+pub(crate) fn within_bound(bytes: &[u8]) -> bool {
+    u64::try_from(bytes.len()).is_ok_and(|length| length <= MAX_RESOURCE_BYTES)
+}
+
 pub(crate) fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
     if !std::fs::metadata(path)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?
@@ -30,7 +38,7 @@ pub(crate) fn read_bounded_file(file: std::fs::File) -> Result<Vec<u8>, String> 
     file.take(MAX_RESOURCE_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
-    if bytes.len() as u64 > MAX_RESOURCE_BYTES {
+    if !within_bound(&bytes) {
         return Err("exceeds 1 MiB".into());
     }
     Ok(bytes)

@@ -112,8 +112,12 @@ export interface UncertainOperation {
   generation: number;
 }
 /** The latest native automatic repair receipt of one configuration source
- * (Issue #464). `receipt` is absent once native withdrew an unresolved one. */
+ * (Issue #464). `receipt` is absent once native withdrew an unresolved one.
+ * `authorityId` is the negotiated App Server authority that announced it: a
+ * receipt id is content-derived, so equal ids from distinct authorities are
+ * distinct repairs. */
 export interface SourceRepairObservation {
+  authorityId: string;
   target: SourceTarget;
   receipt?: ConfigRepairReceipt;
 }
@@ -295,6 +299,9 @@ export class AppServerClient {
   dispose() { this.attachmentIntakes.dispose(); this.firstSubmissions.dispose(); return this.disconnect(); }
   private socket?: Socket;
   private initialized = false;
+  /** Repair observations this connection delivered before its authority was
+   * negotiated; attributed to that authority once `initialize` succeeds. */
+  private unattributedRepairs = new Map<string, Omit<SourceRepairObservation, 'authorityId'>>();
   private nextId = 0;
   private listeners = new Set<() => void>();
   private pending = new Map<string, Pending>();
@@ -525,6 +532,7 @@ export class AppServerClient {
     if (replacing) {
       this.retireAuthority();
     }
+    this.unattributedRepairs.clear();
     this.publish({ configuration: {}, sourceRepairs: {}, endpoint: url.href, connection: transition === 'reconnect' ? 'reconnecting' : 'connecting', capabilities: undefined, error: undefined });
     // Ownership commits after close/retirement, before attempting the new transport.
     committed?.();
@@ -567,6 +575,8 @@ export class AppServerClient {
       }
       this.publish({ authorityId: hello.authority_id });
       this.initialized = true;
+      for (const [key, observation] of this.unattributedRepairs) this.observeRepair(key, { ...observation, authorityId: hello.authority_id });
+      this.unattributedRepairs.clear();
       this.lifecycles.transport(generation, true);
       this.publish({ capabilities: hello.capabilities, connection: 'resynchronizing' });
       await this.listSessions();
@@ -610,6 +620,12 @@ export class AppServerClient {
     const views = { ...this.state.views }; delete views[id];
     this.publish({ views });
   }
+  private observeRepair(key: string, observation: SourceRepairObservation) {
+    const previous = this.state.sourceRepairs?.[key];
+    if (!previous || previous.authorityId !== observation.authorityId || previous.receipt?.id !== observation.receipt?.id) {
+      this.publish({ sourceRepairs: { ...this.state.sourceRepairs, [key]: observation } });
+    }
+  }
   private lose(generation: number) {
     if (this.current(generation)) this.endConnection('stale');
   }
@@ -617,6 +633,7 @@ export class AppServerClient {
     const oldSocket = this.socket;
     this.socket = undefined;
     this.initialized = false;
+    this.unattributedRepairs.clear();
     const uncertain = [...this.state.uncertain];
     for (const [id, pending] of this.pending) {
       clearTimeout(pending.timer); pending.validation?.abort(); pending.validation = undefined;
@@ -853,10 +870,10 @@ export class AppServerClient {
       if (target?.kind !== 'user' && (target?.kind !== 'workspace' || typeof target.directory !== 'string')) { this.lose(generation); return; }
       const receipt = value.params.receipt ?? undefined;
       const key = sourceRepairKey(target);
-      const previous = this.state.sourceRepairs?.[key];
-      if (!previous || previous.receipt?.id !== receipt?.id) {
-        this.publish({ sourceRepairs: { ...this.state.sourceRepairs, [key]: { target, receipt } } });
-      }
+      // Until this connection's `initialize` succeeds, `authorityId` may still
+      // name the authority of a previous connection to the same endpoint.
+      if (this.initialized && this.state.authorityId) this.observeRepair(key, { authorityId: this.state.authorityId, target, receipt });
+      else this.unattributedRepairs.set(key, { target, receipt });
       return;
     }
     if (value.method === 'session/ownershipRetired') return; // Product Host owns execution retirement.
