@@ -18,7 +18,7 @@ async function fixture() {
   server.nodeSnapshots.set(origin.source_node, source);
   server.handlers.set('session/node', request => {
     if (request.method !== 'session/node') throw new Error('wrong method');
-    return { type: 'node', node: { id: request.params.node_id, ordinal: '1', conversation_id: request.params.node_id === origin.source_node ? source.conversation_id : child.conversation_id, origin: request.params.node_id === origin.source_node ? { type: 'new' } : origin } };
+    return { type: 'node', node: { id: request.params.node_id, ordinal: '1', conversation_id: request.params.node_id === origin.source_node ? source.conversation_id : server.snapshots.get(request.params.session_id)!.conversation_id, origin: request.params.session_id === 'A' ? origin : { type: 'new' } } };
   });
   await server.attached('A');
   localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: server.client.getSnapshot().endpoint, openViews: ['A'] }));
@@ -29,21 +29,24 @@ async function fixture() {
   editor().setSelectionRange(7, 12, 'backward'); fireEvent.select(editor());
   const key = JSON.stringify([server.client.getSnapshot().endpoint, server.client.getSnapshot().authorityId, '0']);
   const intake = server.client.attachmentIntakes.lookup(key)!;
-  return { ui, editor, intake, origin, target: server.client.target('A'), text: editor().value };
+  return { ui, editor, intake, key, origin, target: server.client.target('A'), text: editor().value };
 }
 const mutations = (from: number) => server.requests.slice(from).filter(({ request }) => ['session/attach', 'session/detach', 'session/switchNode', 'turn/start', 'turn/steer', 'session/uploadPrepare', 'session/snapshot'].includes(request.method));
-it('repeated read-only history visits retain text, caret, exact intake/files/receipts and original active controls', async () => {
-  const f = await fixture();
+it.each(['Return to conversation', 'Open Session A'])('repeated read-only history visits via %s retain the exact editor, caret, intake/files/receipts and active controls', async back => {
+  const activation = vi.spyOn(ComposerDraft.prototype, 'activate');
+  const f = await fixture(), owner = activation.mock.contexts.at(-1) as ComposerDraft;
   const files = [new File(['one'], 'one.txt'), new File(['two'], 'two.txt')];
   await act(async () => fireEvent.change(f.ui.getByLabelText('Attach files'), { target: { files } }));
   await waitFor(() => expect(f.intake.snapshot().map(file => file.status)).toEqual(['ready', 'ready']));
-  const selected = f.intake.snapshot(), before = server.requests.length;
+  const selected = f.intake.snapshot(), before = server.requests.length, draft = owner.snapshot()!;
   for (let visit = 0; visit < 2; visit++) {
     await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'View source' })));
     await waitFor(() => expect(f.ui.getByText('Exact historical source')).toBeTruthy());
     expect(f.ui.queryByRole('textbox', { name: 'Message' })).toBeNull();
     expect(f.intake.snapshot()).toBe(selected);
-    await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Return to conversation' })));
+    await act(async () => fireEvent.click(f.ui.getByRole('button', { name: back })));
+    expect(owner.snapshot()).toMatchObject({ key: draft.key, incarnation: draft.incarnation, revision: draft.revision });
+    expect(server.client.attachmentIntakes.lookup(f.key)).toBe(f.intake);
     expect(f.editor().value).toBe(f.text); expect([f.editor().selectionStart, f.editor().selectionEnd, f.editor().selectionDirection]).toEqual([7, 12, 'backward']);
     expect(f.intake.snapshot()).toBe(selected); expect(f.intake.snapshot().map(file => file.file)).toEqual(files); expect(server.client.attachmentIntakes.size).toBe(1);
     expect(server.client.target('A')).toBe(f.target); expect(f.editor().disabled).toBe(false);
@@ -53,7 +56,7 @@ it('repeated read-only history visits retain text, caret, exact intake/files/rec
   await act(async () => { f.editor().focus(); fireEvent.keyDown(f.editor(), { key: 'Escape' }); fireEvent.keyDown(f.editor(), { key: 'Escape' }); });
   expect(server.requests.slice(before).filter(row => row.request.method === 'turn/cancel').map(row => row.request.params)).toEqual([{ target: f.target }]);
 });
-it.each(['attachment', 'node', 'connection'] as const)('native %s replacement during history preserves local content but retires receipts without replay', async replacement => {
+it.each(['attachment', 'node', 'connection'].flatMap(replacement => ['Return to conversation', 'Open Session A'].map(back => [replacement, back])))('native %s replacement during history preserves local content via %s but retires receipts without replay', async (replacement, returnLabel) => {
   const f = await fixture(), file = new File(['one'], 'one.txt');
   await act(async () => fireEvent.change(f.ui.getByLabelText('Attach files'), { target: { files: [file] } }));
   await waitFor(() => expect(f.intake.snapshot()[0].status).toBe('ready'));
@@ -70,22 +73,91 @@ it.each(['attachment', 'node', 'connection'] as const)('native %s replacement du
     } else { await server.client.release('A'); await server.client.attach('A'); }
   });
   const target = server.client.target('A'), before = server.requests.length;
-  const back = f.ui.queryByRole('button', { name: 'Return to conversation' });
+  const back = f.ui.queryByRole('button', { name: returnLabel });
   if (back) await act(async () => fireEvent.click(back));
   expect(f.editor().value).toBe(f.text); expect(target).not.toEqual(f.target);
   expect(f.intake.snapshot()[0]).toMatchObject({ id: selected.id, file, status: 'draft', receipt: undefined });
   expect(f.intake.snapshot()[0].operation).not.toBe(selected.operation); expect(mutations(before)).toEqual([]);
   expect(f.editor().disabled).toBe(false);
 });
-it('history retains draft identity while permanently retiring the old control callback on entry and Return', async () => {
+it.each(['Return to conversation', 'sidebar'])('history retains draft identity while permanently retiring old control callbacks on entry and %s', async back => {
   const f = await fixture(); cleanup();
   const nav = routeFixture(server.client, server.workspaceHost), old = nav.capture(), binding = nav.actor.getSnapshot().context.binding;
   nav.actor.send({ type: 'OPEN', destination: { kind: 'history', origin: f.origin } }); await waitActor(nav.actor, state => state.matches('idle'));
   const history = nav.actor.getSnapshot().context.route; if (history.kind !== 'history') throw new Error('not history');
   const historyControl = nav.capture(); expect(old()).toBe(false); expect(nav.actor.getSnapshot().context.binding).toBe(binding);
-  nav.actor.send({ type: 'RETURN', route: history });
+  if (back === 'sidebar') nav.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'A', sidebar: true } });
+  else nav.actor.send({ type: 'RETURN', route: history });
   expect(old()).toBe(false); expect(historyControl()).toBe(false); expect(nav.capture()()).toBe(true); expect(nav.actor.getSnapshot().context.binding).toBe(binding);
   nav.stop();
+});
+it.each(['Return to conversation', 'Open Session A'])('cold admission via %s returns to the same editor without retaining old native receipts', async back => {
+  const activation = vi.spyOn(ComposerDraft.prototype, 'activate');
+  const f = await fixture(), owner = activation.mock.contexts.at(-1) as ComposerDraft, file = new File(['local'], 'local.txt');
+  await act(async () => fireEvent.change(f.ui.getByLabelText('Attach files'), { target: { files: [file] } }));
+  await waitFor(() => expect(f.intake.snapshot()[0].status).toBe('ready'));
+  const draft = owner.snapshot()!, selected = f.intake.snapshot()[0];
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'View source' })));
+  await waitFor(() => expect(f.ui.getByText('Exact historical source')).toBeTruthy());
+  // Explicit lifecycle retirement makes the admission path necessary. UI return
+  // never manufactures this retirement to recover local editor state.
+  await act(async () => server.client.release('A'));
+  server.held.add('session/attach'); const before = server.requests.length;
+  const count = server.requests.filter(row => row.request.method === 'session/attach').length;
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: back })));
+  const held = await server.waitFor('session/attach', count + 1);
+  expect(f.ui.queryByRole('textbox', { name: 'Message' })).toBeNull();
+  expect(owner.snapshot()).toMatchObject({ key: draft.key, incarnation: draft.incarnation, revision: draft.revision });
+  await act(async () => server.reply(held));
+  await waitFor(() => expect(f.editor().disabled).toBe(false));
+  expect(owner.snapshot()).toMatchObject({ key: draft.key, incarnation: draft.incarnation, revision: draft.revision });
+  expect(f.editor().value).toBe(f.text); expect([f.editor().selectionStart, f.editor().selectionEnd, f.editor().selectionDirection]).toEqual([7, 12, 'backward']);
+  expect(server.client.attachmentIntakes.lookup(f.key)).toBe(f.intake);
+  expect(f.intake.snapshot()[0]).toMatchObject({ id: selected.id, file, status: 'draft', receipt: undefined });
+  expect(f.intake.snapshot()[0].operation).not.toBe(selected.operation);
+  expect(mutations(before).map(row => row.request.method)).toEqual(['session/attach']);
+  expect(server.client.target('A').conversation_id).toBe(f.target.conversation_id);
+  expect(server.client.target('A')).not.toEqual(f.target);
+});
+it('sidebar selection of a different Session from history isolates the editor and intake without extra native requests', async () => {
+  const activation = vi.spyOn(ComposerDraft.prototype, 'activate');
+  const f = await fixture(), owner = activation.mock.contexts.at(-1) as ComposerDraft, file = new File(['local'], 'local.txt');
+  await act(async () => fireEvent.change(f.ui.getByLabelText('Attach files'), { target: { files: [file] } }));
+  await waitFor(() => expect(f.intake.snapshot()[0].status).toBe('ready'));
+  const draft = owner.snapshot()!;
+  await act(async () => server.client.attach('B'));
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'View source' })));
+  await waitFor(() => expect(f.ui.getByText('Exact historical source')).toBeTruthy());
+  const before = server.requests.length, target = server.client.target('B');
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Open Session B' })));
+  expect(f.editor().value).toBe(''); expect(f.ui.queryByText('local.txt')).toBeNull();
+  expect(owner.snapshot()?.key).not.toBe(draft.key); expect(owner.snapshot()?.incarnation).not.toBe(draft.incarnation);
+  expect(server.client.attachmentIntakes.lookup(f.key)).toBeUndefined(); expect(f.intake.snapshot()).toEqual([]);
+  expect(server.client.target('B')).toBe(target); expect(mutations(before)).toEqual([]);
+});
+it.each([true, false])('sidebar return supersedes a held history response successful=%s without replacing the retained editor', async successful => {
+  const activation = vi.spyOn(ComposerDraft.prototype, 'activate');
+  const f = await fixture(), owner = activation.mock.contexts.at(-1) as ComposerDraft;
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'View source' })));
+  await waitFor(() => expect(f.ui.getByText('Exact historical source')).toBeTruthy());
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Open Session A' })));
+  const draft = owner.snapshot()!, before = server.requests.length;
+  server.held.add('session/history');
+  const count = server.requests.filter(row => row.request.method === 'session/history').length;
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'View source' })));
+  const held = await server.waitFor('session/history', count + 1);
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Open Session A' })));
+  fireEvent.change(f.editor(), { target: { value: 'Newer editor revision' } });
+  const current = owner.snapshot();
+  await act(async () => {
+    if (successful) server.reply(held);
+    else server.socket.deliver({ jsonrpc: '2.0', id: held.id, error: { code: -32000, message: 'Stale history error', data: { kind: 'operation_failed' } } });
+    await server.client.request({ method: 'server/info', params: {} }, 'server_info');
+  });
+  expect(owner.snapshot()).toBe(current); expect(owner.snapshot()?.incarnation).toBe(draft.incarnation);
+  expect(f.editor().value).toBe('Newer editor revision'); expect(f.ui.queryByRole('alert')).toBeNull();
+  expect(f.ui.queryByText('Exact historical source')).toBeNull(); expect(mutations(before)).toEqual([]);
+  expect(server.client.target('A')).toBe(f.target);
 });
 it('an already admitted upload settles into its retained draft during history without phantom uncertainty or replay', async () => {
   const f = await fixture(); server.held.add('session/uploadPrepare');
@@ -347,7 +419,7 @@ it('connection authority replacement leaves a transmitted input uncertain and ig
   expect(mutations(before)).toEqual([]); expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
 });
 
-it('C1 acceptance during history cannot consume text retained for an authoritatively selected C2', async () => {
+it.each(['Return to conversation', 'Open Session A'])('C1 acceptance during history cannot consume text retained for selected C2 after %s', async back => {
   const f = await fixture(), submit = vi.spyOn(ComposerDraft.prototype, 'submit');
   server.held.add('turn/start'); await act(async () => fireEvent.keyDown(f.editor(), { key: 'Enter' }));
   const sent = await server.waitFor('turn/start', 1), reply = server.commit(sent), ticket = submit.mock.results[0].value!;
@@ -357,7 +429,7 @@ it('C1 acceptance during history cannot consume text retained for an authoritati
   const target = server.client.target('A'), before = server.requests.length;
   await act(async () => { server.socket.deliver(reply); await server.client.request({ method: 'server/info', params: {} }, 'server_info'); });
   expect(ticket.outcome).toBe('accepted'); expect(ticket.conversation?.conversation_id).toBe(f.target.conversation_id);
-  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Return to conversation' })));
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: back })));
   expect(f.editor().value).toBe(f.text); expect(server.client.target('A')).toBe(target); expect(mutations(before)).toEqual([]);
   expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
 });

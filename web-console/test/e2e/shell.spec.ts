@@ -728,7 +728,7 @@ for (const width of [390, 1440]) test(`catalog search owns preparation without r
   await proveCommittedControls(page); expect(errors).toEqual([]);
 });
 
-for (const width of [390, 1440]) test(`read-only visits retain editor text, selection and attachments without reauthorizing old controls: ${width}px`, async ({ page }) => {
+for (const width of [390, 1440]) for (const back of ['return', 'sidebar'] as const) test(`read-only visits via ${back} retain editor text, selection and attachments without reauthorizing old controls: ${width}px`, async ({ page }) => {
   const { before, errors } = await openForkOwnershipFixture(page, width);
   const editor = page.getByRole('textbox', { name: 'Message', exact: true });
   const text = 'Unsent source inspection draft\nsecond line';
@@ -740,13 +740,19 @@ for (const width of [390, 1440]) test(`read-only visits retain editor text, sele
   await expect(page.getByText('Uploaded', { exact: true })).toHaveCount(2);
   await editor.evaluate((element: HTMLTextAreaElement) => { element.focus(); element.setSelectionRange(7, 12, 'backward'); element.dispatchEvent(new Event('select', { bubbles: true })); });
   const requests = await page.evaluate(() => window.sessionFixture.requests());
+  const editorIdentity = await page.locator('[data-editor-incarnation]').evaluate(element => [element.getAttribute('data-editor-incarnation'), element.getAttribute('data-editor-revision')]);
   for (let visit = 0; visit < 2; visit++) {
     await startHeldFork(page, 'history'); await page.evaluate(() => window.sessionFixture.settleHistory(true));
     const anchor = page.locator('[data-history-session="C"] [data-chat-anchor-key="message:source-message"]');
     await expect(anchor).toBeVisible();
     await expect.poll(() => anchor.evaluate(element => { const port = element.closest('[data-conversation-scroll]')!; const a = element.getBoundingClientRect(), p = port.getBoundingClientRect(); return a.top >= p.top - 1 && a.top < p.bottom && a.bottom > p.top; })).toBe(true);
     await expect(editor).toHaveCount(0);
-    await page.getByRole('button', { name: 'Return to conversation', exact: true }).click();
+    if (back === 'sidebar') {
+      if (width === 390) await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
+      await page.getByRole('button', { name: 'Open Session A', exact: true }).click();
+      await expect(page.locator('[data-sidebar-overlay]')).toHaveCount(0); await expect(page.locator('main')).not.toHaveAttribute('inert');
+    } else await page.getByRole('button', { name: 'Return to conversation', exact: true }).click();
+    expect(await page.locator('[data-editor-incarnation]').evaluate(element => [element.getAttribute('data-editor-incarnation'), element.getAttribute('data-editor-revision')])).toEqual(editorIdentity);
     await expect(page.getByLabel('Session title')).toHaveText('Session A'); await expect(editor).toHaveValue(text); await expect(editor).toBeEditable();
     expect(await editor.evaluate((element: HTMLTextAreaElement) => [element.selectionStart, element.selectionEnd, element.selectionDirection])).toEqual([7, 12, 'backward']);
     await expect(page.getByText('one.txt', { exact: true })).toBeVisible(); await expect(page.getByText('two.txt', { exact: true })).toBeVisible();
@@ -755,7 +761,7 @@ for (const width of [390, 1440]) test(`read-only visits retain editor text, sele
   }
   const delta = (await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length);
   expect(nativeMutations(delta)).toEqual([]); expect(delta.filter(request => ['session/snapshot', 'session/uploadPrepare', 'session/uploadStatus'].includes(request.method))).toEqual([]);
-  await page.screenshot({ path: `/tmp/pr458-history-draft-${width}.png` });
+  await page.screenshot({ path: `/tmp/pr458-history-draft-${back}-${width}.png` });
   await editor.focus(); await editor.press('Escape'); await editor.press('Escape');
   await expect.poll(() => page.evaluate(() => window.sessionFixture.requests().filter(request => request.method === 'turn/cancel').length)).toBe(1);
   expect(errors).toEqual([]);

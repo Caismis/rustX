@@ -284,8 +284,14 @@ read-only route. It has bounded paging, exact ChatViewport Message landing and a
 return action, without source attachment, Node switching or model execution.
 The browser-lifetime `ComposerDraft` owns editor incarnation, authored content
 revision, selection and revision-correlated submission tickets. React subscribes;
-it never mirrors stale component-local text back into that owner. History and
-Return preserve the editor incarnation while establishing fresh route controls.
+it never mirrors stale component-local text back into that owner. Entering history
+and returning to its originating Session preserve the logical editor destination,
+including sidebar selection and cold attachment admission. Fast and prepared
+navigation use the same editor-destination comparison through history `returnTo`.
+Returning establishes fresh route controls even when the draft binding stays
+unchanged; selecting another Session or an explicit executable Node/Branch/Retry
+transition establishes a separate editor. Native receipt and Conversation checks
+remain independent of this local draft continuity.
 Known native `inbound_accepted` settlement consumes only the submitted revision
 and exact selected upload entries, even while the editor is unmounted. Later
 edits, including equal text authored again, remain unsent. Older acceptance does

@@ -15,6 +15,16 @@ export interface HistoryRoute {
   conversationId: string; window: ConversationWindow; returnTo: ConversationRoute;
 }
 export type ShellRoute = ConversationRoute | HistoryRoute;
+/** History changes the visible surface, not its originating editor destination.
+ * Native Conversation/receipt authority is reconciled separately by Composer. */
+function editorDestination(route: ShellRoute): ConversationRoute {
+  return route.kind === 'history' ? route.returnTo : route;
+}
+function sameEditorDestination(a: ShellRoute, b: ShellRoute) {
+  const from = editorDestination(a), to = editorDestination(b);
+  return 'sessionId' in from && 'sessionId' in to ? from.sessionId === to.sessionId
+    : from.kind === 'new-conversation' && to.kind === 'new-conversation' && from.workspaceId === to.workspaceId;
+}
 type Destination =
   | { kind: 'creation'; binding: string }
   | { kind: 'session'; sessionId: string; sidebar: boolean; command?: CommandRequest }
@@ -173,18 +183,20 @@ export const shellNavigationMachine = setup({
     commit: assign(({ context, event }) => {
       const output = (event as unknown as { output: Prepared }).output;
       const control = {};
-      const preserveDraft = context.draftSession?.intent === output.pending && (output.pending.route.kind === 'new-conversation' || output.pending.route.kind === 'session-draft')
-        || output.pending.route.kind === 'history' && output.route.kind === 'session' && 'sessionId' in output.pending.route.returnTo && output.route.sessionId === output.pending.route.returnTo.sessionId;
+      // Refocus/admission preserves the logical editor. Explicit executable
+      // Node/Branch/Retry transitions still publish a fresh editor identity.
+      const preserveDraft = (output.pending.destination.kind === 'session' || output.pending.destination.kind === 'restore-session') && sameEditorDestination(context.route, output.route);
       return { draftSession: undefined, readAdmission: undefined, binding: preserveDraft || output.route.kind === 'history' ? context.binding : context.binding + 1, control, route: output.route, pending: undefined, error: undefined,
         command: (output.pending.destination.kind === 'session' || output.pending.destination.kind === 'restore-session') && output.pending.destination.command ? { request: output.pending.destination.command, route: output.route, generation: output.pending.generation } : undefined,
-        restored: output.route.kind === 'history' ? context.restored : output.route.kind === 'session' && output.content ? { conversation: output.observation!.target.conversation_id, content: output.content } : undefined,
+        restored: output.route.kind === 'history' ? context.restored : output.route.kind === 'session' && output.content ? { conversation: output.observation!.target.conversation_id, content: output.content } : preserveDraft && context.restored?.conversation === output.observation?.target.conversation_id ? context.restored : undefined,
         publication: { intent: output.pending, control, sidebar: (output.pending.destination.kind === 'session' || output.pending.destination.kind === 'restore-session') && output.pending.destination.sidebar } };
     }),
     attached: assign(({ context, event }) => {
       if (event.type !== 'OPEN' || event.destination.kind !== 'session' && event.destination.kind !== 'restore-session') return {};
       const route: ShellRoute = context.route.kind === 'session' && context.route.sessionId === event.destination.sessionId ? context.route : { kind: 'session', sessionId: event.destination.sessionId };
+      const preserveDraft = sameEditorDestination(context.route, route);
       const control = route === context.route ? context.control : {};
-      return { draftSession: undefined, readAdmission: undefined, binding: route === context.route || context.draftSession?.sessionId === event.destination.sessionId ? context.binding : context.binding + 1, control, route, pending: undefined, error: undefined, restored: route === context.route && context.restored?.conversation === context.client.getSnapshot().views[event.destination.sessionId]?.target?.conversation_id ? context.restored : undefined, publication: { control, sidebar: event.destination.sidebar }, command: event.destination.command ? { request: event.destination.command, route, generation: context.client.getSnapshot().generation } : undefined };
+      return { draftSession: undefined, readAdmission: undefined, binding: preserveDraft ? context.binding : context.binding + 1, control, route, pending: undefined, error: undefined, restored: preserveDraft && context.restored?.conversation === context.client.getSnapshot().views[event.destination.sessionId]?.target?.conversation_id ? context.restored : undefined, publication: { control, sidebar: event.destination.sidebar }, command: event.destination.command ? { request: event.destination.command, route, generation: context.client.getSnapshot().generation } : undefined };
     }),
     fail: assign(({ event }) => ({ readAdmission: undefined, pending: undefined, error: String((event as unknown as { error: unknown }).error) })),
     draft: assign(({ context, event }) => {
@@ -199,7 +211,7 @@ export const shellNavigationMachine = setup({
     }),
     created: assign(({ context, event }) => event.type === 'CREATED' ? { draftSession: undefined, readAdmission: undefined, binding: context.binding, control: {}, route: { kind: 'session' as const, sessionId: event.sessionId }, pending: undefined, command: undefined, error: undefined } : {}),
     returnPrepare: assign(({ context, event }) => event.type === 'RETURN' && (event.route.returnTo.kind === 'session' || event.route.returnTo.kind === 'session-draft') ? { pending: { destination: { kind: 'session' as const, sessionId: event.route.returnTo.sessionId, sidebar: false }, route: context.route, generation: context.client.getSnapshot().generation, authority: context.client.getSnapshot().authorityRevision }, readAdmission: undefined, command: undefined, error: undefined } : {}),
-    back: assign(({ context }) => ({ draftSession: undefined, readAdmission: undefined, binding: context.binding, control: {}, route: context.route.kind === 'history' ? context.route.returnTo : context.route, pending: undefined, error: undefined })),
+    back: assign(({ context }) => ({ draftSession: undefined, readAdmission: undefined, binding: context.binding, control: {}, route: editorDestination(context.route), pending: undefined, error: undefined })),
     command: assign(({ context, event }) => ({ readAdmission: undefined, pending: undefined, command: event.type === 'COMMAND' && event.request ? { request: event.request, route: context.route, generation: context.client.getSnapshot().generation } : undefined })),
     retireSettings: ({ context, event }) => { if (event.type === 'AUTHORITY' && context.authority !== event.authority) context.settings.send({ type: 'RETIRE' }); },
     settings: ({ context, event }) => { if (event.type === 'SETTINGS') context.settings.send(event.destination); },

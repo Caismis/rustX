@@ -107,3 +107,29 @@ it.each(['history', 'session'] as const)('an obsolete viewport cancellation cann
   await f.server.client.request({ method: 'server/info', params: {} }, 'server_info');
   expect(f.actor.getSnapshot().context.route).toBe(route); expect(f.actor.getSnapshot().context.error).toBeUndefined(); expect(forbidden(f)).toEqual([]);
 });
+
+for (const back of ['RETURN', 'sidebar'] as const) for (const cold of [false, true]) it(`history ${back} cold=${cold} shares editor identity while renewing only route controls`, async () => {
+  const f = await fixture(), binding = f.actor.getSnapshot().context.binding, oldControl = f.capture();
+  f.actor.send({ type: 'OPEN', destination: { kind: 'history', origin: f.origin } });
+  await waitFor(f.actor, state => state.matches('idle'));
+  const history = f.actor.getSnapshot().context.route;
+  if (history.kind !== 'history') throw new Error('History did not commit');
+  const historyControl = f.capture();
+  expect(oldControl()).toBe(false); expect(f.actor.getSnapshot().context.binding).toBe(binding);
+  if (cold) { await f.server.client.release('A'); f.server.held.add('session/attach'); }
+  const before = f.server.requests.length, count = f.server.requests.filter(row => row.request.method === 'session/attach').length;
+  if (back === 'RETURN') f.actor.send({ type: 'RETURN', route: history });
+  else f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'A', sidebar: true } });
+  if (cold) {
+    const request = await f.server.waitFor('session/attach', count + 1);
+    expect(f.actor.getSnapshot().context.route).toBe(history); expect(f.actor.getSnapshot().context.binding).toBe(binding);
+    f.server.reply(request); await waitFor(f.actor, state => state.matches('idle'));
+  }
+  const committed = f.actor.getSnapshot().context.route, current = f.capture();
+  expect(committed).toEqual({ kind: 'session', sessionId: 'A' }); expect(f.actor.getSnapshot().context.binding).toBe(binding);
+  expect(current()).toBe(true); expect(oldControl()).toBe(false); expect(historyControl()).toBe(false);
+  // An obsolete Return callback cannot re-publish history's editor destination.
+  f.actor.send({ type: 'RETURN', route: history });
+  expect(f.actor.getSnapshot().context.route).toBe(committed); expect(current()).toBe(true);
+  expect(f.server.requests.slice(before).filter(row => ['session/attach', 'session/detach', 'session/switchNode', 'session/snapshot', 'turn/start', 'turn/steer'].includes(row.request.method)).map(row => row.request.method)).toEqual(cold ? ['session/attach'] : []);
+});
