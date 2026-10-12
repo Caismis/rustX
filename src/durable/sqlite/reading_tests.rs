@@ -1,4 +1,6 @@
 use super::seq_to_i64;
+use crate::conversation::SurfaceSpan;
+use crate::durable::CompactionCommitInput;
 use crate::durable::reading::*;
 use crate::durable::{ConversationStore, LineageSeed, SqliteConversationStore};
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
@@ -8,6 +10,7 @@ use crate::message::types::{
     UserMessageBlock, UserSource,
 };
 use crate::runtime::identity::{AttemptId, ConversationId, EventId, MessageId};
+use crate::runtime::{TokenMeasurement, TokenMeasurementSource};
 use chrono::Utc;
 use rusqlite::params;
 /// The exact transcript entry at a turn's native location, read as the page
@@ -63,6 +66,7 @@ fn inherited_boundary_includes_terminal_only_turns_and_survives_local_appends() 
         seeded.entries.last().unwrap().cursor,
         seeded.inherited_through
     );
+    store.initialize_lineage(&seed).unwrap();
     start(&store, "local");
     commit(&store, "local", "local-message");
     timeout(&store, "local");
@@ -80,6 +84,35 @@ fn inherited_boundary_includes_terminal_only_turns_and_survives_local_appends() 
         )
         .unwrap();
     assert_eq!(older.page.inherited_through, seeded.inherited_through);
+    let MessageBlock::User(mut summary) = human("summary", "compacted") else {
+        unreachable!()
+    };
+    summary.source = UserSource::Runtime;
+    summary.kind =
+        InboundKind::CompactionSummary(crate::message::types::CompactionSummaryMetadata::empty());
+    store
+        .commit_compaction(CompactionCommitInput {
+            summary,
+            span: SurfaceSpan::new(MessageId::new("seeded"), MessageId::new("seeded")),
+            expected_revision: store.load_head().unwrap().revision,
+            tokens_before: TokenMeasurement {
+                input_tokens: 10,
+                source: TokenMeasurementSource::Estimated,
+            },
+            estimated_tokens_after: 1,
+            attempt_id: None,
+            turn_id: None,
+            timestamp: Utc::now(),
+            occupancy: None,
+        })
+        .unwrap();
+    assert_eq!(
+        store
+            .load_transcript_page(None, 64)
+            .unwrap()
+            .inherited_through,
+        seeded.inherited_through
+    );
 }
 
 fn event(
@@ -1103,5 +1136,54 @@ fn inherited_context_and_invalid_opening_owners_never_supply_a_prompt() {
         assert_eq!(page.turns[0].id, turn.id);
         // Context records do not allocate destination transcript positions.
         assert_eq!(page.turns[0].cursor.unwrap().get(), 2);
+        assert_eq!(
+            store
+                .load_transcript_page(None, 64)
+                .unwrap()
+                .inherited_through
+                .get(),
+            2
+        );
     }
+}
+
+#[test]
+fn schema_56_without_inherited_watermark_is_rejected_before_shape_validation() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("old.sqlite");
+    let id = ConversationId::generate();
+    {
+        let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+        assert_eq!(super::SQLITE_SCHEMA_VERSION, 57);
+        store.lock().unwrap().execute_batch("ALTER TABLE bootstrap_identity DROP COLUMN inherited_transcript_through; UPDATE rustx_store SET schema_version=56 WHERE id=1").unwrap();
+    }
+    assert!(matches!(
+        SqliteConversationStore::open_existing(id.clone(), &path),
+        Err(
+            crate::durable::ConversationStoreError::SchemaVersionMismatch {
+                stored: 56,
+                expected: 57
+            }
+        )
+    ));
+    assert!(matches!(
+        SqliteConversationStore::open(id, &path),
+        Err(
+            crate::durable::ConversationStoreError::SchemaVersionMismatch {
+                stored: 56,
+                expected: 57
+            }
+        )
+    ));
+    let connection = rusqlite::Connection::open(path).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT schema_version FROM rustx_store WHERE id=1",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        56
+    );
 }

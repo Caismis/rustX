@@ -1,6 +1,6 @@
 import type { ProductHostWorkspaces } from '../src/workspaces/host';
-import type { TraceDetail } from '../../protocol/app-server/v45';
-import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v45';
+import type { TraceDetail } from '../../protocol/app-server/v46';
+import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v46';
 import { fixtures } from '../../protocol/app-server/fixtures';
 import { cfg3Source } from './cfg3-data';
 import { AppServerClient, RpcFailure, sameTarget, type Socket } from '../src/client/app-server';
@@ -80,12 +80,12 @@ export class Server {
   held = new Set<Request['method']>();
   requests: { request: Request; socket: FakeSocket }[] = [];
   private waiters: { method: Request['method']; count: number; resolve: (request: Request) => void }[] = [];
-  version = 45;
+  version = 46;
   /** Record details this scenario staged, keyed by Trace record identity. */
   readonly traceDetails = new Map<string, TraceDetail>();
   capabilities = capabilities;
   socketFactory = (_url: string, protocols: string[]) => {
-    if (protocols[0] !== 'rustx.app-server.v45' || protocols[1] !== `rustx-token.${TOKEN}`) throw new Error('Wrong browser admission protocol');
+    if (protocols[0] !== 'rustx.app-server.v46' || protocols[1] !== `rustx-token.${TOKEN}`) throw new Error('Wrong browser admission protocol');
     const socket = new FakeSocket((request, source) => this.receive(request, source), () => { this.targets.get(socket)?.clear(); this.reservations.get(socket)?.clear(); }); this.sockets.push(socket);
     queueMicrotask(() => socket.open()); return socket;
   };
@@ -162,6 +162,12 @@ export class Server {
       case 'session/summary': result = { type: 'session_summary', summary: this.summary(request.params.session_id) }; break;
       case 'session/list': if (request.params.limit > 32) throw new Error('Native Session page limit is 32'); result = { type: 'sessions', sessions: [...this.snapshots.keys()].map(id => this.summary(id)).sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).filter(row => !request.params.query || [row.id, row.name, row.preview].some(text => text?.toLowerCase().includes(request.params.query!.toLowerCase()))).slice(request.params.offset, request.params.offset + request.params.limit) }; break;
       case 'session/read': result = { type: 'session', session: { id, active_node: this.summary(id).active_node, active_conversation_id: (this.nodeSnapshots.get(this.summary(id).active_node) ?? this.snapshots.get(id)!).conversation_id, node_count: 1, created_at: '0', updated_at: '0' } }; break;
+      case 'session/node': {
+        const nodeId = request.params.node_id;
+        const history = this.nodeSnapshots.get(nodeId) ?? (nodeId === this.summary(id).active_node ? this.snapshots.get(id) : undefined);
+        if (!history) throw new RpcFailure({ code: -32000, message: 'Unknown Node', data: { kind: 'unknown_node', session_id: id, node_id: nodeId } });
+        result = { type: 'node', node: { id: nodeId, conversation_id: history.conversation_id, ordinal: '1', origin: { type: 'new' } } }; break;
+      }
       case 'session/tree': {
         const nodes = [{ id: this.summary(id).active_node, conversation_id: (this.nodeSnapshots.get(this.summary(id).active_node) ?? this.snapshots.get(id)!).conversation_id }, ...[...this.nodeSnapshots].map(([id, snapshot]) => ({ id, conversation_id: snapshot.conversation_id }))];
         result = { type: 'tree', nodes: nodes.slice(request.params.offset, request.params.offset + request.params.limit).map((node, i) => ({ ...node, ordinal: String(i), origin: { type: 'new' }, created_at: '0' })), next_offset: null }; break;
@@ -265,4 +271,4 @@ export class Server {
   }
 }
 
-export function readingWindow(page: import('../../protocol/app-server/v45').RuntimeClientTranscriptPage) { return { cut: { conversation_id: 'conversation-A', journal: '1000', transcript: '1000', mutation_revision: '0' }, page }; }
+export function readingWindow(page: import('../../protocol/app-server/v46').RuntimeClientTranscriptPage) { return { cut: { conversation_id: 'conversation-A', journal: '1000', transcript: '1000', mutation_revision: '0' }, page }; }

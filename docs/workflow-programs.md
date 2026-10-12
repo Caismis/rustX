@@ -803,7 +803,7 @@ are refused, without migration. Event
 envelope version remains 1 because framing has not changed. No durable Workflow
 or pending-interaction tables are added. Issue #462 removed Candidate subjects,
 Candidate-bound context and the `review_invalidated` settlement in Runtime
-Client 67, App Server 45, child IPC 32 and SQLite 56; older peers and stores
+Client 68, App Server 46, child IPC 32 and SQLite 57; older peers and stores
 are refused at their version gates.
 
 ## Foreground native details (WF-06)

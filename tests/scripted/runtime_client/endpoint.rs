@@ -206,7 +206,7 @@ async fn unsupported_protocol_version_is_a_correlated_typed_error() {
 
     // Both the original review base and current main lack inherited_through.
     // Reject either before attachment can deliver an incompatible snapshot.
-    for version in [61, 66] {
+    for version in [61, 66, 67] {
         let response = adapter.exchange(
             &serde_json::json!({
                 "method": "initialize", "id": version, "protocol_version": version,
@@ -220,6 +220,9 @@ async fn unsupported_protocol_version_is_a_correlated_typed_error() {
             RUNTIME_CLIENT_PROTOCOL_VERSION
         );
         assert_eq!(response["error"]["requested"], version);
+        assert_eq!(adapter.endpoint.attachment_id(), None);
+        let application = adapter.exchange(r#"{"method":"snapshot_get","id":99}"#);
+        assert_eq!(application["error"]["type"], "not_attached");
         assert_eq!(adapter.endpoint.attachment_id(), None);
     }
 

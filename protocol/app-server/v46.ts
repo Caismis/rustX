@@ -388,6 +388,13 @@ export type Request1 =
       };
     }
   | {
+      method: 'session/node';
+      params: {
+        session_id: SessionId;
+        node_id: SessionNodeId;
+      };
+    }
+  | {
       method: 'session/tree';
       params: {
         session_id: SessionId;
@@ -1324,6 +1331,10 @@ export type MethodResult =
       sessions: SessionSummary[];
       next_offset?: number | null;
       type: 'sessions';
+    }
+  | {
+      node: SessionNode;
+      type: 'node';
     }
   | {
       nodes: SessionNode[];

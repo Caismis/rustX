@@ -320,3 +320,67 @@ test('sidebar recency updates grouped, flat and search rows while preserving the
   await page.getByRole('textbox', { name: 'Search Session metadata' }).fill('Session');
   await expect.poll(order).toEqual(['A', 'B', 'C']);
 });
+
+
+test('primary sidebar navigation retires the narrow overlay without changing runtime ownership', async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${fixtureOrigin}/test/fixtures/shell.html`);
+  const frame = page.locator('[data-harness-frame]'), center = page.locator('main');
+  const expand = page.getByRole('button', { name: 'Expand Sidebar', exact: true });
+  const composer = page.getByRole('textbox', { name: 'Message', exact: true });
+  await expect(page.getByLabel('Session title')).toHaveText('Session A');
+  await page.evaluate(() => window.sessionFixture.readyNavigation());
+  const before = await page.evaluate(() => window.sessionFixture.requests().filter(request => /^(session\/(attach|detach|switchNode|unload|create)|turn\/)/.test(request.method)));
+  for (const destination of ['session', 'new', 'workspace'] as const) {
+    await expand.click();
+    await expect(frame).toHaveAttribute('data-sidebar-overlay', 'true');
+    await expect(center).toHaveAttribute('inert', '');
+    if (destination === 'session') {
+      await page.locator('button[data-session-id="B"]').click();
+      await expect(page.getByLabel('Session title')).toHaveText('Session B');
+    } else if (destination === 'new') await page.getByRole('button', { name: 'New Conversation', exact: true }).first().click();
+    else await page.getByRole('button', { name: 'Select Workspace rustX', exact: true }).click();
+    await expect(frame).not.toHaveAttribute('data-sidebar-overlay');
+    await expect(center).not.toHaveAttribute('inert', '');
+    await expect(page.getByRole('button', { name: 'Close navigation' })).toHaveCount(0);
+    await expect(expand).toBeFocused();
+    await composer.fill(`Destination ${destination}`); await expect(composer).toBeFocused();
+    expect(await composer.evaluate(el => el.closest('[inert]') === null)).toBe(true);
+  }
+  expect(await page.evaluate(() => window.sessionFixture.requests().filter(request => /^(session\/(attach|detach|switchNode|unload|create)|turn\/)/.test(request.method)))).toEqual(before);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.locator('button[data-session-id="A"]').click();
+  await expect(page.getByLabel('Session title')).toHaveText('Session A');
+  await expect(page.getByRole('button', { name: 'Collapse Sidebar', exact: true })).toBeVisible();
+  await expect(frame).not.toHaveAttribute('data-sidebar-collapsed');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(frame).not.toHaveAttribute('data-sidebar-overlay');
+  await composer.click(); await expect(composer).toBeFocused();
+  expect(errors).toEqual([]);
+});
+
+
+for (const outcome of ['failed', 'obsolete'] as const) test(`narrow sidebar ${outcome} navigation retains the current destination`, async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${fixtureOrigin}/test/fixtures/shell.html`);
+  const frame = page.locator('[data-harness-frame]');
+  await expect(page.getByLabel('Session title')).toHaveText('Session A');
+  await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
+  await page.getByText('Sessions outside registered Workspaces', { exact: true }).click();
+  await page.evaluate(() => window.sessionFixture.holdAttach());
+  await page.locator('button[data-session-id="C"]').click();
+  await expect.poll(() => page.evaluate(() => window.sessionFixture.requests().filter(request => request.method === 'session/attach' && request.params.session_id === 'C').length)).toBe(1);
+  await expect(page.getByLabel('Session title')).toHaveText('Session A');
+  await expect(frame).toHaveAttribute('data-sidebar-overlay', 'true');
+  if (outcome === 'obsolete') {
+    await page.locator('button[data-session-id="B"]').click();
+    await expect(page.getByLabel('Session title')).toHaveText('Session B');
+    await expect(frame).not.toHaveAttribute('data-sidebar-overlay');
+  }
+  await page.evaluate(success => window.sessionFixture.settleAttach(success), outcome === 'obsolete');
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await expect(page.getByLabel('Session title')).toHaveText(outcome === 'obsolete' ? 'Session B' : 'Session A');
+  if (outcome === 'failed') await expect(frame).toHaveAttribute('data-sidebar-overlay', 'true');
+  else await expect(frame).not.toHaveAttribute('data-sidebar-overlay');
+});

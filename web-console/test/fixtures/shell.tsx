@@ -49,6 +49,15 @@ localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openVie
 // Isolated fixture controls, never reachable from the production application.
 window.sessionFixture = {
   releaseAssociations,
+  requests: () => server.requests.map(row => row.request),
+  readyNavigation: async () => { const next = structuredClone(server.snapshots.get('B')!); next.pending_interactions = []; await server.update('B', next); },
+  holdAttach: () => { server.held.add('session/attach'); },
+  settleAttach: (success: boolean) => {
+    const row = server.requests.filter(row => row.request.method === 'session/attach').at(-1)!;
+    server.held.delete('session/attach');
+    if (success) server.reply(row.request, row.socket);
+    else row.socket.deliver({ jsonrpc: '2.0', id: row.request.id, error: { code: -32000, message: 'Navigation fixture rejected', data: { kind: 'operation_failed' } } });
+  },
   async releaseCold() {
     server.reply(await server.waitFor('session/attach', 1));
     const start = await server.waitFor('turn/start', 1);
@@ -105,4 +114,4 @@ window.sessionFixture = {
 if (new URL(location.href).searchParams.get('initial') === 'other-uncertain') await window.sessionFixture.presentation('other-uncertain');
 createRoot(document.getElementById('root')!).render(<App client={server.client} workspaceHost={server.workspaceHost} />);
 
-declare global { interface Window { sessionFixture: { releaseCold(): Promise<number>; activity(id: string, timestamp: string): Promise<void>; releaseAssociations(): void; stream(text: string): Promise<void>; state(mode: 'idle' | 'queued' | 'stopping' | 'reconnect' | 'uncertain'): Promise<void>; presentation(mode: 'empty' | 'preview' | 'named' | 'delete' | 'other-uncertain' | 'many'): Promise<void> } } }
+declare global { interface Window { sessionFixture: { readyNavigation(): Promise<void>; holdAttach(): void; settleAttach(success: boolean): void; requests(): import("../../../protocol/app-server/v46").Request[]; releaseCold(): Promise<number>; activity(id: string, timestamp: string): Promise<void>; releaseAssociations(): void; stream(text: string): Promise<void>; state(mode: 'idle' | 'queued' | 'stopping' | 'reconnect' | 'uncertain'): Promise<void>; presentation(mode: 'empty' | 'preview' | 'named' | 'delete' | 'other-uncertain' | 'many'): Promise<void> } } }

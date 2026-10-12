@@ -733,6 +733,8 @@ async fn initialize_and_malformed_wire_are_transactional() {
             let response = connection.handle_json(&request.to_string()).await.unwrap();
             assert!(matches!(response, Response::Failure(Failure { error: RpcError {
                 data: Some(ErrorData::UnsupportedVersion { supported: APP_SERVER_PROTOCOL_VERSION, requested: rejected }), .. }, .. }) if rejected == requested));
+            assert_eq!(rejected(&connection, Method::SessionAttach { session_id: f.sessions[0].id.clone(), node_id: None }).await, ErrorData::NotInitialized);
+            assert_eq!(rejected(&connection, Method::ServerInfo {}).await, ErrorData::NotInitialized);
             assert_eq!(connection.attachment_counts(), (0, 0));
         }
         initialize(&connection).await;
@@ -7736,4 +7738,50 @@ async fn switch_residency_settlement_survives_failure_and_lost_acknowledgement()
 mod child_delivery {
     use super::*;
     include!("child_delivery.rs");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn exact_node_read_retains_origin_and_never_selects_or_composes() {
+    bounded(async {
+        use crate::local_runtime::session::{LineageSide, SessionNodeId, SessionNodeOrigin};
+        use crate::runtime::identity::MessageId;
+        let f = Fixture::new().await;
+        let (connection, target, branch) = switch_fixture(&f).await;
+        let source = &f.sessions[0];
+        f.manager.session_controller().set_current_node(&source.id, &branch.active_node).await.unwrap();
+        let MethodResult::Node { node: root } = call(&connection, 8200, Method::SessionNode { session_id: source.id.clone(), node_id: source.active_node.clone() }).await else { panic!("exact root") };
+        assert_eq!(root.id, source.active_node);
+        assert_eq!(root.conversation_id, source.active_conversation_id);
+        assert_eq!(root.origin, SessionNodeOrigin::New);
+        let MethodResult::Node { node } = call(&connection, 8201, Method::SessionNode { session_id: source.id.clone(), node_id: branch.active_node.clone() }).await else { panic!("exact fork") };
+        assert!(matches!(node.origin, SessionNodeOrigin::Fork { source_session, source_node, source_message, side: LineageSide::Before, .. } if source_session == source.id && source_node == source.active_node && source_message == MessageId::new("ownership-seed")));
+        let missing = SessionNodeId::generate();
+        assert_eq!(rejected(&connection, Method::SessionNode { session_id: source.id.clone(), node_id: missing.clone() }).await, ErrorData::UnknownNode { session_id: source.id.clone(), node_id: missing });
+        assert_eq!(rejected(&connection, Method::SessionNode { session_id: f.sessions[1].id.clone(), node_id: root.id }).await, ErrorData::UnknownNode { session_id: f.sessions[1].id.clone(), node_id: source.active_node.clone() });
+        assert_eq!(f.manager.session_controller().read_session(&source.id).await.unwrap().active_node, branch.active_node);
+        assert_eq!(connection.attachment_counts(), (1, 0));
+        assert_eq!(f.manager.probe(&branch.active_conversation_id).compositions.load(std::sync::atomic::Ordering::SeqCst), 0);
+        let MethodResult::Tree { nodes, .. } = call(&connection, 8202, Method::SessionTree { session_id: source.id.clone(), offset: 0, limit: 32 }).await else { panic!("tree") };
+        assert_eq!(nodes.len(), 2);
+        let MethodResult::TranscriptWindow { window } = call(&connection, 8205, Method::Transcript {
+            target: target.clone(), at: crate::durable::reading::ConversationWindowAt::Message { id: MessageId::new("ownership-seed"), cut: None }, limit: 1,
+        }).await else { panic!("exact Message through matching peers") };
+        assert_eq!(window.target_cursor.unwrap().get(), 1);
+        assert!(window.target.is_none());
+        assert_eq!(window.page.entries.len(), 1);
+        let MethodResult::Boundaries { surface_revision, .. } = call(&connection, 8206, Method::SessionBoundaries { target: target.clone(), offset: 0, limit: 32 }).await else { panic!("cut") };
+        let MethodResult::SessionTransition { session: inherited, .. } = call(&connection, 8207, Method::SessionFork {
+            session_id: source.id.clone(), node_id: Some(source.active_node.clone()), surface_revision, boundary: Some(MessageId::new("ownership-seed")), side: LineageSide::Before,
+        }).await else { panic!("inherited lineage") };
+        let MethodResult::SessionHistory { window, .. } = call(&connection, 8208, Method::SessionHistory {
+            session_id: inherited.id, node_id: Some(inherited.active_node), at: crate::durable::reading::ConversationWindowAt::Latest, limit: 1,
+        }).await else { panic!("inherited boundary through matching peers") };
+        assert_eq!(window.page.inherited_through.unwrap().get(), 0);
+        call(&connection, 8203, Method::SessionDetach { target }).await;
+        let MethodResult::Node { node } = call(&connection, 8204, Method::SessionNode { session_id: source.id.clone(), node_id: branch.active_node.clone() }).await else { panic!("unattached read") };
+        assert_eq!(node.conversation_id, branch.active_conversation_id);
+        assert_eq!(connection.attachment_counts(), (0, 0));
+        assert!(f.provider.request_bodies().is_empty());
+        f.close().await;
+    }).await;
 }

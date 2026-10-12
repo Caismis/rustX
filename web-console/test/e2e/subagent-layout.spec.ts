@@ -8,7 +8,7 @@ async function attach(page: Page, width: number, nested = false) {
   if (width < 600) await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
   await page.locator('button[data-session-id=A]').click();
   await expect(page.getByRole('button', { name: 'Subagents', exact: true })).toBeVisible();
-  if (width < 600) await page.getByRole('button', { name: 'Collapse Sidebar', exact: true }).click();
+  if (width < 600) await expect(page.getByRole('button', { name: 'Expand Sidebar', exact: true })).toBeFocused();
 }
 for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390]) test(`child conversation layout and resident drafts ${theme} ${width}`, async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));

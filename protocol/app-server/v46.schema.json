@@ -1676,6 +1676,36 @@
           ]
         },
         {
+          "description": "Read one exact native node without runtime composition or tree enumeration.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "session/node"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                },
+                "node_id": {
+                  "$ref": "#/$defs/SessionNodeId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "session_id",
+                "node_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
           "type": "object",
           "properties": {
             "method": {
@@ -6830,6 +6860,23 @@
           "required": [
             "type",
             "sessions"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "node": {
+              "$ref": "#/$defs/SessionNode"
+            },
+            "type": {
+              "type": "string",
+              "const": "node"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "node"
           ]
         },
         {

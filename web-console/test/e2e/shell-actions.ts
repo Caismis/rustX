@@ -133,7 +133,13 @@ export async function openEmptySession(page: Page, fixture: { endpoint: string; 
   if (wasCollapsed) await expand.click();
   await page.getByRole('button', { name: 'View options', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Refresh list', exact: true }).click();
+  const overlay = await page.locator('[data-harness-frame]').getAttribute('data-sidebar-overlay') === 'true';
   await page.locator(`button[data-session-id="${id}"]`).click();
+  if (overlay) {
+    await expect(page.locator('[data-harness-frame]')).not.toHaveAttribute('data-sidebar-overlay');
+    await expect(page.locator('main')).not.toHaveAttribute('inert', '');
+    await expand.click(); // Inspect the selected row after the navigation dismissed its overlay.
+  }
   await expect(page.locator(`button[data-session-id="${id}"]`)).toHaveAttribute('aria-current', 'page');
   await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
   await expect(page.getByLabel('Session location', { exact: true })).toHaveCount(0);

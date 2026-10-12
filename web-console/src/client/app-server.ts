@@ -12,10 +12,10 @@ import type {
   TraceToolLocator, ConfigurationApplication, PendingInboundRef, PendingMutationOutcome, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot,
   SessionPersistentState, SessionSummary, ServerCapabilities, UserInputBlock, UploadReceipt, UploadedFile,
-} from '../../../protocol/app-server/v45';
+} from '../../../protocol/app-server/v46';
 import { transferUpload, uploadOperationId } from '../../../protocol/app-server/upload';
 import { HISTORY_PAGE_SIZE, sameReadCut, extendTranscriptWindow, installTranscriptWindow, prependTranscript, refreshTranscript, replaceTranscript, turnKey, type TranscriptCache } from './transcript';
-import type { ConversationTurn, ConversationTurnPage } from '../../../protocol/app-server/v45';
+import type { ConversationTurn, ConversationTurnPage } from '../../../protocol/app-server/v46';
 import { ProtocolLog, type WireContext } from './protocol-log';
 
 interface OutlineDemand {
@@ -72,7 +72,7 @@ export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentI
   history?: TranscriptCache;
   /** Read-only durable history, never an execution snapshot or control claim. */
   preview?: { conversationId: string; history: TranscriptCache };
-  statisticsPreview?: { conversationId: string; statistics: import('../../../protocol/app-server/v45').ConversationStatistics; occupancy?: import('../../../protocol/app-server/v45').ContextOccupancy | null };
+  statisticsPreview?: { conversationId: string; statistics: import('../../../protocol/app-server/v46').ConversationStatistics; occupancy?: import('../../../protocol/app-server/v46').ContextOccupancy | null };
   tracePreview?: { conversationId: string; cache: TraceCache };
   turnOutline?: { paging: OutlinePagingIntent; page?: ConversationTurnPage; loading?: boolean; error?: string };
   turnNavigation?: { intent: number; pending?: string; error?: string };
@@ -82,7 +82,7 @@ export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentI
   /** Current-generation turn/start or turn/steer requests awaiting an outcome.
    * Transport ownership only, including unsent requests in the bounded pipeline. */
   inboundRequests?: number;
-  modelIntent?: { config: import('../../../protocol/app-server/v45').SessionModelConfig; phase: 'waiting' | 'applying' | 'failed'; error?: string };
+  modelIntent?: { config: import('../../../protocol/app-server/v46').SessionModelConfig; phase: 'waiting' | 'applying' | 'failed'; error?: string };
   modelMutation?: { generation: number; status: 'in-flight' | 'acknowledged' | 'uncertain' };
   cancellation?: { attemptId: string; status: 'in-flight' | 'acknowledged' | 'uncertain' };
   error?: string;
@@ -225,7 +225,7 @@ function goalRefusal(error: unknown) {
 const READS = new Set<Request1['method']>([
   'session/traceLocateTool', 'agent/traceLocateTool', 'agent/trace', 'agent/traceDetail',
   'agent/conversationCancel', 'agent/conversation', 'agent/artifactRead', 'agent/deliveryRead', 'agent/deliveryLocate', 'session/turns', 'session/uploadStatus',
-  'artifact/read', 'initialize', 'server/info', 'session/list', 'session/read', 'session/summary', 'session/tree', 'session/deletePreview',
+  'artifact/read', 'initialize', 'server/info', 'session/list', 'session/read', 'session/summary', 'session/node', 'session/tree', 'session/deletePreview',
   'session/history', 'session/statistics', 'session/traceHistory', 'session/traceHistoryDetail', 'session/configuration', 'session/snapshot', 'session/transcript', 'session/trace', 'session/traceDetail', 'session/settings', 'session/model', 'session/models',
   'configuration/sourcesRead', 'session/effectiveConfiguration', 'resources/read', 'job/status', 'job/list', 'job/wait', 'agent/status', 'agent/list', 'agent/wait', 'agent/transcript', 'agent/turns', 'agent/statistics', 'session/boundaries',
 ]);
@@ -402,14 +402,9 @@ export class AppServerClient {
         return { node: result.session.active_node, conversation: result.session.active_conversation_id };
       },
       conversation: async (node, current) => {
-        let offset: number | null | undefined = 0;
-        while (offset != null) {
-          const result: Extract<MethodResult, { type: 'tree' }> = await this.request({ method: 'session/tree', params: { session_id: id, offset, limit: 32 } }, 'tree', undefined, current);
-          const found = result.nodes.find(row => row.id === node); if (found) return found.conversation_id;
-          if (result.next_offset != null && result.next_offset <= offset) throw new Error('Invalid Session tree page.');
-          offset = result.next_offset;
-        }
-        throw new Error('Open Node is absent from the native Session tree.');
+        const { node: found } = await this.request({ method: 'session/node', params: { session_id: id, node_id: node } }, 'node', undefined, current);
+        if (found.id !== node) throw new Error('Mismatched native Node identity.');
+        return found.conversation_id;
       },
       admit: current => this.admitAttachment(id, current),
       attach: (node_id, admission) => native({ method: 'session/attach', params: { session_id: id, node_id } }, 'attached', admission),
@@ -514,7 +509,7 @@ export class AppServerClient {
     // Ownership commits after close/retirement, before attempting the new transport.
     committed?.();
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v45', `rustx-token.${token}`]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v46', `rustx-token.${token}`]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -532,12 +527,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 45, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 46, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (!hello.authority_id || hello.protocol_version !== 45 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v45 with native multi-Session, headless interactions, and single-controller admission is required.');
+      if (!hello.authority_id || hello.protocol_version !== 46 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v46 with native multi-Session, headless interactions, and single-controller admission is required.');
       }
       if (this.state.authorityId && this.state.authorityId !== hello.authority_id) {
         try { this.admitAuthorityReplacement(); }
@@ -1095,7 +1090,7 @@ export class AppServerClient {
     await this.lifecycles.command(id, { kind: 'open', node: nodeId, current: navigationCurrent, attached });
   }
   /** One observation scope for all cold durable reads. The Conversation is
-   * native tree evidence, never inferred from whichever response arrives first. */
+   * exact native Node evidence, never inferred from whichever response arrives first. */
   private coldReadScope(id: string, admitted: () => boolean = () => true) {
     const view = this.state.views[id];
     if (!view?.nodeId || !view.nodeConversationId) return;
@@ -1581,7 +1576,7 @@ export class AppServerClient {
     return this.readHistoryPage(id, { type: 'older', before: history.page.next_cursor, cut: history.window?.cut ?? null });
   }
   /** One gesture, one read. Navigation intent fences both page and anchor reads. */
-  private async readHistoryPage(id: string, at: import('../../../protocol/app-server/v45').ConversationWindowAt) {
+  private async readHistoryPage(id: string, at: import('../../../protocol/app-server/v46').ConversationWindowAt) {
     const history = this.state.views[id]?.history;
     const observation = this.lifecycles.observe(id);
     if (!history || !observation) return;
@@ -1798,10 +1793,10 @@ export class AppServerClient {
     if (observed && view?.snapshot) this.setSession(id, { history: replaceTranscript(view.snapshot.transcript, view.history) });
     return observed;
   }
-  private modelPreparations = new Map<string, { work: Promise<import('../../../protocol/app-server/v45').SessionModelConfig>; retire: () => void }>();
+  private modelPreparations = new Map<string, { work: Promise<import('../../../protocol/app-server/v46').SessionModelConfig>; retire: () => void }>();
   /** Client-owned selection while native resources initialize. Last unsent choice
    * wins; the existing native mutation and authoritative reread still own apply. */
-  prepareAgentModel(id: string, config: import('../../../protocol/app-server/v45').SessionModelConfig) {
+  prepareAgentModel(id: string, config: import('../../../protocol/app-server/v46').SessionModelConfig) {
     const view = this.state.views[id];
     if (view?.attachment !== 'attaching' || view.attachmentIntent !== 'wanted' || view.deleting)
       return Promise.reject(new Error('Conversation is no longer connecting.'));
@@ -1839,7 +1834,7 @@ export class AppServerClient {
   }
   /** Transport continuation guard, not Session model authority. A successful
    * mutation response alone cannot enable a dependent Send. */
-  async setAgentModel(id: string, config: import('../../../protocol/app-server/v45').SessionModelConfig) {
+  async setAgentModel(id: string, config: import('../../../protocol/app-server/v46').SessionModelConfig) {
     const target = this.target(id), generation = this.state.generation;
     if (this.state.views[id].modelMutation) throw new Error('Reread native model state before another mutation.');
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);

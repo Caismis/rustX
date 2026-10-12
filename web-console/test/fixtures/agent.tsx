@@ -6,7 +6,7 @@ import { createRoot } from 'react-dom/client';
 import { RpcFailure } from '../../src/client/app-server';
 import { App } from '../../src/app/App';
 import { Server, interaction, snapshot, endpoint } from '../fixture';
-import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v45';
+import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v46';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -84,7 +84,7 @@ if (mode === 'fork') {
  server.snapshots.set('B', snapshot('B'));
  server.summaries.set('B', { name: '原始会话：探索历史分叉与上下文压缩的交互设计' });
  server.handlers.set('session/read', () => ({ type: 'session', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '2026-10-07T00:00:00Z', updated_at: '2026-10-07T00:00:00Z' } }));
- server.handlers.set('session/tree', () => ({ type: 'tree', nodes: [{ ordinal: '1', id: 'node-A', conversation_id: 'conversation-A', origin: { type: 'fork', source_session: 'B', source_node: 'node-B', source_surface_revision: '2', source_message: 'answer-1', side: 'after' } }], next_offset: null }));
+ server.handlers.set('session/node', () => ({ type: 'node', node: { ordinal: '1', id: 'node-A', conversation_id: 'conversation-A', origin: { type: 'fork', source_session: 'B', source_node: 'node-B', source_surface_revision: '2', source_message: 'answer-1', side: 'after' } } }));
 }
 server.snapshots.set('A', s);
 await server.attached('A');
@@ -119,7 +119,7 @@ if (mode === 'composer') {
   };
 }
 declare global {
-  interface Window { composerFixture: { running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; busyEnter(value: 'queue' | 'steer'): void; cancellations(): import('../../../protocol/app-server/v45').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
+  interface Window { composerFixture: { running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; busyEnter(value: 'queue' | 'steer'): void; cancellations(): import('../../../protocol/app-server/v46').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
 }
 
 function RestoredComposerFixture() {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { AttachmentTarget, MethodResult, SessionNode, SessionSummary } from '../../../../protocol/app-server/v45';
+import type { AttachmentTarget, MethodResult, SessionNode, SessionSummary } from '../../../../protocol/app-server/v46';
 import { sameTarget, type AppServerClient, type SessionView } from '../../client/app-server';
 import { sessionDisplayTitle } from '../../bindings/session-title';
 import { useTranslation } from '../../locale/react';
@@ -21,27 +21,21 @@ export function useForkPoint(client: AppServerClient, target: AttachmentTarget |
     const generation = client.getSnapshot().generation;
     const current = () => !disposed && client.getSnapshot().generation === generation && client.isAttachmentObservationCurrent(target.session_id, admission) && sameTarget(client.getSnapshot().views[target.session_id]?.target, target);
     void (async () => {
-      let offset: number | null | undefined = 0;
-      while (offset != null && current()) {
-        const tree: Extract<MethodResult, { type: 'tree' }> = await client.request({ method: 'session/tree', params: { session_id: target.session_id, offset, limit: 32 } }, 'tree', undefined, current);
-        if (!current()) return;
-        const node = tree.nodes.find(node => node.id === admission.nodeId && node.conversation_id === target.conversation_id);
-        if (!node) { offset = tree.next_offset; continue; }
-        if (node.origin.type !== 'fork') { setResult({ target, admission }); return; }
-        const point: ForkPointInfo = { origin: node.origin, through };
-        // A cross-Session fork creates the destination Session. A same-Session
-        // branch has no native creation timestamp, so never borrow Session age.
-        // Deleted metadata does not erase the immutable origin record.
-        const [source, destination] = await Promise.allSettled([
-          client.request({ method: 'session/summary', params: { session_id: node.origin.source_session } }, 'session_summary'),
-          node.origin.source_session !== target.session_id ? client.request({ method: 'session/read', params: { session_id: target.session_id } }, 'session') : Promise.resolve(undefined),
-        ]);
-        if (source.status === 'fulfilled') point.source = source.value.summary;
-        if (destination.status === 'fulfilled') point.createdAt = destination.value?.session.created_at;
-        if (current()) setResult({ target, admission, point });
-        return;
-      }
-      if (current()) throw new Error('Attached Conversation is absent from the native Session tree.');
+      const { node }: Extract<MethodResult, { type: 'node' }> = await client.request({ method: 'session/node', params: { session_id: target.session_id, node_id: admission.nodeId } }, 'node', undefined, current);
+      if (!current()) return;
+      if (node.id !== admission.nodeId || node.conversation_id !== target.conversation_id) throw new Error('Attached node does not identify the observed Conversation.');
+      if (node.origin.type !== 'fork') { setResult({ target, admission }); return; }
+      const point: ForkPointInfo = { origin: node.origin, through };
+      // A cross-Session fork creates the destination Session. A same-Session
+      // branch has no native creation timestamp, so never borrow Session age.
+      // Deleted metadata does not erase the immutable origin record.
+      const [source, destination] = await Promise.allSettled([
+        client.request({ method: 'session/summary', params: { session_id: node.origin.source_session } }, 'session_summary'),
+        node.origin.source_session !== target.session_id ? client.request({ method: 'session/read', params: { session_id: target.session_id } }, 'session') : Promise.resolve(undefined),
+      ]);
+      if (source.status === 'fulfilled') point.source = source.value.summary;
+      if (destination.status === 'fulfilled') point.createdAt = destination.value?.session.created_at;
+      if (current()) setResult({ target, admission, point });
     })().catch(error => { if (current()) setResult({ target, admission, error: String(error) }); });
     return () => { disposed = true; };
   }, [client, target, through, revision, admission]);

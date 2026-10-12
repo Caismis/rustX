@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { computeColumns, SIDEBAR_DEFAULT, SIDEBAR_AUTO_COLLAPSE, SIDEBAR_MIN, SIDEBAR_MAX, clampWidth } from './columns';
 import css from './AppFrame.module.css';
-export interface SidebarGeometry { collapsed: boolean; width: number; toggleSidebar: () => void }
+export interface SidebarGeometry { overlay: boolean; collapsed: boolean; width: number; toggleSidebar: () => void; dismissSidebar: () => void }
 function DragHandle(props: { side: 'sidebar' | 'rightbar'; left: number; onStart: () => void; onDrag: (dx: number) => void; onEnd: () => void }) {
   const [dragging, setDragging] = useState(false)
   const origin = useRef(0)
@@ -120,7 +120,7 @@ export function AppFrame({ sidebar, children, rightPanel, rightOpen = false, ove
     onKeyDown={event => { if (floatingSidebar && event.key === 'Escape' && !event.defaultPrevented && sidebarRef.current?.contains(event.target as Node)) { event.preventDefault(); dismissSidebar(); } }}
     data-sidebar-collapsed={collapsed || undefined} data-rightbar-collapsed={cols.rightbar === 0 || undefined}
     data-dragging={dragging || undefined} style={{ gridTemplateColumns: `${cols.sidebar}px minmax(0, 1fr) ${cols.rightbar}px` }}>
-    <div ref={sidebarRef} tabIndex={-1} className={css.sidebarCol} style={{ width: visibleSidebarWidth }}>{sidebar({ collapsed, width: visibleSidebarWidth, toggleSidebar })}</div>
+    <div ref={sidebarRef} tabIndex={-1} className={css.sidebarCol} style={{ width: visibleSidebarWidth }}>{sidebar({ overlay: floatingSidebar, collapsed, width: visibleSidebarWidth, toggleSidebar, dismissSidebar })}</div>
     <main className={css.centerCol} inert={floatingSidebar}>{children}</main>
     <div className={css.rightbarCol} data-rightbar-col inert={floatingSidebar}>{rightPanel?.({ width: normal.rightbar, viewportWidth: viewport, canShow: normal.rightbar > 0 })}</div>
     {floatingSidebar && <button type="button" className={css.sidebarBackdrop} tabIndex={-1} aria-label={dismissSidebarLabel} onClick={dismissSidebar} />}

@@ -22,7 +22,7 @@ import { WorkspaceSessionNavigation } from '../workspaces/navigation';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useActorRef } from '@xstate/react';
 import type { AppServerClient } from '../client/app-server';
-import type { AttachmentTarget, CompletedResponseView, MethodResult, SessionNode, SourceTarget, UserInputBlock } from '../../../protocol/app-server/v45';
+import type { AttachmentTarget, CompletedResponseView, MethodResult, SourceTarget, UserInputBlock } from '../../../protocol/app-server/v46';
 import type { ForkOrigin } from './agent/ForkPoint';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
 import { CommandSession, type ResponseAction } from './commands/native';
@@ -35,7 +35,7 @@ import { PreviewWorkspaceOwner } from './preview-workspace';
 import { PreviewWorkspace } from './components/PreviewWorkspace';
 import { ArtifactResources } from '../client/artifacts';
 import { ArtifactContext } from './components/Artifact';
-import { AppFrame } from '../presentation/layout/AppFrame';
+import { AppFrame, type SidebarGeometry } from '../presentation/layout/AppFrame';
 import { SidebarRoot } from '../presentation/sidebar/SidebarRoot';
 import { SettingsTrigger } from '../presentation/settings/SettingsRoot';
 import { ConnectionController } from '../connection/controller';
@@ -245,45 +245,61 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   useEffect(() => {
     if (connected && selected) focusSession(selected, { preserveDraft: true });
   }, [state.connection, state.generation]);
-  const open = (id: string, ready?: () => void) => {
+  const open = (id: string, ready?: () => void, sidebar?: SidebarGeometry) => {
     if (!openViews.includes(id) && openViews.length >= 32) { setError(message('common:copy.32-session-views-are-open-close-a-view-from-its-sidebar-session-actions-or-use-sidebar-vie')); return; }
-    setOpenViews(current => current.includes(id) ? current : [...current, id]);
-    focusSession(id, { attach: true, ready });
+    // Desktop can present a cold Composer during initialization. A narrow overlay
+    // retains navigation ownership until admission succeeds, then exposes the destination.
+    if (!sidebar?.overlay) {
+      setOpenViews(open => open.includes(id) ? open : [...open, id]);
+      focusSession(id, { attach: true, ready });
+      return;
+    }
+    navigation.invalidate();
+    const current = navigation.capture(), generation = client.getSnapshot().generation;
+    const valid = () => current() && client.getSnapshot().generation === generation;
+    runGlobal(async () => {
+      try {
+        await client.attach(id, undefined, valid);
+        if (!valid() || !client.isAttachmentObservationCurrent(id, client.getSnapshot().views[id]?.attachmentObservation)) return;
+        setOpenViews(open => open.includes(id) ? open : [...open, id]);
+        focusSession(id, { ready });
+        sidebar.dismissSidebar();
+      } catch (cause) { if (valid()) throw cause; }
+    });
   };
   const openForkSource = (origin: ForkOrigin) => {
-    if (transitioning || !commandable()) return;
+    const from = commandable();
+    if (transitioning || !from) return;
     const id = origin.source_session;
     if (!openViews.includes(id) && openViews.length >= 32) { setError(message('common:copy.32-session-views-are-open-close-a-view-from-its-sidebar-session-actions-or-use-sidebar-vie')); return; }
     navigation.invalidate();
     const current = navigation.capture(), generation = client.getSnapshot().generation;
-    const valid = () => current() && client.getSnapshot().generation === generation;
+    let replacingSource = false;
+    const valid = () => current() && client.getSnapshot().generation === generation
+      && (replacingSource || client.isAttachmentObservationCurrent(from.id, from.attachmentObservation));
     setTransitioning(selected);
     runGlobal(async () => {
       try {
-        let node: SessionNode | undefined, offset: number | null | undefined = 0;
-        while (offset != null && valid()) {
-          const page: Extract<MethodResult, { type: 'tree' }> = await client.request({ method: 'session/tree', params: { session_id: id, offset, limit: 32 } }, 'tree');
-          if (!valid()) return;
-          node = page.nodes.find(node => node.id === origin.source_node);
-          if (node) break;
-          offset = page.next_offset;
-        }
+        const { node }: Extract<MethodResult, { type: 'node' }> = await client.request({ method: 'session/node', params: { session_id: id, node_id: origin.source_node } }, 'node', undefined, valid);
         if (!valid()) return;
-        if (!node) throw new Error('The fork source node is no longer available.');
+        if (node.id !== origin.source_node) throw new Error('The native read returned a different source Node.');
         const source = client.getSnapshot().views[id];
         if (source?.attachment === 'attached' && source.target?.conversation_id !== node.conversation_id) {
+          // The owned same-Session switch intentionally retires the opening observation.
+          replacingSource = id === from.id;
           await new CommandSession(client, id, valid).openNode(node.id, node.conversation_id);
         } else if (source?.attachment !== 'attached') {
           await client.attach(id, node.id, valid);
         }
         if (!valid()) return;
         const target = client.target(id);
-        if (target.conversation_id !== node.conversation_id) throw new Error('The fork source attached a different Conversation.');
+        if (client.getSnapshot().views[id]?.nodeId !== node.id || target.conversation_id !== node.conversation_id) throw new Error('The fork source attached a different Conversation.');
         setOpenViews(open => open.includes(id) ? open : [...open, id]);
         setConversationMode('chat');
         focusSession(id);
         setSourceLocation({ target, messageId: origin.source_message });
-      } finally { setTransitioning(undefined); }
+      } catch (cause) { if (valid()) throw cause; }
+      finally { setTransitioning(undefined); }
     });
   };
   const closeView = (id: string) => {
@@ -316,17 +332,17 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     if (owner.kind === 'user') openSettings(userSettingsTarget);
     else navigationActor.send({ type: 'OPEN.OWNER', directory: owner.directory });
   };
-  return <SubagentScope onMode={setConversationMode} client={client} sessionId={view?.id} openAside={agent => { previewOwner.showWorkbench(); fileWorkbench.current?.openAgent(agent.agent_id, agent.title); }}><PreviewContext value={{ openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><AppFrame dismissSidebarLabel={tx('sidebar:toggle.dismiss')} sidebar={geometry => <SidebarRoot {...geometry} startSession={() => createInWorkspace(workspace)}
+  return <SubagentScope onMode={setConversationMode} client={client} sessionId={view?.id} openAside={agent => { previewOwner.showWorkbench(); fileWorkbench.current?.openAgent(agent.agent_id, agent.title); }}><PreviewContext value={{ openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><AppFrame dismissSidebarLabel={tx('sidebar:toggle.dismiss')} sidebar={geometry => <SidebarRoot {...geometry} startSession={() => { createInWorkspace(workspace); geometry.dismissSidebar(); }}
     panels={[]}
     browser={(wide, expand) => <WorkspaceNavigation associations={associations} key={state.authorityRevision ?? 0} wide={wide} expand={expand} host={workspaceHost} client={client} state={state} endpoint={endpoint} navigation={navigation}
       metadataChanged={removed => { if (removed) setCenter(value => value.kind === 'new-conversation' && value.workspaceId === removed ? { kind: 'new-conversation' } : value); }}
-      workspaceSettings={(id, label) => openSettings(workspaceSettingsTarget(id, label))} workspace={workspace} selected={selected}
-      draft={center.kind === 'new-conversation' && workspace ? { workspaceId: workspace, binding: String(draftBinding), focus: focusDraft } : undefined} selectWorkspace={createInWorkspace}
-      openSession={open} openViews={openViews} closeView={closeView} closeAllViews={closeAllViews} createSession={createInWorkspace} deleteSession={setDeletingSession}
+      workspaceSettings={(id, label) => { openSettings(workspaceSettingsTarget(id, label)); geometry.dismissSidebar(); }} workspace={workspace} selected={selected}
+      draft={center.kind === 'new-conversation' && workspace ? { workspaceId: workspace, binding: String(draftBinding), focus: focusDraft } : undefined} selectWorkspace={id => { createInWorkspace(id); geometry.dismissSidebar(); }}
+      openSession={id => open(id, undefined, geometry)} openViews={openViews} closeView={closeView} closeAllViews={closeAllViews} createSession={id => { createInWorkspace(id); geometry.dismissSidebar(); }} deleteSession={setDeletingSession}
       forkSession={id => open(id, () => {
         setCommand({ request: { id: 'fork' }, current: navigation.capture(), generation: client.getSnapshot().generation, sessionId: id, conversationId: client.getSnapshot().views[id]?.target?.conversation_id });
-      })} />}
-    settings={wide => <SettingsTrigger wide={wide} onClick={() => openSettings(userSettingsTarget)} />} />}
+      }, geometry)} />}
+    settings={wide => <SettingsTrigger wide={wide} onClick={() => { openSettings(userSettingsTarget); geometry.dismissSidebar(); }} />} />}
     rightOpen={previews.mode !== 'collapsed'} rightPanel={geometry => <RightPanel headerless={previews.mode !== 'inspector'} docked={previews.mode === 'workbench' || previews.mode === 'collapsed'} closeLabel={previews.mode === 'workbench' ? tx('artifacts:workbench.toggle') : previews.mode === 'preview' ? tx('artifacts:workspace.collapse') : tx('common:right-panel.close-inspector')} {...geometry} fullscreen={previews.mode === 'workbench' ? workbenchFullscreen : previews.mode === 'preview' && previews.workspace?.fullscreen} open={previews.mode !== 'collapsed'} close={collapsePanel} title={previews.mode === 'workbench' ? tx('artifacts:workbench.start') : previews.mode === 'preview' ? tx('artifacts:workspace.title') : tx('common:app.developer-inspector')}>
       <Workbench renderAgent={(id, visible) => <SubagentAside id={id} visible={visible}/>} fileRef={fileWorkbench} key={JSON.stringify([state.generation, selected, view?.summary?.active_node, workspaceAuthority.getRevision()])} closePanel={collapsePanel} host={workspaceHost} scope={workspaceAuthority.getCatalog()} target={view?.summary ? { session_id: view.id, active_node: view.summary.active_node } : undefined} visible={previews.mode === 'workbench'} floatingVisible={previews.mode === 'workbench' || previews.mode === 'collapsed'} fullscreen={workbenchFullscreen || !geometry.canShow} toggleFullscreen={() => { if (!geometry.canShow) collapsePanel(); else setWorkbenchFullscreen(value => !value); }}/>
       <PreviewWorkspace openWorkbench={() => previewOwner.showWorkbench()} owner={previewOwner} snapshot={previews} focusRequest={previewFocus} returnFocus={returnPreviewFocus}/>

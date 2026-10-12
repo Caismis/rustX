@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { RuntimeClientSnapshot } from '../../protocol/app-server/v45';
+import type { RuntimeClientSnapshot } from '../../protocol/app-server/v46';
 import { interactionKey, OutcomeUncertain, RequestNotDispatched, RpcFailure } from '../src/client/app-server';
 import { conversation } from '../src/bindings/projection';
 import { deriveSessionProductState } from '../src/bindings/session-product';
@@ -14,7 +14,7 @@ describe('native App Server connection', () => {
     const s = server(); await s.connect();
     expect(s.client.getSnapshot().connection).toBe('connected');
     expect(s.client.getSnapshot().capabilities).toEqual(capabilities);
-    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 45 } });
+    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 46 } });
     expect(JSON.stringify(s.client.log.getSnapshot())).not.toContain(TOKEN);
   });
   it('rejects incompatible versions and missing native capabilities', async () => {
@@ -26,7 +26,7 @@ describe('native App Server connection', () => {
     await expect(t.connect()).rejects.toThrow('Incompatible');
   });
   it('rejects the pre-message-window App Server before attachment', async () => {
-    const s = server(); s.version = 39;
+    const s = server(); s.version = 45;
     await expect(s.connect()).rejects.toThrow('Incompatible');
     expect(s.client.getSnapshot().connection).toBe('incompatible');
     expect(s.requests.map(item => item.request.method)).toEqual(['initialize']);
@@ -688,7 +688,7 @@ it('terminal Release during final validation aborts the reservation and settles 
   const signal = await entered.promise; expect(signal.aborted).toBe(false);
   const closing = s.client.release('A'); gate.resolve(true); await Promise.all([refused, closing]);
   expect(signal.aborted).toBe(true); expectReleased(s); expect(states).not.toContain('error');
-  expect(s.requests.slice(baseline).map(({ request }) => request.method)).toEqual(['session/read', 'session/tree']);
+  expect(s.requests.slice(baseline).map(({ request }) => request.method)).toEqual(['session/read', 'session/node']);
   const afterIdentity = s.requests.length;
   s.held.add('session/settings');
   const reads = Array.from({ length: 8 }, () => s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings'));

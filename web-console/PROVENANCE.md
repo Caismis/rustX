@@ -2080,8 +2080,8 @@ file/artifact access resolves the owned child conversation and workspace.
 
 WebUI reuses AgentComposer and AttachmentIntake, scopes both conversation and
 trajectory preview resources to the Agent, and retires native observation reads
-when navigation changes. No child model settings are introduced. App Server v45,
-Runtime Client v67, child IPC v30 and Product Host file-read v3 are synchronized.
+when navigation changes. No child model settings are introduced. App Server v46,
+Runtime Client v68, child IPC v30 and Product Host file-read v3 are synchronized.
 The Browser plugin is unavailable; the repository's pinned Playwright browser
 validates real native child processes and deterministic provider streams.
 
@@ -2215,7 +2215,7 @@ icons remain stable on failure, summaries use native failure/stopped tones and
 lifecycle announcements are visually hidden. Keyboard expansion and running copy
 visibility follow the upstream flow.
 
-The Inspect pill is pure presentation. App Server v45 / Runtime Client v67 native
+The Inspect pill is pure presentation. App Server v46 / Runtime Client v68 native
 readers locate the canonical occurrence across the complete indexed Journal,
 including historical and exited child stores. RustX supplies bounded continuous
 windows, exact record IDs and lifecycle repairs, replacing Harness runtime/store
@@ -2248,7 +2248,7 @@ TanStack/XState unit bridge); invalid, non-object or duplicate-key text stays a
 local buffer that blocks submission, and formatting-only edits begin no draft.
 Native Rust remains the configuration authority. No upstream source is added.
 Inventory hashes and dependency closures describe this final source, including
-the v45 import renames.
+the v46 import renames.
 
 The #456 selection review separates configured from effective Profiles in the
 Harness-derived `ModelSelect`: its Profile submenu gains a "Model default
@@ -2262,7 +2262,7 @@ configured Profile is pinned, so the pin can be cleared.
 
 ### PR #461: integrating the current main contracts
 
-The main integration keeps App Server v45 and Runtime Client v67, which remain
+The main integration keeps App Server v46 and Runtime Client v68, which remain
 newer than main's v39/v61, and SQLite 51's checkpoint/Model Profile contract.
 Subagent IPC becomes v31 because main and this branch had different v30
 vocabularies; either old peer is rejected. The current generated protocol and
@@ -2354,10 +2354,10 @@ The integration keeps PR #461's native child conversation, Trace, attachment
 and file-delivery presentation. Agent workspace values now carry the frozen
 Session path, and retired worktree disposal and Candidate controls are absent.
 The historical entries above retain the versions reviewed at those snapshots.
-The combined current contracts are App Server v45, Runtime Client v67, SQLite 56
+The combined current contracts are App Server v46, Runtime Client v68, SQLite 57
 and Child IPC 32; see the [format inventory](../docs/agent-workflow-shared-workspace.md#format-and-version-inventory)
 for owners and rejection behavior. Imports and generated client contracts use
-App Server v45. The source inventory
+App Server v46. The source inventory
 records the resulting local hashes and actual dependency closure; upstream
 Harness pins, licenses and source attribution remain unchanged.
 
@@ -2421,3 +2421,12 @@ regression checks the fixed gap before and after scrolling; the prior style
 fails with 0px at both positions, while the repaired owner keeps 20px. Five
 reference/actual/diff sets were individually reviewed for this intentional
 bottom-gutter change. The strict comparator and noise manifest remain unchanged.
+
+
+## PR #458 remaining review repair
+
+AppFrame exposes its narrow overlay state and a presentation-only dismissal callback through the existing sidebar composition contract. Primary Session, new Conversation, Workspace and Settings navigation retire that overlay; desktop cold Composer presentation and sidebar width remain intact. A failed or superseded narrow Session admission does not publish its destination or dismiss the overlay. Focus returns through AppFrame after inert and backdrop retirement.
+
+Fork metadata and source attachment preparation use App Server v46 `session/node`, which reuses the native Session catalog's exact node map lookup. Immutable source identity and inherited transcript placement remain native facts. The matching Runtime Client v68 and SQLite v57 contracts reject prior peers/stores before dependent work. Current generated imports and local provenance hashes are synchronized.
+
+The intentional `mobile-settings-dark-linux.png` reference change removes the obsolete sidebar backdrop beneath the Settings modal after successful Settings navigation. The reference, actual and diff were inspected: modal content and geometry are identical, and the changed pixels are the surrounding backdrop. The pinned browser generator updates this one changed reference; screenshot thresholds, noise policy and stabilization are unchanged.

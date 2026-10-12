@@ -661,7 +661,7 @@ async fn invalid_records_are_fatal_and_write_nothing() {
         ),
         (
             "wrong-type",
-            br#"{"method":"initialize","id":"two","protocol_version":67}"#,
+            br#"{"method":"initialize","id":"two","protocol_version":68}"#,
         ),
     ];
     for (name, record) in cases {

@@ -393,3 +393,11 @@ def web_child_capabilities() -> Scenario:
     )
 
 SCENARIOS["web_child_capabilities"] = web_child_capabilities
+
+
+def web_fork_source_reading() -> Scenario:
+    """Seed distant history; every source navigation remains a read."""
+    return Scenario("web_fork_source_reading", *web_reading_surface().steps[:-1])
+
+
+SCENARIOS["web_fork_source_reading"] = web_fork_source_reading

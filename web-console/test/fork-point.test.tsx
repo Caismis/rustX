@@ -1,9 +1,10 @@
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { RuntimeClientTranscriptEntry, SessionNode } from '../../protocol/app-server/v45';
+import type { AttachmentTarget, RuntimeClientTranscriptEntry, SessionNode } from '../../protocol/app-server/v46';
 import { turnPresentation } from '../src/bindings/turn-presentation';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { ConversationLive } from '../src/app/agent/ConversationLive';
+import { useForkPoint } from '../src/app/agent/ForkPoint';
 import { App } from '../src/app/App';
 import { Server, snapshot } from './fixture';
 
@@ -43,23 +44,28 @@ it('renders one source action with the exact origin and retains compaction cards
   expect(ui.queryByRole('group', { name: 'Fork point' })).toBeNull();
 });
 
-it('reads the attached node across tree pages, ignoring the mutable default and other origins', async () => {
+it.each([33, 129, 4096])('reads the exact attached node at ordinal %s in one request, ignoring the mutable default and other origins', async ordinal => {
   server = new Server();
   server.handlers.set('session/read', () => ({ type: 'session', session: { id: 'A', active_node: 'attached-node', active_conversation_id: 'conversation-A', node_count: 33, created_at: '2026-10-07T00:00:00Z', updated_at: '2026-10-07T00:00:00Z' } }));
   const s = snapshot(); s.transcript = { inherited_through: '1', entries: [entry(1), entry(2)] };
   server.snapshots.set('A', s);
   const node: SessionNode = { ordinal: '33', id: 'attached-node', conversation_id: 'conversation-A', origin };
-  server.handlers.set('session/tree', request => ({ type: 'tree', nodes: request.method === 'session/tree' && request.params.offset === 32 ? [node] : [{ ...node, id: 'default-node', conversation_id: 'other', origin: { type: 'new' } }], next_offset: request.method === 'session/tree' && request.params.offset === 32 ? null : 32 }));
+  server.handlers.set('session/node', request => {
+    expect(request).toMatchObject({ params: { session_id: 'A', node_id: 'attached-node' } });
+    return { type: 'node', node: { ...node, ordinal: String(ordinal) } };
+  });
   await server.attached('A');
-  const initialTreeReads = server.requests.filter(row => row.request.method === 'session/tree').length;
+  const initialNodeReads = server.requests.filter(row => row.request.method === 'session/node').length;
   const ui = await act(async () => render(<ConversationLive client={server!.client} sessionId="A" mode="chat" disabled={false} onHistorical={() => {}} onOpenSource={() => {}}/>));
   await waitFor(() => expect(ui.getByRole('group', { name: 'Fork point' })).toBeTruthy());
   expect(ui.getByText(/Forked from/).title).toContain('2026');
   expect(server.client.getSnapshot().views.A.nodeId).toBe('attached-node');
+  expect(server.requests.filter(row => row.request.method === 'session/node')).toHaveLength(initialNodeReads + 1);
+  expect(server.requests.filter(row => row.request.method === 'session/tree')).toHaveLength(0);
   node.origin = { type: 'clone', source_session: 'B', source_node: 'source-node', source_surface_revision: '8' };
   cleanup();
   const original = await act(async () => render(<ConversationLive client={server!.client} sessionId="A" mode="chat" disabled={false} onHistorical={() => {}}/>));
-  await waitFor(() => expect(server!.requests.filter(row => row.request.method === 'session/tree')).toHaveLength(initialTreeReads + 4));
+  await waitFor(() => expect(server!.requests.filter(row => row.request.method === 'session/node')).toHaveLength(initialNodeReads + 2));
   expect(original.queryByRole('group', { name: 'Fork point' })).toBeNull();
 });
 
@@ -73,10 +79,12 @@ it.each(['B', 'A'])('the source action opens the recorded node in Session %s and
   if (sourceSession !== 'A') server.snapshots.set(sourceSession, source);
   server.snapshots.set('A', child);
   server.nodeSnapshots.set(origin.source_node, source);
-  server.handlers.set('session/tree', request => ({ type: 'tree', nodes: [
-    ...(request.method === 'session/tree' && request.params.session_id === 'A' ? [{ ordinal: '2', id: 'child-node', conversation_id: child.conversation_id, origin: selectedOrigin }] : []),
-    { ordinal: '1', id: origin.source_node, conversation_id: source.conversation_id, origin: { type: 'new' } },
-  ], next_offset: null }));
+  server.handlers.set('session/node', request => {
+    if (request.method !== 'session/node') throw new Error('wrong method');
+    return { type: 'node', node: request.params.node_id === 'child-node'
+      ? { ordinal: '129', id: 'child-node', conversation_id: child.conversation_id, origin: selectedOrigin }
+      : { ordinal: '4096', id: origin.source_node, conversation_id: source.conversation_id, origin: { type: 'new' } } };
+  });
   await server.attached('A');
   localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
   const locate = vi.spyOn(server.client, 'navigateMessage');
@@ -87,4 +95,58 @@ it.each(['B', 'A'])('the source action opens the recorded node in Session %s and
   expect(server.requests.find(row => row.request.method === 'session/attach' && row.request.params.node_id === origin.source_node)?.request).toMatchObject({ params: { node_id: origin.source_node, session_id: sourceSession } });
   expect(ui.getByLabelText('Canonical conversation').textContent).toContain('Original source response');
   expect(server.requests.some(row => row.request.method === 'session/switchNode')).toBe(sourceSession === 'A');
+  expect(server.requests.filter(row => row.request.method === 'session/tree')).toHaveLength(0);
+});
+
+
+function ForkProbe({ target }: { target: AttachmentTarget }) {
+  const reading = useForkPoint(server!.client, target, '1');
+  return <div data-testid="point">{reading.error ?? reading.point?.origin.source_session ?? 'none'}</div>;
+}
+it.each(['attachment', 'connection'])('retires a held exact node read after replacing %s', async replacement => {
+  server = new Server();
+  const child = snapshot(); child.transcript.inherited_through = '1'; server.snapshots.set('A', child);
+  await server.attached('A');
+  server.handlers.set('session/node', () => ({ type: 'node', node: { id: 'node-A', ordinal: '4096', conversation_id: child.conversation_id, origin } }));
+  server.held.add('session/node');
+  const ui = await act(async () => render(<ForkProbe target={server!.client.target('A')}/>));
+  const held = await server.waitFor('session/node', server.requests.filter(row => row.request.method === 'session/node').length);
+  const response = server.commit(held);
+  server.held.delete('session/node'); server.handlers.delete('session/node');
+  await act(async () => {
+    if (replacement === 'connection') { server!.client.disconnect(); await server!.connect(); }
+    else await server!.client.release('A');
+    await server!.client.attach('A');
+    ui.rerender(<ForkProbe target={server!.client.target('A')}/>);
+  });
+  await waitFor(() => expect(ui.getByTestId('point').textContent).toBe('none'));
+  await act(async () => server!.socket.deliver(response));
+  expect(ui.getByTestId('point').textContent).toBe('none');
+});
+
+it('keeps the immutable Fork when optional source summary is unavailable', async () => {
+  server = new Server(); await server.attached('A');
+  server.handlers.set('session/node', () => ({ type: 'node', node: { id: 'node-A', ordinal: '129', conversation_id: 'conversation-A', origin: { ...origin, source_session: 'deleted-source' } } }));
+  const ui = await act(async () => render(<ForkProbe target={server!.client.target('A')}/>));
+  await waitFor(() => expect(ui.getByTestId('point').textContent).toBe('deleted-source'));
+  expect(server.requests.some(row => row.request.method === 'session/tree')).toBe(false);
+});
+
+it('does not attach or publish an obsolete source Node failure after a newer route gesture', async () => {
+  server = new Server();
+  const child = snapshot(); child.transcript = { entries: [entry(1)], inherited_through: '1' };
+  server.snapshots.set('A', child);
+  server.handlers.set('session/node', () => ({ type: 'node', node: { id: 'node-A', ordinal: '129', conversation_id: child.conversation_id, origin } }));
+  await server.attached('A');
+  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
+  const ui = await act(async () => render(<App client={server!.client} workspaceHost={server!.workspaceHost}/>));
+  await waitFor(() => expect(ui.getByRole('button', { name: 'View source' })).toBeTruthy());
+  server.held.add('session/node');
+  await act(async () => fireEvent.click(ui.getByRole('button', { name: 'View source' })));
+  const held = await server.waitFor('session/node', server.requests.filter(row => row.request.method === 'session/node').length);
+  expect(held).toMatchObject({ params: { session_id: 'B', node_id: origin.source_node } });
+  await act(async () => fireEvent.click(ui.getAllByRole('button', { name: 'New Conversation' })[0]));
+  await act(async () => server!.socket.deliver({ jsonrpc: '2.0', id: held.id, error: { code: -32000, message: 'Late source Node missing', data: { kind: 'unknown_node', session_id: 'B', node_id: origin.source_node } } }));
+  expect(ui.queryByText(/Late source Node missing/)).toBeNull();
+  expect(server.requests.filter(row => row.request.method === 'session/attach' && row.request.params.session_id === 'B')).toHaveLength(0);
 });

@@ -305,7 +305,7 @@ request; ChatViewport preserves the reading anchor through the resulting reflow.
 
 ## Exact fork source message windows
 
-App Server v45 adds the Message window selector over canonical MessageId. The
+App Server v46 adds the Message window selector over canonical MessageId. The
 store resolves its existing indexed transcript position inside the same read
 transaction, then returns at most 64 entries forward from that exact position.
 It never scans intervening transcript pages or substitutes a nearby Turn. A
@@ -320,4 +320,4 @@ read, reattachment, node switch or user cancellation retires the result. The
 retained presentation remains bounded and later source activity cannot rewrite
 the fork seed boundary.
 
-The immutable inherited transcript boundary is stored with the lineage bootstrap in SQLite schema 56. Initialization records the final native transcript watermark in the same transaction as the seed, including terminal-only inherited Turns and excluding invisible Context messages. Repeated bounded transcript and snapshot reads resolve this boundary through a single bootstrap primary-key lookup. Older development stores are rejected without migration.
+The immutable inherited transcript boundary is stored with the lineage bootstrap in SQLite schema 57. Initialization records the final native transcript watermark in the same transaction as the seed, including terminal-only inherited Turns and excluding invisible Context messages. Repeated bounded transcript and snapshot reads resolve this boundary through a single bootstrap primary-key lookup. Older development stores are rejected without migration.

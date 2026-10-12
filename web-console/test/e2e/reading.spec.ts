@@ -6,9 +6,10 @@ import { routeWorkspaceHost } from './workspace-host';
 
 // Building 300 durable Attempts is preparation, with its own fixture budget.
 // Browser/race assertions retain the repository's 120-second deadline and gates.
-const test = base.extend<{ reading: { fixture: Awaited<ReturnType<typeof startDogfood>>; id: string; pass: () => void } }>({
-  reading: [async ({}, use) => {
-    const fixture = await startDogfood('web_reading_surface');
+const test = base.extend<{ readingScenario: string; reading: { fixture: Awaited<ReturnType<typeof startDogfood>>; id: string; forkId: string; sourceNode: string; sourceMessage: string; sourceCursor: string; pass: () => void } }>({
+  readingScenario: ['web_reading_surface', { option: true }],
+  reading: [async ({ readingScenario }, use) => {
+    const fixture = await startDogfood(readingScenario);
     let passed = false;
     try {
     const remote = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
@@ -42,8 +43,11 @@ const test = base.extend<{ reading: { fixture: Awaited<ReturnType<typeof startDo
     expect(exact.target ?? null).toBeNull();
     expect(exact.page.entries).toHaveLength(1);
     expect(exact.page.entries![0].item).toMatchObject({ type: 'message', message: { id: sourceEntry.item.message.id } });
+    const completed = sourceEntry.completed_response;
+    if (!completed) throw new Error('The selected source Message has no native completed-response cut.');
+    const fork = await remote.client.call('session/fork', { session_id: id, node_id: created.session.active_node, surface_revision: completed.surface_revision, boundary: sourceEntry.item.message.id, side: 'after' }, 'session_transition');
     await remote.client.call('session/detach', { target: attached.target }, 'detached'); await remote.shutdown();
-      await use({ fixture, id, pass: () => { passed = true; } });
+      await use({ fixture, id, forkId: fork.session.id, sourceNode: created.session.active_node, sourceMessage: sourceEntry.item.message.id, sourceCursor: sourceEntry.cursor, pass: () => { passed = true; } });
     } finally { await fixture.stop(passed); }
   }, { timeout: 240_000 }],
 });
@@ -178,4 +182,101 @@ test('native distant reading rail, detached/latest follow and measured width in 
     await expect(page.locator('[data-conversation-width-owner]').locator('..')).toHaveCSS('--dsh-chat-content-width', `${saved}px`);
     expect(await page.evaluate(()=>localStorage.getItem('rustx-conversation-width-v1'))).toBe(saved);
     expect(errors).toEqual([]);reading.pass();
+});
+
+
+test.describe('Fork source viewport', () => {
+  test.use({ readingScenario: 'web_fork_source_reading' });
+
+test('Fork source exact Message landing and cancellation by scrolling, newer navigation and attachment replacement', async ({ page, reading }) => {
+  const { fixture, id, forkId, sourceNode, sourceMessage, sourceCursor } = reading;
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.addInitScript(() => {
+    const NativeSocket = window.WebSocket;
+    const state = { hold: true, held: [] as (() => void)[], requests: [] as any[], windows: [] as any[], attachments: [] as any[] };
+    Object.assign(window, { sourceTransport: state });
+    class GatedSocket extends NativeSocket {
+      private methods = new Map<string, any>();
+      constructor(...args: ConstructorParameters<typeof WebSocket>) {
+        super(...args);
+        this.addEventListener('message', event => {
+          const reply = JSON.parse(String(event.data)), request = this.methods.get(String(reply.id));
+          if (request?.method === 'session/attach' && reply.result?.target) state.attachments.push(reply.result.target);
+          if (request?.method !== 'session/transcript' || request.params.at.type !== 'message') return;
+          event.stopImmediatePropagation();
+          state.windows.push(reply.result?.window);
+          const deliver = () => this.onmessage?.(new MessageEvent('message', { data: JSON.stringify(reply) }));
+          if (state.hold) state.held.push(deliver); else deliver();
+        });
+      }
+      send(data: Parameters<WebSocket['send']>[0]) {
+        const request = JSON.parse(String(data)); this.methods.set(String(request.id), request); state.requests.push(request); super.send(data);
+      }
+    }
+    window.WebSocket = GatedSocket;
+  });
+  for (const race of ['land', 'scroll', 'newer-navigation', 'attachment'] as const) {
+  await routeWorkspaceHost(page, fixture); await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token);
+  await page.locator(`button[data-session-id="${forkId}"]`).click();
+  const source = page.getByRole('button', { name: 'View source', exact: true });
+  await expect(source).toBeEnabled(); await source.click();
+  await expect.poll(() => page.evaluate(() => (window as any).sourceTransport.held.length)).toBe(1);
+  await expect(page.locator(`button[data-session-id="${id}"]`)).toHaveAttribute('aria-current', 'page');
+  const viewport = page.locator('[data-conversation-scroll]').first();
+  const anchor = page.locator(`[data-chat-anchor-key="message:${sourceMessage}"]`);
+  await expect(anchor).toHaveCount(0); // Outside the initial native latest window.
+  const wire = await page.evaluate(() => ({ requests: (window as any).sourceTransport.requests, windows: (window as any).sourceTransport.windows }));
+  const locate = wire.requests.filter((request: any) => request.method === 'session/transcript' && request.params.at.type === 'message');
+  expect(locate).toHaveLength(1); expect(locate[0].params.at.id).toBe(sourceMessage); expect(locate[0].params.limit).toBe(64);
+  expect(wire.requests.filter((request: any) => request.method === 'session/node').every((request: any) => request.params.node_id)).toBe(true);
+  expect(wire.requests.find((request: any) => request.method === 'session/attach' && request.params.session_id === id).params.node_id).toBe(sourceNode);
+  expect(wire.requests.filter((request: any) => request.method === 'session/tree')).toHaveLength(0);
+  expect(wire.windows[0].target_cursor).toBe(sourceCursor); expect(wire.windows[0].target ?? null).toBeNull();
+  expect(wire.windows[0].page.entries.length).toBeLessThanOrEqual(64);
+  if (race === 'scroll') {
+    const movement = await viewport.evaluate(el => { const before = el.scrollTop; el.scrollTop += before > 200 ? -200 : 200; el.dispatchEvent(new Event('scroll')); return Math.abs(el.scrollTop - before); });
+    expect(movement).toBeGreaterThan(100);
+    await expect(page.getByRole('button', { name: 'Return to latest', exact: true })).toBeVisible();
+  } else if (race === 'newer-navigation') {
+    const rail = page.getByRole('navigation', { name: 'Turn navigation' });
+    await rail.locator(':scope > div').first().evaluate(el => { el.scrollTop = el.scrollHeight; });
+    const latest = rail.locator('[data-turn-ordinal="300"]');
+    await latest.click(); await expect(latest).not.toHaveAttribute('aria-busy', 'true'); await expect(latest).toHaveAttribute('aria-current', 'true');
+    const key = await latest.getAttribute('data-turn-id');
+    await expect.poll(() => viewport.evaluate((el, key) => { const row = [...el.querySelectorAll<HTMLElement>('[data-chat-anchor-key]')].find(row => row.dataset.chatAnchorKey === `turn:${key}`)!; const bounds = row.getBoundingClientRect(), port = el.getBoundingClientRect(); return bounds.top >= port.top - 1 && bounds.top < port.bottom; }, key)).toBe(true);
+  } else if (race === 'attachment') {
+    await page.locator(`button[data-session-id="${id}"]`).hover();
+    await page.locator(`button[data-session-actions="${id}"]`).click();
+    await page.getByRole('menuitem', { name: /^Close .* view$/ }).click();
+    await expect(page.locator(`button[data-session-id="${forkId}"]`)).toHaveAttribute('aria-current', 'page');
+    await page.locator(`button[data-session-id="${id}"]`).click();
+    await expect.poll(() => page.evaluate(id => (window as any).sourceTransport.attachments.filter((target: any) => target.session_id === id).length, id)).toBe(2);
+    const attachments = await page.evaluate(id => (window as any).sourceTransport.attachments.filter((target: any) => target.session_id === id), id);
+    expect(attachments[1].attachment_id).not.toBe(attachments[0].attachment_id);
+  }
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  const position = await viewport.evaluate(el => el.scrollTop);
+  await page.evaluate(() => { const state = (window as any).sourceTransport; state.hold = false; state.held.shift()(); });
+  // Held delivery is synchronous; geometry below observes ChatViewport settlement.
+  if (race === 'land') {
+    await expect(anchor).toHaveCount(1);
+    await expect.poll(() => anchor.evaluate(el => {
+      const port = el.closest('[data-conversation-scroll]')!, row = el.getBoundingClientRect(), view = port.getBoundingClientRect();
+      return row.top >= view.top - 1 && row.top < view.bottom && row.bottom > view.top;
+    })).toBe(true);
+    await expect.poll(async () => Math.abs(await anchor.evaluate(el => el.getBoundingClientRect().top) - await viewport.evaluate(el => el.getBoundingClientRect().top))).toBeLessThan(3);
+    await expect(page.getByRole('button', { name: 'Load later', exact: true })).toBeVisible();
+  } else {
+    // The fixture delivery is synchronous; two layout frames settle any queued publication.
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await expect(anchor).toHaveCount(0);
+    expect(await viewport.evaluate(el => el.scrollTop)).toBe(position);
+    await expect(page.locator(`button[data-session-id="${id}"]`)).toHaveAttribute('aria-current', 'page');
+  }
+  expect(errors).toEqual([]);
+  }
+  reading.pass();
+});
+
 });

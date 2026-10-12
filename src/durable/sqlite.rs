@@ -320,8 +320,9 @@ fn count_conversation_store_open() {
 /// Version 56 persists the immutable inherited transcript boundary and combines
 /// native child history/provenance with frozen shared
 /// Session workspace ownership and removes Candidate/worktree lifecycle facts.
+/// Version 57 requires the immutable inherited transcript watermark in bootstrap identity.
 /// Earlier development stores are rejected without migration.
-pub const SQLITE_SCHEMA_VERSION: i64 = 56;
+pub const SQLITE_SCHEMA_VERSION: i64 = 57;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -14409,7 +14410,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 56);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 57);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -14478,7 +14479,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 56);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 57);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current

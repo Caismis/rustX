@@ -266,11 +266,13 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// request-only context seat with a measured-or-compacted `occupancy` reading.
 /// Version 66 adds exact Tool-occurrence navigation in child Trace domains, and
 /// general Model Profiles in model selection, invocation and catalog views.
-/// Version 67 adds the native inherited transcript boundary and retains native
+/// Version 67 retains native
 /// child input/inspection/provenance and composes
 /// Root-only Agent controls over a frozen shared Session workspace, with no
 /// Candidate, worktree disposal or resource lifecycle vocabulary.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 67;
+/// Version 68 adds the immutable inherited transcript boundary. Version 67 peers
+/// are rejected before an attachment or application operation is admitted.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 68;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1095,7 +1097,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 67);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 68);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

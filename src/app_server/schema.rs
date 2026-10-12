@@ -44,6 +44,31 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
     let mut fixtures = vec![
         ProtocolMessage::Request(Box::new(Request {
             jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("exact-node".into()),
+            call: Method::SessionNode {
+                session_id: target.session_id.clone(),
+                node_id: crate::local_runtime::session::SessionNodeId::new(
+                    "node_00000000-0000-7000-8000-000000000001",
+                ),
+            },
+        })),
+        ProtocolMessage::Response(Response::Success(Box::new(Success {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("exact-node".into()),
+            result: MethodResult::Node {
+                node: crate::local_runtime::session::SessionNode {
+                    id: crate::local_runtime::session::SessionNodeId::new(
+                        "node_00000000-0000-7000-8000-000000000001",
+                    ),
+                    conversation_id: target.conversation_id.clone(),
+                    ordinal: EXACT,
+                    parent: None,
+                    origin: crate::local_runtime::session::SessionNodeOrigin::New,
+                },
+            },
+        }))),
+        ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("manual-compaction-correlation".into()),
             call: Method::CompactContext {
                 target: target.clone(),
@@ -857,9 +882,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v45.schema.json", "v45.ts"]);
+        assert_eq!(generations, ["v46.schema.json", "v46.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v45.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v46.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()
