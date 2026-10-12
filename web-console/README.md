@@ -257,7 +257,12 @@ configuration owners.
 AppFrame owns narrow-sidebar visibility and reports explicit Escape, backdrop,
 toggle and breakpoint dismissal to App. Only a still-current pending sidebar
 gesture retires App's existing NavigationEpoch; idle overlay dismissal preserves
-committed conversation controls. A current authoritative attachment permits
+committed conversation controls. Canceled or unadmitted navigation renews the
+retained route's presentation fence without reopening its attachment. Settings,
+connection Settings and owning-Workspace Settings synchronously retire that
+pending gesture before dispatching to the independent Settings machine, then
+close the overlay programmatically. With no pending gesture, that handoff
+preserves the committed navigation fence. A current authoritative attachment permits
 immediate presentation navigation without an
 attachment refresh. Cold navigation commits only after lifecycle admission and
 the final gesture, generation and attachment-control checks. Dismissal or a newer

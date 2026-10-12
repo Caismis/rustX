@@ -29,7 +29,9 @@ if (!new URL(location.href).searchParams.has('association-gate')) releaseAssocia
 server.workspaceHost.classifyLocations = async cwds => { await associationGate; return cwds.map(cwd => ({ authorized: true, workspaceId: cwd.endsWith('/C') ? undefined : 'project' })); };
 // The shell's registered Workspace supplies the same generated source contract
 // as the permission seat. User Settings retains its explicit error fixture.
-server.workspaceHost.configureWorkspace = async (_id, _endpoint, operation) => {
+const settingsTargets: string[] = [];
+server.workspaceHost.configureWorkspace = async (id, _endpoint, operation) => {
+  settingsTargets.push(id);
   const projection = { ...cfg3Source(), target: { kind: 'workspace' as const, directory: '/workspace' } };
   if (operation.kind === 'write') return { kind: 'write', commit: { acknowledgement: projection, reread: { status: 'observed', projection } } };
   if (operation.kind === 'mcp_probe') return {kind:'mcp_probe',result:{id:operation.id,revision:operation.expected_revision,outcome:'reachable'}};
@@ -52,6 +54,8 @@ let navigationCurrent = () => true;
 window.sessionFixture = {
   releaseAssociations,
   requests: () => server.requests.map(row => row.request),
+  settingsTargets: () => settingsTargets.slice(),
+  waitForNavigation: () => server.client.waitForAttachment('C', () => true).catch(() => {}),
   captureNavigation: () => { navigationCurrent = server.client.navigation.capture(); },
   navigationCurrent: () => navigationCurrent(),
   navigationFacts: () => ({ generation: server.client.getSnapshot().generation, claims: server.claims(), views: Object.fromEntries(Object.entries(server.client.getSnapshot().views).map(([id, view]) => [id, { attachment: view.attachment, intent: view.attachmentIntent, target: view.target, authoritative: server.client.isAttachmentControlCurrent(id, view.attachmentObservation) }])) }),
@@ -124,4 +128,4 @@ window.sessionFixture = {
 if (new URL(location.href).searchParams.get('initial') === 'other-uncertain') await window.sessionFixture.presentation('other-uncertain');
 createRoot(document.getElementById('root')!).render(<App client={server.client} workspaceHost={server.workspaceHost} />);
 
-declare global { interface Window { sessionFixture: { captureNavigation(): void; navigationCurrent(): boolean; navigationFacts(): { generation: number; claims: import('../../../protocol/app-server/v46').AttachmentTarget[]; views: Record<string, { attachment: string; intent: string; target?: import('../../../protocol/app-server/v46').AttachmentTarget; authoritative: boolean }> }; holdSnapshot(): Promise<void>; settleSnapshot(): void; staleDestination(): Promise<void>; replaceConnection(): Promise<void>; readyNavigation(): Promise<void>; holdAttach(): void; settleAttach(success: boolean): void; requests(): import("../../../protocol/app-server/v46").Request[]; releaseCold(): Promise<number>; activity(id: string, timestamp: string): Promise<void>; releaseAssociations(): void; stream(text: string): Promise<void>; state(mode: 'idle' | 'queued' | 'stopping' | 'reconnect' | 'uncertain'): Promise<void>; presentation(mode: 'empty' | 'preview' | 'named' | 'delete' | 'other-uncertain' | 'many'): Promise<void> } } }
+declare global { interface Window { sessionFixture: { settingsTargets(): string[]; waitForNavigation(): Promise<void>; captureNavigation(): void; navigationCurrent(): boolean; navigationFacts(): { generation: number; claims: import('../../../protocol/app-server/v46').AttachmentTarget[]; views: Record<string, { attachment: string; intent: string; target?: import('../../../protocol/app-server/v46').AttachmentTarget; authoritative: boolean }> }; holdSnapshot(): Promise<void>; settleSnapshot(): void; staleDestination(): Promise<void>; replaceConnection(): Promise<void>; readyNavigation(): Promise<void>; holdAttach(): void; settleAttach(success: boolean): void; requests(): import("../../../protocol/app-server/v46").Request[]; releaseCold(): Promise<number>; activity(id: string, timestamp: string): Promise<void>; releaseAssociations(): void; stream(text: string): Promise<void>; state(mode: 'idle' | 'queued' | 'stopping' | 'reconnect' | 'uncertain'): Promise<void>; presentation(mode: 'empty' | 'preview' | 'named' | 'delete' | 'other-uncertain' | 'many'): Promise<void> } } }

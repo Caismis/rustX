@@ -1,6 +1,7 @@
 const fixtureOrigin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 import { test, expect, type Page } from '@playwright/test';
 import { expectStableScreenshot } from './screenshot';
+import { openWorkspaceSettings } from './shell-actions';
 
 /** The shell reference owns its cold-load interleaving. Present the unclassified
  * baseline before publishing the Host reply, then await both shared consumers.
@@ -375,6 +376,7 @@ test('idle overlay dismissal preserves the committed conversation navigation fen
     else await collapse.click();
     await expect(page.locator('[data-harness-frame]')).not.toHaveAttribute('data-sidebar-overlay');
     expect(await page.evaluate(() => window.sessionFixture.navigationCurrent())).toBe(true);
+    await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
     expect(await page.evaluate(() => window.sessionFixture.navigationFacts())).toEqual(before);
   }
 });
@@ -467,6 +469,7 @@ for (const outcome of ['escape', 'backdrop', 'toggle', 'newer', 'success', 'fail
     expect(added.map(request => request.method)).toEqual(['session/attach']);
   }
   if (outcome === 'desktop') await expect(page.getByRole('button', { name: 'Collapse Sidebar', exact: true })).toBeVisible();
+  if (destination === 'A') await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
   if (outcome !== 'failed' && outcome !== 'replacement') {
     await expect(page.locator('main')).not.toHaveAttribute('inert');
     await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Destination remains usable');
@@ -488,4 +491,89 @@ test('a stale retained attachment waits for authoritative reconciliation before 
   await expect(page.getByLabel('Session title')).toHaveText('Session B');
   expect((await page.evaluate(() => window.sessionFixture.navigationFacts())).views.B.authoritative).toBe(true);
   await expect(page.locator('[data-harness-frame]')).not.toHaveAttribute('data-sidebar-overlay');
+});
+
+async function openFixtureSettings(page: Page, workspace: boolean) {
+  const expand = page.getByRole('button', { name: 'Expand Sidebar', exact: true });
+  if (await expand.isVisible()) await expand.click();
+  if (workspace) await openWorkspaceSettings(page, 'rustX');
+  else await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+  await expect(settings).toBeVisible();
+  await expect(settings.getByRole('heading', { name: workspace ? 'Workspace Settings — rustX' : 'User Settings', exact: true })).toBeVisible();
+  if (workspace) expect((await page.evaluate(() => window.sessionFixture.settingsTargets())).at(-1)).toBe('project');
+  return settings;
+}
+
+for (const scenario of ['global', 'workspace', 'global-refusal', 'workspace-refusal', 'competing-global', 'competing-workspace', 'desktop-global', 'desktop-workspace'] as const) test(`Settings supersedes sidebar intent: ${scenario}`, async ({ page }) => {
+  const desktop = scenario.startsWith('desktop'), competing = scenario.startsWith('competing'), refused = scenario.endsWith('refusal');
+  const workspace = scenario.includes('workspace');
+  await page.setViewportSize({ width: desktop ? 1440 : 390, height: 844 });
+  await page.goto(`${fixtureOrigin}/test/fixtures/shell.html`);
+  await expect(page.getByLabel('Session title')).toHaveText('Session A');
+  await page.evaluate(() => window.sessionFixture.readyNavigation());
+  const before = await page.evaluate(() => window.sessionFixture.navigationFacts());
+  const mutations = nativeMutations(await page.evaluate(() => window.sessionFixture.requests()));
+  if (!desktop) await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
+  await page.getByText('Sessions outside registered Workspaces', { exact: true }).click();
+  await page.evaluate(() => window.sessionFixture.holdAttach());
+  await page.locator('button[data-session-id="C"]').click();
+  await expect.poll(() => page.evaluate(() => window.sessionFixture.requests().filter(request => request.method === 'session/attach' && request.params.session_id === 'C').length)).toBe(1);
+  await expect(page.getByLabel('Session title')).toHaveText(desktop ? 'Session C' : 'Session A');
+  expect((await page.evaluate(() => window.sessionFixture.navigationFacts())).views.C.attachment).toBe('attaching');
+  if (competing) {
+    await page.locator('button[data-session-id="B"]').click();
+    await expect(page.getByLabel('Session title')).toHaveText('Session B');
+  }
+  const settings = await openFixtureSettings(page, workspace);
+  const frame = page.locator('[data-harness-frame]');
+  await expect(frame).not.toHaveAttribute('data-sidebar-overlay');
+  await page.evaluate(success => window.sessionFixture.settleAttach(success), !refused);
+  // Wait for the lifecycle-owned Open to settle, not merely its attachment ACK.
+  await page.evaluate(() => window.sessionFixture.waitForNavigation());
+  const after = await page.evaluate(() => window.sessionFixture.navigationFacts());
+  // A known refusal of an obsolete Open settles absent, without a stale error.
+  expect(after.views.C.attachment).toBe(refused ? 'detached' : 'attached');
+  expect(after.views.C.authoritative).toBe(!refused);
+  expect(after.claims.some(target => target.session_id === 'C')).toBe(!refused);
+  expect(after.views.A).toEqual(before.views.A); expect(after.views.B).toEqual(before.views.B);
+  expect(nativeMutations(await page.evaluate(() => window.sessionFixture.requests())).slice(mutations.length).map(request => request.method)).toEqual(['session/attach']);
+  await expect(settings).toBeVisible();
+  await expect(settings.getByRole('heading', { name: workspace ? 'Workspace Settings — rustX' : 'User Settings', exact: true })).toBeVisible();
+  await expect(page.getByRole('alert').filter({ hasText: 'Navigation fixture rejected' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Close Settings', exact: true }).click();
+  await expect(settings).toHaveCount(0);
+  await expect(page.getByLabel('Session title')).toHaveText(`Session ${desktop ? 'C' : competing ? 'B' : 'A'}`);
+  await expect(frame).not.toHaveAttribute('data-sidebar-overlay');
+  await expect(page.locator('main')).not.toHaveAttribute('inert');
+  if (!desktop && !competing) await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
+  if (desktop) await expect(page.getByRole('button', { name: 'Collapse Sidebar', exact: true })).toBeVisible();
+});
+
+for (const width of [390, 1440]) for (const destination of ['A', 'B']) test(`idle Settings preserves completed ${destination} navigation at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 844 });
+  await page.goto(`${fixtureOrigin}/test/fixtures/shell.html`);
+  await expect(page.getByLabel('Session title')).toHaveText('Session A');
+  await page.evaluate(() => window.sessionFixture.readyNavigation());
+  if (destination === 'B') {
+    if (width === 390) await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
+    await page.locator('button[data-session-id="B"]').click();
+    await expect(page.getByLabel('Session title')).toHaveText('Session B');
+  }
+  const before = await page.evaluate(() => window.sessionFixture.navigationFacts());
+  const mutations = nativeMutations(await page.evaluate(() => window.sessionFixture.requests()));
+  const snapshots = (await page.evaluate(() => window.sessionFixture.requests())).filter(request => request.method === 'session/snapshot').length;
+  await page.evaluate(() => window.sessionFixture.captureNavigation());
+  for (const workspace of [false, true]) {
+    await openFixtureSettings(page, workspace);
+    expect(await page.evaluate(() => window.sessionFixture.navigationCurrent())).toBe(true);
+    await page.getByRole('button', { name: 'Close Settings', exact: true }).click();
+    await expect(page.getByLabel('Session title')).toHaveText(`Session ${destination}`);
+    expect(await page.evaluate(() => window.sessionFixture.navigationCurrent())).toBe(true);
+    if (destination === 'A') await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
+  }
+  expect(await page.evaluate(() => window.sessionFixture.navigationFacts())).toEqual(before);
+  expect(nativeMutations(await page.evaluate(() => window.sessionFixture.requests()))).toEqual(mutations);
+  expect((await page.evaluate(() => window.sessionFixture.requests())).filter(request => request.method === 'session/snapshot').length).toBe(snapshots);
+  if (width === 1440) await expect(page.getByRole('button', { name: 'Collapse Sidebar', exact: true })).toBeVisible();
 });

@@ -79,8 +79,6 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   // overwrite a newer decision, reopen a closed dialog or publish an obsolete
   // error. Async resolution is preparation, never ongoing navigation authority.
   const navigationActor = useActorRef(settingsNavigationMachine, { input: { lookup: createOwnerLookup(workspaceHost, client) } });
-  const openSettings = (target: SettingsTarget) => navigationActor.send({ type: 'OPEN', target });
-  const openConnectionSettings = () => navigationActor.send({ type: 'OPEN.CONNECTION' });
   const previewOwner = useMemo(() => new PreviewWorkspaceOwner(client, workspaceHost, workspaceAuthority), [client, workspaceHost, workspaceAuthority]);
   const previews = useSyncExternalStore(previewOwner.subscribe, previewOwner.getSnapshot);
   useEffect(() => previewOwner.start(), [previewOwner]);
@@ -117,10 +115,19 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   // This is a reference to the existing gesture fence, not attachment state.
   // Closing an otherwise idle overlay must not revoke committed route controls.
   const sidebarIntent = useRef<(() => boolean) | undefined>(undefined);
-  const dismissSidebarIntent = useCallback(() => {
-    if (sidebarIntent.current?.()) navigation.invalidate();
+  const retirePendingSidebarNavigation = useCallback(() => {
+    if (sidebarIntent.current?.()) {
+      navigation.invalidate();
+      // The retained route still owns its Composer. Renew only its presentation
+      // fence; do not reopen, refresh or release its native attachment.
+      setCenter(value => ({ ...value }));
+    }
     sidebarIntent.current = undefined;
   }, [navigation]);
+  // Settings has its own destination owner. Explicitly retire the older sidebar
+  // gesture before handing this new destination to that independent machine.
+  const openSettings = (target: SettingsTarget) => { retirePendingSidebarNavigation(); navigationActor.send({ type: 'OPEN', target }); };
+  const openConnectionSettings = () => { retirePendingSidebarNavigation(); navigationActor.send({ type: 'OPEN.CONNECTION' }); };
   const [command, setCommand] = useState<{ request: CommandRequest; current: () => boolean; generation: number; sessionId: string; conversationId?: string }>();
   const [restored, setRestored] = useState<{ conversation: string; content: UserInputBlock[] }>();
   const [consumed, setConsumed] = useState<{ id: string; sequence: number }>();
@@ -277,7 +284,14 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
         focusSession(id, { ready });
         sidebar.dismissSidebar();
       } catch (cause) { if (valid()) throw cause; }
-      finally { if (sidebarIntent.current === valid) sidebarIntent.current = undefined; }
+      finally {
+        if (sidebarIntent.current === valid) {
+          sidebarIntent.current = undefined;
+          // Failed/unadmitted navigation also leaves the retained route active.
+          // Successful publication already replaced center and retired valid.
+          if (valid()) setCenter(value => ({ ...value }));
+        }
+      }
     });
   };
   const openForkSource = (origin: ForkOrigin) => {
@@ -343,9 +357,9 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   // and no Workspace, Session or runtime is allocated to resolve it.
   const openOwningSettings = (owner: SourceTarget) => {
     if (owner.kind === 'user') openSettings(userSettingsTarget);
-    else navigationActor.send({ type: 'OPEN.OWNER', directory: owner.directory });
+    else { retirePendingSidebarNavigation(); navigationActor.send({ type: 'OPEN.OWNER', directory: owner.directory }); }
   };
-  return <SubagentScope onMode={setConversationMode} client={client} sessionId={view?.id} openAside={agent => { previewOwner.showWorkbench(); fileWorkbench.current?.openAgent(agent.agent_id, agent.title); }}><PreviewContext value={{ openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><AppFrame dismissSidebarLabel={tx('sidebar:toggle.dismiss')} onSidebarDismiss={dismissSidebarIntent} sidebar={geometry => <SidebarRoot {...geometry} startSession={() => { createInWorkspace(workspace); geometry.dismissSidebar(); }}
+  return <SubagentScope onMode={setConversationMode} client={client} sessionId={view?.id} openAside={agent => { previewOwner.showWorkbench(); fileWorkbench.current?.openAgent(agent.agent_id, agent.title); }}><PreviewContext value={{ openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><AppFrame dismissSidebarLabel={tx('sidebar:toggle.dismiss')} onSidebarDismiss={retirePendingSidebarNavigation} sidebar={geometry => <SidebarRoot {...geometry} startSession={() => { createInWorkspace(workspace); geometry.dismissSidebar(); }}
     panels={[]}
     browser={(wide, expand) => <WorkspaceNavigation associations={associations} key={state.authorityRevision ?? 0} wide={wide} expand={expand} host={workspaceHost} client={client} state={state} endpoint={endpoint} navigation={navigation}
       metadataChanged={removed => { if (removed) setCenter(value => value.kind === 'new-conversation' && value.workspaceId === removed ? { kind: 'new-conversation' } : value); }}
