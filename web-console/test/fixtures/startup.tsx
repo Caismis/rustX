@@ -1,7 +1,13 @@
+import { createActor } from 'xstate';
+import { shellNavigationMachine } from '../../src/app/navigation/machine';
+import { settingsNavigationMachine, createOwnerLookup } from '../../src/app/settings/machines/navigation';
+import { WorkspaceAuthority } from '../../src/workspaces/authority';
+import { WorkspaceSessionAdmission } from '../../src/workspaces/session-admission';
+import { ConnectionController } from '../../src/connection/controller';
 import { childNavigation } from './child-navigation';
 import { agentMetrics } from '../agent-statistics-fixture';
 import { createRoot } from 'react-dom/client';
-import { App } from '../../src/app/App';
+import { AppSurface } from '../../src/app/App';
 import { Server, snapshot, childConversation } from '../fixture';
 import { cfg3Source, cfg3Effective } from '../cfg3-data';
 import { traceRecord, traceTool, requestDetail, toolDetail } from '../trace-fixture';
@@ -108,8 +114,13 @@ server.handlers.set('session/create', request => {
 });
 await server.connect();
 for (const method of ['session/create', 'session/attach', 'session/list', 'session/summary', 'turn/start'] as const) server.held.add(method);
+const workspaceAuthority = new WorkspaceAuthority(server.workspaceHost);
+server.client.setSessionAdmission(new WorkspaceSessionAdmission(workspaceAuthority, server.client).admit);
+const settings = createActor(settingsNavigationMachine, { input: { lookup: createOwnerLookup(server.workspaceHost, server.client) } }).start();
+const navigation = createActor(shellNavigationMachine, { input: { client: server.client, settings } }).start();
+const connection = new ConnectionController(server.client);
 let root = createRoot(document.getElementById('root')!);
-const render = () => root.render(<App client={server.client} workspaceHost={server.workspaceHost}/>);
+const render = () => root.render(<AppSurface client={server.client} workspaceHost={server.workspaceHost} workspaceAuthority={workspaceAuthority} connection={connection} navigation={navigation}/>);
 render();
 const handled = new Set<Request>(server.requests.filter(row => row.request.method === 'initialize' || row.request.method === 'session/list').map(row => row.request));
 (window as any).startupFixture = {

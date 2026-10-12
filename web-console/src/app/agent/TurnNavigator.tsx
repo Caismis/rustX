@@ -43,7 +43,7 @@ const TurnMark = memo(function TurnMark({ item, index, start, label, active, bus
  * scrolls inside the frame with gradient fades at each scrollable end; the
  * active mark centers only outside the fade-free band while the pointer is
  * elsewhere. Previews follow pointer movement or focus, never scrolling. */
-export function TurnNavigator({ client, sessionId, onNavigate, active }: { client: AppServerClient; sessionId: string; onNavigate: (turn: ConversationTurn | number) => void; active?: string | null }) {
+export function TurnNavigator({ client, sessionId, onNavigate, active, previewCurrent }: { previewCurrent?: () => boolean; client: AppServerClient; sessionId: string; onNavigate: (turn: ConversationTurn | number) => void; active?: string | null }) {
   const view = useClientSelector(client, state => {
     const view = state.views[sessionId];
     return { target: view?.target, attachment: view?.attachment, outline: view?.turnOutline, navigation: view?.turnNavigation,
@@ -64,12 +64,13 @@ export function TurnNavigator({ client, sessionId, onNavigate, active }: { clien
     [client, sessionId, missingLocation, view.outline?.loading, view.outline?.error, view.attachment, page?.offset]);
   return <TurnNavigation page={page} currentId={currentId} location={view.location} loading={!!view.outline?.loading}
     pending={view.navigation?.pending} error={view.navigation?.error ?? view.outline?.error}
-    attached={view.attachment === 'attached'} active={active} onNavigate={onNavigate} readPreview={readPreview}
+    previewCurrent={previewCurrent} attached={view.attachment === 'attached'} active={active} onNavigate={onNavigate} readPreview={readPreview}
     onReload={() => { client.invalidateReading(sessionId); void client.refreshTurns(sessionId); }}/>;
 }
 
 /** Same Harness navigation surface for parent and child native outlines. */
-export function TurnNavigation({ page, currentId, location, loading = false, pending, error, attached, active, onNavigate, onReload, readPreview }: {
+export function TurnNavigation({ page, currentId, location, loading = false, pending, error, attached, active, onNavigate, onReload, readPreview, previewCurrent }: {
+  previewCurrent?: () => boolean;
   page?: ConversationTurnPage; currentId?: ConversationTurnId; location?: string; loading?: boolean;
   pending?: string; error?: string; attached: boolean; active?: string | null;
   onNavigate: (turn: ConversationTurn | number) => void; onReload: () => void; readPreview?: (ordinal: number, current: () => boolean) => Promise<ConversationTurnPage | undefined>;
@@ -80,19 +81,20 @@ export function TurnNavigation({ page, currentId, location, loading = false, pen
   const items = useMemo(() => turnRail(page, currentId, location), [page, currentId, location]);
   const [previewTurn, setPreviewTurn] = useState<ConversationTurn>();
   const previewOwner = useRef(0);
+  useLayoutEffect(() => { ++previewOwner.current; setPreviewKey(null); setFocusedKey(null); setPreviewTurn(undefined); }, [previewCurrent]);
   useEffect(() => {
     const owner = ++previewOwner.current;
     if (previewTurn) setPreviewTurn(undefined);
     const index = items.indexOfKey(previewKey), item = index === undefined ? undefined : items.item(index);
     if (!readPreview || !item || item.turn || !attached || pending) return;
-    const current = () => previewOwner.current === owner;
+    const current = () => previewOwner.current === owner && (previewCurrent?.() ?? true);
     const timer = setTimeout(() => {
       void readPreview(item.ordinal, current).then(page => {
         if (current()) setPreviewTurn(page?.turns.find(turn => turn.ordinal === item.ordinal));
       });
     }, 150);
     return () => { clearTimeout(timer); ++previewOwner.current; };
-  }, [readPreview, previewKey, attached, pending, page?.cut.mutation_revision]);
+  }, [readPreview, previewKey, attached, pending, page?.cut.mutation_revision, previewCurrent]);
   const isActive = (item: TurnRailItem) => !!item.id && (active !== undefined ? active === `turn:${item.id}` : !!currentId && turnKey(currentId) === item.id);
   // The owning viewport starts its gesture immediately, before outline I/O.
   const navigate = (item: TurnRailItem) => { ++previewOwner.current; onNavigate(item.turn ?? item.ordinal); };

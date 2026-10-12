@@ -255,12 +255,12 @@ for explicit Open. Opening or resuming resolves through rustX's canonical
 configuration owners.
 
 AppFrame owns narrow-sidebar visibility and reports explicit Escape, backdrop,
-toggle and breakpoint dismissal to App. NavigationEpoch separates committed
-route authority from exclusive pending preparation. Beginning or retiring a
+toggle and breakpoint dismissal to the XState v5 ShellNavigationMachine. Its
+committed route is independent from its single disposable preparing actor. Beginning or retiring a
 pending gesture leaves the displayed conversation's Stop/upload controls valid;
 only route publication or authority replacement revokes its committed fence.
-Sidebar catalog search supersedes read/preparation continuations without
-replacing the route or acquiring a pending route owner.
+Sidebar catalog search owns only its directory read identity; it cannot replace
+the route or retire an unrelated navigation intent.
 Failure retires only its own pending intent, without refreshing, reopening or
 releasing an attachment. Stale cleanup cannot retire a newer intent. Overlay
 user dismissal retires sidebar preparation; successful programmatic closure
@@ -274,8 +274,16 @@ attachment refresh. Cold navigation commits only after lifecycle admission and
 the final gesture, generation and attachment-control checks. Dismissal or a newer
 gesture retires presentation authority; an already dispatched native operation
 still settles in the Session lifecycle actor. Successful publication closes the
-overlay programmatically without revoking its own commit. Desktop navigation
-continues to expose the cold Composer immediately.
+overlay programmatically without revoking its own commit. Navigation from an existing executable route preserves that route until admission.
+Startup from an empty draft may project a non-executable Session draft for local
+input staging; it never grants runtime controls before attachment proof. Saved
+route restoration starts after connection setup and Settings handoff complete,
+only while the initial draft has not been replaced. Fork View Source uses exact,
+authorized `session/node` and cut-bound `session/history` reads to publish a
+read-only route. It has bounded paging, exact ChatViewport Message landing and a
+return action, without source attachment, Node switching or model execution.
+Historical file references remain metadata; executable workspace/Artifact byte
+preview callbacks are not inherited by that route.
 
 Request IDs provide correlation only. Separate bounded lanes permit four waits,
 two Agent message admissions, two lifecycle controls and eight transmitted ordinary

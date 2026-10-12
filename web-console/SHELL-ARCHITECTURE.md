@@ -71,9 +71,18 @@ diagnostics never attribute another Session's uncertainty to the selected one.
 `presentation/` has no imports of app, bindings, workspaces, client or protocol.
 `app/` and `workspaces/` bind its props to the typed App Server client.
 Native Session cwd/history/execution remain App Server owned. Product Host owns
-registration/classification/authorization only. WorkspaceSessionNavigation and
-NavigationEpoch fence browser continuations; AppServerClient owns authoritative
-reconnect/resync. Unmount/collapse/search/navigation never cancel committed work.
+registration/classification/authorization only. WorkspaceSessionAdmission owns fresh Product Host authorization. The XState v5
+ShellNavigationMachine owns the sole committed route and one disposable pending
+intent. Browser-lifetime Shell/Settings actors and Session admission belong to
+`App`; `AppSurface` is their disposable projection. Remounting that surface does
+not retire an admitted startup continuation or recreate route authority. A
+lifetime callback actor observes native authority directly. Its correlated completion and native proof guard publish routes atomically;
+preparation and failure preserve committed controls. Settings handoff retires
+preparation before the separate Settings actor opens its overlay. AppServerClient
+and Session Lifecycle own authoritative reconnect/resync and admitted mutation
+settlement. Fork View Source publishes a read-only history route using authorized
+exact native Node and Message reads; it never attaches or switches the source.
+ChatViewport owns its exact anchor landing and scroll cancellation. Unmount/collapse/search/navigation never cancel committed work.
 Only widths, collapse, menus, theme, search text and section selection are local.
 
 ## Exclusions and deviations

@@ -305,5 +305,5 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     expect((await fixture.control('requests')).requests).toHaveLength(modelRequests);
     expect(wire.requests.filter(request => request.method === 'turn/start')).toHaveLength(1);
     expect(errors).toEqual([]); passed = true;
-  } finally { await fixture.stop(passed); }
+  } finally { await page.close(); await fixture.stop(passed); }
 });

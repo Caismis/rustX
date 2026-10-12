@@ -504,33 +504,22 @@ for (const when of ['before reply', 'before layout'] as const) it(`real viewport
  } finally {v.server.client.disconnect();}
 });
 
-for (const when of ['before reply', 'before layout'] as const) it(`source jump releases its reading intent on scroll ${when}`, async () => {
+it('a user scroll retires disposable history preparation without touching active reading or native attachment', async () => {
  const v=await clippedReading('completed');v.ui.unmount();
  try {
-  await act(async()=>{v.server.snapshots.set('A',{...snapshot(),transcript:{entries:v.entries.slice(2),next_cursor:'120'}});await v.server.client.refresh('A');});
-  v.server.handlers.set('session/turns',()=>({type:'conversation_turns',page:{cut:v.cut,offset:0,total:3,turns:[{id:v.a,ordinal:1,cursor:'90',prompt:'first',response:''},{id:v.b,ordinal:2,cursor:'120',prompt:'second',response:''}]}}));
-  v.server.held.add('session/transcript');
+  const retired=vi.fn();
   const props={client:v.server.client,sessionId:'A',mode:'chat' as const,disabled:false,onHistorical:()=>{}};
   const ui=await act(async()=>render(<ConversationLive {...props}/>));
   const viewport=ui.container.querySelector<HTMLElement>('.conversation-scroll')!;
   Object.defineProperties(viewport,{scrollHeight:{value:2200},clientHeight:{value:200}});
   v.flush();viewport.scrollTop=1300;fireEvent.scroll(viewport);v.flush();
-  await act(async()=>ui.rerender(<ConversationLive {...props} sourceLocation={{target:v.server.client.getSnapshot().views.A.target!,messageId:'A-prefix'}}/>));
-  const intent=v.server.client.getSnapshot().views.A.turnNavigation!.intent;
-  expect(v.server.client.getSnapshot().views.A.turnNavigation?.pending).toBe('message:A-prefix');
-  const read=await v.server.waitFor('session/transcript',1);
-  const respond=()=>v.server.socket.success(read,{type:'transcript_window',window:{cut:v.cut,target_cursor:'100',page:{entries:v.entries}}});
-  if(when==='before layout')await act(async()=>respond());
-  const history=v.server.client.getSnapshot().views.A.history;
+  const before=v.server.client.getSnapshot().views.A;
+  await act(async()=>ui.rerender(<ConversationLive {...props} pendingHistory={{}} retireHistory={retired}/>));
   viewport.scrollTop=1400;fireEvent.scroll(viewport);
-  expect(v.server.client.getSnapshot().views.A.turnNavigation?.pending).toBeUndefined();
-  expect(v.server.client.getSnapshot().views.A.turnNavigation!.intent).toBeGreaterThan(intent);
-  if(when==='before reply')await act(async()=>respond());
-  expect(v.server.client.getSnapshot().views.A.history).toBe(history);
-  const reads=v.server.requests.filter(row=>row.request.method==='session/turns').length;
-  fireEvent.pointerMove(ui.getByRole('button',{name:'Load and jump to turn 3'}));
-  await act(async()=>{await v.server.waitFor('session/turns',reads+1);});
-  ui.unmount();
+  expect(retired).toHaveBeenCalledTimes(1);
+  expect(v.server.client.getSnapshot().views.A.target).toBe(before.target);
+  expect(v.server.client.getSnapshot().views.A.history).toBe(before.history);
+  expect(viewport.scrollTop).toBe(1400); ui.unmount();
  } finally {v.server.client.disconnect();}
 });
 

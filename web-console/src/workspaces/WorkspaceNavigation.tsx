@@ -1,13 +1,12 @@
 import type { Translate } from '../locale/translation';
 import { useTranslation } from '../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from ui-workspace browser/rows/picker; see PROVENANCE.md. */
-import { useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useState, useRef, useSyncExternalStore, type ReactNode } from 'react';
 import type { AppServerClient, ClientView } from '../client/app-server';
 import { useClientSelector, sameValue, type ShellView } from '../client/selectors';
 import { sessionDisplayTitle } from '../bindings/session-title';
 import { activeAttempt } from '../bindings/projection';
 import { deriveSessionProductState } from '../bindings/session-product';
-import { NavigationEpoch } from '../client/navigation';
 import { Button } from '../presentation/primitives/Button';
 import { Input } from '../presentation/primitives/Input';
 import { Modal } from '../presentation/primitives/Modal';
@@ -26,10 +25,10 @@ export function sessionObservation(tx: Translate, state: ClientView, id: string)
   if (state.connection === 'connected' && (!view || view.attachmentIntent === 'released')) return '';
   return product.label ?? '';
 }
-export function WorkspaceNavigation({ associations, host, client, state, endpoint, navigation, workspace, selected, draft, selectWorkspace, openSession, openViews, closeView, closeAllViews, createSession, forkSession, deleteSession, metadataChanged, wide, expand, workspaceSettings }: {
+export function WorkspaceNavigation({ associations, host, client, state, endpoint, workspace, selected, draft, selectWorkspace, openSession, openViews, closeView, closeAllViews, createSession, forkSession, deleteSession, metadataChanged, wide, expand, workspaceSettings }: {
   associations: WorkspaceAssociations;
   workspaceSettings?: (id: string, label: string) => void;
-  host: ProductHostWorkspaces; client: AppServerClient; state: ShellView; endpoint: string; navigation: NavigationEpoch;
+  host: ProductHostWorkspaces; client: AppServerClient; state: ShellView; endpoint: string;
   wide: boolean; expand: () => void;
   metadataChanged: (removed?: string) => void;
   draft?: DraftConversation;
@@ -48,8 +47,14 @@ export function WorkspaceNavigation({ associations, host, client, state, endpoin
   const connected = state.connection === 'connected';
   const route = state.endpoint ?? endpoint;
   const bound = sameEndpoint(catalog?.endpoint, route);
+  const searchRequest = useRef<object | undefined>(undefined);
+  const directory = useRef({ workspace, selected }); directory.current = { workspace, selected };
+  const capture = () => {
+    const generation = client.getSnapshot().generation, request = searchRequest.current, scope = directory.current;
+    return () => generation === client.getSnapshot().generation && request === searchRequest.current && scope.workspace === directory.current.workspace && scope.selected === directory.current.selected;
+  };
   const search = (text: string, page = 0) => {
-    navigation.supersede(); const current = navigation.capture();
+    const request = {}; searchRequest.current = request; const authorityCurrent = capture(); const current = () => searchRequest.current === request && authorityCurrent();
     setQuery(text); setOffset(page); setError('');
     void client.listSessions(page, text, current).catch(cause => { if (current()) setError(String(cause)); });
   };
@@ -61,7 +66,7 @@ export function WorkspaceNavigation({ associations, host, client, state, endpoin
     setDialog({ kind, id, name: title, mutation, catalog });
   };
   const mutate = async (action: () => Promise<unknown>, mutation?: WorkspaceMutation, removed?: string) => {
-    const current = navigation.capture();
+    const current = capture();
     if (busy) return;
     setBusy(true); setError('');
     try {
@@ -100,7 +105,7 @@ export function WorkspaceNavigation({ associations, host, client, state, endpoin
       {error && <p role="alert">{error}</p>}
       {dialog.kind === 'add' ? <><p>{tx('workspace:workspace-navigation.choose-a-location-authorized-by-this-product-host')}</p>{dialog.catalog.picker.kind === 'configured' && dialog.catalog.picker.locations.map(location => <Button key={location.id} disabled={busy} onClick={() => void mutate(() => host.adoptWorkspace(dialog.mutation.scope, location.id), dialog.mutation)}>{location.displayName}</Button>)}</>
           : dialog.kind === 'remove' ? <><p>{tx('workspace:workspace-navigation.only-the-navigation-registration-is-removed-sessions-cwd-history')}</p><Button disabled={busy} onClick={() => void mutate(() => host.removeWorkspace(dialog.mutation.scope, dialog.id), dialog.mutation, dialog.id)}>{tx('workspace:workspace-navigation.unregister')}</Button></>
-            : <form onSubmit={event => { event.preventDefault(); const current = navigation.capture(); void mutate(async () => {
+            : <form onSubmit={event => { event.preventDefault(); const current = capture(); void mutate(async () => {
               if (dialog.kind === 'workspace') await host.renameWorkspace(dialog.mutation.scope, dialog.id, name);
               else { await client.renameSession(dialog.id, name); if (current()) await client.listSessions(offset, query, current); }
             }, dialog.kind === 'workspace' ? dialog.mutation : undefined); }}><Input autoFocus disabled={busy} onKeyDown={event => { if (event.key === 'Enter' && (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)) event.preventDefault(); }} aria-label={tx('workspace:workspace-navigation.name')} value={name} onChange={event => setName(event.target.value)} /><Button type="submit" disabled={busy || !name.trim()}>{tx('workspace:workspace-navigation.save-name')}</Button></form>}

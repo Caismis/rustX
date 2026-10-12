@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { AppServerClient } from '../../src/client/app-server';
 import { FilePreviewCoordinator, type FilePreviewLease } from '../../src/client/session-files';
 import { HttpWorkspaceHost } from '../../src/workspaces/http-host';
-import { WorkspaceSessionNavigation } from '../../src/workspaces/navigation';
+import { WorkspaceSessionAdmission } from '../../src/workspaces/session-admission';
 import { WorkspaceAuthority } from '../../src/workspaces/authority';
 import { ArtifactPreview, type PreviewArtifact } from '../../src/app/components/ArtifactPreview';
 import type { PreviewViewState } from '../../src/presentation/right-panel/preview-view-state';
@@ -12,7 +12,7 @@ import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/design-platform.css';
 import '../../src/presentation/theme/reset.css';
 const client = new AppServerClient(), host = new HttpWorkspaceHost(), authority = new WorkspaceAuthority(host);
-client.setAttachmentAdmission(new WorkspaceSessionNavigation(authority, client, client.navigation).admit);
+client.setSessionAdmission(new WorkspaceSessionAdmission(authority, client).admit);
 Object.assign(window, { artifactDocument: {
   async setup(endpoint: string, token: string, session: string, id: string) {
     await client.connect(endpoint, token); await client.attach(session); await authority.observe();

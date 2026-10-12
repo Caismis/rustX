@@ -1,5 +1,11 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
+  "navigation.opening-history": "Opening history…",
+  "navigation.opening-conversation": "Opening conversation…",
+  "navigation.stay": "Stay here",
+  "history.title": "Conversation history",
+  "history.read-only": "Read-only history · execution remains in the original conversation",
+  "history.return": "Return to conversation",
   "fork-point.label": "Fork point",
   "fork-point.from": "Forked from “{name}”",
   "fork-point.open-source": "View source",
@@ -381,6 +387,12 @@ export const en = {
 } as const;
 export type AgentKey = keyof typeof en;
 export const zh = {
+  "navigation.opening-history": "正在打开历史…",
+  "navigation.opening-conversation": "正在打开对话…",
+  "navigation.stay": "留在此处",
+  "history.title": "对话历史",
+  "history.read-only": "只读历史 · 执行仍在原对话中",
+  "history.return": "返回对话",
   "fork-point.label": "分叉点",
   "fork-point.from": "从「{name}」分叉",
   "fork-point.open-source": "查看来源",

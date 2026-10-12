@@ -344,3 +344,18 @@ it('obsolete navigation failure retires outside actor actions without publishing
   expect(h.calls).toEqual([]); expect(h.facts.attachment).toBe('detached'); expect(h.facts.error).toBeUndefined();
   expect(h.system.diagnostics().operations).toBe(0);
 });
+
+it('UI retirement during Switch admission proves unsent absence and preserves the original control proof', async () => {
+  const h = new Harness(), original = await h.attached(); h.validation = deferred<void>(); h.validationEntered = deferred<void>();
+  let current = true;
+  const work = h.system.command('S', { kind: 'switch', node: 'B', current: () => current }); const refused = expect(work).rejects.toThrow('unsent');
+  await h.validationEntered.promise; current = false; h.validation.resolve(); await refused;
+  expect(controlCurrent(h.context, original)).toBe(true); expect(h.facts.target).toBe(original.target); expect(h.calls.map(call => call.kind)).toEqual(['attach']);
+});
+it('Switch Host admission retirement retains the original claim without dispatch or refresh', async () => {
+  const h = new Harness(), original = await h.attached(); h.host = deferred<void>(); h.hostEntered = deferred<void>();
+  let current = true; const work = h.system.command('S', { kind: 'switch', node: 'B', current: () => current });
+  const refusal = expect(work).rejects.toThrow('Switch admission retired before dispatch');
+  await h.hostEntered.promise; current = false; h.host.resolve(); await refusal;
+  expect(controlCurrent(h.context, original)).toBe(true); expect(h.facts.target).toBe(original.target); expect(h.calls.map(call => call.kind)).toEqual(['attach']);
+});

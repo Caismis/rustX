@@ -4,7 +4,6 @@ import { lifecycleAvailability, type LifecycleContext } from './session-lifecycl
 import { AgentMeters } from './agent-meters';
 import { UploadFailure, AttachmentIntakes } from './uploads';
 import { foldRuntimeEvent } from '../../../protocol/app-server/projection';
-import { NavigationEpoch } from './navigation';
 import { FirstSubmissions } from '../app/new-conversation/first-submit';
 import { SessionExportController } from "./session-export";
 import { TRACE_LIMIT, TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterests, type TraceCache } from './trace';
@@ -103,6 +102,9 @@ export type GoalControlOutcome =
   | { status: 'uncertain' }
   | { status: 'obsolete' };
 export interface UncertainOperation {
+  /** Known lineage commit with uncertain durability, distinct from a lost ACK. */
+  committedNode?: { sessionId: string; nodeId: string };
+  diagnostic?: string;
   uploadOperationId?: string;
   compactionRequestId?: string;
   id: string;
@@ -153,10 +155,10 @@ export interface OperationAdmission {
   current: () => boolean;
   validate: (signal: AbortSignal) => Promise<boolean>;
 }
-type AttachmentAdmission = (id: string, current: () => boolean) => Promise<false | OperationAdmission>;
+type SessionAdmission = (id: string, current: () => boolean) => Promise<false | OperationAdmission>;
 /** One installation lifetime of an attachment-admission owner. Identity is the
  * object, never the callback: reinstalling the same callback is a new owner. */
-interface AttachmentAdmissionOwner { readonly admit: AttachmentAdmission }
+interface SessionAdmissionOwner { readonly admit: SessionAdmission }
 interface Pending {
   /** Pure actor authority, evaluated after caller-owned admission callbacks. */
   authority?: () => boolean;
@@ -274,7 +276,6 @@ export class AppServerClient {
   });
   readonly attachmentIntakes = new AttachmentIntakes();
   readonly log = new ProtocolLog();
-  readonly navigation = new NavigationEpoch();
   readonly firstSubmissions = new FirstSubmissions();
   /** Final client lifetime ends only explicitly, never on a component unmount. */
   dispose() { this.attachmentIntakes.dispose(); this.firstSubmissions.dispose(); return this.disconnect(); }
@@ -331,7 +332,6 @@ export class AppServerClient {
   }
   constructor(private readonly socketFactory: SocketFactory = (url, protocols) => new WebSocket(url, protocols), private readonly timeoutMs = 30_000, private readonly uploadCarrier = transferUpload) {
     // Navigation retires admission proofs; release their reservations outside the caller's stack.
-    this.navigation.subscribe(() => queueMicrotask(() => this.pump()));
   }
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   getSnapshot = () => this.state;
@@ -406,7 +406,7 @@ export class AppServerClient {
         if (found.id !== node) throw new Error('Mismatched native Node identity.');
         return found.conversation_id;
       },
-      admit: current => this.admitAttachment(id, current),
+      admit: current => this.admitSessionOperation(id, current),
       attach: (node_id, admission) => native({ method: 'session/attach', params: { session_id: id, node_id } }, 'attached', admission),
       detach: async (target, admission) => { await native({ method: 'session/detach', params: { target } }, 'detached', admission); },
       switchNode: async (target, node_id, admission) => (await native({ method: 'session/switchNode', params: { target, node_id } }, 'session', admission)).session,
@@ -441,24 +441,24 @@ export class AppServerClient {
   }
   // Product policy is injected by the Web owner, not interpreted by this transport.
   // Fail closed when there is no admission owner (including after its disposal).
-  private attachmentAdmission?: AttachmentAdmissionOwner;
-  setAttachmentAdmission(admit: AttachmentAdmission) {
+  private sessionAdmission?: SessionAdmissionOwner;
+  setSessionAdmission(admit: SessionAdmission) {
     // Every installation is a new incarnation, so retired proofs stay retired
     // even when the same callback is installed again.
-    const owner: AttachmentAdmissionOwner = { admit };
-    this.replaceAttachmentAdmission(owner);
+    const owner: SessionAdmissionOwner = { admit };
+    this.replaceSessionAdmission(owner);
     // Cleanup removes only its own incarnation; a stale one never disturbs a newer owner or its proofs.
-    return () => { if (this.attachmentAdmission === owner) this.replaceAttachmentAdmission(undefined); };
+    return () => { if (this.sessionAdmission === owner) this.replaceSessionAdmission(undefined); };
   }
-  private replaceAttachmentAdmission(owner?: AttachmentAdmissionOwner) {
-    this.attachmentAdmission = owner;
+  private replaceSessionAdmission(owner?: SessionAdmissionOwner) {
+    this.sessionAdmission = owner;
     // Owner change retires its proofs; release their reservations outside the caller's stack, as navigation does.
     queueMicrotask(() => this.pump());
   }
-  async admitAttachment(id: string, current: () => boolean = () => true): Promise<false | OperationAdmission> {
+  async admitSessionOperation(id: string, current: () => boolean = () => true): Promise<false | OperationAdmission> {
     const generation = this.state.generation;
-    const owner = this.attachmentAdmission;
-    const valid = () => current() && this.current(generation) && owner === this.attachmentAdmission;
+    const owner = this.sessionAdmission;
+    const valid = () => current() && this.current(generation) && owner === this.sessionAdmission;
     if (!valid()) return false;
     if (!owner) throw new Error('No Web attachment admission owner.');
     const allowed = await owner.admit(id, valid);
@@ -468,7 +468,6 @@ export class AppServerClient {
     for (const id of ids.slice(0, 32)) if (!this.state.views[id]) this.lifecycles.restore(id);
   }
   private retireAuthority() {
-    this.navigation.invalidate();
     this.attachmentIntakes.retireAll();
     this.firstSubmissions.retireAuthority();
     const sessions = Object.values(this.state.views).filter(view => view.deleting || view.error || view.modelMutation || view.cancellation)
@@ -789,6 +788,10 @@ export class AppServerClient {
       }
       this.pending.delete(String(value.id)); clearTimeout(pending.timer);
       this.capacityReleased();
+      if ('result' in value && value.result?.type === 'session_transition' && value.result.durability_diagnostic) {
+        this.publish({ uncertain: [...this.state.uncertain, { id: String(value.id), method: pending.request.method, sessionId: pending.context.sessionId, generation,
+          committedNode: { sessionId: value.result.session.id, nodeId: value.result.session.active_node }, diagnostic: value.result.durability_diagnostic }] });
+      }
       // Evidence observers run at decode time, before continuation authority
       // checks. Their failures are local diagnostics, never a native RPC result.
       try {
@@ -1132,7 +1135,7 @@ export class AppServerClient {
     if (limit < 1 || !current()) return;
     if (previous) this.setSession(id, { tracePreview: { ...previous, cache: { ...cache, loading: true, error: undefined } } });
     try {
-      const admission = older ? await this.admitAttachment(id, current) : current;
+      const admission = older ? await this.admitSessionOperation(id, current) : current;
       if (!admission) return;
       const result = await this.request({ method: 'session/traceHistory', params: { session_id: id, node_id: node, before: older ? cache.page.next_cursor : null, limit } }, 'session_trace_history', undefined, admission);
       if (!current()) return;
@@ -1152,7 +1155,7 @@ export class AppServerClient {
       && this.state.views[id]?.tracePreview?.cache.details[record] === pending.details[record];
     this.setSession(id, { tracePreview: { ...preview, cache: pending } });
     try {
-      const admission = await this.admitAttachment(id, current);
+      const admission = await this.admitSessionOperation(id, current);
       if (!admission) return;
       const result = await this.request({ method: 'session/traceHistoryDetail', params: { session_id: id, node_id: node, record_id: record } }, 'session_trace_history_detail', undefined, admission);
       if (!current()) return;
@@ -1171,7 +1174,7 @@ export class AppServerClient {
       && this.state.views[id]?.preview?.history.epoch === epoch;
     this.setSession(id, { preview: { ...preview, history: { ...preview.history, loading: true, error: undefined } } });
     try {
-      const admission = await this.admitAttachment(id, current);
+      const admission = await this.admitSessionOperation(id, current);
       if (!admission) return;
       const result = await this.request({ method: 'session/history', params: { session_id: id, node_id: node, at: { type: 'older', before }, limit: HISTORY_PAGE_SIZE } }, 'session_history', undefined, admission);
       if (!current()) return;
@@ -1954,8 +1957,8 @@ export class AppServerClient {
     this.modelPreparations.get(id)?.retire(); this.modelPreparations.delete(id);
     await this.lifecycles.command(id, { kind: 'release', current: () => true });
   }
-  switchNode(id: string, nodeId: string): Promise<void> {
-    return this.lifecycles.command(id, { kind: 'switch', node: nodeId, current: () => true }, true).then(() => {});
+  switchNode(id: string, nodeId: string, current: () => boolean = () => true): Promise<void> {
+    return this.lifecycles.command(id, { kind: 'switch', node: nodeId, current }, true).then(() => {});
   }
   private retireObservationWork(id: string) {
     this.acquiring.delete(id);
@@ -1970,6 +1973,9 @@ export class AppServerClient {
     this.summaryObservedEpoch.delete(id);
     this.setSession(id, { history: undefined, submissions: undefined, turnOutline: undefined, turnNavigation: undefined });
   }
+  /** Resample admission proofs after their browser owner retires. No native
+   * transaction is cancelled after dispatch. */
+  recheckAdmissions() { queueMicrotask(() => this.pump()); }
   clearError() { this.publish({ error: undefined }); }
   acknowledgeDiagnostic(id: string) {
     // This acknowledges only the notice. Uncertain interaction controls remain

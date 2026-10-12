@@ -91,7 +91,7 @@ failures produce `{ authorized: false, reason: 'unavailable' }`: their Sessions 
 and listable, but this Web Product Host refuses new attachment/cold resume. Aliases
 resolve on the Host; descendants are not implicitly authorized. No second durable
 Session-to-Workspace map exists. Search uses the native bounded summary query;
-query/navigation epochs suppress obsolete responses. There is no transcript index.
+Directory request identity and connection generation suppress obsolete responses. There is no transcript index.
 
 Workspace selection only changes navigation. It does not attach every Session,
 unload, cancel, change cwd, rewrite history or alter trust. Session opening attaches
@@ -99,10 +99,12 @@ only that Session, including cold resume, after current Host admission. Switchin
 focus leaves unrelated work
 alone. Unregister removes metadata only; its Sessions remain durable and visible
 ungrouped. Session deletion and view detach remain separate explicit operations.
-`WorkspaceSessionNavigation` owns the Web admission policy. The client's single
+`WorkspaceSessionAdmission` owns the Web admission policy. The client's single
 attachment entry point calls this injected policy for every new attachment,
 including saved-tab restoration/reconnect, sidebar Open/Fork, toolbar Attach,
-creation and Fork/branch/retry/tree continuations. No policy means refusal. Before
+creation and explicit Fork/branch/retry/tree continuations. Read-only Fork View
+Source uses the same fresh Session-operation authorization before exact
+`session/node` and cut-bound `session/history` reads, with no executable attachment. No policy means refusal. Before
 attach, it reads `session/settings` from the native durable owner, classifies that
 current cwd through the Host for the current connection endpoint, and checks
 navigation/generation fences. Summary classifications only describe the list;
@@ -111,7 +113,7 @@ Already-attached focus does not require a new runtime claim or hot revocation.
 Fork additionally checks its source's current cwd before creating a child; its
 result still passes normal attachment admission.
 
-App's `focusSession` selects a Session identity. Its Workspace is read from the
+ShellNavigationMachine publishes an admitted Session route. Its Workspace is read from the
 shared display association owner; reconnect and catalog refresh retain compatible
 confirmed evidence. Authorized-unregistered focus has no Workspace. `/new` may
 use the displayed registration as navigation intent, but must resolve it freshly
@@ -121,8 +123,9 @@ Native `session/name` owns renaming. Sidebar Fork opens the existing native exac
 boundary chooser and `session/fork`; TypeScript never clones Session/history state.
 
 Create and `/new` resolve the selected Host registration to an explicit cwd before
-`session/create`. NavigationEpoch and connection generations fence resolution,
-creation, attachment and Fork continuations. Supersession never cancels an operation
+`session/create`. ShellNavigationMachine owns disposable route preparation and publication. Native
+FirstSubmissions and Session Lifecycle retain creation and attachment settlement;
+connection generations and dispatch admission fence unsent work. Supersession never cancels an operation
 already committed on the server. For first submission, decoded creation ACK
 publishes a client-owned Session continuation before navigation. The Conversation
 uses the native identity directly, before catalog refresh; attach/readiness gates
@@ -192,8 +195,7 @@ retires display evidence, even if the next explicit catalog read fails. The refu
 does not start an automatic retry loop. `WorkspaceAuthority`, created once alongside
 navigation by `App`, owns the current Product Host catalog authority and invalidation
 epoch. `WorkspaceAssociations` subscribes only to retire incompatible display reads
-and evidence and establish the replacement catalog baseline. It never invalidates
-`NavigationEpoch` or supplies an operation fence. Host-object replacement constructs
+and evidence and establish the replacement catalog baseline. It never changes the Shell route or supplies an operation fence. Host-object replacement constructs
 new authority and display owners. None of these identifiers alone grant access.
 
 Registration writes have two distinct Product Host authority fences. The dispatch
@@ -224,7 +226,7 @@ Host metadata mutation authority, native App Server authority, display associati
 evidence, and native operation admission remain separate. These metadata preconditions
 do not change read, configuration, resolution or native admission APIs.
 
-`WorkspaceSessionNavigation` independently observes the Host authority, captures its
+`WorkspaceSessionAdmission` independently observes the Host authority, captures its
 epoch and the native endpoint, reads current native `session/settings`, and classifies
 the exact returned cwd with that authority ID. An authorized result returns an
 operation proof, not a cached permission bit; the initial classification only decides
@@ -365,7 +367,7 @@ The current Host result is `{authorized:true, workspaceId?:string}` or
 `{authorized:false, reason:'denied'|'unavailable'}`. Filesystem failure is unavailable;
 a canonical-root mismatch is denial. Neither result permits action. Exact root
 semantics remain unchanged: descendants are not recursively authorized, and symlink
-changes never retain usable permission. `WorkspaceSessionNavigation`, Workspace
+changes never retain usable permission. `WorkspaceSessionAdmission`, Workspace
 resolution, native configuration writes, and operation-specific checks remain the
 security-bearing owners. Configuration mutation lanes and write acknowledgement /
 independent reread semantics are unchanged.

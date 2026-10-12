@@ -66,9 +66,9 @@ protocol. No source is copied and no pinned Harness reference is changed.
 | --- | --- | --- |
 | Draft gesture | `ConversationComposer`, `AgentComposer` | Resolve authorized Workspace; seal text, ordered browser Files and creation intent |
 | Identity commit | `SessionRuntimeManager::create_session`, `SessionController::create_session_with_binding`, `SessionCatalog::publish_session` | Full captured binding installed before catalog visibility; validated/persisted initial model and native identity; no loaded runtime required |
-| Client handoff | `AppServerClient.request` decoded acknowledgement → `FirstSubmissions.submit` committed callback | Publish exact Session operation before `firstSubmitPort.handoff` calls `App.focusSession` |
-| Navigation | `App`, client-owned `NavigationEpoch` | Restore native ID directly; Conversation renders without a sidebar row or attach ACK |
-| Runtime readiness | `firstSubmitPort.attach`, `AppServerClient.performAttach`, native `load` | Capture this operation's exact attachment; consume established native model/configuration |
+| Client handoff | `AppServerClient.request` decoded acknowledgement → `FirstSubmissions.submit` committed callback | Publish exact Session operation before `firstSubmitPort.handoff` prepares correlated Shell publication |
+| Navigation | XState `ShellNavigationMachine` | Project the native-owned draft continuation directly; publish the executable route only after exact attachment evidence and current-intent validation |
+| Runtime readiness | `firstSubmitPort.attach`, `SessionLifecycleMachine`, native `load` | Capture this operation's exact attachment; consume established native model/configuration |
 | Upload | `FirstSubmissions.submit`, `AppServerClient.upload` | Dispatch one ordered file at a time after readiness; capture receipt before any subsequent fence |
 | Admission | `AppServerClient.send` / `turn/start` acknowledgement | Consume local input only upon `inbound_accepted`; provider output remains a later native fact |
 | Catalog | Native `SessionSummaryInvalidations` → existing client catalog invalidation | Refresh independently, never awaited by first-submit or attachment |

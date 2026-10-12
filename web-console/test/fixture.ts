@@ -91,7 +91,7 @@ export class Server {
   };
   carrierTransfers = 0;
   client = new AppServerClient(this.socketFactory, 30_000, async () => { this.carrierTransfers++; });
-  constructor() { this.client.setAttachmentAdmission(async () => ({ current: () => true, validate: async () => true })); } // Protocol-only fixture; App installs real Host admission.
+  constructor() { this.client.setSessionAdmission(async () => ({ current: () => true, validate: async () => true })); } // Protocol-only fixture; App installs real Host admission.
   get socket() { return this.sockets[this.sockets.length - 1]; }
   target(id: string, socket = this.socket): AttachmentTarget {
     return this.targets.get(socket)!.get(id)!;
@@ -178,7 +178,11 @@ export class Server {
       case 'session/history': {
         const history = (request.params.node_id ? this.nodeSnapshots.get(request.params.node_id) : undefined) ?? this.snapshots.get(request.params.session_id)!;
         if (!history) throw new RpcFailure({ code: -32000, message: 'Unknown Session' });
-        result = { type: 'session_history', conversation_id: history.conversation_id, window: { cut: { conversation_id: history.conversation_id, journal: '1000', transcript: '1000', mutation_revision: '0' }, page: history.transcript } }; break;
+        const at = request.params.at, entries = history.transcript.entries ?? [];
+        const target = at.type === 'message' ? entries.find(entry => entry.item.type === 'message' && entry.item.message.id === at.id) : undefined;
+        if (at.type === 'message' && !target) throw new RpcFailure({ code: -32000, message: 'Unknown Message', data: { kind: 'operation_failed' } });
+        const selected = at.type === 'older' ? entries.filter(entry => BigInt(entry.cursor) < BigInt(at.before)).slice(-request.params.limit) : at.type === 'newer' ? entries.filter(entry => BigInt(entry.cursor) > BigInt(at.after)).slice(0, request.params.limit) : target ? entries.slice(Math.max(0, entries.indexOf(target) - Math.floor(request.params.limit / 2)), Math.max(0, entries.indexOf(target) - Math.floor(request.params.limit / 2)) + request.params.limit) : entries.slice(-request.params.limit);
+        result = { type: 'session_history', conversation_id: history.conversation_id, window: { cut: 'cut' in at && at.cut ? at.cut : { conversation_id: history.conversation_id, journal: '1000', transcript: '1000', mutation_revision: '0' }, target_cursor: target?.cursor, page: { ...history.transcript, entries: selected } } }; break;
       }
       case 'session/attach': {
         this.reservations.get(socket)?.delete(id);

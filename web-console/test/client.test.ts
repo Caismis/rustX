@@ -535,7 +535,7 @@ it('Release permanently revokes an Open suspended in Product Host admission', as
   const s = server(); await s.connect();
   const entered = deferred<() => boolean>(), gate = deferred<void>();
   let admissions = 0;
-  s.client.setAttachmentAdmission(async (_id, current) => {
+  s.client.setSessionAdmission(async (_id, current) => {
     if (++admissions === 1) { entered.resolve(current); await gate.promise; }
     return { current: () => true, validate: async () => true };
   });
@@ -584,7 +584,7 @@ it('Release revokes an Open during final asynchronous validation', async () => {
   const s = server(); await s.connect();
   const entered = deferred<void>(), gate = deferred<boolean>();
   let admissions = 0;
-  s.client.setAttachmentAdmission(async () => {
+  s.client.setSessionAdmission(async () => {
     const first = ++admissions === 1;
     return { current: () => true, validate: async () => {
       if (first) { entered.resolve(); return gate.promise; }
@@ -633,7 +633,7 @@ const expectReleased = (s: Server) => {
 it('terminal Release after held Host admission settles proven absence and restores Open recovery', async () => {
   const s = server(); await s.connect();
   const entered = deferred<void>(), gate = deferred<void>();
-  s.client.setAttachmentAdmission(async () => { entered.resolve(); await gate.promise; return { current: () => true, validate: async () => true }; });
+  s.client.setSessionAdmission(async () => { entered.resolve(); await gate.promise; return { current: () => true, validate: async () => true }; });
   const baseline = s.requests.length;
   const opening = s.client.attach('A'); await entered.promise;
   expect(s.client.getSnapshot().views.A.attachment).toBe('attaching'); expect(attachmentRequests(s)).toEqual([]);
@@ -644,7 +644,7 @@ it('terminal Release after held Host admission settles proven absence and restor
 it('terminal local Release permits a later explicit Open through normal native admission', async () => {
   const s = server(); await s.connect();
   const entered = deferred<void>(), gate = deferred<void>(); let admissions = 0;
-  s.client.setAttachmentAdmission(async () => {
+  s.client.setSessionAdmission(async () => {
     if (++admissions === 1) { entered.resolve(); await gate.promise; }
     return { current: () => true, validate: async () => true };
   });
@@ -681,7 +681,7 @@ it('terminal Release after RPC backpressure settles an unsent Open without publi
 it('terminal Release during final validation aborts the reservation and settles without native work', async () => {
   const s = server(); await s.connect();
   const entered = deferred<AbortSignal>(), gate = deferred<boolean>();
-  s.client.setAttachmentAdmission(async () => ({ current: () => true, validate: async signal => { entered.resolve(signal); return gate.promise; } }));
+  s.client.setSessionAdmission(async () => ({ current: () => true, validate: async signal => { entered.resolve(signal); return gate.promise; } }));
   const baseline = s.requests.length;
   const states: string[] = []; s.client.subscribe(() => { if (s.client.getSnapshot().views.A) states.push(s.client.getSnapshot().views.A.attachment); });
   const opening = s.client.attach('A'), refused = expect(opening).rejects.toBeInstanceOf(RequestNotDispatched);
@@ -702,7 +702,7 @@ it('terminal Release across repeated unsent Opens preserves native snapshot and 
   const retained = s.client.getSnapshot().views.A.snapshot, baseline = s.requests.length;
   for (let i = 0; i < 70; i++) {
     const entered = deferred<void>(), gate = deferred<void>();
-    s.client.setAttachmentAdmission(async () => { entered.resolve(); await gate.promise; return { current: () => true, validate: async () => true }; });
+    s.client.setSessionAdmission(async () => { entered.resolve(); await gate.promise; return { current: () => true, validate: async () => true }; });
     const opening = s.client.attach('A'); await entered.promise;
     const closing = s.client.release('A'); gate.resolve(); await Promise.all([opening, closing]);
     expectReleased(s); expect(s.client.getSnapshot().views.A.snapshot).toBe(retained);
@@ -713,7 +713,7 @@ it('terminal Release across repeated unsent Opens preserves native snapshot and 
 it('terminal cleanup from an old generation cannot overwrite a new Open after reconnect', async () => {
   const s = server(); await s.connect();
   const entered = deferred<void>(), gate = deferred<void>(); let first = true;
-  s.client.setAttachmentAdmission(async () => {
+  s.client.setSessionAdmission(async () => {
     if (first) { first = false; entered.resolve(); await gate.promise; }
     return { current: () => true, validate: async () => true };
   });
@@ -773,7 +773,7 @@ it('terminal Release cannot turn a lost transmitted attach outcome into local ab
   expect(s.client.getSnapshot().uncertain).toHaveLength(1);
   // A new unsent Open proves nothing about the preceding connection's outcome.
   const entered = deferred<void>(), gate = deferred<void>();
-  s.client.setAttachmentAdmission(async () => { entered.resolve(); await gate.promise; return { current: () => true, validate: async () => true }; });
+  s.client.setSessionAdmission(async () => { entered.resolve(); await gate.promise; return { current: () => true, validate: async () => true }; });
   const next = s.client.attach('A'); await entered.promise;
   const release = s.client.release('A'); gate.resolve(); await Promise.all([next, release]);
   expect(s.client.getSnapshot().views.A).toMatchObject({ attachmentIntent: 'released', attachment: 'stale' });
@@ -791,7 +791,7 @@ it.each(['session/detach', 'session/switchNode'] as const)('terminal unsent Open
   expect(s.claims()).toHaveLength(1); s.socket.close(); await Promise.all([uncertain, closing]);
   await s.connect();
   const entered = deferred<void>(), gate = deferred<void>();
-  s.client.setAttachmentAdmission(async () => { entered.resolve(); await gate.promise; return { current: () => true, validate: async () => true }; });
+  s.client.setSessionAdmission(async () => { entered.resolve(); await gate.promise; return { current: () => true, validate: async () => true }; });
   const opening = s.client.attach('A'); await entered.promise;
   const release = s.client.release('A'); gate.resolve(); await Promise.all([opening, release]);
   expect(s.client.getSnapshot().views.A).toMatchObject({ attachmentIntent: 'released', attachment: 'stale' });

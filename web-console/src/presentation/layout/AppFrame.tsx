@@ -67,8 +67,9 @@ function DragHandle(props: { side: 'sidebar' | 'rightbar'; left: number; onStart
 
 
 /** Harness measured three-column shell; every state here is disposable geometry. */
-export function AppFrame({ sidebar, children, rightPanel, rightOpen = false, overlay, dismissSidebarLabel, onSidebarDismiss }: {
+export function AppFrame({ sidebar, children, rightPanel, rightOpen = false, overlay, dismissSidebarLabel, onSidebarDismiss, sidebarPublication }: {
   dismissSidebarLabel: string;
+  sidebarPublication?: { sidebar: boolean };
   /** User/breakpoint retirement of an overlay gesture; never native lifecycle work. */
   onSidebarDismiss?: () => void;
   sidebar: (geometry: SidebarGeometry) => ReactNode; children: ReactNode;
@@ -114,6 +115,7 @@ export function AppFrame({ sidebar, children, rightPanel, rightOpen = false, ove
   }, [floatingSidebar, narrow, onSidebarDismiss]);
   // Successful navigation closes presentation without revoking its own commit.
   const dismissSidebar = () => setNarrowExpanded(false);
+  useLayoutEffect(() => { if (sidebarPublication?.sidebar) setNarrowExpanded(false); }, [sidebarPublication]);
   const userDismissSidebar = () => { onSidebarDismiss?.(); dismissSidebar(); };
   const toggleSidebar = () => {
     // The labelled gesture keeps its meaning if layout changes before dispatch.

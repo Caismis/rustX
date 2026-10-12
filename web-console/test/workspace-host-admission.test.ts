@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { LocalWorkspaceHost } from '../host/workspaces';
 import { CommandSession } from '../src/app/commands/native';
 import { WorkspaceAuthority } from '../src/workspaces/authority';
-import { WorkspaceSessionNavigation } from '../src/workspaces/navigation';
+import { WorkspaceSessionAdmission } from '../src/workspaces/session-admission';
 import type { ProductHostWorkspaces, SessionLocation } from '../src/workspaces/host';
 import type { MethodResult } from '../../protocol/app-server/v46';
 import { Server, endpoint } from './fixture';
@@ -45,7 +45,7 @@ function realHost(server: Server) {
   server.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd } }));
   const authority = new WorkspaceAuthority(host);
   const accepted = vi.fn(); authority.subscribe(accepted);
-  server.client.setAttachmentAdmission(new WorkspaceSessionNavigation(authority, server.client, server.client.navigation).admit);
+  server.client.setSessionAdmission(new WorkspaceSessionAdmission(authority, server.client).admit);
   return { root, directory, authority, accepted, lists, classified, calls: () => calls,
     /** Hold catalog read number `at` (1-based) until released. */
     holdList: (at: number) => {

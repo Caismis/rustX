@@ -24,26 +24,26 @@ export function ConversationStatus({ client, sessionId, recover }: { client: App
 }
 
 /** Execution admission belongs at the resident composer seat, never the shell. */
-export function ConversationSeat({ client, host, authority, associations, sessionId, initialWorkspace, workspacePicked, binding, current, consumed, restored, opened, onCommand }: {
+export function ConversationSeat({ client, host, authority, associations, sessionId, initialWorkspace, workspacePicked, binding, current, executable, consumed, restored, preparePublication, onCommand }: {
   client: AppServerClient; host: ProductHostWorkspaces; authority: WorkspaceAuthority; associations: WorkspaceAssociations; sessionId?: string; initialWorkspace?: string;
   workspacePicked?: (id: string) => void;
-  binding: string; current: () => boolean; consumed?: { id: string; sequence: number };
-  restored?: { conversation: string; content: UserInputBlock[] }; opened: (id: string) => (() => boolean) | void;
+  executable: boolean; binding: string; current: () => boolean; consumed?: { id: string; sequence: number };
+  restored?: { conversation: string; content: UserInputBlock[] }; preparePublication: () => ((id: string) => (() => boolean) | void);
   onCommand: (id: CommandId) => void;
 }) {
   const state = useClientSelector(client, state => ({ ...transportSelection(state), composer: composerFacts(sessionId ? state.views[sessionId] : undefined) }), sameValue);
   const view = sessionId ? client.getSnapshot().views[sessionId] : undefined;
   const owner = JSON.stringify([state.generation, sessionId, binding]);
   const uploadCurrent = () => current() && state.generation === client.getSnapshot().generation && sameTarget(view?.target, sessionId ? client.getSnapshot().views[sessionId]?.target : undefined);
-  const cancellation = view && current() ? client.cancellationTarget(view.id) : undefined;
+  const cancellation = view && executable && current() ? client.cancellationTarget(view.id) : undefined;
   const [sending, setSending] = useState<string>();
   const [failure, setFailure] = useState<{ owner: string; message: string }>();
   const error = failure?.owner === owner ? failure.message : undefined;
   const attached = state.connection === 'connected' && !!view && client.isAttachmentControlCurrent(view.id, view.attachmentObservation);
-  const disabled = !attached || !!view?.modelMutation || !!view?.snapshot?.shutting_down || !!view?.snapshot?.durability_failure;
+  const disabled = !attached || !executable || !!view?.modelMutation || !!view?.snapshot?.shutting_down || !!view?.snapshot?.durability_failure;
   return <ComposerSeat>
     <div hidden={!!view?.snapshot?.pending_interactions?.length}>
-      <ConversationComposer client={client} host={host} authority={authority} associations={associations} initialWorkspace={initialWorkspace} workspacePicked={workspacePicked} binding={binding} activeView={view} current={current} consumed={consumed} opened={opened}
+      <ConversationComposer client={client} host={host} authority={authority} associations={associations} initialWorkspace={initialWorkspace} workspacePicked={workspacePicked} binding={binding} activeView={view} current={current} consumed={consumed} preparePublication={preparePublication}
         context={view && <><ContextSeat client={client} sessionId={view.id}/><ConversationDocks key={view.id} client={client} sessionId={view.id} disabled={disabled}/></>}
         active={view ? {
           initialContent: restored?.conversation === view.snapshot?.conversation_id ? restored?.content : undefined,

@@ -69,13 +69,13 @@ it.each([33, 129, 4096])('reads the exact attached node at ordinal %s in one req
   expect(original.queryByRole('group', { name: 'Fork point' })).toBeNull();
 });
 
-it.each(['B', 'A'])('the source action opens the recorded node in Session %s and locates its original message', async sourceSession => {
+for (const pendingInput of [false, true]) it.each(['B', 'A'])(`the source action reads exact Node and Message in Session %s without executable effects, pending input=${pendingInput}`, async sourceSession => {
   server = new Server();
   server.handlers.set('session/read', () => ({ type: 'session', session: { id: 'A', active_node: 'child-node', active_conversation_id: 'conversation-A', node_count: 1, created_at: '2026-10-07T00:00:00Z', updated_at: '2026-10-07T00:00:00Z' } }));
   const selectedOrigin = { ...origin, source_session: sourceSession };
-  const child = snapshot(); child.transcript = { inherited_through: '1', entries: [entry(1), entry(2)] };
+  const child = snapshot(); child.attempt = { attempt_id: 'running-origin', phase: { type: 'running' }, turn: 1 }; child.transcript = { inherited_through: '1', entries: [entry(1), entry(2)] };
   const source = snapshot(sourceSession); source.conversation_id = `source-conversation-${sourceSession}`;
-  source.transcript.entries = [{ cursor: '12', item: { type: 'message', message: { role: 'assistant', id: origin.source_message, content: [{ type: 'text', text: 'Original source response' }] } } }];
+  source.transcript.entries = [{ cursor: '12', item: { type: 'message', message: { role: 'assistant', id: origin.source_message, content: [{ type: 'text', text: 'Original source response [local.ts](./src/local.ts)' }] } } }];
   if (sourceSession !== 'A') server.snapshots.set(sourceSession, source);
   server.snapshots.set('A', child);
   server.nodeSnapshots.set(origin.source_node, source);
@@ -86,16 +86,35 @@ it.each(['B', 'A'])('the source action opens the recorded node in Session %s and
       : { ordinal: '4096', id: origin.source_node, conversation_id: source.conversation_id, origin: { type: 'new' } } };
   });
   await server.attached('A');
+  let input: Promise<boolean> | undefined;
+  if (pendingInput) {
+    server.held.add('turn/start');
+    const { firstSubmitPort } = await import('../src/app/new-conversation/port');
+    input = server.client.firstSubmissions.submit('native-input', { workspaceId: '', text: 'Already admitted input', files: [] }, firstSubmitPort(server.client, server.workspaceHost, () => true, () => () => {}, true), undefined, undefined, 'A');
+    await server.waitFor('turn/start', 1);
+    expect(server.client.firstSubmissions.session('A')?.phase).toBe('admitting');
+  }
   localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
-  const locate = vi.spyOn(server.client, 'navigateMessage');
+  const before = server.requests.length, target = server.client.target('A');
   const ui = await act(async () => render(<App client={server!.client} workspaceHost={server!.workspaceHost}/>));
-  await waitFor(() => expect(ui.getByRole('button', { name: 'View source' })).toBeTruthy());
+  await waitFor(() => expect((ui.getByRole('button', { name: 'View source' }) as HTMLButtonElement).disabled).toBe(false));
+  expect((ui.getByRole('button', { name: /^Stop$/ }) as HTMLButtonElement).disabled).toBe(false);
   await act(async () => fireEvent.click(ui.getByRole('button', { name: 'View source' })));
-  await waitFor(() => expect(locate).toHaveBeenCalledWith(sourceSession, origin.source_message, expect.any(Function)));
-  expect(server.requests.find(row => row.request.method === 'session/attach' && row.request.params.node_id === origin.source_node)?.request).toMatchObject({ params: { node_id: origin.source_node, session_id: sourceSession } });
-  expect(ui.getByLabelText('Canonical conversation').textContent).toContain('Original source response');
-  expect(server.requests.some(row => row.request.method === 'session/switchNode')).toBe(sourceSession === 'A');
-  expect(server.requests.filter(row => row.request.method === 'session/tree')).toHaveLength(0);
+  await waitFor(() => expect(ui.container.querySelector('[data-history-session]')?.getAttribute('data-history-session')).toBe(sourceSession));
+  expect(ui.container.querySelector('[data-history-node]')?.getAttribute('data-history-node')).toBe(origin.source_node);
+  expect(ui.container.querySelector(`[data-chat-anchor-key="message:${origin.source_message}"]`)).toBeTruthy();
+  await waitFor(() => expect(ui.getByText('Original source response local.ts')).toBeTruthy());
+  expect(ui.queryByRole('button', { name: 'local.ts' })).toBeNull();
+  const requests = server.requests.slice(before).map(row => row.request);
+  expect(requests.filter(request => ['session/attach', 'session/detach', 'session/switchNode', 'turn/start'].includes(request.method))).toEqual([]);
+  expect(requests.filter(request => request.method === 'session/history' && request.params.at.type === 'message').map(request => request.params)).toEqual([{ session_id: sourceSession, node_id: origin.source_node, at: { type: 'message', id: origin.source_message }, limit: 64 }]);
+  expect(server.client.target('A')).toBe(target); expect(ui.queryByRole('textbox', { name: 'Message' })).toBeNull();
+  await act(async () => fireEvent.click(ui.getByRole('button', { name: 'Return to conversation' })));
+  expect(server.client.target('A')).toBe(target);
+  expect(server.client.getSnapshot().views.A.snapshot?.attempt?.attempt_id).toBe('running-origin');
+  expect((ui.getByRole('button', { name: /^Stop$/ }) as HTMLButtonElement).disabled).toBe(false);
+  if (input) { server.reply(await server.waitFor('turn/start', 1)); expect(await input).toBe(true); }
+
 });
 
 

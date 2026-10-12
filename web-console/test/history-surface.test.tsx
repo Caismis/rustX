@@ -1,0 +1,23 @@
+import { act, cleanup, render } from '@testing-library/react';
+import { afterEach, expect, it, vi } from 'vitest';
+import { createActor } from 'xstate';
+import { HistorySurface } from '../src/app/navigation/HistorySurface';
+import { settingsNavigationMachine } from '../src/app/settings/machines/navigation';
+import { Server } from './fixture';
+import type { HistoryRoute } from '../src/app/navigation/machine';
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+it('read-only history mounts an exact Message landing through ChatViewport, with no executable requests', async () => {
+ const server = new Server(); const settings = createActor(settingsNavigationMachine, { input: { lookup: async () => ({ kind: 'retired' }) } }).start();
+ const frames = new Map<number, FrameRequestCallback>(); let sequence = 0;
+ vi.stubGlobal('requestAnimationFrame', (frame: FrameRequestCallback) => { frames.set(++sequence, frame); return sequence; }); vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id));
+ vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+ const entries = Array.from({length: 3}, (_, i) => ({ cursor: String(i+1), item: {type:'message' as const, message:{id:`message-${i}`,role:'user' as const,source:'human' as const,content:[{type:'text' as const,text:`Message ${i}`}]} } }));
+ const route: HistoryRoute = { kind:'history',sessionId:'B',nodeId:'old-B',messageId:'message-1',conversationId:'conversation-B',returnTo:{kind:'session',sessionId:'A'},window:{cut:{conversation_id:'conversation-B',journal:'3',transcript:'3',mutation_revision:'0'},target_cursor:'2',page:{entries}} };
+ const current=vi.fn(()=>true), ui=render(<HistorySurface client={server.client} route={route} current={current} back={()=>{}} settings={settings}/>);
+ const viewport=ui.container.querySelector<HTMLElement>('[data-conversation-scroll]')!;
+ Object.defineProperties(viewport,{scrollHeight:{value:900},clientHeight:{value:300}});
+ vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockImplementation(function(this:HTMLElement){ const id=this.dataset.chatAnchorKey,top=id ? Number(id.at(-1))*300-viewport.scrollTop : 0;return {top,bottom:top+300,left:0,right:500,width:500,height:300,x:0,y:top,toJSON(){}}; });
+ await act(async()=>{for(const [id, frame] of [...frames]){frames.delete(id);frame(0);}});
+ expect(current).toHaveBeenCalled(); expect(viewport.scrollTop).toBe(300); expect(server.requests).toEqual([]);
+ expect(ui.queryByRole('textbox',{name:'Message'})).toBeNull(); settings.stop();
+});
