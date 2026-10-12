@@ -254,6 +254,18 @@ On a fresh page the Session remains available through the native list
 for explicit Open. Opening or resuming resolves through rustX's canonical
 configuration owners.
 
+AppFrame owns narrow-sidebar visibility and reports explicit Escape, backdrop,
+toggle and breakpoint dismissal to App. Only a still-current pending sidebar
+gesture retires App's existing NavigationEpoch; idle overlay dismissal preserves
+committed conversation controls. A current authoritative attachment permits
+immediate presentation navigation without an
+attachment refresh. Cold navigation commits only after lifecycle admission and
+the final gesture, generation and attachment-control checks. Dismissal or a newer
+gesture retires presentation authority; an already dispatched native operation
+still settles in the Session lifecycle actor. Successful publication closes the
+overlay programmatically without revoking its own commit. Desktop navigation
+continues to expose the cold Composer immediately.
+
 Request IDs provide correlation only. Separate bounded lanes permit four waits,
 two Agent message admissions, two lifecycle controls and eight transmitted ordinary
 RPCs, within the transport's sixteen-request work bound; the overall 64-request

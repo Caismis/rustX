@@ -67,8 +67,10 @@ function DragHandle(props: { side: 'sidebar' | 'rightbar'; left: number; onStart
 
 
 /** Harness measured three-column shell; every state here is disposable geometry. */
-export function AppFrame({ sidebar, children, rightPanel, rightOpen = false, overlay, dismissSidebarLabel }: {
+export function AppFrame({ sidebar, children, rightPanel, rightOpen = false, overlay, dismissSidebarLabel, onSidebarDismiss }: {
   dismissSidebarLabel: string;
+  /** User/breakpoint retirement of an overlay gesture; never native lifecycle work. */
+  onSidebarDismiss?: () => void;
   sidebar: (geometry: SidebarGeometry) => ReactNode; children: ReactNode;
   rightPanel?: (geometry: { width: number; viewportWidth: number; canShow: boolean }) => ReactNode;
   rightOpen?: boolean; overlay?: ReactNode;
@@ -103,27 +105,30 @@ export function AppFrame({ sidebar, children, rightPanel, rightOpen = false, ove
   const base = useRef(0);
   const wasFloating = useRef(false);
   useLayoutEffect(() => {
+    if (wasFloating.current && !narrow) onSidebarDismiss?.();
     if (floatingSidebar || wasFloating.current) {
       const toggle = sidebarRef.current?.querySelector<HTMLElement>('[data-sidebar-toggle]');
       (toggle ?? sidebarRef.current)?.focus();
     }
     wasFloating.current = floatingSidebar;
-  }, [floatingSidebar]);
+  }, [floatingSidebar, narrow, onSidebarDismiss]);
+  // Successful navigation closes presentation without revoking its own commit.
   const dismissSidebar = () => setNarrowExpanded(false);
+  const userDismissSidebar = () => { onSidebarDismiss?.(); dismissSidebar(); };
   const toggleSidebar = () => {
     // The labelled gesture keeps its meaning if layout changes before dispatch.
-    if (narrow) setNarrowExpanded(collapsed);
+    if (narrow) { if (floatingSidebar) userDismissSidebar(); else setNarrowExpanded(true); }
     else setSidebarWidth(collapsed ? SIDEBAR_DEFAULT : 0);
   };
   return <div ref={frameRef} className={css.frame} data-harness-frame
     data-sidebar-overlay={floatingSidebar || undefined}
-    onKeyDown={event => { if (floatingSidebar && event.key === 'Escape' && !event.defaultPrevented && sidebarRef.current?.contains(event.target as Node)) { event.preventDefault(); dismissSidebar(); } }}
+    onKeyDown={event => { if (floatingSidebar && event.key === 'Escape' && !event.defaultPrevented && sidebarRef.current?.contains(event.target as Node)) { event.preventDefault(); userDismissSidebar(); } }}
     data-sidebar-collapsed={collapsed || undefined} data-rightbar-collapsed={cols.rightbar === 0 || undefined}
     data-dragging={dragging || undefined} style={{ gridTemplateColumns: `${cols.sidebar}px minmax(0, 1fr) ${cols.rightbar}px` }}>
     <div ref={sidebarRef} tabIndex={-1} className={css.sidebarCol} style={{ width: visibleSidebarWidth }}>{sidebar({ overlay: floatingSidebar, collapsed, width: visibleSidebarWidth, toggleSidebar, dismissSidebar })}</div>
     <main className={css.centerCol} inert={floatingSidebar}>{children}</main>
     <div className={css.rightbarCol} data-rightbar-col inert={floatingSidebar}>{rightPanel?.({ width: normal.rightbar, viewportWidth: viewport, canShow: normal.rightbar > 0 })}</div>
-    {floatingSidebar && <button type="button" className={css.sidebarBackdrop} tabIndex={-1} aria-label={dismissSidebarLabel} onClick={dismissSidebar} />}
+    {floatingSidebar && <button type="button" className={css.sidebarBackdrop} tabIndex={-1} aria-label={dismissSidebarLabel} onClick={userDismissSidebar} />}
     <div className={css.overlayLayer} data-shell-overlay>{overlay}</div>
     {!collapsed && !narrow && <DragHandle side="sidebar" left={cols.sidebar} onStart={() => { base.current = cols.sidebar; setDragging(true); }}
       onDrag={dx => setSidebarWidth(clampWidth(base.current + dx, SIDEBAR_MIN, SIDEBAR_MAX))} onEnd={() => setDragging(false)} />}

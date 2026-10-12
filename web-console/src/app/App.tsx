@@ -19,7 +19,7 @@ import { WorkspaceAuthority } from '../workspaces/authority';
 import { WorkspaceAssociations } from '../workspaces/associations';
 import { WorkspaceNavigation } from '../workspaces/WorkspaceNavigation';
 import { WorkspaceSessionNavigation } from '../workspaces/navigation';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useActorRef } from '@xstate/react';
 import type { AppServerClient } from '../client/app-server';
 import type { AttachmentTarget, CompletedResponseView, MethodResult, SourceTarget, UserInputBlock } from '../../../protocol/app-server/v46';
@@ -114,6 +114,13 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   });
   const workspace = selected ? associatedWorkspace : center.kind === 'new-conversation' ? center.workspaceId : undefined;
   const navigation = client.navigation;
+  // This is a reference to the existing gesture fence, not attachment state.
+  // Closing an otherwise idle overlay must not revoke committed route controls.
+  const sidebarIntent = useRef<(() => boolean) | undefined>(undefined);
+  const dismissSidebarIntent = useCallback(() => {
+    if (sidebarIntent.current?.()) navigation.invalidate();
+    sidebarIntent.current = undefined;
+  }, [navigation]);
   const [command, setCommand] = useState<{ request: CommandRequest; current: () => boolean; generation: number; sessionId: string; conversationId?: string }>();
   const [restored, setRestored] = useState<{ conversation: string; content: UserInputBlock[] }>();
   const [consumed, setConsumed] = useState<{ id: string; sequence: number }>();
@@ -257,14 +264,20 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     navigation.invalidate();
     const current = navigation.capture(), generation = client.getSnapshot().generation;
     const valid = () => current() && client.getSnapshot().generation === generation;
+    sidebarIntent.current = valid;
     runGlobal(async () => {
       try {
-        await client.attach(id, undefined, valid);
-        if (!valid() || !client.isAttachmentObservationCurrent(id, client.getSnapshot().views[id]?.attachmentObservation)) return;
+        // A current control observation already admits presentation. Opening it
+        // again would unnecessarily put a snapshot refresh on the gesture's path.
+        if (!client.isAttachmentControlCurrent(id, client.getSnapshot().views[id]?.attachmentObservation)) await client.attach(id, undefined, valid);
+        // Publication is after required admission and the final gesture/authority
+        // check. Native settlement remains lifecycle-owned if the gesture retires.
+        if (!valid() || !client.isAttachmentControlCurrent(id, client.getSnapshot().views[id]?.attachmentObservation)) return;
         setOpenViews(open => open.includes(id) ? open : [...open, id]);
         focusSession(id, { ready });
         sidebar.dismissSidebar();
       } catch (cause) { if (valid()) throw cause; }
+      finally { if (sidebarIntent.current === valid) sidebarIntent.current = undefined; }
     });
   };
   const openForkSource = (origin: ForkOrigin) => {
@@ -332,7 +345,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     if (owner.kind === 'user') openSettings(userSettingsTarget);
     else navigationActor.send({ type: 'OPEN.OWNER', directory: owner.directory });
   };
-  return <SubagentScope onMode={setConversationMode} client={client} sessionId={view?.id} openAside={agent => { previewOwner.showWorkbench(); fileWorkbench.current?.openAgent(agent.agent_id, agent.title); }}><PreviewContext value={{ openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><AppFrame dismissSidebarLabel={tx('sidebar:toggle.dismiss')} sidebar={geometry => <SidebarRoot {...geometry} startSession={() => { createInWorkspace(workspace); geometry.dismissSidebar(); }}
+  return <SubagentScope onMode={setConversationMode} client={client} sessionId={view?.id} openAside={agent => { previewOwner.showWorkbench(); fileWorkbench.current?.openAgent(agent.agent_id, agent.title); }}><PreviewContext value={{ openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><AppFrame dismissSidebarLabel={tx('sidebar:toggle.dismiss')} onSidebarDismiss={dismissSidebarIntent} sidebar={geometry => <SidebarRoot {...geometry} startSession={() => { createInWorkspace(workspace); geometry.dismissSidebar(); }}
     panels={[]}
     browser={(wide, expand) => <WorkspaceNavigation associations={associations} key={state.authorityRevision ?? 0} wide={wide} expand={expand} host={workspaceHost} client={client} state={state} endpoint={endpoint} navigation={navigation}
       metadataChanged={removed => { if (removed) setCenter(value => value.kind === 'new-conversation' && value.workspaceId === removed ? { kind: 'new-conversation' } : value); }}

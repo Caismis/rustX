@@ -361,26 +361,131 @@ test('primary sidebar navigation retires the narrow overlay without changing run
 });
 
 
-for (const outcome of ['failed', 'obsolete'] as const) test(`narrow sidebar ${outcome} navigation retains the current destination`, async ({ page }) => {
+test('idle overlay dismissal preserves the committed conversation navigation fence', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${fixtureOrigin}/test/fixtures/shell.html`);
+  await expect(page.getByLabel('Session title')).toHaveText('Session A');
+  const before = await page.evaluate(() => window.sessionFixture.navigationFacts());
+  for (const dismissal of ['escape', 'backdrop', 'toggle'] as const) {
+    await page.evaluate(() => window.sessionFixture.captureNavigation());
+    await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
+    const collapse = page.getByRole('button', { name: 'Collapse Sidebar', exact: true });
+    if (dismissal === 'escape') await collapse.press('Escape');
+    else if (dismissal === 'backdrop') await page.getByRole('button', { name: 'Close navigation', exact: true }).click({ position: { x: 370, y: 400 } });
+    else await collapse.click();
+    await expect(page.locator('[data-harness-frame]')).not.toHaveAttribute('data-sidebar-overlay');
+    expect(await page.evaluate(() => window.sessionFixture.navigationCurrent())).toBe(true);
+    expect(await page.evaluate(() => window.sessionFixture.navigationFacts())).toEqual(before);
+  }
+});
+
+test('authoritative narrow navigation commits while a background snapshot is held', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${fixtureOrigin}/test/fixtures/shell.html`);
+  await expect(page.getByLabel('Session title')).toHaveText('Session A');
+  await page.evaluate(() => window.sessionFixture.readyNavigation());
+  const before = await page.evaluate(() => window.sessionFixture.navigationFacts());
+  expect(before.views.A.authoritative && before.views.B.authoritative).toBe(true);
+  const mutations = nativeMutations(await page.evaluate(() => window.sessionFixture.requests()));
+  await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
+  await page.evaluate(() => window.sessionFixture.holdSnapshot());
+  const snapshots = (await page.evaluate(() => window.sessionFixture.requests())).filter(request => request.method === 'session/snapshot').length;
+  await page.locator('button[data-session-id="B"]').click();
+  await expect(page.getByLabel('Session title')).toHaveText('Session B');
+  await expect(page.locator('[data-harness-frame]')).not.toHaveAttribute('data-sidebar-overlay');
+  await expect(page.locator('main')).not.toHaveAttribute('inert');
+  await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Interactive before snapshot settlement');
+  await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeFocused();
+  expect((await page.evaluate(() => window.sessionFixture.requests())).filter(request => request.method === 'session/snapshot').length).toBe(snapshots);
+  expect(nativeMutations(await page.evaluate(() => window.sessionFixture.requests()))).toEqual(mutations);
+  expect(await page.evaluate(() => window.sessionFixture.navigationFacts())).toEqual(before);
+  await page.evaluate(() => window.sessionFixture.settleSnapshot());
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await expect(page.getByLabel('Session title')).toHaveText('Session B');
+  await expect(page.locator('[data-harness-frame]')).not.toHaveAttribute('data-sidebar-overlay');
+});
+
+const nativeMutations = (requests: import('../../../protocol/app-server/v46').Request[]) => requests.filter(request => /^(session\/(attach|detach|switchNode|unload)|turn\/)/.test(request.method));
+
+for (const outcome of ['escape', 'backdrop', 'toggle', 'newer', 'success', 'failed', 'replacement', 'breakpoint', 'desktop'] as const) test(`sidebar attachment ownership: ${outcome}`, async ({ page }) => {
+  await page.setViewportSize({ width: outcome === 'desktop' ? 1440 : 390, height: 844 });
   await page.goto(`${fixtureOrigin}/test/fixtures/shell.html`);
   const frame = page.locator('[data-harness-frame]');
   await expect(page.getByLabel('Session title')).toHaveText('Session A');
-  await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
+  await page.evaluate(() => window.sessionFixture.readyNavigation());
+  const before = await page.evaluate(() => window.sessionFixture.navigationFacts());
+  const mutations = nativeMutations(await page.evaluate(() => window.sessionFixture.requests()));
+  if (outcome !== 'desktop') await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
   await page.getByText('Sessions outside registered Workspaces', { exact: true }).click();
   await page.evaluate(() => window.sessionFixture.holdAttach());
+  if (outcome === 'success') await frame.evaluate(element => {
+    const frame = element as HTMLElement;
+    frame.dataset.observedClosures = '0';
+    new MutationObserver(records => {
+      for (const record of records) if (record.oldValue === 'true' && !frame.hasAttribute('data-sidebar-overlay')) frame.dataset.observedClosures = String(Number(frame.dataset.observedClosures) + 1);
+    }).observe(frame, { attributes: true, attributeOldValue: true, attributeFilter: ['data-sidebar-overlay'] });
+  });
   await page.locator('button[data-session-id="C"]').click();
   await expect.poll(() => page.evaluate(() => window.sessionFixture.requests().filter(request => request.method === 'session/attach' && request.params.session_id === 'C').length)).toBe(1);
-  await expect(page.getByLabel('Session title')).toHaveText('Session A');
-  await expect(frame).toHaveAttribute('data-sidebar-overlay', 'true');
-  if (outcome === 'obsolete') {
+  await expect(page.getByLabel('Session title')).toHaveText(outcome === 'desktop' ? 'Session C' : 'Session A');
+  expect((await page.evaluate(() => window.sessionFixture.navigationFacts())).views.C.attachment).toBe('attaching');
+  if (outcome === 'escape') await page.locator('button[data-session-id="C"]').press('Escape');
+  if (outcome === 'backdrop') await page.getByRole('button', { name: 'Close navigation', exact: true }).click({ position: { x: 370, y: 400 } });
+  if (outcome === 'toggle') await page.getByRole('button', { name: 'Collapse Sidebar', exact: true }).click();
+  if (outcome === 'breakpoint') { await page.setViewportSize({ width: 1440, height: 844 }); await expect(frame).not.toHaveAttribute('data-sidebar-overlay'); await page.setViewportSize({ width: 390, height: 844 }); }
+  if (outcome === 'newer') {
     await page.locator('button[data-session-id="B"]').click();
     await expect(page.getByLabel('Session title')).toHaveText('Session B');
     await expect(frame).not.toHaveAttribute('data-sidebar-overlay');
   }
-  await page.evaluate(success => window.sessionFixture.settleAttach(success), outcome === 'obsolete');
-  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
-  await expect(page.getByLabel('Session title')).toHaveText(outcome === 'obsolete' ? 'Session B' : 'Session A');
-  if (outcome === 'failed') await expect(frame).toHaveAttribute('data-sidebar-overlay', 'true');
+  if (outcome === 'replacement') { await page.evaluate(() => window.sessionFixture.replaceConnection()); await expect.poll(() => page.evaluate(() => window.sessionFixture.navigationFacts().generation)).not.toBe(before.generation); }
+  await page.evaluate(success => window.sessionFixture.settleAttach(success), outcome !== 'failed');
+  if (outcome === 'failed') {
+    await expect.poll(() => page.evaluate(() => window.sessionFixture.navigationFacts().views.C.attachment)).toBe('error');
+    await expect(page.getByRole('alert').filter({ hasText: 'Navigation fixture rejected' })).toBeVisible();
+  } else if (outcome === 'replacement') {
+    // Transport replacement leaves a dispatched lost acknowledgement uncertain;
+    // it must not replay the attach to manufacture fresh presentation authority.
+    const after = await page.evaluate(() => window.sessionFixture.navigationFacts());
+    expect(after.views.C.authoritative).toBe(false);
+    expect(after.views.C.target).toBeUndefined();
+    expect(after.claims.some(target => target.session_id === 'C')).toBe(false);
+    expect((await page.evaluate(() => window.sessionFixture.requests())).filter(request => request.method === 'session/attach' && request.params.session_id === 'C')).toHaveLength(1);
+  } else {
+    await expect.poll(() => page.evaluate(() => window.sessionFixture.navigationFacts().views.C.authoritative)).toBe(true);
+    expect((await page.evaluate(() => window.sessionFixture.navigationFacts())).claims.some(target => target.session_id === 'C')).toBe(true);
+  }
+  const destination = outcome === 'newer' ? 'B' : outcome === 'success' || outcome === 'desktop' ? 'C' : 'A';
+  await expect(page.getByLabel('Session title')).toHaveText(`Session ${destination}`);
+  if (outcome === 'failed' || outcome === 'replacement') await expect(frame).toHaveAttribute('data-sidebar-overlay', 'true');
   else await expect(frame).not.toHaveAttribute('data-sidebar-overlay');
+  if (outcome === 'success') await expect(frame).toHaveAttribute('data-observed-closures', '1');
+  if (outcome !== 'replacement') {
+    const after = await page.evaluate(() => window.sessionFixture.navigationFacts());
+    expect(after.views.A).toEqual(before.views.A); expect(after.views.B).toEqual(before.views.B);
+    const added = nativeMutations(await page.evaluate(() => window.sessionFixture.requests())).slice(mutations.length);
+    expect(added.map(request => request.method)).toEqual(['session/attach']);
+  }
+  if (outcome === 'desktop') await expect(page.getByRole('button', { name: 'Collapse Sidebar', exact: true })).toBeVisible();
+  if (outcome !== 'failed' && outcome !== 'replacement') {
+    await expect(page.locator('main')).not.toHaveAttribute('inert');
+    await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Destination remains usable');
+  }
+});
+
+test('a stale retained attachment waits for authoritative reconciliation before narrow navigation', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${fixtureOrigin}/test/fixtures/shell.html`);
+  await expect(page.getByLabel('Session title')).toHaveText('Session A');
+  await page.evaluate(() => window.sessionFixture.staleDestination());
+  expect((await page.evaluate(() => window.sessionFixture.navigationFacts())).views.B.authoritative).toBe(false);
+  await page.evaluate(() => window.sessionFixture.holdSnapshot());
+  await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
+  await page.locator('button[data-session-id="B"]').click();
+  await expect(page.getByLabel('Session title')).toHaveText('Session A');
+  await expect(page.locator('[data-harness-frame]')).toHaveAttribute('data-sidebar-overlay', 'true');
+  await page.evaluate(() => window.sessionFixture.settleSnapshot());
+  await expect(page.getByLabel('Session title')).toHaveText('Session B');
+  expect((await page.evaluate(() => window.sessionFixture.navigationFacts())).views.B.authoritative).toBe(true);
+  await expect(page.locator('[data-harness-frame]')).not.toHaveAttribute('data-sidebar-overlay');
 });

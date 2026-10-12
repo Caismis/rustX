@@ -317,8 +317,7 @@ fn count_conversation_store_open() {
 /// Version 52 requires identity-bearing message fact lookup and a qualifying
 /// context-reading expression index over immutable Journal evidence.
 /// Version 55 indexes reverse immutable Turn membership for exact validation.
-/// Version 56 persists the immutable inherited transcript boundary and combines
-/// native child history/provenance with frozen shared
+/// Version 56 combines native child history/provenance with frozen shared
 /// Session workspace ownership and removes Candidate/worktree lifecycle facts.
 /// Version 57 requires the immutable inherited transcript watermark in bootstrap identity.
 /// Earlier development stores are rejected without migration.
