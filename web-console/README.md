@@ -255,14 +255,20 @@ for explicit Open. Opening or resuming resolves through rustX's canonical
 configuration owners.
 
 AppFrame owns narrow-sidebar visibility and reports explicit Escape, backdrop,
-toggle and breakpoint dismissal to App. Only a still-current pending sidebar
-gesture retires App's existing NavigationEpoch; idle overlay dismissal preserves
-committed conversation controls. Canceled or unadmitted navigation renews the
-retained route's presentation fence without reopening its attachment. Settings,
-connection Settings and owning-Workspace Settings synchronously retire that
-pending gesture before dispatching to the independent Settings machine, then
-close the overlay programmatically. With no pending gesture, that handoff
-preserves the committed navigation fence. A current authoritative attachment permits
+toggle and breakpoint dismissal to App. NavigationEpoch separates committed
+route authority from exclusive pending preparation. Beginning or retiring a
+pending gesture leaves the displayed conversation's Stop/upload controls valid;
+only route publication or authority replacement revokes its committed fence.
+Sidebar catalog search supersedes read/preparation continuations without
+replacing the route or acquiring a pending route owner.
+Failure retires only its own pending intent, without refreshing, reopening or
+releasing an attachment. Stale cleanup cannot retire a newer intent. Overlay
+user dismissal retires sidebar preparation; successful programmatic closure
+does not cancel the committed route. Settings, connection Settings and
+owning-Workspace Settings synchronously retire preparation from every
+conversation entry point (including Fork source) before dispatching to the
+independent Settings machine. Idle Settings and overlay dismissal preserve
+committed controls and continuation fences. A current authoritative attachment permits
 immediate presentation navigation without an
 attachment refresh. Cold navigation commits only after lifecycle admission and
 the final gesture, generation and attachment-control checks. Dismissal or a newer

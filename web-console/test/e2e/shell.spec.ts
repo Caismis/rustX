@@ -577,3 +577,154 @@ for (const width of [390, 1440]) for (const destination of ['A', 'B']) test(`idl
   expect((await page.evaluate(() => window.sessionFixture.requests())).filter(request => request.method === 'session/snapshot').length).toBe(snapshots);
   if (width === 1440) await expect(page.getByRole('button', { name: 'Collapse Sidebar', exact: true })).toBeVisible();
 });
+
+async function openForkOwnershipFixture(page: Page, width = 390) {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  await page.setViewportSize({ width, height: 844 });
+  await page.goto(`${fixtureOrigin}/test/fixtures/shell.html?fork`);
+  await expect(page.getByLabel('Session title')).toHaveText('Session A');
+  await expect(page.getByRole('button', { name: 'View source', exact: true })).toBeEnabled();
+  await page.evaluate(() => window.sessionFixture.readyNavigation());
+  const before = await page.evaluate(() => window.sessionFixture.navigationFacts());
+  const requests = await page.evaluate(() => window.sessionFixture.requests());
+  await page.evaluate(() => window.sessionFixture.captureNavigation());
+  return { before, requests, errors };
+}
+async function startHeldFork(page: Page, stage: 'node' | 'attach') {
+  await page.evaluate(stage => { if (stage === 'node') window.sessionFixture.holdNode(); else window.sessionFixture.holdAttach(); }, stage);
+  await page.getByRole('button', { name: 'View source', exact: true }).click();
+  await expect.poll(() => page.evaluate(stage => window.sessionFixture.requests().filter(request => request.method === (stage === 'node' ? 'session/node' : 'session/attach') && 'session_id' in request.params && request.params.session_id === 'C').length, stage)).toBe(1);
+}
+async function proveCommittedControls(page: Page) {
+  expect(await page.evaluate(() => window.sessionFixture.navigationCurrent())).toBe(true);
+  const target = (await page.evaluate(() => window.sessionFixture.navigationFacts())).views.A.target;
+  const stop = page.getByRole('button', { name: 'Stop', exact: true });
+  await expect(stop).toBeEnabled(); await stop.click();
+  await expect.poll(() => page.evaluate(() => window.sessionFixture.requests().filter(request => request.method === 'turn/cancel').length)).toBe(1);
+  const cancellation = (await page.evaluate(() => window.sessionFixture.requests())).filter(request => request.method === 'turn/cancel');
+  expect(cancellation[0].params).toEqual({ target });
+  // Both new uploads and reconciliation use ConversationSeat's committed fence.
+  await page.evaluate(() => window.sessionFixture.uncertainUpload());
+  await page.getByLabel('Attach files', { exact: true }).setInputFiles({ name: 'owned.txt', mimeType: 'text/plain', buffer: Buffer.from('committed A') });
+  const reconcile = page.getByRole('button', { name: 'Check status', exact: true });
+  await expect(reconcile).toBeVisible();
+  await page.evaluate(() => window.sessionFixture.resolveUpload());
+  await reconcile.click(); await expect(page.getByText('Uploaded', { exact: true })).toBeVisible();
+  const requests = await page.evaluate(() => window.sessionFixture.requests());
+  expect(requests.filter(request => request.method === 'session/uploadPrepare')).toHaveLength(1);
+  expect(requests.filter(request => request.method === 'session/uploadStatus').every(request => request.params.target.session_id === 'A')).toBe(true);
+  await expect(page.getByRole('alert').filter({ hasText: 'Upload view replaced' })).toHaveCount(0);
+}
+
+for (const failure of ['node', 'attach'] as const) test(`Fork ownership failure preserves committed controls: ${failure}`, async ({ page }) => {
+  const { before, requests, errors } = await openForkOwnershipFixture(page);
+  await startHeldFork(page, failure);
+  expect(await page.evaluate(() => window.sessionFixture.navigationCurrent())).toBe(true);
+  if (failure === 'node') await page.evaluate(() => window.sessionFixture.settleNode(false));
+  else { await page.evaluate(() => window.sessionFixture.settleAttach(false)); await page.evaluate(() => window.sessionFixture.waitForNavigation()); }
+  await expect(page.getByRole('alert').filter({ hasText: failure === 'node' ? 'Unknown Node' : 'Navigation fixture rejected' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'View source', exact: true })).toBeEnabled();
+  await expect(page.getByLabel('Session title')).toHaveText('Session A');
+  const after = await page.evaluate(() => window.sessionFixture.navigationFacts());
+  expect(after.views.A).toEqual(before.views.A); expect(after.views.B).toEqual(before.views.B);
+  const delta = (await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length);
+  expect(nativeMutations(delta).map(request => request.method)).toEqual(failure === 'node' ? [] : ['session/attach']);
+  expect(delta.filter(request => request.method === 'session/snapshot')).toHaveLength(0);
+  await proveCommittedControls(page); expect(errors).toEqual([]);
+});
+
+for (const workspace of [false, true]) for (const stage of ['node', 'attach'] as const) for (const success of [false, true]) test(`Settings supersedes Fork ownership: ${workspace ? 'workspace' : 'user'} / ${stage} / ${success ? 'success' : 'failure'}`, async ({ page }) => {
+  const { before, requests, errors } = await openForkOwnershipFixture(page);
+  await startHeldFork(page, stage);
+  const settings = await openFixtureSettings(page, workspace);
+  expect(await page.evaluate(() => window.sessionFixture.navigationCurrent())).toBe(true);
+  await expect(page.locator('[data-harness-frame]')).not.toHaveAttribute('data-sidebar-overlay');
+  if (stage === 'node') await page.evaluate(success => window.sessionFixture.settleNode(success), success);
+  else { await page.evaluate(success => window.sessionFixture.settleAttach(success), success); await page.evaluate(() => window.sessionFixture.waitForNavigation()); }
+  await expect(settings).toBeVisible();
+  await expect(settings.getByRole('heading', { name: workspace ? 'Workspace Settings — rustX' : 'User Settings', exact: true })).toBeVisible();
+  await expect(page.getByRole('alert').filter({ hasText: /Unknown Node|Navigation fixture rejected/ })).toHaveCount(0);
+  const after = await page.evaluate(() => window.sessionFixture.navigationFacts());
+  expect(after.views.A).toEqual(before.views.A); expect(after.views.B).toEqual(before.views.B);
+  const delta = (await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length);
+  expect(nativeMutations(delta).map(request => request.method)).toEqual(stage === 'node' ? [] : ['session/attach']);
+  if (stage === 'attach') expect(after.views.C.authoritative).toBe(success);
+  expect(delta.filter(request => request.method === 'session/snapshot' && request.params.target.session_id === 'A')).toHaveLength(0);
+  await page.getByRole('button', { name: 'Close Settings', exact: true }).click();
+  await expect(page.getByLabel('Session title')).toHaveText('Session A');
+  await proveCommittedControls(page); expect(errors).toEqual([]);
+});
+
+for (const width of [390, 1440]) test(`idle Settings keeps committed Stop and upload controls: ${width}px`, async ({ page }) => {
+  const { before, requests, errors } = await openForkOwnershipFixture(page, width);
+  for (const workspace of [false, true]) {
+    await openFixtureSettings(page, workspace);
+    expect(await page.evaluate(() => window.sessionFixture.navigationCurrent())).toBe(true);
+    await page.getByRole('button', { name: 'Close Settings', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
+  }
+  expect(await page.evaluate(() => window.sessionFixture.navigationFacts())).toEqual(before);
+  const delta = (await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length);
+  expect(nativeMutations(delta)).toEqual([]); expect(delta.filter(request => request.method === 'session/snapshot')).toEqual([]);
+  await proveCommittedControls(page); expect(errors).toEqual([]);
+});
+
+test('obsolete Fork failure cannot retire a newer pending sidebar owner', async ({ page }) => {
+  await openForkOwnershipFixture(page);
+  await startHeldFork(page, 'node');
+  await page.evaluate(() => { window.sessionFixture.allowNodeReads(); window.sessionFixture.holdAttach(); });
+  await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
+  await page.getByText('Sessions outside registered Workspaces', { exact: true }).click();
+  await page.locator('button[data-session-id="C"]').click();
+  await expect.poll(() => page.evaluate(() => window.sessionFixture.requests().filter(request => request.method === 'session/attach' && request.params.session_id === 'C').length)).toBe(1);
+  await page.evaluate(() => window.sessionFixture.settleNode(false));
+  await expect(page.getByRole('alert').filter({ hasText: 'Unknown Node' })).toHaveCount(0);
+  await page.evaluate(() => window.sessionFixture.settleAttach(true)); await page.evaluate(() => window.sessionFixture.waitForNavigation());
+  await expect(page.getByLabel('Session title')).toHaveText('Session C');
+  await expect(page.locator('[data-harness-frame]')).not.toHaveAttribute('data-sidebar-overlay');
+  expect((await page.evaluate(() => window.sessionFixture.navigationFacts())).views.C.authoritative).toBe(true);
+});
+
+test('successful Fork ownership commits the recorded Node without substituting the default', async ({ page }) => {
+  const { before, requests, errors } = await openForkOwnershipFixture(page);
+  await startHeldFork(page, 'attach');
+  await expect(page.getByLabel('Session title')).toHaveText('Session A');
+  expect(await page.evaluate(() => window.sessionFixture.navigationCurrent())).toBe(true);
+  await page.evaluate(() => window.sessionFixture.settleAttach(true)); await page.evaluate(() => window.sessionFixture.waitForNavigation());
+  await expect(page.getByLabel('Session title')).toHaveText('Session C');
+  expect(await page.evaluate(() => window.sessionFixture.navigationCurrent())).toBe(false);
+  const after = await page.evaluate(() => window.sessionFixture.navigationFacts());
+  expect(after.views.A).toEqual(before.views.A);
+  expect(after.views.C).toMatchObject({ nodeId: 'source-node-C', authoritative: true, target: { conversation_id: 'conversation-source-C' } });
+  const delta = (await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length);
+  expect(nativeMutations(delta).map(request => request.method)).toEqual(['session/attach']);
+  expect(delta.find(request => request.method === 'session/attach')?.params).toMatchObject({ session_id: 'C', node_id: 'source-node-C' });
+  await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
+  expect(errors).toEqual([]);
+});
+
+for (const width of [390, 1440]) test(`catalog search owns preparation without revoking committed controls: ${width}px`, async ({ page }) => {
+  const { before, requests, errors } = await openForkOwnershipFixture(page, width);
+  if (width === 390) await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
+  await page.getByRole('button', { name: 'Search Sessions', exact: true }).click();
+  await page.evaluate(() => window.sessionFixture.holdSearch());
+  const search = page.getByLabel('Search Session metadata', { exact: true });
+  for (const query of ['Session B', 'Session A']) {
+    await search.fill(query);
+    await expect.poll(() => page.evaluate(query => window.sessionFixture.requests().filter(request => request.method === 'session/list' && request.params.query === query).length, query)).toBe(1);
+    expect(await page.evaluate(() => window.sessionFixture.navigationCurrent())).toBe(true);
+  }
+  // The latest result commits first; obsolete completion must not revoke the
+  // conversation fence or replace either the catalog page or selected route.
+  await page.evaluate(() => window.sessionFixture.settleSearch('Session A'));
+  await expect(page.locator('button[data-session-id="A"]')).toHaveCount(1);
+  await expect(page.locator('button[data-session-id="B"]')).toHaveCount(0);
+  await page.evaluate(() => window.sessionFixture.settleSearch('Session B'));
+  await expect(page.locator('button[data-session-id="B"]')).toHaveCount(0);
+  await expect(page.getByLabel('Session title')).toHaveText('Session A');
+  if (width === 390) await page.getByRole('button', { name: 'Collapse Sidebar', exact: true }).click();
+  expect(await page.evaluate(() => window.sessionFixture.navigationFacts())).toEqual(before);
+  const delta = (await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length);
+  expect(nativeMutations(delta)).toEqual([]); expect(delta.filter(request => request.method === 'session/snapshot')).toEqual([]);
+  await proveCommittedControls(page); expect(errors).toEqual([]);
+});

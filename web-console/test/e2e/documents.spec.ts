@@ -123,7 +123,11 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
       await expect(panel.locator('.textLayer')).toContainText('page 1');
       if (width === 390) await page.screenshot({ animations: 'disabled', path: info.outputPath('pdf-narrow.png') });
       await close();
-      expect(await page.locator('[data-conversation-scroll]').first().evaluate(el => el.scrollTop)).toBeCloseTo(scroll, 0);
+      // Worker/URL cleanup can complete while AppFrame's existing grid-track
+      // transition is still resizing Chat. Assert its final seat, then the
+      // unchanged reading position published by ChatViewport's layout frame.
+      await expect(page.locator('[data-harness-frame]')).toHaveCSS('grid-template-columns', `${sidebar}px ${width - sidebar}px 0px`);
+      await expect.poll(() => viewport.evaluate(el => el.scrollTop)).toBeCloseTo(scroll, 0);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     }
     await page.route('**/pdf.worker*.mjs', route => route.abort());

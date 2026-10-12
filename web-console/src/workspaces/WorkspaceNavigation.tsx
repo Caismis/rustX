@@ -49,7 +49,7 @@ export function WorkspaceNavigation({ associations, host, client, state, endpoin
   const route = state.endpoint ?? endpoint;
   const bound = sameEndpoint(catalog?.endpoint, route);
   const search = (text: string, page = 0) => {
-    navigation.invalidate(); const current = navigation.capture();
+    navigation.supersede(); const current = navigation.capture();
     setQuery(text); setOffset(page); setError('');
     void client.listSessions(page, text, current).catch(cause => { if (current()) setError(String(cause)); });
   };

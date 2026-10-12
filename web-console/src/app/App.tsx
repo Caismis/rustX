@@ -112,26 +112,16 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   });
   const workspace = selected ? associatedWorkspace : center.kind === 'new-conversation' ? center.workspaceId : undefined;
   const navigation = client.navigation;
-  // This is a reference to the existing gesture fence, not attachment state.
-  // Closing an otherwise idle overlay must not revoke committed route controls.
-  const sidebarIntent = useRef<(() => boolean) | undefined>(undefined);
-  const retirePendingSidebarNavigation = useCallback(() => {
-    if (sidebarIntent.current?.()) {
-      navigation.invalidate();
-      // The retained route still owns its Composer. Renew only its presentation
-      // fence; do not reopen, refresh or release its native attachment.
-      setCenter(value => ({ ...value }));
-    }
-    sidebarIntent.current = undefined;
-  }, [navigation]);
-  // Settings has its own destination owner. Explicitly retire the older sidebar
-  // gesture before handing this new destination to that independent machine.
-  const openSettings = (target: SettingsTarget) => { retirePendingSidebarNavigation(); navigationActor.send({ type: 'OPEN', target }); };
-  const openConnectionSettings = () => { retirePendingSidebarNavigation(); navigationActor.send({ type: 'OPEN.CONNECTION' }); };
+  useSyncExternalStore(useCallback(listener => navigation.subscribe(listener), [navigation]), navigation.getRevision);
+  // Overlay dismissal retires its own gesture; Settings supersedes preparation
+  // from every conversation entry point. Neither revokes the committed route.
+  const retirePendingSidebarNavigation = useCallback(() => navigation.retire('sidebar'), [navigation]);
+  const openSettings = (target: SettingsTarget) => { navigation.retire(); navigationActor.send({ type: 'OPEN', target }); };
+  const openConnectionSettings = () => { navigation.retire(); navigationActor.send({ type: 'OPEN.CONNECTION' }); };
   const [command, setCommand] = useState<{ request: CommandRequest; current: () => boolean; generation: number; sessionId: string; conversationId?: string }>();
   const [restored, setRestored] = useState<{ conversation: string; content: UserInputBlock[] }>();
   const [consumed, setConsumed] = useState<{ id: string; sequence: number }>();
-  const [transitioning, setTransitioning] = useState<string>();
+  const [transitioning, setTransitioning] = useState<{ sessionId: string; current: () => boolean }>();
   const [sourceLocation, setSourceLocation] = useState<{ target: AttachmentTarget; messageId: string }>();
   const workspaceNavigation = useMemo(() => new WorkspaceSessionNavigation(workspaceAuthority, client, navigation), [workspaceAuthority, client, navigation]);
   useEffect(() => client.setAttachmentAdmission(workspaceNavigation.admit), [client, workspaceNavigation]);
@@ -187,26 +177,27 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
       setConsumed(previous => ({ id: 'goal', sequence: (previous?.sequence ?? 0) + 1 }));
       return;
     }
-    navigation.invalidate();
-    setCommand({ request, current: navigation.capture(), generation: state.generation, sessionId: view.id, conversationId: view.target?.conversation_id });
+    const intent = navigation.begin('conversation');
+    setCommand({ request, current: intent.current, generation: state.generation, sessionId: view.id, conversationId: view.target?.conversation_id });
   };
   // A completed response already names its exact boundary, so its Fork and
   // Retry run on the click, as Harness forkAt does: no confirming chooser.
   const transitionResponse = (action: ResponseAction, response: CompletedResponseView) => {
     const view = commandable();
-    if (!view || transitioning) return;
-    navigation.invalidate(); setCommand(undefined);
-    const current = navigation.capture(), generation = client.getSnapshot().generation;
+    if (!view) return;
+    const intent = navigation.begin('conversation'); setCommand(undefined);
+    const current = intent.current, generation = client.getSnapshot().generation;
     const valid = () => current() && client.getSnapshot().generation === generation;
     const scope = new CommandSession(client, view.id, valid);
-    setTransitioning(view.id);
+    setTransitioning({ sessionId: view.id, current });
     runGlobal(async () => {
       try {
         const result = await scope.transition(action, await scope.responseSelection(response));
         if (!result || !valid()) return;
         focusSession(result.session.id, { ready: () => setRestored({ conversation: result.session.active_conversation_id, content: result.content }) });
         setOpenViews(open => open.includes(result.session.id) ? open : [...open, result.session.id]);
-      } finally { setTransitioning(undefined); }
+      } catch (cause) { if (valid()) setError(String(cause)); }
+      finally { intent.finish(); setTransitioning(value => value?.current === current ? undefined : value); }
     });
   };
   const runGlobal = (action: () => Promise<unknown>) => {
@@ -268,10 +259,9 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
       focusSession(id, { attach: true, ready });
       return;
     }
-    navigation.invalidate();
-    const current = navigation.capture(), generation = client.getSnapshot().generation;
+    const intent = navigation.begin('sidebar');
+    const current = intent.current, generation = client.getSnapshot().generation;
     const valid = () => current() && client.getSnapshot().generation === generation;
-    sidebarIntent.current = valid;
     runGlobal(async () => {
       try {
         // A current control observation already admits presentation. Opening it
@@ -283,28 +273,21 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
         setOpenViews(open => open.includes(id) ? open : [...open, id]);
         focusSession(id, { ready });
         sidebar.dismissSidebar();
-      } catch (cause) { if (valid()) throw cause; }
-      finally {
-        if (sidebarIntent.current === valid) {
-          sidebarIntent.current = undefined;
-          // Failed/unadmitted navigation also leaves the retained route active.
-          // Successful publication already replaced center and retired valid.
-          if (valid()) setCenter(value => ({ ...value }));
-        }
-      }
+      } catch (cause) { if (valid()) setError(String(cause)); }
+      finally { intent.finish(); }
     });
   };
   const openForkSource = (origin: ForkOrigin) => {
     const from = commandable();
-    if (transitioning || !from) return;
+    if (!from) return;
     const id = origin.source_session;
     if (!openViews.includes(id) && openViews.length >= 32) { setError(message('common:copy.32-session-views-are-open-close-a-view-from-its-sidebar-session-actions-or-use-sidebar-vie')); return; }
-    navigation.invalidate();
-    const current = navigation.capture(), generation = client.getSnapshot().generation;
+    const intent = navigation.begin('conversation');
+    const current = intent.current, generation = client.getSnapshot().generation;
     let replacingSource = false;
     const valid = () => current() && client.getSnapshot().generation === generation
       && (replacingSource || client.isAttachmentObservationCurrent(from.id, from.attachmentObservation));
-    setTransitioning(selected);
+    setTransitioning({ sessionId: from.id, current });
     runGlobal(async () => {
       try {
         const { node }: Extract<MethodResult, { type: 'node' }> = await client.request({ method: 'session/node', params: { session_id: id, node_id: origin.source_node } }, 'node', undefined, valid);
@@ -325,8 +308,8 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
         setConversationMode('chat');
         focusSession(id);
         setSourceLocation({ target, messageId: origin.source_message });
-      } catch (cause) { if (valid()) throw cause; }
-      finally { setTransitioning(undefined); }
+      } catch (cause) { if (valid()) setError(String(cause)); }
+      finally { intent.finish(); setTransitioning(value => value?.current === current ? undefined : value); }
     });
   };
   const closeView = (id: string) => {
@@ -342,12 +325,13 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   };
   const focusDraft = () => document.querySelector<HTMLTextAreaElement>('[data-resident-composer] textarea')?.focus();
   const createInWorkspace = (id?: string) => {
+    navigation.supersede();
     if (center.kind === 'new-conversation' && center.workspaceId === id && newConversationCurrent()) { focusDraft(); return; }
     setDraftBinding(value => value + 1);
     navigation.invalidate(); setCommand(undefined); setRestored(undefined); setFocus({});
     setCenter({ kind: 'new-conversation', workspaceId: id });
   };
-  const newConversationCurrent = useMemo(() => navigation.capture(), [navigation, center]);
+  const newConversationCurrent = useMemo(() => navigation.captureCommitted(), [navigation, center]);
   // Owner-specific Settings navigation from one native authored source owner.
   // The owner arrives as a `SourceTarget` from `ConfigurationApplication.sources`;
   // nothing here parses an application scope, a Session cwd or a display string.
@@ -357,7 +341,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   // and no Workspace, Session or runtime is allocated to resolve it.
   const openOwningSettings = (owner: SourceTarget) => {
     if (owner.kind === 'user') openSettings(userSettingsTarget);
-    else { retirePendingSidebarNavigation(); navigationActor.send({ type: 'OPEN.OWNER', directory: owner.directory }); }
+    else { navigation.retire(); navigationActor.send({ type: 'OPEN.OWNER', directory: owner.directory }); }
   };
   return <SubagentScope onMode={setConversationMode} client={client} sessionId={view?.id} openAside={agent => { previewOwner.showWorkbench(); fileWorkbench.current?.openAgent(agent.agent_id, agent.title); }}><PreviewContext value={{ openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><AppFrame dismissSidebarLabel={tx('sidebar:toggle.dismiss')} onSidebarDismiss={retirePendingSidebarNavigation} sidebar={geometry => <SidebarRoot {...geometry} startSession={() => { createInWorkspace(workspace); geometry.dismissSidebar(); }}
     panels={[]}
@@ -367,7 +351,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
       draft={center.kind === 'new-conversation' && workspace ? { workspaceId: workspace, binding: String(draftBinding), focus: focusDraft } : undefined} selectWorkspace={id => { createInWorkspace(id); geometry.dismissSidebar(); }}
       openSession={id => open(id, undefined, geometry)} openViews={openViews} closeView={closeView} closeAllViews={closeAllViews} createSession={id => { createInWorkspace(id); geometry.dismissSidebar(); }} deleteSession={setDeletingSession}
       forkSession={id => open(id, () => {
-        setCommand({ request: { id: 'fork' }, current: navigation.capture(), generation: client.getSnapshot().generation, sessionId: id, conversationId: client.getSnapshot().views[id]?.target?.conversation_id });
+        setCommand({ request: { id: 'fork' }, current: navigation.begin('conversation').current, generation: client.getSnapshot().generation, sessionId: id, conversationId: client.getSnapshot().views[id]?.target?.conversation_id });
       }, geometry)} />}
     settings={wide => <SettingsTrigger wide={wide} onClick={() => { openSettings(userSettingsTarget); geometry.dismissSidebar(); }} />} />}
     rightOpen={previews.mode !== 'collapsed'} rightPanel={geometry => <RightPanel headerless={previews.mode !== 'inspector'} docked={previews.mode === 'workbench' || previews.mode === 'collapsed'} closeLabel={previews.mode === 'workbench' ? tx('artifacts:workbench.toggle') : previews.mode === 'preview' ? tx('artifacts:workspace.collapse') : tx('common:right-panel.close-inspector')} {...geometry} fullscreen={previews.mode === 'workbench' ? workbenchFullscreen : previews.mode === 'preview' && previews.workspace?.fullscreen} open={previews.mode !== 'collapsed'} close={collapsePanel} title={previews.mode === 'workbench' ? tx('artifacts:workbench.start') : previews.mode === 'preview' ? tx('artifacts:workspace.title') : tx('common:app.developer-inspector')}>
@@ -420,13 +404,13 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
       <section className={`conversation-panel ${agentCss.body}`} id="conversation-view" role={view && displayPreferences.codingView ? 'tabpanel' : undefined} aria-labelledby={view && displayPreferences.codingView ? `view-tab-${conversationMode}` : undefined} tabIndex={0}>
       <ConversationWidthControls active={!!view && conversationMode === 'chat'}/>
       <ArtifactContext.Provider value={artifacts}><SubagentSurface mode={conversationMode}><div className={agentCss.scrollBody} data-conversation-scroll>
-      <ConversationLive onOpenSource={openForkSource} sourceLocation={sourceLocation} onMode={setConversationMode} client={client} sessionId={view?.id} mode={conversationMode} disabled={commandOpen || transitioning === view?.id} onHistorical={transitionResponse}/>
+      <ConversationLive onOpenSource={openForkSource} sourceLocation={sourceLocation} onMode={setConversationMode} client={client} sessionId={view?.id} mode={conversationMode} disabled={commandOpen || !!transitioning && transitioning.sessionId === view?.id && transitioning.current()} onHistorical={transitionResponse}/>
       <ConversationSeat client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} sessionId={view?.id}
         initialWorkspace={workspace ?? (center.kind === 'new-conversation' ? center.workspaceId : undefined)}
-        workspacePicked={id => { if (newConversationCurrent()) setCenter({ kind: 'new-conversation', workspaceId: id }); }}
+        workspacePicked={id => { if (newConversationCurrent()) { navigation.supersede(); setCenter({ kind: 'new-conversation', workspaceId: id }); } }}
         binding={String(draftBinding)} current={newConversationCurrent} consumed={consumed} restored={restored}
         onCommand={id => { if (id !== 'model') invokeCommand({ id }); }}
-        opened={id => { setOpenViews(current => current.includes(id) ? current : [...current, id]); focusSession(id, { commitDraft: true }); return navigation.capture(); }}/>
+        opened={id => { setOpenViews(current => current.includes(id) ? current : [...current, id]); focusSession(id, { commitDraft: true }); return navigation.captureCommitted(); }}/>
 
       </div></SubagentSurface></ArtifactContext.Provider>
       </section>
@@ -434,7 +418,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
         succeeded={() => { setConsumed(previous => ({ id: command.request.id, sequence: (previous?.sequence ?? 0) + 1 })); }}
         close={() => {
           if (command.conversationId !== client.getSnapshot().views[command.sessionId]?.snapshot?.conversation_id) setRestored(undefined);
-          navigation.invalidate(); setCommand(undefined);
+          if (command.current()) navigation.retire(); setCommand(undefined);
         }} opened={result => {
           if (!command.current() || client.getSnapshot().generation !== command.generation) return;
           focusSession(result.session.id, { ready: () => setRestored({ conversation: result.session.active_conversation_id, content: result.content }) });
