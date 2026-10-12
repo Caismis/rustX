@@ -924,7 +924,9 @@ impl SessionRuntimeManager {
         let credentials = self.credentials.clone();
         let input = settings.input();
         let applications = self.applications.clone();
+        let owner = self.clone();
         let capture = tokio::task::spawn_blocking(move || {
+            owner.repair_session_sources(&input.cwd);
             applications
                 .lock()
                 .initial_binding(&configuration, &input, &credentials, false)
@@ -987,6 +989,11 @@ impl SessionRuntimeManager {
         id: &SessionId,
     ) -> Option<super::configuration::application::ConfigurationApplication> {
         self.applications.lock().view(id.as_ref())
+    }
+
+    /// Process-local automatic source repair observations (Issue #464).
+    pub(crate) fn source_repairs(&self) -> &super::configuration::repair::RepairLedger {
+        self.configuration.repairs()
     }
 
     pub(crate) fn configuration_changes(&self) -> watch::Receiver<u64> {
@@ -1142,6 +1149,13 @@ impl SessionRuntimeManager {
         let target = target.clone();
         tokio::task::spawn_blocking(move || {
             target.validate().map_err(SourceSettingsError::Source)?;
+            // Explicit reconciliation observes external edits: the User source
+            // composes every target, the Workspace only its own.
+            let mut sources = vec![super::configuration::settings::SourceTarget::User];
+            if target.workspace().is_some() {
+                sources.push(target.clone());
+            }
+            owner.repair_sources(&sources);
             let mut application = owner.applications.lock();
             owner.capture_source_consumers(&mut application, &target);
             owner.applications.notify(&application);
@@ -1153,6 +1167,40 @@ impl SessionRuntimeManager {
         .map_err(|_| {
             SourceSettingsError::Source(super::configuration::settings::SettingsError::Io)
         })?
+    }
+
+    /// Automatic `rustx.toml` repair at a native source boundary (Issue #464).
+    ///
+    /// Each source is its own transaction, serialized with source writes and
+    /// coordinator capture by the application lock. A committed repair
+    /// transfers to the coordinator exactly like a committed source write, so
+    /// one commit is captured once; a healthy or already-repaired source takes
+    /// no lock on disk, writes nothing and captures nothing.
+    pub(super) fn repair_sources(&self, targets: &[super::configuration::settings::SourceTarget]) {
+        use super::configuration::repair::RepairOutcome;
+        for target in targets {
+            let mut application = self.applications.lock();
+            let outcome = self.configuration.repair_source(target);
+            if outcome == RepairOutcome::Committed {
+                self.capture_source_consumers(&mut application, target);
+                self.applications.notify(&application);
+            }
+            drop(application);
+            if outcome == RepairOutcome::Committed {
+                self.applications.run(self.clone());
+            }
+        }
+    }
+
+    /// The bound User and the exact selected Workspace of one Session, before
+    /// its fresh resolution. No ancestor or other Workspace is consulted.
+    fn repair_session_sources(&self, cwd: &std::path::Path) {
+        use super::configuration::settings::SourceTarget;
+        let mut targets = vec![SourceTarget::User];
+        if let Ok(directory) = super::configuration::canonical_directory(cwd) {
+            targets.push(SourceTarget::Workspace { directory });
+        }
+        self.repair_sources(&targets);
     }
 
     fn capture_source_consumers(
@@ -1565,6 +1613,7 @@ impl SessionRuntimeManager {
         let credentials = self.credentials.clone();
         let bindings = self.sessions.configuration_bindings.clone();
         let applications = self.applications.clone();
+        let owner = self.clone();
         let (access, paths) = tokio::task::spawn_blocking(move || {
             let retained = bindings
                 .lock()
@@ -1574,6 +1623,8 @@ impl SessionRuntimeManager {
             let paths = if let Some(paths) = retained {
                 paths
             } else {
+                // Only a fresh resolution reads sources; repair them first.
+                owner.repair_session_sources(&access.settings.input().cwd);
                 let paths = applications
                     .lock()
                     .initial_binding(&configuration, &access.settings.input(), &credentials, true)

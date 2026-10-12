@@ -25,7 +25,7 @@ Settings is organized by product task into exactly six primary pages:
 | **Agent** | Root identity, description, instructions and project guidance. |
 | **Tools & Permissions** | Approval mode, Native Tools, Tool-source selections, Skill visibility, the Agent and Workflow delegation allowlists, and per-Tool/MCP policies under **Advanced Tool policies**. |
 | **Extensions** | One searchable inventory of MCP servers, Skills, named Agents, Workflows and Managed Python sources, filtered by kind, with a detail per resource; plus the native Todo, Goal and Agent Status extensions under **Native**. |
-| **Advanced** | Context and runtime limits, environment identities, App Server process policy, native diagnostics (source paths, revisions, application observations, process bindings, raw projections) and **Rescan configuration files**. **Connection** is a sub-surface of Advanced, not a seventh page. |
+| **Advanced** | Context and runtime limits, environment identities, App Server process policy, **Auto Repair** (this owner's latest native automatic `rustx.toml` repair receipt, #464), native diagnostics (source paths, revisions, application observations, process bindings, raw projections) and **Rescan configuration files**. **Connection** is a sub-surface of Advanced, not a seventh page. |
 
 The six pages share one modal frame: about 1000 px wide, bounded by the
 viewport, `min(820 px, viewport − 48 px)` high and 24 px round, with a fixed
@@ -394,6 +394,19 @@ Settings presents seven facts that are never collapsed into one another:
 A confirmed save is not an application, a successful read does not clear an
 unrelated application failure, a valid resource is not a prepared one, and a
 fact native did not report is shown as not observed rather than as a negative.
+
+## Automatic repair notification
+
+A native automatic repair of a `rustx.toml` source (#464) shows one brief,
+nonblocking notification — for example **Configuration automatically repaired
+· 3 changes in User configuration** — with **View details** and **Dismiss**.
+Simultaneous User and Workspace repairs share one sentence; an unresolved or
+uncertain repair is an alert naming its source. View details opens the exact
+owner at Settings → Advanced → Auto Repair; nothing opens by itself and a healthy
+source shows nothing. Each native receipt identity is acknowledged once per
+browser, so reconnects, rereads and reloads never repeat it. The notification is
+presentation of a native fact: it never edits, submits or rebases a Settings
+draft. See `SETTINGS-ARCHITECTURE.md` → Automatic repair.
 
 ## Session configuration banner
 

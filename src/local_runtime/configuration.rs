@@ -3,6 +3,7 @@
 //! Source content is reread per call; admitted configurations own their capture.
 
 pub mod application;
+pub mod repair;
 pub mod settings;
 
 use crate::bounded_file::read_bounded;
@@ -65,6 +66,8 @@ pub struct UserConfigSources {
 pub struct UserConfigManager {
     pub(super) sources: UserConfigSources,
     runtime_root_origin: Origin,
+    /// Process-local automatic repair observations, shared by every clone.
+    repairs: repair::RepairLedger,
     #[cfg(test)]
     pub(crate) test_hooks: ConfigurationHooks,
 }
@@ -73,7 +76,10 @@ pub struct UserConfigManager {
 type ConfigurationHookMap = BTreeMap<&'static str, Box<dyn FnOnce() + Send>>;
 #[cfg(test)]
 #[derive(Clone, Default)]
-pub(crate) struct ConfigurationHooks(std::sync::Arc<std::sync::Mutex<ConfigurationHookMap>>);
+pub(crate) struct ConfigurationHooks(
+    std::sync::Arc<std::sync::Mutex<ConfigurationHookMap>>,
+    std::sync::Arc<std::sync::Mutex<std::collections::BTreeSet<&'static str>>>,
+);
 #[cfg(test)]
 impl std::fmt::Debug for ConfigurationHooks {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -90,6 +96,14 @@ impl ConfigurationHooks {
         if let Some(hook) = hook {
             hook();
         }
+    }
+    /// Make the next I/O step named `point` fail, once.
+    pub(crate) fn fail_once(&self, point: &'static str) {
+        self.1.lock().unwrap().insert(point);
+    }
+    /// Whether the I/O step named `point` is injected to fail now.
+    pub(crate) fn fault(&self, point: &'static str) -> bool {
+        self.1.lock().unwrap().remove(point)
     }
 }
 
@@ -137,6 +151,7 @@ impl UserConfigManager {
         Ok(Self {
             sources,
             runtime_root_origin: explicit,
+            repairs: repair::RepairLedger::default(),
             #[cfg(test)]
             test_hooks: ConfigurationHooks::default(),
         })
@@ -1693,6 +1708,17 @@ pub(super) fn parse_layer(
 ) -> Result<RuntimeLayer, LaunchFailure> {
     let layer: RuntimeLayer =
         crate::toml_authoring::parse_detailed(bytes).map_err(|e| LaunchFailure::parse(path, e))?;
+    source_restrictions(path, &layer, workspace)?;
+    Ok(layer)
+}
+
+/// The source-specific contract of an already strictly parsed document: process
+/// policy belongs to the User scope, and an explicit version is the current one.
+pub(super) fn source_restrictions(
+    path: &Path,
+    layer: &RuntimeLayer,
+    workspace: bool,
+) -> Result<(), LaunchFailure> {
     if workspace && layer.app_server.is_some() {
         return Err(LaunchFailure::at(
             Some(path.into()),
@@ -1716,7 +1742,76 @@ pub(super) fn parse_layer(
             ),
         ));
     }
-    Ok(layer)
+    Ok(())
+}
+
+/// Native semantic validation of one authored composition, independent of
+/// `.agents` resources, credentials and preparation.
+///
+/// It applies the validators Session resolution applies to the composed
+/// document. A composition that selects no default model is incomplete rather
+/// than invalid — the other scope may still select one — so, exactly like
+/// resolution, only its Model Catalog and its root Native Tool selection are
+/// decidable here.
+pub(super) fn source_semantics(merged: &RuntimeLayer) -> Result<(), String> {
+    use crate::capabilities::selection::{BuiltinSelectionClass, classify_builtin_selection};
+    if let Some(policy) = &merged.app_server {
+        policy.validate()?;
+    }
+    let catalog = ModelCatalog::from_document(
+        crate::model::authoring::Catalog {
+            schema_version: crate::model::catalog::MODEL_CATALOG_SCHEMA_VERSION,
+            providers: merged.providers.clone().unwrap_or_default(),
+            models: merged.models.clone().unwrap_or_default(),
+        }
+        .into(),
+    );
+    let selected = merged
+        .agent
+        .as_ref()
+        .and_then(|agent| agent.model.as_ref())
+        .is_some_and(|model| model.model.is_some());
+    if !selected {
+        if let Err(error) = &catalog
+            && !matches!(
+                error,
+                crate::model::catalog::ModelCatalogError::EmptyCatalog
+            )
+        {
+            return Err(error.to_string());
+        }
+        if let Some(tools) = merged.agent.as_ref().and_then(|agent| agent.tools.clone()) {
+            let tools = tools.resolve();
+            tools.validate_spelling()?;
+            if let Some(name) = tools
+                .builtin
+                .iter()
+                .find(|name| classify_builtin_selection(name) == BuiltinSelectionClass::Unknown)
+            {
+                return Err(format!("unknown Native Tool {name:?}"));
+            }
+        }
+        return Ok(());
+    }
+    let config = merged.clone().resolve()?;
+    config.validate().map_err(|error| error.to_string())?;
+    let models = catalog.map_err(|error| error.to_string())?;
+    let (primary, summary) =
+        crate::model::session::analyze_session_model_config(&models, config.initial_model())
+            .map_err(|error| error.to_string())?;
+    let summary = summary.as_ref().unwrap_or(&primary);
+    config
+        .context_policy()
+        .validate_budgets(
+            (primary.context_window, primary.max_output_tokens),
+            (summary.context_window, summary.max_output_tokens),
+        )
+        .map_err(|error| error.message)?;
+    config.tool_deadline_policy.to_policy()?;
+    config
+        .tool_environment()
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 fn rebase_paths(

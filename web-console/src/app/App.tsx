@@ -22,7 +22,7 @@ import { WorkspaceSessionNavigation } from '../workspaces/navigation';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useActorRef } from '@xstate/react';
 import type { AppServerClient } from '../client/app-server';
-import type { CompletedResponseView, SourceTarget, UserInputBlock } from '../../../protocol/app-server/v45';
+import type { CompletedResponseView, SourceTarget, UserInputBlock } from '../../../protocol/app-server/v46';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
 import { CommandSession, type ResponseAction } from './commands/native';
 import { available, commands } from './commands/registry';
@@ -48,6 +48,7 @@ import { LiveInspector } from './Inspector';
 import { SessionDeletion } from './SessionDeletion';
 import { userSettingsTarget, workspaceSettingsTarget, type SettingsTarget } from './settings/projection';
 import { createOwnerLookup, settingsNavigationMachine } from './settings/machines/navigation';
+import { RepairNotice } from './RepairNotice';
 
 const PREFERENCES = 'rustx-console-view-v2';
 function readPreferences(): { endpoint?: string; openViews: string[] } {
@@ -313,6 +314,9 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     <DetachedFirstSubmissions client={client} binding={String(draftBinding)} active={!!selected}/>
     {(previews.problem || previews.downloadError) && <div className="notice error" role="alert">{previews.problem ? tx(`artifacts:workspace.limit-${previews.problem}`) : previews.downloadError}<Button size="sm" onClick={() => previewOwner.dismissProblem()}>{tx('common:app.dismiss-notice')}</Button></div>}
     {error && <div className="notice error" role="alert">{error}<Button size="sm" onClick={() => setError('')}>{tx('common:app.dismiss-notice')}</Button></div>}
+    {/* Native automatic configuration repairs: nonblocking, never a modal,
+        and silent for a healthy source. View details opens the exact owner. */}
+    <RepairNotice client={client} viewDetails={source => navigationActor.send({ type: 'OPEN.REPAIRS', source })} />
     {state.uncertain.some(item => !item.sessionId) && <div className="notice" role="status">{tx('common:app.a-global-operation-needs-verification-inspect-global-other-sessi')}</div>}
     {deletingSession && <SessionDeletion key={JSON.stringify([state.authorityRevision, deletingSession])} client={client} sessionId={deletingSession} title={sessionDisplayTitle(tx, state.sessions.find(session => session.id === deletingSession) ?? state.views[deletingSession]?.summary)} close={() => setDeletingSession(undefined)} deleted={() => {
       const remaining = openViews.filter(id => id !== deletingSession);

@@ -1,0 +1,829 @@
+//! Issue #464: deterministic repair planning, candidate validation, and the
+//! source transaction, against real native parsing, Tool definitions and files.
+use super::*;
+use crate::local_runtime::configuration::UserConfigSources;
+use std::fmt::Write;
+use std::os::unix::fs::PermissionsExt;
+
+/// A complete, valid User source: Provider, Model and default selection.
+const USER: &str = r#"# User configuration — keep this comment.
+[providers.local]
+base_url = "http://127.0.0.1:9/v1"
+api_key = "SECRET_SENTINEL"
+
+[models."local/a"]
+provider = "local"
+id = "wire-a"
+protocol = "openai_responses"
+context_window = 128000
+max_output_tokens = 8192
+request_params = '{"vendor_x":{"secret_mode":true},"temperature":0.25}'
+
+[models."local/a".capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = false
+
+[agent.model]
+model = "local/a"
+"#;
+
+struct Fixture {
+    _root: tempfile::TempDir,
+    manager: UserConfigManager,
+    workspace: SourceTarget,
+}
+
+impl Fixture {
+    fn new() -> Self {
+        Self::with_config_path(|home| home.join("rustx/rustx.toml"))
+    }
+
+    fn with_config_path(config: impl FnOnce(&Path) -> PathBuf) -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(home.join("rustx")).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
+        let config_path = config(&home);
+        std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        let manager = UserConfigManager::new(UserConfigSources {
+            home_directory: home.clone(),
+            config_path,
+            runtime_root: root.path().join("state"),
+        })
+        .unwrap();
+        Self {
+            workspace: SourceTarget::Workspace {
+                directory: workspace.canonicalize().unwrap(),
+            },
+            _root: root,
+            manager,
+        }
+    }
+
+    fn path(&self, target: &SourceTarget) -> PathBuf {
+        self.manager.config_path(target)
+    }
+
+    fn write(&self, target: &SourceTarget, text: &str) {
+        std::fs::write(self.path(target), text).unwrap();
+    }
+
+    fn read(&self, target: &SourceTarget) -> String {
+        std::fs::read_to_string(self.path(target)).unwrap()
+    }
+
+    fn backups(&self) -> Vec<PathBuf> {
+        let directory = self.manager.runtime_root().join(BACKUP_DIRECTORY);
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            return Vec::new();
+        };
+        let mut paths: Vec<_> = entries.map(|entry| entry.unwrap().path()).collect();
+        paths.sort();
+        paths
+    }
+
+    fn receipt(&self, target: &SourceTarget) -> Option<ConfigRepairReceipt> {
+        self.manager.repairs().latest(target)
+    }
+
+    fn sequence(&self) -> u64 {
+        *self.manager.repairs().subscribe().borrow()
+    }
+}
+
+fn changes(text: &str) -> Vec<ConfigRepairChange> {
+    plan(text.as_bytes()).unwrap().changes
+}
+
+fn candidate(text: &str) -> String {
+    String::from_utf8(plan(text.as_bytes()).unwrap().candidate).unwrap()
+}
+
+fn removed(path: &str) -> ConfigRepairChange {
+    ConfigRepairChange::RemovedField {
+        field_path: path.into(),
+    }
+}
+
+fn tool(name: &str, reason: NativeToolRemoval) -> ConfigRepairChange {
+    ConfigRepairChange::RemovedNativeTool {
+        name: name.into(),
+        reason,
+    }
+}
+
+#[test]
+fn the_issue_example_converges_to_its_documented_result() {
+    let before = "schema_version = 8\n\n[agent.tools]\nbuiltin = [\"read\", \"old_tool\", \"grep\", \"read\"]\n\n[agent.plugins.todo]\nenabled = true\nunknown_permission = true\n\n[native_tools.old_tool]\napproval = \"always\"\n";
+    let plan = plan(before.as_bytes()).unwrap();
+    assert_eq!(
+        String::from_utf8(plan.candidate.clone()).unwrap(),
+        "schema_version = 10\n\n[agent.tools]\nbuiltin = [\"read\", \"grep\"]\n\n[agent.plugins.todo]\nenabled = true\n"
+    );
+    assert_eq!(
+        plan.changes,
+        vec![
+            ConfigRepairChange::UpdatedSchemaVersion { from: 8, to: 10 },
+            removed("agent.plugins.todo.unknown_permission"),
+            removed("native_tools.old_tool"),
+            tool("old_tool", NativeToolRemoval::Unknown),
+            tool("read", NativeToolRemoval::Duplicate),
+        ]
+    );
+    // One finite pass reaches the fixed point.
+    assert!(changes(std::str::from_utf8(&plan.candidate).unwrap()).is_empty());
+}
+
+#[test]
+fn the_rule_anchors_are_typed_source_schema_fields() {
+    // The two fields repair edits by name are members of the generated schema.
+    let schema = source_schema();
+    assert!(schema["properties"][SCHEMA_VERSION_FIELD].is_object());
+    let [agent, tools, builtin] = BUILTIN_SELECTION_PATH;
+    assert!(schema["properties"][agent].is_object());
+    assert!(schema["$defs"]["AgentProfileLayer"]["properties"][tools].is_object());
+    assert!(schema["$defs"]["ToolsLayer"]["properties"][builtin].is_object());
+}
+
+#[test]
+fn nested_unknown_fields_and_tables_go_in_one_pass_without_security_exemptions() {
+    let text = r#"unknown_root = 1
+[security]
+sandbox = "off"
+[security.network]
+allow = ["*"]
+
+[native_tools.bash]
+approval = "always"
+allow_unsandboxed = true
+
+[agent.plugins.goal]
+enabled = true
+permissions = { escalate = true }
+
+[agent.model]
+model = "local/a"
+[agent.model.max_output_tokens]
+mode = "limit"
+tokens = 512
+bypass = true
+
+[subagents]
+max_concurrent = 2
+isolation = "none"
+
+[mcp_tool_policies.docs]
+approval = "never"
+trust_all = true
+"#;
+    let repaired = candidate(text);
+    assert_eq!(
+        changes(text),
+        vec![
+            removed("unknown_root"),
+            removed("security"),
+            removed("native_tools.bash.allow_unsandboxed"),
+            removed("agent.plugins.goal.permissions"),
+            removed("agent.model.max_output_tokens.bypass"),
+            removed("subagents.isolation"),
+            removed("mcp_tool_policies.docs.trust_all"),
+        ]
+    );
+    for gone in [
+        "unknown_root",
+        "security",
+        "allow_unsandboxed",
+        "permissions",
+        "bypass",
+        "isolation",
+        "trust_all",
+    ] {
+        assert!(!repaired.contains(gone), "{gone} survived:\n{repaired}");
+    }
+    // Known policy values stay exactly as authored.
+    for kept in [
+        "approval = \"always\"",
+        "approval = \"never\"",
+        "max_concurrent = 2",
+        "tokens = 512",
+    ] {
+        assert!(repaired.contains(kept), "{kept} was lost:\n{repaired}");
+    }
+    let layer: RuntimeLayer = crate::toml_authoring::parse(repaired.as_bytes()).unwrap();
+    assert!(layer.native_tools.unwrap().bash.is_some());
+}
+
+#[test]
+fn dynamic_identities_and_opaque_request_params_are_never_fields() {
+    let text = format!(
+        r#"{USER}
+[models."local/a".profiles."fast-🚀"]
+reasoning_enabled = false
+request_params = '{{"unknown_vendor_key":{{"nested":[1,2]}},"x-api-key":"SECRET_PARAM"}}'
+
+[agent.tools.sources]
+"mcp:docs" = ["search", "fetch"]
+
+[environment]
+CUSTOM_TOKEN = "SECRET_ENV"
+"weird.name" = "v"
+
+[mcp_tool_policies."docs"]
+approval = "always"
+"#
+    );
+    assert!(changes(&text).is_empty(), "{:?}", changes(&text));
+    // Opaque JSON keys are data even beside a removed schema field.
+    let with_unknown = format!("{text}\n[models.\"local/a\".compat]\nfuture_flag = true\n");
+    assert_eq!(
+        changes(&with_unknown),
+        vec![removed("models.\"local/a\".compat.future_flag")]
+    );
+    let repaired = candidate(&with_unknown);
+    assert!(repaired.starts_with(&text), "{repaired}");
+    for exact in [
+        r#"request_params = '{"vendor_x":{"secret_mode":true},"temperature":0.25}'"#,
+        r#"request_params = '{"unknown_vendor_key":{"nested":[1,2]},"x-api-key":"SECRET_PARAM"}'"#,
+        "CUSTOM_TOKEN = \"SECRET_ENV\"",
+        "api_key = \"SECRET_SENTINEL\"",
+        "# User configuration — keep this comment.",
+    ] {
+        assert!(repaired.contains(exact), "{exact}");
+    }
+}
+
+#[test]
+fn comments_and_unrelated_bytes_survive_deletions() {
+    let text = "# head comment\nschema_version = 10 # trailing\n\n# before agent\n[agent]\ndescription = 'kept'   # spaced comment\nstale = 'x'\n\n[agent.tools]\n# list comment\nbuiltin = [\n  \"read\", # first\n  \"nope\",\n  \"grep\",\n]\n";
+    let repaired = candidate(text);
+    assert_eq!(
+        repaired,
+        "# head comment\nschema_version = 10 # trailing\n\n# before agent\n[agent]\ndescription = 'kept'   # spaced comment\n\n[agent.tools]\n# list comment\nbuiltin = [\n  \"read\", # first\n  \"grep\",\n]\n"
+    );
+}
+
+#[test]
+fn native_tool_entries_are_classified_by_the_native_domain() {
+    use crate::capabilities::selection::{BuiltinSelectionClass, classify_builtin_selection};
+    let ordinary: Vec<String> = crate::tools::native::definitions(
+        crate::tools::native::NativeToolPolicies::default(),
+        &crate::runtime::subagent::AgentCatalog::default(),
+    )
+    .into_iter()
+    .map(|(definition, _)| definition.name)
+    .collect();
+    assert!(
+        ordinary
+            .iter()
+            .all(|name| classify_builtin_selection(name) == BuiltinSelectionClass::Ordinary)
+    );
+    let controls = crate::tools::native::AGENT_CONTROL_TOOL_NAMES;
+    let plugins: Vec<&str> = std::iter::once(crate::tools::native::TODO_TOOL_NAME)
+        .chain(crate::tools::native::GOAL_TOOL_NAMES.iter().copied())
+        .collect();
+    let mut selection: Vec<String> = ordinary.clone();
+    selection.extend(controls.iter().map(|name| (*name).to_owned()));
+    selection.extend(plugins.iter().map(|name| (*name).to_owned()));
+    selection.push(ordinary[0].clone());
+    selection.push("not_a_native_tool".into());
+    selection.push(String::new());
+    let text = format!(
+        "[agent.tools]\nbuiltin = [{}]\n",
+        selection
+            .iter()
+            .map(|name| format!("{name:?}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let mut expected: Vec<_> = controls
+        .iter()
+        .map(|name| tool(name, NativeToolRemoval::AgentControl))
+        .collect();
+    expected.extend(
+        plugins
+            .iter()
+            .map(|name| tool(name, NativeToolRemoval::PluginOwned)),
+    );
+    expected.push(tool(&ordinary[0], NativeToolRemoval::Duplicate));
+    expected.push(tool("not_a_native_tool", NativeToolRemoval::Unknown));
+    expected.push(tool("", NativeToolRemoval::Unknown));
+    assert_eq!(changes(&text), expected);
+    let repaired: RuntimeLayer = crate::toml_authoring::parse(candidate(&text).as_bytes()).unwrap();
+    assert_eq!(
+        repaired.agent.unwrap().tools.unwrap().builtin.unwrap(),
+        ordinary
+    );
+    // A non-string element is a known-field type error, never a selection edit.
+    assert!(changes("[agent.tools]\nbuiltin = [\"read\", 3, \"read\"]\n").is_empty());
+}
+
+#[test]
+fn explicit_schema_versions_are_normalized_and_omission_is_preserved() {
+    for from in [0_i64, 8, 9, 11, 99, -1] {
+        let text = format!("schema_version = {from} # authored\n");
+        assert_eq!(
+            changes(&text),
+            vec![ConfigRepairChange::UpdatedSchemaVersion { from, to: 10 }]
+        );
+        assert_eq!(candidate(&text), "schema_version = 10 # authored\n");
+    }
+    assert!(changes("schema_version = 10\n").is_empty());
+    assert!(changes("[agent]\ndescription = 'x'\n").is_empty());
+    assert!(!candidate("[agent]\nstale = 1\n").contains("schema_version"));
+    // A non-integer version is a type error, not version metadata.
+    for wrong in ["'10'", "10.0", "true"] {
+        assert!(changes(&format!("schema_version = {wrong}\n")).is_empty());
+    }
+}
+
+#[test]
+fn tagged_unions_close_only_their_selected_variant() {
+    let text = "[agent.model]\nmodel = 'local/a'\n[agent.model.summary_model]\nmode = 'explicit'\nmodel = 'local/a'\nlegacy = true\n[tool_deadline_policy.idle_liveness_ms]\nmode = 'window'\nmilliseconds = 5\nextra = 1\n";
+    assert_eq!(
+        changes(text),
+        vec![
+            removed("agent.model.summary_model.legacy"),
+            removed("tool_deadline_policy.idle_liveness_ms.extra"),
+        ]
+    );
+    // An unknown tag selects no variant: nothing under it is guessed.
+    assert!(changes("[context.summary_output_cap]\nmode = 'future'\nextra = 1\n").is_empty());
+}
+
+#[test]
+fn syntax_and_encoding_are_never_edited() {
+    assert_eq!(
+        plan(b"[agent\nmodel = 1").unwrap_err(),
+        Uneditable::Syntax {
+            line: Some(1),
+            column: Some(7)
+        }
+    );
+    assert_eq!(plan(b"\xff\xfe").unwrap_err(), Uneditable::NotUtf8);
+}
+
+#[test]
+fn identical_rules_apply_to_user_and_workspace_sources() {
+    let fixture = Fixture::new();
+    let text = format!("legacy = true\n{USER}[agent.plugins.todo]\nenabled = true\nstale = 1\n");
+    for target in [SourceTarget::User, fixture.workspace.clone()] {
+        fixture.write(&target, &text);
+        assert_eq!(
+            fixture.manager.repair_source(&target),
+            RepairOutcome::Committed
+        );
+        let receipt = fixture.receipt(&target).unwrap();
+        assert_eq!(receipt.status, ConfigRepairStatus::Repaired);
+        assert_eq!(receipt.target, target);
+        assert_eq!(
+            receipt.changes,
+            vec![removed("legacy"), removed("agent.plugins.todo.stale")]
+        );
+    }
+    assert_eq!(
+        fixture.read(&SourceTarget::User),
+        fixture.read(&fixture.workspace)
+    );
+}
+
+#[test]
+fn a_process_bound_config_override_is_repaired_in_place() {
+    let fixture = Fixture::with_config_path(|home| home.join("elsewhere/custom-name.toml"));
+    fixture.write(&SourceTarget::User, &format!("{USER}\nlegacy = 1\n"));
+    assert_eq!(
+        fixture.manager.repair_source(&SourceTarget::User),
+        RepairOutcome::Committed
+    );
+    assert_eq!(fixture.read(&SourceTarget::User), USER);
+    assert!(
+        fixture
+            .path(&SourceTarget::User)
+            .ends_with("elsewhere/custom-name.toml")
+    );
+    assert_eq!(fixture.backups().len(), 1);
+}
+
+#[test]
+fn a_committed_repair_keeps_one_exact_private_backup_outside_the_workspace() {
+    let fixture = Fixture::new();
+    let original = format!("{USER}\n[agent.plugins.todo]\nenabled = true\nlegacy = 'SECRET_X'\n");
+    fixture.write(&fixture.workspace, &original);
+    fixture.write(&SourceTarget::User, USER);
+    assert_eq!(
+        fixture.manager.repair_source(&fixture.workspace),
+        RepairOutcome::Committed
+    );
+    let backups = fixture.backups();
+    assert_eq!(backups.len(), 1);
+    assert_eq!(std::fs::read(&backups[0]).unwrap(), original.as_bytes());
+    let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&backups[0]), 0o600);
+    assert_eq!(mode(backups[0].parent().unwrap()), 0o700);
+    let directory = fixture.workspace.workspace().unwrap();
+    assert!(!backups[0].starts_with(directory));
+    let name = backups[0].file_name().unwrap().to_str().unwrap();
+    assert!(name.starts_with("workspace-"), "{name}");
+    assert!(!name.contains("workspace/"), "{name}");
+    let receipt = fixture.receipt(&fixture.workspace).unwrap();
+    assert!(receipt.backup_available);
+    assert_eq!(
+        receipt.after_revision.as_deref(),
+        Some(
+            super::super::super::settings::revision(Some(
+                fixture.read(&fixture.workspace).as_bytes()
+            ))
+            .as_str()
+        )
+    );
+    // The receipt never carries the removed value.
+    assert!(!serde_json::to_string(&receipt).unwrap().contains("SECRET"));
+}
+
+#[test]
+fn healthy_and_repaired_sources_are_disk_and_ledger_no_ops() {
+    let fixture = Fixture::new();
+    fixture.write(&SourceTarget::User, USER);
+    let modified = std::fs::metadata(fixture.path(&SourceTarget::User))
+        .unwrap()
+        .modified()
+        .unwrap();
+    assert_eq!(
+        fixture.manager.repair_source(&SourceTarget::User),
+        RepairOutcome::Unchanged
+    );
+    assert_eq!(fixture.read(&SourceTarget::User), USER);
+    assert_eq!(
+        std::fs::metadata(fixture.path(&SourceTarget::User))
+            .unwrap()
+            .modified()
+            .unwrap(),
+        modified
+    );
+    assert!(fixture.backups().is_empty());
+    assert!(fixture.receipt(&SourceTarget::User).is_none());
+    // A healthy check takes no writer lock, so it creates no lock file.
+    assert!(
+        !fixture
+            .path(&SourceTarget::User)
+            .with_file_name(".rustx.toml.lock")
+            .exists()
+    );
+    assert_eq!(fixture.sequence(), 0);
+
+    fixture.write(&SourceTarget::User, &format!("{USER}legacy = 1\n"));
+    assert_eq!(
+        fixture.manager.repair_source(&SourceTarget::User),
+        RepairOutcome::Committed
+    );
+    let repaired = fixture.read(&SourceTarget::User);
+    let receipt = fixture.receipt(&SourceTarget::User).unwrap();
+    let sequence = fixture.sequence();
+    for _ in 0..3 {
+        assert_eq!(
+            fixture.manager.repair_source(&SourceTarget::User),
+            RepairOutcome::Unchanged
+        );
+    }
+    assert_eq!(fixture.read(&SourceTarget::User), repaired);
+    assert_eq!(fixture.backups().len(), 1);
+    assert_eq!(fixture.receipt(&SourceTarget::User).unwrap(), receipt);
+    assert_eq!(fixture.sequence(), sequence);
+}
+
+#[test]
+fn nonrepairable_sources_stay_unchanged_with_a_safe_unresolved_receipt() {
+    let fixture = Fixture::new();
+    fixture.write(&SourceTarget::User, USER);
+    let cases = [
+        // Syntax is never edited.
+        format!("{USER}legacy = 1\n[broken\n"),
+        // A known field with the wrong type.
+        format!("{USER}legacy = 1\n[subagents]\nmax_concurrent = 'SECRET_TYPE'\n"),
+        // Invalid request_params JSON.
+        USER.replace(
+            r#"'{"vendor_x":{"secret_mode":true},"temperature":0.25}'"#,
+            r#"'{"SECRET_JSON": }'"#,
+        ) + "legacy = 1\n",
+        // A broken Model reference.
+        USER.replace("model = \"local/a\"", "model = \"local/missing\"") + "legacy = 1\n",
+        // A missing required Model fact.
+        USER.replace("context_window = 128000\n", "") + "legacy = 1\n",
+        // A wrong-type version cannot be normalized.
+        format!("schema_version = 'SECRET_VERSION'\n{USER}legacy = 1\n"),
+    ];
+    for text in &cases {
+        fixture.write(&fixture.workspace, text);
+        assert_eq!(
+            fixture.manager.repair_source(&fixture.workspace),
+            RepairOutcome::Unchanged,
+            "{text}"
+        );
+        assert_eq!(&fixture.read(&fixture.workspace), text);
+        let receipt = fixture.receipt(&fixture.workspace).unwrap();
+        assert_eq!(receipt.status, ConfigRepairStatus::Unresolved, "{text}");
+        assert!(receipt.after_revision.is_none());
+        assert!(!receipt.backup_available);
+        let wire = serde_json::to_string(&receipt).unwrap();
+        assert!(!wire.contains("SECRET"), "{wire}");
+        assert!(receipt.diagnostic.is_some());
+    }
+    assert!(fixture.backups().is_empty());
+    // Workspace process policy is a source restriction, not an unknown field.
+    fixture.write(
+        &fixture.workspace,
+        "[app_server]\nmax_connections = 4\n[agent]\nlegacy = 1\n",
+    );
+    assert_eq!(
+        fixture.manager.repair_source(&fixture.workspace),
+        RepairOutcome::Unchanged
+    );
+    let receipt = fixture.receipt(&fixture.workspace).unwrap();
+    assert_eq!(receipt.status, ConfigRepairStatus::Unresolved);
+    assert!(receipt.diagnostic.unwrap().contains("app_server"));
+}
+
+#[test]
+fn a_partial_source_is_incomplete_not_invalid() {
+    let fixture = Fixture::new();
+    // A User source with a catalog but no default selection is complete enough.
+    let user = USER.replace("[agent.model]\nmodel = \"local/a\"\n", "");
+    fixture.write(&SourceTarget::User, &format!("{user}legacy = 1\n"));
+    assert_eq!(
+        fixture.manager.repair_source(&SourceTarget::User),
+        RepairOutcome::Committed
+    );
+    // A Workspace selecting a User-defined Model validates over the User.
+    fixture.write(
+        &fixture.workspace,
+        "[agent.model]\nmodel = \"local/a\"\nstale = true\n",
+    );
+    assert_eq!(
+        fixture.manager.repair_source(&fixture.workspace),
+        RepairOutcome::Committed
+    );
+    assert_eq!(
+        fixture.read(&fixture.workspace),
+        "[agent.model]\nmodel = \"local/a\"\n"
+    );
+}
+
+#[test]
+fn a_source_found_healthy_clears_its_unresolved_receipt() {
+    let fixture = Fixture::new();
+    fixture.write(&SourceTarget::User, "[broken");
+    fixture.manager.repair_source(&SourceTarget::User);
+    assert_eq!(
+        fixture.receipt(&SourceTarget::User).unwrap().status,
+        ConfigRepairStatus::Unresolved
+    );
+    let sequence = fixture.sequence();
+    // The same invalid bytes are the same observation.
+    fixture.manager.repair_source(&SourceTarget::User);
+    assert_eq!(fixture.sequence(), sequence);
+    fixture.write(&SourceTarget::User, USER);
+    fixture
+        .manager
+        .refresh_repair_observation(&SourceTarget::User);
+    assert!(fixture.receipt(&SourceTarget::User).is_none());
+    assert_eq!(fixture.sequence(), sequence + 1);
+    assert_eq!(
+        fixture
+            .manager
+            .repairs()
+            .changed_after(&SourceKey::User, sequence),
+        Some((sequence + 1, None))
+    );
+}
+
+#[test]
+fn user_and_workspace_repairs_are_independent_transactions() {
+    let fixture = Fixture::new();
+    fixture.write(&SourceTarget::User, &format!("{USER}legacy = 1\n"));
+    fixture.write(&fixture.workspace, "[agent\n");
+    assert_eq!(
+        fixture.manager.repair_source(&SourceTarget::User),
+        RepairOutcome::Committed
+    );
+    assert_eq!(
+        fixture.manager.repair_source(&fixture.workspace),
+        RepairOutcome::Unchanged
+    );
+    assert_eq!(
+        fixture.receipt(&SourceTarget::User).unwrap().status,
+        ConfigRepairStatus::Repaired
+    );
+    assert_eq!(
+        fixture.receipt(&fixture.workspace).unwrap().status,
+        ConfigRepairStatus::Unresolved
+    );
+    assert_eq!(fixture.read(&fixture.workspace), "[agent\n");
+}
+
+#[test]
+fn an_external_edit_before_the_writer_lock_supersedes_the_candidate() {
+    let fixture = Fixture::new();
+    fixture.write(&SourceTarget::User, &format!("{USER}legacy = 1\n"));
+    let path = fixture.path(&SourceTarget::User);
+    let external = format!("{USER}# edited concurrently\n");
+    let edit = external.clone();
+    fixture
+        .manager
+        .test_hooks
+        .insert("repair_before_lock", move || {
+            std::fs::write(&path, edit).unwrap();
+        });
+    assert_eq!(
+        fixture.manager.repair_source(&SourceTarget::User),
+        RepairOutcome::Superseded
+    );
+    assert_eq!(fixture.read(&SourceTarget::User), external);
+    assert!(fixture.backups().is_empty());
+    assert!(fixture.receipt(&SourceTarget::User).is_none());
+}
+
+#[test]
+fn an_external_edit_before_publication_is_never_overwritten() {
+    let fixture = Fixture::new();
+    fixture.write(&SourceTarget::User, &format!("{USER}legacy = 1\n"));
+    let path = fixture.path(&SourceTarget::User);
+    let external = format!("{USER}# edited concurrently\n");
+    let edit = external.clone();
+    fixture
+        .manager
+        .test_hooks
+        .insert("before_publication", move || {
+            std::fs::write(&path, edit).unwrap();
+        });
+    assert_eq!(
+        fixture.manager.repair_source(&SourceTarget::User),
+        RepairOutcome::Superseded
+    );
+    assert_eq!(fixture.read(&SourceTarget::User), external);
+    assert!(fixture.receipt(&SourceTarget::User).is_none());
+    // The next observation plans from the external bytes; nothing is replayed.
+    assert_eq!(
+        fixture.manager.repair_source(&SourceTarget::User),
+        RepairOutcome::Unchanged
+    );
+    assert_eq!(fixture.read(&SourceTarget::User), external);
+}
+
+#[test]
+fn failures_before_publication_leave_the_source_unchanged() {
+    for point in ["backup", "stage_write", "stage_sync", "replace_refused"] {
+        let fixture = Fixture::new();
+        let original = format!("{USER}legacy = 1\n");
+        fixture.write(&SourceTarget::User, &original);
+        fixture.manager.test_hooks.fail_once(point);
+        assert_eq!(
+            fixture.manager.repair_source(&SourceTarget::User),
+            RepairOutcome::Unchanged,
+            "{point}"
+        );
+        assert_eq!(fixture.read(&SourceTarget::User), original, "{point}");
+        let receipt = fixture.receipt(&SourceTarget::User).unwrap();
+        assert_eq!(receipt.status, ConfigRepairStatus::Unresolved, "{point}");
+        assert_eq!(receipt.backup_available, point != "backup", "{point}");
+        assert!(receipt.after_revision.is_none());
+        if point == "backup" {
+            assert!(fixture.backups().is_empty());
+        }
+    }
+}
+
+#[test]
+fn an_uncertain_publication_is_reported_and_never_replayed() {
+    for point in ["directory_sync", "replace"] {
+        let fixture = Fixture::new();
+        fixture.write(&SourceTarget::User, &format!("{USER}legacy = 1\n"));
+        fixture.manager.test_hooks.fail_once(point);
+        assert_eq!(
+            fixture.manager.repair_source(&SourceTarget::User),
+            RepairOutcome::Committed,
+            "{point}"
+        );
+        let published = fixture.read(&SourceTarget::User);
+        assert_eq!(published, USER, "{point}");
+        let receipt = fixture.receipt(&SourceTarget::User).unwrap();
+        assert_eq!(receipt.status, ConfigRepairStatus::CommitUncertain);
+        assert_eq!(
+            receipt.after_revision,
+            Some(super::super::super::settings::revision(Some(
+                published.as_bytes()
+            )))
+        );
+        let sequence = fixture.sequence();
+        // A later observation sees healthy bytes: no write, no new receipt.
+        assert_eq!(
+            fixture.manager.repair_source(&SourceTarget::User),
+            RepairOutcome::Unchanged
+        );
+        assert_eq!(fixture.read(&SourceTarget::User), published);
+        assert_eq!(fixture.backups().len(), 1);
+        assert_eq!(fixture.sequence(), sequence);
+    }
+}
+
+#[test]
+fn receipts_are_bounded_and_sanitized() {
+    let fixture = Fixture::new();
+    let mut text = USER.to_owned();
+    for index in 0..(MAX_RECEIPT_CHANGES + 6) {
+        writeln!(text, "legacy_{index} = 1").unwrap();
+    }
+    writeln!(text, "\"{}\\u0007\" = 1", "k".repeat(300)).unwrap();
+    fixture.write(&SourceTarget::User, &text);
+    assert_eq!(
+        fixture.manager.repair_source(&SourceTarget::User),
+        RepairOutcome::Committed
+    );
+    let receipt = fixture.receipt(&SourceTarget::User).unwrap();
+    assert_eq!(receipt.changed_count as usize, MAX_RECEIPT_CHANGES + 7);
+    assert_eq!(receipt.changes.len(), MAX_RECEIPT_CHANGES);
+    assert!(receipt.truncated);
+    let all = plan(text.as_bytes()).unwrap().changes;
+    let ConfigRepairChange::RemovedField { field_path } = all.last().unwrap() else {
+        panic!("expected a removed field");
+    };
+    let segment = field_path.strip_prefix("agent.model.").unwrap();
+    assert_eq!(segment.chars().count(), MAX_SEGMENT_CHARS);
+    assert!(segment.ends_with('…'));
+    assert!(!field_path.chars().any(char::is_control));
+    // A short key keeps its escaped control character visible but inert.
+    assert_eq!(
+        changes("\"a\\u0007b\" = 1\n"),
+        vec![removed("\"a\\u0007b\"")]
+    );
+}
+
+#[test]
+fn the_ledger_forgets_the_least_recent_workspace_beyond_its_bound() {
+    let ledger = RepairLedger::default();
+    let observation = |index: usize| {
+        receipt(
+            &SourceTarget::Workspace {
+                directory: PathBuf::from(format!("/w/{index}")),
+            },
+            "sha256:before",
+            Observation {
+                status: ConfigRepairStatus::Unresolved,
+                after_revision: None,
+                changes: Vec::new(),
+                backup_available: false,
+                diagnostic: None,
+            },
+        )
+    };
+    ledger.record(receipt(
+        &SourceTarget::User,
+        "sha256:user",
+        Observation {
+            status: ConfigRepairStatus::Repaired,
+            after_revision: Some("sha256:after".into()),
+            changes: Vec::new(),
+            backup_available: true,
+            diagnostic: None,
+        },
+    ));
+    for index in 0..=MAX_LEDGER_WORKSPACES {
+        ledger.record(observation(index));
+    }
+    assert!(ledger.latest(&SourceTarget::User).is_some());
+    assert!(
+        ledger
+            .latest(&SourceTarget::Workspace {
+                directory: "/w/0".into()
+            })
+            .is_none()
+    );
+    assert!(
+        ledger
+            .latest(&SourceTarget::Workspace {
+                directory: format!("/w/{MAX_LEDGER_WORKSPACES}").into()
+            })
+            .is_some()
+    );
+}
+
+#[test]
+fn array_removals_keep_neighbouring_layout_and_comments() {
+    for (before, after) in [
+        (r#"["nope", "read", "grep"]"#, r#"["read", "grep"]"#),
+        (r#"["read", "nope"]"#, r#"["read"]"#),
+        (r#"[ "read" , "nope" , "grep" ]"#, r#"[ "read" , "grep" ]"#),
+        (
+            "[\n  \"nope\", # about nope\n  # about read\n  \"read\", # first\n  \"bad\", # about bad\n  \"grep\", # last ok\n  \"gone\", # about gone\n]",
+            "[\n  # about read\n  \"read\", # first\n  \"grep\", # last ok\n]",
+        ),
+    ] {
+        let text = format!("[agent.tools]\nbuiltin = {before}\n");
+        assert_eq!(
+            candidate(&text),
+            format!("[agent.tools]\nbuiltin = {after}\n"),
+            "{before}"
+        );
+    }
+}

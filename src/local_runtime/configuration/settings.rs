@@ -164,6 +164,11 @@ pub struct SourceSettings {
     pub provenance: BTreeMap<String, super::Origin>,
     pub user: SourceView<SourceDocumentView>,
     pub workspace: Option<SourceView<SourceDocumentView>>,
+    /// The latest automatic repair observation of the User source in this
+    /// process. Absent for a source that never needed repair.
+    pub user_repair: Option<super::repair::ConfigRepairReceipt>,
+    /// The latest automatic repair observation of the target Workspace source.
+    pub workspace_repair: Option<super::repair::ConfigRepairReceipt>,
     pub user_resource_root: PathBuf,
     pub workspace_resource_root: Option<PathBuf>,
     pub runtime_root: PathBuf,
@@ -380,10 +385,21 @@ fn source_resolution_diagnostic(document: &RuntimeLayer) -> Option<String> {
     };
     validate().err()
 }
-fn view(path: PathBuf, bytes: Option<&[u8]>) -> SourceView<SourceDocumentView> {
+fn view(path: PathBuf, bytes: Option<&[u8]>, workspace: bool) -> SourceView<SourceDocumentView> {
     let (authored, diagnostic) =
         match crate::toml_authoring::parse_detailed::<RuntimeLayer>(bytes.unwrap_or(b"")) {
-            Ok(document) => (Some(redact(document)), None),
+            // A document violating its source contract is not editable either:
+            // ordinary writes refuse it and manual repair accepts it.
+            Ok(document) => match super::source_restrictions(&path, &document, workspace) {
+                Ok(()) => (Some(redact(document)), None),
+                Err(failure) => (
+                    None,
+                    Some(format!(
+                        "invalid rustx.toml; source was not loaded: {} at {}",
+                        failure.diagnostic.reason, failure.diagnostic.path
+                    )),
+                ),
+            },
             // A request_params failure names only its field path, category
             // and locations, so it can say why the source cannot be edited.
             // Other parser messages may quote authored text.
@@ -886,7 +902,7 @@ impl UserConfigManager {
             SourceTarget::Workspace { directory } => directory.join(".agents"),
         }
     }
-    fn config_path(&self, target: &SourceTarget) -> PathBuf {
+    pub(super) fn config_path(&self, target: &SourceTarget) -> PathBuf {
         match target {
             SourceTarget::User => self.sources.config_path.clone(),
             SourceTarget::Workspace { directory } => directory.join("rustx.toml"),
@@ -1036,10 +1052,14 @@ impl UserConfigManager {
                         .unwrap_or_default(),
                 )
                 .collect(),
-            user: view(user.clone(), user_bytes.as_deref()),
+            user: view(user.clone(), user_bytes.as_deref(), false),
             workspace: workspace
                 .as_ref()
-                .map(|path| view(path.clone(), workspace_bytes.as_deref())),
+                .map(|path| view(path.clone(), workspace_bytes.as_deref(), true)),
+            user_repair: self.repairs().latest(&SourceTarget::User),
+            workspace_repair: target
+                .workspace()
+                .and_then(|_| self.repairs().latest(target)),
             user_resource_root: self.resource_root(&SourceTarget::User),
             workspace_resource_root: target
                 .workspace()
@@ -1084,6 +1104,10 @@ impl UserConfigManager {
     ) -> Result<SourceSettings, SettingsError> {
         target.validate()?;
         let scope = target.scope();
+        let authors_config = matches!(
+            &mutation,
+            SourceMutation::Config { .. } | SourceMutation::RepairConfig { .. }
+        );
         let path = match &mutation {
             SourceMutation::Mcp { .. } => self.resource_root(target).join("mcp.toml"),
             SourceMutation::Config { .. } | SourceMutation::RepairConfig { .. } => {
@@ -1110,7 +1134,16 @@ impl UserConfigManager {
             }
             let candidate = match mutation {
                 SourceMutation::RepairConfig { document } => {
-                    if parse(original.as_deref()).is_ok() {
+                    // Manual repair exists for documents that fail their own
+                    // source contract, including TOML-parsable ones; it never
+                    // overwrites a valid source.
+                    if super::parse_layer(
+                        &path,
+                        original.as_deref().unwrap_or(b""),
+                        scope == SourceScope::Workspace,
+                    )
+                    .is_ok()
+                    {
                         return Err(SettingsError::Invalid);
                     }
                     let repaired = super::parse_layer(
@@ -1130,7 +1163,14 @@ impl UserConfigManager {
                     {
                         return Err(SettingsError::Invalid);
                     }
-                    let mut document = parse(original.as_deref())?;
+                    // Ordinary editing requires a source satisfying its own
+                    // source contract; anything else is manual repair's.
+                    let mut document = super::parse_layer(
+                        &path,
+                        original.as_deref().unwrap_or(b""),
+                        scope == SourceScope::Workspace,
+                    )
+                    .map_err(|_| SettingsError::Invalid)?;
                     apply(&mut document, mutation)?;
                     Some(encode(document)?)
                 }
@@ -1162,42 +1202,114 @@ impl UserConfigManager {
                     actual,
                 });
             }
-            if let Some(bytes) = candidate {
-                let mut staged =
-                    tempfile::NamedTempFile::new_in(path.parent().ok_or(SettingsError::Io)?)
-                        .map_err(|_| SettingsError::Io)?;
-                staged.write_all(&bytes).map_err(|_| SettingsError::Io)?;
-                staged.as_file().sync_all().map_err(|_| SettingsError::Io)?;
-                #[cfg(test)]
-                self.test_hooks.reach("before_publication");
-                let actual = revision(read(&path)?.as_deref());
-                if actual != expected {
-                    return Err(SettingsError::Conflict {
-                        scope,
-                        expected: expected.into(),
-                        actual,
-                    });
-                }
-                staged.persist(&path).map_err(|_| SettingsError::Io)?;
-            } else if original.is_some() {
-                #[cfg(test)]
-                self.test_hooks.reach("before_publication");
-                let actual = revision(read(&path)?.as_deref());
-                if actual != expected {
-                    return Err(SettingsError::Conflict {
-                        scope,
-                        expected: expected.into(),
-                        actual,
-                    });
-                }
-                std::fs::remove_file(&path).map_err(|_| SettingsError::Io)?;
-            }
-            std::fs::File::open(path.parent().ok_or(SettingsError::Committed)?)
-                .and_then(|dir| dir.sync_all())
-                .map_err(|_| SettingsError::Committed)?;
+            self.publish_locked(
+                &path,
+                scope,
+                expected,
+                candidate.as_deref(),
+                original.is_some(),
+            )?;
+        }
+        if authors_config {
+            // A committed edit may have resolved an unresolved repair.
+            self.refresh_repair_observation(target);
         }
         self.read_source_settings(target)
             .map_err(|_| SettingsError::Committed)
+    }
+
+    /// The one native source publication primitive. Ordinary authoring and
+    /// automatic repair both publish through it, so every source commit has
+    /// the same revision fence, staging, durability and uncertainty rules.
+    ///
+    /// The caller holds the document writer lock and has verified `expected`.
+    /// `candidate` replaces the document; `None` removes a present document.
+    /// The candidate is staged beside the document and synced, the revision is
+    /// verified again immediately before the atomic replacement, and the
+    /// parent directory is synced afterwards. A failure before replacement
+    /// leaves the source unchanged (`Io`); a failed replacement is classified
+    /// by rereading the source; anything after replacement is `Committed`
+    /// (published, durability unconfirmed). Nothing here retries or replays.
+    #[cfg_attr(
+        not(test),
+        allow(
+            clippy::unused_self,
+            reason = "the owner carries the test I/O fault hooks"
+        )
+    )]
+    pub(super) fn publish_locked(
+        &self,
+        path: &Path,
+        scope: SourceScope,
+        expected: &str,
+        candidate: Option<&[u8]>,
+        present: bool,
+    ) -> Result<(), SettingsError> {
+        let verify = || {
+            let actual = revision(read(path)?.as_deref());
+            if actual == expected {
+                Ok(())
+            } else {
+                Err(SettingsError::Conflict {
+                    scope,
+                    expected: expected.into(),
+                    actual,
+                })
+            }
+        };
+        let parent = path.parent().ok_or(SettingsError::Io)?;
+        if let Some(bytes) = candidate {
+            let mut staged =
+                tempfile::NamedTempFile::new_in(parent).map_err(|_| SettingsError::Io)?;
+            #[cfg(test)]
+            if self.test_hooks.fault("stage_write") {
+                return Err(SettingsError::Io);
+            }
+            staged.write_all(bytes).map_err(|_| SettingsError::Io)?;
+            #[cfg(test)]
+            if self.test_hooks.fault("stage_sync") {
+                return Err(SettingsError::Io);
+            }
+            staged.as_file().sync_all().map_err(|_| SettingsError::Io)?;
+            #[cfg(test)]
+            self.test_hooks.reach("before_publication");
+            verify()?;
+            // Injected replacement failures: refused before the rename, or
+            // reported after it already happened.
+            #[cfg(test)]
+            if self.test_hooks.fault("replace_refused") {
+                return Err(Self::classify_failed_replacement(path, expected));
+            }
+            #[cfg(test)]
+            if self.test_hooks.fault("replace") {
+                staged.persist(path).map_err(|_| SettingsError::Io)?;
+                return Err(Self::classify_failed_replacement(path, expected));
+            }
+            staged
+                .persist(path)
+                .map_err(|_| Self::classify_failed_replacement(path, expected))?;
+        } else if present {
+            #[cfg(test)]
+            self.test_hooks.reach("before_publication");
+            verify()?;
+            std::fs::remove_file(path).map_err(|_| SettingsError::Io)?;
+        }
+        #[cfg(test)]
+        if self.test_hooks.fault("directory_sync") {
+            return Err(SettingsError::Committed);
+        }
+        std::fs::File::open(parent)
+            .and_then(|dir| dir.sync_all())
+            .map_err(|_| SettingsError::Committed)
+    }
+
+    /// A replacement that reported failure is unchanged only while the source
+    /// still has exactly the expected bytes; otherwise its outcome is unknown.
+    fn classify_failed_replacement(path: &Path, expected: &str) -> SettingsError {
+        match read(path) {
+            Ok(bytes) if revision(bytes.as_deref()) == expected => SettingsError::Io,
+            _ => SettingsError::Committed,
+        }
     }
 }
 

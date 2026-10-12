@@ -393,3 +393,11 @@ def web_child_capabilities() -> Scenario:
     )
 
 SCENARIOS["web_child_capabilities"] = web_child_capabilities
+
+
+def web_config_repair() -> Scenario:
+    """Automatic configuration repair needs no model request at all (#464)."""
+    return Scenario("web_config_repair")
+
+
+SCENARIOS["web_config_repair"] = web_config_repair

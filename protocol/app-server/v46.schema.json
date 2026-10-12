@@ -19883,6 +19883,28 @@
             }
           ]
         },
+        "user_repair": {
+          "description": "The latest automatic repair observation of the User source in this\nprocess. Absent for a source that never needed repair.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConfigRepairReceipt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workspace_repair": {
+          "description": "The latest automatic repair observation of the target Workspace source.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConfigRepairReceipt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "user_resource_root": {
           "type": "string"
         },
@@ -20009,6 +20031,190 @@
       "required": [
         "path",
         "revision"
+      ]
+    },
+    "ConfigRepairReceipt": {
+      "description": "Bounded, redacted native fact about one automatic repair of one source.\n\nIt describes authored bytes only: it never claims that any configuration\nwas prepared, applied or adopted.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Content identity of this observation; equal receipts are one repair.",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/SourceTarget"
+        },
+        "status": {
+          "$ref": "#/$defs/ConfigRepairStatus"
+        },
+        "before_revision": {
+          "description": "The exact source revision the repair was planned from.",
+          "type": "string"
+        },
+        "after_revision": {
+          "description": "The committed revision, or the revision observed after an uncertain\npublication. Absent when nothing was published.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "changed_count": {
+          "description": "Every eligible change, including those beyond `changes`.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConfigRepairChange"
+          }
+        },
+        "truncated": {
+          "description": "Whether `changes` omits entries beyond [`MAX_RECEIPT_CHANGES`].",
+          "type": "boolean"
+        },
+        "backup_available": {
+          "description": "Whether an exact private copy of the original bytes exists.",
+          "type": "boolean"
+        },
+        "diagnostic": {
+          "description": "Why the source is unresolved or uncertain; never source excerpts.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "target",
+        "status",
+        "before_revision",
+        "changed_count",
+        "changes",
+        "truncated",
+        "backup_available"
+      ]
+    },
+    "ConfigRepairStatus": {
+      "description": "The outcome of one automatic repair observation. A healthy unchanged\nsource has no receipt at all.",
+      "oneOf": [
+        {
+          "description": "A validated candidate was atomically published.",
+          "type": "string",
+          "const": "repaired"
+        },
+        {
+          "description": "The source is invalid and no valid candidate exists; it is unchanged.",
+          "type": "string",
+          "const": "unresolved"
+        },
+        {
+          "description": "Publication may have happened but was not durably confirmed. The\nobserved revision is reported; the mutation is never replayed.",
+          "type": "string",
+          "const": "commit_uncertain"
+        }
+      ]
+    },
+    "ConfigRepairChange": {
+      "description": "One deterministic edit of an authored source. Never carries a value.",
+      "oneOf": [
+        {
+          "description": "A field or table unknown to its closed schema object was deleted.",
+          "type": "object",
+          "properties": {
+            "field_path": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "removed_field"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "field_path"
+          ]
+        },
+        {
+          "description": "An illegal `agent.tools.builtin` element was deleted.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/NativeToolRemoval"
+            },
+            "kind": {
+              "type": "string",
+              "const": "removed_native_tool"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "name",
+            "reason"
+          ]
+        },
+        {
+          "description": "An explicit `schema_version` was normalized to the current version.",
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "to": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "kind": {
+              "type": "string",
+              "const": "updated_schema_version"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "from",
+            "to"
+          ]
+        }
+      ]
+    },
+    "NativeToolRemoval": {
+      "description": "Why a Native Tool selection entry was removed.",
+      "oneOf": [
+        {
+          "description": "No native Tool of the root selection plane has this name.",
+          "type": "string",
+          "const": "unknown"
+        },
+        {
+          "description": "A later repeat of an ordinary selection; the first occurrence stays.",
+          "type": "string",
+          "const": "duplicate"
+        },
+        {
+          "description": "An Agent control Tool composed automatically when agents are admitted.",
+          "type": "string",
+          "const": "agent_control"
+        },
+        {
+          "description": "A Tool owned by a Plugin and selected through `agent.plugins`.",
+          "type": "string",
+          "const": "plugin_owned"
+        }
       ]
     },
     "SourceView2": {
@@ -20898,6 +21104,42 @@
               "additionalProperties": false,
               "required": [
                 "application"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "The latest automatic `rustx.toml` repair observation of one source\nchanged (Issue #464).\n\nSource-scoped: it names a `SourceTarget`, never a Session, attachment\nor application scope, and it says nothing about runtime application,\nwhich `configuration/changed` reports separately. A connection observes\nthe User source and each Workspace source it addressed; a newly\nobserved source announces its latest receipt once. `receipt: null`\nmeans the source no longer reports an unresolved repair. Delivery is\nlevel-triggered from a finite process-local ledger: after a gap, the\nauthoritative `configuration/sourcesRead` carries the same receipts.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "configuration/sourceRepairChanged"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/SourceTarget"
+                },
+                "receipt": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ConfigRepairReceipt"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target"
               ]
             }
           },

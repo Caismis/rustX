@@ -12,10 +12,11 @@ import type {
   TraceToolLocator, ConfigurationApplication, PendingInboundRef, PendingMutationOutcome, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot,
   SessionPersistentState, SessionSummary, ServerCapabilities, UserInputBlock, UploadReceipt, UploadedFile,
-} from '../../../protocol/app-server/v45';
+  ConfigRepairReceipt, SourceTarget,
+} from '../../../protocol/app-server/v46';
 import { transferUpload, uploadOperationId } from '../../../protocol/app-server/upload';
 import { HISTORY_PAGE_SIZE, sameReadCut, extendTranscriptWindow, installTranscriptWindow, prependTranscript, refreshTranscript, replaceTranscript, turnKey, type TranscriptCache } from './transcript';
-import type { ConversationTurn, ConversationTurnPage } from '../../../protocol/app-server/v45';
+import type { ConversationTurn, ConversationTurnPage } from '../../../protocol/app-server/v46';
 import { ProtocolLog, type WireContext } from './protocol-log';
 
 interface OutlineDemand {
@@ -71,7 +72,7 @@ export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentI
   history?: TranscriptCache;
   /** Read-only durable history, never an execution snapshot or control claim. */
   preview?: { conversationId: string; history: TranscriptCache };
-  statisticsPreview?: { conversationId: string; statistics: import('../../../protocol/app-server/v45').ConversationStatistics; occupancy?: import('../../../protocol/app-server/v45').ContextOccupancy | null };
+  statisticsPreview?: { conversationId: string; statistics: import('../../../protocol/app-server/v46').ConversationStatistics; occupancy?: import('../../../protocol/app-server/v46').ContextOccupancy | null };
   tracePreview?: { conversationId: string; cache: TraceCache };
   turnOutline?: { paging: OutlinePagingIntent; page?: ConversationTurnPage; loading?: boolean; error?: string };
   turnNavigation?: { intent: number; pending?: string; error?: string };
@@ -81,7 +82,7 @@ export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentI
   /** Current-generation turn/start or turn/steer requests awaiting an outcome.
    * Transport ownership only, including unsent requests in the bounded pipeline. */
   inboundRequests?: number;
-  modelIntent?: { config: import('../../../protocol/app-server/v45').SessionModelConfig; phase: 'waiting' | 'applying' | 'failed'; error?: string };
+  modelIntent?: { config: import('../../../protocol/app-server/v46').SessionModelConfig; phase: 'waiting' | 'applying' | 'failed'; error?: string };
   modelMutation?: { generation: number; status: 'in-flight' | 'acknowledged' | 'uncertain' };
   cancellation?: { attemptId: string; status: 'in-flight' | 'acknowledged' | 'uncertain' };
   error?: string;
@@ -110,8 +111,23 @@ export interface UncertainOperation {
   interactionKey?: string;
   generation: number;
 }
+/** The latest native automatic repair receipt of one configuration source
+ * (Issue #464). `receipt` is absent once native withdrew an unresolved one. */
+export interface SourceRepairObservation {
+  target: SourceTarget;
+  receipt?: ConfigRepairReceipt;
+}
+/** The stable client key of one configuration source. */
+export function sourceRepairKey(target: SourceTarget): string {
+  return target.kind === 'user' ? 'user' : `workspace:${target.directory}`;
+}
 export interface ClientView {
   configuration?: Readonly<Record<string, ConfigurationApplication>>;
+  /** Source repair observations of this connection, by `sourceRepairKey`.
+   * Source-scoped: never keyed by a Session or an application scope, and
+   * replaced on every connection, whose server announces each latest receipt
+   * again. Repair is not application: `configuration` reports that. */
+  sourceRepairs?: Readonly<Record<string, SourceRepairObservation>>;
   authorityRevision?: number;
   /** Native AppServerHost identity; unlike generation, stable across reconnect. */
   authorityId?: string;
@@ -509,11 +525,11 @@ export class AppServerClient {
     if (replacing) {
       this.retireAuthority();
     }
-    this.publish({ configuration: {}, endpoint: url.href, connection: transition === 'reconnect' ? 'reconnecting' : 'connecting', capabilities: undefined, error: undefined });
+    this.publish({ configuration: {}, sourceRepairs: {}, endpoint: url.href, connection: transition === 'reconnect' ? 'reconnecting' : 'connecting', capabilities: undefined, error: undefined });
     // Ownership commits after close/retirement, before attempting the new transport.
     committed?.();
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v45', `rustx-token.${token}`]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v46', `rustx-token.${token}`]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -531,12 +547,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 45, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 46, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (!hello.authority_id || hello.protocol_version !== 45 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v45 with native multi-Session, headless interactions, and single-controller admission is required.');
+      if (!hello.authority_id || hello.protocol_version !== 46 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v46 with native multi-Session, headless interactions, and single-controller admission is required.');
       }
       if (this.state.authorityId && this.state.authorityId !== hello.authority_id) {
         try { this.admitAuthorityReplacement(); }
@@ -827,6 +843,19 @@ export class AppServerClient {
       const previous = this.state.configuration?.[application.scope];
       if (!previous || BigInt(application.version) > BigInt(previous.version)) {
         this.publish({ configuration: { ...this.state.configuration, [application.scope]: application } });
+      }
+      return;
+    }
+    if (value.method === 'configuration/sourceRepairChanged') {
+      // Source-scoped (Issue #464): it addresses a configuration source, never
+      // a Session, and never changes runtime application or conversation state.
+      const { target } = value.params;
+      if (target?.kind !== 'user' && (target?.kind !== 'workspace' || typeof target.directory !== 'string')) { this.lose(generation); return; }
+      const receipt = value.params.receipt ?? undefined;
+      const key = sourceRepairKey(target);
+      const previous = this.state.sourceRepairs?.[key];
+      if (!previous || previous.receipt?.id !== receipt?.id) {
+        this.publish({ sourceRepairs: { ...this.state.sourceRepairs, [key]: { target, receipt } } });
       }
       return;
     }
@@ -1535,7 +1564,7 @@ export class AppServerClient {
     return this.readHistoryPage(id, { type: 'older', before: history.page.next_cursor, cut: history.window?.cut ?? null });
   }
   /** One gesture, one read. Navigation intent fences both page and anchor reads. */
-  private async readHistoryPage(id: string, at: import('../../../protocol/app-server/v45').ConversationWindowAt) {
+  private async readHistoryPage(id: string, at: import('../../../protocol/app-server/v46').ConversationWindowAt) {
     const history = this.state.views[id]?.history;
     const observation = this.lifecycles.observe(id);
     if (!history || !observation) return;
@@ -1752,10 +1781,10 @@ export class AppServerClient {
     if (observed && view?.snapshot) this.setSession(id, { history: replaceTranscript(view.snapshot.transcript, view.history) });
     return observed;
   }
-  private modelPreparations = new Map<string, { work: Promise<import('../../../protocol/app-server/v45').SessionModelConfig>; retire: () => void }>();
+  private modelPreparations = new Map<string, { work: Promise<import('../../../protocol/app-server/v46').SessionModelConfig>; retire: () => void }>();
   /** Client-owned selection while native resources initialize. Last unsent choice
    * wins; the existing native mutation and authoritative reread still own apply. */
-  prepareAgentModel(id: string, config: import('../../../protocol/app-server/v45').SessionModelConfig) {
+  prepareAgentModel(id: string, config: import('../../../protocol/app-server/v46').SessionModelConfig) {
     const view = this.state.views[id];
     if (view?.attachment !== 'attaching' || view.attachmentIntent !== 'wanted' || view.deleting)
       return Promise.reject(new Error('Conversation is no longer connecting.'));
@@ -1793,7 +1822,7 @@ export class AppServerClient {
   }
   /** Transport continuation guard, not Session model authority. A successful
    * mutation response alone cannot enable a dependent Send. */
-  async setAgentModel(id: string, config: import('../../../protocol/app-server/v45').SessionModelConfig) {
+  async setAgentModel(id: string, config: import('../../../protocol/app-server/v46').SessionModelConfig) {
     const target = this.target(id), generation = this.state.generation;
     if (this.state.views[id].modelMutation) throw new Error('Reread native model state before another mutation.');
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);

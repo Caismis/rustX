@@ -132,6 +132,8 @@ import { ResumeSelector } from "./components/resume-selector.ts";
 import { ConfirmationView } from "./components/confirmation.ts";
 import { PopupFrame, type PopupContent } from "./components/popup-frame.ts";
 import { TransientFeedbackSurface } from "./components/transient-feedback.ts";
+import { SourceRepairStatus } from "./components/source-repair-status.ts";
+import { SourceRepairNotices, sourceKey, type SourceRepairObservation } from "../presentation/source-repairs.ts";
 import {
   FooterView,
   renderStartup,
@@ -224,6 +226,11 @@ export class RustxTuiApp {
    */
   readonly #todos = new Container();
   readonly #transient = new TransientFeedbackSurface();
+  /** Newly observed configuration repairs; presentation only (Issue #464). */
+  readonly #repairStatus = new SourceRepairStatus();
+  /** Receipt identities already announced, across reconnects. */
+  readonly #repairNotices = new SourceRepairNotices();
+  #removeRepairListener: () => void = () => {};
   readonly #footer = new FooterView(() => ({
     state: this.#connecting ? undefined : this.#session?.state,
     connection: this.#connectionLabel(),
@@ -317,6 +324,7 @@ export class RustxTuiApp {
     this.#tui.addChild(this.#transcript);
     this.#tui.addChild(this.#activity);
     this.#tui.addChild(this.#transient);
+    this.#tui.addChild(this.#repairStatus);
     this.#tui.addChild(this.#todos);
     this.#tui.addChild(new Spacer(1));
     this.#tui.addChild(this.#composerContext);
@@ -324,7 +332,25 @@ export class RustxTuiApp {
     this.#tui.addChild(this.#footer);
 
     this.#watchConnection();
+    this.#watchSourceRepairs();
     this.#bindSession(this.#session);
+  }
+
+  /**
+   * Presents source repair receipts this connection observed: those already
+   * held by the host, then each new one. A receipt identity is announced once
+   * per client, so reconnects and rereads never repeat a status line.
+   */
+  #watchSourceRepairs(): void {
+    this.#removeRepairListener();
+    const observe = ({ target, receipt }: SourceRepairObservation) => {
+      if (receipt === undefined) this.#repairStatus.withdraw(sourceKey(target));
+      else if (this.#repairNotices.fresh(receipt)) this.#repairStatus.observe(receipt);
+      else return;
+      if (this.#started) this.#tui.requestRender();
+    };
+    for (const observation of this.#host.sourceRepairs()) observe(observation);
+    this.#removeRepairListener = this.#host.onSourceRepair(observe);
   }
 
   #watchConnection(): void {
@@ -384,6 +410,7 @@ export class RustxTuiApp {
       this.#dispatcher.setHost(replacement);
       this.#bindSession(session);
       this.#watchConnection();
+      this.#watchSourceRepairs();
       if (session !== undefined && this.#reconnectChild !== undefined) this.#openChildTranscript(this.#reconnectChild);
       this.#reconnectChild = undefined;
       if (session !== undefined) this.#renderState(session.state);
@@ -1745,10 +1772,11 @@ export class RustxTuiApp {
   }
 
   #acknowledgeTransient(): void {
-    if (this.#transient.feedback === undefined) {
+    if (this.#transient.feedback === undefined && !this.#repairStatus.visible) {
       return;
     }
     this.#transient.acknowledge();
+    this.#repairStatus.acknowledge();
     this.#tui.requestRender();
   }
 

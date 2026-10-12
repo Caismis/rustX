@@ -194,6 +194,24 @@ fn cfg235_binary_init_check_show_exit_and_machine_contract() {
     assert_eq!(invalid["diagnostics"][0]["path"], "$");
     assert!(invalid["diagnostics"][0]["file"].is_string());
     assert!(!Path::new(runtime_root).exists());
+    // Offline inspection is never a repair trigger (Issue #464): the
+    // automatically repairable field is still strictly reported, and neither
+    // source nor any backup storage is written.
+    let user_before = std::fs::read(root.path().join("home/rustx/rustx.toml")).unwrap();
+    let shown = report(
+        &run(root.path(), &["config", "show", "--sources", "--json"]),
+        2,
+    );
+    assert_eq!(shown["diagnostics"][0]["path"], "$");
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("workspace/rustx.toml")).unwrap(),
+        "unknown_field = true"
+    );
+    assert_eq!(
+        std::fs::read(root.path().join("home/rustx/rustx.toml")).unwrap(),
+        user_before
+    );
+    assert!(!Path::new(runtime_root).exists());
     let help = run(root.path(), &["--help"]);
     assert!(help.status.success());
     assert!(String::from_utf8_lossy(&help.stderr).contains("3 incomplete or unresolved"));

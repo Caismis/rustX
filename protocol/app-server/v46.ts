@@ -2957,6 +2957,33 @@ export type SessionModelsView =
       diagnostic: string;
       kind: 'unavailable';
     };
+/**
+ * The outcome of one automatic repair observation. A healthy unchanged
+ * source has no receipt at all.
+ */
+export type ConfigRepairStatus = 'repaired' | 'unresolved' | 'commit_uncertain';
+/**
+ * One deterministic edit of an authored source. Never carries a value.
+ */
+export type ConfigRepairChange =
+  | {
+      field_path: string;
+      kind: 'removed_field';
+    }
+  | {
+      name: string;
+      reason: NativeToolRemoval;
+      kind: 'removed_native_tool';
+    }
+  | {
+      from: number;
+      to: number;
+      kind: 'updated_schema_version';
+    };
+/**
+ * Why a Native Tool selection entry was removed.
+ */
+export type NativeToolRemoval = 'unknown' | 'duplicate' | 'agent_control' | 'plugin_owned';
 export type ErrorData =
   | {
       reason: SessionFileReadFailure;
@@ -3144,6 +3171,13 @@ export type Notification1 =
       method: 'configuration/changed';
       params: {
         application: ConfigurationApplication;
+      };
+    }
+  | {
+      method: 'configuration/sourceRepairChanged';
+      params: {
+        target: SourceTarget;
+        receipt?: ConfigRepairReceipt | null;
       };
     }
   | {
@@ -9843,6 +9877,15 @@ export interface SourceSettings {
   };
   user: SourceView;
   workspace?: SourceView | null;
+  /**
+   * The latest automatic repair observation of the User source in this
+   * process. Absent for a source that never needed repair.
+   */
+  user_repair?: ConfigRepairReceipt | null;
+  /**
+   * The latest automatic repair observation of the target Workspace source.
+   */
+  workspace_repair?: ConfigRepairReceipt | null;
   user_resource_root: string;
   workspace_resource_root?: string | null;
   runtime_root: string;
@@ -9854,6 +9897,46 @@ export interface SourceView {
   path: string;
   revision: string;
   authored?: RuntimeLayer | null;
+  diagnostic?: string | null;
+}
+/**
+ * Bounded, redacted native fact about one automatic repair of one source.
+ *
+ * It describes authored bytes only: it never claims that any configuration
+ * was prepared, applied or adopted.
+ */
+export interface ConfigRepairReceipt {
+  /**
+   * Content identity of this observation; equal receipts are one repair.
+   */
+  id: string;
+  target: SourceTarget;
+  status: ConfigRepairStatus;
+  /**
+   * The exact source revision the repair was planned from.
+   */
+  before_revision: string;
+  /**
+   * The committed revision, or the revision observed after an uncertain
+   * publication. Absent when nothing was published.
+   */
+  after_revision?: string | null;
+  /**
+   * Every eligible change, including those beyond `changes`.
+   */
+  changed_count: number;
+  changes: ConfigRepairChange[];
+  /**
+   * Whether `changes` omits entries beyond [`MAX_RECEIPT_CHANGES`].
+   */
+  truncated: boolean;
+  /**
+   * Whether an exact private copy of the original bytes exists.
+   */
+  backup_available: boolean;
+  /**
+   * Why the source is unresolved or uncertain; never source excerpts.
+   */
   diagnostic?: string | null;
 }
 export interface SourceView2 {

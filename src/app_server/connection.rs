@@ -150,12 +150,63 @@ pub struct AppServerConnection {
     summary_invalidations: Arc<crate::local_runtime::session::SessionSummaryInvalidations>,
     summary_invalidations_delivered: Arc<Mutex<u64>>,
     ownership_invalidations_delivered: Arc<Mutex<u64>>,
+    /// The configuration sources whose automatic repair observations this
+    /// connection may see (Issue #464), with the ledger sequence it last
+    /// delivered for each.
+    source_repairs: Arc<Mutex<RepairInterest>>,
     /// Delivery access granted by this connection's transport authentication,
     /// never by a request. Close cancels it, retiring every admitted fence.
     delivery_access: Option<tokio_util::sync::CancellationToken>,
     /// This connection's in-flight delivery requests, by exact request id.
     deliveries: Arc<super::delivery_access::Operations>,
     observation_reads: Arc<Mutex<Vec<(RequestId, tokio_util::sync::CancellationToken)>>>,
+}
+
+/// Which source repair observations one connection may see.
+///
+/// The User source always; a Workspace source once this connection addressed
+/// it in a request — exactly the sources its own `configuration/sourcesRead`
+/// could read — so no other Workspace identity reaches it. A source starts at
+/// sequence zero, so its latest receipt is announced once; the set is finite
+/// and forgets the least recently addressed Workspace first.
+struct RepairInterest {
+    delivered:
+        std::collections::BTreeMap<crate::local_runtime::configuration::repair::SourceKey, u64>,
+    workspaces: std::collections::VecDeque<std::path::PathBuf>,
+}
+
+/// Workspace sources one connection observes for repair notices.
+const REPAIR_INTEREST_WORKSPACES: usize = 64;
+
+impl Default for RepairInterest {
+    fn default() -> Self {
+        Self {
+            delivered: [(
+                crate::local_runtime::configuration::repair::SourceKey::User,
+                0,
+            )]
+            .into(),
+            workspaces: std::collections::VecDeque::new(),
+        }
+    }
+}
+
+impl RepairInterest {
+    fn observe(&mut self, directory: std::path::PathBuf) {
+        use crate::local_runtime::configuration::repair::SourceKey;
+        if let Some(position) = self.workspaces.iter().position(|known| *known == directory) {
+            self.workspaces.remove(position);
+        } else {
+            self.delivered
+                .insert(SourceKey::Workspace(directory.clone()), 0);
+        }
+        self.workspaces.push_back(directory);
+        if self.workspaces.len() > REPAIR_INTEREST_WORKSPACES
+            && let Some(forgotten) = self.workspaces.pop_front()
+        {
+            self.delivered.remove(&SourceKey::Workspace(forgotten));
+        }
+    }
 }
 
 /// Read cancellation owns only a disposable observation, never child work.
@@ -248,6 +299,7 @@ impl AppServerConnection {
             changed: Arc::new(tokio::sync::Notify::new()),
             reader: Arc::new(tokio::sync::Mutex::new(())),
             configuration_versions: Arc::default(),
+            source_repairs: Arc::default(),
             next_route: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             delivery_access: None,
             deliveries: Arc::default(),
@@ -620,6 +672,10 @@ impl AppServerConnection {
                 return Err(domain(ErrorData::AlreadyInitialized));
             }
             *state = Some(params);
+            drop(state);
+            // Source repair notices begin with initialization; wake a parked
+            // notification reader so already-recorded receipts are announced.
+            self.changed.notify_one();
             return Ok(MethodResult::Initialized {
                 authority_id: self.host.authority_id().to_owned(),
                 protocol_version: APP_SERVER_PROTOCOL_VERSION,
@@ -634,6 +690,7 @@ impl AppServerConnection {
                 snapshot: self.host.diagnostics(),
             });
         }
+        self.observe_repair_source(&method).await;
         if let Method::AgentConversationCancel { request_id } = method {
             let reads = self
                 .observation_reads
@@ -1145,6 +1202,67 @@ impl AppServerConnection {
         Ok(route)
     }
 
+    /// Admit the Workspace source a request addresses into this connection's
+    /// repair observations, before the request runs: a Session open that
+    /// fails on an unrepairable source still announces why.
+    async fn observe_repair_source(&self, method: &Method) {
+        let directory = match method {
+            Method::SourcesRead { target }
+            | Method::SourcesWrite { target, .. }
+            | Method::ConfigurationReconcile { target }
+            | Method::McpProbe { target, .. } => target
+                .validate()
+                .ok()
+                .and_then(|()| target.workspace().map(std::path::Path::to_path_buf)),
+            Method::SessionCreate { settings } => std::fs::canonicalize(&settings.cwd).ok(),
+            Method::SessionAttach { session_id, .. } => self
+                .sessions
+                .read_settings(session_id)
+                .await
+                .ok()
+                .and_then(|(_, settings)| std::fs::canonicalize(&settings.cwd).ok()),
+            _ => None,
+        };
+        if let Some(directory) = directory.filter(|directory| directory.is_dir()) {
+            self.source_repairs
+                .lock()
+                .expect("source repair interest")
+                .observe(directory);
+        }
+    }
+
+    /// The next source repair observation this connection has not delivered.
+    /// Level-triggered against the native ledger and per-source cursors.
+    pub(crate) fn next_source_repair(&self) -> Option<NotificationMethod> {
+        use crate::local_runtime::configuration::repair::SourceKey;
+        use crate::local_runtime::configuration::settings::SourceTarget;
+        // A v46 notice reaches only a connection that negotiated v46.
+        if self.initialized.lock().expect("initialize mutex").is_none() {
+            return None;
+        }
+        let ledger = self.host.manager().source_repairs();
+        let mut interest = self.source_repairs.lock().expect("source repair interest");
+        for (key, delivered) in &mut interest.delivered {
+            let Some((sequence, receipt)) = ledger.changed_after(key, *delivered) else {
+                continue;
+            };
+            let first = *delivered == 0;
+            *delivered = sequence;
+            // Nothing to withdraw from a connection that never saw a receipt.
+            if receipt.is_none() && first {
+                continue;
+            }
+            let target = match key {
+                SourceKey::User => SourceTarget::User,
+                SourceKey::Workspace(directory) => SourceTarget::Workspace {
+                    directory: directory.clone(),
+                },
+            };
+            return Some(NotificationMethod::SourceRepairChanged { target, receipt });
+        }
+        None
+    }
+
     /// The next configuration application this connection has not delivered yet.
     ///
     /// Level-triggered against the manager's current applications and this
@@ -1200,6 +1318,16 @@ impl AppServerConnection {
         })
     }
 
+    /// The next level-triggered notification owed outside any attachment, in
+    /// priority order: Session metadata, configuration application, then
+    /// configuration source repair.
+    fn next_level_notification(&self) -> Option<NotificationMethod> {
+        self.next_ownership_invalidation()
+            .or_else(|| self.next_summary_invalidation())
+            .or_else(|| self.next_configuration_change())
+            .or_else(|| self.next_source_repair())
+    }
+
     /// Wait for one routed notification. No per-Session event queues or pump tasks.
     /// # Panics
     /// Panics if a connection routing mutex is poisoned.
@@ -1207,17 +1335,9 @@ impl AppServerConnection {
         let _reader = self.reader.lock().await;
         let mut configuration_changes = self.host.manager().configuration_changes();
         let mut summary_invalidations = self.summary_invalidations.changes();
+        let mut source_repairs = self.host.manager().source_repairs().subscribe();
         loop {
-            if let Some(notification) = self
-                .next_ownership_invalidation()
-                .or_else(|| self.next_summary_invalidation())
-            {
-                return Notification {
-                    jsonrpc: JsonRpcVersion::V2,
-                    notification,
-                };
-            }
-            if let Some(notification) = self.next_configuration_change() {
+            if let Some(notification) = self.next_level_notification() {
                 return Notification {
                     jsonrpc: JsonRpcVersion::V2,
                     notification,
@@ -1239,6 +1359,7 @@ impl AppServerConnection {
                     () = &mut changed => {},
                     _ = configuration_changes.changed() => {},
                     _ = summary_invalidations.changed() => {},
+                    _ = source_repairs.changed() => {},
                 }
                 continue;
             }
@@ -1268,6 +1389,7 @@ impl AppServerConnection {
                 () = &mut changed => continue,
                 _ = configuration_changes.changed() => continue,
                 _ = summary_invalidations.changed() => continue,
+                _ = source_repairs.changed() => continue,
                 result = futures_util::future::select_all(pending) => result.0,
             };
             let target = route.target.clone();

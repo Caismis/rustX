@@ -122,6 +122,10 @@ fn compose(options: &Request) -> Result<AppServerHost, String> {
     validate_wire_bindings(configuration.source_bindings())?;
     let sessions =
         SessionController::open(configuration.runtime_root()).map_err(|error| error.to_string())?;
+    // Automatic repair of the bound User source precedes process policy
+    // parsing and every transport. Its outcome is a ledger observation the
+    // first client reads; an unrepairable source keeps its strict failure.
+    configuration.repair_source(&crate::local_runtime::configuration::settings::SourceTarget::User);
     let policy = configuration.app_server_policy()?;
     let manager = SessionRuntimeManager::new(
         sessions,

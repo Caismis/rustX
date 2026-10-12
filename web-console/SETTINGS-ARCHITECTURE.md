@@ -574,6 +574,48 @@ Settings surface states (`connecting`/`loading`/`ready`/`stale`/`failed`) and
 change behavior (`Applies immediately`/`Requires App Server restart`) are likewise
 projected rather than inferred.
 
+### Automatic repair (#464)
+
+Native repairs the two `rustx.toml` sources by itself at its own boundaries;
+the browser classifies nothing, repairs nothing and never triggers a repair by
+reading. It presents two native facts:
+
+```text
+configuration/sourceRepairChanged ──▶ client `sourceRepairs` (per source key)
+                                       └─▶ RepairNotice: one nonblocking notice
+                                             View details ─▶ OPEN.REPAIRS(source)
+configuration/sourcesRead ──▶ SourceSettings.user_repair / workspace_repair
+                               └─▶ Advanced → Auto Repair (AutoRepairSection)
+```
+
+- The client keeps the latest receipt of each source this connection observed,
+  keyed by source and never by Session or application scope, replaced on every
+  connection (whose server announces each latest receipt again). It is a
+  separate fact from `configuration`, the application publication.
+- `RepairNotice` (`app/RepairNotice.tsx`) presents each unacknowledged receipt
+  once: a combined sentence for simultaneous User and Workspace repairs, an
+  alert for `unresolved` / `commit_uncertain`, and nothing at all for a source
+  without a receipt. View details and Dismiss acknowledge the receipt ids in a
+  bounded browser-local list, so reconnects, rereads, reloads and other tabs
+  never repeat a notice. There is no dialog and no automatic navigation.
+- `OPEN.REPAIRS` is a navigation event: the User owner opens directly at
+  Advanced with the `{ kind: 'auto_repair' }` focus, which every owner admits;
+  a Workspace source resolves its exact owner through the Product Host lookup
+  like `OPEN.OWNER` and lands there on resolution. A stale lookup has no
+  completion path, as for every other navigation decision.
+- Advanced → Auto Repair renders the receipt from the target's own
+  authoritative read: status, change count, field paths, Tool names with
+  reasons, the schema version update, revisions and whether a private backup
+  exists. A failed repair keeps the native diagnostic beside the existing
+  Repair malformed source editor; it never claims the configuration is applied,
+  which Application observation reports.
+
+A receipt is presentation only. It is not a transaction input: a repair commits
+a new source revision exactly like an external edit, so an unsaved draft stays
+in its unit transaction with its pinned CAS base, is never submitted or
+rebased, and needs the explicit review gesture before it can save against the
+repaired revision.
+
 ## Authoring intent
 
 `UnitForm` keeps these facts distinct and never collapses them into one form value:

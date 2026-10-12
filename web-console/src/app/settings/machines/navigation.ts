@@ -34,8 +34,9 @@ export interface PageFocus {
   tools: never;
   mcp: { kind: 'mcp'; name?: string; mode?: 'json' | 'permissions' };
   extensions: { kind: 'extension'; family: ExtensionFamily; name: string };
-  /** Connection is the client-owned sub-surface of Advanced. */
-  advanced: { kind: 'connection' };
+  /** Connection is the client-owned sub-surface of Advanced; Auto Repair is
+   * the owner's own automatic `rustx.toml` repair section (Issue #464). */
+  advanced: { kind: 'connection' } | { kind: 'auto_repair' };
 }
 export type SettingsFocus = PageFocus[SettingsPage];
 export type FocusMap = { [P in SettingsPage]?: PageFocus[P] };
@@ -65,6 +66,7 @@ export function admitsPage(target: SettingsTarget, page: SettingsPage): boolean 
  * - Advanced focuses Connection, and only for the User target — Connection is
  *   client-owned global configuration, and a Workspace is a constrained
  *   source-authoring surface that never exposes it;
+ * - Advanced focuses Auto Repair for every owner: each source has its own;
  * - General, Agent and Tools & Permissions have no secondary focus.
  *
  * A focus that belongs to another page is never this page's focus. */
@@ -75,10 +77,13 @@ export function admitsFocus(target: SettingsTarget, page: SettingsPage, focus: S
     case 'mcp': return page === 'mcp';
     case 'extension': return page === 'extensions' && focus.family !== 'mcp';
     case 'connection': return page === 'advanced' && target.kind === 'user';
+    case 'auto_repair': return page === 'advanced';
   }
 }
 /** The Connection focus, which Advanced admits only for the User target. */
 export const connectionFocus: PageFocus['advanced'] = { kind: 'connection' };
+/** The Auto Repair focus of an owner's Advanced page. */
+export const autoRepairFocus: PageFocus['advanced'] = { kind: 'auto_repair' };
 
 /** What an owning-Workspace lookup can truthfully answer. There is deliberately
  * no error channel: a lookup that completes under a retired authority answers
@@ -125,6 +130,9 @@ export interface SettingsNavigationContext {
   focus: FocusMap;
   /** The owner an opened Settings instance is permanently bound to. */
   target: SettingsTarget;
+  /** Where an owner lookup in flight lands once it resolves: the landing page
+   * by default, or Advanced → Auto Repair for `OPEN.REPAIRS`. */
+  landing?: 'auto_repair';
   error: DisplayText;
 }
 
@@ -132,6 +140,10 @@ export type SettingsNavigationEvent =
   | { type: 'OPEN'; target: SettingsTarget }
   | { type: 'OPEN.CONNECTION' }
   | { type: 'OPEN.OWNER'; directory: string }
+  /** Open the exact owner of one native configuration source at Advanced →
+   * Auto Repair. A Workspace source resolves its owner through the Product
+   * Host like `OPEN.OWNER`; nothing is guessed from a path or a Session. */
+  | { type: 'OPEN.REPAIRS'; source: { kind: 'user' } | { kind: 'workspace'; directory: string } }
   /** Select another primary page of the open dialog, keeping its target and
    * every page's own focus. A page the target does not authorize is refused. */
   | { type: 'SELECT'; page: SettingsPage }
@@ -232,6 +244,18 @@ export const settingsNavigationMachine = setup({
     }),
     close: assign({ page: () => undefined, error: () => '' }),
     clearError: assign({ error: () => '' }),
+    openRepairs: assign({
+      target: () => userSettingsTarget,
+      page: () => 'advanced' as const,
+      focus: ({ context }) => ({
+        ...(settingsTargetKey(context.target) === settingsTargetKey(userSettingsTarget) ? context.focus : {}),
+        advanced: autoRepairFocus,
+      }),
+      landing: () => undefined,
+      error: () => '',
+    }),
+    landOnRepairs: assign({ landing: () => 'auto_repair' as const, error: () => '' }),
+    landOnOwner: assign({ landing: () => undefined }),
     openResolvedOwner: assign({
       target: ({ context, event }) => {
         const output = (event as unknown as { output: OwnerResolution }).output;
@@ -239,9 +263,12 @@ export const settingsNavigationMachine = setup({
       },
       page: ({ context, event }) => {
         const output = (event as unknown as { output: OwnerResolution }).output;
+        if (output.kind === 'resolved' && context.landing === 'auto_repair') return 'advanced' as const;
         return settingsLanding(output.kind === 'resolved' ? workspaceSettingsTarget(output.id, output.displayName) : context.target);
       },
-      focus: () => ({}),
+      focus: ({ context, event }) => (event as unknown as { output: OwnerResolution }).output.kind === 'resolved' && context.landing === 'auto_repair'
+        ? { advanced: autoRepairFocus } : {},
+      landing: () => undefined,
       error: () => '',
     }),
     reportOwnerLookup: assign({
@@ -262,7 +289,12 @@ export const settingsNavigationMachine = setup({
     resolvingOwner: {
       invoke: {
         src: 'resolveOwner',
-        input: ({ context, event }) => ({ lookup: context.lookup, directory: (event as Extract<SettingsNavigationEvent, { type: 'OPEN.OWNER' }>).directory }),
+        input: ({ context, event }) => ({
+          lookup: context.lookup,
+          directory: event.type === 'OPEN.REPAIRS' && event.source.kind === 'workspace'
+            ? event.source.directory
+            : (event as Extract<SettingsNavigationEvent, { type: 'OPEN.OWNER' }>).directory,
+        }),
         onDone: [
           { guard: 'ownerResolved', target: 'idle', actions: 'openResolvedOwner' },
           { guard: 'ownerUnregistered', target: 'idle', actions: 'reportOwnerLookup' },
@@ -276,7 +308,11 @@ export const settingsNavigationMachine = setup({
   on: {
     OPEN: { target: '.idle', reenter: true, actions: 'openTarget' },
     'OPEN.CONNECTION': { target: '.idle', reenter: true, actions: 'openConnection' },
-    'OPEN.OWNER': { target: '.resolvingOwner', reenter: true, actions: 'clearError' },
+    'OPEN.OWNER': { target: '.resolvingOwner', reenter: true, actions: ['clearError', 'landOnOwner'] },
+    'OPEN.REPAIRS': [
+      { guard: ({ event }) => event.source.kind === 'workspace', target: '.resolvingOwner', reenter: true, actions: 'landOnRepairs' },
+      { target: '.idle', reenter: true, actions: 'openRepairs' },
+    ],
     SELECT: { guard: 'pageAdmitted', target: '.idle', reenter: true, actions: 'select' },
     FOCUS: { guard: 'focusAdmitted', target: '.idle', reenter: true, actions: 'focus' },
     CLOSE: { target: '.idle', reenter: true, actions: 'close' },

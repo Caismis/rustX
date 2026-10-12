@@ -66,6 +66,12 @@ timezone = "UTC"
     const writeSettings = (model = 'console-model') => writeFileSync(settings, (scenario === 'web_compaction' ? '[context]\nreserve_tokens = 0\nkeep_recent_tokens = 0\n' : '') + catalog + `[model_timeout_policy]\nresponse_start_timeout_ms = 600000\nstream_idle_timeout_ms = 600000\n[native_tools.bash]\napproval = "always"\n[agent.tools]\nbuiltin = ["read", "write", "edit", "glob", "grep", "bash", "present", "ask_user", "job_list", "job_status", "job_wait", "job_cancel"]\n[agent.model]\nmodel = "fixture/${model}"\n` + imageSource);
     writeSettings();
     if (scenario === 'web_child_capabilities') writeFileSync(settings, readFileSync(settings, 'utf8') + '\n[native_tools.write]\napproval = "never"\n');
+    // Automatically repairable sources (#464): the App Server repairs the User
+    // document at startup and Workspace A before its first Session resolves.
+    if (scenario === 'web_config_repair') {
+      writeFileSync(settings, 'schema_version = 8\nlegacy_root = true\n' + readFileSync(settings, 'utf8') + '\n[agent.plugins.todo]\nenabled = true\nunknown_permission = true\n');
+      writeFileSync(join(workspaceA, 'rustx.toml'), '# Workspace A\n[agent]\nfuture_trust = true\n');
+    }
     if (['web_agent_continuation', 'web_child_capabilities'].includes(scenario)) {
       mkdirSync(join(workspaceA, '.agents/agents'), { recursive: true });
       writeFileSync(join(workspaceA, '.agents/agents/reviewer.toml'), 'description = "Continuable reviewer"\ninstructions = "Review requests carefully."\n' + (scenario === 'web_child_capabilities' ? '[tools]\nbuiltin = ["read", "write", "present"]\n[tools.sources]\nimage_fixture = ["render_image"]\n' : ''));

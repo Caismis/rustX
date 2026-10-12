@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v45 envelope and method vocabulary.
+//! Rust authority for the App Server v46 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 45;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 46;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -877,6 +877,22 @@ pub enum NotificationMethod {
     #[serde(rename = "configuration/changed")]
     ConfigurationChanged {
         application: crate::local_runtime::configuration::application::ConfigurationApplication,
+    },
+    /// The latest automatic `rustx.toml` repair observation of one source
+    /// changed (Issue #464).
+    ///
+    /// Source-scoped: it names a `SourceTarget`, never a Session, attachment
+    /// or application scope, and it says nothing about runtime application,
+    /// which `configuration/changed` reports separately. A connection observes
+    /// the User source and each Workspace source it addressed; a newly
+    /// observed source announces its latest receipt once. `receipt: null`
+    /// means the source no longer reports an unresolved repair. Delivery is
+    /// level-triggered from a finite process-local ledger: after a gap, the
+    /// authoritative `configuration/sourcesRead` carries the same receipts.
+    #[serde(rename = "configuration/sourceRepairChanged")]
+    SourceRepairChanged {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        receipt: Option<crate::local_runtime::configuration::repair::ConfigRepairReceipt>,
     },
     #[serde(rename = "session/event")]
     Event {

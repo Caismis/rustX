@@ -1,12 +1,16 @@
 # TUI and App Server configuration
 
-The TUI is a projection/control client of App Server protocol v45. It does not parse
+The TUI is a projection/control client of App Server protocol v46. It does not parse
 TOML, resolve overlays or discover resources. Generated contracts live in
-[`protocol/app-server/v45.ts`](../protocol/app-server/v45.ts).
+[`protocol/app-server/v46.ts`](../protocol/app-server/v46.ts).
 
 `/settings` reads User configuration even with zero Sessions. `/settings workspace
 "/canonical/path"` selects a native Workspace source; `rescan` and `approval
 policy|full_access|inherit` operate on that explicit target with source CAS.
+`/settings repairs`, `/settings user repairs` and `/settings workspace repairs`
+inspect native automatic repair receipts (#464) read-only; the host routes
+`configuration/sourceRepairChanged` without a Session and retains notices that
+arrive before any presentation subscribes.
 `/session settings` inspects Session selections, binding, pending candidate and
 the runtime's published adoption eligibility (Runtime Client state, never part of
 the application). `/session adopt` sends only the last inspected candidate and

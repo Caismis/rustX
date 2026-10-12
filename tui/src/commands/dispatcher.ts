@@ -1,5 +1,7 @@
+import { realpathSync } from "node:fs";
 import { isAttemptActive } from "../presentation/state.ts";
 import { archiveDestination } from "../app-server/archive.ts";
+import { renderRepairInspection, type SourceRepairObservation } from "../presentation/source-repairs.ts";
 /**
  * The command/input dispatcher.
  *
@@ -183,7 +185,7 @@ export class CommandDispatcher {
   // A retained command is one submission until its response is classified.
   // Other controls and commands (including on a replacement attachment) remain usable.
   readonly #agentMessageSubmissions = new WeakSet<AppServerSession>();
-  #inspected = new Map<string, import('../../../protocol/app-server/v45.ts').AvailableConfiguration>();
+  #inspected = new Map<string, import('../../../protocol/app-server/v46.ts').AvailableConfiguration>();
 
   constructor(context: DispatcherContext) {
     this.#context = context;
@@ -506,11 +508,20 @@ export class CommandDispatcher {
 
   async #settings(argument: string): Promise<CommandOutcome> {
     const words = argument.match(/"(?:[^"\\]|\\.)*"|\S+/g)?.map(word => word.startsWith('"') ? JSON.parse(word) as string : word) ?? [];
+    const usage = transient("error", 'usage: /settings [repairs] | [user | workspace ["<canonical absolute path>"]] [repairs | rescan | approval policy|full_access|inherit]');
+    if (words.length === 1 && words[0] === "repairs") return this.#repairs(undefined);
     const owner = words.shift() ?? "user";
-    let target: import("../../../protocol/app-server/v45.ts").SourceTarget;
+    let target: import("../../../protocol/app-server/v46.ts").SourceTarget;
     if (owner === "user") target = { kind: "user" };
-    else if (owner === "workspace" && words[0]) target = { kind: "workspace", directory: words.shift()! };
-    else return transient("error", 'usage: /settings [user | workspace "<canonical absolute path>"] [rescan | approval policy|full_access|inherit]');
+    else if (owner === "workspace" && words[0] === "repairs" && words.length === 1) {
+      // The current Workspace is this client's own Session directory; any
+      // other Workspace is still named explicitly.
+      const current = this.#currentWorkspace();
+      if (current === undefined) return transient("error", "The current Workspace directory is unavailable; name it explicitly.");
+      target = current;
+    } else if (owner === "workspace" && words[0]) target = { kind: "workspace", directory: words.shift()! };
+    else return usage;
+    if (words[0] === "repairs") return words.length === 1 ? this.#repairs(target) : usage;
     const action = words.shift();
     const client = this.#context.host.client;
     let source = (await client.call("configuration/sourcesRead", { target }, "source_settings")).projection;
@@ -523,6 +534,32 @@ export class CommandDispatcher {
     } else if (action) return transient("error", "Unknown Settings action");
     if (action) source = (await client.call("configuration/sourcesRead", { target }, "source_settings")).projection;
     return inspect(target.kind === "user" ? "User Settings" : "Workspace Settings", JSON.stringify(source, null, 2));
+  }
+
+  /**
+   * The redacted native repair receipts of the User source, a Workspace
+   * source, or both (`undefined`), read authoritatively. Read-only: this never
+   * triggers a repair, and nothing in it reaches the conversation.
+   */
+  async #repairs(target: import("../../../protocol/app-server/v46.ts").SourceTarget | undefined): Promise<CommandOutcome> {
+    const workspace = target === undefined ? this.#currentWorkspace() : target.kind === "workspace" ? target : undefined;
+    const projection = await this.#context.host.readSourceRepairs(workspace ?? { kind: "user" });
+    const observations: SourceRepairObservation[] = [];
+    if (target === undefined || target.kind === "user") {
+      observations.push({ target: { kind: "user" }, receipt: projection.user_repair ?? undefined });
+    }
+    if (workspace !== undefined) {
+      observations.push({ target: projection.target, receipt: projection.workspace_repair ?? undefined });
+    }
+    return inspect("Configuration repairs", renderRepairInspection(observations));
+  }
+
+  #currentWorkspace(): import("../../../protocol/app-server/v46.ts").SourceTarget | undefined {
+    try {
+      return { kind: "workspace", directory: realpathSync(this.#context.sessionSettings.cwd) };
+    } catch {
+      return undefined;
+    }
   }
 
   async #configuration(session: AppServerSession, argument: string): Promise<CommandOutcome> {
@@ -1214,6 +1251,6 @@ export function renderSettings(state: PresentationState, configuration?: import(
       `Admitted Attempt: ${JSON.stringify(configuration.admitted_attempt ?? null)}`,
       "Effective configuration and provenance:", JSON.stringify(configuration, null, 2),
     ] : []),
-    "/settings edits User/Workspace sources. /session settings inspects Session state; /session adopt explicitly adopts the inspected candidate.",
+    "/settings edits User/Workspace sources; /settings repairs shows their automatic repairs. /session settings inspects Session state; /session adopt explicitly adopts the inspected candidate.",
   ].join("\n");
 }

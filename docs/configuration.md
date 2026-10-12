@@ -70,9 +70,12 @@ preparation additionally requires `--prepare`.
 
 The authoritative structural reference is
 [`rustx.schema.json`](../schemas/rustx.schema.json), generated from
-`local_runtime::authoring::RuntimeLayer`. Unknown fields are rejected. TOML
-tables and arrays preserve authored omission versus explicit empty values.
-The current document version is `schema_version = 10`.
+`local_runtime::authoring::RuntimeLayer`. Unknown fields are rejected by the
+parser; the App Server deletes them from a source at its native boundaries
+before parsing, together with a few other exactly recognizable constructs (see
+[Automatic source repair](#automatic-source-repair-464)). TOML tables and arrays
+preserve authored omission versus explicit empty values. The current document
+version is `schema_version = 10`.
 
 | Top-level field | Owner and meaning |
 | --- | --- |
@@ -570,6 +573,103 @@ apply through their owners; the process drain deadline waits for restart. Fixed
 startup storage/transport bindings remain process-owned. Notifications identify
 scope and monotonically ordered native versions; clients discard stale versions.
 Reconnect rereads authority and never replays uncertain mutations.
+
+## Automatic source repair (#464)
+
+The App Server repairs a small, exactly recognizable set of invalid authored
+constructs in the two `rustx.toml` sources — the bound User document (including
+a process `--config` override) and the selected Workspace document — with the
+same rules for both. The strict parser is never weakened: repair rewrites the
+file, and the rewritten file must then pass the same validation every consumer
+applies. Repair is deletion-first and deterministic; it never guesses, renames,
+coerces or invents a value.
+
+| Authored problem | Automatic transformation |
+| --- | --- |
+| Field unknown to its closed schema object — including inside policy, approval, security, plugin or isolation objects | The field and its value are deleted; there is no semantic exemption |
+| Unknown configuration table | The table is deleted; unrelated tables stay |
+| Unknown entry in `agent.tools.builtin` | That element is deleted |
+| Repeated ordinary `agent.tools.builtin` entry | Later occurrences are deleted; the first stays |
+| Agent control or Plugin-owned Tool in `agent.tools.builtin` | That element is deleted, with its classified reason |
+| Unsupported key under `native_tools` | That policy entry is deleted |
+| Explicit `schema_version` other than the current version (older or newer) | Set to the current version, only if the whole candidate then validates |
+| Omitted `schema_version` | Stays omitted |
+| Invalid TOML syntax, wrong type or value of a known field, missing required facts, broken Provider/Model references, invalid `request_params` JSON, `app_server` in a Workspace, any other remaining failure | Nothing is edited; the source is unchanged and reported `unresolved` |
+
+Eligibility comes from the generated source schema of `RuntimeLayer`
+(`schemas/rustx.schema.json`): only keys of closed objects
+(`additionalProperties: false`) are fields. Declared open maps — Provider,
+Model and Profile identities, `agent.tools.sources`, `environment`,
+`mcp_tool_policies` — hold authored identities, never unknown fields, and the
+JSON inside `request_params` is an opaque string that is never entered. A union
+is entered only through the one alternative that admits the authored shape, so
+an unknown `mode` tag selects nothing and nothing beneath it is touched. Tool
+entries are classified by the native Tool domain itself (the Agent control
+vocabulary, the extension plane and the definitions a root profile can select),
+which is also the owner of the strict `agent.tools.builtin` validation.
+
+Candidate construction uses `toml_edit` in one finite pass over one exact byte
+revision: comments, formatting, quoting, secrets and every unrelated value stay as
+the editing model allows, and a second plan of the candidate must find nothing
+left to do. The candidate is valid only if the production source parser accepts
+it (types, required fields, `request_params`, Workspace `app_server`, the current
+schema version) and native semantics accept the composition consumers actually
+use: a Workspace over the current User source, the User source on its own. A
+composition that selects no default model is incomplete, not invalid, because the
+other scope may select it; then only its Model Catalog and root Tool selection
+are decided. Nothing here resolves credentials, connects MCP, prepares Python,
+creates a Session or calls a model.
+
+A changed source is committed through the same native writer primitive as
+`configuration/sourceWrite`: the source writer lock, an exact revision check
+before the candidate is used and again immediately before publication, a staged
+and synced file, atomic replacement and a parent-directory sync. Before that, an
+exact copy of the original bytes is written to private storage under the bound
+runtime root (`<runtime_root>/configuration-backups/`, directory `0700`, file
+`0600`, never inside the Workspace), named by source identity and original
+revision; a backup failure leaves the source unchanged. A healthy source is read
+once without a lock or any write, so it gets no lock file, no backup and no
+receipt. An external edit that races the repair supersedes it: nothing is written
+and the next boundary plans from the new bytes. A failure before replacement
+leaves the source unchanged; a replacement that may have happened, or a parent
+sync that failed, is reported `commit_uncertain` with the revision observed by
+rereading the file, and is never replayed. User and Workspace are independent
+transactions, so one may be repaired while the other stays unresolved.
+
+Repair runs only at native source boundaries:
+
+- App Server startup repairs the bound User source after the runtime root is
+  opened and before process `app_server` policy is parsed or any transport opens;
+- Session creation, and a Session load that has to resolve configuration afresh,
+  repair the User source and the exact selected Workspace document first;
+- `configuration/reconcile` repairs the User source and, for a Workspace target,
+  that Workspace before it captures them.
+
+`rustx config check`, `rustx config show --sources`, `configuration/sourcesRead`
+and every client navigation stay read-only. There is no watcher and no periodic
+check. A committed repair is handed to the configuration coordinator exactly like a
+committed `configuration/sourceWrite`, under the same lock, so one commit is
+captured once and application, preparation and Session adoption keep their
+existing contracts: a repaired file is desired state, not proof that anything was
+applied. A receipt never enters canonical history, the Event Journal or model
+context.
+
+Each source keeps its latest repair observation in a finite, process-local
+ledger: `repaired`, `unresolved` or `commit_uncertain`, the exact before and
+committed revisions, the change count and up to 64 changes (removed field paths,
+removed Tool names with reason, the schema version update), whether more were
+omitted, whether a backup exists, and for a failure a diagnostic built from the
+parser's location and classification or the native semantic message — never a
+removed value, source excerpt, credential, `request_params` payload or backup
+content. Re-observing the same bytes is the same receipt. An unresolved receipt is
+withdrawn once the source is found healthy at a later boundary or a committed
+`configuration/sourceWrite` leaves it satisfying its source contract.
+
+Manual `repair_config` remains the editor for documents that fail their own source
+contract — syntax, types, Workspace `app_server`, a foreign schema version —
+including TOML-parsable ones; ordinary semantic-unit writes require a document that
+satisfies it, and the source projection marks a document violating it as not
+loaded.
 
 ## Durable identity and retention
 

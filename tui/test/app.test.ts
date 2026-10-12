@@ -157,6 +157,8 @@ function fakeHost(options: FakeHostOptions = {}): AppServerHost {
       (async (sessionId: string) => fakeSession(undefined, sessionId)),
     attachment: () => undefined,
     detach: async () => {},
+    sourceRepairs: () => [],
+    onSourceRepair: () => () => {},
     readSession:
       options.readSession ?? (async () => sessionView()),
     listSessions: async () => ({ sessions: [] as SessionSummaryView[] }),

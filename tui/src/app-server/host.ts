@@ -42,7 +42,11 @@ import {
   type MessageId,
   type UserInputBlock,
   type Notification,
+  type ConfigRepairReceipt,
+  type SourceSettings,
+  type SourceTarget,
 } from "../protocol/app-server.ts";
+import { sourceKey, type SourceRepairObservation } from "../presentation/source-repairs.ts";
 import { AppServerClient } from "./client.ts";
 import {
   AppServerChild,
@@ -107,18 +111,22 @@ export interface AppServerHostComposition {
 }
 
 /**
- * The Session a notification addresses.
+ * The Session a notification addresses, if it addresses one.
  *
- * Every server notification names exactly one Session, but not all of them do
- * it through an attachment target: configuration application is scoped by
- * Session, and `session/summaryInvalidated` (Issue #386) is addressed by
- * Session identity alone, because durable Session metadata belongs to the
- * Session rather than to whichever Conversation of it a client displays.
+ * Session notifications do not all address a Session through an attachment
+ * target: configuration application is scoped by Session, and
+ * `session/summaryInvalidated` (Issue #386) is addressed by Session identity
+ * alone, because durable Session metadata belongs to the Session rather than
+ * to whichever Conversation of it a client displays. A source-scoped
+ * notification (`configuration/sourceRepairChanged`, Issue #464) addresses a
+ * configuration source and no Session at all.
  */
-function sessionIdOf(notification: Notification): string {
+function sessionIdOf(notification: Notification): string | undefined {
   switch (notification.method) {
     case "configuration/changed":
       return notification.params.application.scope;
+    case "configuration/sourceRepairChanged":
+      return undefined;
     case "session/ownershipRetired":
     case "session/summaryInvalidated":
       return notification.params.session_id;
@@ -127,12 +135,23 @@ function sessionIdOf(notification: Notification): string {
   }
 }
 
+/** Observes a source's latest native repair receipt. Presentation only. */
+export type SourceRepairListener = (observation: SourceRepairObservation) => void;
+
 export class AppServerHost {
   readonly endpoint: string | undefined;
   readonly client: AppServerClient;
   readonly ownership: ProcessOwnership;
   readonly #child: AppServerChild | undefined;
   readonly #sessions = new Map<string, AppServerSession>();
+  /**
+   * The latest native repair receipt of each configuration source this
+   * connection observed, by source. Source-scoped and Session-independent:
+   * kept here so a notice that arrives before any presentation subscribes is
+   * still there to present, and replaced only by a different receipt.
+   */
+  readonly #sourceRepairs = new Map<string, SourceRepairObservation>();
+  readonly #sourceRepairListeners = new Set<SourceRepairListener>();
   #shutdown: Promise<ChildExit | undefined> | undefined;
   readonly #exports = new Set<AbortController>();
 
@@ -149,11 +168,17 @@ export class AppServerHost {
     this.ownership = ownership;
     this.#child = child;
 
-    // One subscription routes every notification. A notification names its full
-    // attachment target; each attachment decides whether that target is its
-    // own, so a superseded incarnation cannot reach its replacement.
+    // One subscription routes every notification. A Session notification names
+    // its full attachment target; each attachment decides whether that target
+    // is its own, so a superseded incarnation cannot reach its replacement.
+    // Source-scoped notices go to the host's source observations instead.
     client.onNotification((notification) => {
-      const session = this.#sessions.get(sessionIdOf(notification));
+      if (notification.method === "configuration/sourceRepairChanged") {
+        this.#observeSourceRepair(notification.params.target, notification.params.receipt ?? undefined);
+        return;
+      }
+      const sessionId = sessionIdOf(notification);
+      const session = sessionId === undefined ? undefined : this.#sessions.get(sessionId);
       session?.applyNotification(notification);
     });
   }
@@ -232,6 +257,42 @@ export class AppServerHost {
         return fetch(archiveDownloadUrl(download, this.endpoint), { signal: combined, redirect: "error" });
       }, combined);
     } finally { this.#exports.delete(abort); }
+  }
+
+  // -------------------------------------------------------------------------
+  // Configuration source repair observations (Issue #464)
+  // -------------------------------------------------------------------------
+
+  /** The latest receipt of every source observed on this connection. */
+  sourceRepairs(): SourceRepairObservation[] {
+    return [...this.#sourceRepairs.values()];
+  }
+
+  /** Subscribes to changed source repair observations. */
+  onSourceRepair(listener: SourceRepairListener): () => void {
+    this.#sourceRepairListeners.add(listener);
+    return () => this.#sourceRepairListeners.delete(listener);
+  }
+
+  /**
+   * Reads sources authoritatively and folds their repair receipts in.
+   *
+   * The recovery path after a notification gap or a reconnect: a read, never
+   * a guess. `configuration/sourcesRead` is read-only on the server.
+   */
+  async readSourceRepairs(target: SourceTarget = { kind: "user" }): Promise<SourceSettings> {
+    const { projection } = await this.client.call("configuration/sourcesRead", { target }, "source_settings");
+    this.#observeSourceRepair({ kind: "user" }, projection.user_repair ?? undefined);
+    if (target.kind === "workspace") this.#observeSourceRepair(projection.target, projection.workspace_repair ?? undefined);
+    return projection;
+  }
+
+  #observeSourceRepair(target: SourceTarget, receipt: ConfigRepairReceipt | undefined): void {
+    const key = sourceKey(target);
+    if (this.#sourceRepairs.get(key)?.receipt?.id === receipt?.id && this.#sourceRepairs.has(key)) return;
+    const observation = { target, receipt };
+    this.#sourceRepairs.set(key, observation);
+    for (const listener of [...this.#sourceRepairListeners]) listener(observation);
   }
 
   /** Every Session currently attached through this connection. */

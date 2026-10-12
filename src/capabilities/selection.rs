@@ -131,6 +131,44 @@ impl std::fmt::Display for AgentToolSelection {
     }
 }
 
+/// How the native Tool domain classifies one root `tools.builtin` entry.
+///
+/// Derived from the native registration and selection owners themselves —
+/// the Agent control vocabulary, the extension plane and the native
+/// definitions a root profile can select — never from a copied name list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BuiltinSelectionClass {
+    /// An ordinary native Tool a root profile may select.
+    Ordinary,
+    /// Composed automatically when the Agent Profile admits agents.
+    AgentControl,
+    /// Owned by the named Plugin; selected through `plugins.<name>.enabled`.
+    PluginOwned(&'static str),
+    /// No native Tool of the root selection plane has this name.
+    Unknown,
+}
+
+/// Classify one root `tools.builtin` entry against the native Tool domain.
+pub(crate) fn classify_builtin_selection(name: &str) -> BuiltinSelectionClass {
+    if crate::tools::native::is_agent_control(name) {
+        return BuiltinSelectionClass::AgentControl;
+    }
+    if let Some(extension) = super::extension_provided_tool(name) {
+        return BuiltinSelectionClass::PluginOwned(extension);
+    }
+    let selectable = crate::tools::native::definitions(
+        crate::tools::native::NativeToolPolicies::default(),
+        &crate::runtime::subagent::AgentCatalog::default(),
+    )
+    .into_iter()
+    .any(|(definition, _)| definition.name == name);
+    if selectable {
+        BuiltinSelectionClass::Ordinary
+    } else {
+        BuiltinSelectionClass::Unknown
+    }
+}
+
 /// Shared Agent and Workflow Agent override selection. Extensions are composed
 /// by their native owner and never enter this ordinary capability vocabulary.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

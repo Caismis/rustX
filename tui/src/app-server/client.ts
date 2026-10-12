@@ -71,7 +71,11 @@ import {
 } from "./transport.ts";
 
 /** The protocol version this client speaks. Independent of every other version. */
-export const APP_SERVER_PROTOCOL_VERSION = 45;
+export const APP_SERVER_PROTOCOL_VERSION = 46;
+
+/** Notifications retained before the first subscription; level-triggered
+ * owners re-announce or reread anything beyond this. */
+const UNROUTED_NOTIFICATIONS = 64;
 
 /** How this client identifies itself in `initialize`. */
 export const CLIENT_IDENTITY: ClientIdentity = {
@@ -276,6 +280,14 @@ export class AppServerClient {
    * settles, so this never outgrows the in-flight delivery requests. */
   readonly #cancels = new Set<RequestId>();
   readonly #notificationListeners = new Set<NotificationListener>();
+  /**
+   * Notifications that arrived before anything subscribed, replayed to the
+   * first subscriber. A server may notify right after `initialize` answers,
+   * before the composition root has built the host that routes notifications;
+   * that gap must not lose a level-triggered notice. Finite, and retired by
+   * the first subscription.
+   */
+  #unrouted: Notification[] | undefined = [];
   readonly #closeListeners = new Set<CloseListener>();
   #nextRequestId = 1;
   #capabilities: ServerCapabilities | undefined;
@@ -383,6 +395,9 @@ export class AppServerClient {
   /** Subscribes to server notifications. Returns an unsubscribe function. */
   onNotification(listener: NotificationListener): () => void {
     this.#notificationListeners.add(listener);
+    const unrouted = this.#unrouted;
+    this.#unrouted = undefined;
+    for (const notification of unrouted ?? []) listener(notification);
     return () => this.#notificationListeners.delete(listener);
   }
 
@@ -478,11 +493,15 @@ export class AppServerClient {
 
     const record = decodeProtocolMessage(untrusted);
     if (record === undefined) {
-      this.#fail("invalid App Server v45 protocol message");
+      this.#fail("invalid App Server v46 protocol message");
       return;
     }
 
     if (isNotification(record)) {
+      if (this.#unrouted !== undefined) {
+        if (this.#unrouted.length < UNROUTED_NOTIFICATIONS) this.#unrouted.push(record);
+        return;
+      }
       for (const listener of [...this.#notificationListeners]) {
         listener(record);
       }

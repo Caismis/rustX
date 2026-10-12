@@ -415,14 +415,9 @@ impl CurrentRuntimeConfig {
             .tools
             .validate_spelling()
             .map_err(|detail| CurrentRuntimeConfigError::Invalid { detail })?;
-        let native = crate::tools::native::definitions(
-            crate::tools::native::NativeToolPolicies::default(),
-            &crate::runtime::subagent::AgentCatalog::default(),
-        );
         for name in &self.agent.tools.builtin {
-            if !native
-                .iter()
-                .any(|(definition, _)| definition.name == *name)
+            if crate::capabilities::selection::classify_builtin_selection(name)
+                == crate::capabilities::selection::BuiltinSelectionClass::Unknown
             {
                 return Err(CurrentRuntimeConfigError::Invalid {
                     detail: format!("unknown Native Tool {name:?}"),
