@@ -53,7 +53,7 @@ import { userSettingsTarget, workspaceSettingsTarget, type SettingsTarget } from
 import { createOwnerLookup, settingsNavigationMachine } from './settings/machines/navigation';
 
 import type { ChatViewport } from '../presentation/layout/ChatViewport';
-import type { ComposerDraft } from './composer/draft';
+import { ComposerDraft } from './composer/draft';
 
 const PREFERENCES = 'rustx-console-view-v2';
 function readPreferences(): { endpoint?: string; openViews: string[] } {
@@ -75,7 +75,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   const [preferences] = useState(readPreferences);
   const first = preferences.endpoint === client.getSnapshot().endpoint ? preferences.openViews[0] : undefined;
   const navigation = useActorRef(shellNavigationMachine, { input: { client, settings, route: first && client.isAttachmentControlCurrent(first, client.getSnapshot().views[first]?.attachmentObservation) ? { kind: 'session', sessionId: first } : undefined } });
-  const [composerDraft] = useState<ComposerDraft>(() => ({}));
+  const [composerDraft] = useState(() => new ComposerDraft());
   return <AppSurface composerDraft={composerDraft} client={client} workspaceHost={workspaceHost} workspaceAuthority={workspaceAuthority} connection={connection} navigation={navigation}/>;
 }
 /** Route rendering and gestures; it owns no native admission or actor lifetime. */

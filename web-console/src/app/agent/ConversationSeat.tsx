@@ -50,7 +50,7 @@ export function ConversationSeat({ client, host, authority, associations, sessio
         context={view && <><ContextSeat client={client} sessionId={view.id}/><ConversationDocks key={view.id} client={client} sessionId={view.id} disabled={disabled}/></>}
         active={view ? {
           initialContent: restored?.conversation === view.snapshot?.conversation_id ? restored?.content : undefined,
-          submitDisabled: false, disabled, busy: sending === owner, active: activeAttempt(view.snapshot),
+          submissionTarget: view.target, submitDisabled: false, disabled, busy: sending === owner, active: activeAttempt(view.snapshot),
           lineageSwitchSafe: lineageSwitchSafe(view), hasGoal: !!goalDock(view.snapshot), onCommand,
           consumed, cancellationAvailable: !!cancellation,
           cancellationScope: cancellation ? { authority: client, identity: JSON.stringify([binding, cancellation]) } : undefined,
@@ -64,8 +64,8 @@ export function ConversationSeat({ client, host, authority, associations, sessio
           onReconcile: async operation => { if (!uploadCurrent()) throw new Error('Upload view replaced'); const result = await client.uploadStatus(view.id, operation); if (!nativeUploadCurrent()) throw new Error('Upload view replaced'); return result; },
           onSend: async (text, receipts, delivery, acknowledged) => {
             if (!uploadCurrent()) return false;
-            const generation = client.getSnapshot().generation; setFailure(undefined); setSending(owner);
-            try { await client.send(view.id, text, receipts, delivery, () => { if (uploadCurrent()) acknowledged?.(); }, uploadCurrent); return uploadCurrent() && generation === client.getSnapshot().generation; }
+            setFailure(undefined); setSending(owner);
+            try { await client.send(view.id, text, receipts, delivery, acknowledged, uploadCurrent); return true; }
             finally { setSending(value => value === owner ? undefined : value); }
           },
         } : undefined}/>

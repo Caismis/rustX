@@ -282,6 +282,20 @@ only while the initial draft has not been replaced. Fork View Source uses exact,
 authorized `session/node` and cut-bound `session/history` reads to publish a
 read-only route. It has bounded paging, exact ChatViewport Message landing and a
 return action, without source attachment, Node switching or model execution.
+The browser-lifetime `ComposerDraft` owns editor incarnation, authored content
+revision, selection and revision-correlated submission tickets. React subscribes;
+it never mirrors stale component-local text back into that owner. History and
+Return preserve the editor incarnation while establishing fresh route controls.
+Known native `inbound_accepted` settlement consumes only the submitted revision
+and exact selected upload entries, even while the editor is unmounted. Later
+edits, including equal text authored again, remain unsent. Older acceptance does
+not unblock a newer pending submission. Lost acknowledgements remain uncertain;
+there is no automatic replay. Native receipt authority changes retire receipts,
+not recoverable local text or File selections. Explicit successful First Submission
+Discard alone replaces the incarnation and clears the discarded draft; refused
+Discard and obsolete settlement cannot replace the current editor. Deliberate
+executable route replacement establishes a separate editor identity.
+
 Historical file references remain metadata; executable workspace/Artifact byte
 preview callbacks are not inherited by that route.
 

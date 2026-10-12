@@ -7,6 +7,7 @@ import { ConnectionController } from '../../src/connection/controller';
 import { childNavigation } from './child-navigation';
 import { agentMetrics } from '../agent-statistics-fixture';
 import { createRoot } from 'react-dom/client';
+import { ComposerDraft } from '../../src/app/composer/draft';
 import { AppSurface } from '../../src/app/App';
 import { Server, snapshot, childConversation } from '../fixture';
 import { cfg3Source, cfg3Effective } from '../cfg3-data';
@@ -120,7 +121,7 @@ const settings = createActor(settingsNavigationMachine, { input: { lookup: creat
 const navigation = createActor(shellNavigationMachine, { input: { client: server.client, settings } }).start();
 const connection = new ConnectionController(server.client);
 let root = createRoot(document.getElementById('root')!);
-const composerDraft = {};
+const composerDraft = new ComposerDraft();
 const render = () => root.render(<AppSurface composerDraft={composerDraft} client={server.client} workspaceHost={server.workspaceHost} workspaceAuthority={workspaceAuthority} connection={connection} navigation={navigation}/>);
 render();
 const handled = new Set<Request>(server.requests.filter(row => row.request.method === 'initialize' || row.request.method === 'session/list').map(row => row.request));

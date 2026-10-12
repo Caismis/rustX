@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react
 import { afterEach, expect, it } from 'vitest';
 import { waitFor as waitActor } from 'xstate';
 import { AgentComposer } from '../src/app/agent/AgentComposer';
-import type { ComposerDraft } from '../src/app/composer/draft';
+import { ComposerDraft } from '../src/app/composer/draft';
 import { App } from '../src/app/App';
 import { Server, snapshot } from './fixture';
 import { routeFixture } from './shell-navigation-fixture';
@@ -100,7 +100,7 @@ it('an already admitted upload settles into its retained draft during history wi
   expect(server.requests.filter(row => row.request.method === 'session/uploadPrepare')).toHaveLength(1);
   expect(server.client.target('A')).toBe(f.target);
 });
-it('a retired Send continuation cannot clear or reauthorize the returned draft after its native acknowledgement', async () => {
+it('known native acceptance settles the submitted revision after Return without reauthorizing old controls', async () => {
   const f = await fixture(); server.held.add('turn/start');
   await act(async () => fireEvent.keyDown(f.editor(), { key: 'Enter' }));
   const sent = await server.waitFor('turn/start', 1);
@@ -109,7 +109,7 @@ it('a retired Send continuation cannot clear or reauthorize the returned draft a
   await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Return to conversation' })));
   expect(f.editor().value).toBe(f.text);
   await act(async () => server.reply(sent));
-  expect(f.editor().value).toBe(f.text); expect(f.editor().readOnly).toBe(false); expect(server.client.target('A')).toBe(f.target);
+  expect(f.editor().value).toBe(''); expect(f.editor().readOnly).toBe(false); expect(server.client.target('A')).toBe(f.target);
   expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
 });
 it('the actual View Source click and immediate scroll retire history in one stack before passive effects', async () => {
@@ -145,7 +145,7 @@ it.each([[true, true], [false, true], [true, false]] as const)('user scrolling r
 });
 
 it('restored native upload blocks survive temporary unmount only under their original receipt authority', () => {
-  const draftOwner: ComposerDraft = {};
+  const draftOwner = new ComposerDraft();
   const props = { draftOwner, binding: 'same-editor', disabled: false, busy: false, active: false, onSend: async () => false, onUpload: async () => [], onCancel: () => {} };
   const initialContent = [{ type: 'upload' as const, session_id: 'A', batch_id: 'original-batch', token: 'original-token' }, { type: 'text' as const, text: 'Native restored draft' }];
   let ui = render(<AgentComposer {...props} initialContent={initialContent} receiptAuthority="original-native"/>);
@@ -157,7 +157,7 @@ it('restored native upload blocks survive temporary unmount only under their ori
   expect((ui.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('Edited restored draft'); expect(ui.queryByText(/original-batch/)).toBeNull();
 });
 it('draft identity survives retirement of a completed submission while a different editor identity discards content', () => {
-  const draftOwner: ComposerDraft = {};
+  const draftOwner = new ComposerDraft();
   const props = { draftOwner, draftIdentity: 'conversation-A', disabled: false, busy: false, active: false, onSend: async () => false, onUpload: async () => [], onCancel: () => {} };
   let ui = render(<AgentComposer {...props} binding="consumed-submission"/>);
   fireEvent.change(ui.getByLabelText('Message'), { target: { value: 'Unsent after completed input' } }); ui.unmount();
@@ -165,4 +165,138 @@ it('draft identity survives retirement of a completed submission while a differe
   expect((ui.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('Unsent after completed input'); ui.unmount();
   ui = render(<AgentComposer {...props} draftIdentity="conversation-B" binding="another-route"/>);
   expect((ui.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('');
+});
+
+it.each([['turn/start', false], ['turn/start', true], ['turn/steer', false], ['turn/steer', true]] as const)('native %s acceptance before Return=%s settles once without replay', async (method, beforeReturn) => {
+  const f = await fixture(); server.held.add(method);
+  await act(async () => fireEvent.keyDown(f.editor(), { key: 'Enter', ctrlKey: method === 'turn/steer' }));
+  const sent = await server.waitFor(method, 1);
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'View source' })));
+  await waitFor(() => expect(f.ui.getByText('Exact historical source')).toBeTruthy());
+  if (beforeReturn) await act(async () => server.reply(sent));
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Return to conversation' })));
+  if (!beforeReturn) await act(async () => server.reply(sent));
+  expect(f.editor().value).toBe(''); expect(server.client.target('A')).toBe(f.target);
+  expect(server.requests.filter(row => row.request.method === method)).toHaveLength(1);
+  expect(server.requests.filter(row => ['session/attach', 'session/detach', 'session/switchNode'].includes(row.request.method))).toHaveLength(1);
+});
+it.each([false, true])('newer authored revision equalText=%s survives an older native acknowledgement', async equalText => {
+  const f = await fixture(); server.held.add('turn/start');
+  await act(async () => fireEvent.keyDown(f.editor(), { key: 'Enter' }));
+  const sent = await server.waitFor('turn/start', 1);
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'View source' })));
+  await waitFor(() => expect(f.ui.getByText('Exact historical source')).toBeTruthy());
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Return to conversation' })));
+  fireEvent.change(f.editor(), { target: { value: 'newly authored intermediate' } });
+  const text = equalText ? f.text : 'Later revision R2';
+  fireEvent.change(f.editor(), { target: { value: text } });
+  await act(async () => server.reply(sent));
+  expect(f.editor().value).toBe(text); expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
+});
+it('accepted F1 consumes only its submitted selection while a newer F2 survives', async () => {
+  const f = await fixture(), first = new File(['one'], 'one.txt'), second = new File(['two'], 'two.txt');
+  await act(async () => fireEvent.change(f.ui.getByLabelText('Attach files'), { target: { files: [first] } }));
+  await waitFor(() => expect(f.intake.snapshot()[0].status).toBe('ready'));
+  server.held.add('turn/start'); await act(async () => fireEvent.keyDown(f.editor(), { key: 'Enter' }));
+  const sent = await server.waitFor('turn/start', 1);
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'View source' })));
+  await waitFor(() => expect(f.ui.getByText('Exact historical source')).toBeTruthy());
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Return to conversation' })));
+  await act(async () => fireEvent.change(f.ui.getByLabelText('Attach files'), { target: { files: [second] } }));
+  await waitFor(() => expect(f.intake.snapshot()[1].status).toBe('ready'));
+  await act(async () => server.reply(sent));
+  expect(f.intake.snapshot().map(value => value.file)).toEqual([second]); expect(f.editor().value).toBe(f.text);
+  expect(server.requests.filter(row => row.request.method === 'session/uploadPrepare')).toHaveLength(2);
+  expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
+});
+it.each(['failed', 'uncertain'] as const)('Discard of an actual %s First Submission establishes a stable replacement across repeated history', async outcome => {
+  const f = await fixture();
+  // A retired receipt becomes a local draft file and enters FirstSubmissions.
+  const file = new File(['one'], 'one.txt');
+  await act(async () => { f.intake.add([{ file }], server.client.getSnapshot().capabilities!.upload_policy); });
+  server.handlers.set('session/uploadStatus', () => ({ type: 'upload_status', outcome: { state: outcome === 'failed' ? 'failed' : 'unresolved' } }));
+  await act(async () => fireEvent.keyDown(f.editor(), { key: 'Enter' }));
+  await waitFor(() => expect(f.ui.getByRole('button', { name: /Discard/i })).toBeTruthy());
+  const old = f.ui.container.querySelector('[data-editor-incarnation]')!.getAttribute('data-editor-incarnation');
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: /Discard/i })));
+  server.handlers.delete('session/uploadStatus');
+  fireEvent.change(f.editor(), { target: { value: 'Replacement after Discard' } });
+  await act(async () => fireEvent.change(f.ui.getByLabelText('Attach files'), { target: { files: [new File(['new'], 'replacement.txt')] } }));
+  await waitFor(() => expect(f.intake.snapshot()[0].status).toBe('ready'));
+  const incarnation = f.ui.container.querySelector('[data-editor-incarnation]')!.getAttribute('data-editor-incarnation');
+  expect(incarnation).not.toBe(old);
+  f.editor().setSelectionRange(3, 8, 'backward'); fireEvent.select(f.editor());
+  const before = server.requests.length;
+  for (let visit = 0; visit < 2; visit++) {
+    await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'View source' })));
+    await waitFor(() => expect(f.ui.getByText('Exact historical source')).toBeTruthy());
+    await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Return to conversation' })));
+    expect(f.editor().value).toBe('Replacement after Discard');
+    expect(f.ui.container.querySelector('[data-editor-incarnation]')!.getAttribute('data-editor-incarnation')).toBe(incarnation);
+    expect([f.editor().selectionStart, f.editor().selectionEnd]).toEqual([3, 8]);
+  }
+  expect(f.intake.snapshot().map(value => value.name)).toEqual(['replacement.txt']);
+  expect(mutations(before)).toEqual([]); expect(server.client.target('A')).toBe(f.target);
+});
+
+it('an uncertain dispatched input stays uncertain across history and cannot silently resubmit', async () => {
+  const f = await fixture(); server.held.add('turn/start');
+  await act(async () => fireEvent.keyDown(f.editor(), { key: 'Enter' })); const sent = await server.waitFor('turn/start', 1);
+  await act(async () => server.socket.deliver({ jsonrpc: '2.0', id: sent.id, error: { code: -32000, message: 'Committed input durability unknown', data: { kind: 'committed_durability_uncertain' } } }));
+  expect(f.ui.container.querySelector('[data-submission-outcome]')?.getAttribute('data-submission-outcome')).toBe('uncertain');
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'View source' })));
+  await waitFor(() => expect(f.ui.getByText('Exact historical source')).toBeTruthy());
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Return to conversation' })));
+  expect(f.editor().value).toBe(f.text); expect(f.ui.container.querySelector('[data-submission-outcome]')?.getAttribute('data-submission-outcome')).toBe('uncertain');
+  await act(async () => fireEvent.keyDown(f.editor(), { key: 'Enter' }));
+  expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1); expect(server.client.target('A')).toBe(f.target);
+});
+it('late native acknowledgement from A cannot change a deliberately replaced new Conversation editor', async () => {
+  const f = await fixture(); server.held.add('turn/start');
+  await act(async () => fireEvent.keyDown(f.editor(), { key: 'Enter' })); const sent = await server.waitFor('turn/start', 1);
+  await act(async () => fireEvent.click(f.ui.getAllByRole('button', { name: 'New Conversation' })[0]));
+  fireEvent.change(f.editor(), { target: { value: 'Independent new Conversation' } });
+  await act(async () => server.reply(sent));
+  expect(f.editor().value).toBe('Independent new Conversation'); expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
+});
+
+it('First Submission native acceptance consumes its stable revision while its Composer is unmounted', async () => {
+  const f = await fixture(), file = new File(['first'], 'first.txt');
+  const native = server.snapshots.get('A')!, message = { role: 'assistant' as const, id: 'existing-message', content: [{ type: 'text' as const, text: 'Existing canonical conversation' }] };
+  await act(async () => server.update('A', { ...native, messages: [message], transcript: { ...native.transcript, entries: [{ cursor: '1', item: { type: 'message', message } }] } }));
+  await act(async () => f.intake.add([{ file }], server.client.getSnapshot().capabilities!.upload_policy));
+  server.held.add('turn/start'); await act(async () => fireEvent.keyDown(f.editor(), { key: 'Enter' }));
+  const sent = await server.waitFor('turn/start', 1);
+  expect(server.client.firstSubmissions.draft('0')?.phase).toBe('admitting');
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'View source' })));
+  await waitFor(() => expect(f.ui.getByText('Exact historical source')).toBeTruthy());
+  await act(async () => server.reply(sent));
+  expect(server.client.firstSubmissions.draft('0')?.phase).toBe('admitted');
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Return to conversation' })));
+  expect(f.editor().value).toBe(''); expect(f.intake.snapshot()).toEqual([]); expect(f.editor().readOnly).toBe(false);
+  expect(server.requests.filter(row => row.request.method === 'session/uploadPrepare')).toHaveLength(1);
+  expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1); expect(server.client.target('A')).toBe(f.target);
+});
+
+it('a late native reply after terminal uncertain First Submission Discard cannot alter its replacement editor', async () => {
+  const f = await fixture(), file = new File(['first'], 'first.txt');
+  await act(async () => f.intake.add([{ file }], server.client.getSnapshot().capabilities!.upload_policy));
+  server.held.add('turn/start'); await act(async () => fireEvent.keyDown(f.editor(), { key: 'Enter' }));
+  const sent = await server.waitFor('turn/start', 1);
+  expect(server.client.firstSubmissions.draft('0')?.phase).toBe('admitting');
+  // A settled uncertain response permits Discard; the in-flight phase did not.
+  expect(f.ui.queryByRole('button', { name: /Discard/i })).toBeNull();
+  await act(async () => server.socket.deliver({ jsonrpc: '2.0', id: sent.id, error: { code: -32000, message: 'Committed durability unknown', data: { kind: 'committed_durability_uncertain' } } }));
+  expect(server.client.firstSubmissions.draft('0')?.phase).toBe('uncertain');
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: /Discard/i })));
+  const discarded = server.client.firstSubmissions.draft('0');
+  fireEvent.change(f.editor(), { target: { value: 'Replacement E2' } });
+  const incarnation = f.ui.container.querySelector('[data-editor-incarnation]')!.getAttribute('data-editor-incarnation');
+  await act(async () => { server.reply(sent); await server.client.request({ method: 'server/info', params: {} }, 'server_info'); });
+  expect(server.client.firstSubmissions.draft('0')).toBe(discarded);
+  expect(f.editor().value).toBe('Replacement E2'); expect(f.intake.snapshot()).toEqual([]);
+  expect(f.ui.container.querySelector('[data-editor-incarnation]')!.getAttribute('data-editor-incarnation')).toBe(incarnation);
+  expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
+  expect(server.requests.filter(row => row.request.method === 'session/uploadPrepare')).toHaveLength(1);
+  expect(server.client.target('A')).toBe(f.target);
 });

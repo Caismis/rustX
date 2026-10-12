@@ -66,6 +66,12 @@ let replacedAttach: { socket: typeof server.socket; response: import('../../../p
 let navigationCurrent = () => true;
 window.sessionFixture = {
   releaseAssociations,
+  holdInput: () => { server.held.add('turn/start'); server.held.add('turn/steer'); },
+  settleInput: async () => {
+    const row = server.requests.filter(row => row.request.method === 'turn/start' || row.request.method === 'turn/steer').at(-1)!;
+    server.reply(row.request, row.socket);
+    await server.client.request({ method: 'server/info', params: {} }, 'server_info');
+  },
   holdSearch: () => { server.held.add('session/list'); },
   settleSearch: async (query: string) => {
     const row = server.requests.filter(row => row.request.method === 'session/list' && row.request.params.query === query).at(-1)!;
@@ -109,9 +115,9 @@ window.sessionFixture = {
   replaceConnection: async () => { const row = server.requests.find(row => row.request.method === 'session/attach' && row.request.params.session_id === 'C')!; replacedAttach = { socket: row.socket, response: server.commit(row.request, row.socket) }; await server.client.disconnect(); server.held.delete('session/attach'); await server.connect(); },
   readyNavigation: async () => { const next = structuredClone(server.snapshots.get('B')!); next.pending_interactions = []; await server.update('B', next); },
   holdAttach: () => { server.held.add('session/attach'); },
-  settleAttach: (success: boolean) => {
+  settleAttach: (success: boolean, sessionId?: string) => {
     if (replacedAttach) { replacedAttach.socket.deliver(replacedAttach.response); replacedAttach = undefined; return; }
-    const row = server.requests.filter(row => row.request.method === 'session/attach').at(-1)!;
+    const row = server.requests.filter(row => row.request.method === 'session/attach' && (!sessionId || row.request.params.session_id === sessionId)).at(-1)!;
     server.held.delete('session/attach');
     if (success) server.reply(row.request, row.socket);
     else row.socket.deliver({ jsonrpc: '2.0', id: row.request.id, error: { code: -32000, message: 'Navigation fixture rejected', data: { kind: 'operation_failed' } } });
@@ -172,4 +178,4 @@ window.sessionFixture = {
 if (new URL(location.href).searchParams.get('initial') === 'other-uncertain') await window.sessionFixture.presentation('other-uncertain');
 createRoot(document.getElementById('root')!).render(<App client={server.client} workspaceHost={server.workspaceHost} />);
 
-declare global { interface Window { sessionFixture: { wireBarrier(): Promise<void>; holdHistory(): void; settleHistory(success: boolean): Promise<void>; holdSearch(): void; settleSearch(query: string): Promise<void>; allowNodeReads(): void; holdNode(): void; settleNode(success: boolean): Promise<void>; uncertainUpload(): void; resolveUpload(): void; settingsTargets(): string[]; waitForNavigation(): Promise<void>; captureNavigation(): void; navigationCurrent(): boolean; navigationFacts(): { generation: number; claims: import('../../../protocol/app-server/v46').AttachmentTarget[]; views: Record<string, { attachment: string; nodeId?: string; intent: string; target?: import('../../../protocol/app-server/v46').AttachmentTarget; authoritative: boolean }> }; holdSnapshot(): Promise<void>; settleSnapshot(): void; staleDestination(): Promise<void>; replaceConnection(): Promise<void>; readyNavigation(): Promise<void>; holdAttach(): void; settleAttach(success: boolean): void; requests(): import("../../../protocol/app-server/v46").Request[]; releaseCold(): Promise<number>; activity(id: string, timestamp: string): Promise<void>; releaseAssociations(): void; stream(text: string): Promise<void>; state(mode: 'idle' | 'queued' | 'stopping' | 'reconnect' | 'uncertain'): Promise<void>; presentation(mode: 'empty' | 'preview' | 'named' | 'delete' | 'other-uncertain' | 'many'): Promise<void> } } }
+declare global { interface Window { sessionFixture: { holdInput(): void; settleInput(): Promise<void>; wireBarrier(): Promise<void>; holdHistory(): void; settleHistory(success: boolean): Promise<void>; holdSearch(): void; settleSearch(query: string): Promise<void>; allowNodeReads(): void; holdNode(): void; settleNode(success: boolean): Promise<void>; uncertainUpload(): void; resolveUpload(): void; settingsTargets(): string[]; waitForNavigation(): Promise<void>; captureNavigation(): void; navigationCurrent(): boolean; navigationFacts(): { generation: number; claims: import('../../../protocol/app-server/v46').AttachmentTarget[]; views: Record<string, { attachment: string; nodeId?: string; intent: string; target?: import('../../../protocol/app-server/v46').AttachmentTarget; authoritative: boolean }> }; holdSnapshot(): Promise<void>; settleSnapshot(): void; staleDestination(): Promise<void>; replaceConnection(): Promise<void>; readyNavigation(): Promise<void>; holdAttach(): void; settleAttach(success: boolean, sessionId?: string): void; requests(): import("../../../protocol/app-server/v46").Request[]; releaseCold(): Promise<number>; activity(id: string, timestamp: string): Promise<void>; releaseAssociations(): void; stream(text: string): Promise<void>; state(mode: 'idle' | 'queued' | 'stopping' | 'reconnect' | 'uncertain'): Promise<void>; presentation(mode: 'empty' | 'preview' | 'named' | 'delete' | 'other-uncertain' | 'many'): Promise<void> } } }

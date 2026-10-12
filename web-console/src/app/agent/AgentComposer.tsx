@@ -1,4 +1,5 @@
-import type { ComposerDraft } from '../composer/draft';
+import { ComposerDraft, type ComposerSubmission, type InputAcceptance } from '../composer/draft';
+import { isOutcomeUncertain, RpcFailure } from '../../client/app-server';
 import type { FirstSubmission } from '../new-conversation/first-submit';
 import { message } from '../../locale/translation';
 import { useTranslation, useNotice } from '../../locale/react';
@@ -7,7 +8,7 @@ import { useTranslation, useNotice } from '../../locale/react';
 // Native textarea replaces Lexical. Commands are client grammar; effects are typed.
 import { useEffect, useLayoutEffect, useState, useRef, useSyncExternalStore, type ReactNode } from 'react';
 import { AttachmentIntake, transferInputs, pasteText, type IntakeInput, type IntakeFile, type UploadPort } from '../../client/uploads';
-import type { UploadPolicy, UploadReceipt, UploadedFile, UserInputBlock } from '../../../../protocol/app-server/v46';
+import type { AttachmentTarget, UploadPolicy, UploadReceipt, UploadedFile, UserInputBlock } from '../../../../protocol/app-server/v46';
 import { commands, available, parseCommand, type CommandId } from '../commands/registry';
 import { matchCommands } from '../commands/matching';
 import { ModelPicker, type ModelPickerState } from '../composer/ModelPicker';
@@ -23,15 +24,15 @@ import { Button } from '../../presentation/primitives/Button';
 import css from '../../presentation/agent/Composer.module.css';
 import { observeControlRow } from '../../presentation/agent/control-row-layout';
 const emptyContent: UserInputBlock[] = [];
-export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, modelPicker, onRetainedRemove, onRetainedRecover, intakeOwner, uploadPolicy, onReconcile, draftOwner, draftIdentity, receiptAuthority, binding = 'default', firstSubmission, disabled, submitDisabled = false, busy, active, onSend, onUpload, onCancel, onCommand, commandAvailable, hasGoal = false, lineageSwitchSafe = false, initialContent = emptyContent, consumed, model, permission, onDraftSend, cancellationAvailable = !disabled, cancellationScope }: {
+export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, modelPicker, onRetainedRemove, onRetainedRecover, intakeOwner, uploadPolicy, onReconcile, draftOwner, draftIdentity, receiptAuthority, submissionTarget, binding = 'default', firstSubmission, disabled, submitDisabled = false, busy, active, onSend, onUpload, onCancel, onCommand, commandAvailable, hasGoal = false, lineageSwitchSafe = false, initialContent = emptyContent, consumed, model, permission, onDraftSend, cancellationAvailable = !disabled, cancellationScope }: {
   placeholder?: string; messageLabel?: string; busyEnterBehavior?: import('../composer/preferences').BusyEnterBehavior;
   modelPicker?: ModelPickerState;
   onRetainedRemove?: (id: string) => void; onRetainedRecover?: (retry: boolean) => void;
   intakeOwner?: AttachmentIntake; uploadPolicy?: UploadPolicy; onReconcile?: UploadPort['status'];
-  draftOwner?: ComposerDraft; draftIdentity?: string; receiptAuthority?: string;
+  draftOwner?: ComposerDraft; draftIdentity?: string; receiptAuthority?: string; submissionTarget?: AttachmentTarget;
   firstSubmission?: FirstSubmission; binding?: string; submitDisabled?: boolean; disabled: boolean; busy: boolean; active: boolean; model?: ReactNode; permission?: ReactNode;
-  onDraftSend?: (text: string, files: readonly File[], ids?: readonly string[]) => Promise<boolean>; cancellationAvailable?: boolean; cancellationScope?: StopScope;
-  onSend: (text: string, receipts: readonly UploadReceipt[], delivery: 'send' | 'steer', acknowledged?: () => void) => Promise<boolean>;
+  onDraftSend?: (text: string, files: readonly File[], ids?: readonly string[], submission?: ComposerSubmission) => Promise<boolean>; cancellationAvailable?: boolean; cancellationScope?: StopScope;
+  onSend: (text: string, receipts: readonly UploadReceipt[], delivery: 'send' | 'steer', acknowledged?: (acceptance?: InputAcceptance) => void) => Promise<boolean>;
   onUpload: (files: readonly File[], operation?: string) => Promise<UploadedFile[]>; onCancel: () => void;
   onCommand?: (id: CommandId) => void; commandAvailable?: (id: CommandId) => boolean; hasGoal?: boolean; lineageSwitchSafe?: boolean; initialContent?: UserInputBlock[];
   consumed?: { id: string; sequence: number };
@@ -43,8 +44,12 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
   const composing = useRef(false);
   const escapePress = useRef<{ event: KeyboardEvent; accept: ReturnType<StopSequence['prepare']> } | undefined>(undefined);
   const editorIdentity = draftIdentity ?? binding;
-  const saved = draftOwner?.snapshot?.identity === editorIdentity ? draftOwner.snapshot : undefined;
-  const [restoreSupported, setRestoreSupported] = useState(() => saved?.supported ?? editableContent(initialContent));
+  const [localDraft] = useState(() => new ComposerDraft());
+  const owner = draftOwner ?? localDraft;
+  const state = useSyncExternalStore(owner.subscribe, owner.snapshot);
+  useLayoutEffect(() => { owner.activate(editorIdentity, initialContent, receiptAuthority); }, [owner, editorIdentity, initialContent, receiptAuthority]);
+  const editor = state?.key === editorIdentity ? state : undefined;
+  const restoreSupported = editor?.supported ?? editableContent(initialContent);
   disabled = disabled || !restoreSupported;
   const [localIntake] = useState(() => new AttachmentIntake());
   const intake = intakeOwner ?? localIntake;
@@ -58,27 +63,17 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
   const pending = files.some(file => file.status !== 'ready' && !(onDraftSend && file.status === 'draft'));
   const port: UploadPort = { upload: onUpload, status: onReconcile ?? (async () => ({ state: 'unresolved' })) };
   const pick = (picked: IntakeInput[]) => {
-    if (!disabled && !busy) intake.add(picked, uploadPolicy, onDraftSend ? undefined : port);
+    if (!disabled && !busy && editor) { intake.add(picked, uploadPolicy, onDraftSend ? undefined : port); owner.attachmentsEdited(editor.incarnation); }
   };
-  const [draft, setDraft] = useState(() => saved?.text ?? (inTranscript ? '' : firstSubmission?.draft.text) ?? (restoreSupported ? initialContent.flatMap(block => block.type === 'text' ? [block.text] : []).join('') : ''));
-  const draftBinding = useRef(binding);
-  const restoredInput = useRef(initialContent);
-  const retainedInput = useRef(retained);
-  if (retained && (retainedInput.current !== retained || draft !== shownText)) {
-    retainedInput.current = retained;
-    setDraft(shownText ?? '');
-
-  }
-  const invocation = useRef<{ id: CommandId; draft: string } | undefined>(undefined);
+  const draft = retained ? shownText ?? '' : editor?.text ?? '';
+  const setDraft = (text: string) => { if (editor) owner.edit(editor.incarnation, text); };
+  const invocation = useRef<{ id: CommandId; incarnation: number; revision: number } | undefined>(undefined);
   useEffect(() => {
     const invoked = invocation.current;
     if (!consumed || !invoked || invoked.id !== consumed.id) return;
-    invocation.current = undefined;
-    setDraft(current => current === invoked.draft ? '' : current);
-  }, [consumed]);
-  const [restored, setRestored] = useState(() => saved ? saved.receiptAuthority === receiptAuthority ? saved.restored : [] : restoreSupported ? initialContent.flatMap(block => block.type === 'upload' ? [block] : []) : []);
-  const receiptsAt = useRef(receiptAuthority);
-  if (receiptsAt.current !== receiptAuthority) { receiptsAt.current = receiptAuthority; setRestored([]); }
+    invocation.current = undefined; owner.consumeRevision(invoked.incarnation, invoked.revision);
+  }, [consumed, owner]);
+  const restored = editor?.restored ?? [];
   const row = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => observeControlRow(row.current!), []);
   const picker = useRef<HTMLInputElement>(null);
@@ -87,31 +82,20 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
   useLayoutEffect(() => { const next = pastedCaret.current; pastedCaret.current = undefined; if (next?.binding === binding) input.current?.setSelectionRange(next.caret, next.caret); }, [draft, binding]);
   const trigger = useInputTrigger(input);
   const rememberSelection = () => {
-    const element = input.current, snapshot = draftOwner?.snapshot;
-    if (element && snapshot?.identity === editorIdentity) snapshot.selection = { start: element.selectionStart, end: element.selectionEnd, direction: element.selectionDirection };
+    const element = input.current;
+    if (element && editor) owner.select(editor.incarnation, { start: element.selectionStart, end: element.selectionEnd, direction: element.selectionDirection });
   };
   useLayoutEffect(() => {
-    if (draftOwner) draftOwner.snapshot = { identity: editorIdentity, text: draft, restored, supported: restoreSupported, receiptAuthority, selection: draftOwner.snapshot?.identity === editorIdentity ? draftOwner.snapshot.selection : undefined };
-  }, [draftOwner, editorIdentity, draft, restored, restoreSupported, receiptAuthority]);
-  useLayoutEffect(() => {
-    const selection = draftOwner?.snapshot?.selection;
+    const selection = owner.snapshot()?.selection;
     if (selection) input.current?.setSelectionRange(selection.start, selection.end, selection.direction);
-  }, [draftOwner, editorIdentity]);
-  if (draftBinding.current !== binding || restoredInput.current !== initialContent) {
-    draftBinding.current = binding;
-    restoredInput.current = initialContent;
-    const supported = editableContent(initialContent);
-    setRestoreSupported(supported);
-    setDraft(supported ? initialContent.flatMap(block => block.type === 'text' ? [block.text] : []).join('') : '');
-    setRestored(supported ? initialContent.flatMap(block => block.type === 'upload' ? [block] : []) : []);
-    if (!intakeOwner) intake.clear(); setError(''); setDragging(false);
-    invocation.current = undefined; trigger.dismiss();
-  }
+  }, [owner, editor?.incarnation]);
+  useEffect(() => { setError(''); setDragging(false); invocation.current = undefined; if (!intakeOwner) intake.clear(); }, [editorIdentity]);
   const query = trigger.state?.query;
-  const modelInvocation = useRef<string | undefined>(undefined);
+  const modelInvocation = useRef<{ incarnation: number; revision: number } | undefined>(undefined);
   const [modelRequested, setModelRequested] = useState(false);
   useEffect(() => setModelRequested(false), [binding]);
   const modelMenu = !!modelPicker && (modelRequested || trigger.state?.source === 'typed' && trigger.state.query.toLowerCase() === 'model') && commandAvailable?.('model') !== false && !disabled && !busy;
+  const modelRevision = modelInvocation.current ?? (trigger.state?.source === 'typed' ? editor : undefined);
   const menu = !modelMenu && !!trigger.state && !disabled && !busy;
   const commandRows = onCommand ? matchCommands(query ?? '', commands.filter(command => available(command, active, hasGoal, lineageSwitchSafe) && (commandAvailable?.(command.id) ?? true))) : [];
   const rows: readonly { id: MenuAction }[] = [
@@ -125,7 +109,7 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
   const selectedCommand = selected && selected !== 'file' ? selected : parsed.type === 'command' ? parsed.id : undefined;
   const facts = { running: active, busyEnter, actionable: !!draft.trim() || files.length > 0 || restored.length > 0,
     draftKind: parsed.type === 'text' ? 'message' as const : selectedCommand ? 'command' as const : 'unsupported-command' as const,
-    blocked: disabled || submitDisabled, acknowledging: busy, uploadsPending: pending, cancellationAvailable };
+    blocked: disabled || submitDisabled, acknowledging: busy || owner.blocked(editor), uploadsPending: pending, cancellationAvailable };
   const primary = composerSubmissionPolicy(facts);
   useEffect(() => { stopSequence.reset(); }, [stopSequence, binding, cancellationScope?.authority, cancellationScope?.identity, active, cancellationAvailable, menu]);
   useEffect(() => {
@@ -139,8 +123,8 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
     if (files.length || restored.length) { setError(message('agent:copy.remove-draft-attachments-before-invoking-a-command')); return; }
     const definition = commands.find(command => command.id === id)!;
     if (!onCommand || !available(definition, active, hasGoal, lineageSwitchSafe) || commandAvailable?.(id) === false) { setError(message('agent:copy.command-unavailable-in-the-current-session-state')); return; }
-    if (id === 'model' && modelPicker) { modelInvocation.current = trigger.state?.source === 'launcher' ? undefined : draft; setModelRequested(true); trigger.dismiss(); return; }
-    invocation.current = { id, draft: trigger.state?.source === 'launcher' ? '' : draft };
+    if (id === 'model' && modelPicker) { modelInvocation.current = trigger.state?.source === 'launcher' ? undefined : editor; setModelRequested(true); trigger.dismiss(); return; }
+    if (editor && trigger.state?.source !== 'launcher') invocation.current = { id, incarnation: editor.incarnation, revision: editor.revision };
     trigger.dismiss(); setError(''); trigger.restore(); onCommand(id);
   };
   const selectMenu = (id: MenuAction) => {
@@ -164,12 +148,15 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
       else setError(message('agent:copy.unsupported-command-edit-the-draft-it-will-not-be-sent-as-a-prompt'));
       return;
     }
-    const submitted = draft;
-    const owner = binding;
+    if (!editor) return;
+    const ticket = owner.submit(editor.incarnation, intake, action.delivery, submissionTarget);
+    if (!ticket) return;
     try {
-      if (await (onDraftSend ? onDraftSend(submitted, files.map(file => file.file!), files.map(file => file.id)) : onSend(submitted, [...restored, ...files.map(file => file.receipt!)], action.delivery, () => intake.clear())) && draftBinding.current === owner) { setDraft(current => current === submitted ? '' : current); intake.clear(); setRestored([]); input.current?.focus(); }
+      const accepted = await (onDraftSend ? onDraftSend(ticket.text, files.map(file => file.file!), files.map(file => file.id), ticket) : onSend(ticket.text, ticket.receipts, action.delivery, ticket.accepted));
+      if (accepted) ticket.accepted(); else ticket.failed('unsent');
     } catch (cause) {
-      if (draftBinding.current === owner) setError(String(cause));
+      ticket.failed(isOutcomeUncertain(cause) ? 'uncertain' : cause instanceof RpcFailure ? 'rejected' : 'unsent');
+      if (owner.snapshot()?.incarnation === ticket.incarnation) setError(String(cause));
     }
   };
   return <div ref={root} className={css.root} onDragOver={event => { if (!disabled && !busy && event.dataTransfer.types.includes('Files')) { event.preventDefault(); setDragging(true); } }}
@@ -178,13 +165,13 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
     {dragging && <div className="attachment-drop" role="status">{tx('agent:upload.drop')}</div>}
     {error && <p role="alert">{error}</p>}
     {!restoreSupported && <p role="alert">{tx('agent:agent-composer.cannot-restore-this-ordered-native-input-in-the-flat-web-editor')}</p>}
-    <div className={css.card} data-composer-card aria-busy={busy}>
-      {modelMenu && <ModelPicker state={modelPicker!} close={() => { setModelRequested(false); trigger.dismiss(); trigger.restore(); }} chosen={() => { setModelRequested(false); trigger.dismiss(); setDraft(value => value === modelInvocation.current || value.trim().toLowerCase() === '/model' ? '' : value); trigger.restore(); }}/>}
+    <div className={css.card} data-composer-card data-editor-incarnation={editor?.incarnation} data-editor-revision={editor?.revision} data-submission-outcome={editor?.submission?.outcome} aria-busy={busy}>
+      {modelMenu && <ModelPicker state={modelPicker!} close={() => { modelInvocation.current = undefined; setModelRequested(false); trigger.dismiss(); trigger.restore(); }} chosen={() => { if (modelRevision) owner.consumeRevision(modelRevision.incarnation, modelRevision.revision); setModelRequested(false); trigger.dismiss(); modelInvocation.current = undefined; trigger.restore(); }}/>}
       {menu && <CommandMenu rows={rows} active={highlight} select={selectMenu} highlight={trigger.highlight}
         fileDescription={uploadPolicy ? tx('agent:upload.limits', { count: uploadPolicy.max_uploads_per_user_input, file: uploadPolicy.max_file_bytes, batch: uploadPolicy.max_upload_bytes_per_user_input }) : tx('agent:upload.policy')} />}
-      {restored.map((receipt, index) => <div key={JSON.stringify([receipt.batch_id, receipt.token])}><span>{tx('agent:agent-composer.native-restored-upload-batch')}{' '}{receipt.batch_id}</span><Button disabled={disabled || busy} onClick={() => setRestored(current => current.filter((_, at) => at !== index))}>{tx('agent:agent-composer.remove-draft-upload')}</Button></div>)}
+      {restored.map((receipt, index) => <div key={JSON.stringify([receipt.batch_id, receipt.token])}><span>{tx('agent:agent-composer.native-restored-upload-batch')}{' '}{receipt.batch_id}</span><Button disabled={disabled || busy} onClick={() => editor && owner.removeRestored(editor.incarnation, index)}>{tx('agent:agent-composer.remove-draft-upload')}</Button></div>)}
       <div className={css.attachments} aria-label={tx('agent:agent-composer.draft-attachments')}>{files.map(item => <div key={item.id}>
-        <DraftAttachment name={item.name} file={item.file} remove={firstSubmission && onRetainedRemove ? () => onRetainedRemove(item.id) : disabled || busy ? undefined : () => intake.remove(item.id)} />
+        <DraftAttachment name={item.name} file={item.file} remove={firstSubmission && onRetainedRemove ? () => onRetainedRemove(item.id) : disabled || busy ? undefined : () => { intake.remove(item.id); if (editor) owner.attachmentsEdited(editor.incarnation); }} />
         <small role="status">{item.reason ? tx(`agent:upload.${item.reason}`) : tx(`agent:upload.${item.status}`)}</small>
         {item.status === 'failed' && <Button disabled={!onRetainedRecover && (disabled || busy)} onClick={() => onRetainedRecover ? onRetainedRecover(true) : void intake.upload(item.id, port)}>{tx('agent:upload.retry')}</Button>}
         {item.status === 'uncertain' && <Button disabled={!onRetainedRecover && (disabled || busy)} onClick={() => onRetainedRecover ? onRetainedRecover(false) : void intake.reconcile(item.id, port)}>{tx('agent:upload.reconcile')}</Button>}

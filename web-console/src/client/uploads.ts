@@ -67,6 +67,11 @@ export class AttachmentIntake {
     return true;
   }
   remove(id: string) { this.publish(this.files.filter(file => file.id !== id)); }
+  consume(selected: readonly { id: string; operation: string; receipt?: UploadReceipt }[]) {
+    if (this.retired) return;
+    const next = this.files.filter(file => !selected.some(old => old.id === file.id && old.operation === file.operation && old.receipt === file.receipt));
+    if (next.length !== this.files.length) this.publish(next);
+  }
   clear() { this.revision++; this.actions.clear(); this.publish([]); }
   retire() { this.retired = true; this.clear(); this.listeners.clear(); }
   add(inputs: readonly IntakeInput[], policy: UploadPolicy | undefined, port?: UploadPort) {

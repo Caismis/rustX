@@ -65,6 +65,6 @@ export function firstSubmitPort(client: AppServerClient, host: ProductHostWorksp
     },
     async upload(session, file, acknowledged, operation) { try { bindSession(session); } catch (error) { throw new UploadFailure('failed', error); } const [uploaded] = await client.upload(session.id, [file], { current, acknowledged: files => { if (files[0]) acknowledged(files[0].receipt); } }, operation); if (!uploaded) throw new Error('Upload receipt missing; inspect native state.'); return uploaded.receipt; },
     status: async (session, operation) => { bindSession(session); const result = await client.uploadStatus(session.id, operation); requireCurrent(); return result; },
-    async send(session, draft, receipts, acknowledged) { bindSession(session); await client.send(session.id, draft.text, receipts, 'send', acknowledged, current); },
+    async send(session, draft, receipts, acknowledged) { bindSession(session); draft.submission?.bind(target!, JSON.stringify([generation, target]), receipts); await client.send(session.id, draft.text, receipts, 'send', acceptance => { draft.submission?.accepted(acceptance); acknowledged(); }, current); },
   };
 }

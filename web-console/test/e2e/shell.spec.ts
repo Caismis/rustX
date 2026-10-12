@@ -798,3 +798,49 @@ test('View Source installs cancellation in the click stack before the next user 
   expect(await port.evaluate(element => element.scrollTop)).toBe(position);
   await expect(page.getByRole('alert')).toHaveCount(0); expect(errors).toEqual([]);
 });
+
+for (const beforeReturn of [false, true]) test(`known input acceptance settles its revision during history beforeReturn=${beforeReturn}`, async ({ page }) => {
+  const { before, requests, errors } = await openForkOwnershipFixture(page);
+  const editor = page.getByRole('textbox', { name: 'Message', exact: true });
+  await editor.fill('Accepted revision R1'); await page.evaluate(() => window.sessionFixture.holdInput()); await editor.press('Enter');
+  await expect.poll(() => page.evaluate(() => window.sessionFixture.requests().filter(row => row.method === 'turn/start').length)).toBe(1);
+  await startHeldFork(page, 'history'); await page.evaluate(() => window.sessionFixture.settleHistory(true));
+  await expect(page.locator('[data-history-session="C"]')).toBeVisible();
+  if (beforeReturn) await page.evaluate(() => window.sessionFixture.settleInput());
+  await page.getByRole('button', { name: 'Return to conversation', exact: true }).click();
+  if (!beforeReturn) await page.evaluate(() => window.sessionFixture.settleInput());
+  await expect(editor).toHaveValue(''); await expect(editor).toBeEditable();
+  const delta = (await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length);
+  expect(nativeMutations(delta).map(row => row.method)).toEqual(['turn/start']);
+  expect(await page.evaluate(() => window.sessionFixture.navigationFacts())).toEqual(before);
+  expect(errors).toEqual([]);
+});
+test('Discard creates a stable replacement editor through repeated read-only history', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('http://127.0.0.1:5174/test/fixtures/shell.html?fork&initial=cold');
+  await expect(page.getByLabel('Session title')).toHaveText('Session A');
+  const editor = page.getByRole('textbox', { name: 'Message', exact: true });
+  await editor.fill('Discarded First Submission');
+  await page.getByLabel('Attach files', { exact: true }).setInputFiles({ name: 'first.txt', mimeType: 'text/plain', buffer: Buffer.from('first') });
+  await page.evaluate(() => window.sessionFixture.uncertainUpload()); await editor.press('Enter');
+  await expect.poll(() => page.evaluate(() => window.sessionFixture.requests().filter(row => row.method === 'session/attach' && row.params.session_id === 'A').length)).toBe(1);
+  await page.evaluate(() => window.sessionFixture.settleAttach(true, 'A'));
+  const discard = page.getByRole('button', { name: /Discard/i }); await expect(discard).toBeVisible(); await discard.click();
+  await page.evaluate(() => window.sessionFixture.resolveUpload());
+  await editor.fill('Stable replacement after Discard');
+  await page.getByLabel('Attach files', { exact: true }).setInputFiles({ name: 'replacement.txt', mimeType: 'text/plain', buffer: Buffer.from('replacement') });
+  await expect(page.getByText('Uploaded', { exact: true })).toHaveCount(1);
+  const incarnation = await page.locator('[data-editor-incarnation]').getAttribute('data-editor-incarnation');
+  await editor.evaluate((element: HTMLTextAreaElement) => { element.focus(); element.setSelectionRange(3, 8, 'backward'); element.dispatchEvent(new Event('select', { bubbles: true })); });
+  const requests = await page.evaluate(() => window.sessionFixture.requests());
+  for (let visit = 0; visit < 2; visit++) {
+    await startHeldFork(page, 'history'); await page.evaluate(() => window.sessionFixture.settleHistory(true));
+    await expect(page.locator('[data-history-session="C"]')).toBeVisible();
+    await page.getByRole('button', { name: 'Return to conversation', exact: true }).click();
+    await expect(editor).toHaveValue('Stable replacement after Discard'); await expect(editor).toBeEditable();
+    await expect(page.locator('[data-editor-incarnation]')).toHaveAttribute('data-editor-incarnation', incarnation!);
+    await expect(page.getByText('replacement.txt', { exact: true })).toBeVisible();
+    expect(await editor.evaluate((element: HTMLTextAreaElement) => [element.selectionStart, element.selectionEnd, element.selectionDirection])).toEqual([3, 8, 'backward']);
+  }
+  expect(nativeMutations((await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length))).toEqual([]);
+});

@@ -17,7 +17,7 @@ import { IconChevronDownOutline14, IconFolderClose16 } from '../../presentation/
 import hero from '../../presentation/agent/HeroShell.module.css';
 import modal from '../../presentation/primitives/Modal.module.css';
 import { useModelPreference } from '../model-preference';
-import type { ComposerDraft } from '../composer/draft';
+import { ComposerDraft } from '../composer/draft';
 import { useAttachmentIntake } from '../composer/use-attachment-intake';
 import { ComposerContextStack } from '../composer/ComposerContextStack';
 import type { ModelPickerState } from '../composer/ModelPicker';
@@ -30,7 +30,8 @@ export function ConversationComposer({ client, host, authority, associations, in
   const tx = useTranslation();
   const [workspaceId, setWorkspace] = useState(initialWorkspace);
   const [owner, setOwner] = useState(binding);
-  const [discarded, setDiscarded] = useState(0);
+  const [localDraft] = useState(() => new ComposerDraft());
+  const editor = draftOwner ?? localDraft;
   const [intent, setIntent] = useState<SessionModelConfig>();
   const [catalog, setCatalog] = useState<WorkspaceCatalog>();
   const [error, setError] = useNotice(), [menu, setMenu] = useState(false), [add, setAdd] = useState<{ mutation: WorkspaceMutation; locations: { id: string; displayName: string }[] }>(), [adopting, setAdopting] = useState(false);
@@ -77,15 +78,15 @@ export function ConversationComposer({ client, host, authority, associations, in
   // The route owns a draft; acquiring its first native attachment must not
   // retire selected files. Native target changes still fence upload operations.
   const hasDraftFiles = useSyncExternalStore(intake.subscribe, intake.snapshot).some(file => file.status === 'draft');
-  const composer = (block: () => Message | undefined, permission?: React.ReactNode, model?: React.ReactNode, modelPicker?: ModelPickerState) => <AgentComposer draftOwner={draftOwner} draftIdentity={JSON.stringify([binding, discarded])} receiptAuthority={receiptAuthority} modelPicker={modelPicker} onRetainedRemove={flow && (flow.phase === 'paused' || ['failed', 'uncertain'].includes(flow.phase) && flow.failedPhase === 'uploading') ? id => submissions.removeUpload(flow, id) : undefined} onRetainedRecover={flow && ['failed', 'uncertain'].includes(flow.phase) ? retry => { void submissions.recoverUpload(flow, firstSubmitPort(client, host, current, preparePublication), retry); } : undefined} uploadPolicy={client.getSnapshot().capabilities?.upload_policy} intakeOwner={intake} firstSubmission={flow} consumed={active ? consumed : undefined} commandAvailable={active ? id => id === 'model' && connecting || !active.disabled : id => id === 'model'} onCommand={() => {}} submitDisabled={!!block()} active={false}
+  const composer = (block: () => Message | undefined, permission?: React.ReactNode, model?: React.ReactNode, modelPicker?: ModelPickerState) => <AgentComposer draftOwner={editor} draftIdentity={binding} receiptAuthority={receiptAuthority} modelPicker={modelPicker} onRetainedRemove={flow && (flow.phase === 'paused' || ['failed', 'uncertain'].includes(flow.phase) && flow.failedPhase === 'uploading') ? id => submissions.removeUpload(flow, id) : undefined} onRetainedRecover={flow && ['failed', 'uncertain'].includes(flow.phase) ? retry => { void submissions.recoverUpload(flow, firstSubmitPort(client, host, current, preparePublication), retry); } : undefined} uploadPolicy={client.getSnapshot().capabilities?.upload_policy} intakeOwner={intake} firstSubmission={flow} consumed={active ? consumed : undefined} commandAvailable={active ? id => id === 'model' && connecting || !active.disabled : id => id === 'model'} onCommand={() => {}} submitDisabled={!!block()} active={false}
     permission={permission} model={model} onCancel={() => {}} onUpload={async () => { throw new Error(tx('common:copy.no-session-exists-before-submit')); }} onSend={async () => false}
-    onDraftSend={active && !connecting && !hasDraftFiles ? undefined : async (text, files, attachmentIds) => {
-      if (activeView) return submissions.submit(binding, { workspaceId: '', text, files, attachmentIds }, firstSubmitPort(client, host, current, preparePublication, true), () => intake.clear(), (files, ids) => intake.restoreDraft(files, ids), activeView.id);
+    onDraftSend={active && !connecting && !hasDraftFiles ? undefined : async (text, files, attachmentIds, submission) => {
+      if (activeView) return submissions.submit(binding, { workspaceId: '', text, files, attachmentIds, submission }, firstSubmitPort(client, host, current, preparePublication, true), () => intake.clear(), (files, ids) => intake.restoreDraft(files, ids), activeView.id);
       const blocked = block();
       if (blocked) { setError(blocked); return false; }
       if (!selected) { setError(message('common:copy.choose-a-host-authorized-registered-workspace-before-submitting')); return false; }
-      return submissions.submit(binding, { workspaceId: selected.id, text, files, attachmentIds, model: intent ?? preference }, firstSubmitPort(client, host, current, preparePublication), () => intake.clear(), (files, ids) => intake.restoreDraft(files, ids));
-    }} {...active} busy={pending || !!active?.busy} disabled={active ? !pending && !connecting && active.disabled : !live || owner !== binding} binding={JSON.stringify([binding, discarded, flow?.phase === 'admitted' || flow?.phase === 'discarded'])}/>;
+      return submissions.submit(binding, { workspaceId: selected.id, text, files, attachmentIds, submission, model: intent ?? preference }, firstSubmitPort(client, host, current, preparePublication), () => intake.clear(), (files, ids) => intake.restoreDraft(files, ids));
+    }} {...active} busy={pending || !!active?.busy} disabled={active ? !pending && !connecting && active.disabled : !live || owner !== binding} binding={binding}/>;
   return <div className={hero.body} data-resident-composer="" role="region" aria-label={active ? tx('common:conversation-composer.conversation-composer') : tx('common:conversation-composer.new-conversation')}>
     {!active && <div className={hero.headline}><h1 className={hero.titleGroup}>{tx('common:conversation-composer.what-would-you-like-to-build')}</h1></div>}
     {!active && <div className={hero.workspaceRow}>
@@ -106,7 +107,7 @@ export function ConversationComposer({ client, host, authority, associations, in
     {flow && (flow.session || activeView) && pending && !['attaching', 'uploading', 'admitting'].includes(flow.phase) && <p className={startupCss.notice} role="status" data-first-submission={flow.phase}>{tx(flow.phase === 'paused' ? 'agent:upload.paused' : flow.phase === 'attaching' ? 'common:startup.attaching' : flow.phase === 'uploading' ? 'common:startup.uploading' : flow.phase === 'admitting' ? 'common:startup.admitting' : flow.phase === 'uncertain' ? 'common:startup.uncertain' : flow.failedPhase === 'attaching' ? 'common:startup.attach-failed' : flow.failedPhase === 'uploading' ? 'common:startup.upload-failed' : 'common:startup.admission-failed')}</p>}
     {flow?.error != null && <div className={startupCss.notice} role="alert">{activeView && !flow.session ? tx('common:startup.attach-failed') : !flow.session && flow.phase === 'rejected' ? tx('common:conversation-composer.no-session-was-created-correct-the-draft-or-workspace-and-submit') : flow.session ? null : tx('common:conversation-composer.creation-outcome-uncertain-inspect-native-sessions-before-starti')}<details><summary>{tx('common:app.show-details')}</summary><pre>{String(flow.error)}</pre>{flow.session && <p>{tx('common:conversation-composer.session-value-was-created-value-upload-s-committed-inspect-that', { p0: flow.session.id, p1: flow.receipts.length })}</p>}</details></div>}
     {flow?.phase === 'paused' && <Button onClick={() => void submissions.continueUploads(flow, firstSubmitPort(client, host, current, preparePublication))}>{tx('agent:upload.continue')}</Button>}
-    {flow && ['failed', 'uncertain'].includes(flow.phase) && <Button onClick={() => { setDiscarded(value => value + 1); submissions.discard(flow); }}>{tx('common:conversation-composer.discard-first-submission-draft')}</Button>}
+    {flow && ['failed', 'uncertain'].includes(flow.phase) && <Button onClick={() => { if (submissions.discard(flow)) { intake.clear(); const state = editor.snapshot(); if (state) editor.replace(state.incarnation); } }}>{tx('common:conversation-composer.discard-first-submission-draft')}</Button>}
     <DialogSurface open={!!add} onClose={() => { if (!adopting) setAdd(undefined); }} title={tx('common:conversation-composer.add-workspace-2')} overlayClassName={`${modal.root} ${modal.scrim}`} className={modal.dialog}>
       <div className={modal.content}><div className={modal.header}><h2 className={modal.title}>{tx('common:conversation-composer.add-workspace-2')}</h2></div><div className={modal.body}><p>{tx('common:conversation-composer.choose-a-location-authorized-by-this-product-host')}</p>{error && <p role="alert">{error}</p>}{add?.locations.map(location => <Button key={location.id} disabled={adopting} onClick={() => void adopt(location.id)}>{location.displayName}</Button>)}<Button disabled={adopting} onClick={() => setAdd(undefined)}>{tx('common:conversation-composer.cancel')}</Button></div></div>
     </DialogSurface>

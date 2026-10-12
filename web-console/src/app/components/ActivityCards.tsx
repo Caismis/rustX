@@ -139,7 +139,7 @@ export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible
         onUpload={(files, operation) => client.upload(sessionId, files, { current: () => client.isAttachmentControlCurrent(sessionId, admission), acknowledged: () => {} }, operation)}
         onReconcile={operation => client.uploadStatus(sessionId, operation)}
         onSend={(message, attachments, _delivery, acknowledged) => request.run(async (client, target, current) => {
-          await client.request({ method: 'agent/sendMessage', params: { target, agent_id: agent.agent_id, message, attachments: [...attachments] } }, 'agent_message', acknowledged, current);
+          await client.request({ method: 'agent/sendMessage', params: { target, agent_id: agent.agent_id, message, attachments: [...attachments] } }, 'agent_message', () => acknowledged?.(), current);
           if (current()) refreshTranscript(value => value + 1);
         })}
         cancellationAvailable={!interruptRequest.disabled && !unavailable && agent.state !== 'inactive'}

@@ -341,7 +341,9 @@ it.each(['wait-release', 'interrupt-switch', 'message-release'] as const)('%s ca
     ? { type: 'agent_message', agent_id: agent.agent_id, activation_id: agent.activation_id, resumed: false }
     : { type: 'agent_wait', agent_id: agent.agent_id, activation_id: 'obsolete', outcome: 'succeeded', agent }); });
   expect(ui.queryByText('succeeded')).toBeNull(); expect(ui.queryByRole('alert')).toBeNull();
-  if (kind === 'message-release') expect((ui.getByRole('textbox') as HTMLTextAreaElement).value).toBe('Preserve draft');
+  // Native accepted input consumes its exact editor revision even though
+  // the old observation has lost permission to publish Agent state.
+  if (kind === 'message-release') expect((ui.getByRole('textbox') as HTMLTextAreaElement).value).toBe('');
   expect(server.requests.filter(r => r.request.method === 'session/snapshot')).toHaveLength(0);
   expect(server.requests.filter(r => r.request.method === method)).toHaveLength(1);
   await act(async () => { server.reply(await server.waitFor(kind === 'interrupt-switch' ? 'session/switchNode' : 'session/detach', 1)); await cleanup; });

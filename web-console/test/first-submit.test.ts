@@ -216,3 +216,17 @@ it('continuation preserves a known no-commit upload failure instead of degrading
   expect(owner.session(session.id)).toMatchObject({ phase: 'failed', failedPhase: 'uploading', uploadIndex: 1, receipts: [receipt] });
   expect(port.send).not.toHaveBeenCalled();
 });
+
+it('Discard reports only an applied terminal transition and late admission cannot replace the discarded owner', async () => {
+  let acknowledged!: () => void;
+  const admission = gate<void>(), entered = gate<void>();
+  const send = vi.fn<FirstSubmitPort['send']>(async (_, __, ___, capture) => { acknowledged = capture; entered.resolve(); return admission.promise; });
+  const { owner, start } = fixture({ send });
+  const work = start();
+  await entered.promise;
+  expect(owner.discard(owner.draft('draft')!)).toBe(false);
+  admission.reject(new OutcomeUncertain()); expect(await work).toBe(false);
+  const old = owner.draft('draft')!; expect(owner.discard(old)).toBe(true);
+  const discarded = owner.draft('draft'); expect(owner.discard(old)).toBe(false);
+  acknowledged(); expect(owner.draft('draft')).toBe(discarded); expect(owner.draft('draft')?.phase).toBe('discarded'); expect(send).toHaveBeenCalledTimes(1);
+});

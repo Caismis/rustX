@@ -1690,7 +1690,7 @@ export class AppServerClient {
     return read();
   }
 
-  async send(id: string, text: string, receipts: readonly UploadReceipt[] = [], delivery: 'send' | 'steer' = 'send', acknowledged?: () => void, dispatchCurrent?: () => boolean) {
+  async send(id: string, text: string, receipts: readonly UploadReceipt[] = [], delivery: 'send' | 'steer' = 'send', acknowledged?: (result: Extract<MethodResult, { type: 'inbound_accepted' }>) => void, dispatchCurrent?: () => boolean) {
     if (receipts.some(receipt => receipt.session_id !== id)) throw new Error('Invalid Session upload receipts.');
     const content: UserInputBlock[] = [
       ...receipts.map(receipt => ({ type: 'upload' as const, ...receipt })),
@@ -1698,7 +1698,7 @@ export class AppServerClient {
     ];
     return this.sendContent(id, content, delivery, acknowledged, dispatchCurrent);
   }
-  async sendContent(id: string, content: UserInputBlock[], delivery: 'send' | 'steer' = 'send', acknowledged?: () => void, dispatchCurrent?: () => boolean) {
+  async sendContent(id: string, content: UserInputBlock[], delivery: 'send' | 'steer' = 'send', acknowledged?: (result: Extract<MethodResult, { type: 'inbound_accepted' }>) => void, dispatchCurrent?: () => boolean) {
     const generation = this.state.generation;
     const preparation = this.modelPreparations.get(id);
     if (preparation) await preparation.work;
