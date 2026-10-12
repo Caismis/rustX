@@ -227,3 +227,28 @@ Workspace mutation while held proves the frozen prepared source supplies both.
 The timeout is a post-release liveness guard, not synchronization over uv setup.
 No sleep, timeout increase, retry, cancellation change or authority fallback is
 added by this repair.
+
+## Budget revision — measured warm-cache lane (PR #465)
+
+The 40-minute budget left no margin for runner speed variation. Two runs of this
+job, with the same runner image (`macos-26-arm64` `20260907.0351.1`), the same
+exact Rust cache hit and selectors and features unchanged, measured (from
+`/usr/bin/time -l`):
+
+| Phase | [Run 38249121225](https://github.com/Caismis/rustX/actions/runs/38249121225) (passed) | [Run 38263767197](https://github.com/Caismis/rustX/actions/runs/38263767197) (cancelled) |
+| --- | --- | --- |
+| `cargo build --bins --all-features` | 188.77 s | 348.64 s (1.85×) |
+| Lib/bin test-harness compilation | 847.57 s | 1534.10 s (1.81×) |
+| Lib/bin test execution | 698.68 s: 2,676 passed, 2 ignored | cancelled after 438 s: 2,105 passed, 0 failed |
+| External targets: compile, run | 43.30 s, 110.87 s | not reached |
+| Entire job | 32m52s | 40m32s, budget exceeded |
+
+Every step, checkout and toolchain installation included, ran about 1.8× slower
+in the second run. The limiting phase is test-harness compilation, not test
+execution, as in the cold-cache audit above. No test failed or hung. At 1.8×,
+the complete warm-cache lane projects to about 60 minutes. Other branches'
+passing runs of this job on the same day took 26–40 minutes, one of them 39m48s.
+The budget is now 70 minutes. Selectors, skips, the external target list, the
+provider-emulator requirement, test deadlines and the cache policy are
+unchanged. The cold-cache comparison above remains pending; this revision
+claims no speedup.
