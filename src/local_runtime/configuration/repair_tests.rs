@@ -30,7 +30,7 @@ model = "local/a"
 "#;
 
 struct Fixture {
-    _root: tempfile::TempDir,
+    root: tempfile::TempDir,
     manager: UserConfigManager,
     workspace: SourceTarget,
 }
@@ -65,7 +65,7 @@ impl Fixture {
             workspace: SourceTarget::Workspace {
                 directory: workspace.canonicalize().unwrap(),
             },
-            _root: root,
+            root,
             manager,
         }
     }
@@ -131,16 +131,28 @@ fn candidate(text: &str) -> String {
     String::from_utf8(plan(text.as_bytes()).unwrap().candidate).unwrap()
 }
 
-fn removed(path: &str) -> ConfigRepairChange {
+/// An unknown field removed from the closed object at `object_path`.
+fn removed(object_path: &str) -> ConfigRepairChange {
     ConfigRepairChange::RemovedField {
-        field_path: path.into(),
+        object_path: object_path.into(),
     }
 }
 
-fn tool(name: &str, reason: NativeToolRemoval) -> ConfigRepairChange {
+/// A removed selection entry naming the native Tool `name`.
+fn tool(position: u32, name: &str, reason: NativeToolRemoval) -> ConfigRepairChange {
     ConfigRepairChange::RemovedNativeTool {
-        name: name.into(),
+        position,
+        name: Some(name.into()),
         reason,
+    }
+}
+
+/// A removed selection entry naming no native Tool: its name stays unsaid.
+fn unknown_tool(position: u32) -> ConfigRepairChange {
+    ConfigRepairChange::RemovedNativeTool {
+        position,
+        name: None,
+        reason: NativeToolRemoval::Unknown,
     }
 }
 
@@ -156,10 +168,10 @@ fn the_issue_example_converges_to_its_documented_result() {
         plan.changes,
         vec![
             ConfigRepairChange::UpdatedSchemaVersion { from: 8, to: 10 },
-            removed("agent.plugins.todo.unknown_permission"),
-            removed("native_tools.old_tool"),
-            tool("old_tool", NativeToolRemoval::Unknown),
-            tool("read", NativeToolRemoval::Duplicate),
+            removed("agent.plugins.todo"),
+            removed("native_tools"),
+            unknown_tool(1),
+            tool(3, "read", NativeToolRemoval::Duplicate),
         ]
     );
     // One finite pass reaches the fixed point.
@@ -212,13 +224,13 @@ trust_all = true
     assert_eq!(
         changes(text),
         vec![
-            removed("unknown_root"),
-            removed("security"),
-            removed("native_tools.bash.allow_unsandboxed"),
-            removed("agent.plugins.goal.permissions"),
-            removed("agent.model.max_output_tokens.bypass"),
-            removed("subagents.isolation"),
-            removed("mcp_tool_policies.docs.trust_all"),
+            removed(""),
+            removed(""),
+            removed("native_tools.bash"),
+            removed("agent.plugins.goal"),
+            removed("agent.model.max_output_tokens"),
+            removed("subagents"),
+            removed("mcp_tool_policies.*"),
         ]
     );
     for gone in [
@@ -267,10 +279,7 @@ approval = "always"
     assert!(changes(&text).is_empty(), "{:?}", changes(&text));
     // Opaque JSON keys are data even beside a removed schema field.
     let with_unknown = format!("{text}\n[models.\"local/a\".compat]\nfuture_flag = true\n");
-    assert_eq!(
-        changes(&with_unknown),
-        vec![removed("models.\"local/a\".compat.future_flag")]
-    );
+    assert_eq!(changes(&with_unknown), vec![removed("models.*.compat")]);
     let repaired = candidate(&with_unknown);
     assert!(repaired.starts_with(&text), "{repaired}");
     for exact in [
@@ -327,18 +336,25 @@ fn native_tool_entries_are_classified_by_the_native_domain() {
             .collect::<Vec<_>>()
             .join(", ")
     );
+    let position = |name: &str| {
+        u32::try_from(selection.iter().rposition(|entry| entry == name).unwrap()).unwrap()
+    };
     let mut expected: Vec<_> = controls
         .iter()
-        .map(|name| tool(name, NativeToolRemoval::AgentControl))
+        .map(|name| tool(position(name), name, NativeToolRemoval::AgentControl))
         .collect();
     expected.extend(
         plugins
             .iter()
-            .map(|name| tool(name, NativeToolRemoval::PluginOwned)),
+            .map(|name| tool(position(name), name, NativeToolRemoval::PluginOwned)),
     );
-    expected.push(tool(&ordinary[0], NativeToolRemoval::Duplicate));
-    expected.push(tool("not_a_native_tool", NativeToolRemoval::Unknown));
-    expected.push(tool("", NativeToolRemoval::Unknown));
+    expected.push(tool(
+        position(&ordinary[0]),
+        &ordinary[0],
+        NativeToolRemoval::Duplicate,
+    ));
+    expected.push(unknown_tool(position("not_a_native_tool")));
+    expected.push(unknown_tool(position("")));
     assert_eq!(changes(&text), expected);
     let repaired: RuntimeLayer = crate::toml_authoring::parse(candidate(&text).as_bytes()).unwrap();
     assert_eq!(
@@ -374,8 +390,8 @@ fn tagged_unions_close_only_their_selected_variant() {
     assert_eq!(
         changes(text),
         vec![
-            removed("agent.model.summary_model.legacy"),
-            removed("tool_deadline_policy.idle_liveness_ms.extra"),
+            removed("agent.model.summary_model"),
+            removed("tool_deadline_policy.idle_liveness_ms"),
         ]
     );
     // An unknown tag selects no variant: nothing under it is guessed.
@@ -406,7 +422,7 @@ fn identical_rules_apply_to_user_and_workspace_sources() {
         assert_eq!(receipt.target, target);
         assert_eq!(
             receipt.changes,
-            vec![removed("legacy"), removed("agent.plugins.todo.stale")]
+            vec![removed(""), removed("agent.plugins.todo")]
         );
     }
     assert_eq!(
@@ -765,19 +781,14 @@ fn receipts_are_bounded_and_sanitized() {
     assert_eq!(receipt.changed_count as usize, MAX_RECEIPT_CHANGES + 7);
     assert_eq!(receipt.changes.len(), MAX_RECEIPT_CHANGES);
     assert!(receipt.truncated);
+    // The removed key itself, however long or strange, is never carried.
     let all = plan(text.as_bytes()).unwrap().changes;
-    let ConfigRepairChange::RemovedField { field_path } = all.last().unwrap() else {
-        panic!("expected a removed field");
-    };
-    let segment = field_path.strip_prefix("agent.model.").unwrap();
-    assert_eq!(segment.chars().count(), MAX_SEGMENT_CHARS);
-    assert!(segment.ends_with('…'));
-    assert!(!field_path.chars().any(char::is_control));
-    // A short key keeps its escaped control character visible but inert.
-    assert_eq!(
-        changes("\"a\\u0007b\" = 1\n"),
-        vec![removed("\"a\\u0007b\"")]
-    );
+    assert_eq!(all.last(), Some(&removed("agent.model")));
+    let serialized = serde_json::to_string(&receipt).unwrap();
+    assert!(!serialized.contains("legacy_"), "{serialized}");
+    assert!(!serialized.contains("kkkk"), "{serialized}");
+    assert!(!serialized.contains("\\u0007"), "{serialized}");
+    assert_eq!(changes("\"a\\u0007b\" = 1\n"), vec![removed("")]);
 }
 
 #[test]
@@ -1010,7 +1021,7 @@ fn a_user_may_select_a_model_its_workspace_defines() {
     assert_eq!(fixture.read(&fixture.workspace), WORKSPACE_MODEL);
     let receipt = fixture.receipt(&SourceTarget::User).unwrap();
     assert_eq!(receipt.status, ConfigRepairStatus::Repaired);
-    assert_eq!(receipt.changes, vec![removed("legacy_field")]);
+    assert_eq!(receipt.changes, vec![removed("")]);
     assert!(fixture.receipt(&fixture.workspace).is_none());
     // The composition Session resolution builds is complete and valid.
     let directory = fixture.workspace.workspace().unwrap().to_path_buf();
@@ -1146,7 +1157,7 @@ fn a_partial_intrinsically_valid_source_is_repaired_without_inventing_facts() {
         "[agent]\ninstructions = \"Be brief.\"\n"
     );
     let receipt = fixture.receipt(&SourceTarget::User).unwrap();
-    assert_eq!(receipt.changes, vec![removed("legacy_field")]);
+    assert_eq!(receipt.changes, vec![removed("")]);
 }
 
 #[test]
@@ -1753,7 +1764,7 @@ fn a_non_utf8_user_source_keeps_its_exact_name_through_every_transaction() {
     assert_eq!(receipt.status, ConfigRepairStatus::Repaired);
     assert_eq!(receipt.before_revision, revision(&original));
     assert_eq!(receipt.after_revision, Some(revision(USER)));
-    assert_eq!(receipt.changes, vec![removed("agent.model.legacy")]);
+    assert_eq!(receipt.changes, vec![removed("agent.model")]);
     assert!(receipt.backup_available);
     let entries = || {
         let mut names: Vec<_> = std::fs::read_dir(&directory)
@@ -1825,8 +1836,14 @@ fn every_writer_takes_one_bounded_lock_per_document() {
     };
     for name in &names {
         // The handle-relative lock of source transactions and the path lock
-        // of initialization and capture are one bounded inode.
+        // of initialization are one bounded inode, which no reader creates.
         let lock = lock_of(&directory.join(name));
+        assert!(
+            super::super::super::settings::share_document_lock(&directory.join(name))
+                .unwrap()
+                .is_none()
+        );
+        assert!(!lock.exists());
         assert!(lock.file_name().unwrap().len() <= limit);
         let held = source.lock(name).unwrap();
         assert_eq!(
@@ -1843,6 +1860,18 @@ fn every_writer_takes_one_bounded_lock_per_document() {
         );
         assert!(excluded(&lock));
         drop(held);
+        // A capture shares that inode without ever creating it, and excludes
+        // writers while it holds it.
+        let shared = super::super::super::settings::share_document_lock(&directory.join(name))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            std::fs::metadata(&lock).unwrap().ino(),
+            shared.metadata().unwrap().ino()
+        );
+        assert!(excluded(&lock));
+        drop(shared);
+        assert!(!excluded(&lock));
         // Distinct documents never share a lock.
         assert!(
             inodes.insert(std::fs::metadata(&lock).unwrap().ino()),
@@ -3165,4 +3194,695 @@ fn an_evicted_workspace_reads_as_withdrawn_at_a_frontier_after_its_last_change()
     let (again, _, current) = ledger.snapshot(&workspace(0));
     assert!(again > frontier);
     assert!(current.is_some());
+}
+
+// INV-01: a receipt carries native vocabulary only. Every authored identity,
+// key, Tool name and value below contains the test-only sentinel `zsecretz`.
+
+const SENTINEL: &str = "zsecretz";
+
+/// A valid User source whose every authored identity holds the sentinel, with
+/// unknown keys (also holding it) under each kind of open-map identity, an
+/// unknown root key and table, and unknown Native Tool selections.
+const SENTINEL_SOURCE: &str = r#"zsecretz_root_key = "zsecretz-value"
+
+[providers.zsecretz-provider]
+base_url = "http://127.0.0.1:9/v1"
+api_key = "zsecretz-credential"
+zsecretz_provider_key = "zsecretz-value"
+
+[models."zsecretz-provider/zsecretz-model"]
+provider = "zsecretz-provider"
+id = "zsecretz-wire"
+protocol = "openai_responses"
+context_window = 128000
+max_output_tokens = 8192
+default_profile = "zsecretz-profile"
+zsecretz_model_key = 1
+
+[models."zsecretz-provider/zsecretz-model".capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = false
+
+[models."zsecretz-provider/zsecretz-model".profiles."zsecretz-profile"]
+reasoning_enabled = false
+request_params = '{"zsecretz_param":"zsecretz-value"}'
+zsecretz_profile_key = true
+
+[mcp_tool_policies."zsecretz-mcp"]
+approval = "always"
+trust_all = true
+
+[environment]
+ZSECRETZ_ENV = "zsecretz-value"
+
+[agent.model]
+model = "zsecretz-provider/zsecretz-model"
+
+[agent.tools]
+builtin = ["read", "zsecretz_tool", "read", "zsecretz-\u0007-tool"]
+
+[agent.tools.sources]
+"mcp:zsecretz-source" = ["zsecretz_search"]
+
+[zsecretz_table]
+zsecretz_nested = "zsecretz-value"
+"#;
+
+fn assert_no_sentinel(receipt: &ConfigRepairReceipt) {
+    let serialized = serde_json::to_string(receipt).unwrap();
+    assert!(
+        !serialized.to_ascii_lowercase().contains(SENTINEL),
+        "{serialized}"
+    );
+    let debug = format!("{receipt:?}");
+    assert!(!debug.to_ascii_lowercase().contains(SENTINEL), "{debug}");
+}
+
+/// REDACT-01: open-map identities (Provider, Model, Profile, MCP policy, Tool
+/// source), unknown keys and unsupported Tool names never leave native
+/// authority, while the schema structure, categories, positions and counts
+/// that explain the repair do.
+#[test]
+fn receipts_never_carry_authored_identities_keys_or_tool_names() {
+    let fixture = Fixture::new();
+    fixture.write(&SourceTarget::User, SENTINEL_SOURCE);
+    assert_eq!(
+        fixture.repair(&SourceTarget::User, &SourceTarget::User),
+        RepairOutcome::Committed,
+        "{:?}",
+        fixture.receipt(&SourceTarget::User)
+    );
+    let receipt = fixture.receipt(&SourceTarget::User).unwrap();
+    assert_eq!(receipt.status, ConfigRepairStatus::Repaired);
+    assert_eq!(
+        receipt.changes,
+        vec![
+            removed(""),
+            removed(""),
+            removed("providers.*"),
+            removed("models.*"),
+            removed("models.*.profiles.*"),
+            removed("mcp_tool_policies.*"),
+            unknown_tool(1),
+            tool(2, "read", NativeToolRemoval::Duplicate),
+            unknown_tool(3),
+        ]
+    );
+    assert_eq!(receipt.changed_count, 9);
+    assert_no_sentinel(&receipt);
+    // The edit itself still used the exact authored keys: every known
+    // identity, value and opaque request_params survives, every unknown key
+    // and unsupported Tool selection is gone.
+    let repaired = fixture.read(&SourceTarget::User);
+    for kept in [
+        "[providers.zsecretz-provider]",
+        "api_key = \"zsecretz-credential\"",
+        "[models.\"zsecretz-provider/zsecretz-model\".profiles.\"zsecretz-profile\"]",
+        "request_params = '{\"zsecretz_param\":\"zsecretz-value\"}'",
+        "[mcp_tool_policies.\"zsecretz-mcp\"]",
+        "ZSECRETZ_ENV = \"zsecretz-value\"",
+        "\"mcp:zsecretz-source\" = [\"zsecretz_search\"]",
+        "builtin = [\"read\"]",
+    ] {
+        assert!(repaired.contains(kept), "{kept} was lost:\n{repaired}");
+    }
+    for gone in [
+        "zsecretz_root_key",
+        "zsecretz_provider_key",
+        "zsecretz_model_key",
+        "zsecretz_profile_key",
+        "trust_all",
+        "zsecretz_tool",
+        "zsecretz_table",
+    ] {
+        assert!(!repaired.contains(gone), "{gone} survived:\n{repaired}");
+    }
+}
+
+/// REDACT-02: an unresolved receipt lists the eligible changes it could not
+/// apply, and its diagnostic, in the same native vocabulary.
+#[test]
+fn unresolved_receipts_never_carry_authored_identities_or_values() {
+    let fixture = Fixture::new();
+    for (text, reason) in [
+        // Eligible removals beside an invalid known value: unresolved, with
+        // the eligible changes listed.
+        (
+            format!("{SENTINEL_SOURCE}\n[subagents]\nmax_concurrent = \"zsecretz-not-a-number\"\n"),
+            "invalid document shape",
+        ),
+        // A syntax error on a line full of authored text.
+        (
+            format!("{SENTINEL_SOURCE}\n[zsecretz-unclosed\nzsecretz = \"zsecretz\"\n"),
+            "malformed TOML",
+        ),
+    ] {
+        fixture.write(&SourceTarget::User, &text);
+        assert_eq!(
+            fixture.repair(&SourceTarget::User, &SourceTarget::User),
+            RepairOutcome::Unchanged
+        );
+        assert_eq!(fixture.read(&SourceTarget::User), text);
+        let receipt = fixture.receipt(&SourceTarget::User).unwrap();
+        assert_eq!(receipt.status, ConfigRepairStatus::Unresolved);
+        assert!(
+            receipt.diagnostic.as_deref().unwrap().contains(reason),
+            "{receipt:?}"
+        );
+        assert_no_sentinel(&receipt);
+    }
+}
+
+/// REDACT-03: a removed known Native Tool keeps its native name and reason;
+/// only a name no native definition has is withheld.
+#[test]
+fn known_native_tool_removals_keep_their_native_identity() {
+    let control = crate::tools::native::AGENT_CONTROL_TOOL_NAMES[0];
+    let plugin = crate::tools::native::TODO_TOOL_NAME;
+    let text = format!(
+        "[agent.tools]\nbuiltin = [\"grep\", \"{control}\", \"{plugin}\", \"grep\", \"zsecretz\"]\n"
+    );
+    assert_eq!(
+        changes(&text),
+        vec![
+            tool(1, control, NativeToolRemoval::AgentControl),
+            tool(2, plugin, NativeToolRemoval::PluginOwned),
+            tool(3, "grep", NativeToolRemoval::Duplicate),
+            unknown_tool(4),
+        ]
+    );
+    // A name differing from a native one only by case is not that Tool.
+    assert_eq!(
+        changes("[agent.tools]\nbuiltin = [\"GREP\"]\n"),
+        vec![unknown_tool(0)]
+    );
+}
+
+/// REDACT-04: rendered paths stay within their bound, whatever the depth of
+/// arrays and open maps.
+#[test]
+fn schema_paths_are_native_and_bounded() {
+    let mut text = String::new();
+    for index in 0..(MAX_RECEIPT_CHANGES * 2) {
+        writeln!(
+            text,
+            "[mcp_tool_policies.\"zsecretz-{index}\"]\nzsecretz_{index} = 1"
+        )
+        .unwrap();
+    }
+    let planned = changes(&text);
+    assert_eq!(planned.len(), MAX_RECEIPT_CHANGES * 2);
+    for change in &planned {
+        let ConfigRepairChange::RemovedField { object_path } = change else {
+            panic!("a removed field");
+        };
+        assert_eq!(object_path, "mcp_tool_policies.*");
+        assert!(object_path.chars().count() <= MAX_PATH_CHARS);
+    }
+}
+
+// INV-02: occurrence identity, distinct from content and from ordering.
+
+fn observed(target: &SourceTarget, status: ConfigRepairStatus) -> ConfigRepairReceipt {
+    receipt(
+        target,
+        "sha256:a",
+        Observation {
+            status,
+            after_revision: (status != ConfigRepairStatus::Unresolved).then(|| "sha256:b".into()),
+            changes: vec![removed("")],
+            backup_available: status != ConfigRepairStatus::Unresolved,
+            diagnostic: None,
+        },
+    )
+}
+
+/// OCC-01: every publication attempt is an occurrence even with identical
+/// content; an unresolved observation equal to the current episode is not;
+/// a withdrawal advances ordering without naming an occurrence.
+#[test]
+fn occurrences_are_distinct_from_content_and_from_ordering() {
+    let ledger = RepairLedger::default();
+    let sequence = || *ledger.subscribe().borrow();
+    let latest = || ledger.latest(&SourceTarget::User).unwrap();
+    let mut seen = BTreeSet::new();
+    for status in [
+        ConfigRepairStatus::Repaired,
+        ConfigRepairStatus::Repaired,
+        ConfigRepairStatus::CommitUncertain,
+        ConfigRepairStatus::CommitUncertain,
+    ] {
+        let before = sequence();
+        ledger.record(observed(&SourceTarget::User, status));
+        assert_eq!(sequence(), before + 1, "{status:?}");
+        assert!(seen.insert(latest().id), "{status:?} reused an id");
+    }
+    ledger.record(observed(
+        &SourceTarget::User,
+        ConfigRepairStatus::Unresolved,
+    ));
+    let episode = latest();
+    assert!(seen.insert(episode.id.clone()));
+    let before = sequence();
+    for _ in 0..3 {
+        ledger.record(observed(
+            &SourceTarget::User,
+            ConfigRepairStatus::Unresolved,
+        ));
+        ledger.replace_unresolved(observed(
+            &SourceTarget::User,
+            ConfigRepairStatus::Unresolved,
+        ));
+    }
+    assert_eq!(sequence(), before);
+    assert_eq!(latest(), episode);
+    // Changed unresolved facts are a new observation and a new occurrence.
+    let mut changed = observed(&SourceTarget::User, ConfigRepairStatus::Unresolved);
+    changed.diagnostic = Some("another invalid value".into());
+    ledger.record(changed);
+    assert_eq!(sequence(), before + 1);
+    assert!(seen.insert(latest().id));
+    // A withdrawal orders, names nothing; the identical episode after it is
+    // a new one.
+    ledger.clear_unresolved(&SourceKey::User);
+    assert_eq!(sequence(), before + 2);
+    assert!(ledger.latest(&SourceTarget::User).is_none());
+    ledger.record(observed(
+        &SourceTarget::User,
+        ConfigRepairStatus::Unresolved,
+    ));
+    assert_eq!(sequence(), before + 3);
+    let again = latest();
+    assert_eq!(
+        ConfigRepairReceipt {
+            id: episode.id.clone(),
+            ..again.clone()
+        },
+        episode
+    );
+    assert!(seen.insert(again.id));
+    // Sources share one occurrence space: a Workspace never reuses an id.
+    let workspace = SourceTarget::Workspace {
+        directory: "/w".into(),
+    };
+    ledger.record(observed(&workspace, ConfigRepairStatus::Repaired));
+    assert!(seen.insert(ledger.latest(&workspace).unwrap().id));
+}
+
+/// OCC-02: A (invalid) → repair commits B (R1); an external edit restores
+/// exactly A → repair commits B again (R2). R2 is a new occurrence, ordered
+/// after R1, announced, at the same revision B — one transaction, one
+/// committed outcome, each time.
+#[test]
+fn a_restored_original_repaired_again_is_a_new_occurrence() {
+    let fixture = Fixture::new();
+    let original = format!("{USER}legacy = 1\n");
+    fixture.write(&SourceTarget::User, &original);
+    let mut changed = fixture.manager.repairs().subscribe();
+    changed.mark_unchanged();
+    assert_eq!(
+        fixture.repair(&SourceTarget::User, &SourceTarget::User),
+        RepairOutcome::Committed
+    );
+    assert!(changed.has_changed().unwrap());
+    changed.mark_unchanged();
+    let first = fixture.receipt(&SourceTarget::User).unwrap();
+    let first_sequence = fixture.sequence();
+    let repaired = fixture.read(&SourceTarget::User);
+    // Observations of R1 never become another occurrence.
+    for _ in 0..3 {
+        assert_eq!(
+            fixture.repair(&SourceTarget::User, &SourceTarget::User),
+            RepairOutcome::Unchanged
+        );
+        fixture
+            .manager
+            .read_source_settings(&SourceTarget::User)
+            .unwrap();
+        let (sequence, user, _) = fixture.manager.repairs().snapshot(&SourceTarget::User);
+        assert_eq!(sequence, first_sequence);
+        assert_eq!(user.as_ref(), Some(&first));
+    }
+    assert!(!changed.has_changed().unwrap());
+
+    fixture.write(&SourceTarget::User, &original);
+    assert_eq!(
+        fixture.repair(&SourceTarget::User, &SourceTarget::User),
+        RepairOutcome::Committed
+    );
+    let second = fixture.receipt(&SourceTarget::User).unwrap();
+    assert_ne!(second.id, first.id);
+    assert_eq!(fixture.sequence(), first_sequence + 1);
+    assert!(changed.has_changed().unwrap());
+    assert_eq!(second.after_revision, first.after_revision);
+    assert_eq!(fixture.read(&SourceTarget::User), repaired);
+    // The same content in every other respect, and one exact backup.
+    assert_eq!(
+        ConfigRepairReceipt {
+            id: first.id.clone(),
+            ..second.clone()
+        },
+        first
+    );
+    assert_eq!(fixture.backups().len(), 1);
+    assert_eq!(
+        fixture
+            .manager
+            .repairs()
+            .changed_after(&SourceKey::User, first_sequence),
+        Some((first_sequence + 1, Some(second)))
+    );
+}
+
+/// OCC-03: an invalid source observed again and again is one episode; once a
+/// proven recovery withdraws it, the identical invalid bytes are a new one.
+#[test]
+fn an_identical_unresolved_episode_after_recovery_is_observable() {
+    let fixture = Fixture::new();
+    fixture.write(&fixture.workspace, "[agent\n");
+    fixture.repair(&fixture.workspace, &fixture.workspace);
+    let first = fixture.receipt(&fixture.workspace).unwrap();
+    let sequence = fixture.sequence();
+    for _ in 0..3 {
+        fixture.repair(&fixture.workspace, &fixture.workspace);
+        fixture
+            .manager
+            .refresh_repair_observation(&fixture.workspace);
+    }
+    assert_eq!(fixture.sequence(), sequence);
+    assert_eq!(fixture.receipt(&fixture.workspace).unwrap(), first);
+    fixture.write(&fixture.workspace, "");
+    fixture.repair(&fixture.workspace, &fixture.workspace);
+    assert!(fixture.receipt(&fixture.workspace).is_none());
+    assert_eq!(fixture.sequence(), sequence + 1);
+    fixture.write(&fixture.workspace, "[agent\n");
+    fixture.repair(&fixture.workspace, &fixture.workspace);
+    let second = fixture.receipt(&fixture.workspace).unwrap();
+    assert_eq!(fixture.sequence(), sequence + 2);
+    assert_ne!(second.id, first.id);
+    assert_eq!(second.before_revision, first.before_revision);
+    assert_eq!(second.diagnostic, first.diagnostic);
+}
+
+/// OCC-04: a superseded transaction published nothing, so it names no
+/// occurrence and orders nothing; the next commit is the next occurrence.
+#[test]
+fn a_superseded_transaction_manufactures_no_occurrence() {
+    let fixture = Fixture::new();
+    let original = format!("{USER}legacy = 1\n");
+    fixture.write(&SourceTarget::User, &original);
+    assert_eq!(
+        fixture.repair(&SourceTarget::User, &SourceTarget::User),
+        RepairOutcome::Committed
+    );
+    let first = fixture.receipt(&SourceTarget::User).unwrap();
+    let sequence = fixture.sequence();
+    fixture.write(&SourceTarget::User, &original);
+    let path = fixture.path(&SourceTarget::User);
+    let edit = original.clone();
+    fixture
+        .manager
+        .test_hooks
+        .insert("repair_before_lock", move || {
+            // An external edit between planning and the writer lock.
+            std::fs::write(&path, format!("{edit}# concurrently\n")).unwrap();
+        });
+    assert_eq!(
+        fixture.repair(&SourceTarget::User, &SourceTarget::User),
+        RepairOutcome::Superseded
+    );
+    assert_eq!(fixture.sequence(), sequence);
+    assert_eq!(fixture.receipt(&SourceTarget::User).unwrap(), first);
+}
+
+// INV-03: source inspection has no persistent filesystem side effects, and
+// its snapshot stays coherent against rustX writers and explicit about
+// everyone else.
+
+/// Every entry below `root`, with the bytes of every regular file and the
+/// target of every symlink.
+fn namespace(root: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
+    let mut entries = BTreeMap::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(&directory).unwrap() {
+            let path = entry.unwrap().path();
+            let metadata = std::fs::symlink_metadata(&path).unwrap();
+            let content = if metadata.is_dir() {
+                pending.push(path.clone());
+                None
+            } else if metadata.is_symlink() {
+                use std::os::unix::ffi::OsStringExt;
+                Some(
+                    std::fs::read_link(&path)
+                        .unwrap()
+                        .into_os_string()
+                        .into_vec(),
+                )
+            } else {
+                Some(std::fs::read(&path).unwrap())
+            };
+            entries.insert(path, content);
+        }
+    }
+    entries
+}
+
+fn read_both(fixture: &Fixture) {
+    for target in [SourceTarget::User, fixture.workspace.clone()] {
+        fixture.manager.read_source_settings(&target).unwrap();
+    }
+}
+
+/// READ-01: absent User and Workspace sources — even an absent User
+/// directory — are read without creating any directory, lock or file.
+#[test]
+fn reading_absent_sources_creates_nothing() {
+    let fixture = Fixture::with_config_path(|home| home.join(".config/rustx/rustx.toml"));
+    let root = fixture.root.path().to_path_buf();
+    std::fs::remove_dir_all(root.join("home/.config")).unwrap();
+    let before = namespace(&root);
+    for _ in 0..3 {
+        for target in [SourceTarget::User, fixture.workspace.clone()] {
+            let read = fixture.manager.read_source_settings(&target).unwrap();
+            assert_eq!(read.user.revision, "missing");
+        }
+    }
+    assert_eq!(namespace(&root), before);
+    assert!(!root.join("home/.config").exists());
+}
+
+/// READ-02: valid sources, a repairable one and a malformed one are read
+/// without any writer artifact, backup, repair, receipt or modification.
+#[test]
+fn reading_present_sources_writes_nothing_and_repairs_nothing() {
+    let fixture = Fixture::new();
+    let root = fixture.root.path().to_path_buf();
+    for (user, workspace) in [
+        (
+            USER.to_owned(),
+            "[subagents]\nmax_concurrent = 2\n".to_owned(),
+        ),
+        (
+            format!("{USER}legacy = 1\n"),
+            "[agent]\nfuture = 1\n".to_owned(),
+        ),
+        ("[agent\n".to_owned(), "[broken\n".to_owned()),
+    ] {
+        fixture.write(&SourceTarget::User, &user);
+        fixture.write(&fixture.workspace, &workspace);
+        let before = namespace(&root);
+        for _ in 0..3 {
+            read_both(&fixture);
+        }
+        assert_eq!(namespace(&root), before, "{user}");
+        assert_eq!(fixture.sequence(), 0);
+        assert!(fixture.receipt(&SourceTarget::User).is_none());
+        assert!(fixture.backups().is_empty());
+    }
+    assert!(!lock_of(&fixture.path(&SourceTarget::User)).exists());
+    assert!(!lock_of(&fixture.path(&fixture.workspace)).exists());
+}
+
+/// Whether a rustX writer could take the lock at `lock` now.
+fn writer_excluded(lock: &Path) -> bool {
+    matches!(
+        std::fs::File::open(lock).unwrap().try_lock(),
+        Err(std::fs::TryLockError::WouldBlock)
+    )
+}
+
+/// READ-03: where rustX writers have locked a document before, a reader holds
+/// that same lock shared for its whole capture: every rustX writer is
+/// excluded, other readers are not.
+#[test]
+fn a_reader_excludes_rustx_writers_through_their_existing_locks() {
+    let fixture = Fixture::new();
+    for target in [SourceTarget::User, fixture.workspace.clone()] {
+        let revision = fixture.manager.read_source_settings(&target).unwrap();
+        let expected = match &target {
+            SourceTarget::User => revision.user.revision,
+            SourceTarget::Workspace { .. } => revision.workspace.unwrap().revision,
+        };
+        fixture
+            .manager
+            .write_source_settings(&target, &expected, capacity(2))
+            .unwrap();
+    }
+    let locks = [
+        lock_of(&fixture.path(&SourceTarget::User)),
+        lock_of(&fixture.path(&fixture.workspace)),
+    ];
+    let checked = Arc::new(Mutex::new(false));
+    let observed = checked.clone();
+    let held = locks.clone();
+    fixture
+        .manager
+        .test_hooks
+        .insert("before_capture_verification", move || {
+            for lock in &held {
+                assert!(writer_excluded(lock), "{lock:?}");
+                std::fs::File::open(lock)
+                    .unwrap()
+                    .try_lock_shared()
+                    .unwrap();
+            }
+            *observed.lock().unwrap() = true;
+        });
+    fixture
+        .manager
+        .read_source_settings(&fixture.workspace)
+        .unwrap();
+    assert!(*checked.lock().unwrap());
+    for lock in &locks {
+        assert!(!writer_excluded(lock));
+    }
+}
+
+/// READ-04: a rustX writer that creates a document's lock during a read ran
+/// unexcluded, so that round never answers — not even when its bytes
+/// changed back (A → B → A). The next round holds the new lock and answers
+/// the coherent current snapshot.
+#[test]
+fn a_writer_creating_the_lock_during_a_read_restarts_it() {
+    for restore in [false, true] {
+        let fixture = Fixture::new();
+        fixture.write(&SourceTarget::User, USER);
+        fixture.write(&fixture.workspace, "[subagents]\nmax_concurrent = 2\n");
+        let lock = lock_of(&fixture.path(&SourceTarget::User));
+        assert!(!lock.exists());
+        let writer = fixture.manager.clone();
+        let hooks = fixture.manager.test_hooks.clone();
+        let restarted = Arc::new(Mutex::new(false));
+        let observed = restarted.clone();
+        fixture
+            .manager
+            .test_hooks
+            .insert("before_capture_verification", move || {
+                let original = super::super::super::settings::revision(Some(USER.as_bytes()));
+                let written = writer
+                    .write_source_settings(&SourceTarget::User, &original, capacity(3))
+                    .unwrap()
+                    .user
+                    .revision;
+                assert_ne!(written, original);
+                if restore {
+                    std::fs::write(writer.config_path(&SourceTarget::User), USER).unwrap();
+                }
+                // Installed only now, so the writer's own capture cannot take it.
+                hooks.insert("before_documents", move || {
+                    *observed.lock().unwrap() = true;
+                });
+            });
+        let read = fixture
+            .manager
+            .read_source_settings(&fixture.workspace)
+            .unwrap();
+        assert!(*restarted.lock().unwrap(), "restore = {restore}");
+        assert!(lock.exists());
+        let current = std::fs::read(fixture.path(&SourceTarget::User)).unwrap();
+        assert_eq!(
+            read.user.revision,
+            super::super::super::settings::revision(Some(&current))
+        );
+        assert_eq!(
+            read.workspace.unwrap().revision,
+            super::super::super::settings::revision(Some(
+                b"[subagents]\nmax_concurrent = 2\n".as_slice()
+            ))
+        );
+    }
+}
+
+/// READ-05: a writer outside rustX, which no advisory lock excludes, makes
+/// the capture an explicit revision conflict — never a mixed snapshot.
+#[test]
+fn an_external_edit_during_a_read_is_an_explicit_conflict() {
+    let fixture = Fixture::new();
+    fixture.write(&SourceTarget::User, USER);
+    fixture.write(&fixture.workspace, "[subagents]\nmax_concurrent = 2\n");
+    let path = fixture.path(&fixture.workspace);
+    fixture
+        .manager
+        .test_hooks
+        .insert("before_capture_verification", move || {
+            std::fs::write(&path, "[subagents]\nmax_concurrent = 3\n").unwrap();
+        });
+    assert!(matches!(
+        fixture.manager.read_source_settings(&fixture.workspace),
+        Err(super::super::settings::SettingsError::Conflict {
+            scope: SourceScope::Workspace,
+            ..
+        })
+    ));
+    let read = fixture
+        .manager
+        .read_source_settings(&fixture.workspace)
+        .unwrap();
+    assert_eq!(
+        read.workspace.unwrap().revision,
+        super::super::super::settings::revision(Some(
+            b"[subagents]\nmax_concurrent = 3\n".as_slice()
+        ))
+    );
+}
+
+/// READ-06: a redirected lock name or document is refused, never followed:
+/// nothing is created or locked at its target.
+#[test]
+fn a_redirected_lock_or_document_is_never_followed_by_a_reader() {
+    let fixture = Fixture::new();
+    let elsewhere = fixture.root.path().join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    let lock = lock_of(&fixture.path(&fixture.workspace));
+    std::os::unix::fs::symlink(elsewhere.join("planted.lock"), &lock).unwrap();
+    assert!(
+        fixture
+            .manager
+            .read_source_settings(&fixture.workspace)
+            .is_err()
+    );
+    assert!(!elsewhere.join("planted.lock").exists());
+    std::fs::remove_file(&lock).unwrap();
+    std::fs::write(
+        elsewhere.join("rustx.toml"),
+        "[subagents]\nmax_concurrent = 2\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(
+        elsewhere.join("rustx.toml"),
+        fixture.path(&fixture.workspace),
+    )
+    .unwrap();
+    let before = namespace(fixture.root.path());
+    assert!(
+        fixture
+            .manager
+            .read_source_settings(&fixture.workspace)
+            .is_err()
+    );
+    assert_eq!(namespace(fixture.root.path()), before);
 }

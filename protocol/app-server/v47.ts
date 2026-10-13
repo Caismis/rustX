@@ -2979,15 +2979,29 @@ export type SessionModelsView =
  */
 export type ConfigRepairStatus = 'repaired' | 'unresolved' | 'commit_uncertain';
 /**
- * One deterministic edit of an authored source. Never carries a value.
+ * One deterministic edit of an authored source, in native vocabulary only:
+ * never an authored key, identity or value.
  */
 export type ConfigRepairChange =
   | {
-      field_path: string;
+      /**
+       * The closed schema object the field was removed from: schema
+       * property names, `*` for an open-map identity and `[n]` for a
+       * zero-based array position; empty for the document root.
+       */
+      object_path: string;
       kind: 'removed_field';
     }
   | {
-      name: string;
+      /**
+       * The element's zero-based position in the authored selection.
+       */
+      position: number;
+      /**
+       * The native Tool identity the element names; null when `reason`
+       * is `unknown`, since a name no native Tool has is authored text.
+       */
+      name?: string | null;
       reason: NativeToolRemoval;
       kind: 'removed_native_tool';
     }
@@ -9945,7 +9959,10 @@ export interface SourceView {
  */
 export interface ConfigRepairReceipt {
   /**
-   * Content identity of this observation; equal receipts are one repair.
+   * Opaque identity of this repair occurrence within its App Server
+   * authority: one committed (or possibly committed) publication, or one
+   * unresolved episode. Rereading or redelivering the receipt keeps it;
+   * another commit gets another, even of identical bytes and changes.
    */
   id: string;
   target: SourceTarget;

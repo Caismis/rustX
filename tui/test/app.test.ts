@@ -2398,7 +2398,7 @@ it("repair status is scoped to the App Server authority across reconnects and re
     assert.equal(t.reads.length, 1);
     t.publish.get("a2")!(repairObservation("late", { kind: "user" }, "7"));
     assert.equal(t.status.visible, false, "a replaced connection never reaches the new line");
-    // Its own receipt with the same content-derived id is a new announcement.
+    // Its own receipt with an equal id is a new announcement.
     t.publish.get("b")!(repairObservation("receipt-user-1", { kind: "user" }, "1"));
     assert.deepEqual(t.announced.at(-1), "authority-b:receipt-user-1");
     assert.match(t.line(), /Auto-repaired 1 entry in User/);

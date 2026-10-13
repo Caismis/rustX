@@ -4,12 +4,15 @@ import type { Translate } from '../../../locale/translation';
 import type { ConfigRepairChange, ConfigRepairReceipt } from '../../../../../protocol/app-server/v47';
 import css from '../../../presentation/settings/SettingsContent.module.css';
 
-/** One redacted native repair change, worded. Never a value: native receipts
- * carry field paths, Tool names and version numbers only. */
+/** One redacted native repair change, worded. Never an authored key, identity
+ * or value: native receipts carry schema paths (`*` for an identity),
+ * positions, native Tool names and version numbers only. */
 export function repairChangeLabel(tx: Translate, change: ConfigRepairChange): string {
   switch (change.kind) {
-    case 'removed_field': return tx('settings:auto-repair.removed-field', { path: change.field_path });
-    case 'removed_native_tool': return tx(`settings:auto-repair.removed-tool-${change.reason}`, { name: change.name });
+    case 'removed_field': return change.object_path === ''
+      ? tx('settings:auto-repair.removed-root-field')
+      : tx('settings:auto-repair.removed-field', { path: change.object_path });
+    case 'removed_native_tool': return tx(`settings:auto-repair.removed-tool-${change.reason}`, { entry: `agent.tools.builtin[${change.position}]`, name: change.name ?? '' });
     case 'updated_schema_version': return tx('settings:auto-repair.updated-schema-version', { from: change.from, to: change.to });
   }
 }

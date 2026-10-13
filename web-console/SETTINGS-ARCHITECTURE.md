@@ -594,8 +594,10 @@ configuration/sourcesRead ──▶ SourceSettings.user_repair / workspace_repai
   connection (whose server announces each latest receipt again). It is a
   separate fact from `configuration`, the application publication. Each
   observation carries the `authorityId` its connection negotiated: a receipt
-  id is content-derived, so equal ids from two App Server authorities — or
-  from a new process at the same endpoint — are different repairs. A receipt
+  id names one repair occurrence within its authority — a second commit of
+  identical bytes has another id — so equal ids from two App Server
+  authorities, or from a new process at the same endpoint, are different
+  repairs. A receipt
   delivered before this connection's `initialize` succeeds is held and
   attributed to the authority `initialize` then returns, never to the one the
   client knew from an earlier connection.

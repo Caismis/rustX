@@ -917,7 +917,18 @@ impl UserConfigManager {
 
     /// Capture source facts and their native identity in the same revision fence.
     /// Presentation, redaction, and protocol fields never participate in identity.
-    #[allow(clippy::too_many_lines)] // One revision-fenced source capture.
+    ///
+    /// Read-only: capture creates, locks into existence and writes nothing.
+    /// It excludes rustX writers through the documents' persistent writer
+    /// locks held shared, but only through locks that already exist. A
+    /// document without one has never had a rustX writer, and the capture is
+    /// accepted only if it still has none afterwards, so no rustX writer ran
+    /// during it either: each lock that appears — lock inodes are never
+    /// unlinked — sends the capture round once more, now holding that lock,
+    /// so there are at most one more rounds than documents. Within a round,
+    /// every document and resource revision is reread after the facts are
+    /// derived; a change by a writer outside rustX, which no advisory lock
+    /// excludes, is an explicit conflict.
     pub(crate) fn capture_source_settings(
         &self,
         target: &SourceTarget,
@@ -932,14 +943,42 @@ impl UserConfigManager {
             .collect();
         paths.sort();
         paths.dedup();
-        #[cfg(test)]
-        self.test_hooks.reach("before_documents");
-        let mut locks = Vec::new();
-        for path in &paths {
-            std::fs::create_dir_all(path.parent().ok_or(SettingsError::Io)?)
-                .map_err(|_| SettingsError::Io)?;
-            locks.push(super::super::settings::lock_document(path).map_err(|_| SettingsError::Io)?);
+        for _ in 0..=paths.len() {
+            #[cfg(test)]
+            self.test_hooks.reach("before_documents");
+            let mut locks = Vec::new();
+            let mut unlocked = Vec::new();
+            for path in &paths {
+                match super::super::settings::share_document_lock(path) {
+                    Ok(Some(lock)) => locks.push(lock),
+                    Ok(None) => unlocked.push(path),
+                    Err(_) => return Err(SettingsError::Io),
+                }
+            }
+            let captured = self.capture_round(target, &user, workspace.as_ref());
+            let mut appeared = false;
+            for path in unlocked {
+                appeared |= super::super::settings::document_lock_exists(path)
+                    .map_err(|_| SettingsError::Io)?;
+            }
+            if !appeared {
+                return captured;
+            }
         }
+        // Only an actor outside rustX unlinking writer locks gets here.
+        Err(SettingsError::Io)
+    }
+
+    /// One capture round, revision-fenced by rereading every input.
+    #[allow(clippy::too_many_lines)] // One revision-fenced source capture.
+    fn capture_round(
+        &self,
+        target: &SourceTarget,
+        user: &Path,
+        workspace: Option<&PathBuf>,
+    ) -> Result<(SourceSettings, String), SettingsError> {
+        let user = user.to_path_buf();
+        let workspace = workspace.cloned();
         let user_bytes = read(&user)?;
         let workspace_bytes = workspace
             .as_ref()
@@ -1065,6 +1104,8 @@ impl UserConfigManager {
                 .map(|directory| directory.join(".agents")),
             runtime_root: self.sources.runtime_root.clone(),
         };
+        #[cfg(test)]
+        self.test_hooks.reach("before_capture_verification");
         for (scope, path, captured) in std::iter::once((SourceScope::User, user, user_bytes))
             .chain(workspace.map(|path| (SourceScope::Workspace, path, workspace_bytes)))
         {

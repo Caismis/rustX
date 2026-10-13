@@ -491,9 +491,23 @@ does when the directory sync fails. An uncertain write is never replayed.
 Writer artifacts have fixed-length names, so every basename the filesystem
 accepts for a source document stays writable. The persistent writer lock beside a
 document is `.rustx-lock-<sha256 of the exact basename bytes>.lock`: every native
-writer of that document — source authoring, automatic repair, capture and
-create-only initialization — locks the same inode, and distinct documents never
-share one. A staged candidate is `.rustx-stage-<uuid>.tmp`, created exclusively
+writer of that document — source authoring, automatic repair and create-only
+initialization — locks the same inode exclusively, and distinct documents never
+share one. Writers create it; nothing unlinks it.
+
+Source capture (`configuration/sourcesRead`, `rustx config show --sources`, the
+read after a write and coordinator capture) is read-only: it creates no
+directory, lock, staged file or backup and changes no source. It holds each
+document's existing writer lock *shared* for the whole capture, opened without
+creating or following it, so every rustX writer of that document is excluded and
+other readers are not. A document without a lock has never had a rustX writer;
+the capture is accepted only if it still has none afterwards. A lock that
+appeared meanwhile means a rustX writer may have run unexcluded — even one whose
+bytes changed back — so the capture is taken once more, now holding that lock: at
+most one more round than documents. Within a round every document and resource
+revision is reread after the facts are derived, so a writer outside rustX, which
+no advisory lock excludes, makes the capture an explicit revision conflict rather
+than a mixed snapshot. A staged candidate is `.rustx-stage-<uuid>.tmp`, created exclusively
 and removed unless it is renamed into place. A document's basename is a native
 filesystem name, not text: reading, locking, staging, replacement and removal use
 its exact bytes, so a name that is not UTF-8 — where the operating system and
@@ -782,14 +796,29 @@ context.
 
 Each source keeps its latest repair observation in a finite, process-local
 ledger: `repaired`, `unresolved` or `commit_uncertain`, the exact before and
-committed revisions, the change count and up to 64 changes (removed field paths,
-removed Tool names with reason, the schema version update), whether more were
+committed revisions, the change count and up to 64 changes (the schema object an
+unknown field was removed from, a removed Tool selection's position and reason
+with its name only when that is a native Tool, the schema version update),
+whether more were
 omitted, whether a backup exists, and for a failure a diagnostic built only from
 native constants: the parser's or the semantic owner's fixed category, line and
 column, and a schema location in which every Provider, Model, Profile or other
 open-map identity is `*` (a path the schema cannot explain is dropped). It never
 holds a removed value, an invalid value or identity, a domain error message, a
-source excerpt, a credential, a `request_params` payload or backup content. Re-observing the same bytes is the same receipt.
+source excerpt, a credential, a `request_params` payload, an authored key or
+identity, an unsupported Tool name or backup content: repair edits by exact
+authored keys, but a receipt reports only their projection onto the source schema
+(property names, `*` for an open-map identity, `[n]` for a position).
+
+A receipt's `id` names one repair occurrence, separate from its content and from
+the ledger order. Every publication that happened or may have happened is a new
+occurrence, so restoring the original bytes externally and repairing them again
+reports a second receipt with a new id, even though its changes and revisions
+equal the first. Rereading, redelivering or re-observing a receipt keeps its id.
+An unresolved observation equal to the source's current unresolved receipt is
+that episode again and changes nothing; once the episode was withdrawn, the same
+invalid bytes start a new one. A superseded transaction publishes nothing and
+reports nothing.
 
 Every change the ledger publishes — a new receipt, a replaced one, a withdrawal
 — advances one process-wide sequence, under the ledger lock that applies the
@@ -798,8 +827,8 @@ That sequence is the only order of observations: a notification carries the
 sequence of its change, and a source read takes the receipts and the current
 sequence together under the same lock, so the read's sequence is never lower
 than any change it reflects — including for a Workspace the ledger has
-forgotten, which reads as having no receipt. Receipt ids identify content, not
-time. A receipt is withdrawn only when its source is found intrinsically healthy;
+forgotten, which reads as having no receipt. Receipt ids name occurrences; they
+never order them. A receipt is withdrawn only when its source is found intrinsically healthy;
 a client deciding what to present reconciles against that order, never against
 which receipts it already showed (see [TUI and App Server](tui-app-server.md)
 and the [protocol](app-server-protocol.md#automatic-source-repair-receipts-v47)).

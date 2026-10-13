@@ -39,8 +39,8 @@ function receipt(overrides: Partial<ConfigRepairReceipt> = {}): ConfigRepairRece
     changed_count: 3,
     changes: [
       { kind: "updated_schema_version", from: 8, to: 10 },
-      { kind: "removed_field", field_path: "agent.plugins.todo.unknown_permission" },
-      { kind: "removed_native_tool", name: "old_tool", reason: "unknown" },
+      { kind: "removed_field", object_path: "agent.plugins.todo" },
+      { kind: "removed_native_tool", position: 1, name: null, reason: "unknown" },
     ],
     truncated: false,
     backup_available: true,
@@ -93,7 +93,7 @@ it("words repaired, combined, unresolved and uncertain receipts without values",
   assert.equal(repairNotice([]), undefined);
 
   const body = renderRepairInspection([
-    { target: { kind: "user" }, receipt: receipt({ changes: [...receipt().changes, { kind: "removed_native_tool", name: "read", reason: "duplicate" }, { kind: "removed_native_tool", name: "agent_list", reason: "agent_control" }, { kind: "removed_native_tool", name: "todo", reason: "plugin_owned" }] }) },
+    { target: { kind: "user" }, receipt: receipt({ changes: [...receipt().changes, { kind: "removed_field", object_path: "" }, { kind: "removed_field", object_path: "models.*.profiles.*" }, { kind: "removed_native_tool", position: 3, name: "read", reason: "duplicate" }, { kind: "removed_native_tool", position: 4, name: "agent_list", reason: "agent_control" }, { kind: "removed_native_tool", position: 5, name: "todo", reason: "plugin_owned" }] }) },
     { target: WORKSPACE, receipt: undefined },
   ]);
   for (const line of [
@@ -101,11 +101,13 @@ it("words repaired, combined, unresolved and uncertain receipts without values",
     "Status: repaired",
     "Original backup: kept in private rustX storage",
     "~ schema_version 8 → 10",
-    "- agent.plugins.todo.unknown_permission (unknown field)",
-    '- agent.tools.builtin "old_tool" (unknown Native Tool)',
-    '- agent.tools.builtin "read" (duplicate selection)',
-    '- agent.tools.builtin "agent_list" (Agent control composed automatically)',
-    '- agent.tools.builtin "todo" (provided by a Plugin)',
+    "- unknown field in agent.plugins.todo",
+    "- unknown top-level field",
+    "- unknown field in models.*.profiles.*",
+    "- agent.tools.builtin[1] (unknown Native Tool)",
+    '- agent.tools.builtin[3] "read" (duplicate selection)',
+    '- agent.tools.builtin[4] "agent_list" (Agent control composed automatically)',
+    '- agent.tools.builtin[5] "todo" (provided by a Plugin)',
     "## Workspace rustx.toml (/work/project)",
     "No automatic repair was needed in this App Server process.",
     "runtime application is reported separately",
@@ -113,8 +115,9 @@ it("words repaired, combined, unresolved and uncertain receipts without values",
   const failed = renderRepairInspection([{ target: WORKSPACE, receipt: receipt({ status: "unresolved", after_revision: null, diagnostic: "invalid value" }) }]);
   assert.match(failed, /Status: unresolved — the source is unchanged/);
   assert.match(failed, /Eligible, not applied:/);
-  // A control character in an authored name is reduced before it is drawn.
-  assert.doesNotMatch(renderRepairInspection([{ target: { kind: "user" }, receipt: receipt({ changes: [{ kind: "removed_field", field_path: "x\u001b[2Jy" }] }) }]), /\u001b/);
+  // Native paths and names hold no control characters; a hostile peer's are
+  // still reduced before they are drawn.
+  assert.doesNotMatch(renderRepairInspection([{ target: { kind: "user" }, receipt: receipt({ changes: [{ kind: "removed_field", object_path: "x\u001b[2Jy" }, { kind: "removed_native_tool", position: 0, name: "x\u001b[2Jy", reason: "duplicate" }] }) }]), /\u001b/);
 });
 
 it("never presents an uncertain publication as a confirmed application", () => {
@@ -175,7 +178,7 @@ it("announcements are kept once per negotiated App Server authority and receipt 
   const announced = new SourceRepairAnnouncements();
   assert.equal(announced.announce("authority-a", receipt()), true);
   assert.equal(announced.announce("authority-a", receipt()), false);
-  // An equal content-derived id from another authority is its own repair.
+  // An equal id from another authority is its own repair.
   assert.equal(announced.announce("authority-b", receipt()), true);
   // Bounded: the oldest identity is forgotten beyond the window.
   for (let index = 0; index < SourceRepairAnnouncements.LIMIT; index++) announced.announce("authority-c", receipt({ id: `r${index}` }));
@@ -222,6 +225,39 @@ it("each connection carries the authority its initialize negotiated", async () =
   replaced.transport.notify(notification("configuration/sourceRepairChanged", { target: { kind: "user" }, receipt: null, sequence: "2" }));
   assert.deepEqual(replaced.host.sourceRepairs(), [user(undefined, "2")]);
   assert.deepEqual(announced(replaced.host), []);
+});
+
+it("OCC-TUI a second occurrence of identical changes is announced after the first was acknowledged", async () => {
+  const status = new SourceRepairStatus();
+  const announced = (host: AppServerHost) => {
+    status.adopt(host.authorityId);
+    return host.sourceRepairs()
+      .filter(observation => status.observe(host.authorityId, observation) && observation.receipt !== undefined)
+      .map(({ receipt: value }) => value!.id);
+  };
+  const first = receipt({ id: "repair-1" });
+  // The same commit of the same original bytes again: only the occurrence differs.
+  const second = receipt({ id: "repair-2" });
+  const a = await connect("authority-a");
+  a.transport.notify(notification("configuration/sourceRepairChanged", { target: { kind: "user" }, receipt: first, sequence: "1" }));
+  assert.deepEqual(announced(a.host), ["repair-1"]);
+  status.acknowledge();
+  assert.equal(status.visible, false);
+  a.transport.notify(notification("configuration/sourceRepairChanged", { target: { kind: "user" }, receipt: second, sequence: "2" }));
+  assert.deepEqual(announced(a.host), ["repair-2"]);
+  assert.match(presented(status), /Auto-repaired 3 entries in User/);
+  // Observing R2 again — redelivered, read, or after a same-authority
+  // reconnect — never announces it twice, acknowledged or not.
+  a.transport.notify(notification("configuration/sourceRepairChanged", { target: { kind: "user" }, receipt: second, sequence: "2" }));
+  assert.deepEqual(announced(a.host), []);
+  assert.equal(status.observe("authority-a", user(second, "2")), false);
+  status.acknowledge();
+  const reconnected = await connect("authority-a", second);
+  assert.deepEqual(announced(reconnected.host), []);
+  assert.equal(status.visible, false);
+  // A replacement authority's equal id is its own occurrence.
+  const replaced = await connect("authority-b", second);
+  assert.deepEqual(announced(replaced.host), ["repair-2"]);
 });
 
 it("refuses a connection that negotiates no authority", async () => {
@@ -275,7 +311,7 @@ it("a replacement authority retires the previous authority's line", () => {
   status.adopt("authority-b");
   assert.equal(status.visible, false);
   assert.deepEqual(status.render(120), []);
-  // Its receipts are its own, even with an equal content-derived id.
+  // Its receipts are its own, even with an equal id.
   assert.equal(status.observe("authority-b", user(receipt({ status: "unresolved", after_revision: null, diagnostic: "invalid value" }))), true);
   assert.match(presented(status), /User rustx\.toml could not be auto-repaired: invalid value/);
   assert.doesNotMatch(presented(status), /Workspace/);

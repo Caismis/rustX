@@ -408,8 +408,10 @@ stays presented, and an owner lookup that fails, a closed dialog or any other
 navigation acknowledges nothing; Dismiss acknowledges the whole notice. Nothing
 opens by itself and a healthy source shows nothing. Each receipt is acknowledged
 once per browser for the App Server authority that produced it, so reconnects,
-rereads and reloads never repeat it, while the same receipt id from another App
-Server, or a new process at the same endpoint, is presented on its own. Other
+rereads and reloads never repeat it, while a second repair occurrence of the same
+authority — even of identical changes — has its own id and is presented, and the
+same receipt id from another App Server, or a new process at the same endpoint,
+is presented on its own. Other
 tabs' acknowledgements are merged before each write and picked up live; two
 tabs acknowledging at the same instant can, at worst, show one notice once more. The notification is
 presentation of a native fact: it never edits, submits or rebases a Settings

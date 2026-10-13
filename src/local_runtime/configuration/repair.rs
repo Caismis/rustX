@@ -13,6 +13,16 @@
 //!   -> one bounded, redacted receipt           process-local ledger
 //! ```
 //!
+//! A receipt is the only repair fact that leaves native authority, and it
+//! carries native vocabulary only. The walker edits the document by its exact
+//! authored keys, but what it reports is a separate projection onto the source
+//! schema: closed-object property names (native constants), `*` for an
+//! open-map identity, `[n]` for an array position. A removed unknown field is
+//! reported by the object it was removed from, never by its own key, and a
+//! removed Tool selection entry by its position, plus its name only when that
+//! name is a native Tool identity. Authored keys, identities, values and parser
+//! messages never enter a receipt.
+//!
 //! The strict parser is never weakened: repair rewrites a small, precisely
 //! recognizable set of authored constructs and then requires the candidate to
 //! pass the same native validation every other consumer applies. Eligibility
@@ -41,9 +51,7 @@ use toml_edit::{Array, DocumentMut, Item, TableLike, Value as TomlValue};
 
 /// Receipt entries retained per source; further changes only count.
 pub const MAX_RECEIPT_CHANGES: usize = 64;
-/// Characters retained per rendered key segment or Tool name.
-const MAX_SEGMENT_CHARS: usize = 64;
-/// Characters retained per rendered field path.
+/// Characters retained per rendered schema path.
 const MAX_PATH_CHARS: usize = 256;
 /// Characters retained per receipt diagnostic.
 const MAX_DIAGNOSTIC_CHARS: usize = 512;
@@ -66,15 +74,26 @@ pub enum NativeToolRemoval {
     PluginOwned,
 }
 
-/// One deterministic edit of an authored source. Never carries a value.
+/// One deterministic edit of an authored source, in native vocabulary only:
+/// never an authored key, identity or value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ConfigRepairChange {
-    /// A field or table unknown to its closed schema object was deleted.
-    RemovedField { field_path: String },
+    /// A field or table unknown to its closed schema object was deleted. The
+    /// removed key is authored text and is never carried.
+    RemovedField {
+        /// The closed schema object the field was removed from: schema
+        /// property names, `*` for an open-map identity and `[n]` for a
+        /// zero-based array position; empty for the document root.
+        object_path: String,
+    },
     /// An illegal `agent.tools.builtin` element was deleted.
     RemovedNativeTool {
-        name: String,
+        /// The element's zero-based position in the authored selection.
+        position: u32,
+        /// The native Tool identity the element names; null when `reason`
+        /// is `unknown`, since a name no native Tool has is authored text.
+        name: Option<String>,
         reason: NativeToolRemoval,
     },
     /// An explicit `schema_version` was normalized to the current version.
@@ -102,7 +121,10 @@ pub enum ConfigRepairStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigRepairReceipt {
-    /// Content identity of this observation; equal receipts are one repair.
+    /// Opaque identity of this repair occurrence within its App Server
+    /// authority: one committed (or possibly committed) publication, or one
+    /// unresolved episode. Rereading or redelivering the receipt keeps it;
+    /// another commit gets another, even of identical bytes and changes.
     pub id: String,
     pub target: SourceTarget,
     pub status: ConfigRepairStatus,
@@ -302,7 +324,10 @@ fn repair_builtin_selection(document: &mut DocumentMut, changes: &mut Vec<Config
         };
         removed.push(index);
         changes.push(ConfigRepairChange::RemovedNativeTool {
-            name: bounded(name, MAX_SEGMENT_CHARS),
+            position: u32::try_from(index).unwrap_or(u32::MAX),
+            // Every class but Unknown is established by equality with a
+            // native Tool definition, so only then is the name native.
+            name: (reason != NativeToolRemoval::Unknown).then(|| name.clone()),
             reason,
         });
     }
@@ -380,6 +405,9 @@ fn value_shape(value: &TomlValue) -> Shape<'_> {
 
 /// One schema-directed traversal. It only ever deletes keys of closed
 /// objects; open maps, unions it cannot select, and scalars are left alone.
+///
+/// It edits by exact authored keys but records `path` as the schema
+/// projection only: native property names, `*` and `[n]`.
 struct Walker<'s> {
     root: &'s Value,
     path: Vec<String>,
@@ -547,15 +575,17 @@ impl<'s> Walker<'s> {
                 for key in unknown {
                     table.remove(&key);
                     self.changes.push(ConfigRepairChange::RemovedField {
-                        field_path: self.render(&key),
+                        object_path: self.render(),
                     });
                 }
                 let Some(properties) = properties else {
                     return;
                 };
                 for (key, item) in table.iter_mut() {
-                    if let Some(property) = properties.get(key.get()) {
-                        self.path.push(segment(key.get()));
+                    // The schema's own spelling of the property, never the
+                    // authored key, enters the path.
+                    if let Some((name, property)) = properties.get_key_value(key.get()) {
+                        self.path.push(name.clone());
                         self.walk_item(property, item);
                         self.path.pop();
                     }
@@ -563,8 +593,8 @@ impl<'s> Walker<'s> {
             }
             // A declared open map: every key is an authored identity.
             Some(entry @ Value::Object(_)) => {
-                for (key, item) in table.iter_mut() {
-                    self.path.push(segment(key.get()));
+                for (_, item) in table.iter_mut() {
+                    self.path.push("*".into());
                     self.walk_item(entry, item);
                     self.path.pop();
                 }
@@ -574,14 +604,10 @@ impl<'s> Walker<'s> {
         }
     }
 
-    fn render(&self, key: &str) -> String {
+    /// The schema projection of the current object, bounded.
+    fn render(&self) -> String {
         let mut path = String::new();
-        for part in self
-            .path
-            .iter()
-            .map(String::as_str)
-            .chain([segment(key).as_str()])
-        {
+        for part in &self.path {
             if !path.is_empty() && !part.starts_with('[') {
                 path.push('.');
             }
@@ -589,11 +615,6 @@ impl<'s> Walker<'s> {
         }
         bounded(&path, MAX_PATH_CHARS)
     }
-}
-
-/// One key as TOML spells it (quoted and escaped when not bare), bounded.
-fn segment(key: &str) -> String {
-    bounded(&toml_edit::Key::new(key).display_repr(), MAX_SEGMENT_CHARS)
 }
 
 /// Bound `text` to `limit` characters, escaping control characters.
@@ -650,7 +671,10 @@ struct LedgerEntry {
 
 #[derive(Debug, Default)]
 struct LedgerState {
+    /// Orders observations: advanced by every recorded or withdrawn receipt.
     sequence: u64,
+    /// Names occurrences: advanced by every receipt that is a new occurrence.
+    occurrences: u64,
     entries: BTreeMap<SourceKey, LedgerEntry>,
 }
 
@@ -658,6 +682,15 @@ struct LedgerState {
 ///
 /// Not history, not an Event Journal, and never persisted. A source repaired
 /// before any client connected is visible on that client's first source read.
+///
+/// Three facts stay apart. A receipt's *content* is what it says; its
+/// *occurrence* — its `id` — is the one repair transaction or unresolved
+/// episode it reports; the ledger *sequence* orders observations. Every
+/// publication attempt that published or may have published is a new
+/// occurrence, so identical repairs of identical bytes stay distinct. An
+/// unresolved observation equal in content to the source's current unresolved
+/// receipt is that episode observed again and changes nothing; once withdrawn,
+/// an equal one is a new episode.
 #[derive(Clone)]
 pub(crate) struct RepairLedger {
     state: Arc<Mutex<LedgerState>>,
@@ -684,19 +717,28 @@ impl RepairLedger {
         self.state.lock().expect("configuration repair ledger")
     }
 
-    /// Record `receipt` as its source's latest observation. Re-observing the
-    /// same repair changes nothing and announces nothing.
-    fn record(&self, receipt: ConfigRepairReceipt) {
+    /// Record `receipt`, whose id is not yet assigned, as its source's latest
+    /// observation and a new occurrence — unless it is an unresolved
+    /// observation of the source's current unresolved episode, which changes
+    /// nothing and announces nothing.
+    fn record(&self, mut receipt: ConfigRepairReceipt) {
         let key = SourceKey::from(&receipt.target);
         let mut state = self.lock();
-        if state
+        let current = state
             .entries
             .get(&key)
-            .and_then(|entry| entry.receipt.as_ref())
-            .is_some_and(|current| current.id == receipt.id)
+            .and_then(|entry| entry.receipt.as_ref());
+        if let Some(current) = current
+            && receipt.status == ConfigRepairStatus::Unresolved
+            && current.status == ConfigRepairStatus::Unresolved
         {
-            return;
+            receipt.id.clone_from(&current.id);
+            if receipt == *current {
+                return;
+            }
         }
+        state.occurrences += 1;
+        receipt.id = format!("repair-{}", state.occurrences);
         state.sequence += 1;
         let sequence = state.sequence;
         state.entries.insert(
@@ -827,7 +869,8 @@ fn receipt(target: &SourceTarget, before: &str, observation: Observation) -> Con
     let truncated = observation.changes.len() > MAX_RECEIPT_CHANGES;
     let mut changes = observation.changes;
     changes.truncate(MAX_RECEIPT_CHANGES);
-    let mut receipt = ConfigRepairReceipt {
+    ConfigRepairReceipt {
+        // Assigned by the ledger, which alone knows the occurrence.
         id: String::new(),
         target: target.clone(),
         status: observation.status,
@@ -838,13 +881,7 @@ fn receipt(target: &SourceTarget, before: &str, observation: Observation) -> Con
         truncated,
         backup_available: observation.backup_available,
         diagnostic: observation.diagnostic.as_deref().map(bounded_diagnostic),
-    };
-    let canonical = serde_json::to_vec(&receipt).expect("receipt serializes");
-    let mut hash = Sha256::new();
-    hash.update(b"rustx-config-repair-v1");
-    hash.update(&canonical);
-    receipt.id = format!("{:x}", hash.finalize());
-    receipt
+    }
 }
 
 impl UserConfigManager {

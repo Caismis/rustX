@@ -1793,9 +1793,9 @@ async fn app_server_startup_repairs_the_user_source_before_process_policy() {
             receipt.changes,
             vec![
                 ConfigRepairChange::UpdatedSchemaVersion { from: 8, to: 10 },
-                ConfigRepairChange::RemovedField { field_path: "legacy_root".into() },
+                ConfigRepairChange::RemovedField { object_path: String::new() },
                 ConfigRepairChange::RemovedField {
-                    field_path: "app_server.future_isolation".into()
+                    object_path: "app_server".into()
                 },
             ]
         );

@@ -43,7 +43,8 @@ by the native ledger sequence a notice (`sequence`) or read (`repair_sequence`)
 carries — never by receipt id, status or arrival — so an older read answered
 after a newer notice, or a late notice after a fresher read, changes nothing,
 and an observation at an equal sequence is the same observation. Announcements
-are kept once per `(authority_id, receipt id)`. What the line presents is a
+are kept once per `(authority_id, receipt id)`; a receipt id names one native
+repair occurrence, so a second commit of identical changes is announced again. What the line presents is a
 source's current receipt from its first announcement until the user
 acknowledges it or a newer observation replaces or withdraws it. A newer
 observation therefore always updates its source even when its receipt was

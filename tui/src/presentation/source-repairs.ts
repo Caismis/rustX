@@ -7,9 +7,10 @@
  * source by their native repair-ledger sequence, and remembers which receipts
  * were announced by the App Server authority and native receipt identity, so
  * a reconnect, a repeated read, or the same receipt from both a notification
- * and a read never announces one repair twice, while an equal content-derived
- * receipt id from another App Server — or a replacement process — is a
- * repair of its own.
+ * and a read never announces one repair twice. A receipt id names one native
+ * repair occurrence within its authority — a second commit of identical bytes
+ * has another id — and an equal id from another App Server, or a replacement
+ * process, is a repair of its own.
  *
  * Nothing here reads a configuration file, applies a rule, or reaches a model:
  * a repair notice is presentation only and never becomes a conversation Turn.
@@ -125,13 +126,19 @@ const REMOVAL_REASONS: Record<Extract<ConfigRepairChange, { kind: "removed_nativ
   plugin_owned: "provided by a Plugin",
 };
 
-/** One redacted `+`/`-`/`~` line per change; never a value. */
+/** One redacted `+`/`-`/`~` line per change; never an authored key, identity
+ * or value — receipts carry schema paths (`*` for an identity), positions and
+ * native Tool names only. */
 export function renderRepairChange(change: ConfigRepairChange): string {
   switch (change.kind) {
     case "removed_field":
-      return `- ${sanitizeField(change.field_path, false)} (unknown field)`;
-    case "removed_native_tool":
-      return `- agent.tools.builtin ${JSON.stringify(sanitizeField(change.name, false))} (${REMOVAL_REASONS[change.reason]})`;
+      return change.object_path === ""
+        ? "- unknown top-level field"
+        : `- unknown field in ${sanitizeField(change.object_path, false)}`;
+    case "removed_native_tool": {
+      const name = change.name == null ? "" : ` ${JSON.stringify(sanitizeField(change.name, false))}`;
+      return `- agent.tools.builtin[${change.position}]${name} (${REMOVAL_REASONS[change.reason]})`;
+    }
     case "updated_schema_version":
       return `~ schema_version ${change.from} → ${change.to}`;
   }

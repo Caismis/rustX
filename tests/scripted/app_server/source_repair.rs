@@ -140,7 +140,7 @@ async fn session_creation_repairs_both_sources_before_resolution() {
         assert_eq!(
             user.changes,
             vec![ConfigRepairChange::RemovedField {
-                field_path: "legacy_user".into()
+                object_path: String::new()
             }]
         );
         assert_eq!(repaired.status, ConfigRepairStatus::Repaired);
@@ -239,7 +239,7 @@ async fn reconcile_repairs_an_external_edit_once_and_reads_stay_read_only() {
         assert_eq!(
             receipt.changes,
             vec![ConfigRepairChange::RemovedField {
-                field_path: "agent.future_trust".into()
+                object_path: "agent".into()
             }]
         );
         // One committed repair is one prepared application for its consumers,
@@ -998,6 +998,271 @@ async fn a_withdrawal_while_away_reaches_a_fresh_connection_only_through_its_rea
         assert!(reread.workspace_repair.is_none());
         assert!(reread.repair_sequence >= withdrawn);
         assert!(reread.repair_sequence > kept);
+    })
+    .await;
+}
+
+/// Reconcile workspace 0 and return its announced receipt and sequence.
+async fn reconcile_announced(
+    f: &Fixture,
+    connection: &AppServerConnection,
+    id: i64,
+) -> (ConfigRepairReceipt, u64) {
+    let target = workspace(f, 0);
+    let MethodResult::ConfigurationApplication { .. } = call(
+        connection,
+        id,
+        Method::ConfigurationReconcile {
+            target: target.clone(),
+        },
+    )
+    .await
+    else {
+        panic!("reconciled")
+    };
+    let (announced, receipt, sequence) = sequenced_repair_notice(connection).await;
+    assert_eq!(announced, target);
+    (receipt.unwrap(), sequence)
+}
+
+/// OCC-INT (INV-02): A (repairable) → reconcile commits B (R1); an external
+/// edit restores exactly A → reconcile commits B again (R2). R2 is announced
+/// as a distinct occurrence after R1 at the same revision B; rereading
+/// either never repeats it; and the second commit of bytes the coordinator
+/// already applied prepares nothing more.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_restored_original_repaired_again_is_announced_as_a_new_occurrence() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let target = workspace(&f, 0);
+        let _runtime = f.load(0).await.unwrap().unwrap();
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        call(
+            &connection,
+            100,
+            Method::ConfigurationReconcile {
+                target: target.clone(),
+            },
+        )
+        .await;
+        let probe = f.manager.probe(&f.id(0).await);
+        let baseline = super::configuration::settled(&f, 0).await;
+        let workspace_file = f.workspaces[0].join("rustx.toml");
+        let original = format!(
+            "{}[agent]\ninstructions = \"Occurrence instructions\"\nfuture_trust = true\n",
+            std::fs::read_to_string(&workspace_file).unwrap()
+        );
+        std::fs::write(&workspace_file, &original).unwrap();
+        let before = probe.configuration_preparations.load(Ordering::SeqCst);
+        let (first, first_sequence) = reconcile_announced(&f, &connection, 1).await;
+        let repaired = std::fs::read_to_string(&workspace_file).unwrap();
+        let applied = super::configuration::settled(&f, 0).await;
+        assert_ne!(
+            applied.desired.input_revision,
+            baseline.desired.input_revision
+        );
+        assert_eq!(
+            probe.configuration_preparations.load(Ordering::SeqCst),
+            before + 1
+        );
+        // Reading R1 again and again repeats nothing.
+        for id in 2..5 {
+            let read = sources(&connection, id, &target).await;
+            assert_eq!(read.workspace_repair.as_ref(), Some(&first));
+            assert_eq!(read.repair_sequence, first_sequence);
+        }
+        assert!(connection.next_source_repair().is_none());
+
+        std::fs::write(&workspace_file, &original).unwrap();
+        let (second, second_sequence) = reconcile_announced(&f, &connection, 5).await;
+        assert_ne!(second.id, first.id);
+        assert!(second_sequence > first_sequence);
+        assert_eq!(second.status, ConfigRepairStatus::Repaired);
+        assert_eq!(second.after_revision, first.after_revision);
+        assert_eq!(std::fs::read_to_string(&workspace_file).unwrap(), repaired);
+        let read = sources(&connection, 6, &target).await;
+        assert_eq!(read.workspace_repair.as_ref(), Some(&second));
+        assert_eq!(read.repair_sequence, second_sequence);
+        // B is what the coordinator already applied: no further attempt.
+        let settled = super::configuration::settled(&f, 0).await;
+        assert_eq!(settled.desired, applied.desired);
+        assert_eq!(
+            probe.configuration_preparations.load(Ordering::SeqCst),
+            before + 1
+        );
+        // A fresh connection to the same authority is told the current
+        // occurrence once, never R1.
+        let fresh = AppServerConnection::new(f.host.clone());
+        initialize(&fresh).await;
+        sources(&fresh, 1, &target).await;
+        let mut announced = Vec::new();
+        while let Some(NotificationMethod::SourceRepairChanged {
+            target: noticed,
+            receipt,
+            ..
+        }) = fresh.next_source_repair()
+        {
+            if noticed == target {
+                announced.push(receipt.unwrap().id);
+            }
+        }
+        assert_eq!(announced, std::slice::from_ref(&second.id));
+        f.close().await;
+    })
+    .await;
+}
+
+/// REDACT-INT (INV-01): the notification and the authoritative read carry
+/// one receipt, and neither carries an authored identity, unknown key or
+/// unsupported Tool name.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn notices_and_reads_carry_the_same_redacted_receipt() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let target = workspace(&f, 0);
+        let _runtime = f.load(0).await.unwrap().unwrap();
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let workspace_file = f.workspaces[0].join("rustx.toml");
+        std::fs::write(
+            &workspace_file,
+            format!(
+                "zsecretz_root = \"zsecretz-value\"\n{}[agent]\nzsecretz_agent_key = 1\n[agent.tools]\nbuiltin = [\"read\", \"zsecretz_tool\"]\n[mcp_tool_policies.\"zsecretz-mcp\"]\napproval = \"always\"\ntrust_all = \"zsecretz-value\"\n",
+                std::fs::read_to_string(&workspace_file).unwrap()
+            ),
+        )
+        .unwrap();
+        let MethodResult::ConfigurationApplication { .. } = call(
+            &connection,
+            1,
+            Method::ConfigurationReconcile {
+                target: target.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("reconciled")
+        };
+        let notice = loop {
+            let notification = connection.next_notification().await.notification;
+            if matches!(notification, NotificationMethod::SourceRepairChanged { .. }) {
+                break notification;
+            }
+        };
+        let serialized = serde_json::to_string(&notice).unwrap();
+        assert!(!serialized.to_ascii_lowercase().contains("zsecretz"), "{serialized}");
+        let NotificationMethod::SourceRepairChanged { receipt, .. } = notice else {
+            unreachable!()
+        };
+        let receipt = receipt.unwrap();
+        assert_eq!(receipt.status, ConfigRepairStatus::Repaired, "{receipt:?}");
+        assert_eq!(
+            receipt.changes,
+            vec![
+                ConfigRepairChange::RemovedField {
+                    object_path: String::new()
+                },
+                ConfigRepairChange::RemovedField {
+                    object_path: "agent".into()
+                },
+                ConfigRepairChange::RemovedField {
+                    object_path: "mcp_tool_policies.*".into()
+                },
+                ConfigRepairChange::RemovedNativeTool {
+                    position: 1,
+                    name: None,
+                    reason: crate::local_runtime::configuration::repair::NativeToolRemoval::Unknown,
+                },
+            ]
+        );
+        let read = sources(&connection, 2, &target).await;
+        assert_eq!(read.workspace_repair.as_ref(), Some(&receipt));
+        let serialized = serde_json::to_string(&read.workspace_repair).unwrap();
+        assert!(!serialized.to_ascii_lowercase().contains("zsecretz"), "{serialized}");
+        f.close().await;
+    })
+    .await;
+}
+
+/// Every entry below `root`, with the bytes of every regular file.
+fn namespace(root: &std::path::Path) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+    let mut entries = std::collections::BTreeMap::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(&directory).unwrap() {
+            let path = entry.unwrap().path();
+            let metadata = std::fs::symlink_metadata(&path).unwrap();
+            if metadata.is_dir() {
+                pending.push(path.clone());
+            }
+            let bytes = if metadata.is_file() {
+                std::fs::read(&path).unwrap()
+            } else {
+                Vec::new()
+            };
+            entries.insert(path, bytes);
+        }
+    }
+    entries
+}
+
+/// READ-INT (INV-03): `configuration/sourcesRead` — of the User, a Workspace
+/// without a document, and a repairable or malformed Workspace document —
+/// creates no directory, lock, staged file or backup, repairs nothing and
+/// records no receipt, through any path the App Server takes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn source_reads_leave_the_filesystem_unchanged() {
+    bounded(async {
+        let f = Fixture::with_session_count(None, 0).await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let user_directory = user_path(&f).parent().unwrap().to_path_buf();
+        let runtime_root = f
+            .manager
+            .configuration
+            .source_bindings()
+            .runtime_root
+            .clone();
+        let roots = [
+            user_directory,
+            f.workspaces[0].clone(),
+            f.workspaces[1].clone(),
+        ];
+        let observe = || {
+            (
+                roots.iter().map(|root| namespace(root)).collect::<Vec<_>>(),
+                runtime_root.join("configuration-backups").exists(),
+            )
+        };
+        let mut id = 1;
+        for document in [
+            None,
+            Some("[agent]\nfuture_trust = true\n"),
+            Some("[agent\nlegacy = 1\n"),
+        ] {
+            let workspace_file = f.workspaces[1].join("rustx.toml");
+            match document {
+                None => {
+                    let _ = std::fs::remove_file(&workspace_file);
+                }
+                Some(text) => std::fs::write(&workspace_file, text).unwrap(),
+            }
+            let before = observe();
+            for target in [SourceTarget::User, workspace(&f, 1), workspace(&f, 1)] {
+                let read = sources(&connection, id, &target).await;
+                id += 1;
+                assert!(read.workspace_repair.is_none());
+            }
+            assert_eq!(observe(), before, "{document:?}");
+            assert!(
+                f.manager
+                    .source_repairs()
+                    .latest(&workspace(&f, 1))
+                    .is_none()
+            );
+        }
+        f.close().await;
     })
     .await;
 }

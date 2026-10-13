@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createActor } from 'xstate';
 import type { ConfigRepairReceipt, ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v47';
 import { RepairNotice, repairNoticeText } from '../src/app/RepairNotice';
+import { repairChangeLabel } from '../src/app/settings/advanced/AutoRepair';
 import { inspectionAcknowledger, RepairAcknowledgements } from '../src/app/repair-notices';
 import { settingsNavigationMachine, type OwnerResolution, type RepairInspection } from '../src/app/settings/machines/navigation';
 import { RpcFailure } from '../src/client/app-server';
@@ -28,8 +29,8 @@ function receipt(overrides: Partial<ConfigRepairReceipt> = {}): ConfigRepairRece
     before_revision: 'sha256:before', after_revision: 'sha256:after', changed_count: 3,
     changes: [
       { kind: 'updated_schema_version', from: 8, to: 10 },
-      { kind: 'removed_field', field_path: 'agent.plugins.todo.unknown_permission' },
-      { kind: 'removed_native_tool', name: 'old_tool', reason: 'unknown' },
+      { kind: 'removed_field', object_path: 'agent.plugins.todo' },
+      { kind: 'removed_native_tool', position: 1, name: null, reason: 'unknown' },
     ],
     truncated: false, backup_available: true, diagnostic: null, ...overrides,
   };
@@ -447,7 +448,7 @@ it('acknowledges a receipt only for the App Server authority that produced it', 
   render(<RepairNotice client={s.client} viewDetails={vi.fn()} acknowledgements={new RepairAcknowledgements(localStorage)} />);
   expect(notice()).toBeNull();
   // A new App Server process at the same endpoint is another authority: its
-  // equal content-derived receipt id is a repair of its own.
+  // equal receipt id is a repair of its own.
   await replaceProcess(s, 'replacement-authority');
   await announce(s, { kind: 'user' }, receipt());
   expect(notice()?.textContent).toMatch(/3 changes in User configuration/);
@@ -464,6 +465,43 @@ it('acknowledges a receipt only for the App Server authority that produced it', 
     ['replacement-authority', 'receipt-user-1'],
   ]);
   s.client.disconnect(); other.client.disconnect();
+});
+
+it('OCC-WEB acknowledging one occurrence never suppresses a second of identical changes', async () => {
+  const s = new Server(); await s.connect();
+  const acknowledgements = new RepairAcknowledgements(localStorage);
+  render(<RepairNotice client={s.client} viewDetails={vi.fn()} acknowledgements={acknowledgements} />);
+  // R1: A repaired to B.
+  await announce(s, { kind: 'user' }, receipt({ id: 'repair-1' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+  expect(notice()).toBeNull();
+  // R2: A restored externally and repaired to B again — identical content,
+  // another native occurrence of the same authority.
+  await announce(s, { kind: 'user' }, receipt({ id: 'repair-2' }));
+  expect(notice()?.textContent).toMatch(/3 changes in User configuration/);
+  fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+  // Delivered again, or after a reconnect to the same authority: still one.
+  await announce(s, { kind: 'user' }, receipt({ id: 'repair-2' }));
+  s.client.disconnect(); await s.connect();
+  await announce(s, { kind: 'user' }, receipt({ id: 'repair-2' }));
+  expect(notice()).toBeNull();
+  expect(JSON.parse(localStorage.getItem(RepairAcknowledgements.KEY)!)).toEqual([
+    ['fixture-app-server-authority', 'repair-1'],
+    ['fixture-app-server-authority', 'repair-2'],
+  ]);
+  s.client.disconnect();
+});
+
+it('words every change from native vocabulary alone', () => {
+  const en = translator('en');
+  expect(repairChangeLabel(en, { kind: 'removed_field', object_path: '' })).toBe('Removed an unknown top-level field');
+  expect(repairChangeLabel(en, { kind: 'removed_field', object_path: 'models.*.profiles.*' })).toBe('Removed an unknown field from models.*.profiles.*');
+  expect(repairChangeLabel(en, { kind: 'removed_native_tool', position: 4, name: null, reason: 'unknown' })).toBe('Removed agent.tools.builtin[4]: no such Native Tool');
+  expect(repairChangeLabel(en, { kind: 'removed_native_tool', position: 2, name: 'read', reason: 'duplicate' })).toBe('Removed agent.tools.builtin[2], a repeated read');
+  expect(repairChangeLabel(en, { kind: 'removed_native_tool', position: 0, name: 'todo', reason: 'plugin_owned' })).toBe('Removed todo (agent.tools.builtin[0]): it is provided by a Plugin');
+  const zh = translator('zh');
+  expect(repairChangeLabel(zh, { kind: 'removed_field', object_path: '' })).toBe('已删除一个未知的顶层字段');
+  expect(repairChangeLabel(zh, { kind: 'removed_native_tool', position: 4, name: null, reason: 'unknown' })).toBe('已删除 agent.tools.builtin[4]：不存在此原生工具');
 });
 
 it('attributes a receipt delivered during initialization to the authority that connection negotiates', async () => {
@@ -569,7 +607,7 @@ it('renders Auto Repair from the authoritative read and keeps an unsaved draft f
   await openSettingsPage('Advanced');
   const repaired = await screen.findByRole('region', { name: 'Auto Repair' });
   expect(within(repaired).getByRole('status').textContent).toBe('Automatically repaired: 3 changes committed.');
-  for (const line of ['Updated schema_version 8 → 10', 'Removed unknown field agent.plugins.todo.unknown_permission', 'Removed old_tool from agent.tools.builtin: no such Native Tool'])
+  for (const line of ['Updated schema_version 8 → 10', 'Removed an unknown field from agent.plugins.todo', 'Removed agent.tools.builtin[1]: no such Native Tool'])
     expect(within(repaired).getByText(line)).toBeTruthy();
   expect(within(repaired).getByText('An exact private copy of the original file is kept in rustX storage.')).toBeTruthy();
   expect(within(repaired).getByText('Revision sha256:before → user-2')).toBeTruthy();

@@ -20130,7 +20130,7 @@
       "type": "object",
       "properties": {
         "id": {
-          "description": "Content identity of this observation; equal receipts are one repair.",
+          "description": "Opaque identity of this repair occurrence within its App Server\nauthority: one committed (or possibly committed) publication, or one\nunresolved episode. Rereading or redelivering the receipt keeps it;\nanother commit gets another, even of identical bytes and changes.",
           "type": "string"
         },
         "target": {
@@ -20212,13 +20212,14 @@
       ]
     },
     "ConfigRepairChange": {
-      "description": "One deterministic edit of an authored source. Never carries a value.",
+      "description": "One deterministic edit of an authored source, in native vocabulary only:\nnever an authored key, identity or value.",
       "oneOf": [
         {
-          "description": "A field or table unknown to its closed schema object was deleted.",
+          "description": "A field or table unknown to its closed schema object was deleted. The\nremoved key is authored text and is never carried.",
           "type": "object",
           "properties": {
-            "field_path": {
+            "object_path": {
+              "description": "The closed schema object the field was removed from: schema\nproperty names, `*` for an open-map identity and `[n]` for a\nzero-based array position; empty for the document root.",
               "type": "string"
             },
             "kind": {
@@ -20229,15 +20230,26 @@
           "additionalProperties": false,
           "required": [
             "kind",
-            "field_path"
+            "object_path"
           ]
         },
         {
           "description": "An illegal `agent.tools.builtin` element was deleted.",
           "type": "object",
           "properties": {
+            "position": {
+              "description": "The element's zero-based position in the authored selection.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
             "name": {
-              "type": "string"
+              "description": "The native Tool identity the element names; null when `reason`\nis `unknown`, since a name no native Tool has is authored text.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "reason": {
               "$ref": "#/$defs/NativeToolRemoval"
@@ -20250,7 +20262,7 @@
           "additionalProperties": false,
           "required": [
             "kind",
-            "name",
+            "position",
             "reason"
           ]
         },

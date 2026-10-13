@@ -1256,13 +1256,13 @@ writes a source for repair: `configuration/sourcesRead` stays a read.
 
 ```ts
 type ConfigRepairChange =
-  | { kind: "removed_field"; field_path: string }
-  | { kind: "removed_native_tool"; name: string;
+  | { kind: "removed_field"; object_path: string } // "" is the document root
+  | { kind: "removed_native_tool"; position: number; name: string | null;
       reason: "unknown" | "duplicate" | "agent_control" | "plugin_owned" }
   | { kind: "updated_schema_version"; from: number; to: number };
 
 interface ConfigRepairReceipt {
-  id: string;                 // content identity; equal ids are one repair
+  id: string;                 // one repair occurrence within this authority
   target: SourceTarget;       // the exact source owner
   status: "repaired" | "unresolved" | "commit_uncertain";
   before_revision: string;    // the exact revision the repair was planned from
@@ -1283,13 +1283,30 @@ source is unchanged, either because nothing eligible could fix it — including 
 parsable source that violates a source-intrinsic constraint — or because the
 candidate failed validation; its `changes` are then the eligible, unapplied ones.
 `commit_uncertain` reports the revision observed after a publication that may have
-happened; nothing is replayed. Receipts carry field paths, Tool names and version
-numbers only — never removed values, credentials, `request_params` payloads, raw
-parser excerpts, backup paths or backup bytes; key segments are TOML-quoted and
-bounded. A `diagnostic` is assembled from native constants only — a fixed
+happened; nothing is replayed.
+
+A receipt carries native vocabulary only. Repair edits a document by its exact
+authored keys, but reports a separate projection onto the source schema:
+`object_path` names the closed schema object an unknown field was removed from,
+as schema property names, `*` for an open-map identity (Provider, Model,
+Profile, MCP policy, Tool source and similar names) and `[n]` for an array
+position — never the removed key itself, which is authored text whatever it
+looks like. A removed `agent.tools.builtin` element is reported by its
+zero-based `position` and `reason`; `name` is present only when the element
+names a native Tool (a duplicate, an Agent control or a Plugin-owned Tool) and
+is `null` for `unknown`, since a name no native Tool has is authored text. So
+no removed value, credential, `request_params` payload, authored key or
+identity, unsupported Tool name, raw parser excerpt, backup path or backup
+byte can reach a receipt. A `diagnostic` is assembled from native constants only — a fixed
 category, line and column, and a schema location whose open-map identities
 (Provider, Model, Profile and similar names) are `*` — so neither an invalid value
 nor an identity nor a domain error message can reach it.
+
+`id` is opaque and names one repair occurrence within the App Server authority:
+each publication that happened or may have happened gets a new one — a second
+commit of byte-identical changes included — while a reread or redelivery of the
+same receipt, or an unchanged unresolved observation, keeps it. A client pairs it
+with `authority_id`; it never orders anything, which `sequence` does.
 
 `configuration/sourcesRead` returns `user_repair` for the User source and, for a
 Workspace target, `workspace_repair` for that Workspace, with `repair_sequence`:
@@ -1328,7 +1345,7 @@ Every change of any source advances the ledger sequence. A notice carries the
 `sequence` of its change and a read its `repair_sequence`; within one App Server
 authority the higher one is the newer observation of a source, whatever arrives
 first — a read answered after a newer notice, or a notice produced before a
-fresher read and delivered after it. Receipt ids identify content and never
+fresher read and delivered after it. Receipt ids name occurrences and never
 order observations; sequences of different authorities are not comparable.
 Sequences order observations of one source, not deliveries across sources: a
 newly observed source's latest receipt carries the sequence of the change that

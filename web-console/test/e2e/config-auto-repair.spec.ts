@@ -36,8 +36,10 @@ test('automatic configuration repair is announced once and inspected at its exac
     expect(await selectedSettingsPage(page)).toBe('Advanced');
     const section = settings.getByRole('region', { name: 'Auto Repair', exact: true });
     await expect(section.getByRole('status').first()).toHaveText('Automatically repaired: 3 changes committed.');
-    for (const line of ['Updated schema_version 8 → 10', 'Removed unknown field legacy_root', 'Removed unknown field agent.plugins.todo.unknown_permission'])
+    for (const line of ['Updated schema_version 8 → 10', 'Removed an unknown top-level field', 'Removed an unknown field from agent.plugins.todo'])
       await expect(section.getByText(line, { exact: true })).toBeVisible();
+    // The receipt names schema objects, never the authored keys it removed.
+    for (const authored of ['legacy_root', 'unknown_permission']) await expect(section).not.toContainText(authored);
     await expect(section.getByText('An exact private copy of the original file is kept in rustX storage.')).toBeVisible();
     await section.screenshot({ path: test.info().outputPath('config-repair-advanced-user.png') });
     // Settings may first show the owner's last confirmed details while a
@@ -56,7 +58,8 @@ test('automatic configuration repair is announced once and inspected at its exac
     await expect(settings.getByRole('heading', { name: 'Workspace A' })).toBeVisible();
     expect(await selectedSettingsPage(page)).toBe('Advanced');
     const workspace = settings.getByRole('region', { name: 'Auto Repair', exact: true });
-    await expect(workspace.getByText('Removed unknown field agent.future_trust', { exact: true })).toBeVisible();
+    await expect(workspace.getByText('Removed an unknown field from agent', { exact: true })).toBeVisible();
+    await expect(workspace).not.toContainText('future_trust');
     // Presenting the Workspace's current details acknowledges its receipt.
     await expect(notice).toHaveCount(0);
     await closeSettings(page);
@@ -69,7 +72,7 @@ test('automatic configuration repair is announced once and inspected at its exac
     await connectRemote(page, fixture.endpoint, fixture.token);
     await openWorkspaceSettings(page, 'Workspace A');
     await settings.getByRole('tab', { name: 'Advanced', exact: true }).click();
-    await expect(settings.getByRole('region', { name: 'Auto Repair', exact: true }).getByText('Removed unknown field agent.future_trust', { exact: true })).toBeVisible();
+    await expect(settings.getByRole('region', { name: 'Auto Repair', exact: true }).getByText('Removed an unknown field from agent', { exact: true })).toBeVisible();
     await expect(page.locator('.repair-notice')).toHaveCount(0);
     expect(errors).toEqual([]);
   } finally { await fixture.stop(); }

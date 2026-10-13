@@ -1,8 +1,9 @@
 import type { ConfigRepairReceipt } from '../../../protocol/app-server/v47';
 import type { AppServerClient, SourceRepairObservation } from '../client/app-server';
 
-/** The identity of one repair: a receipt id is content-derived, so only the
- * App Server authority that produced it and the id together identify it. */
+/** The identity of one repair: a receipt id names one repair occurrence
+ * within the App Server authority that produced it, so the authority and the
+ * id together identify it. */
 export interface RepairIdentity {
   authorityId: string;
   receiptId: string;

@@ -43,10 +43,7 @@ pub(super) fn is_writer_artifact(name: &OsStr) -> bool {
 
 /// Shared with create-only initialization. Never unlink the lock inode.
 pub(super) fn lock_document(target: &Path) -> std::io::Result<File> {
-    let name = target
-        .file_name()
-        .ok_or_else(|| std::io::Error::other("invalid document"))?;
-    let lock = target.with_file_name(lock_name(name));
+    let lock = lock_path(target)?;
     let file = OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -60,6 +57,45 @@ pub(super) fn lock_document(target: &Path) -> std::io::Result<File> {
     }
     file.lock()?;
     Ok(file)
+}
+
+/// Hold the persistent writer lock of `target` shared, for a reader: rustX
+/// writers, which hold it exclusively, are excluded while the returned file
+/// lives. Reading never creates the lock or its directory: `None` when either
+/// is absent, which means no rustX writer has ever locked the document there,
+/// since lock inodes are never unlinked. The lock name is never followed.
+pub(super) fn share_document_lock(target: &Path) -> std::io::Result<Option<File>> {
+    let lock = lock_path(target)?;
+    let file = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(lock)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::other("lock is not a regular file"));
+    }
+    file.lock_shared()?;
+    Ok(Some(file))
+}
+
+/// Whether the writer lock of `target` exists, as any entry.
+pub(super) fn document_lock_exists(target: &Path) -> std::io::Result<bool> {
+    match std::fs::symlink_metadata(lock_path(target)?) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+fn lock_path(target: &Path) -> std::io::Result<std::path::PathBuf> {
+    let name = target
+        .file_name()
+        .ok_or_else(|| std::io::Error::other("invalid document"))?;
+    Ok(target.with_file_name(lock_name(name)))
 }
 
 pub(super) fn read_document(path: &Path) -> Result<Option<Vec<u8>>, RuntimeClientError> {

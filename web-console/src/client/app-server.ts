@@ -117,8 +117,8 @@ export interface UncertainOperation {
 /** The latest native automatic repair receipt of one configuration source
  * (Issue #464). `receipt` is absent once native withdrew an unresolved one.
  * `authorityId` is the negotiated App Server authority that announced it: a
- * receipt id is content-derived, so equal ids from distinct authorities are
- * distinct repairs. */
+ * receipt id names one repair occurrence within its authority only, so equal
+ * ids from distinct authorities are distinct repairs. */
 export interface SourceRepairObservation {
   authorityId: string;
   target: SourceTarget;
