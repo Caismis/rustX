@@ -1219,6 +1219,9 @@ admitted when it began: a Workspace pathname replaced or redirected before the
 publication is refused as `invalid_params` (nothing written), distinct from a
 `source_conflict` on changed bytes, and one that stops naming the written
 directory after the replacement is `committed_durability_uncertain`.
+`configuration/sourcesRead` is bound the same way: it reads each `rustx.toml`
+only through the directory it admitted, never through a symlink, and refuses as
+`invalid_params` a capture whose directory was replaced or redirected meanwhile.
 
 A successful `configuration/sourceWrite` acknowledgement is proof of **authoring**
 — the committed source revision — and not proof that the application projection it

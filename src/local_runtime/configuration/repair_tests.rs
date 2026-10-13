@@ -1838,11 +1838,8 @@ fn every_writer_takes_one_bounded_lock_per_document() {
         // The handle-relative lock of source transactions and the path lock
         // of initialization are one bounded inode, which no reader creates.
         let lock = lock_of(&directory.join(name));
-        assert!(
-            super::super::super::settings::share_document_lock(&directory.join(name))
-                .unwrap()
-                .is_none()
-        );
+        assert!(source.share_lock(name).unwrap().is_none());
+        assert!(!source.lock_exists(name).unwrap());
         assert!(!lock.exists());
         assert!(lock.file_name().unwrap().len() <= limit);
         let held = source.lock(name).unwrap();
@@ -1862,9 +1859,8 @@ fn every_writer_takes_one_bounded_lock_per_document() {
         drop(held);
         // A capture shares that inode without ever creating it, and excludes
         // writers while it holds it.
-        let shared = super::super::super::settings::share_document_lock(&directory.join(name))
-            .unwrap()
-            .unwrap();
+        assert!(source.lock_exists(name).unwrap());
+        let shared = source.share_lock(name).unwrap().unwrap();
         assert_eq!(
             std::fs::metadata(&lock).unwrap().ino(),
             shared.metadata().unwrap().ino()
@@ -3642,8 +3638,11 @@ fn namespace(root: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
                         .into_os_string()
                         .into_vec(),
                 )
-            } else {
+            } else if metadata.is_file() {
                 Some(std::fs::read(&path).unwrap())
+            } else {
+                // A FIFO or other special entry, recorded without opening it.
+                Some(format!("{:?}", metadata.file_type()).into_bytes())
             };
             entries.insert(path, content);
         }
@@ -3885,4 +3884,443 @@ fn a_redirected_lock_or_document_is_never_followed_by_a_reader() {
             .is_err()
     );
     assert_eq!(namespace(fixture.root.path()), before);
+}
+
+/// A valid document outside every source, which a reader must never answer.
+const EXTERNAL: &str = "# not a source\n[subagents]\nmax_concurrent = 7\n";
+const WORKSPACE_A: &str = "[subagents]\nmax_concurrent = 2\n";
+const WORKSPACE_B: &str = "[subagents]\nmax_concurrent = 3\n";
+
+fn revision_of(text: &str) -> String {
+    super::super::super::settings::revision(Some(text.as_bytes()))
+}
+
+/// Whether anything opens a file from now on. Linux reads the kernel's own
+/// record (`inotify` `IN_OPEN`); elsewhere the outcome assertions stand alone.
+struct OpenWatch(#[cfg(target_os = "linux")] nix::sys::inotify::Inotify);
+
+impl OpenWatch {
+    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
+    fn new(path: &Path) -> Self {
+        #[cfg(target_os = "linux")]
+        {
+            use nix::sys::inotify::{AddWatchFlags, InitFlags, Inotify};
+            let inotify = Inotify::init(InitFlags::IN_NONBLOCK).unwrap();
+            inotify.add_watch(path, AddWatchFlags::IN_OPEN).unwrap();
+            Self(inotify)
+        }
+        #[cfg(not(target_os = "linux"))]
+        Self()
+    }
+
+    fn opened(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        match self.0.read_events() {
+            Ok(events) => !events.is_empty(),
+            Err(nix::errno::Errno::EAGAIN) => false,
+            Err(error) => panic!("{error}"),
+        }
+        #[cfg(not(target_os = "linux"))]
+        false
+    }
+}
+
+/// What a test observed at the opening boundary: the namespace right after
+/// its replacement, and a watch on the file the replacement redirects to.
+struct Reached {
+    namespace: BTreeMap<PathBuf, Option<Vec<u8>>>,
+    redirect: OpenWatch,
+}
+
+/// Run `replace` right before the reader opens `document` through its
+/// admitted directory: its first read, or — armed when verification begins
+/// — its reread. `replace` returns the file it redirects to, which is
+/// watched from then on. What was reached proves the boundary was reached,
+/// lets a test prove the reader changed nothing afterwards, and that it never
+/// opened the redirect.
+fn at_opening(
+    fixture: &Fixture,
+    document: &Path,
+    reread: bool,
+    replace: impl FnOnce() -> PathBuf + Send + 'static,
+) -> Arc<Mutex<Option<Reached>>> {
+    let reached = Arc::new(Mutex::new(None));
+    let observed = reached.clone();
+    let root = fixture.root.path().to_path_buf();
+    let document = document.to_path_buf();
+    let arm = move || {
+        super::super::super::settings::reads::before_opening(&document, move || {
+            let redirect = replace();
+            let namespace = namespace(&root);
+            *observed.lock().unwrap() = Some(Reached {
+                namespace,
+                redirect: OpenWatch::new(&redirect),
+            });
+        });
+    };
+    if reread {
+        fixture
+            .manager
+            .test_hooks
+            .insert("before_capture_verification", arm);
+    } else {
+        arm();
+    }
+    reached
+}
+
+/// READ-07 (FS-RACE-01): a document replaced by a symlink at the exact
+/// boundary where the reader opens it — its first read or its reread — is
+/// refused, never followed: the external file it names never becomes the
+/// source, and the reader changes nothing.
+#[test]
+fn a_document_replaced_by_a_symlink_while_it_is_opened_is_never_followed() {
+    for reread in [false, true] {
+        let fixture = Fixture::new();
+        fixture.write(&SourceTarget::User, USER);
+        fixture.write(&fixture.workspace, WORKSPACE_A);
+        let external = fixture.root.path().join("external.toml");
+        std::fs::write(&external, EXTERNAL).unwrap();
+        let document = fixture.path(&fixture.workspace);
+        let replaced = document.clone();
+        let reached = at_opening(&fixture, &document, reread, move || {
+            std::fs::remove_file(&replaced).unwrap();
+            std::os::unix::fs::symlink(&external, &replaced).unwrap();
+            external
+        });
+        let read = fixture.manager.read_source_settings(&fixture.workspace);
+        let reached = reached
+            .lock()
+            .unwrap()
+            .take()
+            .expect("the opening boundary was reached");
+        assert!(!reached.redirect.opened(), "reread = {reread}");
+        assert!(
+            matches!(read, Err(super::super::settings::SettingsError::Io)),
+            "reread = {reread}: {read:?}"
+        );
+        assert_eq!(
+            namespace(fixture.root.path()),
+            reached.namespace,
+            "reread = {reread}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(fixture.root.path().join("external.toml")).unwrap(),
+            EXTERNAL
+        );
+    }
+}
+
+/// READ-08 (FS-RACE-02): a source directory, or an ancestor of it, moved away
+/// and replaced — by another directory or by a symlink to one — after the
+/// reader admitted it cannot rebind the capture: the reader keeps reading the
+/// admitted physical directory and, since the pathname no longer names it,
+/// answers nothing (`Invalid`), never the replacement's document.
+#[test]
+fn a_source_directory_replaced_after_admission_never_rebinds_the_capture() {
+    for (source, swapped) in [
+        ("workspace", "workspace"),
+        ("user", "home/rustx"),
+        ("user", "home"),
+    ] {
+        for symlink in [false, true] {
+            for reread in [false, true] {
+                let case = format!("{swapped} symlink={symlink} reread={reread}");
+                let fixture = Fixture::new();
+                fixture.write(&SourceTarget::User, USER);
+                fixture.write(&fixture.workspace, WORKSPACE_A);
+                let target = if source == "user" {
+                    SourceTarget::User
+                } else {
+                    fixture.workspace.clone()
+                };
+                let document = fixture.path(&target);
+                let root = fixture.root.path().canonicalize().unwrap();
+                let relative = document
+                    .strip_prefix(root.join(swapped))
+                    .unwrap()
+                    .to_owned();
+                let reached = at_opening(&fixture, &document, reread, move || {
+                    let original = root.join(swapped);
+                    std::fs::rename(&original, root.join("moved")).unwrap();
+                    let replacement = if symlink {
+                        root.join("elsewhere")
+                    } else {
+                        original.clone()
+                    };
+                    let planted = replacement.join(&relative);
+                    std::fs::create_dir_all(planted.parent().unwrap()).unwrap();
+                    std::fs::write(&planted, EXTERNAL).unwrap();
+                    if symlink {
+                        std::os::unix::fs::symlink(&replacement, &original).unwrap();
+                    }
+                    planted
+                });
+                let read = fixture.manager.read_source_settings(&target);
+                let reached = reached
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("the opening boundary was reached");
+                assert!(!reached.redirect.opened(), "{case}");
+                assert!(
+                    matches!(read, Err(super::super::settings::SettingsError::Invalid)),
+                    "{case}: {read:?}"
+                );
+                assert_eq!(namespace(fixture.root.path()), reached.namespace, "{case}");
+            }
+        }
+    }
+}
+
+/// READ-09 (FS-RACE-03): a regular document atomically replaced by another
+/// regular file during a capture yields one coherent revision or an explicit
+/// conflict: replaced before the reader opens it, the capture is the
+/// replacement's; replaced before its reread, a conflict naming both exact
+/// revisions; replaced and restored (A → B → A), the exact admitted bytes.
+#[test]
+fn a_regular_document_replaced_during_a_capture_is_coherent_or_a_conflict() {
+    for (reread, restore) in [(false, false), (true, false), (true, true)] {
+        let case = format!("reread={reread} restore={restore}");
+        let fixture = Fixture::new();
+        fixture.write(&SourceTarget::User, USER);
+        fixture.write(&fixture.workspace, WORKSPACE_A);
+        let document = fixture.path(&fixture.workspace);
+        let replaced = document.clone();
+        let reached = at_opening(&fixture, &document, reread, move || {
+            let staged = replaced.with_file_name("staged.tmp");
+            std::fs::write(&staged, WORKSPACE_B).unwrap();
+            std::fs::rename(&staged, &replaced).unwrap();
+            if restore {
+                std::fs::write(&staged, WORKSPACE_A).unwrap();
+                std::fs::rename(&staged, &replaced).unwrap();
+            }
+            replaced
+        });
+        let read = fixture.manager.read_source_settings(&fixture.workspace);
+        assert!(reached.lock().unwrap().is_some(), "{case}");
+        match (reread, restore) {
+            (false, _) => assert_eq!(
+                read.unwrap().workspace.unwrap().revision,
+                revision_of(WORKSPACE_B),
+                "{case}"
+            ),
+            (true, false) => match read {
+                Err(super::super::settings::SettingsError::Conflict {
+                    scope: SourceScope::Workspace,
+                    expected,
+                    actual,
+                }) => {
+                    assert_eq!(expected, revision_of(WORKSPACE_A));
+                    assert_eq!(actual, revision_of(WORKSPACE_B));
+                }
+                other => panic!("{case}: {other:?}"),
+            },
+            (true, true) => assert_eq!(
+                read.unwrap().workspace.unwrap().revision,
+                revision_of(WORKSPACE_A),
+                "{case}"
+            ),
+        }
+    }
+}
+
+/// Wait until some process is blocked on the lock `lock` — a level, read
+/// from the kernel's lock table, never a timing assumption.
+#[cfg(target_os = "linux")]
+fn await_blocked_waiter(lock: &Path) {
+    use std::os::unix::fs::MetadataExt;
+    let inode = format!(":{} ", std::fs::metadata(lock).unwrap().ino());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while !std::fs::read_to_string("/proc/locks")
+        .unwrap()
+        .lines()
+        .any(|line| line.contains("->") && line.contains(&inode))
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the writer never waited for the reader's lock"
+        );
+        std::thread::yield_now();
+    }
+}
+
+/// READ-10 (FS-RACE-04): a native source write that starts while a capture
+/// holds the document's lock shared waits for it — the capture answers the
+/// exact bytes before the write, never a partial publication — and then
+/// commits whole; neither deadlocks.
+#[test]
+fn a_native_writer_interleaved_with_a_capture_waits_and_publishes_whole() {
+    let fixture = Fixture::new();
+    fixture.write(&SourceTarget::User, USER);
+    let initial = fixture
+        .manager
+        .read_source_settings(&fixture.workspace)
+        .unwrap()
+        .workspace
+        .unwrap()
+        .revision;
+    // A first native write creates the lock inode the reader then shares.
+    let base = fixture
+        .manager
+        .write_source_settings(&fixture.workspace, &initial, capacity(2))
+        .unwrap()
+        .workspace
+        .unwrap()
+        .revision;
+    let lock = lock_of(&fixture.path(&fixture.workspace));
+    let writer = fixture.manager.clone();
+    let target = fixture.workspace.clone();
+    let expected = base.clone();
+    let spawned = Arc::new(Mutex::new(None));
+    let slot = spawned.clone();
+    fixture
+        .manager
+        .test_hooks
+        .insert("before_capture_verification", move || {
+            assert!(writer_excluded(&lock));
+            let (arrived, arrival) = std::sync::mpsc::channel();
+            writer.test_hooks.insert("write_before_lock", move || {
+                arrived.send(()).unwrap();
+            });
+            let thread = std::thread::spawn(move || {
+                writer.write_source_settings(&target, &expected, capacity(3))
+            });
+            arrival.recv().unwrap();
+            #[cfg(target_os = "linux")]
+            await_blocked_waiter(&lock);
+            *slot.lock().unwrap() = Some(thread);
+        });
+    let read = fixture
+        .manager
+        .read_source_settings(&fixture.workspace)
+        .unwrap();
+    assert_eq!(read.workspace.unwrap().revision, base);
+    let thread = spawned.lock().unwrap().take().expect("the writer started");
+    let written = thread.join().unwrap().unwrap().workspace.unwrap().revision;
+    assert_ne!(written, base);
+    assert_eq!(written, revision_of(&fixture.read(&fixture.workspace)));
+    assert!(
+        fixture
+            .read(&fixture.workspace)
+            .contains("max_concurrent = 3")
+    );
+}
+
+/// READ-11 (FS-RACE-05): a User source whose directory is missing is read as
+/// absent; a native writer that creates the directory, its lock and the
+/// document during the capture ran unexcluded, so that round never answers.
+/// The next round admits the new directory, holds its lock and answers the
+/// coherent current document.
+#[test]
+fn a_writer_creating_the_missing_directory_during_a_read_restarts_it() {
+    let fixture = Fixture::with_config_path(|home| home.join(".config/rustx/rustx.toml"));
+    let root = fixture.root.path().to_path_buf();
+    std::fs::remove_dir_all(root.join("home/.config")).unwrap();
+    let writer = fixture.manager.clone();
+    let hooks = fixture.manager.test_hooks.clone();
+    let restarted = Arc::new(Mutex::new(false));
+    let observed = restarted.clone();
+    fixture
+        .manager
+        .test_hooks
+        .insert("before_capture_verification", move || {
+            writer
+                .write_source_settings(&SourceTarget::User, "missing", capacity(3))
+                .unwrap();
+            hooks.insert("before_documents", move || {
+                *observed.lock().unwrap() = true;
+            });
+        });
+    let read = fixture
+        .manager
+        .read_source_settings(&fixture.workspace)
+        .unwrap();
+    assert!(*restarted.lock().unwrap());
+    assert_eq!(
+        read.user.revision,
+        revision_of(&fixture.read(&SourceTarget::User))
+    );
+    assert!(lock_of(&fixture.path(&SourceTarget::User)).exists());
+}
+
+/// Plants an entry at a path, given a redirect target and the exact-bound text.
+type Plant = fn(&Path, &Path, &str);
+
+/// READ-12 (FS-RACE-06/07): symlinks, FIFOs and directories at a source or
+/// resource document are refused without blocking; the exact 1 MiB bound is
+/// enforced on the opened descriptor. None of these reads, nor reading
+/// missing, valid, repairable or malformed sources (READ-01, READ-02),
+/// leaves anything behind.
+#[test]
+fn unsupported_entries_and_oversized_documents_are_refused_without_effects() {
+    let bound = usize::try_from(crate::bounded_file::MAX_RESOURCE_BYTES).unwrap();
+    let exact = format!("#{}\n", "x".repeat(bound - 2));
+    let fixture = Fixture::new();
+    fixture.write(&SourceTarget::User, USER);
+    let document = fixture.path(&fixture.workspace);
+    let resource = fixture.root.path().join("workspace/mcp.toml");
+    let elsewhere = fixture.root.path().join("elsewhere.toml");
+    std::fs::write(&elsewhere, EXTERNAL).unwrap();
+    let cases: [(&str, Plant, bool); 5] = [
+        (
+            "symlink",
+            |path, elsewhere, _| std::os::unix::fs::symlink(elsewhere, path).unwrap(),
+            false,
+        ),
+        (
+            "fifo",
+            |path, _, _| nix::unistd::mkfifo(path, nix::sys::stat::Mode::S_IRWXU).unwrap(),
+            false,
+        ),
+        (
+            "directory",
+            |path, _, _| std::fs::create_dir(path).unwrap(),
+            false,
+        ),
+        (
+            "exact bound",
+            |path, _, exact| std::fs::write(path, exact).unwrap(),
+            true,
+        ),
+        (
+            "over bound",
+            |path, _, exact| std::fs::write(path, format!("{exact} ")).unwrap(),
+            false,
+        ),
+    ];
+    for (case, plant, accepted) in cases {
+        for path in [&document, &resource] {
+            plant(path, &elsewhere, &exact);
+        }
+        let before = namespace(fixture.root.path());
+        let read = fixture.manager.read_source_settings(&fixture.workspace);
+        let resource_read = super::super::super::settings::read_document(&resource);
+        assert_eq!(namespace(fixture.root.path()), before, "{case}");
+        if accepted {
+            assert_eq!(
+                read.unwrap().workspace.unwrap().revision,
+                revision_of(&exact)
+            );
+            assert_eq!(resource_read.unwrap().unwrap(), exact.as_bytes());
+        } else {
+            assert!(
+                matches!(read, Err(super::super::settings::SettingsError::Io)),
+                "{case}: {read:?}"
+            );
+            assert!(resource_read.is_err(), "{case}");
+        }
+        for path in [&document, &resource] {
+            if std::fs::symlink_metadata(path).unwrap().is_dir() {
+                std::fs::remove_dir(path).unwrap();
+            } else {
+                std::fs::remove_file(path).unwrap();
+            }
+        }
+    }
+    assert_eq!(
+        super::super::super::settings::read_document(&resource).unwrap(),
+        None
+    );
+    assert_eq!(std::fs::read_to_string(&elsewhere).unwrap(), EXTERNAL);
 }

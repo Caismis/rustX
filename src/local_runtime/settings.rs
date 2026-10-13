@@ -59,38 +59,6 @@ pub(super) fn lock_document(target: &Path) -> std::io::Result<File> {
     Ok(file)
 }
 
-/// Hold the persistent writer lock of `target` shared, for a reader: rustX
-/// writers, which hold it exclusively, are excluded while the returned file
-/// lives. Reading never creates the lock or its directory: `None` when either
-/// is absent, which means no rustX writer has ever locked the document there,
-/// since lock inodes are never unlinked. The lock name is never followed.
-pub(super) fn share_document_lock(target: &Path) -> std::io::Result<Option<File>> {
-    let lock = lock_path(target)?;
-    let file = match OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(lock)
-    {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error),
-    };
-    if !file.metadata()?.is_file() {
-        return Err(std::io::Error::other("lock is not a regular file"));
-    }
-    file.lock_shared()?;
-    Ok(Some(file))
-}
-
-/// Whether the writer lock of `target` exists, as any entry.
-pub(super) fn document_lock_exists(target: &Path) -> std::io::Result<bool> {
-    match std::fs::symlink_metadata(lock_path(target)?) {
-        Ok(_) => Ok(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error),
-    }
-}
-
 fn lock_path(target: &Path) -> std::io::Result<std::path::PathBuf> {
     let name = target
         .file_name()
@@ -98,17 +66,53 @@ fn lock_path(target: &Path) -> std::io::Result<std::path::PathBuf> {
     Ok(target.with_file_name(lock_name(name)))
 }
 
+/// Read an authored resource document by pathname. The `open` that reads it
+/// is the one that refuses a symlink or non-regular entry: the pathname is
+/// resolved once, never checked and then opened again.
+///
+/// A `rustx.toml` source is read through its physically admitted directory
+/// instead ([`read_source`], [`SourceDirectory::read`]).
 pub(super) fn read_document(path: &Path) -> Result<Option<Vec<u8>>, RuntimeClientError> {
-    match std::fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => Err(failure(
-            "authored source must be a regular file, not a symlink",
-        )),
-        Ok(_) => crate::bounded_file::read_bounded(path)
-            .map(Some)
-            .map_err(io_failure),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(io_failure(error)),
+    read_opened(
+        OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY)
+            .open(path),
+    )
+}
+
+/// Read the source `document` through its physically admitted directory
+/// ([`SourceDirectory::open`]): no component of its pathname, ancestor or
+/// leaf, is followed, and a missing directory is an absent source, never
+/// created.
+pub(super) fn read_source(document: &Path) -> Result<Option<Vec<u8>>, RuntimeClientError> {
+    let name = document
+        .file_name()
+        .ok_or_else(|| failure("invalid authored source"))?;
+    match SourceDirectory::open(document).map_err(io_failure)? {
+        Some(directory) => directory.read(name),
+        None => Ok(None),
     }
+}
+
+/// The bounded bytes of a document just opened without following its name
+/// and without blocking: absent is `None`; a symlink, FIFO, directory or
+/// other non-regular file is refused. Everything is checked and read on the
+/// opened descriptor itself.
+fn read_opened(opened: std::io::Result<File>) -> Result<Option<Vec<u8>>, RuntimeClientError> {
+    let not_regular = || failure("authored source must be a regular file, not a symlink");
+    let file = match opened {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.raw_os_error() == Some(libc::ELOOP) => return Err(not_regular()),
+        Err(error) => return Err(io_failure(error)),
+    };
+    if !file.metadata().map_err(io_failure)?.is_file() {
+        return Err(not_regular());
+    }
+    crate::bounded_file::read_bounded_file(file)
+        .map(Some)
+        .map_err(io_failure)
 }
 pub(super) fn revision(bytes: Option<&[u8]>) -> String {
     bytes.map_or_else(
@@ -248,15 +252,52 @@ impl SourceDirectory {
     /// Read `name` in this directory: absent is `None`; a symlink, FIFO or
     /// other non-regular file is refused, as [`read_document`] refuses it.
     pub(super) fn read(&self, name: &OsStr) -> Result<Option<Vec<u8>>, RuntimeClientError> {
-        match self.open_file(name, OFlag::O_RDONLY | OFlag::O_NONBLOCK, Mode::empty()) {
-            Ok(file) => crate::bounded_file::read_bounded_file(file)
-                .map(Some)
-                .map_err(io_failure),
-            Err(nix::errno::Errno::ENOENT) => Ok(None),
-            Err(nix::errno::Errno::ELOOP) => Err(failure(
-                "authored source must be a regular file, not a symlink",
-            )),
-            Err(error) => Err(io_failure(error)),
+        #[cfg(test)]
+        reads::opening(&self.path.join(name));
+        read_opened(
+            self.open_file(
+                name,
+                OFlag::O_RDONLY | OFlag::O_NONBLOCK | OFlag::O_NOCTTY,
+                Mode::empty(),
+            )
+            .map_err(std::io::Error::from),
+        )
+    }
+
+    /// Hold the persistent writer lock of `name` shared, for a reader: rustX
+    /// writers, which hold it exclusively, are excluded while the returned
+    /// file lives. Reading never creates the lock: `None` when it is absent,
+    /// which means no rustX writer has ever locked the document in this
+    /// directory, since lock inodes are never unlinked. The lock name is
+    /// never followed.
+    pub(super) fn share_lock(&self, name: &OsStr) -> std::io::Result<Option<File>> {
+        let file = match self.open_file(
+            OsStr::new(&lock_name(name)),
+            OFlag::O_RDONLY | OFlag::O_NONBLOCK | OFlag::O_NOCTTY,
+            Mode::empty(),
+        ) {
+            Ok(file) => file,
+            Err(nix::errno::Errno::ENOENT) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        if !file.metadata()?.is_file() {
+            return Err(std::io::Error::other("lock is not a regular file"));
+        }
+        file.lock_shared()?;
+        Ok(Some(file))
+    }
+
+    /// Whether the writer lock of `name` exists in this directory, as any
+    /// entry.
+    pub(super) fn lock_exists(&self, name: &OsStr) -> std::io::Result<bool> {
+        match nix::sys::stat::fstatat(
+            &self.directory,
+            OsStr::new(&lock_name(name)),
+            nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
+        ) {
+            Ok(_) => Ok(true),
+            Err(nix::errno::Errno::ENOENT) => Ok(false),
+            Err(error) => Err(error.into()),
         }
     }
 
@@ -499,6 +540,41 @@ fn identity(directory: &std::os::fd::OwnedFd) -> std::io::Result<(u64, u64)> {
         reason = "dev_t and ino_t are signed or narrower on some platforms"
     )]
     Ok((status.st_dev as u64, status.st_ino as u64))
+}
+
+/// Test-only cross-thread hook right before a source entry is opened relative
+/// to its admitted directory: the exact boundary that a replacement of the
+/// entry, or of any component of its pathname, races with.
+#[cfg(test)]
+pub(super) mod reads {
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    type Hook = Box<dyn FnOnce() + Send>;
+    /// Keyed by absolute path; tests use distinct temporary directories.
+    static OPENING_HOOKS: Mutex<Vec<(PathBuf, Hook)>> = Mutex::new(Vec::new());
+
+    /// Run `hook` on whichever thread next opens the source entry `path`
+    /// through its admitted directory, right before the `openat`.
+    pub(crate) fn before_opening(path: &Path, hook: impl FnOnce() + Send + 'static) {
+        OPENING_HOOKS
+            .lock()
+            .unwrap()
+            .push((path.to_path_buf(), Box::new(hook)));
+    }
+
+    pub(super) fn opening(path: &Path) {
+        let hook = {
+            let mut hooks = OPENING_HOOKS.lock().unwrap();
+            hooks
+                .iter()
+                .position(|(target, _)| target == path)
+                .map(|index| hooks.remove(index).1)
+        };
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
 }
 
 /// Test-only trace of this thread's durability-relevant directory steps, with

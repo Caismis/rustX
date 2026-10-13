@@ -1266,3 +1266,125 @@ async fn source_reads_leave_the_filesystem_unchanged() {
     })
     .await;
 }
+
+/// FS-RACE-08: `configuration/sourcesRead` is a physically bound, read-only
+/// capture. A document redirected by a symlink at the exact boundary where
+/// the reader opens it is refused without its target ever answering; plain
+/// reads of a repairable source repair nothing, create nothing, announce
+/// nothing and prepare no application; nothing reaches the journal or a
+/// provider. Repair stays reconciliation's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn source_reads_are_physically_bound_and_trigger_nothing() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let target = workspace(&f, 0);
+        let runtime = f.load(0).await.unwrap().unwrap();
+        let live = runtime.inspect_runtime().unwrap();
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        call(
+            &connection,
+            100,
+            Method::ConfigurationReconcile {
+                target: target.clone(),
+            },
+        )
+        .await;
+        let baseline = super::configuration::settled(&f, 0).await;
+        let probe = f.manager.probe(&f.id(0).await);
+        let preparations = probe.configuration_preparations.load(Ordering::SeqCst);
+        let journal = events(&live).len();
+        let requests = f.provider.attempt_count();
+        let workspace_file = std::fs::canonicalize(&f.workspaces[0])
+            .unwrap()
+            .join("rustx.toml");
+        let edited = format!(
+            "{}[agent]\nfuture_trust = true\n",
+            std::fs::read_to_string(&workspace_file).unwrap()
+        );
+        std::fs::write(&workspace_file, &edited).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let external = outside.path().join("external.toml");
+        std::fs::write(&external, "[subagents]\nmax_concurrent = 7\n").unwrap();
+        let entries = |directory: &std::path::Path| {
+            let mut names: Vec<_> = std::fs::read_dir(directory)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            names.sort();
+            names
+        };
+        let user_directory = user_path(&f).parent().unwrap().to_path_buf();
+        let namespace = (
+            entries(workspace_file.parent().unwrap()),
+            entries(&user_directory),
+        );
+
+        // The leaf redirected while the reader opens it: refused, and the
+        // redirect's revision answers nothing.
+        let (reached, arrival) = std::sync::mpsc::channel();
+        let (document, redirect) = (workspace_file.clone(), external.clone());
+        crate::local_runtime::settings::reads::before_opening(&workspace_file, move || {
+            std::fs::remove_file(&document).unwrap();
+            std::os::unix::fs::symlink(&redirect, &document).unwrap();
+            reached.send(()).unwrap();
+        });
+        let response = connection
+            .handle_request(Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(1),
+                call: Method::SourcesRead {
+                    target: target.clone(),
+                },
+            })
+            .await;
+        arrival
+            .try_recv()
+            .expect("the opening boundary was reached");
+        assert!(matches!(response, Response::Failure(_)), "{response:?}");
+        let external_revision = crate::local_runtime::settings::revision(Some(
+            std::fs::read(&external).unwrap().as_slice(),
+        ));
+        assert!(
+            !serde_json::to_string(&response)
+                .unwrap()
+                .contains(&external_revision)
+        );
+        std::fs::remove_file(&workspace_file).unwrap();
+        std::fs::write(&workspace_file, &edited).unwrap();
+
+        // Plain reads of the repairable source are read-only.
+        for id in 2..5 {
+            let read = sources(&connection, id, &target).await;
+            let workspace = read.workspace.unwrap();
+            assert_eq!(
+                workspace.revision,
+                crate::local_runtime::settings::revision(Some(edited.as_bytes()))
+            );
+            assert!(read.workspace_repair.is_none());
+        }
+        assert_eq!(std::fs::read_to_string(&workspace_file).unwrap(), edited);
+        assert_eq!(
+            (
+                entries(workspace_file.parent().unwrap()),
+                entries(&user_directory)
+            ),
+            namespace
+        );
+        assert!(connection.next_source_repair().is_none());
+        assert!(f.manager.source_repairs().latest(&target).is_none());
+        assert_eq!(
+            probe.configuration_preparations.load(Ordering::SeqCst),
+            preparations
+        );
+        assert_eq!(
+            super::configuration::settled(&f, 0).await.desired,
+            baseline.desired
+        );
+        assert_eq!(events(&live).len(), journal);
+        assert_eq!(f.provider.attempt_count(), requests);
+        drop(live);
+        f.close().await;
+    })
+    .await;
+}

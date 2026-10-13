@@ -1039,7 +1039,7 @@ impl UserConfigManager {
     pub(crate) fn refresh_repair_observation(&self, target: &SourceTarget) {
         let path = self.config_path(target);
         let workspace = target.scope() == SourceScope::Workspace;
-        let Ok(bytes) = super::super::settings::read_document(&path) else {
+        let Ok(bytes) = super::super::settings::read_source(&path) else {
             return;
         };
         let Some(bytes) = bytes else {
@@ -1125,7 +1125,7 @@ impl UserConfigManager {
             SourceTarget::Workspace { .. } => SourceTarget::User,
         };
         let path = self.config_path(&other);
-        let other_layer = match super::super::settings::read_document(&path).ok()? {
+        let other_layer = match super::super::settings::read_source(&path).ok()? {
             None => RuntimeLayer::default(),
             Some(bytes) => {
                 intrinsic_health(&path, &bytes, other.scope() == SourceScope::Workspace).ok()?

@@ -366,6 +366,92 @@ pub enum SettingsError {
 fn read(path: &Path) -> Result<Option<Vec<u8>>, SettingsError> {
     super::super::settings::read_document(path).map_err(|_| SettingsError::Io)
 }
+
+/// One `rustx.toml` of a capture round, bound to the physical directory it
+/// was admitted in ([`SourceDirectory::open`]: no component followed,
+/// nothing created). Its shared writer lock, its bytes and their reread are
+/// all relative to that one handle, so the pathname is never resolved again
+/// to reach the document; before the round answers, the pathname must still
+/// name that directory.
+struct AdmittedDocument {
+    path: PathBuf,
+    /// `None` while the directory is missing: the document is absent.
+    directory: Option<SourceDirectory>,
+}
+
+impl AdmittedDocument {
+    /// A pathname that cannot be admitted is `Invalid` when the target is
+    /// redirected, exactly as at entry; otherwise `Io`.
+    fn admit(path: &Path, target: &SourceTarget) -> Result<Self, SettingsError> {
+        let directory = SourceDirectory::open(path)
+            .map_err(|_| target.validate().err().unwrap_or(SettingsError::Io))?;
+        Ok(Self {
+            path: path.into(),
+            directory,
+        })
+    }
+
+    fn name(&self) -> &std::ffi::OsStr {
+        self.path
+            .file_name()
+            .expect("a source document is named in its directory")
+    }
+
+    fn read(&self) -> Result<Option<Vec<u8>>, SettingsError> {
+        self.directory.as_ref().map_or(Ok(None), |directory| {
+            directory.read(self.name()).map_err(|_| SettingsError::Io)
+        })
+    }
+
+    fn share_lock(&self) -> Result<Option<std::fs::File>, SettingsError> {
+        self.directory.as_ref().map_or(Ok(None), |directory| {
+            directory
+                .share_lock(self.name())
+                .map_err(|_| SettingsError::Io)
+        })
+    }
+
+    /// Whether this document's writer lock exists now. A directory that was
+    /// missing is observed again — a rustX writer creates the directory and
+    /// then the lock in it — and still created by nothing.
+    fn lock_exists(&self, target: &SourceTarget) -> Result<bool, SettingsError> {
+        match &self.directory {
+            Some(directory) => directory.lock_exists(self.name()),
+            None => match Self::admit(&self.path, target)?.directory {
+                Some(directory) => directory.lock_exists(self.name()),
+                None => Ok(false),
+            },
+        }
+        .map_err(|_| SettingsError::Io)
+    }
+
+    /// Whether the pathname no longer names the admitted directory.
+    fn redirected(&self) -> bool {
+        self.directory
+            .as_ref()
+            .is_some_and(|directory| !directory.holds())
+    }
+
+    /// The document's bytes now, read through the admitted directory, which
+    /// the pathname must still name: one it no longer names is `Invalid`,
+    /// exactly as publication refuses it, since the capture would otherwise
+    /// answer for a directory that is no longer the source. A directory that
+    /// was missing is observed again: if it appeared, its document is
+    /// compared like any other change.
+    fn reread(&self, target: &SourceTarget) -> Result<Option<Vec<u8>>, SettingsError> {
+        match &self.directory {
+            Some(_) => {
+                let bytes = self.read()?;
+                if self.redirected() {
+                    Err(SettingsError::Invalid)
+                } else {
+                    Ok(bytes)
+                }
+            }
+            None => Self::admit(&self.path, target)?.read(),
+        }
+    }
+}
 fn revision(bytes: Option<&[u8]>) -> String {
     super::super::settings::revision(bytes)
 }
@@ -938,28 +1024,48 @@ impl UserConfigManager {
         let workspace = target
             .workspace()
             .map(|directory| directory.join("rustx.toml"));
-        let mut paths: Vec<_> = std::iter::once(user.clone())
-            .chain(workspace.clone())
-            .collect();
-        paths.sort();
-        paths.dedup();
-        for _ in 0..=paths.len() {
+        let distinct = 1 + usize::from(workspace.as_ref().is_some_and(|path| *path != user));
+        for _ in 0..=distinct {
             #[cfg(test)]
             self.test_hooks.reach("before_documents");
+            // Each round admits every document's physical directory once;
+            // its lock, bytes and lock appearance are all relative to it.
+            let user = AdmittedDocument::admit(&user, target)?;
+            let workspace = workspace
+                .as_ref()
+                .map(|path| AdmittedDocument::admit(path, target))
+                .transpose()?;
+            let documents: Vec<_> = std::iter::once(&user)
+                .chain(
+                    workspace
+                        .as_ref()
+                        .filter(|document| document.path != user.path),
+                )
+                .collect();
             let mut locks = Vec::new();
             let mut unlocked = Vec::new();
-            for path in &paths {
-                match super::super::settings::share_document_lock(path) {
-                    Ok(Some(lock)) => locks.push(lock),
-                    Ok(None) => unlocked.push(path),
-                    Err(_) => return Err(SettingsError::Io),
+            for document in documents {
+                match document.share_lock()? {
+                    Some(lock) => locks.push(lock),
+                    None => unlocked.push(document),
                 }
             }
-            let captured = self.capture_round(target, &user, workspace.as_ref());
+            let captured = self
+                .capture_round(target, &user, workspace.as_ref())
+                .map_err(|error| {
+                    // Whatever failed, a round whose pathname no longer names
+                    // an admitted directory is refused as redirected.
+                    if user.redirected()
+                        || workspace.as_ref().is_some_and(AdmittedDocument::redirected)
+                    {
+                        SettingsError::Invalid
+                    } else {
+                        error
+                    }
+                });
             let mut appeared = false;
-            for path in unlocked {
-                appeared |= super::super::settings::document_lock_exists(path)
-                    .map_err(|_| SettingsError::Io)?;
+            for document in unlocked {
+                appeared |= document.lock_exists(target)?;
             }
             if !appeared {
                 return captured;
@@ -974,15 +1080,14 @@ impl UserConfigManager {
     fn capture_round(
         &self,
         target: &SourceTarget,
-        user: &Path,
-        workspace: Option<&PathBuf>,
+        user_document: &AdmittedDocument,
+        workspace_document: Option<&AdmittedDocument>,
     ) -> Result<(SourceSettings, String), SettingsError> {
-        let user = user.to_path_buf();
-        let workspace = workspace.cloned();
-        let user_bytes = read(&user)?;
-        let workspace_bytes = workspace
-            .as_ref()
-            .map(|path| read(path))
+        let user = user_document.path.clone();
+        let workspace = workspace_document.map(|document| document.path.clone());
+        let user_bytes = user_document.read()?;
+        let workspace_bytes = workspace_document
+            .map(AdmittedDocument::read)
             .transpose()?
             .flatten();
         let roots: Vec<_> =
@@ -1106,11 +1211,14 @@ impl UserConfigManager {
         };
         #[cfg(test)]
         self.test_hooks.reach("before_capture_verification");
-        for (scope, path, captured) in std::iter::once((SourceScope::User, user, user_bytes))
-            .chain(workspace.map(|path| (SourceScope::Workspace, path, workspace_bytes)))
+        for (scope, document, captured) in
+            std::iter::once((SourceScope::User, user_document, user_bytes)).chain(
+                workspace_document
+                    .map(|document| (SourceScope::Workspace, document, workspace_bytes)),
+            )
         {
             let expected = revision(captured.as_deref());
-            let actual = revision(read(&path)?.as_deref());
+            let actual = revision(document.reread(target)?.as_deref());
             if actual != expected {
                 return Err(SettingsError::Conflict {
                     scope,
