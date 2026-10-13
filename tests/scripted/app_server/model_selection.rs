@@ -4,9 +4,10 @@
 
 use super::*;
 use crate::local_runtime::configuration::settings::SourceTarget;
-use crate::model::catalog::ModelRef;
-use crate::model::session::SessionModelConfig;
-use crate::runtime::conversation_runtime::ModelUpdateError;
+use crate::model::catalog::{ModelProfileId, ModelRef};
+use crate::model::session::{SessionModelConfig, SummaryModelPolicy};
+use crate::runtime::conversation_runtime::{Gate, ModelUpdateError};
+use crate::runtime_client::{EventDelivery, RuntimeClientEvent};
 
 struct SelectionGate {
     entered: Option<tokio::sync::oneshot::Receiver<()>>,
@@ -132,6 +133,13 @@ fn assert_conflict(result: &Result<crate::model::session::SessionModelView, Mode
     );
 }
 
+async fn gate_entered(gate: &Arc<Gate>) {
+    let gate = gate.clone();
+    tokio::task::spawn_blocking(move || gate.wait_entered())
+        .await
+        .unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn r04_manager_selection_and_attempt_admission_have_both_complete_orders() {
     bounded(async {
@@ -140,35 +148,185 @@ async fn r04_manager_selection_and_attempt_admission_have_both_complete_orders()
             let id = &f.sessions[0].id;
             let runtime = f.manager.configuration_runtime(id).unwrap();
             let host = f.manager.configuration_host(id).unwrap();
-            let selected = selection("local/b");
-            if selection_first {
-                f.manager.set_model(id, selected.clone()).await.unwrap();
-                super::configuration::settled(&f, 0).await;
-            }
+            let source = f
+                .manager
+                .source_settings(&SourceTarget::User, None)
+                .await
+                .unwrap();
+            let mut document: toml::Value =
+                toml::from_str(&std::fs::read_to_string(&source.user.path).unwrap()).unwrap();
+            let model = document["models"]["local/b"].as_table_mut().unwrap();
+            model.remove("request_params");
+            model.insert("default_profile".into(), "low".into());
+            model.insert(
+                "profiles".into(),
+                toml::Value::try_from(serde_json::json!({
+                    "low": {"request_params": "{\"temperature\":0.9}"}
+                }))
+                .unwrap(),
+            );
+            std::fs::write(source.user.path, toml::to_string(&document).unwrap()).unwrap();
+            f.manager
+                .reconcile_configuration(&SourceTarget::User)
+                .await
+                .unwrap();
+            super::configuration::settled(&f, 0).await;
+            let original = SessionModelConfig {
+                request_params: serde_json::from_value(
+                    serde_json::json!({"temperature": 0.1, "seed": 7}),
+                )
+                .unwrap(),
+                max_output_tokens: Some(333),
+                summary_model: SummaryModelPolicy::Explicit {
+                    model: ModelRef::parse("local/a").unwrap(),
+                    profile: None,
+                    request_params: serde_json::from_value(serde_json::json!({"temperature": 0.2}))
+                        .unwrap(),
+                    max_output_tokens: Some(111),
+                },
+                ..selection("local/a")
+            };
+            f.manager.set_model(id, original).await.unwrap();
+            super::configuration::settled(&f, 0).await;
+            let old_invocation = runtime.model_snapshot().view();
+            let selected = SessionModelConfig {
+                profile: Some(ModelProfileId::new("low")),
+                request_params: serde_json::from_value(serde_json::json!({"seed": 17})).unwrap(),
+                max_output_tokens: Some(888),
+                summary_model: SummaryModelPolicy::Explicit {
+                    model: ModelRef::parse("local/a").unwrap(),
+                    profile: None,
+                    request_params: serde_json::from_value(serde_json::json!({"temperature": 0.6}))
+                        .unwrap(),
+                    max_output_tokens: Some(222),
+                },
+                ..selection("local/b")
+            };
+            let resources = runtime.runtime_resources();
+            let binding = runtime.configuration_view().unwrap().adopted_binding;
+            let settings_revision = f.manager.sessions.read_settings(id).await.unwrap().0;
+            let (attachment, _) = host
+                .attach_read_only(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+                .unwrap();
+            let (_, before_cursor) = host.snapshot().unwrap();
+            let observations = attachment.subscribe_events(before_cursor).unwrap();
+            let contention = Arc::new(tokio::sync::Notify::new());
+            let held = Arc::new(Gate::default());
+            let held_release = held.arm_scoped();
             let settlement = runtime.settlement_signal();
-            runtime.submit_inbound(input("request-A")).unwrap();
+            let selection;
+            let admission_cursor;
+            if selection_first {
+                let entering = Arc::new(Gate::default());
+                let entering_release = entering.arm_scoped();
+                runtime.install_admission_gate(entering.clone());
+                runtime.install_model_selection_race_probe(
+                    Some(contention.clone()),
+                    None,
+                    None,
+                    Some(held.clone()),
+                );
+                runtime.submit_inbound(input("request-A")).unwrap();
+                gate_entered(&entering).await;
+                selection = select(&f, selected.clone());
+                gate_entered(&held).await;
+                // Selection owns the coordinator; the released admission must
+                // actually observe WouldBlock before this test releases it.
+                drop(entering_release);
+                contention.notified().await;
+                assert!(!selection.is_finished());
+                admission_cursor = None;
+            } else {
+                let mut prepared = SelectionGate::prepared(&f);
+                selection = select(&f, selected.clone());
+                prepared.entered().await;
+                runtime.install_model_selection_race_probe(
+                    None,
+                    Some(held.clone()),
+                    Some(contention.clone()),
+                    None,
+                );
+                runtime.submit_inbound(input("request-A")).unwrap();
+                gate_entered(&held).await;
+                // The frozen snapshot has been published under the still-held
+                // coordinator lock; no model request has started yet.
+                let (admitted, cursor) = host.snapshot().unwrap();
+                assert_eq!(*admitted.attempt.unwrap().model.unwrap(), old_invocation);
+                assert!(f.provider.request_bodies().is_empty());
+                admission_cursor = Some(cursor);
+                drop(prepared);
+                contention.notified().await;
+                assert!(!selection.is_finished());
+            }
+            drop(held_release);
+            selection.await.unwrap().unwrap();
             f.gates[0].wait_entered().await;
             let frozen = host.snapshot().unwrap().0.attempt.unwrap();
-            if !selection_first {
-                f.manager.set_model(id, selected.clone()).await.unwrap();
-            }
             assert_authority(&f, &selected).await;
+            assert_eq!(
+                f.manager.sessions.read_settings(id).await.unwrap().0,
+                settings_revision + 1
+            );
+            assert_eq!(
+                runtime.configuration_view().unwrap().adopted_binding,
+                binding + 1
+            );
+            assert!(Arc::ptr_eq(&resources, &runtime.runtime_resources()));
+            let new_invocation = runtime.model_snapshot().view();
             let expected = if selection_first {
-                "local/b"
+                &new_invocation
             } else {
-                "local/a"
+                &old_invocation
             };
+            assert_eq!(frozen.model.as_deref().unwrap(), expected);
             assert_eq!(
-                frozen.model.as_ref().unwrap().primary.model.to_string(),
-                expected
+                frozen
+                    .execution_settings
+                    .as_ref()
+                    .unwrap()
+                    .resource_revision,
+                resources.revision()
             );
-            assert_eq!(
-                host.snapshot().unwrap().0.attempt.unwrap().model,
-                frozen.model
-            );
+            let (mut changed, mut started) = (None, None);
+            while changed.is_none() || started.is_none() {
+                let EventDelivery::Event(event) = observations.next().await else {
+                    panic!("live observations")
+                };
+                match event.event {
+                    RuntimeClientEvent::SessionModelChanged { model } => {
+                        assert_eq!(model.configured, selected);
+                        assert!(changed.replace(event.cursor).is_none());
+                    }
+                    RuntimeClientEvent::AttemptStarted {
+                        model, attempt_id, ..
+                    } => {
+                        assert_eq!(model.as_deref().unwrap(), expected);
+                        assert_eq!(attempt_id, frozen.attempt_id);
+                        assert!(started.replace(event.cursor).is_none());
+                    }
+                    _ => {}
+                }
+            }
+            assert!(changed.unwrap() > before_cursor && started.unwrap() > before_cursor);
+            if selection_first {
+                assert!(changed.unwrap() < started.unwrap());
+            } else {
+                // AttemptStarted is an execution event emitted after admission
+                // unlocks; the admitted snapshot above is the ordering evidence.
+                assert!(changed.unwrap() > admission_cursor.unwrap());
+            }
             let bodies = f.provider.request_bodies();
             let body: serde_json::Value = serde_json::from_str(&bodies[0]).unwrap();
             assert_eq!(body["model"], if selection_first { "b" } else { "a" });
+            assert_eq!(
+                body["temperature"],
+                expected.primary.request_params["temperature"]
+            );
+            assert_eq!(body["seed"], expected.primary.request_params["seed"]);
+            assert_eq!(
+                body["max_completion_tokens"],
+                expected.primary.max_output_tokens
+            );
             f.gates[0].release();
             settlement.notified().await;
             super::configuration::settled(&f, 0).await;
@@ -180,6 +338,15 @@ async fn r04_manager_selection_and_attempt_admission_have_both_complete_orders()
             assert_eq!(bodies.len(), 2);
             let body: serde_json::Value = serde_json::from_str(&bodies[1]).unwrap();
             assert_eq!(body["model"], "b");
+            assert_eq!(
+                body["temperature"],
+                new_invocation.primary.request_params["temperature"]
+            );
+            assert_eq!(body["seed"], new_invocation.primary.request_params["seed"]);
+            assert_eq!(
+                body["max_completion_tokens"],
+                new_invocation.primary.max_output_tokens
+            );
             f.close().await;
         }
     })
@@ -451,13 +618,6 @@ async fn r08_retirement_and_selection_commit_have_both_valid_orders() {
             gate.entered().await;
             if retirement_first {
                 f.manager.unload(&f.id(0).await).await.unwrap();
-                assert!(
-                    matches!(
-                        old_runtime.model_set(selection("local/a")),
-                        Err(ModelUpdateError::Inactive)
-                    ),
-                    "an unchanged selection cannot acknowledge a retired runtime"
-                );
                 assert!(matches!(
                     f.manager.set_model(id, selection("local/a")).await,
                     Err(ModelSelectionError::Model(ModelUpdateError::Inactive))
@@ -505,28 +665,126 @@ async fn r10_native_selection_survives_request_waiter_abort_without_replay() {
     bounded(async {
         let f = fixture().await;
         let id = &f.sessions[0].id;
-        let (revision, _) = f.manager.sessions.read_settings(id).await.unwrap();
-        let mut changes = f.manager.configuration_changes();
+        let original_settings = f.manager.sessions.read_settings(id).await.unwrap();
+        let original_application = f.manager.configuration_application(id).unwrap();
+        let host = f.manager.configuration_host(id).unwrap();
+        let (_, original_cursor) = host.snapshot().unwrap();
         let mut gate = SelectionGate::prepared(&f);
         let pending = select(&f, selection("local/b"));
         gate.entered().await;
         pending.abort();
         assert!(pending.await.unwrap_err().is_cancelled());
+
+        // A fresh attachment successfully reads A while the accepted native B
+        // operation still owns its parked commit. This read cannot settle B.
+        let (readback, initialized) = host
+            .attach_read_only(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .unwrap();
+        let crate::runtime_client::RuntimeClientResult::Initialized {
+            snapshot, cursor, ..
+        } = initialized
+        else {
+            panic!("fresh readback")
+        };
+        assert_eq!(snapshot.model.unwrap().configured, selection("local/a"));
+        assert_eq!(cursor, original_cursor);
+        let observations = readback.subscribe_events(cursor).unwrap();
+        // Even an acknowledged deliberate selection of already explicit A is
+        // a true NoOp. It supplies no new revision capable of fencing late B.
+        f.manager.set_model(id, selection("local/a")).await.unwrap();
+        assert_eq!(
+            f.manager.sessions.read_settings(id).await.unwrap(),
+            original_settings
+        );
+        assert_eq!(
+            f.manager.configuration_application(id).unwrap(),
+            original_application
+        );
+        assert_eq!(host.snapshot().unwrap().1, original_cursor);
         drop(gate);
         loop {
-            if f.manager.sessions.read_settings(id).await.unwrap().1.model
-                == Some(selection("local/b"))
-            {
+            let EventDelivery::Event(event) = observations.next().await else {
+                panic!("late native selection observation")
+            };
+            if let RuntimeClientEvent::SessionModelChanged { model } = event.event {
+                assert_eq!(model.configured, selection("local/b"));
+                assert!(event.cursor > cursor);
                 break;
             }
-            changes.changed().await.unwrap();
         }
         super::configuration::settled(&f, 0).await;
         assert_authority(&f, &selection("local/b")).await;
+        readback.detach();
+        let (_reconnected, initialized) = host
+            .attach_read_only(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .unwrap();
+        let crate::runtime_client::RuntimeClientResult::Initialized { snapshot, .. } = initialized
+        else {
+            panic!("reconnect")
+        };
+        assert_eq!(snapshot.model.unwrap().configured, selection("local/b"));
         assert_eq!(
             f.manager.sessions.read_settings(id).await.unwrap().0,
-            revision + 1
+            original_settings.0 + 1,
+            "readback and reconnect never replay the lost mutation"
         );
+        assert!(f.provider.request_bodies().is_empty());
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn f4_later_deliberate_selection_fences_a_prepared_request_after_old_readback() {
+    bounded(async {
+        let f = fixture().await;
+        let id = &f.sessions[0].id;
+        let host = f.manager.configuration_host(id).unwrap();
+        let initial_revision = f.manager.sessions.read_settings(id).await.unwrap().0;
+        let mut gate = SelectionGate::prepared(&f);
+        let pending = select(&f, selection("local/b"));
+        gate.entered().await;
+        let (readback, initialized) = host
+            .attach_read_only(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .unwrap();
+        let crate::runtime_client::RuntimeClientResult::Initialized { snapshot, .. } = initialized
+        else {
+            panic!("old readback")
+        };
+        assert_eq!(snapshot.model.unwrap().configured, selection("local/a"));
+        let mut deliberate = selection("local/a");
+        deliberate
+            .request_params
+            .insert("seed".into(), serde_json::json!(19));
+        f.manager.set_model(id, deliberate.clone()).await.unwrap();
+        super::configuration::settled(&f, 0).await;
+        let settings = f.manager.sessions.read_settings(id).await.unwrap();
+        let application = f.manager.configuration_application(id).unwrap();
+        let (_, cursor) = host.snapshot().unwrap();
+        assert_eq!(settings.0, initial_revision + 1);
+        drop(gate);
+        // Keep the native result for this independent CAS proof; the preceding
+        // regression separately proves a dropped RPC waiter does not cancel it.
+        assert_conflict(&pending.await.unwrap());
+        assert_authority(&f, &deliberate).await;
+        assert_eq!(
+            f.manager.sessions.read_settings(id).await.unwrap(),
+            settings
+        );
+        assert_eq!(
+            f.manager.configuration_application(id).unwrap(),
+            application
+        );
+        assert_eq!(host.snapshot().unwrap().1, cursor);
+        readback.detach();
+        let (_reconnected, initialized) = host
+            .attach_read_only(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .unwrap();
+        let crate::runtime_client::RuntimeClientResult::Initialized { snapshot, .. } = initialized
+        else {
+            panic!("new readback")
+        };
+        assert_eq!(snapshot.model.unwrap().configured, deliberate);
         assert!(f.provider.request_bodies().is_empty());
         f.close().await;
     })

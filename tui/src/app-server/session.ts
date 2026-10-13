@@ -19,8 +19,10 @@ import { uploadOperationId } from '../../../protocol/app-server/upload.ts';
  * This owner sequences snapshot installation, subscription and resync repair
  * for exactly one Session. It owns no agent semantics: it starts nothing,
  * settles nothing, and interprets no model, tool or capability value. The
- * server is authoritative; everything held here is a projection that one fresh
- * snapshot rebuilds completely. Ordinary events, including native read-domain
+ * server is authoritative; semantic state here is a projection that one fresh
+ * snapshot rebuilds completely. Local unanswered-request diagnostics are
+ * separate: an observation cannot establish their terminal outcomes.
+ * Ordinary events, including native read-domain
  * cuts at settlement, preserve safely joined history and local UI without rereads.
  *
  * # Identity and fencing
@@ -95,7 +97,7 @@ import {
   type DeliveryPage,
   type DeliveryRecord,
 } from "../presentation/deliveries.ts";
-import { AppServerClient, isResyncRequired } from "./client.ts";
+import { AppServerClient, isResyncRequired, isUncertainOutcome } from "./client.ts";
 
 /** Native owner bound for one bounded page. */
 export const SESSION_PROJECTION_PAGE_LIMIT = 32;
@@ -128,7 +130,9 @@ export class AppServerSession {
   #epoch = 0;
   #released = false;
   #serverClosed = false;
-  #modelMutation: "in-flight" | "unresolved" | undefined;
+  #modelMutationInFlight = false;
+  /** Local evidence about unanswered requests, never authoritative Session state. */
+  readonly #unknownModelSelections: Set<string>;
   /** Serializes repairs so two resyncs cannot interleave their installs. */
   #repair: Promise<void> | undefined;
   #acquiring = false;
@@ -138,11 +142,13 @@ export class AppServerSession {
     target: AttachmentTarget,
     state: PresentationState,
     nodeId?: SessionNodeId,
+    unknownModelSelections = new Set<string>(),
   ) {
     this.nodeId = nodeId;
     this.#client = client;
     this.#target = target;
     this.#state = state;
+    this.#unknownModelSelections = unknownModelSelections;
     client.onClose(() => {
       this.#released = true;
       this.#epoch += 1;
@@ -160,6 +166,7 @@ export class AppServerSession {
     client: AppServerClient,
     sessionId: string,
     nodeId?: SessionNodeId,
+    unknownModelSelections = new Set<string>(),
   ): Promise<AppServerSession> {
     const attached = await client.call(
       "session/attach",
@@ -167,7 +174,7 @@ export class AppServerSession {
       "attached",
     );
     const session = new AppServerSession(client, attached.target,
-      replaceFromSnapshot(attached.snapshot, attached.cursor), nodeId);
+      replaceFromSnapshot(attached.snapshot, attached.cursor), nodeId, unknownModelSelections);
     if (attached.configuration) session.#installConfiguration(attached.configuration);
     return session;
   }
@@ -561,7 +568,7 @@ export class AppServerSession {
   }
 
   async modelGet(): Promise<SessionModelView> {
-    if (this.#modelMutation === "unresolved") await this.resync();
+    if (this.#acquiring) await this.resync();
     const epoch = this.#epoch;
     const model = await this.#client.call(
       "session/model",
@@ -574,18 +581,27 @@ export class AppServerSession {
     return model.model;
   }
 
+  /** A snapshot cannot establish the terminal outcome of an unanswered request. */
+  get modelSelectionOutcomeUnknown(): boolean {
+    return this.#unknownModelSelections.has(this.sessionId);
+  }
+
   /**
    * Replaces the authoritative session model configuration.
    *
    * A whole-state replacement, never a patch: callers send back the complete
    * configuration they read. The update affects future admissions only; an
    * already-admitted attempt keeps the model it froze.
+   *
+   * A new deliberate request is allowed after a lost response. Native revision
+   * checks fence older prepared work when the new selection changes authority;
+   * a NoOp acknowledgement cannot settle an earlier unanswered request.
    */
   async modelSet(config: SessionModelConfig): Promise<SessionModelView> {
     if (this.#released || this.#serverClosed) throw new Error("Session attachment is unavailable.");
-    if (this.#modelMutation) throw new Error("Reread native model state before another selection.");
+    if (this.#modelMutationInFlight) throw new Error("A model selection request is still in flight; wait for its response or connection recovery.");
     const epoch = this.#epoch;
-    this.#modelMutation = "in-flight";
+    this.#modelMutationInFlight = true;
     try {
       const model = await this.#client.call(
         "session/setModel",
@@ -595,16 +611,17 @@ export class AppServerSession {
       if (this.#released || this.#serverClosed || epoch !== this.#epoch) {
         throw new Error("Model acknowledgement belongs to a retired observation; reread native authority. Not replayed.");
       }
-      this.#modelMutation = undefined;
       // A response confirms this operation, but is not an ordered observation.
       // Only native events and snapshots update the Session or Attempt view.
       return model.model;
     } catch (error) {
-      this.#modelMutation = "unresolved";
-      // Conflict and uncertain responses both require a fresh observation.
-      // A lost transport leaves the guard in place until reconnect/reattach.
+      if (isUncertainOutcome(error)) this.#unknownModelSelections.add(this.sessionId);
+      // Readback repairs the projection, not the outcome of an unanswered
+      // request. Native work can survive its waiter and commit after a snapshot.
       if (!this.#released && !this.#serverClosed) await this.resync().catch(() => {});
       throw error;
+    } finally {
+      this.#modelMutationInFlight = false;
     }
   }
 
@@ -686,7 +703,6 @@ export class AppServerSession {
         this.#acquiring = false;
         try {
           await this.#client.call("session/subscribe", { target, after_cursor: snapshot.cursor }, "subscribed");
-          if (this.#modelMutation === "unresolved") this.#modelMutation = undefined;
           return;
         } catch (error) {
           if (!isResyncRequired(error) || attempt === 2) throw error;

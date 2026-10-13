@@ -1185,6 +1185,20 @@ impl DrainCompletion {
 pub(crate) struct CoordinatorProbe {
     /// Parks the next admission when armed.
     pub(crate) admission_gate: Option<Arc<Gate>>,
+    /// Signals only after admission proves the coordinator lock is held by
+    /// a competitor. Consumed once, immediately before normal lock acquisition.
+    pub(crate) admission_contended: Option<Arc<tokio::sync::Notify>>,
+    /// Parks after admission freezes and publishes its invocation while the
+    /// coordinator lock is still held.
+    pub(crate) admission_committed_gate: Option<Arc<Gate>>,
+    /// Parks an admitted Attempt after releasing the coordinator, before its
+    /// execution task can publish further observations.
+    pub(crate) attempt_execution_gate: Option<Arc<Gate>>,
+    /// Signals only after model selection proves the coordinator lock is held
+    /// by a competitor. Consumed once before normal lock acquisition.
+    pub(crate) selection_contended: Option<Arc<tokio::sync::Notify>>,
+    /// Parks model selection after taking the coordinator lock and before commit.
+    pub(crate) selection_locked_gate: Option<Arc<Gate>>,
     /// Parks the next settlement handoff when armed.
     pub(crate) settlement_gate: Option<Arc<Gate>>,
     /// Parks after durable terminal publication, before restoring conversation state.
@@ -1341,6 +1355,7 @@ impl Drop for GateRelease {
 /// The shared state of one conversation runtime.
 pub(crate) struct RuntimeInner {
     configuration_owner: Arc<()>,
+    model_selection_owner: ModelSelectionOwner,
     conversation_id: ConversationId,
     agent_id: AgentId,
     context: ConversationContextConfig,
@@ -2927,6 +2942,20 @@ impl RuntimeInner {
         if let Some(gate) = admission_gate {
             gate.enter();
         }
+        #[cfg(test)]
+        if let Some(contended) = self
+            .probe
+            .lock()
+            .expect("coordinator probe lock poisoned")
+            .as_mut()
+            .and_then(|probe| probe.admission_contended.take())
+        {
+            assert!(matches!(
+                self.state.try_lock(),
+                Err(std::sync::TryLockError::WouldBlock)
+            ));
+            contended.notify_one();
+        }
         let mut state = self.lock_state();
         if !self.lifecycle.is_running()
             || state.current_attempt.is_some()
@@ -3314,9 +3343,8 @@ impl RuntimeInner {
                 });
         let approval_mode = state.effective_approval_mode;
         let resources = state.resources.clone();
-        let lease = self
-            .capability
-            .acquire_attempt_lease_for(resources.capability().clone());
+        let capability = resources.capability().clone();
+        let lease = self.capability.acquire_attempt_lease_for(capability);
         self.observe(ConversationObservation::AttemptAdmitted {
             read_image_active: resources
                 .capability()
@@ -3330,6 +3358,8 @@ impl RuntimeInner {
             resource_revision: resources.revision(),
             approval_mode,
         });
+        #[cfg(test)]
+        self.enter_probe_gate(|probe| probe.admission_committed_gate.clone());
         // The attempt **task** is a runtime-owned operation in its own
         // right, distinct from the current-attempt slot it settles into
         // (Issue #12, M9c). `finish_attempt` clears the slot and then still
@@ -3343,6 +3373,8 @@ impl RuntimeInner {
             .try_enter_running()
             .expect("the coordinator lock owns the attempt admission boundary");
         drop(state);
+        #[cfg(test)]
+        self.enter_probe_gate(|probe| probe.attempt_execution_gate.clone());
         let inner = Arc::clone(self);
         self.executor.spawn(async move {
             let result = inner
@@ -3364,6 +3396,20 @@ impl RuntimeInner {
             inner.finish_attempt(attempt_id, result);
             drop(attempt_admission);
         });
+    }
+
+    #[cfg(test)]
+    fn enter_probe_gate(&self, select: impl FnOnce(&CoordinatorProbe) -> Option<Arc<Gate>>) {
+        let gate = self
+            .probe
+            .lock()
+            .expect("coordinator probe lock poisoned")
+            .as_ref()
+            .and_then(select);
+        // Never retain the probe lock while parking a coordinator participant.
+        if let Some(gate) = gate {
+            gate.enter();
+        }
     }
 }
 
@@ -3471,6 +3517,14 @@ pub struct ConversationRuntime {
     pub(crate) inner: Arc<RuntimeInner>,
 }
 
+/// Chosen at composition, before either runtime or client authority is exposed.
+/// A durable Session can only change selection through its native Session owner.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ModelSelectionOwner {
+    Conversation,
+    Session,
+}
+
 impl core::fmt::Debug for ConversationRuntime {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ConversationRuntime")
@@ -3494,6 +3548,11 @@ impl ConversationRuntime {
     /// composition may now optionally bind a `RuntimeClientHost` over it, and
     /// must then call [`ConversationRuntime::activate`] before semantic
     /// execution can begin. A headless composition simply activates directly.
+    ///
+    /// This low-level constructor has no durable Session selection owner. Its
+    /// model selection can be replaced in memory through [`Self::model_set`].
+    /// Local Session composition uses a separate immutable owner boundary and
+    /// rejects that direct control, including through Runtime Client handles.
     ///
     /// # One conversation authority
     ///
@@ -3534,7 +3593,15 @@ impl ConversationRuntime {
     /// runtime's background plane already holds prepared or committed
     /// background work.
     pub fn new(config: RuntimeConversationConfig) -> Result<Self, ConversationRuntimeError> {
-        Self::new_with_monotonic_clock(config, None)
+        Self::new_with_monotonic_clock(config, None, ModelSelectionOwner::Conversation)
+    }
+
+    /// Durable local roots delegate every selection mutation to their Session
+    /// owner. This ownership is immutable and shared by all runtime/client clones.
+    pub(crate) fn new_session_owned(
+        config: RuntimeConversationConfig,
+    ) -> Result<Self, ConversationRuntimeError> {
+        Self::new_with_monotonic_clock(config, None, ModelSelectionOwner::Session)
     }
 
     /// Creates a runtime with one explicitly supplied monotonic clock for a
@@ -3547,13 +3614,18 @@ impl ConversationRuntime {
         config: RuntimeConversationConfig,
         monotonic_clock: Arc<dyn MonotonicClock>,
     ) -> Result<Self, ConversationRuntimeError> {
-        Self::new_with_monotonic_clock(config, Some(monotonic_clock))
+        Self::new_with_monotonic_clock(
+            config,
+            Some(monotonic_clock),
+            ModelSelectionOwner::Conversation,
+        )
     }
 
     #[allow(clippy::too_many_lines)]
     fn new_with_monotonic_clock(
         config: RuntimeConversationConfig,
         injected_monotonic_clock: Option<Arc<dyn MonotonicClock>>,
+        model_selection_owner: ModelSelectionOwner,
     ) -> Result<Self, ConversationRuntimeError> {
         // The one conversation authority at this boundary: every identity
         // this runtime publishes or derives comes from the tool runtime it
@@ -3840,6 +3912,7 @@ impl ConversationRuntime {
         let durability_gate = Arc::new(DurabilityGate::new());
         let inner = Arc::new(RuntimeInner {
             configuration_owner: Arc::new(()),
+            model_selection_owner,
             conversation_id,
             agent_id: config.agent_id,
             context: config.context,
@@ -4034,6 +4107,32 @@ impl ConversationRuntime {
             .expect("probe lock")
             .get_or_insert_with(CoordinatorProbe::default)
             .admission_gate = Some(gate);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_attempt_execution_gate(&self, gate: Arc<Gate>) {
+        self.inner
+            .probe
+            .lock()
+            .expect("probe lock")
+            .get_or_insert_with(CoordinatorProbe::default)
+            .attempt_execution_gate = Some(gate);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_model_selection_race_probe(
+        &self,
+        admission_contended: Option<Arc<tokio::sync::Notify>>,
+        admission_committed: Option<Arc<Gate>>,
+        selection_contended: Option<Arc<tokio::sync::Notify>>,
+        selection_locked: Option<Arc<Gate>>,
+    ) {
+        let mut probe = self.inner.probe.lock().expect("probe lock");
+        let probe = probe.get_or_insert_with(CoordinatorProbe::default);
+        probe.admission_contended = admission_contended;
+        probe.admission_committed_gate = admission_committed;
+        probe.selection_contended = selection_contended;
+        probe.selection_locked_gate = selection_locked;
     }
 
     #[cfg(test)]
@@ -5617,7 +5716,11 @@ impl ConversationRuntime {
         self.inner.lock_state().effective_approval_mode
     }
 
-    /// Replaces the authoritative session model configuration.
+    /// Replaces a standalone conversation's in-memory model configuration.
+    ///
+    /// Durable local Sessions must select through their native Session owner,
+    /// which commits catalog settings, retained binding, and runtime authority
+    /// together. Every runtime clone retains that construction-time ownership.
     ///
     /// # Lifecycle
     ///
@@ -5644,7 +5747,8 @@ impl ConversationRuntime {
     ///
     /// # Errors
     ///
-    /// Returns [`ModelUpdateError::Inactive`] before activation,
+    /// Returns [`ModelUpdateError::SessionOwned`] for a durable Session runtime,
+    /// [`ModelUpdateError::Inactive`] before activation,
     /// [`ModelUpdateError::DurabilityFailed`] while the runtime's durable
     /// authority is in the explicit failed state, and
     /// [`ModelUpdateError::InvalidConfiguration`] when the configuration
@@ -5654,8 +5758,12 @@ impl ConversationRuntime {
         &self,
         config: SessionModelConfig,
     ) -> Result<SessionModelView, ModelUpdateError> {
+        if self.inner.model_selection_owner == ModelSelectionOwner::Session {
+            return Err(ModelUpdateError::SessionOwned);
+        }
         let candidate = self.prepare_model_selection(config)?;
-        self.commit_model_selection(candidate, |_| Ok(()))
+        self.commit_model_selection(candidate, |_| Ok(false))
+            .map(|commit| commit.view)
     }
 
     /// Resolve against the exact published authority, off the admission lock.
@@ -5718,12 +5826,40 @@ impl ConversationRuntime {
     /// settings fences and persists/retains in `commit` before this infallible
     /// publication. An already-admitted Attempt owns its old snapshot and leases.
     /// No idle or physical-resource replacement is involved.
+    /// `commit` returns whether durable authority changed; the outcome reports
+    /// either that change or a changed runtime selection, never mere success.
     pub(crate) fn commit_model_selection(
         &self,
         candidate: PreparedModelSelection,
-        commit: impl FnOnce(u64) -> Result<(), ModelUpdateError>,
-    ) -> Result<SessionModelView, ModelUpdateError> {
+        commit: impl FnOnce(u64) -> Result<bool, ModelUpdateError>,
+    ) -> Result<ModelSelectionCommit, ModelUpdateError> {
+        #[cfg(test)]
+        let (contended, locked_gate) = {
+            let mut probe = self
+                .inner
+                .probe
+                .lock()
+                .expect("coordinator probe lock poisoned");
+            probe.as_mut().map_or((None, None), |probe| {
+                (
+                    probe.selection_contended.take(),
+                    probe.selection_locked_gate.clone(),
+                )
+            })
+        };
+        #[cfg(test)]
+        if let Some(contended) = contended {
+            assert!(matches!(
+                self.inner.state.try_lock(),
+                Err(std::sync::TryLockError::WouldBlock)
+            ));
+            contended.notify_one();
+        }
         let mut state = self.inner.lock_state();
+        #[cfg(test)]
+        if let Some(gate) = locked_gate {
+            gate.enter();
+        }
         self.check_model_selection_lifecycle()?;
         if state.binding_revision != candidate.baseline
             || !Arc::ptr_eq(&candidate.owner, &self.inner.configuration_owner)
@@ -5742,9 +5878,12 @@ impl ConversationRuntime {
         };
         // Even an unchanged live invocation must visit its durable owner:
         // a loaded default may not yet be an explicit persisted selection.
-        commit(revision)?;
+        let persisted = commit(revision)?;
         if unchanged {
-            return Ok(state.model.view());
+            return Ok(ModelSelectionCommit {
+                view: state.model.view(),
+                changed: persisted,
+            });
         }
         let reopens = state.model.unavailable().is_some();
         state.model = candidate.model;
@@ -5758,7 +5897,10 @@ impl ConversationRuntime {
         if reopens {
             self.inner.mailbox.wake().notify_one();
         }
-        Ok(view)
+        Ok(ModelSelectionCommit {
+            view,
+            changed: true,
+        })
     }
 
     pub(crate) fn model_is_frozen(&self) -> bool {
@@ -6589,9 +6731,19 @@ pub(crate) struct PreparedModelSelection {
     model: SessionModelState,
 }
 
+/// Whether a completed selection changed Session authority. A successful
+/// validation of an already explicit selection is not an application change.
+pub(crate) struct ModelSelectionCommit {
+    pub(crate) view: SessionModelView,
+    pub(crate) changed: bool,
+}
+
 /// A session model update failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModelUpdateError {
+    /// A durable Session owns this selection. Runtime-only mutation cannot
+    /// update its catalog and retained binding, so it is not a supported control.
+    SessionOwned,
     /// The published binding or resource snapshot changed during preparation.
     Conflict,
     /// The runtime has not been activated: a live semantic mutation of an
@@ -9252,6 +9404,7 @@ mod tests {
             parent_guidance_seal_gate: None,
             background_failure_gate: None,
             subagent_failure_published_gate: None,
+            ..CoordinatorProbe::default()
         }))
         .await;
         gate.arm();
@@ -10709,6 +10862,7 @@ mod tests {
             parent_guidance_seal_gate: None,
             background_failure_gate: None,
             subagent_failure_published_gate: None,
+            ..CoordinatorProbe::default()
         }))
         .await;
         gate.arm();
@@ -10797,6 +10951,7 @@ mod tests {
             parent_guidance_seal_gate: None,
             background_failure_gate: None,
             subagent_failure_published_gate: None,
+            ..CoordinatorProbe::default()
         }))
         .await;
         // Freeze admission so the worker cannot adopt the pre-shutdown item.

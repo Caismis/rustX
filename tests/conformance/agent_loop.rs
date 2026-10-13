@@ -11,7 +11,7 @@
 //! this test driver
 //!   |  fixed user/runtime actions
 //!   v
-//! LocalConversationRuntime  (real composition, no injected adapter)
+//! SessionRuntimeManager + AppServerConnection  (real composition)
 //!   |
 //!   v
 //! real provider adapter -> real HTTP + SSE -> fake-provider (Python)
@@ -31,22 +31,31 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::common::provider_emulator::ProviderEmulator;
-use rustx::durable::ConversationStore;
-use rustx::local_runtime::composition::{
-    HeadlessConversationRuntime, LocalConversationRuntime, LocalRuntimeDependencies,
+use rustx::app_server::connection::AppServerConnection;
+use rustx::app_server::host::AppServerHost;
+use rustx::app_server::protocol::{
+    APP_SERVER_PROTOCOL_VERSION, AttachmentTarget, ClientIdentity, InitializeParams,
+    JsonRpcVersion, Method, MethodResult, NotificationMethod, PresentationCapabilities, Request,
+    RequestId, Response, RpcError,
+};
+use rustx::credentials::CredentialSnapshot;
+use rustx::durable::{ConversationStore, SqliteConversationStore};
+use rustx::local_runtime::HostEnvironment;
+use rustx::local_runtime::app_server_policy::AppServerPolicy;
+use rustx::local_runtime::composition::{HeadlessConversationRuntime, LocalRuntimeDependencies};
+use rustx::local_runtime::session::SessionPersistentState;
+use rustx::local_runtime::session_controller::{SessionAccess, SessionController};
+use rustx::local_runtime::session_runtime_manager::{
+    ManagedRuntimeClient, RuntimeManagerError, RuntimeResidencyPolicy, SessionRuntimeManager,
 };
 use rustx::message::content::TextBlock;
 use rustx::message::types::{MessageBlock, UserContentBlock, UserSource};
 use rustx::model::catalog::{MapCredentialEnvironment, ModelRef};
 use rustx::model::session::{SessionModelConfig, SummaryModelPolicy};
 use rustx::runtime::recovery::{AttemptRecoveryClass, ResumeDisposition};
-use rustx::runtime_client::attachment::RuntimeAttachment;
-use rustx::runtime_client::host::{EventDelivery, EventSubscription, RuntimeClientHost};
 use rustx::runtime_client::snapshot::RuntimeClientAttemptPhase;
-use rustx::runtime_client::types::RuntimeClientResult;
 use rustx::runtime_client::{
-    RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientAttemptFailure, RuntimeClientEvent,
-    RuntimeClientOutcome,
+    RuntimeClientAttemptFailure, RuntimeClientEvent, RuntimeClientOutcome,
 };
 
 // ---------------------------------------------------------------------------
@@ -116,12 +125,14 @@ struct Driver {
     /// The temporary root, kept alive for the fixture lifetime.
     #[allow(dead_code)]
     root: tempfile::TempDir,
-    runtime: LocalConversationRuntime,
-    /// The one Runtime Client attachment, kept alive for the subscription's
-    /// lifetime.
-    #[allow(dead_code)]
-    _attachment: RuntimeAttachment,
-    events: EventSubscription,
+    manager: SessionRuntimeManager,
+    client: ManagedRuntimeClient,
+    connection: Arc<AppServerConnection>,
+    target: AttachmentTarget,
+    access: SessionAccess,
+    store: Arc<SqliteConversationStore>,
+    events: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<RuntimeClientEvent>>,
+    relay: tokio::task::JoinHandle<()>,
 }
 
 /// How a driver's catalog and session are shaped.
@@ -215,37 +226,190 @@ impl Driver {
             child_program: Some(PathBuf::from(env!("CARGO_BIN_EXE_rustx"))),
             ..LocalRuntimeDependencies::default()
         };
-        let runtime = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies)
+        let home = root.path().join(".test-host");
+        std::fs::create_dir_all(&home).expect("isolated host");
+        let environment =
+            HostEnvironment::from_paths(paths.workspace.clone(), home).expect("host environment");
+        let (configuration, input) = paths
+            .request()
+            .session_input(&environment)
+            .expect("fixture Session input");
+        let sessions = SessionController::open(&paths.runtime_root).expect("Session controller");
+        let session = sessions
+            .create_session(SessionPersistentState::from_input(&input))
             .await
-            .expect("the real runtime composes against the emulator catalog");
-        let (attachment, result) = runtime
-            .host()
-            .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
-            .expect("attach");
-        let RuntimeClientResult::Initialized { cursor, .. } = result else {
-            panic!("initialize returns the snapshot");
+            .expect("durable Session")
+            .session;
+        let manager = SessionRuntimeManager::new(
+            sessions.clone(),
+            configuration,
+            CredentialSnapshot::new([(
+                CREDENTIAL_VARIABLE.to_owned(),
+                CREDENTIAL_VALUE.to_owned(),
+            )]),
+            dependencies,
+            RuntimeResidencyPolicy {
+                max_resident_runtimes: 8,
+                idle_grace_ms: 300_000,
+            },
+        )
+        .expect("Session runtime owner");
+        let connection = Arc::new(AppServerConnection::new(AppServerHost::new(
+            manager.clone(),
+            AppServerPolicy::default(),
+        )));
+        rpc(
+            &connection,
+            Method::Initialize(InitializeParams {
+                protocol_version: APP_SERVER_PROTOCOL_VERSION,
+                client: ClientIdentity {
+                    name: "conformance".into(),
+                    version: "1".into(),
+                },
+                presentation: PresentationCapabilities::default(),
+            }),
+        )
+        .await
+        .expect("initialize App Server");
+        let attached = rpc(
+            &connection,
+            Method::SessionAttach {
+                session_id: session.id.clone(),
+                node_id: None,
+            },
+        )
+        .await
+        .expect("attach durable Session");
+        let MethodResult::Attached { target, cursor, .. } = attached else {
+            panic!("attach returns the snapshot");
         };
-        let (events, _) = runtime
-            .host()
-            .subscribe_events(attachment.attachment_id(), cursor)
-            .expect("subscribe");
+        rpc(
+            &connection,
+            Method::SessionSubscribe {
+                target: target.clone(),
+                after_cursor: cursor,
+            },
+        )
+        .await
+        .expect("subscribe");
+        let runtime = manager
+            .load(&session.id, None)
+            .await
+            .expect("resident runtime");
+        let client = runtime.client();
+        let access = sessions
+            .acquire_session(&session.id, None)
+            .await
+            .expect("read access");
+        let store = Arc::new(
+            SqliteConversationStore::open_existing(
+                access.node.conversation_id.clone(),
+                &access.database_path,
+            )
+            .expect("durable read handle"),
+        );
+        let (send, events) = tokio::sync::mpsc::unbounded_channel();
+        let notifications = connection.clone();
+        let relay = tokio::spawn(async move {
+            loop {
+                match notifications.next_notification().await.notification {
+                    NotificationMethod::Event { event, .. } => {
+                        if send.send(*event).is_err() {
+                            break;
+                        }
+                    }
+                    NotificationMethod::Closed { .. }
+                    | NotificationMethod::ResyncRequired { .. } => break,
+                    _ => {}
+                }
+            }
+        });
         Self {
             root,
-            runtime,
-            // The attachment is held for the driver's lifetime: dropping it
-            // detaches, which releases the subscription mid-test.
-            _attachment: attachment,
-            events,
+            manager,
+            client,
+            connection,
+            target,
+            access,
+            store,
+            events: tokio::sync::Mutex::new(events),
+            relay,
         }
     }
 
-    fn host(&self) -> &RuntimeClientHost {
-        self.runtime.host()
+    fn snapshot(
+        &self,
+    ) -> Result<
+        (
+            rustx::runtime_client::snapshot::RuntimeClientSnapshot,
+            rustx::runtime_client::RuntimeClientCursor,
+        ),
+        RuntimeManagerError,
+    > {
+        self.client.snapshot()
+    }
+
+    fn request_history(&self) -> rustx::runtime::request_history::RequestHistory {
+        rustx::runtime::request_history::RequestHistory::new(self.store.clone())
+    }
+
+    fn reconstruct_request(
+        &self,
+        identity: &rustx::model::RequestIdentity,
+    ) -> Result<rustx::model::ModelRequest, rustx::runtime::request_history::RequestHistoryError>
+    {
+        self.request_history().reconstruct(identity)
+    }
+
+    fn artifacts(&self) -> rustx::tools::artifacts::ArtifactStore {
+        rustx::tools::artifacts::ArtifactStore::new(
+            self.access.node.conversation_id.clone(),
+            self.access.database_path.parent().unwrap(),
+        )
+        .expect("artifact read handle")
+    }
+
+    async fn model_set(&self, config: SessionModelConfig) -> Result<MethodResult, RpcError> {
+        rpc(
+            &self.connection,
+            Method::ModelSet {
+                target: self.target.clone(),
+                config: Box::new(config),
+            },
+        )
+        .await
+    }
+
+    async fn cancel_current_attempt(&self) -> Result<MethodResult, RpcError> {
+        rpc(
+            &self.connection,
+            Method::TurnCancel {
+                target: self.target.clone(),
+            },
+        )
+        .await
+    }
+
+    async fn compact_context(&self) -> Result<MethodResult, RpcError> {
+        rpc(
+            &self.connection,
+            Method::CompactContext {
+                target: self.target.clone(),
+                request_id: "conformance-compact".to_owned().try_into().unwrap(),
+            },
+        )
+        .await
+    }
+
+    async fn shutdown(&self) -> Result<(), RuntimeManagerError> {
+        self.connection.close();
+        self.relay.abort();
+        self.manager.unload(&self.target.conversation_id).await
     }
 
     /// Submits one fixed user turn.
     fn submit(&self, text: &str) {
-        self.host()
+        self.client
             .submit_inbound(vec![UserContentBlock::Text(TextBlock {
                 text: text.to_owned(),
             })])
@@ -260,22 +424,17 @@ impl Driver {
     /// be the last event of the attempt.
     async fn settle(&self) -> (Vec<RuntimeClientEvent>, RuntimeClientOutcome) {
         let mut observed = Vec::new();
+        let mut events = self.events.lock().await;
         loop {
-            match tokio::time::timeout(std::time::Duration::from_secs(30), self.events.next()).await
-            {
-                Ok(EventDelivery::Event(published)) => {
-                    let event = published.event;
+            match tokio::time::timeout(std::time::Duration::from_secs(30), events.recv()).await {
+                Ok(Some(event)) => {
                     if let RuntimeClientEvent::AttemptSettled { outcome, .. } = &event {
                         let outcome = outcome.clone();
                         observed.push(event);
                         assert!(
                             !matches!(
-                                self.events.try_next(),
-                                EventDelivery::Event(published)
-                                    if matches!(
-                                        published.event,
-                                        RuntimeClientEvent::AttemptSettled { .. }
-                                    )
+                                events.try_recv(),
+                                Ok(RuntimeClientEvent::AttemptSettled { .. })
                             ),
                             "an attempt settles exactly once"
                         );
@@ -294,7 +453,7 @@ impl Driver {
 
     /// The committed Assistant text of the conversation, concatenated.
     fn committed_assistant_text(&self) -> String {
-        let (snapshot, _) = self.host().snapshot().expect("snapshot");
+        let (snapshot, _) = self.snapshot().expect("snapshot");
         snapshot
             .messages
             .iter()
@@ -310,6 +469,27 @@ impl Driver {
                 _ => None,
             })
             .collect()
+    }
+}
+
+impl Drop for Driver {
+    fn drop(&mut self) {
+        self.connection.close();
+        self.relay.abort();
+    }
+}
+
+async fn rpc(connection: &AppServerConnection, call: Method) -> Result<MethodResult, RpcError> {
+    match connection
+        .handle_request(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(1),
+            call,
+        })
+        .await
+    {
+        Response::Success(success) => Ok(success.result),
+        Response::Failure(failure) => Err(failure.error),
     }
 }
 
@@ -592,7 +772,7 @@ async fn a_real_skill_reaches_the_provider_and_is_read_by_the_real_tool() {
     setup.skill_paths = vec![package];
     let driver = Driver::start_in(root, &emulator, &setup).await;
 
-    let (snapshot, _) = driver.host().snapshot().expect("snapshot");
+    let (snapshot, _) = driver.snapshot().expect("snapshot");
     assert_eq!(
         snapshot
             .capabilities
@@ -741,8 +921,6 @@ async fn cancellation_at_a_provider_gate_settles_once_and_closes_the_stream() {
     // exactly one started Request Snapshot, bound to exactly one
     // `ModelRequestStarted` event.
     let snapshots = driver
-        .runtime
-        .runtime()
         .request_history()
         .page(None, 32)
         .expect("request snapshot page")
@@ -752,16 +930,9 @@ async fn cancellation_at_a_provider_gate_settles_once_and_closes_the_stream() {
         1,
         "exactly one started Request Snapshot exists before cancellation"
     );
-    let store = rustx::durable::SqliteConversationStore::open(
-        driver.runtime.runtime().conversation_id().clone(),
-        &driver
-            .runtime
-            .tool_runtime()
-            .tool_output()
-            .root()
-            .parent()
-            .unwrap()
-            .join("conversation.sqlite"),
+    let store = rustx::durable::SqliteConversationStore::open_existing(
+        driver.access.node.conversation_id.clone(),
+        &driver.access.database_path,
     )
     .expect("open the durable store for event assertions");
     let started_facts = store
@@ -782,12 +953,12 @@ async fn cancellation_at_a_provider_gate_settles_once_and_closes_the_stream() {
     );
 
     let accepted = driver
-        .host()
         .cancel_current_attempt()
+        .await
         .expect("the in-flight attempt is cancellable");
     assert!(matches!(
         accepted,
-        RuntimeClientResult::AttemptCancellationAccepted { .. }
+        MethodResult::CancellationAccepted { .. }
     ));
 
     // The runtime really dropped the provider connection; this is observed,
@@ -887,7 +1058,7 @@ async fn compaction_invokes_the_real_provider_on_both_summary_policies() {
             "{scenario}: the runtime committed the canonical compaction: {events:?}"
         );
 
-        let (snapshot, _) = driver.host().snapshot().expect("snapshot");
+        let (snapshot, _) = driver.snapshot().expect("snapshot");
         assert_eq!(
             snapshot.context.compaction_count, 1,
             "{scenario}: exactly one compaction"
@@ -1042,7 +1213,7 @@ async fn repeated_compaction_invokes_the_real_provider_on_both_summary_policies(
             "{scenario}: two compaction generations in order"
         );
 
-        let (snapshot, _) = driver.host().snapshot().expect("snapshot");
+        let (snapshot, _) = driver.snapshot().expect("snapshot");
         assert_eq!(
             snapshot.context.compaction_count, 2,
             "{scenario}: exactly two compactions"
@@ -1125,7 +1296,7 @@ async fn repeated_compaction_invokes_the_real_provider_on_both_summary_policies(
         // The frozen request snapshots reconstruct the three primary
         // requests through the real provider path, after both compactions.
         await_history_len(&driver, 3).await;
-        let history = driver.host().request_history();
+        let history = driver.request_history();
         let snapshots = crate::common::request_snapshots(&history);
         assert_eq!(
             snapshots.len(),
@@ -1136,7 +1307,6 @@ async fn repeated_compaction_invokes_the_real_provider_on_both_summary_policies(
             .iter()
             .map(|snapshot| {
                 let request = driver
-                    .host()
                     .reconstruct_request(&snapshot.identity)
                     .expect("settled historical request reconstructs");
                 serde_json::to_string(&request.messages).expect("serialize reconstructed messages")
@@ -1169,8 +1339,7 @@ async fn repeated_compaction_invokes_the_real_provider_on_both_summary_policies(
 async fn await_history_len(driver: &Driver, expected: usize) {
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
-            if crate::common::request_snapshots(&driver.host().request_history()).len() == expected
-            {
+            if crate::common::request_snapshots(&driver.request_history()).len() == expected {
                 return;
             }
             tokio::task::yield_now().await;
@@ -1210,15 +1379,15 @@ async fn a_running_attempt_keeps_its_frozen_model_while_the_session_moves_on() {
         )
     };
     driver
-        .host()
         .model_set(next_model)
+        .await
         .expect("live selection commits");
 
     emulator.release_gate("session-model-updated").await;
     let (_, outcome) = driver.settle().await;
     assert!(matches!(outcome, RuntimeClientOutcome::Completed { .. }));
 
-    let (snapshot, _) = driver.host().snapshot().expect("snapshot");
+    let (snapshot, _) = driver.snapshot().expect("snapshot");
     let attempt = snapshot.attempt.as_ref().expect("the settled attempt");
     assert!(matches!(
         attempt.phase,
@@ -1518,7 +1687,7 @@ async fn image_tool_round_trip_and_text_model_switch() {
     let driver = Driver::start_in(root, &emulator, &setup).await;
     driver.submit("read the image");
     emulator.await_gate("image-admitted").await;
-    let (snapshot, _) = driver.host().snapshot().unwrap();
+    let (snapshot, _) = driver.snapshot().unwrap();
     assert_eq!(
         snapshot
             .attempt
@@ -1540,7 +1709,7 @@ async fn image_tool_round_trip_and_text_model_switch() {
     let text_model =
         SessionModelConfig::of(ModelRef::parse(&format!("emulator/{CHAT_MODEL}")).unwrap());
     assert!(
-        driver.host().model_set(text_model.clone()).is_ok(),
+        driver.model_set(text_model.clone()).await.is_ok(),
         "Session selection changes while admitted image capabilities remain frozen"
     );
     emulator.release_gate("image-admitted").await;
@@ -1555,7 +1724,7 @@ async fn image_tool_round_trip_and_text_model_switch() {
     let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
     assert!(body_text(&requests[1]).contains(&data));
     assert!(body_text(&requests[1]).contains("image/png"));
-    let canonical_image = driver.host().snapshot().unwrap().0.messages.into_iter()
+    let canonical_image = driver.snapshot().unwrap().0.messages.into_iter()
         .find(|message| matches!(message, MessageBlock::Tool(tool) if tool.tool_call_id.as_str() == "call-image"))
         .expect("native image result committed canonically");
     assert!(
@@ -1565,7 +1734,7 @@ async fn image_tool_round_trip_and_text_model_switch() {
     );
     driver.submit("continue as text");
     emulator.await_gate("text-admitted").await;
-    let (snapshot, _) = driver.host().snapshot().unwrap();
+    let (snapshot, _) = driver.snapshot().unwrap();
     assert_eq!(
         snapshot
             .attempt
@@ -1588,7 +1757,7 @@ async fn image_tool_round_trip_and_text_model_switch() {
         ModelRef::parse(&format!("emulator-anthropic/{ANTHROPIC_MODEL}")).unwrap(),
     );
     assert!(
-        driver.host().model_set(image_model.clone()).is_ok(),
+        driver.model_set(image_model.clone()).await.is_ok(),
         "Session selection changes while the text Attempt stays frozen"
     );
     emulator.release_gate("text-admitted").await;
@@ -1620,7 +1789,6 @@ async fn image_tool_round_trip_and_text_model_switch() {
     );
     assert!(
         driver
-            .host()
             .snapshot()
             .unwrap()
             .0
@@ -1635,7 +1803,7 @@ async fn image_tool_round_trip_and_text_model_switch() {
             .iter()
             .any(|tool| tool["function"]["name"] == "read_image")
     );
-    driver.host().model_set(image_model).unwrap();
+    driver.model_set(image_model).await.unwrap();
     driver.submit("inspect the retained image");
     let (_, outcome) = driver.settle().await;
     assert!(
@@ -1650,7 +1818,7 @@ async fn image_tool_round_trip_and_text_model_switch() {
     );
     // The real child process owns a different conversation and a text-only
     // invocation. Parent image history must not leak across that boundary.
-    driver.host().model_set(text_model).unwrap();
+    driver.model_set(text_model).await.unwrap();
     driver.submit("delegate the retained image context as text");
     let (_, outcome) = driver.settle().await;
     assert!(
@@ -1677,7 +1845,6 @@ async fn image_tool_round_trip_and_text_model_switch() {
     assert!(!body_text(&requests[5]).contains("read_image"));
     assert!(
         driver
-            .host()
             .snapshot()
             .unwrap()
             .0
@@ -1687,7 +1854,7 @@ async fn image_tool_round_trip_and_text_model_switch() {
 
     // Manual compaction invokes the production summary request builder and
     // adapter over the image-bearing canonical span, not a helper-only mock.
-    driver.host().compact_context(None).await.unwrap();
+    driver.compact_context().await.unwrap();
     let requests = emulator.requests().await;
     assert_eq!(requests.len(), 8);
     let summary = body_text(&requests[7]);
@@ -1699,7 +1866,6 @@ async fn image_tool_round_trip_and_text_model_switch() {
     assert!(!summary.contains("image_url"));
     assert!(
         driver
-            .host()
             .snapshot()
             .unwrap()
             .0
@@ -1709,25 +1875,16 @@ async fn image_tool_round_trip_and_text_model_switch() {
     );
     assert_eq!(
         driver
-            .runtime
-            .tool_runtime()
             .artifacts()
             .read_bounded(&rustx::runtime::identity::ArtifactId::new("artifact_1"))
             .unwrap(),
         bytes
     );
     await_history_len(&driver, 6).await;
-    driver.host().shutdown().await.unwrap();
+    driver.shutdown().await.unwrap();
     let reopened = rustx::durable::SqliteConversationStore::open_existing(
-        driver.runtime.runtime().conversation_id().clone(),
-        &driver
-            .runtime
-            .tool_runtime()
-            .tool_output()
-            .root()
-            .parent()
-            .unwrap()
-            .join("conversation.sqlite"),
+        driver.access.node.conversation_id.clone(),
+        &driver.access.database_path,
     )
     .unwrap();
     let history = rustx::runtime::request_history::RequestHistory::new(Arc::new(reopened));
@@ -1811,8 +1968,8 @@ async fn image_budget_continuation(scenario: &str, image_model: &str, text_model
     if let Some(text_model) = text_model {
         assert!(
             driver
-                .host()
                 .model_set(SessionModelConfig::of(ModelRef::parse(text_model).unwrap()))
+                .await
                 .is_ok(),
             "live selection commits while the active Attempt catalog remains frozen"
         );
@@ -1878,7 +2035,7 @@ async fn image_budget_continuation(scenario: &str, image_model: &str, text_model
         }
     }
 
-    let snapshot = driver.host().snapshot().unwrap().0;
+    let snapshot = driver.snapshot().unwrap().0;
     let mut ids = std::collections::BTreeSet::new();
     for message in &snapshot.messages {
         if let rustx::message::types::MessageBlock::Tool(tool) = message {
@@ -1899,8 +2056,8 @@ async fn image_budget_continuation(scenario: &str, image_model: &str, text_model
     std::fs::remove_file(workspace.join("sample.png")).unwrap();
     if let Some(text_model) = text_model {
         driver
-            .host()
             .model_set(SessionModelConfig::of(ModelRef::parse(text_model).unwrap()))
+            .await
             .unwrap();
         driver.submit("continue as text");
         let outcome = driver.settle().await.1;
@@ -1909,10 +2066,10 @@ async fn image_budget_continuation(scenario: &str, image_model: &str, text_model
             "{outcome:?}"
         );
         driver
-            .host()
             .model_set(SessionModelConfig::of(
                 ModelRef::parse(image_model).unwrap(),
             ))
+            .await
             .unwrap();
         driver.submit("restore images");
         let outcome = driver.settle().await.1;
@@ -1925,23 +2082,16 @@ async fn image_budget_continuation(scenario: &str, image_model: &str, text_model
         assert!(!body_text(&requests[2]).contains(&encoded));
         assert_eq!(body_text(&requests[3]).matches(&encoded).count(), 16);
         // Original successful canonical Tool results remain immutable.
-        let after = driver.host().snapshot().unwrap().0;
+        let after = driver.snapshot().unwrap().0;
         for message in &snapshot.messages {
             assert!(after.messages.contains(message));
         }
     }
     await_history_len(&driver, if text_model.is_some() { 4 } else { 2 }).await;
-    driver.host().shutdown().await.unwrap();
+    driver.shutdown().await.unwrap();
     let reopened = rustx::durable::SqliteConversationStore::open_existing(
-        driver.runtime.runtime().conversation_id().clone(),
-        &driver
-            .runtime
-            .tool_runtime()
-            .tool_output()
-            .root()
-            .parent()
-            .unwrap()
-            .join("conversation.sqlite"),
+        driver.access.node.conversation_id.clone(),
+        &driver.access.database_path,
     )
     .unwrap();
     let history = rustx::runtime::request_history::RequestHistory::new(Arc::new(reopened));
@@ -1958,8 +2108,6 @@ async fn image_budget_continuation(scenario: &str, image_model: &str, text_model
     );
     reconstructed.images = rustx::model::images::resolve(&reconstructed.messages, |id| {
         driver
-            .runtime
-            .tool_runtime()
             .artifacts()
             .read_bounded(id)
             .map_err(|error| error.to_string())

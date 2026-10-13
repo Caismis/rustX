@@ -499,6 +499,10 @@ unavailable/retired runtimes, persistence failures and committed durability
 uncertainty through the existing typed error vocabulary. No error or lost response
 authorizes automatic mutation replay. Clients reread Session authority to reconcile
 an uncertain result and retain the separately projected running Attempt.
+Readback is a current-state observation, not a terminal receipt for an unanswered
+request: a native-owned selection may still commit after that observation. A new
+deliberate selection uses the existing native revision fences; a true no-op does
+not advance them or establish settlement of an earlier request.
 
 The connection admits at most 32 active **plus reserved** attachments. A short
 routing-lock transaction reserves capacity before `load` can compose a cold

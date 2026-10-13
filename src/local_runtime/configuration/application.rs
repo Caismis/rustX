@@ -160,7 +160,19 @@ pub(crate) struct ApplicationState {
     source_inputs:
         BTreeMap<String, Result<super::super::app_server_policy::AppServerPolicy, String>>,
     worker_running: bool,
+    #[cfg(test)]
+    worker_starts: usize,
     ready: BTreeMap<String, ReadyConfiguration>,
+}
+
+#[cfg(test)]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct SelectionApplicationProbe {
+    version: u64,
+    next_attempt: u64,
+    worker_starts: usize,
+    pending: BTreeMap<String, ApplicationIdentity>,
+    ready: Option<(usize, usize, u64)>,
 }
 
 #[derive(Clone)]
@@ -254,6 +266,25 @@ impl ConfigurationApplications {
 }
 
 impl ApplicationState {
+    #[cfg(test)]
+    pub(crate) fn selection_probe(&self, scope: &str) -> SelectionApplicationProbe {
+        SelectionApplicationProbe {
+            version: self.version,
+            next_attempt: self.next_attempt,
+            worker_starts: self.worker_starts,
+            pending: self.pending.clone(),
+            ready: self.ready.get(scope).and_then(|ready| {
+                ready.prepared.as_ref().map(|prepared| {
+                    (
+                        Arc::as_ptr(&prepared.owner) as usize,
+                        Arc::as_ptr(&prepared.preview) as usize,
+                        prepared.baseline,
+                    )
+                })
+            }),
+        }
+    }
+
     /// Initial resolution happens only for an uninitialized source scope. Once
     /// established, authored input cannot bypass successful native publication.
     /// A new Session's selection must resolve. A `persisted` Session's
@@ -649,6 +680,10 @@ impl ApplicationState {
             return false;
         }
         self.worker_running = true;
+        #[cfg(test)]
+        {
+            self.worker_starts += 1;
+        }
         true
     }
 

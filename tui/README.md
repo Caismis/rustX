@@ -390,7 +390,11 @@ the Session's selection for future independent Attempts; the running Attempt's
 frozen model/Profile remains separately labelled, even for same-Model changes.
 Profile changes preserve independent request/output overrides and Summary Model
 policy; choosing another Model resets only primary overrides. Uncertain outcomes
-are reconciled by reading authority, never by replaying the mutation.
+repair displayed state by reading authority, never by replaying the mutation.
+Readback does not settle an unanswered native request; the TUI keeps that
+diagnostic across reconnect. Deliberately selecting the current Model submits
+the complete preserved configuration so native authority decides explicit intent
+versus a no-op.
 
 `/tools`, `/skills`, and `/todos` read the projection the client already
 holds; `/status` prints the

@@ -631,10 +631,10 @@ export class CommandDispatcher {
       if (clear) delete configured.profile;
       else if (profile !== undefined) configured.profile = profile;
       const updated = await session.modelSet(configured);
-      return transient("info", `Session model profile -> ${updated.configured.profile ?? "model default"}; future independent attempts. Running attempts stay frozen.`);
+      return transient("info", withModelOutcomeNotice(session, `Session model profile -> ${updated.configured.profile ?? "model default"}; future independent attempts. Running attempts stay frozen.`));
     }
     if (argument === "show") {
-      return inspect("Model", renderModel(state));
+      return inspect("Model", withModelOutcomeNotice(session, renderModel(state)));
     }
     const catalog = await session.modelCatalog();
     const models = catalog.models ?? [];
@@ -672,14 +672,17 @@ export class CommandDispatcher {
   ): Promise<CommandOutcome> {
     try {
       const current = (await session.modelGet()).configured;
-      if (current.model === model.model) return transient("info", `session model remains ${model.model}; profile and overrides preserved`);
+      const sameModel = current.model === model.model;
 
       // `/model X` is a deliberate whole-state replacement: the selected
       // primary model gets its own runtime defaults — the runtime resolves
       // its default profile — while the independently configured summary
       // policy is copied from the authoritative current configuration
       // unchanged.
-      const replacement = {
+      // Model-name equality cannot prove an explicit durable selection. Send
+      // the complete current configuration and let its native owner decide
+      // whether to persist inherited intent or return a genuine NoOp.
+      const replacement = sameModel ? current : {
         model: model.model,
         requestParams: {},
         summaryModel: current.summaryModel,
@@ -687,6 +690,9 @@ export class CommandDispatcher {
       const updated = await session.modelSet({
         ...replacement,
       });
+      const selectionNote = sameModel
+        ? "profile, overrides and summary policy preserved"
+        : "primary overrides reset; summary policy preserved";
 
       const attempt = session.state?.attempt;
       const attemptNote =
@@ -696,16 +702,17 @@ export class CommandDispatcher {
       const modelFeedback = attemptNote.length > 0
         ? [
             `session model -> ${updated.configured.model}; ${attemptNote}`,
-            "change applies to next attempt (independent admission); primary overrides reset; summary policy preserved",
-            `capabilities: ${updated.effective == null ? "unavailable" : capabilitySummary(updated.effective)}`,
-          ].join("\n")
+            `change applies to next attempt (independent admission); ${selectionNote}`,
+          ]
         : [
-            `session model -> ${updated.configured.model}; primary overrides reset; summary policy preserved`,
-            `capabilities: ${updated.effective == null ? "unavailable" : capabilitySummary(updated.effective)}`,
-          ].join("\n");
+            `session model -> ${updated.configured.model}; ${selectionNote}`,
+          ];
+      // Leave a visible line for the unanswered-request warning within the
+      // transient surface's three-line bound.
+      if (!session.modelSelectionOutcomeUnknown) modelFeedback.push(`capabilities: ${updated.effective == null ? "unavailable" : capabilitySummary(updated.effective)}`);
       return transient(
         "info",
-        modelFeedback,
+        withModelOutcomeNotice(session, modelFeedback.join("\n")),
       );
     } catch (error) {
       return failure(error);
@@ -879,13 +886,19 @@ function failure(error: unknown): CommandOutcome {
     // support, and resending would risk doing the work twice.
     return transient(
       "error",
-      `${compactDiagnostic(error.message)} · reconnect and check the authoritative state before retrying`,
+      `${compactDiagnostic(error.message)} · not replayed; reconnect and check the authoritative state. Readback does not establish this request's outcome`,
     );
   }
   if (error instanceof AppServerRequestError) {
     return transient("error", compactDiagnostic(error.message));
   }
   return transient("error", compactDiagnostic(error));
+}
+
+function withModelOutcomeNotice(session: AppServerSession, text: string): string {
+  return session.modelSelectionOutcomeUnknown
+    ? `Earlier model selection outcome unknown; readback cannot settle it.\n${text}`
+    : text;
 }
 
 /** Transient errors keep their distinguishing identity near the front. */

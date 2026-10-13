@@ -1838,6 +1838,9 @@ fn model_selection_error(
     use crate::local_runtime::session_runtime_manager::ModelSelectionError;
     use crate::runtime::conversation_runtime::ModelUpdateError;
     match error {
+        ModelSelectionError::Model(ModelUpdateError::SessionOwned) => {
+            domain(ErrorData::OperationFailed)
+        }
         ModelSelectionError::Model(ModelUpdateError::Conflict)
         | ModelSelectionError::Persistence(
             crate::local_runtime::session::SessionError::StaleSettings { .. },

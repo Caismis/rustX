@@ -203,6 +203,50 @@ async function openSession(
   return host.attach(created.session.id, created.session.active_node);
 }
 
+it("same-model TUI command persists inherited intent then delegates explicit NoOp to the native owner", { skip: SKIP, timeout: 120_000 }, async () => {
+  const provider = await ProviderEmulator.start("tui_multi_session");
+  const fixture = ServerFixture.create("rustx-tui-explicit-model-", provider.url());
+  let host = await AppServerHost.spawnLocal({ binary: BINARY, launch: { runtimeRoot: fixture.runtimeRoot }, env: fixture.env });
+  try {
+    const settings = fixture.settings("inherited-model");
+    const created = await host.createSession(settings);
+    await host.shutdown();
+    // Public creation materializes its selected default. Seed a legitimate
+    // inherited Session only while the native owner is stopped; the next
+    // owner then loads it normally, as in the native inherited-selection test.
+    const catalogPath = join(fixture.runtimeRoot, "sessions/catalog.json");
+    const catalog = JSON.parse(readFileSync(catalogPath, "utf8")) as {
+      sessions: Record<string, { state: SessionSettings }>;
+    };
+    assert.ok(catalog.sessions[created.session.id]!.state.model);
+    delete catalog.sessions[created.session.id]!.state.model;
+    writeFileSync(catalogPath, JSON.stringify(catalog));
+    host = await AppServerHost.spawnLocal({ binary: BINARY, launch: { runtimeRoot: fixture.runtimeRoot }, env: fixture.env });
+    const session = await host.attach(created.session.id, created.session.active_node);
+    const before = await host.readSettings(session.sessionId);
+    assert.equal(before.settings.model, undefined);
+    const inherited = await session.modelGet();
+    const dispatcher = new CommandDispatcher({ host, session, sessionSettings: settings, diagnostics: () => { throw new Error("not requested"); } });
+    const selected = await dispatcher.submit(`/model ${inherited.configured.model}`);
+    assert.equal(selected.kind, "transient");
+    if (selected.kind === "transient") assert.equal(selected.level, "info", selected.text);
+    const explicit = await host.readSettings(session.sessionId);
+    assert.deepEqual(explicit.settings.model, inherited.configured);
+    assert.equal(BigInt(explicit.revision), BigInt(before.revision) + 1n);
+
+    const repeated = await dispatcher.submit(`/model ${inherited.configured.model}`);
+    assert.equal(repeated.kind, "transient");
+    if (repeated.kind === "transient") assert.equal(repeated.level, "info", repeated.text);
+    assert.deepEqual(await host.readSettings(session.sessionId), explicit);
+    assert.deepEqual((await session.modelGet()).configured, inherited.configured);
+    assert.deepEqual(await provider.requests(), [], "selection never invokes inference");
+  } finally {
+    await host.shutdown();
+    fixture.cleanup();
+    await provider.stop();
+  }
+});
+
 it("live profile selection crosses the real TUI/App Server boundary while the original request is gated", { skip: SKIP, timeout: 120_000 }, async () => {
   const provider = await ProviderEmulator.start("tui_multi_session");
   const fixture = ServerFixture.create("rustx-tui-live-profile-", provider.url());
@@ -221,6 +265,13 @@ it("live profile selection crosses the real TUI/App Server boundary while the or
     await until(() => session.state.attempt?.phase.type === "running", "original attempt is observed");
     const frozen = structuredClone(session.state.attempt!.model);
     const dispatcher = new CommandDispatcher({ host, session, sessionSettings: settings, diagnostics: () => { throw new Error("not requested"); } });
+    const beforeSameModel = await host.readSettings(session.sessionId);
+    const sameModel = await dispatcher.submit("/model fixture/integration-model");
+    assert.equal(sameModel.kind, "transient");
+    if (sameModel.kind === "transient") assert.equal(sameModel.level, "info", sameModel.text);
+    assert.deepEqual(await host.readSettings(session.sessionId), beforeSameModel);
+    assert.deepEqual((await session.modelGet()).configured, settings.model);
+    assert.deepEqual(session.state.attempt!.model, frozen);
     const selected = await dispatcher.submit("/model profile set low");
     assert.equal(selected.kind, "transient");
     if (selected.kind === "transient") assert.equal(selected.level, "info", selected.text);

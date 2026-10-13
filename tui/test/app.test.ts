@@ -17,6 +17,7 @@ import { TUI, Editor } from "@earendil-works/pi-tui";
 
 import { plainText, plainWidth } from "../src/ui/theme.ts";
 import { stateOf } from "./support/render.ts";
+import { harness } from "./support/app-server-harness.ts";
 import { RustxTuiApp } from "../src/ui/app.ts";
 import {
   AppServerRequestError,
@@ -43,6 +44,7 @@ import {
   catalogModel,
   sessionModel,
   sessionView,
+  snapshot,
   subagent,
 } from "./support/fixtures.ts";
 
@@ -123,6 +125,7 @@ interface FakeHostOptions {
   onClose?: (listener: (error: TransportClosedError) => void) => void;
   /** Answers `host.attach` for a focus change. */
   attach?: (sessionId: string, nodeId?: string) => Promise<AppServerSession>;
+  inheritModelSelectionUncertainty?: (previous: AppServerHost) => void;
   /** Answers `host.readSession` for the footer. */
   readSession?: (sessionId: string) => Promise<SessionSnapshot>;
   exitCode?: number;
@@ -149,6 +152,7 @@ function fakeHost(options: FakeHostOptions = {}): AppServerHost {
       describeTransport: () => "fake",
     },
     attached: [],
+    inheritModelSelectionUncertainty: options.inheritModelSelectionUncertainty ?? (() => {}),
     describe: () => (ownership === "owned_child" ? "owned child" : "external"),
     stderrTail: () => ({ text: "", truncatedBytes: 0 }),
     childExit: undefined,
@@ -2252,8 +2256,13 @@ it("remote recovery installs a fresh attachment and fences old callbacks without
   next.submitInbound = async () => { submissions++; return { messageId: "new", sequence: "2" }; };
   const first = fakeHost({ ownership: "external", onClose: (listener) => { close = listener; } });
   let attachments = 0;
+  let inheritedUncertainty = false;
   const second = fakeHost({ ownership: "external", attach: async (id) => {
+    assert.equal(inheritedUncertainty, true, "unanswered-selection evidence transfers before new attachment");
     assert.equal(id, old.sessionId); attachments++; return next;
+  }, inheritModelSelectionUncertainty: previous => {
+    assert.equal(previous, first);
+    inheritedUncertainty = true;
   } });
   let connects = 0;
   const app = new RustxTuiApp({ host: first, session: old, sessionSettings: SESSION_SETTINGS,
@@ -2279,6 +2288,39 @@ it("remote recovery installs a fresh attachment and fences old callbacks without
   assert.equal(submissions, 2, "new input uses the replacement attachment");
   await app.quit();
   await running;
+});
+
+it("immediate automatic reconnect retains an outstanding model request's unknown outcome before new attachment", async t => {
+  const initial = snapshot({ model: sessionModel("alpha/model-a") });
+  const previous = await harness(initial);
+  const replacement = await harness(initial);
+  t.mock.method(previous.host, "readSession", async () => sessionView());
+  t.mock.method(replacement.host, "readSession", async () => sessionView());
+  const attachedWithUnknown = deferred<boolean>();
+  const attach = replacement.host.attach.bind(replacement.host);
+  t.mock.method(replacement.host, "attach", async (...args: Parameters<typeof attach>) => {
+    const session = await attach(...args);
+    attachedWithUnknown.resolve(session.modelSelectionOutcomeUnknown);
+    return session;
+  });
+  const app = new RustxTuiApp({ host: previous.host, session: previous.session, sessionSettings: SESSION_SETTINGS,
+    reconnect: async () => replacement.host });
+  try {
+    const uncertain = assert.rejects(previous.session.modelSet({ model: "beta/model-b" }), UncertainOutcomeError);
+    await previous.transport.log.awaitMethod("session/setModel");
+    previous.transport.fail("input_eof");
+    // The real close listener begins recovery synchronously. Do not await the
+    // modelSet catch before verifying the evidence seen by replacement attach.
+    assert.equal(await attachedWithUnknown.promise, true);
+    await uncertain;
+    assert.equal(replacement.session.state.sessionModel?.configured.model, "alpha/model-a");
+    assert.equal(replacement.session.modelSelectionOutcomeUnknown, true);
+    assert.equal(replacement.transport.log.count("session/setModel"), 0);
+    await waitForApplicationContinuation();
+  } finally {
+    await app.quit();
+    await replacement.host.shutdown();
+  }
 });
 
 it("quitting while remote recovery is pending closes the late connection", async () => {

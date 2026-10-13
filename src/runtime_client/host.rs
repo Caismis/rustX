@@ -1621,8 +1621,9 @@ impl ClientInner {
         })
     }
 
-    /// Replaces the authoritative session model configuration through the
-    /// conversation runtime.
+    /// Replaces a standalone conversation's in-memory model configuration.
+    /// Durable Session runtimes reject this control; their native Session owner
+    /// must commit settings, retained binding, and runtime authority together.
     ///
     /// # Linearization
     ///
@@ -1642,7 +1643,7 @@ impl ClientInner {
     /// Returns [`RuntimeClientError::InvalidModelConfiguration`] when the
     /// configuration cannot be resolved against the catalog or cannot run
     /// under the session context policy, [`RuntimeClientError::InvalidState`]
-    /// while the runtime is not yet activated, and
+    /// for a durable Session or while the runtime is not yet activated, and
     /// [`RuntimeClientError::ProjectionExhausted`] when the observation
     /// stream is over.
     pub(crate) fn model_set(
@@ -1659,6 +1660,9 @@ impl ClientInner {
             .expect("a writable Runtime Client host has a runtime")
             .model_set(config)
             .map_err(|error| match error {
+                ModelUpdateError::SessionOwned => RuntimeClientError::InvalidState {
+                    message: "Session model selection requires the native Session owner".to_owned(),
+                },
                 ModelUpdateError::Conflict => RuntimeClientError::ConfigurationAdoption {
                     rejection:
                         crate::local_runtime::configuration::application::AdoptionError::Conflict,
@@ -2600,14 +2604,16 @@ impl RuntimeClientHost {
         self.inner.model_get()
     }
 
-    /// Replaces the authoritative session model configuration through the
-    /// conversation runtime.
+    /// Replaces a standalone conversation's in-memory model configuration.
+    /// Durable Session runtimes reject this control; their native Session owner
+    /// must commit settings, retained binding, and runtime authority together.
     ///
     /// # Errors
     ///
     /// Returns [`RuntimeClientError::InvalidModelConfiguration`] when the
     /// configuration cannot be resolved against the catalog or cannot run
-    /// under the session context policy, and
+    /// under the session context policy, [`RuntimeClientError::InvalidState`]
+    /// for a durable Session or inactive runtime, and
     /// [`RuntimeClientError::ProjectionExhausted`] when the observation
     /// stream is over.
     pub fn model_set(
@@ -6463,6 +6469,7 @@ mod tests {
                 parent_guidance_seal_gate: None,
                 background_failure_gate: None,
                 subagent_failure_published_gate: None,
+                ..CoordinatorProbe::default()
             },
         )
         .await;
@@ -6560,6 +6567,7 @@ mod tests {
                 parent_guidance_seal_gate: None,
                 background_failure_gate: None,
                 subagent_failure_published_gate: None,
+                ..CoordinatorProbe::default()
             },
         )
         .await;
@@ -7325,6 +7333,7 @@ mod tests {
                 parent_guidance_seal_gate: None,
                 background_failure_gate: None,
                 subagent_failure_published_gate: None,
+                ..CoordinatorProbe::default()
             },
         )
         .await;
@@ -7424,6 +7433,7 @@ mod tests {
                 parent_guidance_seal_gate: None,
                 background_failure_gate: None,
                 subagent_failure_published_gate: None,
+                ..CoordinatorProbe::default()
             },
         )
         .await;
@@ -8848,6 +8858,7 @@ mod tests {
                 parent_guidance_seal_gate: None,
                 background_failure_gate: None,
                 subagent_failure_published_gate: None,
+                ..CoordinatorProbe::default()
             }),
         )
         .await;

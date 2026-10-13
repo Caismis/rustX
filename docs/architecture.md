@@ -1142,6 +1142,11 @@ Attempt admitted before the commit retains its complete old model/resource
 snapshot; one admitted afterward captures the new selection. Derived child work
 inherits its parent's snapshot. This path neither adopts pending context nor
 changes the physical resource retirement rules of existing snapshot/lease owners.
+Durable local composition marks this ownership before exposing any runtime or
+client handle. Runtime-only model mutation is rejected for those Sessions;
+standalone Conversation runtimes keep their in-memory mutation contract. A true
+identical explicit selection reports an unchanged commit and leaves the entire
+Configuration Application lifecycle, including Ready Candidates, untouched.
 
 The Runtime Client protocol carries the same semantic plane through
 `interaction_respond`, typed acceptance/errors, `interaction_pending` and
@@ -6971,7 +6976,7 @@ work cannot guarantee progress without native cancellable-read settlement; this
 repair does not invent that protocol or release physical capacity on a timer.
 Other client instances have independent budgets; this is not a server-wide quota.
 
-The Composer model menu and `/model` picker consume the same native catalog and
+The Web Composer model menu and `/model` picker consume the same native catalog and
 selection policy. Model and profile identifiers retain native order and defaults;
 a different model without an explicit profile uses native defaults for its
 primary settings and keeps the independent Summary policy. Selecting the

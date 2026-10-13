@@ -535,7 +535,7 @@ Session admits no model work: `turn/start`, `turn/steer` and `context/compact`
 are refused with `model_unavailable`, and inbound accepted before the publication
 is held, never run on the removed selection and never dropped. Held work does not
 make the Session busy for the correction. The correction is an ordinary
-`session/setModel` (or Runtime Client `model_set`) with a complete selection the
+`session/setModel` with a complete selection the
 catalog admits, primary and explicit Summary alike; it commits through the usual
 fence and admits held work with exactly the new selection.
 
@@ -599,6 +599,15 @@ execution facts.
 
 An already-persisted identical selection is a no-op only after the same lifecycle,
 revision and resource checks. It writes nothing and advances no binding or event.
+It also preserves Application Identity, Version, Unit states, and any Ready
+Candidate, and starts no configuration preparation. Selecting the inherited
+current model explicitly is a durable intent change, even if its invocation is
+identical. Clients submit the complete selection and let the native owner decide.
+
+Durable local Session runtimes reject runtime-only `model_set` calls, including
+Runtime Client host, attachment and request-dispatch controls. Only the native
+Session owner may commit their settings, retained binding and runtime authority.
+Standalone Conversation runtimes retain their in-memory control operation.
 An invocation that happens to resolve alike still visits the durable owner: making
 an inherited default explicit must persist that intent. Selection does not create
 a source-application scope when the Session has no source application to reconsider.

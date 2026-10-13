@@ -673,6 +673,16 @@ async fn authenticated_websocket_capacity_is_released_after_client_reaping() {
     .await;
 }
 
+// Populate the existing test-only projection input without mutating Session
+// authority. This test concerns transport fairness, not model selection.
+fn replenish_observation(native: &crate::runtime::ConversationRuntime) {
+    native.installed_observation_bridge().unwrap().push(
+        crate::runtime::observation::ConversationObservation::SessionModelChanged {
+            model: Box::new(native.model_view()),
+        },
+    );
+}
+
 // A synchronous writer keeps draining and replenishes one native notification
 // per observed notification. Thus queue overflow cannot mask scheduling starvation.
 struct ReplenishingWriter {
@@ -702,14 +712,7 @@ impl tokio::io::AsyncWrite for ReplenishingWriter {
                     self.notifications <= transport::IN_FLIGHT_REQUESTS + 1,
                     "ready control request was starved by observations"
                 );
-                let mut selection = self.native.model_view().configured;
-                selection.request_params.insert(
-                    "temperature".into(),
-                    serde_json::json!(
-                        f64::from(u32::try_from(self.notifications).unwrap()) / 100.0
-                    ),
-                );
-                self.native.model_set(selection).unwrap();
+                replenish_observation(&self.native);
             }
         }
         std::task::Poll::Ready(Ok(bytes.len()))
@@ -741,13 +744,8 @@ async fn ready_control_admission_does_not_wait_for_continuous_notifications() {
         let native = managed.inspect_runtime().unwrap();
         // The ready backlog exceeds the fairness bound and is replenished by the
         // writer. Input is already in the pipe before the shared serve core is polled.
-        for i in 0..64 {
-            let mut selection = native.model_view().configured;
-            selection.request_params.insert(
-                "temperature".into(),
-                serde_json::json!(f64::from(i) / 100.0),
-            );
-            native.model_set(selection).unwrap();
+        for _ in 0..64 {
+            replenish_observation(&native);
         }
         let (mut client, input) = tokio::io::duplex(4096);
         let request = Request {

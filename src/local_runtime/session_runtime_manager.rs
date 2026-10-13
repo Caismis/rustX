@@ -1052,10 +1052,9 @@ impl SessionRuntimeManager {
             let selection_is_persisted = settings.model.as_ref() == Some(&selection);
             settings.model = Some(selection.clone());
             let mut persistence_error = None;
-            let mut committed = false;
             let result = runtime.commit_model_selection(candidate, |revision| {
                 if selection_is_persisted && revision == adopted.binding_revision {
-                    return Ok(());
+                    return Ok(false);
                 }
                 // Linearization: catalog visibility under the runtime admission
                 // gate. Before visibility, failure publishes nothing. Once visible,
@@ -1072,7 +1071,6 @@ impl SessionRuntimeManager {
                         });
                     }
                 }
-                committed = true;
                 owner
                     .sessions
                     .configuration_bindings
@@ -1082,21 +1080,24 @@ impl SessionRuntimeManager {
                         session.clone(),
                         adopted.with_model_selection(selection.clone(), revision),
                     );
-                Ok(())
+                Ok(true)
             });
-            if committed {
+            let changed = result.as_ref().is_ok_and(|commit| commit.changed);
+            if changed {
                 application.selection_changed(session.as_ref(), selection);
                 owner.applications.notify(&application);
             }
             drop(catalog);
             drop(application);
-            if committed {
+            if changed {
                 owner.applications.run(owner.clone());
             }
             if let Some(error) = persistence_error {
                 return Err(ModelSelectionError::Persistence(error));
             }
-            result.map_err(ModelSelectionError::Model)
+            result
+                .map(|commit| commit.view)
+                .map_err(ModelSelectionError::Model)
         })
         .await
         .map_err(|_| {

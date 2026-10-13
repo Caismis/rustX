@@ -1442,7 +1442,7 @@ impl LocalConversationCore {
             // authoritative conversation runtime coordinator, constructed
             // **inactive**: the final composition path activates it after the
             // optional Runtime Client host binds.
-            let runtime = ConversationRuntime::new(RuntimeConversationConfig {
+            let runtime = ConversationRuntime::new_session_owned(RuntimeConversationConfig {
                 explicit_model: session_state.model.is_some(),
                 agent_id: runtime_config.agent_id.clone(),
                 model,

@@ -114,8 +114,9 @@ export class AppServerRequestError extends Error {
  * A side-effecting request whose response was lost with the connection.
  *
  * The request may have been accepted, executed and committed. This client will
- * not resend it and will not report it as failed; the caller's only sound move
- * is to read authoritative state after reconnecting.
+ * not resend it and will not report it as failed. Readback after reconnecting
+ * restores the current projection, but does not establish this request's outcome:
+ * native work can survive its waiter and commit after the readback.
  */
 export class UncertainOutcomeError extends Error {
   readonly method: MethodName;
