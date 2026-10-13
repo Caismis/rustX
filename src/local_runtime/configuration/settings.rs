@@ -434,21 +434,24 @@ impl AdmittedDocument {
 
     /// The document's bytes now, read through the admitted directory, which
     /// the pathname must still name: one it no longer names is `Invalid`,
-    /// exactly as publication refuses it, since the capture would otherwise
-    /// answer for a directory that is no longer the source. A directory that
-    /// was missing is observed again: if it appeared, its document is
-    /// compared like any other change.
+    /// whatever the read returned, exactly as publication refuses it, since
+    /// the capture would otherwise answer for a directory that is no longer
+    /// the source. A directory that was missing is admitted again, under the
+    /// same rule: if it appeared, its document is compared like any other
+    /// change.
     fn reread(&self, target: &SourceTarget) -> Result<Option<Vec<u8>>, SettingsError> {
-        match &self.directory {
-            Some(_) => {
-                let bytes = self.read()?;
-                if self.redirected() {
-                    Err(SettingsError::Invalid)
-                } else {
-                    Ok(bytes)
-                }
-            }
-            None => Self::admit(&self.path, target)?.read(),
+        let readmitted;
+        let document = if self.directory.is_some() {
+            self
+        } else {
+            readmitted = Self::admit(&self.path, target)?;
+            &readmitted
+        };
+        let bytes = document.read();
+        if document.redirected() {
+            Err(SettingsError::Invalid)
+        } else {
+            bytes
         }
     }
 }
@@ -1065,7 +1068,11 @@ impl UserConfigManager {
                 });
             let mut appeared = false;
             for document in unlocked {
-                appeared |= document.lock_exists(target)?;
+                match document.lock_exists(target) {
+                    Ok(exists) => appeared |= exists,
+                    // A round that failed reports its own failure.
+                    Err(error) => return captured.and(Err(error)),
+                }
             }
             if !appeared {
                 return captured;

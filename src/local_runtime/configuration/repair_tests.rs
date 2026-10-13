@@ -4244,6 +4244,125 @@ fn a_writer_creating_the_missing_directory_during_a_read_restarts_it() {
     assert!(lock_of(&fixture.path(&SourceTarget::User)).exists());
 }
 
+/// A fixture whose User source directory `home/.config/rustx` is missing.
+fn missing_user_directory() -> (Fixture, PathBuf) {
+    let fixture = Fixture::with_config_path(|home| home.join(".config/rustx/rustx.toml"));
+    let directory = fixture.root.path().join("home/.config/rustx");
+    std::fs::remove_dir_all(directory.parent().unwrap()).unwrap();
+    (fixture, directory)
+}
+
+/// F4-RACE-01: a User source directory missing at admission, created during
+/// the capture outside rustX — no writer lock — and then moved away and
+/// replaced, by another directory or by a symlink to one, right before the
+/// reader opens the document through it: the directory admitted at
+/// verification answers nothing (`Invalid`), never a "missing" User source,
+/// and the replacement's document is never opened. The reader leaves
+/// nothing behind and repairs nothing.
+#[test]
+fn a_missing_directory_created_then_replaced_during_a_read_never_answers() {
+    for symlink in [false, true] {
+        let case = format!("symlink={symlink}");
+        let (fixture, directory) = missing_user_directory();
+        let document = fixture.path(&SourceTarget::User);
+        let root = fixture.root.path().to_path_buf();
+        let replaced = directory.clone();
+        // Armed now: a missing directory opens nothing on the first read, so
+        // the document's first opening is the reread's, through directory A.
+        let reached = at_opening(&fixture, &document, false, move || {
+            std::fs::rename(&replaced, root.join("moved")).unwrap();
+            let replacement = if symlink {
+                root.join("elsewhere")
+            } else {
+                replaced.clone()
+            };
+            std::fs::create_dir(&replacement).unwrap();
+            std::fs::write(replacement.join("rustx.toml"), USER).unwrap();
+            if symlink {
+                std::os::unix::fs::symlink(&replacement, &replaced).unwrap();
+            }
+            replacement.join("rustx.toml")
+        });
+        // The admission found nothing; directory A appears, empty, before
+        // the reread admits it.
+        let created = directory.clone();
+        fixture
+            .manager
+            .test_hooks
+            .insert("before_capture_verification", move || {
+                assert!(!created.parent().unwrap().exists());
+                std::fs::create_dir_all(&created).unwrap();
+            });
+        let read = fixture.manager.read_source_settings(&SourceTarget::User);
+        let reached = reached
+            .lock()
+            .unwrap()
+            .take()
+            .expect("the opening boundary was reached");
+        assert!(!reached.redirect.opened(), "{case}");
+        assert!(
+            matches!(read, Err(super::super::settings::SettingsError::Invalid)),
+            "{case}: {read:?}"
+        );
+        assert_eq!(namespace(fixture.root.path()), reached.namespace, "{case}");
+        let moved = fixture.root.path().join("moved");
+        assert_eq!(std::fs::read_dir(&moved).unwrap().count(), 0, "{case}");
+        assert!(!lock_of(&document).exists(), "{case}");
+        assert_eq!(fixture.read(&SourceTarget::User), USER, "{case}");
+        assert_eq!(fixture.sequence(), 0, "{case}");
+        assert!(fixture.receipt(&SourceTarget::User).is_none(), "{case}");
+        assert!(fixture.backups().is_empty(), "{case}");
+    }
+}
+
+/// F4-RACE-02: a User source directory missing at admission and created
+/// during the capture outside rustX, then left in place: empty, the source
+/// is still missing; holding a document, the capture is an explicit
+/// conflict naming it, never a "missing" User source. The reader creates no
+/// writer lock, and the next capture answers the document.
+#[test]
+fn a_missing_directory_created_during_a_read_is_compared_like_any_change() {
+    for content in [None, Some(USER)] {
+        let case = format!("document={}", content.is_some());
+        let (fixture, directory) = missing_user_directory();
+        let created = directory.clone();
+        fixture
+            .manager
+            .test_hooks
+            .insert("before_capture_verification", move || {
+                std::fs::create_dir_all(&created).unwrap();
+                if let Some(text) = content {
+                    std::fs::write(created.join("rustx.toml"), text).unwrap();
+                }
+            });
+        let read = fixture.manager.read_source_settings(&SourceTarget::User);
+        match content {
+            None => assert_eq!(read.unwrap().user.revision, "missing", "{case}"),
+            Some(text) => match read {
+                Err(super::super::settings::SettingsError::Conflict {
+                    scope: SourceScope::User,
+                    expected,
+                    actual,
+                }) => {
+                    assert_eq!(expected, "missing");
+                    assert_eq!(actual, revision_of(text));
+                }
+                other => panic!("{case}: {other:?}"),
+            },
+        }
+        let document = fixture.path(&SourceTarget::User);
+        assert!(!lock_of(&document).exists(), "{case}");
+        let current = fixture.manager.read_source_settings(&SourceTarget::User);
+        assert_eq!(
+            current.unwrap().user.revision,
+            content.map_or_else(|| "missing".to_owned(), revision_of),
+            "{case}"
+        );
+        assert!(!lock_of(&document).exists(), "{case}");
+        assert_eq!(fixture.sequence(), 0, "{case}");
+    }
+}
+
 /// Plants an entry at a path, given a redirect target and the exact-bound text.
 type Plant = fn(&Path, &Path, &str);
 

@@ -506,9 +506,11 @@ their reread are all relative to that one handle, each opened
 descriptor, which is then read within the 1 MiB bound. The pathname is never
 resolved again to reach the document, so a symlink, FIFO or directory swapped in
 at any moment is refused without its target being opened. Before a round
-answers, the pathname must still name every admitted directory: a directory
+answers, the pathname must still name every admitted directory — including a
+directory that was missing and is admitted again for the reread: a directory
 replaced or redirected during the capture is refused as `invalid_params`, as at
-entry, never answered from the replacement. Repair's own reads of a `rustx.toml`
+entry, never answered from the replacement, whatever else the round reports.
+Repair's own reads of a `rustx.toml`
 use the same admitted read. It holds each
 document's existing writer lock *shared* for the whole capture, opened without
 creating or following it, so every rustX writer of that document is excluded and
