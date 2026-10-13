@@ -6997,11 +6997,22 @@ Other client instances have independent budgets; this is not a server-wide quota
 The Web Composer model menu and `/model` picker consume the same native catalog and
 selection policy. Model and profile identifiers retain native order and defaults;
 a different model without an explicit profile uses native defaults for its
-primary settings and keeps the independent Summary policy. Selecting the
-current model or its effective profile preserves the configured choice and sends
-no mutation. Both controls use the existing Session model mutation/confirmation
-owner; a cold choice is only local intent until native acknowledgement and the
-authoritative reread. Unknown outcomes remain visible and are never replayed.
+primary settings and keeps the independent Summary policy. Selecting the current
+model preserves the complete configured choice, including its pinned Profile,
+request overrides, output limit and independent Summary policy. A deliberate
+selection against an attached Session submits that complete choice through the
+existing Session model mutation/confirmation owner even when its values are
+unchanged. Only the native owner can distinguish inherited intent that must be
+persisted from an already-persisted NoOp. On the current model, Profile gestures
+change only the pin; the effective Profile is a display value, not proof of
+persisted selection.
+New-Session Drafts retain their local intent comparison. An existing Session
+that is still attaching queues the complete deliberate choice through the
+existing model-preparation owner, including a choice equal to the displayed
+default. The last unsent choice wins; native acknowledgement and an authoritative
+reread confirm the selection after attachment. Unknown outcomes remain visible
+and are never replayed, and a reread alone does not prove an unanswered mutation
+has settled.
 
 ### Per-input attachment admission
 

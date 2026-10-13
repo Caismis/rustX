@@ -65,7 +65,7 @@ enabled = true
 enabled = true
 timezone = "UTC"
 ` : '';
-    const writeSettings = (model = primaryModel) => writeFileSync(settings, (scenario === 'web_compaction' ? '[context]\nreserve_tokens = 0\nkeep_recent_tokens = 0\n' : '') + catalog + `[model_timeout_policy]\nresponse_start_timeout_ms = 600000\nstream_idle_timeout_ms = 600000\n[native_tools.bash]\napproval = "always"\n[agent.tools]\nbuiltin = ["read", "write", "edit", "glob", "grep", "bash", "present", "ask_user", "job_list", "job_status", "job_wait", "job_cancel"]\n[agent.model]\nmodel = "fixture/${model}"\n` + imageSource);
+    const writeSettings = (model = primaryModel, modelFields = '') => writeFileSync(settings, (scenario === 'web_compaction' ? '[context]\nreserve_tokens = 0\nkeep_recent_tokens = 0\n' : '') + catalog + `[model_timeout_policy]\nresponse_start_timeout_ms = 600000\nstream_idle_timeout_ms = 600000\n[native_tools.bash]\napproval = "always"\n[agent.tools]\nbuiltin = ["read", "write", "edit", "glob", "grep", "bash", "present", "ask_user", "job_list", "job_status", "job_wait", "job_cancel"]\n[agent.model]\nmodel = "fixture/${model}"\n${modelFields}` + imageSource);
     writeSettings();
     if (scenario === 'web_child_capabilities') writeFileSync(settings, readFileSync(settings, 'utf8') + '\n[native_tools.write]\napproval = "never"\n');
     if (['web_agent_continuation', 'web_child_capabilities'].includes(scenario)) {
@@ -86,9 +86,13 @@ timezone = "UTC"
     const tokenFile = join(directory, 'socket-token'); writeFileSync(tokenFile, token, { mode: 0o600 });
     const productHostToken = randomBytes(32).toString('base64url');
     const productHostTokenFile = join(directory, 'product-host-token'); writeFileSync(productHostTokenFile, productHostToken, { mode: 0o600 });
-    app = spawn(binary, ['app-server', '--config', settings, '--runtime-root', join(directory, 'runtime'), '--listen', 'ws://127.0.0.1:0', '--token-file', tokenFile, '--product-host-token-file', productHostTokenFile], { env, stdio: ['pipe', 'pipe', 'pipe'] });
-    let appErrors = ''; app.stderr!.on('data', chunk => { appErrors = (appErrors + String(chunk)).slice(-16_384); });
-    const endpoint = await readiness(app, 'stderr', appServerEndpoint);
+    let appErrors = '';
+    const startApp = async (listen = 'ws://127.0.0.1:0') => {
+      app = spawn(binary, ['app-server', '--config', settings, '--runtime-root', join(directory, 'runtime'), '--listen', listen, '--token-file', tokenFile, '--product-host-token-file', productHostTokenFile], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+      app.stderr!.on('data', chunk => { appErrors = (appErrors + String(chunk)).slice(-16_384); });
+      return readiness(app, 'stderr', appServerEndpoint);
+    };
+    const endpoint = await startApp();
     const control = async (path: string, method = 'GET') => {
       const response = await fetch(`${providerUrl}/__control/${path}`, { method });
       if (!response.ok) throw new Error(`Provider barrier failed: ${await response.text()}`);
@@ -104,6 +108,26 @@ timezone = "UTC"
       gate: (name: string) => control(`observations/await?kind=gate_reached&name=${name}&timeoutMs=30000`),
       release: (name: string) => control(`gates/${name}/release`, 'POST'),
       diagnostics: () => ({ providerErrors, appErrors }),
+      /** Public creation materializes defaults. Seed inherited intent only
+       * before the browser connects, with the native owner physically stopped. */
+      async seedInheritedSession(modelFields: string) {
+        const { AppServerHost } = await import('../../../tui/src/app-server/host');
+        const remote = await AppServerHost.connectRemote({ endpoint, token });
+        let id: string;
+        try { id = (await remote.createSession({ cwd: workspaceA })).session.id; }
+        finally { await remote.shutdown(); }
+        app!.kill('SIGTERM');
+        await exited(app!);
+        const catalogPath = join(directory, 'runtime/sessions/catalog.json');
+        const catalog = JSON.parse(readFileSync(catalogPath, 'utf8'));
+        if (!catalog.sessions[id].state.model) throw new Error('New Session must materialize its default before inherited fixture setup.');
+        delete catalog.sessions[id].state.model;
+        writeFileSync(catalogPath, JSON.stringify(catalog));
+        writeSettings(primaryModel, modelFields);
+        const restarted = await startApp(endpoint);
+        if (new URL(restarted).href !== new URL(endpoint).href) throw new Error('Fixture restart changed the native endpoint.');
+        return id;
+      },
       async stop(check = true) {
         try {
           const report = await control('shutdown', 'POST');

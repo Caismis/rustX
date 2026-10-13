@@ -10,7 +10,7 @@ import { Toast } from '../../presentation/primitives/Toast';
 import { IconWarningOutline16 } from '../../presentation/primitives/icons';
 import { Button } from '../../presentation/primitives/Button';
 import { activeAttempt } from '../../bindings/projection';
-import { catalogAdmits, catalogChoices, intentProfile, nextModelSelection } from '../../bindings/model-catalog';
+import { catalogAdmits, catalogChoices, intentProfile, nextModelSelection, selectionChanges } from '../../bindings/model-catalog';
 import type { ModelSelectionIntent } from '../../presentation/agent/ModelSelect';
 import { selectSessionModel } from '../model-preference';
 
@@ -79,8 +79,11 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
  const effectiveProfile = !draft && attached && !queued && model?.unavailable == null && model?.effective?.model === currentModel ? model?.effective?.profile ?? undefined : undefined;
  const choose = async (intent: ModelSelectionIntent) => {
    if (!catalogAdmits(choices, intent.model, intentProfile(intent))) return false;
+   // A Draft compares local intent. Existing Sessions, including a queued
+   // choice during attachment, let native authority decide whether equal
+   // values persist inherited intent or are already an explicit, durable NoOp.
+   if (draft && !selectionChanges(selected?.model, selected?.profile ?? undefined, intent)) return true;
    const selection = nextModelSelection(selected, intent);
-   if (!selection) return true;
    if (draft) { draft.choose(selection); return true; }
    if (connecting) {
      void selectSessionModel(client, view!.id, selection).catch(() => {});
