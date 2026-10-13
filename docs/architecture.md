@@ -700,6 +700,24 @@ result `{ "cancelled": true, "answers": [] }`, while attempt cancellation
 remains `ToolExecutionStatus::Cancelled`; neither response can replace the
 original Tool arguments.
 
+The compiled model-facing schema keeps string lengths, array bounds, required
+fields, defaults and closed objects, but does not use regex patterns to guide
+text generation. Descriptions explain unique question text, unique option
+labels and the runtime-owned custom-answer choice. The native normalizer owns
+deserialization and native option cardinality; the shared Questionnaire
+validator remains the authority for text and choice semantics, including the
+wider MCP choice vocabulary.
+
+A preflight rejection creates one ordinary canonical failed Tool Result and
+never starts the executor or publishes an interaction. Validation diagnostics
+use zero-based field paths, identify both indexes for conflicts, and give a
+correction without echoing authored values. The next model request receives the
+committed result; `ToolExecutionResult::model_facing_projection()` renders its
+failed status even when tool-owned content is empty. Chat Completions,
+Responses and Anthropic adapters translate that shared projection through
+their existing tool-result surfaces. This path adds no retry policy or
+provider-specific validation. See the [offline regression evidence](issue-460-validation.md).
+
 ##### The typed question vocabulary (Issue #242)
 
 Those model-facing arguments are **`ask_user`'s** authoring surface, not the

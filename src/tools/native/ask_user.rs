@@ -4,6 +4,8 @@
 //! invocation contains one bounded questionnaire and publishes exactly one
 //! interaction through the runtime-owned `InteractionCoordinator`.
 
+use std::fmt::Write as _;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -30,12 +32,60 @@ use crate::tools::types::{
 /// The canonical model-facing name of the native questionnaire tool.
 pub const ASK_USER_NAME: &str = crate::tools::executor::ASK_USER_TOOL_NAME;
 
+/// Bounds the complete model-facing argument diagnostic, including its prefix.
+const MAX_ARGUMENT_DIAGNOSTIC_BYTES: usize = 1024;
+
+fn invalid_arguments(detail: impl std::fmt::Display) -> String {
+    crate::tools::limits::bound_utf8_text(
+        format!("invalid ask_user arguments: {detail}"),
+        MAX_ARGUMENT_DIAGNOSTIC_BYTES,
+    )
+}
+
+// Serde errors can embed authored string values or unknown keys. Retain only
+// typed indexes and property names found in the tool's generated input schema.
+fn malformed_arguments(path: &serde_path_to_error::Path) -> String {
+    let schema = input_schema::<AskUserInput>();
+    let mut field_schema = &schema;
+    let mut field_path = String::new();
+    for segment in path {
+        match segment {
+            serde_path_to_error::Segment::Map { key } => {
+                let Some(property) = field_schema["properties"].get(key) else {
+                    break;
+                };
+                if !field_path.is_empty() {
+                    field_path.push('.');
+                }
+                field_path.push_str(key);
+                field_schema = property;
+            }
+            serde_path_to_error::Segment::Seq { index } => {
+                let Some(items) = field_schema.get("items") else {
+                    break;
+                };
+                let _ = write!(field_path, "[{index}]");
+                field_schema = items;
+            }
+            serde_path_to_error::Segment::Enum { .. } | serde_path_to_error::Segment::Unknown => {
+                break;
+            }
+        }
+    }
+    if field_path.is_empty() {
+        field_path.push('$');
+    }
+    invalid_arguments(format!(
+        "{field_path} does not match the declared input shape. Use the declared JSON types, include required fields, omit unknown fields, and omit optional fields instead of null."
+    ))
+}
+
 /// The model-facing input shape. `multi_select` is optional in the model
 /// contract and defaults to false through Serde and the generated schema.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct AskUserInput {
-    /// One to four related blocking questions.
+    /// One to four related blocking questions with unique question text.
     #[schemars(length(min = 1, max = 4), inner(length(min = 1, max = 4096)))]
     questions: Vec<AskUserQuestionInput>,
 }
@@ -43,16 +93,16 @@ struct AskUserInput {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct AskUserQuestionInput {
-    /// The full question text.
-    #[schemars(length(min = 1, max = 4096), pattern(r"\S"))]
+    /// Meaningful, non-whitespace question text, unique within this questionnaire.
+    #[schemars(length(min = 1, max = 4096))]
     question: String,
-    /// The short tab label.
-    #[schemars(length(min = 1, max = 16), pattern(r"\S"))]
+    /// A meaningful, non-whitespace tab label of at most 16 characters.
+    #[schemars(length(min = 1, max = 16))]
     header: String,
-    /// Two to four authored options. The client supplies the custom-answer row.
+    /// Two to four authored options with distinct labels and meaningful descriptions. The runtime supplies the custom-answer choice; do not author Other or an equivalent reserved choice.
     #[schemars(length(min = 2, max = 4), inner(length(min = 1, max = 60)))]
     options: Vec<AskUserOptionInput>,
-    /// Optional; omitted means single-select.
+    /// Defaults to false (single-select). Multi-select questions cannot include option previews.
     #[serde(default)]
     multi_select: bool,
 }
@@ -60,19 +110,19 @@ struct AskUserQuestionInput {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct AskUserOptionInput {
-    /// The authored option label.
-    #[schemars(length(min = 1, max = 60), pattern(r"\S"))]
+    /// A meaningful, non-whitespace label, unique within this question. Do not use Other, Type something., or Next: the runtime reserves these for custom-answer controls.
+    #[schemars(length(min = 1, max = 60))]
     label: String,
-    /// The option's meaning and trade-offs.
-    #[schemars(length(min = 1, max = 1024), pattern(r"\S"))]
+    /// A meaningful, non-whitespace description of the option's meaning and trade-offs.
+    #[schemars(length(min = 1, max = 1024))]
     description: String,
-    /// Optional Markdown preview, only for single-select questions.
+    /// Optional non-whitespace Markdown preview for single-select questions only. Omit when unused; null is not accepted.
     #[serde(
         default,
         deserialize_with = "deserialize_non_null_optional_string",
         skip_serializing_if = "Option::is_none"
     )]
-    #[schemars(length(min = 1, max = 8192), pattern(r"\S"))]
+    #[schemars(length(min = 1, max = 8192))]
     preview: Option<String>,
 }
 
@@ -85,12 +135,12 @@ where
 
 impl AskUserInput {
     fn from_wire(arguments: &serde_json::Value) -> Result<Self, String> {
-        let input: Self = serde_json::from_value(arguments.clone())
-            .map_err(|error| format!("invalid ask_user arguments: {error}"))?;
+        let input: Self = serde_path_to_error::deserialize(arguments)
+            .map_err(|error| malformed_arguments(error.path()))?;
         input
             .validate_authoring_bounds()
             .and_then(|()| validate_questionnaire(&input.specification()))
-            .map_err(|error| format!("invalid ask_user arguments: {error}"))?;
+            .map_err(invalid_arguments)?;
         Ok(input)
     }
 
@@ -104,8 +154,8 @@ impl AskUserInput {
             let count = question.options.len();
             if !(MIN_QUESTIONNAIRE_OPTIONS..=MAX_QUESTIONNAIRE_OPTIONS).contains(&count) {
                 return Err(format!(
-                    "question {index} options must contain \
-                     {MIN_QUESTIONNAIRE_OPTIONS}–{MAX_QUESTIONNAIRE_OPTIONS} options"
+                    "questions[{index}].options must contain \
+                     {MIN_QUESTIONNAIRE_OPTIONS}–{MAX_QUESTIONNAIRE_OPTIONS} authored options. Adjust the option count."
                 ));
             }
         }
@@ -114,8 +164,9 @@ impl AskUserInput {
 
     fn normalize(arguments: &serde_json::Value) -> Result<serde_json::Value, String> {
         let input = Self::from_wire(arguments)?;
-        serde_json::to_value(input)
-            .map_err(|error| format!("failed to normalize ask_user arguments: {error}"))
+        serde_json::to_value(input).map_err(|_| {
+            invalid_arguments("$ could not be normalized. Follow the declared input schema.")
+        })
     }
 
     /// Maps the model-authored questionnaire onto the shared typed vocabulary.
@@ -199,7 +250,7 @@ pub(super) fn definition() -> ToolDefinition {
     ToolDefinition {
         id: crate::runtime::identity::ToolId::new("tool-ask-user"),
         name: ASK_USER_NAME.to_owned(),
-        description: "Ask the user one structured questionnaire for a blocking decision. Group related blocking questions into one invocation instead of issuing consecutive ask_user calls. Use 1–4 questions, each with 2–4 authored options; every option needs a concise label and a description of its meaning or trade-offs. A custom answer is always available at runtime, so do not add an Other or custom-answer option. If one option is recommended, place it first and append (Recommended) to its label. multi_select defaults to false; previews are for single-select questions only. The user's answers are returned as an ordinary structured tool result.".to_owned(),
+        description: "Ask the user one structured questionnaire for a blocking decision. Group related blocking questions into one invocation instead of issuing consecutive ask_user calls. Use 1–4 questions with unique question text, each with 2–4 authored options. Option labels must be unique within their question; every option needs a meaningful label and description of its meaning or trade-offs. A custom answer is always available at runtime, so do not author Other or an equivalent reserved custom-answer choice. If one option is recommended, place it first and append (Recommended) to its label. multi_select defaults to false. Optional previews are for single-select questions only; multi-select questions cannot include previews. The user's answers are returned as an ordinary structured tool result.".to_owned(),
         input_schema: input_schema::<AskUserInput>(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
         concurrency_policy: ToolConcurrencyPolicy::Sequential,
@@ -220,17 +271,14 @@ impl ToolExecutor for AskUserExecutor {
         let cancellation = context.cancellation.clone();
         ToolExecutionHandle::settled_by_operation(
             Box::pin(async move {
-                let input: AskUserInput = match serde_json::from_value(invocation.arguments) {
-                    Ok(input) => input,
-                    Err(error) => {
-                        return failed_result(format!(
-                            "ask_user received an invocation that was not preflight-normalized: {error}"
-                        ));
-                    }
+                let Ok(input) = serde_json::from_value::<AskUserInput>(invocation.arguments) else {
+                    return failed_result(
+                        "ask_user received an invocation that was not preflight-normalized",
+                    );
                 };
                 let specification = input.specification();
                 if let Err(error) = validate_questionnaire(&specification) {
-                    return failed_result(format!("invalid ask_user arguments: {error}"));
+                    return failed_result(invalid_arguments(error));
                 }
                 let Some(requester) = context.questionnaire_requester() else {
                     return failed_result("ask_user interaction provider unavailable");
@@ -451,6 +499,114 @@ mod tests {
         );
     }
 
+    fn schema_keyword_paths(schema: &serde_json::Value, keyword: &str) -> Vec<String> {
+        fn visit(value: &serde_json::Value, keyword: &str, path: &str, paths: &mut Vec<String>) {
+            match value {
+                serde_json::Value::Object(object) => {
+                    for (key, value) in object {
+                        let child = format!("{path}/{key}");
+                        if key == keyword {
+                            paths.push(child.clone());
+                        }
+                        visit(value, keyword, &child, paths);
+                    }
+                }
+                serde_json::Value::Array(values) => {
+                    for (index, value) in values.iter().enumerate() {
+                        visit(value, keyword, &format!("{path}/{index}"), paths);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut paths = Vec::new();
+        visit(schema, keyword, "", &mut paths);
+        paths.sort();
+        paths
+    }
+
+    fn strip_schema_guidance_and_patterns(schema: &mut serde_json::Value) {
+        match schema {
+            serde_json::Value::Object(object) => {
+                object.remove("pattern");
+                // Preserve the actual description property, whose value is a
+                // schema object; only string-valued descriptions are guidance.
+                if object
+                    .get("description")
+                    .is_some_and(serde_json::Value::is_string)
+                {
+                    object.remove("description");
+                }
+                for value in object.values_mut() {
+                    strip_schema_guidance_and_patterns(value);
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for value in values {
+                    strip_schema_guidance_and_patterns(value);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn compiled_schema_delta_only_removes_five_patterns_and_updates_guidance() {
+        // Captured by compiling definition() at the starting origin/main SHA,
+        // 3c4b85a627e87383f244600e8b19887f103b82f0, before changing its attributes.
+        let mut before: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/ask_user/schema-before.json"
+        ))
+        .unwrap();
+        let mut original_definition = definition();
+        original_definition.input_schema = before.clone();
+        let compiled_before = crate::tools::schema::compile_model_definition(&original_definition)
+            .expect("baseline definition compiles for model adapters");
+        assert_eq!(compiled_before.input_schema, before);
+        let mut after = registry().model_definitions().remove(0).input_schema;
+        let captured_after: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/ask_user/schema-after.json"
+        ))
+        .unwrap();
+        assert_eq!(after, captured_after);
+        assert_eq!(after, definition().input_schema);
+        let text_paths = [
+            ("/properties/questions/items/properties/question", 4096),
+            ("/properties/questions/items/properties/header", 16),
+            (
+                "/properties/questions/items/properties/options/items/properties/label",
+                60,
+            ),
+            (
+                "/properties/questions/items/properties/options/items/properties/description",
+                1024,
+            ),
+            (
+                "/properties/questions/items/properties/options/items/properties/preview",
+                8192,
+            ),
+        ];
+        let mut expected_patterns: Vec<_> = text_paths
+            .iter()
+            .map(|(path, _)| format!("{path}/pattern"))
+            .collect();
+        expected_patterns.sort();
+        assert_eq!(schema_keyword_paths(&before, "pattern"), expected_patterns);
+        assert!(schema_keyword_paths(&after, "pattern").is_empty());
+        assert!(schema_keyword_paths(&after, "uniqueItems").is_empty());
+        for (path, max) in text_paths {
+            assert_eq!(before.pointer(path).unwrap()["pattern"], r"\S");
+            let field = after.pointer(path).unwrap();
+            assert_eq!(field["type"], "string");
+            assert_eq!(field["minLength"], 1);
+            assert_eq!(field["maxLength"], max);
+        }
+        jsonschema::validator_for(&after).expect("compiled native schema remains valid");
+        strip_schema_guidance_and_patterns(&mut before);
+        strip_schema_guidance_and_patterns(&mut after);
+        assert_eq!(after, before, "all structural schema metadata is preserved");
+    }
+
     #[test]
     fn valid_one_and_four_question_payloads_preflight() {
         let registry = registry();
@@ -655,6 +811,166 @@ mod tests {
         preview_on_multi["questions"][0]["multi_select"] = true.into();
         preview_on_multi["questions"][0]["options"][0]["preview"] = "# preview".into();
         rejected(preview_on_multi);
+    }
+
+    #[test]
+    fn whitespace_only_authored_fields_remain_invalid_without_schema_patterns() {
+        let registry = registry();
+        for path in [
+            "/questions/0/question",
+            "/questions/0/header",
+            "/questions/0/options/0/label",
+            "/questions/0/options/0/description",
+            "/questions/0/options/0/preview",
+        ] {
+            let mut arguments = valid(1);
+            arguments["questions"][0]["options"][0]["preview"] = "A valid preview".into();
+            *arguments.pointer_mut(path).unwrap() = " \t\n\u{3000}".into();
+            let error = AskUserInput::from_wire(&arguments).unwrap_err();
+            assert!(error.contains("non-whitespace text"), "{path}: {error}");
+            assert!(error.contains("Supply meaningful text."));
+            assert!(!preflight(&registry, arguments));
+        }
+    }
+
+    #[test]
+    fn malformed_argument_diagnostics_keep_safe_paths_without_authored_values() {
+        let registry = registry();
+        let private_value = "秘密字段-private-model-value".repeat(1024);
+        for (path, expected) in [
+            ("/questions", "questions"),
+            ("/questions/0", "questions[0]"),
+            ("/questions/0/question", "questions[0].question"),
+            ("/questions/0/header", "questions[0].header"),
+            ("/questions/0/options", "questions[0].options"),
+            ("/questions/0/options/0", "questions[0].options[0]"),
+            (
+                "/questions/0/options/0/label",
+                "questions[0].options[0].label",
+            ),
+            (
+                "/questions/0/options/0/description",
+                "questions[0].options[0].description",
+            ),
+            (
+                "/questions/0/options/0/preview",
+                "questions[0].options[0].preview",
+            ),
+            ("/questions/0/multi_select", "questions[0].multi_select"),
+        ] {
+            let mut arguments = valid(1);
+            arguments["questions"][0]["multi_select"] = false.into();
+            arguments["questions"][0]["options"][0]["preview"] = "Preview".into();
+            let original = arguments.pointer_mut(path).unwrap();
+            *original = if original.is_string() {
+                serde_json::json!({"private-key": private_value})
+            } else {
+                private_value.clone().into()
+            };
+            let error = AskUserInput::from_wire(&arguments).unwrap_err();
+            assert!(error.contains(expected), "{path}: {error}");
+            assert!(error.contains("Use the declared JSON types"));
+            assert!(!error.contains("private"));
+            assert!(!error.contains("秘密字段"));
+            assert!(error.len() <= MAX_ARGUMENT_DIAGNOSTIC_BYTES);
+            assert!(std::str::from_utf8(error.as_bytes()).is_ok());
+            assert_eq!(error, AskUserInput::from_wire(&arguments).unwrap_err());
+            assert!(!preflight(&registry, arguments));
+        }
+
+        for (container, expected) in [
+            ("", "$"),
+            ("/questions/0", "questions[0]"),
+            ("/questions/0/options/0", "questions[0].options[0]"),
+        ] {
+            let mut arguments = valid(1);
+            arguments
+                .pointer_mut(container)
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .insert(private_value.clone(), private_value.clone().into());
+            let error = AskUserInput::from_wire(&arguments).unwrap_err();
+            assert!(error.contains(expected), "{container}: {error}");
+            assert!(error.contains("omit unknown fields"));
+            assert!(!error.contains("private"));
+            assert!(!error.contains("秘密字段"));
+            assert!(error.len() <= MAX_ARGUMENT_DIAGNOSTIC_BYTES);
+            assert_eq!(error, AskUserInput::from_wire(&arguments).unwrap_err());
+            assert!(!preflight(&registry, arguments));
+        }
+    }
+
+    #[test]
+    fn reserved_runtime_metadata_rejection_is_bounded_without_echoing_the_private_key() {
+        let mut arguments = valid(1);
+        let private_key = format!("__rustx_{}", "private-key-秘密字段".repeat(1024));
+        arguments
+            .as_object_mut()
+            .unwrap()
+            .insert(private_key.clone(), true.into());
+        let outcome = registry()
+            .preflight(&ToolCall {
+                id: crate::runtime::identity::ToolCallId::new("reserved-metadata"),
+                tool_id: ToolId::new("tool-ask-user"),
+                name: ASK_USER_NAME.to_owned(),
+                arguments,
+            })
+            .unwrap();
+        let PreflightOutcome::Rejected { error, .. } = outcome else {
+            panic!("reserved metadata must be rejected before native execution");
+        };
+        assert!(error.contains('$'));
+        assert!(error.contains("reserved"));
+        assert!(error.contains("__rustx_"));
+        assert!(error.contains("Remove"));
+        assert!(!error.contains(&private_key));
+        assert!(!error.contains("private-key"));
+        assert!(!error.contains("秘密字段"));
+        assert!(error.len() <= MAX_ARGUMENT_DIAGNOSTIC_BYTES);
+        assert!(std::str::from_utf8(error.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn missing_fields_and_null_preview_have_safe_actionable_diagnostics() {
+        for container in ["", "/questions/0", "/questions/0/options/0"] {
+            let mut arguments = valid(1);
+            *arguments.pointer_mut(container).unwrap() = serde_json::json!({});
+            let error = AskUserInput::from_wire(&arguments).unwrap_err();
+            assert!(error.contains("include required fields"));
+            assert!(error.len() <= MAX_ARGUMENT_DIAGNOSTIC_BYTES);
+        }
+        let mut arguments = valid(1);
+        arguments["questions"][0]["options"][0]["preview"] = serde_json::Value::Null;
+        let error = AskUserInput::from_wire(&arguments).unwrap_err();
+        assert!(error.contains("questions[0].options[0].preview"));
+        assert!(error.contains("omit optional fields instead of null"));
+    }
+
+    #[test]
+    fn reserved_label_diagnostics_name_the_field_and_correction_without_the_label() {
+        for reserved in ["Other", "Type something.", "Next"] {
+            let mut arguments = valid(1);
+            arguments["questions"][0]["options"][0]["label"] = reserved.into();
+            let error = AskUserInput::from_wire(&arguments).unwrap_err();
+            assert!(error.contains("questions[0].options[0].label"));
+            assert!(error.contains("reserved"));
+            assert!(error.contains("Replace it with a distinct authored choice"));
+            assert!(!error.contains(reserved));
+            assert!(error.len() <= MAX_ARGUMENT_DIAGNOSTIC_BYTES);
+        }
+    }
+
+    #[test]
+    fn argument_diagnostic_bound_counts_bytes_without_splitting_utf8() {
+        for text in ["a".repeat(2048), "修正".repeat(1024)] {
+            let error = invalid_arguments(&text);
+            assert!(error.starts_with("invalid ask_user arguments: "));
+            assert!(error.len() <= MAX_ARGUMENT_DIAGNOSTIC_BYTES);
+            assert!(error.len() >= MAX_ARGUMENT_DIAGNOSTIC_BYTES - 3);
+            assert!(std::str::from_utf8(error.as_bytes()).is_ok());
+            assert_eq!(error, invalid_arguments(&text));
+        }
     }
 
     /// Native `ask_user` maps onto the shared typed vocabulary as
