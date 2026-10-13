@@ -65,6 +65,7 @@ export interface Harness {
 export async function harness(
   initial: RuntimeClientSnapshot = defaultSnapshot(),
   sessionId = "ses_84097828-fc31-78c8-9292-10df48901a85",
+  previousHost?: AppServerHost,
 ): Promise<Harness> {
   const transport = new FakeTransport();
   const connecting = AppServerClient.initialize({ transport });
@@ -77,6 +78,7 @@ export async function harness(
   const client = await connecting;
   client.uploadCarrier = async () => {};
   const host = new AppServerHost({ client, ownership: "external" });
+  if (previousHost) host.inheritModelSelectionUncertainty(previousHost);
 
   const target: AttachmentTarget = {
     session_id: sessionId,

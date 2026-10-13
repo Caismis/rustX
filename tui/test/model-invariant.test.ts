@@ -43,12 +43,17 @@ import type { ProjectedEvent } from "../src/presentation/projection.ts";
 import { runtimeCursor, transcriptCursor } from "./support/fixtures.ts";
 import {
   attemptModel,
+  catalogModel,
   inboundBlock,
   sessionModel,
   snapshot,
   nextCursor,
 } from "./support/fixtures.ts";
 import { FakeTransport, paramsOf, tick } from "./support/app-server-peer.ts";
+import { harness } from "./support/app-server-harness.ts";
+import { renderModel } from "../src/commands/dispatcher.ts";
+import { TransientFeedbackSurface } from "../src/ui/components/transient-feedback.ts";
+import { UncertainOutcomeError } from "../src/app-server/client.ts";
 
 const MODEL_A = "alpha/model-a";
 const MODEL_B = "beta/model-b";
@@ -68,6 +73,170 @@ function fold(
 }
 
 describe("session model A -> B invariant", () => {
+  it("same-model profile changes retain the complete frozen invocation across events and reconnect", () => {
+    const frozen = attemptModel(MODEL_A, { profile: "high", reasoningEnabled: true, requestParams: { effort: "high", temperature: 0.2 }, maxOutputTokens: 777 });
+    frozen.summary = { mode: "explicit", ...frozen.primary, model: "summary/original" };
+    const initial = snapshot({ model: sessionModel(MODEL_A, frozen.primary), attempt: { attempt_id: "profile-attempt", phase: { type: "running" }, turn: 1, model: frozen, execution_settings: null } });
+    const low = sessionModel(MODEL_A, { profile: "low", reasoningEnabled: false, requestParams: { effort: "low", temperature: 0.2 }, maxOutputTokens: 777 });
+    low.configured.profile = "low";
+    const changed = fold(replaceFromSnapshot(initial, runtimeCursor(0)), [{ type: "session_model_changed", model: low }]);
+    assert.deepEqual(changed.attempt?.model, frozen);
+    assert.equal(changed.sessionModel?.effective?.profile, "low");
+    const rendered = renderModel(changed);
+    assert.match(rendered, /effective profile: low/);
+    assert.match(rendered, /profile: high/);
+    assert.match(rendered, /"effort": "high"/);
+    assert.match(rendered, /summary\/original/);
+    const recovered = replaceFromSnapshot({ ...initial, model: low }, runtimeCursor(1));
+    assert.deepEqual(recovered.attempt?.model, frozen);
+    assert.equal(recovered.sessionModel?.configured.profile, "low");
+  });
+
+  it("rejected selection rereads authority and prevents another mutation until the reread settles", async () => {
+    const h = await harness(snapshot({ model: sessionModel(MODEL_A) }));
+    const rejected = assert.rejects(h.session.modelSet({ model: MODEL_B }), /selection conflict/);
+    const set = (await h.transport.log.awaitMethod("session/setModel")).at(-1)!;
+    h.transport.respondError(set.id, { code: -32000, message: "selection conflict" });
+    const read = (await h.transport.log.awaitMethod("session/snapshot")).at(-1)!;
+    await assert.rejects(h.session.modelSet({ model: MODEL_B }), /still in flight/);
+    h.transport.respond(read.id, { type: "snapshot", snapshot: snapshot({ model: sessionModel(MODEL_A) }), cursor: runtimeCursor(1) });
+    const subscribe = (await h.transport.log.awaitMethod("session/subscribe")).at(-1)!;
+    h.transport.respond(subscribe.id, { type: "subscribed", after_cursor: runtimeCursor(1) });
+    await rejected;
+    assert.equal(h.session.state.sessionModel?.configured.model, MODEL_A);
+    assert.equal(h.transport.log.count("session/setModel"), 1);
+    assert.equal(h.session.modelSelectionOutcomeUnknown, false, "known rejection is terminal evidence");
+    h.client.close();
+  });
+
+  it("lost B acknowledgement remains unknown after snapshot A, acknowledged no-op A, late B and reconnect B without replay", async () => {
+    const frozen = attemptModel(MODEL_A, { profile: "high" });
+    const initial = snapshot({ model: sessionModel(MODEL_A), attempt: { attempt_id: "still-running", phase: { type: "running" }, turn: 1, model: frozen, execution_settings: null } });
+    const h = await harness(initial);
+    const uncertain = assert.rejects(h.session.modelSet({ model: MODEL_B }), UncertainOutcomeError);
+    await h.transport.log.awaitMethod("session/setModel");
+    h.transport.fail("input_eof");
+    await uncertain;
+    assert.equal(h.session.state.sessionModel?.configured.model, MODEL_A);
+    assert.equal(h.transport.log.count("session/setModel"), 1);
+    assert.equal(h.session.modelSelectionOutcomeUnknown, true);
+
+    // Native r10 parks captured B across exactly this old readback and no-op
+    // A. This peer controls the client boundary; it does not simulate native CAS.
+    const recovered = await harness(initial, h.session.sessionId, h.host);
+    assert.equal(recovered.session.state.sessionModel?.configured.model, MODEL_A);
+    assert.equal(recovered.session.modelSelectionOutcomeUnknown, true);
+    const repairing = recovered.session.resync();
+    const read = (await recovered.transport.log.awaitMethod("session/snapshot")).at(-1)!;
+    recovered.transport.respond(read.id, { type: "snapshot", snapshot: initial, cursor: runtimeCursor(1) });
+    const subscribe = (await recovered.transport.log.awaitMethod("session/subscribe")).at(-1)!;
+    recovered.transport.respond(subscribe.id, { type: "subscribed", after_cursor: runtimeCursor(1) });
+    await repairing;
+    assert.equal(recovered.session.modelSelectionOutcomeUnknown, true);
+    assert.equal(recovered.transport.log.count("session/setModel"), 0, "readback does not replay B");
+    const showing = await recovered.dispatcher.submit("/model show");
+    assert.equal(showing.kind, "inspect");
+    if (showing.kind === "inspect") assert.match(showing.body, /readback cannot settle it/);
+
+    // A new intentional request is permitted, but its acknowledgement settles
+    // only that request. A true no-op A does not fence previously captured B.
+    const choosing = recovered.dispatcher.selectModel(catalogModel(MODEL_A));
+    const modelRead = (await recovered.transport.log.awaitMethod("session/model")).at(-1)!;
+    recovered.transport.respond(modelRead.id, { type: "model", model: sessionModel(MODEL_A) });
+    const set = (await recovered.transport.log.awaitMethod("session/setModel")).at(-1)!;
+    assert.equal(paramsOf(set, "session/setModel").config.model, MODEL_A);
+    recovered.transport.respond(set.id, { type: "model", model: sessionModel(MODEL_A) });
+    const selected = await choosing;
+    assert.equal(selected.kind, "transient");
+    if (selected.kind === "transient") {
+      assert.equal(selected.level, "info");
+      assert.match(selected.text, /Earlier model selection outcome unknown/);
+      const feedback = new TransientFeedbackSurface();
+      feedback.replace(selected);
+      assert.match(feedback.render(80).join("\n"), /readback cannot settle it/);
+      assert.ok(selected.text.split("\n").length <= 3);
+    }
+    assert.equal(recovered.session.modelSelectionOutcomeUnknown, true);
+    recovered.transport.emit(recovered.target, runtimeCursor(2), { type: "session_model_changed", model: sessionModel(MODEL_B) });
+    assert.equal(recovered.session.state.sessionModel?.configured.model, MODEL_B);
+    assert.deepEqual(recovered.session.state.attempt?.model, frozen);
+    assert.equal(recovered.session.modelSelectionOutcomeUnknown, true, "an observation is not a correlated response");
+
+    const detaching = recovered.host.detach(h.session.sessionId);
+    const detach = (await recovered.transport.log.awaitMethod("session/detach")).at(-1)!;
+    recovered.transport.respond(detach.id, { type: "detached" });
+    await detaching;
+    const attaching = recovered.host.attach(h.session.sessionId);
+    const attach = (await recovered.transport.log.awaitMethod("session/attach", 2)).at(-1)!;
+    recovered.transport.respond(attach.id, {
+      type: "attached", target: { ...recovered.target, attachment_id: "att-2", runtime_incarnation: "2" },
+      snapshot: { ...initial, model: sessionModel(MODEL_B) }, cursor: runtimeCursor(0),
+    });
+    assert.equal((await attaching).modelSelectionOutcomeUnknown, true, "a replacement runtime still cannot prove the old request's outcome");
+
+    const reconnected = await harness({ ...initial, model: sessionModel(MODEL_B) }, h.session.sessionId, recovered.host);
+    assert.equal(reconnected.session.state.sessionModel?.configured.model, MODEL_B);
+    assert.deepEqual(reconnected.session.state.attempt?.model, frozen);
+    assert.equal(reconnected.session.modelSelectionOutcomeUnknown, true);
+    assert.equal(reconnected.transport.log.count("session/setModel"), 0);
+    recovered.client.close();
+    reconnected.client.close();
+  });
+
+  it("a successful snapshot cannot release the guard for a still pending selection", async () => {
+    const h = await harness(snapshot({ model: sessionModel(MODEL_A) }));
+    const retired = assert.rejects(h.session.modelSet({ model: MODEL_B }), /acknowledgement belongs to a retired observation/);
+    const set = (await h.transport.log.awaitMethod("session/setModel")).at(-1)!;
+    const repairing = h.session.resync();
+    const read = (await h.transport.log.awaitMethod("session/snapshot")).at(-1)!;
+    h.transport.respond(read.id, { type: "snapshot", snapshot: snapshot({ model: sessionModel(MODEL_A) }), cursor: runtimeCursor(1) });
+    const subscribe = (await h.transport.log.awaitMethod("session/subscribe")).at(-1)!;
+    h.transport.respond(subscribe.id, { type: "subscribed", after_cursor: runtimeCursor(1) });
+    await repairing;
+    await assert.rejects(h.session.modelSet({ model: MODEL_A }), /still in flight/);
+    h.transport.respond(set.id, { type: "model", model: sessionModel(MODEL_B) });
+    const readAfterAck = (await h.transport.log.awaitMethod("session/snapshot", 2)).at(-1)!;
+    h.transport.respond(readAfterAck.id, { type: "snapshot", snapshot: snapshot({ model: sessionModel(MODEL_B) }), cursor: runtimeCursor(2) });
+    const subscribedAfterAck = (await h.transport.log.awaitMethod("session/subscribe", 2)).at(-1)!;
+    h.transport.respond(subscribedAfterAck.id, { type: "subscribed", after_cursor: runtimeCursor(2) });
+    await retired;
+    assert.equal(h.session.modelSelectionOutcomeUnknown, false, "the native acknowledgement was received, but its observation retired");
+    assert.equal(h.session.state.sessionModel?.configured.model, MODEL_B);
+    assert.equal(h.transport.log.count("session/setModel"), 1);
+    h.client.close();
+  });
+
+  it("a committed durability-uncertain response is known committed evidence, not an unanswered request", async () => {
+    const h = await harness(snapshot({ model: sessionModel(MODEL_A) }));
+    const rejected = assert.rejects(h.session.modelSet({ model: MODEL_B }), /committed.*durability.*unknown/);
+    const set = (await h.transport.log.awaitMethod("session/setModel")).at(-1)!;
+    h.transport.respondError(set.id, { code: -32000, message: "directory sync failed", data: { kind: "committed_durability_uncertain" } });
+    const read = (await h.transport.log.awaitMethod("session/snapshot")).at(-1)!;
+    assert.equal(h.session.state.sessionModel?.configured.model, MODEL_A, "the response does not publish optimistic authority");
+    h.transport.respond(read.id, { type: "snapshot", snapshot: snapshot({ model: sessionModel(MODEL_B) }), cursor: runtimeCursor(1) });
+    const subscribe = (await h.transport.log.awaitMethod("session/subscribe")).at(-1)!;
+    h.transport.respond(subscribe.id, { type: "subscribed", after_cursor: runtimeCursor(1) });
+    await rejected;
+    assert.equal(h.session.modelSelectionOutcomeUnknown, false);
+    assert.equal(h.session.state.sessionModel?.configured.model, MODEL_B);
+    h.client.close();
+  });
+
+  it("an acknowledgement from a retired attachment cannot report selection success", async () => {
+    const h = await harness(snapshot({ model: sessionModel(MODEL_A) }));
+    const rejected = assert.rejects(h.session.modelSet({ model: MODEL_B }), /retired observation/);
+    const set = (await h.transport.log.awaitMethod("session/setModel")).at(-1)!;
+    const detaching = h.session.detach();
+    const detach = (await h.transport.log.awaitMethod("session/detach")).at(-1)!;
+    h.transport.respond(set.id, { type: "model", model: sessionModel(MODEL_B) });
+    h.transport.respond(detach.id, { type: "detached" });
+    await Promise.all([rejected, detaching]);
+    assert.equal(h.session.state.sessionModel?.configured.model, MODEL_A);
+    assert.equal(h.transport.log.count("session/setModel"), 1);
+    assert.equal(h.session.modelSelectionOutcomeUnknown, false);
+    h.client.close();
+  });
+
   it("keeps the running attempt on A while the session moves to B", () => {
     let state = replaceFromSnapshot(
       snapshot({ model: sessionModel(MODEL_A) }),

@@ -71,6 +71,7 @@ pub(crate) use crate::scripted_suites::common;
 pub(crate) use crate::scripted_suites::support;
 
 mod app_server_file_read;
+mod app_server_model_selection;
 mod background;
 mod durable;
 mod managed_selection;

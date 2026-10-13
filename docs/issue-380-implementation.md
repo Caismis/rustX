@@ -142,9 +142,11 @@ already covers static invocation overrides (which cannot override instructions o
 models). Physical resource validation uses the same set at immutable admission and
 preparation. Unselected unrelated catalog definitions remain inert.
 
-The dedicated `session/setModel` operation uses the same preparation and atomic
-binding commit, with durable selection CAS. It does not import unrelated pending
-context.
+The dedicated `session/setModel` operation shares published binding inputs and
+the admission fence, with durable selection CAS. Issue #468 separates its
+immediate selection commit from context adoption's idle requirement: active
+Attempts retain their complete snapshot while future independent Attempts capture
+the newly selected model. It does not import unrelated pending context.
 
 `src/model/request_shape.rs` compares configuration evidence built through the
 actual Chat Completions, Responses and Anthropic request constructors. Canonical

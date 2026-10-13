@@ -1143,6 +1143,118 @@ impl crate::tools::executor::ToolExecutor for GatedBackgroundExecutor {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_model_selection_accepts_background_ownership_without_adopting_pending_context() {
+    bounded(async {
+        let fixture = Fixture::new().await;
+        let id = fixture.sessions[0].id.clone();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        let instructions = runtime
+            .runtime_resources()
+            .configuration()
+            .unwrap()
+            .config
+            .agent
+            .instructions
+            .clone();
+        let (executor, mut started, release) = GatedBackgroundExecutor::new();
+        let executor: Arc<dyn crate::tools::executor::ToolExecutor> = Arc::new(executor);
+        let invocation = crate::tools::types::ToolInvocation {
+            id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: crate::runtime::identity::ToolCallId::new("live-selection-background"),
+            },
+            tool_id: crate::runtime::identity::ToolId::new("tool-bash"),
+            tool_name: "bash".to_owned(),
+            mode: crate::tools::types::ToolInvocationMode::Background,
+            arguments: serde_json::json!({}),
+        };
+        let background = runtime.tool_runtime().background();
+        let prepared = background
+            .prepare_dispatch(
+                &invocation,
+                &executor,
+                crate::tools::environment::ToolEnvironment::new(),
+            )
+            .unwrap();
+        let crate::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
+            background
+                .commit_dispatch(prepared, &crate::runtime::CancellationSignal::new())
+                .unwrap()
+        else {
+            panic!("background dispatch accepted")
+        };
+        started.wait_for(|entered| *entered).await.unwrap();
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Instructions {
+                authored: Some("pending context must remain pending".into()),
+            },
+        )
+        .await;
+        let candidate = settled(&fixture, 0).await.candidate.unwrap();
+        assert_eq!(
+            fixture.manager.adopt_configuration(
+                &id,
+                &candidate.identity,
+                candidate.expected_binding,
+            ),
+            Err(AdoptionError::Busy)
+        );
+
+        let selected = crate::model::session::SessionModelConfig::of(
+            crate::model::catalog::ModelRef::parse("local/b").unwrap(),
+        );
+        fixture
+            .manager
+            .set_model(&id, selected.clone())
+            .await
+            .unwrap();
+        assert_eq!(runtime.model_view().configured, selected);
+        assert_eq!(
+            fixture
+                .manager
+                .sessions
+                .read_settings(&id)
+                .await
+                .unwrap()
+                .1
+                .model,
+            Some(selected)
+        );
+        assert!(
+            background.configuration_busy(),
+            "selection retains physical background ownership"
+        );
+        assert_eq!(
+            runtime
+                .runtime_resources()
+                .configuration()
+                .unwrap()
+                .config
+                .agent
+                .instructions,
+            instructions
+        );
+        let candidate = settled(&fixture, 0).await.candidate.unwrap();
+        assert_eq!(
+            fixture.manager.adopt_configuration(
+                &id,
+                &candidate.identity,
+                candidate.expected_binding,
+            ),
+            Err(AdoptionError::Busy)
+        );
+
+        release.send_replace(true);
+        background.wait_until_terminal(&execution_id).await.unwrap();
+        fixture.gates[0].release();
+        fixture.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t11_background_execution_busy_settles_into_eligible_adoption() {
     bounded(async {
         let fixture = Fixture::new().await;
@@ -1434,7 +1546,7 @@ async fn t05_complete_policy_registry_publishes_while_instructions_remain_pendin
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn t08_model_baseline_change_rejects_prepared_context() {
+async fn t08_model_baseline_change_recaptures_prepared_context() {
     bounded(async {
         let fixture = Fixture::new().await;
         let id = &fixture.sessions[0].id;
@@ -1460,20 +1572,30 @@ async fn t08_model_baseline_change_rejects_prepared_context() {
             .desired;
         // A deliberate model commit uses the same runtime gate and advances
         // the Session baseline while preparation holds no admission lock.
-        runtime
-            .model_set(crate::model::session::SessionModelConfig::of(
-                crate::model::catalog::ModelRef::parse("local/b").unwrap(),
-            ))
+        fixture
+            .manager
+            .set_model(
+                id,
+                crate::model::session::SessionModelConfig::of(
+                    crate::model::catalog::ModelRef::parse("local/b").unwrap(),
+                ),
+            )
+            .await
             .unwrap();
         probe.before_configuration_publish.release();
         let application = settled(&fixture, 0).await;
-        assert!(
-            application.candidate.is_none(),
-            "stale baseline cannot become ready"
+        let recaptured = application
+            .candidate
+            .as_ref()
+            .expect("new baseline becomes ready");
+        assert_eq!(recaptured.identity, application.desired);
+        assert_eq!(
+            recaptured.expected_binding,
+            runtime.configuration_view().unwrap().adopted_binding
         );
         assert!(matches!(
             application.units[&ApplyUnit::Instructions],
-            UnitApplication::Failed { .. }
+            UnitApplication::Ready { .. }
         ));
         assert_eq!(runtime.model_view().configured.model.to_string(), "local/b");
         assert_ne!(
@@ -1486,7 +1608,10 @@ async fn t08_model_baseline_change_rejects_prepared_context() {
                 .instructions,
             "prepared for old model"
         );
-        assert_eq!(application.desired, candidate_id);
+        assert_ne!(
+            application.desired, candidate_id,
+            "stale preparation is superseded"
+        );
         fixture.close().await;
     })
     .await;
@@ -1826,22 +1951,22 @@ async fn t08_model_capture_ignores_unrelated_resource_directories_t09_same_selec
     let selected = crate::model::session::SessionModelConfig::of(
         crate::model::catalog::ModelRef::parse("local/b").unwrap(),
     );
+    assert!(fixture.manager.configuration_application(id).is_none());
     let view = fixture
         .manager
         .set_model(id, selected.clone())
         .await
         .unwrap();
     assert_eq!(view.configured, selected);
-    settled(&fixture, 0).await;
     let runtime = fixture.manager.configuration_runtime(id).unwrap();
     let before = runtime.runtime_resources();
-    let application = fixture.manager.configuration_application(id).unwrap();
+    assert!(
+        fixture.manager.configuration_application(id).is_none(),
+        "selection must not ingest sources or manufacture a configuration application"
+    );
     fixture.manager.set_model(id, selected).await.unwrap();
     assert!(Arc::ptr_eq(&before, &runtime.runtime_resources()));
-    assert_eq!(
-        fixture.manager.configuration_application(id).unwrap(),
-        application
-    );
+    assert!(fixture.manager.configuration_application(id).is_none());
     fixture.close().await;
 }
 
@@ -4307,18 +4432,14 @@ async fn issue419_initial_model_commit_readback_admission_and_later_switch() {
                 f.manager
                     .set_model(&created.session.id, later.clone())
                     .await
-                    .is_err(),
-                "ordinary model mutation preserves the running Attempt's admission fence"
+                    .is_ok(),
+                "live selection commits while the running Attempt retains its snapshot"
             );
             let after = managed.client().snapshot().unwrap().0;
             assert_eq!(before.attempt.unwrap().model, after.attempt.unwrap().model);
             let settlement = runtime.settlement_signal();
             f.gates[0].release();
             settlement.notified().await;
-            f.manager
-                .set_model(&created.session.id, later.clone())
-                .await
-                .unwrap();
             assert_eq!(runtime.model_view().configured, later);
             f.manager
                 .unload(&created.session.active_conversation_id)
@@ -5751,7 +5872,7 @@ async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
             let text = serde_json::to_string(&response).unwrap();
             quiet(&text);
             let Response::Failure(Failure {
-                error: RpcError { data: Some(ErrorData::ConfigurationAdoption { rejection: AdoptionError::Failed { diagnostic } }), .. },
+                error: RpcError { data: Some(ErrorData::ModelUnavailable { diagnostic }), .. },
                 ..
             }) = response
             else {
@@ -6036,7 +6157,7 @@ async fn issue459_catalog_publication_keeps_discovery_and_admission_on_one_autho
     use crate::model::authoring::Profile;
     use crate::model::catalog::{ModelCatalogView, ModelProfileId, ModelRef};
     use crate::model::session::SessionModelConfig;
-    use crate::runtime_client::{RuntimeClientError, RuntimeClientResult};
+    use crate::runtime_client::RuntimeClientResult;
     use crate::toml_authoring::AuthoredRequestParams;
     use serde_json::json;
     type Authored<'a> = (&'a str, Option<u32>, serde_json::Value);
@@ -6194,7 +6315,7 @@ async fn issue459_catalog_publication_keeps_discovery_and_admission_on_one_autho
             &[("balanced", None), ("creative", None), ("fast", Some(32))],
         ));
 
-        // A removed unselected Profile is no longer selectable on either path.
+        // A removed unselected Profile is no longer selectable by its Session owner.
         write(
             &fixture,
             0,
@@ -6206,12 +6327,17 @@ async fn issue459_catalog_publication_keeps_discovery_and_admission_on_one_autho
         let view = runtime.model_view();
         assert!(matches!(
             fixture.manager.set_model(&id, pinned("creative")).await,
-            Err(AdoptionError::Failed { .. })
+            Err(ModelSelectionError::Model(
+                crate::runtime::conversation_runtime::ModelUpdateError::InvalidConfiguration(..)
+            ))
         ));
-        assert!(matches!(
-            client.model_set(pinned("creative")),
-            Err(RuntimeClientError::InvalidModelConfiguration { .. })
-        ));
+        let RuntimeClientResult::Model {
+            model: observed_model,
+        } = client.model_get().unwrap()
+        else {
+            panic!("Runtime Client model read")
+        };
+        assert_eq!(*observed_model, view);
         assert_eq!(runtime.model_view(), view);
 
         // A moved default never reaches the pinned selection.
@@ -6306,10 +6432,11 @@ async fn issue459_catalog_publication_keeps_discovery_and_admission_on_one_autho
 
         // Selection admission resolves the edited Profile from the published
         // catalog, never a retained older registry.
-        let RuntimeClientResult::ModelSet { model } = client.model_set(pinned("fast")).unwrap()
-        else {
-            panic!("model set")
-        };
+        let model = fixture
+            .manager
+            .set_model(&id, pinned("fast"))
+            .await
+            .unwrap();
         assert_eq!(
             model.effective.as_ref().unwrap().request_params,
             serde_json::from_value::<crate::model::invocation::RequestParams>(
@@ -6406,7 +6533,7 @@ async fn issue459_unavailable_selection_survives_reload_and_cold_binding() {
         fixture.manager.load(&id, None).await.unwrap();
         let b = SessionModelConfig::of(ModelRef::parse("local/b").unwrap());
         fixture.manager.set_model(&id, b.clone()).await.unwrap();
-        settled(&fixture, 0).await;
+        assert!(fixture.manager.configuration_application(&id).is_none());
         write(
             &fixture,
             0,
@@ -6485,7 +6612,6 @@ async fn issue459_unavailable_selection_survives_reload_and_cold_binding() {
 /// overtakes the candidate's expected binding so it can no longer adopt.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn issue459_changed_selected_profile_still_needs_fenced_adoption() {
-    use crate::runtime_client::RuntimeClientResult;
     use serde_json::json;
     Box::pin(bounded(async {
         let fixture = Fixture::new().await;
@@ -6519,7 +6645,6 @@ async fn issue459_changed_selected_profile_still_needs_fenced_adoption() {
             .await
             .unwrap();
         settled(&fixture, 0).await;
-        let mut eligibility = EligibilityStream::open(&fixture, &id);
         let invocation = runtime.model_snapshot();
         let settlement = runtime.settlement_signal();
         runtime.submit_inbound(issue459_text("request-A")).unwrap();
@@ -6559,15 +6684,12 @@ async fn issue459_changed_selected_profile_still_needs_fenced_adoption() {
         assert_eq!(body["temperature"], json!(0.5));
 
         // A selection committed after preparation advances the binding the
-        // candidate expected: it cannot overwrite that selection. Settlement
-        // precedes the Attempt task's release; selection waits for idle.
-        eligibility.until(AdoptionEligibility::Busy).await;
-        eligibility.until(AdoptionEligibility::Eligible).await;
-        let RuntimeClientResult::ModelSet { model } =
-            client.model_set(issue459_pinned(Some("fast"))).unwrap()
-        else {
-            panic!("model set")
-        };
+        // candidate expected: it cannot overwrite that selection.
+        let model = fixture
+            .manager
+            .set_model(&id, issue459_pinned(Some("fast")))
+            .await
+            .unwrap();
         assert!(matches!(
             fixture.manager.adopt_configuration(
                 &id,
@@ -6576,7 +6698,7 @@ async fn issue459_changed_selected_profile_still_needs_fenced_adoption() {
             ),
             Err(AdoptionError::Conflict)
         ));
-        assert_eq!(runtime.model_view(), *model);
+        assert_eq!(runtime.model_view(), model);
         assert_eq!(
             model.effective.unwrap().request_params["temperature"],
             json!(1.0)
@@ -6692,13 +6814,15 @@ async fn issue459_selection_racing_catalog_publication_linearizes_on_one_authori
                 .manager
                 .set_model(&id, issue459_pinned(Some("fast")))
                 .await,
-            Err(AdoptionError::Failed { .. })
+            Err(ModelSelectionError::Model(
+                crate::runtime::conversation_runtime::ModelUpdateError::InvalidConfiguration(..)
+            ))
         ));
-        let RuntimeClientResult::ModelSet { model } =
-            client.model_set(issue459_pinned(Some("deep"))).unwrap()
-        else {
-            panic!("model set")
-        };
+        let model = fixture
+            .manager
+            .set_model(&id, issue459_pinned(Some("deep")))
+            .await
+            .unwrap();
         assert!(model.unavailable.is_none());
         assert_eq!(
             model.effective.unwrap().request_params["temperature"],
@@ -6808,7 +6932,11 @@ async fn issue459_recovery_keeps_the_explicit_summary_policy_explicit() {
             Err(InboundAdmissionError::ModelUnavailable { .. })
         ));
         // Switching only the primary keeps the invalid Summary and is refused.
-        let Err(AdoptionError::Failed { diagnostic }) = fixture
+        let Err(ModelSelectionError::Model(
+            crate::runtime::conversation_runtime::ModelUpdateError::InvalidConfiguration(
+                diagnostic,
+            ),
+        )) = fixture
             .manager
             .set_model(&id, with_summary(None, summary_on("local/b")))
             .await
@@ -8748,7 +8876,9 @@ async fn issue459_publication_selection_race(selection_first: bool) {
                 .manager
                 .set_model(&id, issue459_pinned(Some("fast")))
                 .await,
-            Err(AdoptionError::Failed { .. })
+            Err(ModelSelectionError::Model(
+                crate::runtime::conversation_runtime::ModelUpdateError::InvalidConfiguration(..)
+            ))
         ));
         assert_eq!(retained(), binding + 2);
         let marker = issue459_pinned(Some("deep"));
@@ -8802,7 +8932,9 @@ async fn issue459_publication_selection_race(selection_first: bool) {
                 .manager
                 .set_model(&id, issue459_pinned(Some("fast")))
                 .await,
-            Err(AdoptionError::Failed { .. })
+            Err(ModelSelectionError::Model(
+                crate::runtime::conversation_runtime::ModelUpdateError::InvalidConfiguration(..)
+            ))
         ));
         assert_eq!(runtime.model_view(), view);
         assert_eq!(retained(), binding + 1);
@@ -9354,7 +9486,7 @@ async fn issue459_mixed_generations_keep_the_summary_policy_and_clients_agree() 
     use crate::model::catalog::ModelRef;
     use crate::model::invocation::RequestParams;
     use crate::model::session::{SessionModelConfig, SummaryModelPolicy, SummaryModelView};
-    use crate::runtime_client::{RuntimeClientError, RuntimeClientResult};
+    use crate::runtime_client::RuntimeClientResult;
     Box::pin(bounded(async {
         let fixture = Fixture::new().await;
         let id = fixture.sessions[0].id.clone();
@@ -9381,9 +9513,9 @@ async fn issue459_mixed_generations_keep_the_summary_policy_and_clients_agree() 
             .await
             .unwrap();
         settled(&fixture, 0).await;
-        // Both surfaces refuse `config` with a diagnostic naming `subject`,
-        // and the refusal changes nothing.
-        let refused_alike = |config: SessionModelConfig, subject: &'static str| {
+        // The Session owner refuses `config` with a diagnostic naming `subject`;
+        // Runtime Client readback and all authority remain unchanged.
+        let refused_by_owner = |config: SessionModelConfig, subject: &'static str| {
             let manager = fixture.manager.clone();
             let id = id.clone();
             let runtime = runtime.clone();
@@ -9391,18 +9523,19 @@ async fn issue459_mixed_generations_keep_the_summary_policy_and_clients_agree() 
             async move {
                 let view = runtime.model_view();
                 let application = manager.configuration_application(&id).unwrap();
-                let Err(AdoptionError::Failed { diagnostic }) =
-                    manager.set_model(&id, config.clone()).await
+                let Err(ModelSelectionError::Model(
+                    crate::runtime::conversation_runtime::ModelUpdateError::InvalidConfiguration(
+                        diagnostic,
+                    ),
+                )) = manager.set_model(&id, config.clone()).await
                 else {
                     panic!("session/setModel admitted {config:?}")
                 };
-                let Err(RuntimeClientError::InvalidModelConfiguration { message }) =
-                    client.model_set(config.clone())
-                else {
-                    panic!("Runtime Client admitted {config:?}")
+                let RuntimeClientResult::Model { model } = client.model_get().unwrap() else {
+                    panic!("Runtime Client model read")
                 };
                 assert!(diagnostic.contains(subject), "{diagnostic}");
-                assert!(message.contains(subject), "{message}");
+                assert_eq!(*model, view);
                 assert_eq!(runtime.model_view(), view);
                 assert_eq!(manager.configuration_application(&id).unwrap(), application);
             }
@@ -9427,7 +9560,7 @@ async fn issue459_mixed_generations_keep_the_summary_policy_and_clients_agree() 
         let view = runtime.model_view();
         assert!(view.unavailable.as_deref().unwrap().contains("fast"));
         assert_eq!(view.configured.summary_model, summary_on("local/b"));
-        refused_alike(with_summary(Some("fast"), summary_on("local/b")), "fast").await;
+        refused_by_owner(with_summary(Some("fast"), summary_on("local/b")), "fast").await;
         let view = fixture
             .manager
             .set_model(&id, with_summary(Some("deep"), summary_on("local/b")))
@@ -9461,30 +9594,29 @@ async fn issue459_mixed_generations_keep_the_summary_policy_and_clients_agree() 
             view.configured,
             with_summary(Some("deep"), summary_on("local/b"))
         );
-        refused_alike(with_summary(None, summary_on("local/b")), "local/b").await;
+        refused_by_owner(with_summary(None, summary_on("local/b")), "local/b").await;
 
-        // A complete correction resolves alike on both surfaces.
+        // A complete correction committed by the owner is visible on both surfaces.
         let corrected = with_summary(None, summary_on("local/a"));
-        let RuntimeClientResult::ModelSet { model } = client.model_set(corrected.clone()).unwrap()
-        else {
-            panic!("model set")
-        };
-        assert!(model.unavailable.is_none());
-        // The client's commit advanced the binding the candidate expected.
+        let view = fixture
+            .manager
+            .set_model(&id, corrected.clone())
+            .await
+            .unwrap();
+        assert!(view.unavailable.is_none());
+        // The Session owner's commit advanced the binding the candidate expected.
         assert!(matches!(
             fixture
                 .manager
                 .adopt_configuration(&id, &pending.identity, pending.expected_binding),
             Err(AdoptionError::Conflict)
         ));
-        let view = fixture
-            .manager
-            .set_model(&id, corrected.clone())
-            .await
-            .unwrap();
+        let recaptured = settled(&fixture, 0).await.candidate.unwrap();
+        let RuntimeClientResult::Model { model } = client.model_get().unwrap() else {
+            panic!("Runtime Client model read")
+        };
         assert_eq!(view, *model);
         assert_eq!(runtime.model_view(), view);
-        let recaptured = settled(&fixture, 0).await.candidate.unwrap();
         fixture
             .manager
             .adopt_configuration(&id, &recaptured.identity, recaptured.expected_binding)

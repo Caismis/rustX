@@ -17,6 +17,24 @@ Ordinary Save transfers work to the existing native coordinator. Clients do not
 classify cache impact or resource closures, retry refused adoption, or replay an
 uncertain mutation.
 
+`/model` also works while an Attempt, child or background Tool is running. Native
+confirmation commits the selected Model/Profile for future independent Attempts;
+the footer and `/model show` retain the active Attempt's separately frozen model
+facts, including same-Model Profile/parameter changes. A Profile change preserves
+request and output overrides and Summary Model policy. A different Model resets
+only primary overrides. Failed or uncertain choices do not become optimistic
+display state, and reconciliation rereads authority without mutation replay.
+Selecting the current Model still submits its complete configuration, preserving
+Profile, overrides and Summary policy; only native authority can decide whether
+the choice persists inherited intent or is already an explicit no-op.
+
+A successful snapshot or resubscription repairs the projection; it does not prove
+that an unanswered native selection has finished. The TUI retains that diagnostic
+across reconnect. A later deliberate selection is a separate request, never a
+replay. A changed native commit fences older prepared candidates by revision;
+an identical no-op is not such a fence. Responses from retired attachments cannot
+report current selection success.
+
 A spawned App Server receives process-only `--config` and `--runtime-root` bindings.
 User resources remain `~/rustx/.agents`. Remote connections use the server's bindings,
 not client-local configuration. Reconnect reconstructs current authoritative state;

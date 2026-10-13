@@ -174,7 +174,17 @@ impl RuntimeAttachment {
     native_control!(model_get, false);
     native_control!(model_catalog, false);
     native_control!(capability, false);
-    native_control!(model_set, true, config: crate::model::session::SessionModelConfig);
+    /// Replace a standalone conversation's in-memory model selection.
+    /// Durable Sessions require their native Session owner instead.
+    /// # Errors
+    /// Closed/read-only attachments and Session-owned runtimes are rejected;
+    /// invalid configurations leave the current selection unchanged.
+    pub fn model_set(
+        &self,
+        config: crate::model::session::SessionModelConfig,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.access(true)?.model_set(config)
+    }
     native_control!(goal_control, true, control: crate::goal::GoalControl);
     native_control!(trace_page, false, before: Option<super::trace::TraceCursor>, limit: usize, records: Vec<super::trace::TraceCursor>);
     native_control!(transcript_page, false, before: Option<super::snapshot::RuntimeClientTranscriptCursor>, limit: usize);

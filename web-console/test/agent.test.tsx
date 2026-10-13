@@ -11,7 +11,7 @@ import { Interactions } from '../src/app/agent/Interactions';
 import { Tool } from '../src/app/agent/Tool';
 import { RpcFailure } from '../src/client/app-server';
 import { toolCard } from '../src/bindings/tools';
-import { cfg3Effective } from './cfg3-data';
+import { cfg3Effective, cfg3Source } from './cfg3-data';
 import { Server, snapshot, interaction } from './fixture';
 let server: Server;
 beforeEach(() => { server = new Server(); });
@@ -49,7 +49,7 @@ function modelFixture() {
    const next = structuredClone(server.snapshots.get('A')!);
    next.model!.configured = request.params.config;
    next.model!.effective!.model = request.params.config.model;
-   next.model!.effective!.profile = request.params.config.profile;
+   next.model!.effective!.profile = request.params.config.profile ?? catalog.find(row => row.model === request.params.config.model)?.defaultProfile;
    server.snapshots.set('A', next);
    return { type: 'model', model: next.model! };
  });
@@ -59,6 +59,50 @@ async function openModels() {
  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Model and profile' })));
  await waitFor(() => expect(screen.queryByText('Reading native models…')).toBeNull());
 }
+it('selects a profile during execution without changing its frozen profile, parameters, output limit or summary', async () => {
+ modelFixture();
+ const initial = server.snapshots.get('A')!;
+ initial.model!.configured = { model: 'exact/model', profile: 'deliberate', requestParams: { temperature: 0.2 }, maxOutputTokens: 777, summaryModel: { mode: 'explicit', model: 'summary/original' } };
+ initial.model!.effective!.requestParams = { effort: 'high', temperature: 0.2 };
+ initial.model!.effective!.maxOutputTokens = 777;
+ const frozen = { primary: structuredClone(initial.model!.effective!), summary: { ...structuredClone(initial.model!.effective!), mode: 'explicit' as const, model: 'summary/original' } };
+ initial.attempt = { ...running().attempt!, model: frozen };
+ await server.attached('A'); const ui = render(<Control/>); await openModels();
+ expect((screen.getByRole('button', { name: 'Model and profile' }) as HTMLButtonElement).disabled).toBe(false);
+ expect(ui.container.querySelector('[data-running-model]')?.textContent).toBe('Running: exact/model / deliberate');
+ fireEvent.click(screen.getByRole('menuitem', { name: 'Profile' }));
+ server.held.add('session/setModel'); server.held.add('session/snapshot');
+ await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'brief' })));
+ const set = await server.waitFor('session/setModel', 1);
+ expect(set.params).toMatchObject({ config: { ...initial.model!.configured, profile: 'brief' } });
+ await act(async () => server.reply(set));
+ expect(screen.getByRole('button', { name: 'Model and profile' }).textContent).toContain('deliberate');
+ const reread = await server.waitFor('session/snapshot', 1);
+ await act(async () => server.reply(reread));
+ expect(screen.getByRole('button', { name: 'Model and profile' }).textContent).toContain('brief');
+ expect(ui.container.querySelector('[data-running-model]')?.textContent).toBe('Running: exact/model / deliberate');
+ await act(async () => fireEvent.click(ui.container.querySelector('[data-running-model]')!));
+ expect(document.querySelector('[data-session-model]')?.textContent).toBe('Session selection: exact/model / brief');
+ expect(JSON.parse(document.querySelector('[data-running-model-details] pre')!.textContent!)).toEqual(frozen);
+ expect(server.client.getSnapshot().views.A.snapshot?.attempt?.model).toEqual(frozen);
+ expect(count('session/setModel')).toBe(1);
+ server.held.delete('session/snapshot');
+ await act(async () => { await server.client.release('A'); await server.client.attach('A'); });
+ expect(screen.getByRole('button', { name: 'Model and profile' }).textContent).toContain('brief');
+ expect(JSON.parse(document.querySelector('[data-running-model-details] pre')!.textContent!)).toEqual(frozen);
+});
+it('shows frozen effective settings even when the selected model and profile names are unchanged', async () => {
+ modelFixture();
+ const initial = server.snapshots.get('A')!;
+ const frozen = { primary: { ...structuredClone(initial.model!.effective!), requestParams: { effort: 'original' }, maxOutputTokens: 777 }, summary: { mode: 'session' as const } };
+ initial.attempt = { ...running().attempt!, model: frozen };
+ initial.model!.effective!.requestParams = { effort: 'new' };
+ await server.attached('A'); const ui = render(<Control/>);
+ expect(ui.container.querySelector('[data-running-model]')?.textContent).toBe('Running: exact/model / deliberate');
+ await act(async () => fireEvent.click(ui.container.querySelector('[data-running-model]')!));
+ expect(JSON.parse(document.querySelector('[data-running-model-details] pre')!.textContent!)).toEqual(frozen);
+ expect(document.querySelector('[data-running-model-details]')?.textContent).toContain('future independent attempts');
+});
 it('does not dim the model trigger during a held catalog read', async () => {
  modelFixture(); await server.attached('A'); server.held.add('session/models'); render(<Control/>);
  const trigger = screen.getByRole('button', { name: 'Model and profile' }) as HTMLButtonElement;
@@ -327,7 +371,7 @@ async function slashFixture() {
  const input = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
  fireEvent.change(input, { target: { value: '/model' } }); return input;
 }
-it('slash model/profile choices retain native order and membership across locales, with no RPC on dismissal or equivalent selection', async () => {
+it('slash model/profile choices retain native order across locales, dismiss locally and submit equivalent deliberate selections', async () => {
  const input = await slashFixture(); const baseline = server.requests.length;
  // The Session follows its Model's default: the default-Profile row is its own.
  for (const [locale, followDefault] of [['zh', '模型默认预设（deliberate）'], ['en', 'Model default profile (deliberate)']] as const) {
@@ -339,7 +383,7 @@ it('slash model/profile choices retain native order and membership across locale
  expect(server.requests).toHaveLength(baseline);
  fireEvent.change(input, { target: { value: '/' } }); fireEvent.change(input, { target: { value: '/model' } });
  await act(async () => fireEvent.click(screen.getByRole('option', { name: 'exact/model / Model default profile (deliberate)' })));
- expect(count('session/setModel')).toBe(0); expect(input.value).toBe(''); expect(document.activeElement).toBe(input);
+ expect(count('session/setModel')).toBe(1); expect(input.value).toBe(''); expect(document.activeElement).toBe(input);
  expect(server.client.getSnapshot().views.A.snapshot?.model?.effective?.profile).toBe('deliberate');
 });
 it('slash keyboard profile selection on the current model waits for acknowledgement and authoritative reread', async () => {
@@ -359,16 +403,45 @@ it('slash keyboard profile selection on the current model waits for acknowledgem
  expect(input.value).toBe(''); expect(document.activeElement).toBe(input);
  await server.client.send('A', 'after confirmation'); expect(count('turn/start')).toBe(1); expect(count('session/setModel')).toBe(1);
 });
-it.each(['refused', 'unknown'] as const)('slash profile mutation %s preserves the invocation and never replays', async outcome => {
+for (const choice of ['exact/model / brief', 'exact/model']) it.each(['refused', 'unknown'] as const)(`slash selection ${choice} %s preserves the invocation and never replays`, async outcome => {
  const input = await slashFixture(); server.held.add('session/setModel');
- if (outcome === 'refused') server.handlers.set('session/setModel', () => { throw new RpcFailure({ code: -32602, message: 'Profile refused by native' }); });
- await act(async () => fireEvent.click(screen.getByRole('option', { name: 'exact/model / brief' })));
+ const before = server.client.getSnapshot().views.A.snapshot;
+ if (outcome === 'refused') server.handlers.set('session/setModel', () => { throw new RpcFailure({ code: -32602, message: 'Selection refused by native' }); });
+ await act(async () => fireEvent.click(screen.getByRole('option', { name: choice })));
  const mutation = await server.waitFor('session/setModel', 1);
+ expect(server.client.getSnapshot().views.A.snapshot).toBe(before);
  await act(async () => { if (outcome === 'unknown') { server.commit(mutation); server.socket.close(); } else server.reply(mutation); });
  expect(input.value).toBe('/model');
- expect(screen.getAllByRole('alert').some(row => row.textContent?.includes(outcome === 'unknown' ? 'uncertain' : 'Profile refused'))).toBe(true);
+ expect(screen.getAllByRole('alert').some(row => row.textContent?.includes(outcome === 'unknown' ? 'uncertain' : 'Selection refused'))).toBe(true);
  expect(count('session/setModel')).toBe(1);
- if (outcome === 'unknown') { await act(async () => server.connect()); expect(count('session/setModel')).toBe(1); }
+ if (outcome === 'unknown') {
+   await act(async () => server.connect());
+   await act(async () => server.client.repairAgentModel('A'));
+   expect(server.client.getSnapshot().views.A.snapshot?.model).toEqual(server.snapshots.get('A')!.model);
+   expect(server.client.getSnapshot().uncertain).toEqual([expect.objectContaining({ method: 'session/setModel', sessionId: 'A' })]);
+   expect(input.value).toBe('/model');
+   expect(count('session/setModel')).toBe(1);
+ } else {
+   expect(server.client.getSnapshot().views.A.snapshot).toBe(before);
+   expect(server.client.getSnapshot().uncertain).toEqual([]);
+ }
+});
+it('a late acknowledgement for the current-model gesture cannot report success after its attachment is retired', async () => {
+ const input = await slashFixture(); server.held.add('session/setModel');
+ const target = server.client.target('A');
+ await act(async () => fireEvent.click(screen.getByRole('option', { name: 'exact/model' })));
+ const mutation = await server.waitFor('session/setModel', 1);
+ expect(mutation.params).toEqual({ target, config: server.snapshots.get('A')!.model!.configured });
+ server.commit(mutation);
+ await act(async () => { await server.client.release('A'); await server.client.attach('A'); });
+ expect(server.client.target('A')).not.toEqual(target);
+ const reads = count('session/snapshot');
+ const replacement = server.client.getSnapshot().views.A;
+ await act(async () => server.reply(mutation));
+ expect(input.value).toBe('/model');
+ expect(server.client.getSnapshot().views.A).toBe(replacement);
+ expect(count('session/snapshot')).toBe(reads);
+ expect(count('session/setModel')).toBe(1);
 });
 
 /** One Model, `example/chat`, whose Profiles resolve like native: a pinned
@@ -421,6 +494,83 @@ async function chooseRow(name: string) {
   await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
 }
 
+it.each(['menu', 'slash'] as const)('%s reselects the current model with its complete configuration, waits for native confirmation and never mutates from renders or reads', async surface => {
+  const configured = { model: 'example/chat', profile: 'fast', requestParams: { top_k: 40, nested: [null, { seed: 7 }] }, maxOutputTokens: 512,
+    summaryModel: { mode: 'explicit' as const, model: 'example/summary', profile: 'short', request_params: { temperature: 0.1 }, max_output_tokens: 64 } };
+  const fixture = profileFixture(configured);
+  const initial = server.snapshots.get('A')!;
+  const frozen = { primary: { ...initial.model!.effective!, requestParams: { original: true }, maxOutputTokens: 777 }, summary: { mode: 'session' as const } };
+  initial.attempt = { ...running().attempt!, model: frozen };
+  await server.attached('A');
+  const ui = render(surface === 'menu' ? <Control/> : <SlashControl/>);
+  const chooseCurrent = async () => {
+    if (surface === 'menu') {
+      await openModels(); fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
+      await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: configured.model })));
+    } else {
+      await waitFor(() => expect(count('session/models')).toBeGreaterThan(0));
+      fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: '/model' } });
+      await act(async () => fireEvent.click(screen.getByRole('option', { name: configured.model })));
+    }
+  };
+  server.held.add('session/setModel'); server.held.add('session/snapshot');
+  const before = server.client.getSnapshot().views.A.snapshot;
+  await chooseCurrent();
+  const mutation = await server.waitFor('session/setModel', 1);
+  expect(mutation.params).toEqual({ target: server.target('A'), config: configured });
+  expect(server.client.getSnapshot().views.A.snapshot).toBe(before);
+  if (surface === 'slash') expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLInputElement).value).toBe('/model');
+  ui.rerender(surface === 'menu' ? <Control/> : <SlashControl/>);
+  expect(count('session/setModel')).toBe(1);
+  await act(async () => server.reply(mutation));
+  const reread = await server.waitFor('session/snapshot', 1);
+  expect(server.client.getSnapshot().views.A.snapshot).toBe(before);
+  expect(server.client.getSnapshot().views.A.modelMutation?.status).toBe('acknowledged');
+  await expect(server.client.send('A', 'before authoritative confirmation')).rejects.toThrow('Reread');
+  await act(async () => server.reply(reread));
+  expect(server.client.getSnapshot().views.A.snapshot?.attempt?.model).toEqual(frozen);
+  if (surface === 'slash') expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLInputElement).value).toBe('');
+  server.held.delete('session/setModel'); server.held.delete('session/snapshot');
+  await act(async () => fixture.publish(['balanced', 'fast'], 'balanced'));
+  expect(count('session/setModel'), 'snapshot and catalog refresh never repeat a gesture').toBe(1);
+  await chooseCurrent();
+  await waitFor(() => expect(server.client.getSnapshot().views.A.modelMutation).toBeUndefined());
+  expect(sent()).toEqual([configured, configured]);
+  expect(server.client.getSnapshot().views.A.snapshot?.attempt?.model).toEqual(frozen);
+});
+
+it('a Draft equivalent choice stays local, while a deliberate current-model choice during attachment queues the complete native selection', async () => {
+  const catalog = modelFixture();
+  const configured = { model: 'exact/model', profile: 'brief', requestParams: { temperature: 0.2 }, maxOutputTokens: 777,
+    summaryModel: { mode: 'explicit' as const, model: 'other', request_params: { summary_tag: 'keep' }, max_output_tokens: 333 } };
+  const source = cfg3Source();
+  source.session_models = { kind: 'available', catalog: { models: catalog }, default_model: configured };
+  const chosen: typeof configured[] = [];
+  const ui = render(<AgentControls client={server.client} draft={{ source, intent: configured, choose: value => chosen.push(value as typeof configured), disabled: false }}/>);
+  await openModels(); fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
+  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: configured.model })));
+  expect(chosen).toEqual([]); expect(count('session/setModel')).toBe(0);
+  ui.unmount();
+
+  await server.connect(); server.held.add('session/attach'); server.held.add('session/setModel');
+  const attaching = server.client.attach('A');
+  const opening = await server.waitFor('session/attach', 1);
+  function ConnectingControl() {
+    const state = useSyncExternalStore(server.client.subscribe, server.client.getSnapshot);
+    return <AgentControls client={server.client} view={state.views.A} coldSource={source}/>;
+  }
+  render(<ConnectingControl/>);
+  await openModels(); fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
+  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: configured.model })));
+  expect(count('session/setModel'), 'queued intent never dispatches before attachment').toBe(0);
+  expect(server.client.getSnapshot().views.A.modelIntent?.config).toEqual(configured);
+  await act(async () => { server.reply(opening); await attaching; });
+  const mutation = await server.waitFor('session/setModel', 1);
+  expect(mutation.params).toEqual({ target: server.target('A'), config: configured });
+  await act(async () => server.reply(mutation));
+  expect(count('session/setModel')).toBe(1);
+});
+
 it('the Session menu distinguishes following the Model default from pinning a Profile, through a single-Model catalog', async () => {
   const independent = { model: 'example/chat', requestParams: { top_k: 40, nested: [null] }, maxOutputTokens: 512, summaryModel: { mode: 'explicit' as const, model: 'example/chat', profile: 'fast', request_params: { temperature: 0.1 } } };
   profileFixture(independent); await server.attached('A'); render(<Control/>);
@@ -433,7 +583,7 @@ it('the Session menu distinguishes following the Model default from pinning a Pr
   await act(async () => fireEvent.keyDown(document.activeElement!, { key: 'Escape' }));
   await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
   // default → fast → default → balanced (explicit) → default, each with the
-  // exact whole configuration and no redundant mutation for repeats.
+  // exact whole configuration. Native authority, not this menu, decides NoOp.
   const steps: [string, typeof independent & { profile?: string }][] = [
     ['fast', { ...independent, profile: 'fast' }],
     ['Model default profile (balanced)', independent],
@@ -444,13 +594,13 @@ it('the Session menu distinguishes following the Model default from pinning a Pr
   ];
   const expected: unknown[] = [];
   for (const [row, config] of steps) {
-    if (JSON.stringify(expected.at(-1) ?? independent) !== JSON.stringify(config)) expected.push(config);
+    expected.push(config);
     menu = await profileMenu();
     await chooseRow(row);
     expect(sent()).toEqual(expected);
     expect(server.client.getSnapshot().views.A.snapshot?.model?.configured).toEqual(config);
   }
-  expect(sent()).toHaveLength(4);
+  expect(sent()).toHaveLength(6);
   // Pinning the current default: same effective Profile, different intent.
   menu = await profileMenu();
   await chooseRow('balanced');
@@ -473,11 +623,11 @@ it('choosing the selected Model keeps a pinned Profile; the default action clear
   await openModels();
   fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
   await chooseRow('example/chat');
-  expect(sent()).toEqual([]);
+  expect(sent()).toEqual([{ model: 'example/chat', profile: 'fast', maxOutputTokens: 256 }]);
   expect(configuredProfile()).toBe('fast');
   menu = await profileMenu();
   await chooseRow('Model default profile (balanced)');
-  expect(sent()).toEqual([{ model: 'example/chat', maxOutputTokens: 256 }]);
+  expect(sent().at(-1)).toEqual({ model: 'example/chat', maxOutputTokens: 256 });
   expect(configuredProfile()).toBeUndefined();
   expect(server.client.getSnapshot().views.A.snapshot?.model?.effective?.profile).toBe('balanced');
   menu = await profileMenu();
@@ -510,14 +660,14 @@ it('switching the primary Model resets primary settings and keeps the explicit S
   await profileMenu();
   await chooseRow('fast');
   expect(sent().at(-1)).toEqual({ model: 'example/other', summaryModel, profile: 'fast' });
-  // Returning to the Model default clears only the pin; repeats are no-ops.
+  // Returning to the Model default clears only the pin; repeats reach native.
   await profileMenu();
   await chooseRow('Model default profile (balanced)');
   expect(sent().at(-1)).toEqual({ model: 'example/other', summaryModel });
   await profileMenu();
   await chooseRow('Model default profile (balanced)');
   await chooseModel('example/other');
-  expect(sent()).toHaveLength(3);
+  expect(sent()).toHaveLength(5);
   // Native refuses the switch: the refusal is presented and nothing retries
   // with a reset Summary.
   server.handlers.set('session/setModel', () => { throw new RpcFailure({ code: -32602, message: 'Summary refused by native' }); });
@@ -526,6 +676,8 @@ it('switching the primary Model resets primary settings and keeps the explicit S
   expect(sent()).toEqual([
     { model: 'example/other', summaryModel },
     { model: 'example/other', summaryModel, profile: 'fast' },
+    { model: 'example/other', summaryModel },
+    { model: 'example/other', summaryModel },
     { model: 'example/other', summaryModel },
     { model: 'example/chat', summaryModel },
   ]);
@@ -566,18 +718,18 @@ it('a pinned Profile a Model without Profiles no longer declares is identified a
   await openModels();
   fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
   await chooseRow('example/chat');
-  expect(sent()).toEqual([]); expect(configuredProfile()).toBe('fast');
+  expect(sent()).toEqual([{ ...independent, profile: 'fast' }]); expect(configuredProfile()).toBe('fast');
   menu = await profileMenu();
   await chooseRow('Use model defaults');
-  expect(sent()).toEqual([independent]);
+  expect(sent().at(-1)).toEqual(independent);
   expect(server.client.getSnapshot().views.A.snapshot?.model?.configured).toEqual(independent);
-  expect(Object.hasOwn(sent()[0], 'profile')).toBe(false);
+  expect(Object.hasOwn(sent().at(-1)!, 'profile')).toBe(false);
   // Corrected: nothing left to recover, so no Profile submenu and no repeat.
   await openModels();
   expect(screen.queryByRole('menuitem', { name: 'Profile' })).toBeNull();
   expect(unavailable('fast')).toBe(false);
   expect(menu.trigger()).not.toContain('fast');
-  expect(sent()).toHaveLength(1);
+  expect(sent()).toHaveLength(2);
 });
 
 it('a published catalog that removes the pinned Profile leaves it configured and unavailable; a published Profile recovers it with the Summary policy kept', async () => {

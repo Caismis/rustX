@@ -1,6 +1,6 @@
 //! Issue #42: the Runtime Client model read/update contract.
 //!
-//! The client boundary must let #39 control the real session model without
+//! Standalone conversation clients control their in-memory model without
 //! reading `rustx.toml`, without rebuilding the runtime, and without
 //! inferring "which model is this attempt actually using" from event
 //! ordering. It must also never expose a credential.
@@ -124,6 +124,39 @@ async fn runtime(scripts: Vec<Vec<FakeStep>>) -> (Arc<FakeModel>, RuntimeClientH
     .into_parts()
     .1;
     (handle, host)
+}
+
+/// Standalone construction deliberately has no durable Session selection
+/// owner. Every supported Runtime Client control reaches the same runtime.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn standalone_model_selection_remains_writable_through_host_attachment_and_request() {
+    let (provider, host) = runtime(vec![]).await;
+    let (attachment, _) = host.attach(RUNTIME_CLIENT_PROTOCOL_VERSION).unwrap();
+    let initial_cursor = host.snapshot().unwrap().1;
+    let b = SessionModelConfig::of(model_ref("beta/model-b"));
+    let RuntimeClientResult::ModelSet { model } = host.model_set(b.clone()).unwrap() else {
+        panic!("host model selection")
+    };
+    assert_eq!(model.configured, b);
+    let a = SessionModelConfig::of(model_ref("alpha/model-a"));
+    let RuntimeClientResult::ModelSet { model } = attachment.model_set(a.clone()).unwrap() else {
+        panic!("attachment model selection")
+    };
+    assert_eq!(model.configured, a);
+    let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
+        id: RequestId::new(1),
+        config: Box::new(b.clone()),
+    });
+    assert!(response.error.is_none());
+    let Some(RuntimeClientResult::ModelSet { model }) = response.result else {
+        panic!("request model selection")
+    };
+    assert_eq!(model.configured, b);
+    let (snapshot, cursor) = host.snapshot().unwrap();
+    assert_eq!(snapshot.model.unwrap().configured, b);
+    assert!(cursor > initial_cursor);
+    assert!(provider.requests().is_empty());
+    host.shutdown().await.unwrap();
 }
 
 async fn receive_until(
@@ -703,12 +736,20 @@ async fn attempt_started_freezes_the_model_across_a_mid_attempt_switch() {
         id: RequestId::new(2),
         config: Box::new(SessionModelConfig::of(model_ref("beta/model-b"))),
     });
-    assert!(matches!(
-        response.error,
-        Some(RuntimeClientError::ConfigurationAdoption {
-            rejection: rustx::local_runtime::configuration::application::AdoptionError::Busy
-        })
-    ));
+    assert!(
+        response.error.is_none(),
+        "live selection commits: {response:?}"
+    );
+    let changed = receive_until(&subscription, |event| {
+        matches!(event.event, RuntimeClientEvent::SessionModelChanged { .. })
+    })
+    .await;
+    assert!(
+        !changed
+            .iter()
+            .any(|event| matches!(event.event, RuntimeClientEvent::AttemptStarted { .. })),
+        "selection does not readmit or rewrite the running Attempt"
+    );
 
     // The running attempt is still, truthfully, on A.
     let (during, _) = host.snapshot().expect("snapshot");
@@ -721,7 +762,7 @@ async fn attempt_started_freezes_the_model_across_a_mid_attempt_switch() {
     );
     assert_eq!(
         during.model.as_ref().unwrap().configured.model,
-        model_ref("alpha/model-a")
+        model_ref("beta/model-b")
     );
 
     release.send_replace(true);
@@ -734,18 +775,6 @@ async fn attempt_started_freezes_the_model_across_a_mid_attempt_switch() {
         RuntimeClientEvent::AttemptSettled { .. }
     ));
 
-    let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
-        id: RequestId::new(4),
-        config: Box::new(SessionModelConfig::of(model_ref("beta/model-b"))),
-    });
-    assert!(
-        response.error.is_none(),
-        "idle selection succeeds: {response:?}"
-    );
-    receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::SessionModelChanged { .. })
-    })
-    .await;
     // The next admission uses B, announced on the same self-contained event.
     assert!(
         attachment

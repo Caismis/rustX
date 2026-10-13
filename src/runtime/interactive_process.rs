@@ -53,7 +53,7 @@ use tokio::io::AsyncReadExt;
 
 use crate::runtime::interactive_supervisor::RUSTX_CONTROL_ENV;
 use crate::runtime::process_runner::{
-    MAX_PROCESS_OUTPUT_BYTES, SupervisorEvent, read_supervisor_event, send_owner_attached,
+    MAX_PROCESS_OUTPUT_BYTES, SupervisorEvent, SupervisorEventReader, send_owner_attached,
     send_start, send_terminal_ack, send_terminate,
 };
 use crate::runtime::supervised_unit::{EmergencyContainment, emergency_contain_group};
@@ -674,6 +674,7 @@ async fn run_interactive_unit(
     };
     let _ = std::fs::remove_file(socket_path);
     let (mut control_read, mut control_write) = tokio::io::split(control);
+    let mut event_reader = SupervisorEventReader::default();
     let mut lifecycle = UnitLifecycle::PreOwnership;
     let mut started = false;
     let mut control_failure: Option<String> = None;
@@ -714,7 +715,7 @@ async fn run_interactive_unit(
                     }
                 }
             }
-            event = read_supervisor_event(&mut control_read) => match event {
+            event = event_reader.read(&mut control_read) => match event {
                 Ok(Some(SupervisorEvent::AnchorReady { pgid })) => {
                     record_event(test_control, "anchor_ready");
                     if pgid > 0 && lifecycle == UnitLifecycle::PreOwnership {

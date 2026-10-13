@@ -1621,13 +1621,14 @@ impl ClientInner {
         })
     }
 
-    /// Replaces the authoritative session model configuration through the
-    /// conversation runtime.
+    /// Replaces a standalone conversation's in-memory model configuration.
+    /// Durable Session runtimes reject this control; their native Session owner
+    /// must commit settings, retained binding, and runtime authority together.
     ///
     /// # Linearization
     ///
-    /// The runtime performs resolution, validation, and state replacement
-    /// under the one coordinator lock that also owns attempt admission. An
+    /// The runtime resolves from an immutable capture off the coordinator
+    /// lock, then fences and commits under the lock that also owns admission. An
     /// update therefore either linearizes before an admission (and that
     /// attempt observes it) or after it (and only later attempts observe
     /// it). There is no third possibility and no timing assumption.
@@ -1642,7 +1643,7 @@ impl ClientInner {
     /// Returns [`RuntimeClientError::InvalidModelConfiguration`] when the
     /// configuration cannot be resolved against the catalog or cannot run
     /// under the session context policy, [`RuntimeClientError::InvalidState`]
-    /// while the runtime is not yet activated, and
+    /// for a durable Session or while the runtime is not yet activated, and
     /// [`RuntimeClientError::ProjectionExhausted`] when the observation
     /// stream is over.
     pub(crate) fn model_set(
@@ -1659,9 +1660,13 @@ impl ClientInner {
             .expect("a writable Runtime Client host has a runtime")
             .model_set(config)
             .map_err(|error| match error {
-                ModelUpdateError::ConfigurationAdoption { rejection } => {
-                    RuntimeClientError::ConfigurationAdoption { rejection }
-                }
+                ModelUpdateError::SessionOwned => RuntimeClientError::InvalidState {
+                    message: "Session model selection requires the native Session owner".to_owned(),
+                },
+                ModelUpdateError::Conflict => RuntimeClientError::ConfigurationAdoption {
+                    rejection:
+                        crate::local_runtime::configuration::application::AdoptionError::Conflict,
+                },
                 ModelUpdateError::Inactive => RuntimeClientError::InvalidState {
                     message: "the conversation runtime is not activated".to_owned(),
                 },
@@ -2599,14 +2604,16 @@ impl RuntimeClientHost {
         self.inner.model_get()
     }
 
-    /// Replaces the authoritative session model configuration through the
-    /// conversation runtime.
+    /// Replaces a standalone conversation's in-memory model configuration.
+    /// Durable Session runtimes reject this control; their native Session owner
+    /// must commit settings, retained binding, and runtime authority together.
     ///
     /// # Errors
     ///
     /// Returns [`RuntimeClientError::InvalidModelConfiguration`] when the
     /// configuration cannot be resolved against the catalog or cannot run
-    /// under the session context policy, and
+    /// under the session context policy, [`RuntimeClientError::InvalidState`]
+    /// for a durable Session or inactive runtime, and
     /// [`RuntimeClientError::ProjectionExhausted`] when the observation
     /// stream is over.
     pub fn model_set(
@@ -6462,6 +6469,7 @@ mod tests {
                 parent_guidance_seal_gate: None,
                 background_failure_gate: None,
                 subagent_failure_published_gate: None,
+                ..CoordinatorProbe::default()
             },
         )
         .await;
@@ -6559,6 +6567,7 @@ mod tests {
                 parent_guidance_seal_gate: None,
                 background_failure_gate: None,
                 subagent_failure_published_gate: None,
+                ..CoordinatorProbe::default()
             },
         )
         .await;
@@ -7324,6 +7333,7 @@ mod tests {
                 parent_guidance_seal_gate: None,
                 background_failure_gate: None,
                 subagent_failure_published_gate: None,
+                ..CoordinatorProbe::default()
             },
         )
         .await;
@@ -7423,6 +7433,7 @@ mod tests {
                 parent_guidance_seal_gate: None,
                 background_failure_gate: None,
                 subagent_failure_published_gate: None,
+                ..CoordinatorProbe::default()
             },
         )
         .await;
@@ -7682,15 +7693,10 @@ mod tests {
             "frozen_probe".to_owned(),
             serde_json::json!("updated-after-admission"),
         );
-        assert!(matches!(
-            fixture_b.host.model_set(updated.clone()),
-            Err(
-                crate::runtime_client::RuntimeClientError::ConfigurationAdoption {
-                    rejection:
-                        crate::local_runtime::configuration::application::AdoptionError::Busy
-                }
-            )
-        ));
+        fixture_b
+            .host
+            .model_set(updated)
+            .expect("active selection commits");
 
         release_b_tx.send(true).expect("release");
         receive_until(&subscription_b, |event| {
@@ -7703,11 +7709,7 @@ mod tests {
             "the admitted attempt never observes the post-admission update"
         );
 
-        fixture_b
-            .host
-            .model_set(updated)
-            .expect("idle model commit");
-        // A later attempt observes it.
+        // A later attempt observes the selection already committed while active.
         attachment_b.handle_request(RuntimeClientRequest::SubmitInbound {
             id: crate::runtime_client::RequestId::new(2),
             content: submit_content("second"),
@@ -8856,6 +8858,7 @@ mod tests {
                 parent_guidance_seal_gate: None,
                 background_failure_gate: None,
                 subagent_failure_published_gate: None,
+                ..CoordinatorProbe::default()
             }),
         )
         .await;

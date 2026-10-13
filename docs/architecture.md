@@ -1151,6 +1151,21 @@ Tool batch, child and Workflow retain their captured immutable configuration.
 Session bindings survive runtime unload/load within the process. See
 [configuration application](configuration.md#save-automatic-application-and-session-adoption).
 
+Session Model/Profile selection has a separate commit responsibility. It resolves
+a complete selection against the Session's published catalog off the commit lock,
+then revalidates source, settings, binding, resource and runtime identities before
+durable publication under the existing Attempt admission gate. The committed
+selection becomes authoritative immediately even during execution. An independent
+Attempt admitted before the commit retains its complete old model/resource
+snapshot; one admitted afterward captures the new selection. Derived child work
+inherits its parent's snapshot. This path neither adopts pending context nor
+changes the physical resource retirement rules of existing snapshot/lease owners.
+Durable local composition marks this ownership before exposing any runtime or
+client handle. Runtime-only model mutation is rejected for those Sessions;
+standalone Conversation runtimes keep their in-memory mutation contract. A true
+identical explicit selection reports an unchanged commit and leaves the entire
+Configuration Application lifecycle, including Ready Candidates, untouched.
+
 The Runtime Client protocol carries the same semantic plane through
 `interaction_respond`, typed acceptance/errors, `interaction_pending` and
 `interaction_settled` events, and `snapshot.pending_interactions`. Snapshot
@@ -5669,7 +5684,11 @@ inspected candidate, and `/model` changes Session intent. Web Settings separates
 source authoring from Session adoption. Save automatically transfers work to the
 native coordinator; the focused Session header owns explicit adoption. Preparation
 failure and process restart can appear together. Conflicts preserve target-scoped
-drafts; uncertain outcomes trigger reads, never blind replay.
+drafts; uncertain outcomes trigger reads, never blind replay. Web and TUI allow a
+valid model/Profile selection while execution is active and label the selected
+Session invocation separately from the frozen active Attempt, including same-Model
+Profile or parameter differences. Only native confirmation changes the displayed
+selection; reconnect reconstructs both facts from their native owners.
 
 
 ## Native YAML WorkflowRuntime (M9.5 / Issue #83)
@@ -6975,14 +6994,25 @@ work cannot guarantee progress without native cancellable-read settlement; this
 repair does not invent that protocol or release physical capacity on a timer.
 Other client instances have independent budgets; this is not a server-wide quota.
 
-The Composer model menu and `/model` picker consume the same native catalog and
+The Web Composer model menu and `/model` picker consume the same native catalog and
 selection policy. Model and profile identifiers retain native order and defaults;
 a different model without an explicit profile uses native defaults for its
-primary settings and keeps the independent Summary policy. Selecting the
-current model or its effective profile preserves the configured choice and sends
-no mutation. Both controls use the existing Session model mutation/confirmation
-owner; a cold choice is only local intent until native acknowledgement and the
-authoritative reread. Unknown outcomes remain visible and are never replayed.
+primary settings and keeps the independent Summary policy. Selecting the current
+model preserves the complete configured choice, including its pinned Profile,
+request overrides, output limit and independent Summary policy. A deliberate
+selection against an attached Session submits that complete choice through the
+existing Session model mutation/confirmation owner even when its values are
+unchanged. Only the native owner can distinguish inherited intent that must be
+persisted from an already-persisted NoOp. On the current model, Profile gestures
+change only the pin; the effective Profile is a display value, not proof of
+persisted selection.
+New-Session Drafts retain their local intent comparison. An existing Session
+that is still attaching queues the complete deliberate choice through the
+existing model-preparation owner, including a choice equal to the displayed
+default. The last unsent choice wins; native acknowledgement and an authoritative
+reread confirm the selection after attachment. Unknown outcomes remain visible
+and are never replayed, and a reread alone does not prove an unanswered mutation
+has settled.
 
 ### Per-input attachment admission
 

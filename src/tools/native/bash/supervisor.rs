@@ -266,6 +266,8 @@
 /// Opt-in bounded native regression evidence; not lifecycle authority.
 #[doc(hidden)]
 pub mod diagnostics;
+#[cfg(all(test, target_os = "macos"))]
+mod macos_absence_tests;
 use diagnostics::{Event as TraceEvent, record as trace};
 
 use std::process::{Command, Stdio};
@@ -371,8 +373,8 @@ pub fn run_inner_supervisor() -> ! {
 /// An `ECHILD` from the dedicated observation before the intentional
 /// release is an ownership invariant violation — never a terminal
 /// observation — and moves the anchor to [`InnerAnchor::UnexpectedlyLost`].
-/// A fallback containment signal that fails moves the anchor to
-/// [`InnerAnchor::ContainmentFailed`]: the anchor is still retained but the
+/// On Linux a fallback containment signal that fails moves the anchor to
+/// `ContainmentFailed`: the anchor is still retained but the
 /// owned group was not provably contained, so terminality stays unproven.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InnerAnchor {
@@ -392,7 +394,13 @@ enum InnerAnchor {
     /// The fallback containment signal failed while the anchor was still
     /// retained. The owned group was not provably contained, so the outer
     /// fails safely and never reports the canonical terminal event.
+    #[cfg(target_os = "linux")]
     ContainmentFailed,
+    /// The anchored containment decision and group-child reaping are complete.
+    /// Darwin may still expose orphaned members. Only absence observations
+    /// are legal now: this numeric id no longer authorizes signals or reaping.
+    #[cfg(target_os = "macos")]
+    Released { failure_reported: bool },
 }
 
 /// The outer supervisor: the final containment and reaping authority. It
@@ -594,17 +602,19 @@ fn run_outer() -> i32 {
                         // independently (after the anchor was reaped) before
                         // the terminal frame is emitted.
                         #[cfg(target_os = "macos")]
-                        if let Err(error) = prove_group_absent(inner_pid) {
-                            let _ = stream.write_failure(&error);
-                            anchor = InnerAnchor::ContainmentFailed;
+                        {
+                            anchor = InnerAnchor::Released {
+                                failure_reported: false,
+                            };
                             continue;
                         }
-                        #[cfg(target_os = "macos")]
-                        trace(TraceEvent::GroupAbsenceProven);
-                        if stream.write_frame(MSG_ALL_CHILDREN_REAPED, &[]).is_ok() {
-                            await_terminal_ack();
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            if stream.write_frame(MSG_ALL_CHILDREN_REAPED, &[]).is_ok() {
+                                await_terminal_ack();
+                            }
+                            return 0;
                         }
-                        return 0;
                     }
                     Err(error) => {
                         let _ = stream.write_failure(&format!(
@@ -613,14 +623,39 @@ fn run_outer() -> i32 {
                     }
                 }
             }
-            InnerAnchor::UnexpectedlyLost | InnerAnchor::ContainmentFailed => {
-                // Fail-safe: the owned-group terminal state cannot be
-                // proven (the anchor was lost before its intentional
-                // release, or the fallback containment signal failed). The
-                // specific failure was already reported once above. Never
-                // signal the unproven numeric id again and never report
-                // the canonical terminal event: stay alive and non-terminal
-                // rather than fabricate a terminal state.
+            #[cfg(target_os = "macos")]
+            InnerAnchor::Released { failure_reported } => {
+                // An expired observation is a diagnostic, not an irreversible
+                // loss of the ability to prove absence. Darwin gives no bound
+                // on orphan reclamation. Continue observing after the existing
+                // budget expires; only ESRCH can authorize the terminal frame.
+                // Never return to a retained-anchor signal or wait from here.
+                match observe_group_absence(inner_pid) {
+                    Ok(()) => {
+                        trace(TraceEvent::GroupAbsenceProven);
+                        if stream.write_frame(MSG_ALL_CHILDREN_REAPED, &[]).is_ok() {
+                            await_terminal_ack();
+                        }
+                        return 0;
+                    }
+                    Err(error) if !failure_reported => {
+                        trace(TraceEvent::GroupAbsenceUnproven);
+                        let _ = stream.write_failure(&error);
+                        anchor = InnerAnchor::Released {
+                            failure_reported: true,
+                        };
+                    }
+                    Err(_) => {}
+                }
+            }
+            InnerAnchor::UnexpectedlyLost => {
+                // Ownership was lost before intentional release. Never signal
+                // or derive terminality from the unproven numeric identity.
+            }
+            #[cfg(target_os = "linux")]
+            InnerAnchor::ContainmentFailed => {
+                // The anchored fallback signal failed. Preserve the retained
+                // anchor and the reported failure without fabricating proof.
             }
         }
         // Test-only deterministic barrier: parks this supervisor after it
@@ -642,6 +677,17 @@ fn run_outer() -> i32 {
             wait_for_supervisor_event(false);
         }
     }
+}
+
+/// The fixture can conservatively withhold one absence observation at the
+/// existing deadline. Every subsequent observation uses the real kernel.
+#[cfg(target_os = "macos")]
+fn observe_group_absence(pgid: i32) -> Result<(), String> {
+    if diagnostics::expired_group_presence() {
+        return crate::runtime::supervised_unit::group_absence_probe(Err(Errno::EPERM), true)
+            .map(|_| ());
+    }
+    prove_group_absent(pgid)
 }
 
 /// Keeps the outer alive until rustX acknowledges parsing the authoritative

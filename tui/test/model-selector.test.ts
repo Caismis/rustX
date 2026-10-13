@@ -337,6 +337,16 @@ describe("model identity distinctions", () => {
     assert.ok(!/beta\/model-b current/.test(rendered));
   });
 
+  it("names the running role and frozen profile separately even on the same model", () => {
+    const attempt = running("alpha/model-a");
+    attempt.model = attemptModel("alpha/model-a", { profile: "high", maxOutputTokens: 777 });
+    const rendered = lines(selector({ sessionModel: sessionModel("alpha/model-a", { profile: "low" }), attempt }), 160).join("\n");
+    assert.match(rendered, /alpha\/model-a configured · effective · attempt/);
+    assert.match(rendered, /attempt {5}alpha\/model-a · profile high · 777 out/);
+    assert.match(rendered, /effective profile {3}low/);
+    assert.doesNotMatch(rendered, /alpha\/model-a current/);
+  });
+
   it("B · shows configured and effective separately when they differ", () => {
     const rendered = lines(
       selector({
@@ -364,7 +374,7 @@ describe("model identity distinctions", () => {
     assert.match(rendered, /configured · effective {2}beta\/model-b/);
     assert.match(
       rendered,
-      /attempt {5}alpha\/model-a · frozen at admission; a change applies to the next attempt/,
+      /attempt {5}alpha\/model-a · profile .* · 4096 out · frozen at admission; a change applies to the next attempt/,
     );
     assert.match(rendered, /alpha\/model-a attempt/);
     assert.match(rendered, /beta\/model-b configured · effective/);
@@ -382,7 +392,7 @@ describe("model identity distinctions", () => {
     ).join("\n");
     assert.match(rendered, /configured {2}alpha\/model-a/);
     assert.match(rendered, /effective {3}beta\/model-b/);
-    assert.match(rendered, /attempt {5}beta\/sonnet-x · frozen at admission/);
+    assert.match(rendered, /attempt {5}beta\/sonnet-x · profile .* · 4096 out · frozen at admission/);
     // Each row is labelled with the role it actually holds, and no row is
     // labelled with a role it does not.
     assert.match(rendered, /alpha\/model-a configured/);
@@ -407,7 +417,7 @@ describe("model identity distinctions", () => {
       }),
     ).join("\n");
     assert.ok(!/a change applies to the next attempt/.test(rendered));
-    assert.match(rendered, /attempt {5}alpha\/model-a · frozen at admission \(settled\)/);
+    assert.match(rendered, /attempt {5}alpha\/model-a · profile .* · 4096 out · frozen at admission \(settled\)/);
   });
 });
 

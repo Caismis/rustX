@@ -745,6 +745,7 @@ impl RunnerTestControl {
 pub(crate) struct SupervisedCommandRunner {
     child: tokio::process::Child,
     stream: tokio::net::UnixStream,
+    event_reader: SupervisorEventReader,
     cancellation: CancellationSignal,
     timeout: Option<Duration>,
     start: tokio::time::Instant,
@@ -901,6 +902,7 @@ impl SupervisedCommandRunner {
             Self {
                 child,
                 stream,
+                event_reader: SupervisorEventReader::default(),
                 cancellation: spec.cancellation.clone(),
                 timeout: spec.timeout,
                 start: tokio::time::Instant::now(),
@@ -981,7 +983,7 @@ impl SupervisedCommandRunner {
                     self.trace_event(crate::tools::native::bash_supervisor::diagnostics::Event::TerminateSent { sent });
                     self.terminate_deadline = Some(tokio::time::Instant::now() + BASH_TERMINATION_CONFIRMATION);
                 }
-                event = read_supervisor_event(&mut self.stream), if self.supervisor_channel == SupervisorChannel::Connected => match event {
+                event = self.event_reader.read(&mut self.stream), if self.supervisor_channel == SupervisorChannel::Connected => match event {
                     Ok(Some(SupervisorEvent::AnchorReady { pgid })) => {
                         if pgid <= 0 || self.lifecycle != ProcessLifecycle::PreOwnership {
                             self.failure = Some("invalid Bash ownership anchor transition".to_owned());
@@ -1391,30 +1393,62 @@ pub(crate) async fn send_terminal_ack<W: tokio::io::AsyncWrite + Unpin>(stream: 
     let _ = stream.write_all(&frame).await;
 }
 
-/// Reads exactly one supervisor control frame:
-/// `[u32 LE length][kind][payload]`.
-///
-/// `Ok(None)` means the control channel reached EOF: the supervisor exited.
+/// One connection's asynchronous control decoder. Partial header/payload bytes
+/// belong to this owner, never to a cancellable `select!` arm. Each `read` is
+/// cancellation-safe; its byte count commits before another await can yield.
 #[cfg(unix)]
-pub(crate) async fn read_supervisor_event<R: tokio::io::AsyncRead + Unpin>(
-    stream: &mut R,
-) -> Result<Option<SupervisorEvent>, String> {
-    let mut header = [0u8; 4];
-    match stream.read_exact(&mut header).await {
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
-        Err(error) => {
-            return Err(format!(
-                "cannot read the supervisor control channel: {error}"
-            ));
+#[derive(Default)]
+pub(crate) struct SupervisorEventReader {
+    header: [u8; 4],
+    header_read: usize,
+    frame: Vec<u8>,
+    frame_read: usize,
+}
+
+#[cfg(unix)]
+impl SupervisorEventReader {
+    /// Reads one `[u32 LE length][kind][payload]` frame. Header EOF still means
+    /// channel closure; EOF inside a declared payload is a protocol failure.
+    pub(crate) async fn read<R: tokio::io::AsyncRead + Unpin>(
+        &mut self,
+        stream: &mut R,
+    ) -> Result<Option<SupervisorEvent>, String> {
+        while self.header_read < self.header.len() {
+            match stream.read(&mut self.header[self.header_read..]).await {
+                Ok(0) => return Ok(None),
+                Ok(count) => self.header_read += count,
+                Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
+                    return Ok(None);
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "cannot read the supervisor control channel: {error}"
+                    ));
+                }
+            }
         }
+        self.frame
+            .resize(u32::from_le_bytes(self.header) as usize, 0);
+        while self.frame_read < self.frame.len() {
+            let count = stream
+                .read(&mut self.frame[self.frame_read..])
+                .await
+                .map_err(|error| format!("cannot read the supervisor control frame: {error}"))?;
+            if count == 0 {
+                return Err("cannot read the supervisor control frame: early eof".to_owned());
+            }
+            self.frame_read += count;
+        }
+        let event = decode_supervisor_event(&self.frame);
+        self.header_read = 0;
+        self.frame_read = 0;
+        self.frame.clear();
+        event
     }
-    let len = u32::from_le_bytes(header) as usize;
-    let mut frame = vec![0u8; len];
-    stream
-        .read_exact(&mut frame)
-        .await
-        .map_err(|error| format!("cannot read the supervisor control frame: {error}"))?;
+}
+
+#[cfg(unix)]
+fn decode_supervisor_event(frame: &[u8]) -> Result<Option<SupervisorEvent>, String> {
     let Some((&kind, payload)) = frame.split_first() else {
         return Err("empty supervisor control frame".to_owned());
     };
@@ -1868,6 +1902,122 @@ mod tests {
         );
     }
 
+    /// The offer and ownership watches select the two native orderings. No
+    /// scheduling delay decides whether cancellation precedes START.
+    #[cfg(unix)]
+    #[allow(clippy::too_many_lines)] // One native cancellation/readiness ordering proof.
+    async fn cancel_at_nested_readiness(acknowledge_first: bool) {
+        use crate::tools::native::bash_supervisor::diagnostics::{Entry, Event};
+
+        let mut harness = gated_authority(true);
+        let directory = tempfile::tempdir().expect("fixture directory");
+        let marker = directory.path().join("started");
+        let trace = directory.path().join("trace.jsonl");
+        harness.control.diagnostics.trace = Some(trace.clone());
+        let cancellation = CancellationSignal::new();
+        let mut command = spec("touch started; sleep 30", cancellation.clone());
+        command.cwd = directory.path().to_path_buf();
+        let control = harness.control.clone();
+        let invocation = tokio::spawn(async move {
+            RunnerBackedProcessRunner::default()
+                .run(command, Some(control))
+                .await
+        });
+        let offered = tokio::time::timeout(Duration::from_secs(15), harness.offers.recv())
+            .await
+            .expect("the native anchor reaches its parent gate")
+            .expect("anchor offer");
+        assert!(!marker.exists(), "START has not been authorized");
+        if acknowledge_first {
+            harness.gate.send_replace(true);
+            tokio::time::timeout(
+                Duration::from_secs(15),
+                harness.control.lifecycle.await_ownership_established(),
+            )
+            .await
+            .expect("native ownership precedes cancellation");
+        }
+        cancellation.cancel();
+        let result = tokio::time::timeout(Duration::from_secs(15), invocation)
+            .await
+            .expect("the cancelled native unit settles")
+            .expect("invocation task")
+            .expect("terminal result");
+        assert_eq!(result.intent, ProcessOutcomeIntent::Cancelled);
+        tokio::time::timeout(
+            Duration::from_secs(15),
+            harness.control.lifecycle.await_direct_child_reaped(),
+        )
+        .await
+        .expect("the direct supervisor is reaped before the result");
+        let evidence: Vec<Entry> = std::fs::read_to_string(trace)
+            .expect("native trace")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("trace entry"))
+            .collect();
+        assert_eq!(
+            evidence
+                .iter()
+                .filter(|entry| matches!(entry.event, Event::TerminateSent { sent: true }))
+                .count(),
+            1,
+            "one cancellation gesture sends exactly one termination frame"
+        );
+        assert_eq!(
+            evidence
+                .iter()
+                .filter(|entry| matches!(entry.event, Event::DirectChildReaped))
+                .count(),
+            1,
+            "the runner owns the sole direct-child reap"
+        );
+        if acknowledge_first {
+            assert_eq!(
+                harness.releases.try_recv().expect("anchor released"),
+                offered
+            );
+            assert_eq!(
+                evidence
+                    .iter()
+                    .filter(|entry| matches!(entry.event, Event::TerminalObserved))
+                    .count(),
+                1,
+                "owned cancellation consumes exactly one native terminal proof"
+            );
+            let signals = harness.control.recorded_signals();
+            assert!(
+                signals
+                    .iter()
+                    .any(|signal| signal.signal == "SIGTERM" && signal.emitted)
+            );
+            assert!(signals.iter().all(|signal| signal.pgid == offered.1));
+        } else {
+            assert!(
+                !marker.exists(),
+                "cancellation before START never executes the command"
+            );
+            assert!(harness.control.recorded_signals().is_empty());
+            // A late parent acknowledgement cannot replay START after settlement.
+            harness.gate.send_replace(true);
+        }
+        assert!(
+            harness.releases.try_recv().is_err(),
+            "no duplicate or unowned release"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancellation_before_parent_acknowledgement_never_starts_the_command() {
+        cancel_at_nested_readiness(false).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn parent_acknowledgement_and_ownership_before_cancellation_settle_once() {
+        cancel_at_nested_readiness(true).await;
+    }
+
     /// The top-level runtime installs no authority, so the gate resolves
     /// immediately and the single-level lifecycle is unchanged.
     #[cfg(unix)]
@@ -1990,6 +2140,104 @@ mod tests {
         assert!(result.stderr.is_empty());
     }
 
+    #[cfg(unix)]
+    mod cancellation_safe_frames {
+        use super::super::{
+            MSG_ALL_CHILDREN_REAPED, MSG_ANCHOR_READY, SupervisorEvent, SupervisorEventReader,
+        };
+        use crate::runtime::cancellation::CancellationSignal;
+        use tokio::io::AsyncWriteExt;
+
+        async fn resume_after_cancellation(split: usize) {
+            let frame = [5, 0, 0, 0, MSG_ANCHOR_READY, 1, 0, 0, 0];
+            let (mut writer, mut input) = tokio::io::duplex(64);
+            let mut decoder = SupervisorEventReader::default();
+            writer
+                .write_all(&frame[..split])
+                .await
+                .expect("partial frame");
+            {
+                let reading = decoder.read(&mut input);
+                tokio::pin!(reading);
+                // This poll consumes exactly the available prefix and then
+                // waits for the suffix. Cancellation drops that pending read.
+                assert!(futures_util::poll!(reading.as_mut()).is_pending());
+                let cancellation = CancellationSignal::new();
+                cancellation.cancel();
+                tokio::select! {
+                    biased;
+                    () = cancellation.cancelled() => {}
+                    event = &mut reading => panic!("incomplete frame produced {event:?}"),
+                }
+            }
+            writer
+                .write_all(&frame[split..])
+                .await
+                .expect("remaining frame");
+            writer
+                .write_all(&[1, 0, 0, 0, MSG_ALL_CHILDREN_REAPED])
+                .await
+                .expect("successor terminal frame");
+            writer.shutdown().await.expect("EOF");
+            assert_eq!(
+                decoder.read(&mut input).await,
+                Ok(Some(SupervisorEvent::AnchorReady { pgid: 1 })),
+                "cancelled read lost bytes at split {split}"
+            );
+            assert_eq!(
+                decoder.read(&mut input).await,
+                Ok(Some(SupervisorEvent::AllChildrenReaped))
+            );
+            assert_eq!(decoder.read(&mut input).await, Ok(None));
+        }
+
+        #[tokio::test]
+        async fn partial_headers_survive_cancelled_reads() {
+            for split in 1..4 {
+                resume_after_cancellation(split).await;
+            }
+        }
+
+        #[tokio::test]
+        async fn partial_payloads_survive_cancelled_reads() {
+            for split in 4..9 {
+                resume_after_cancellation(split).await;
+            }
+        }
+
+        #[tokio::test]
+        async fn header_and_payload_eof_keep_their_existing_meanings() {
+            let frame = [5, 0, 0, 0, MSG_ANCHOR_READY, 1, 0, 0, 0];
+            for split in 0..frame.len() {
+                let (mut writer, mut input) = tokio::io::duplex(64);
+                writer
+                    .write_all(&frame[..split])
+                    .await
+                    .expect("frame prefix");
+                writer.shutdown().await.expect("EOF");
+                let parsed = SupervisorEventReader::default().read(&mut input).await;
+                if split < 4 {
+                    assert_eq!(parsed, Ok(None));
+                } else {
+                    assert!(parsed.is_err_and(|error| error.contains("control frame")));
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn empty_and_unknown_frames_remain_protocol_errors() {
+            for frame in [vec![0, 0, 0, 0], vec![1, 0, 0, 0, 255]] {
+                let mut input = frame.as_slice();
+                assert!(
+                    SupervisorEventReader::default()
+                        .read(&mut input)
+                        .await
+                        .is_err()
+                );
+            }
+        }
+    }
+
     /// The strict, fail-closed `NoOwnership` payload grammar.
     ///
     /// `NoOwnership` is terminal evidence — rustX publishes physical
@@ -2003,7 +2251,7 @@ mod tests {
         use tokio::io::AsyncWriteExt;
 
         use crate::runtime::process_runner::{
-            MSG_NO_OWNERSHIP, SupervisorEvent, read_supervisor_event,
+            MSG_NO_OWNERSHIP, SupervisorEvent, SupervisorEventReader,
         };
 
         /// Parses one hand-written `MSG_NO_OWNERSHIP` frame with the given
@@ -2016,7 +2264,7 @@ mod tests {
             frame.extend_from_slice(payload);
             writer.write_all(&frame).await.expect("no-ownership frame");
             drop(writer);
-            read_supervisor_event(&mut reader).await
+            SupervisorEventReader::default().read(&mut reader).await
         }
 
         /// The M5 Bash contract: an empty payload is the vacuous proof that

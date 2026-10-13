@@ -400,7 +400,7 @@ describe("CommandDispatcher", () => {
       return;
     }
     assert.match(outcome.body, /Active attempt model \(frozen at admission\)/);
-    assert.match(outcome.body, /this attempt keeps the model it froze/);
+    assert.match(outcome.body, /this attempt keeps its frozen model, profile, parameters and summary policy/);
   });
 
   it("changes the model only through model_catalog_get + model_set", async () => {
@@ -465,6 +465,8 @@ describe("CommandDispatcher", () => {
       },
     });
 
+    const modelRead = await nextRequest(h, "session/model");
+    h.transport.respond(modelRead.id, { type: "model", model: h.session.state.sessionModel! });
     const modelSet = await nextRequest(h, "session/setModel");
     // A deliberate whole-state replacement: primary overrides reset — the
     // runtime resolves the new model's default profile — while the
@@ -505,6 +507,7 @@ describe("CommandDispatcher", () => {
     let bModelSet = 0;
     const sessionA = {
       state: emptyPresentationState(sessionModel("alpha/model-a")),
+      modelGet: async () => sessionModel("alpha/model-a"),
       modelCatalog: async () => {
         aCatalog += 1;
         catalogStarted.resolve(undefined);
@@ -950,6 +953,46 @@ describe("CommandDispatcher", () => {
       );
     });
   }
+
+  it("selecting the current model submits its complete configuration and reports success only after native acknowledgement", async () => {
+    const h = await harness();
+    const choosing = h.dispatcher.selectModel(catalogModel("alpha/model-a"));
+    const current = sessionModel("alpha/model-a");
+    current.configured = { model: "alpha/model-a", profile: "high", requestParams: { temperature: 0.3 }, maxOutputTokens: 777, summaryModel: { mode: "explicit", model: "alpha/summary" } };
+    const read = await nextRequest(h, "session/model");
+    h.transport.respond(read.id, { type: "model", model: current });
+    const set = await nextRequest(h, "session/setModel");
+    assert.deepEqual(paramsOf(set, "session/setModel").config, current.configured);
+    let acknowledged = false;
+    void choosing.then(() => { acknowledged = true; });
+    await Promise.resolve();
+    assert.equal(acknowledged, false, "model-name equality cannot acknowledge explicit intent");
+    h.transport.respond(set.id, { type: "model", model: current });
+    const outcome = await choosing;
+    assert.equal(outcome.kind, "transient");
+    if (outcome.kind === "transient") assert.match(outcome.text, /profile, overrides and summary policy preserved/);
+    assert.equal(h.transport.log.count("session/setModel"), 1);
+  });
+
+  it("selecting the current model cannot report success when native authority rejects explicit intent", async () => {
+    const h = await harness();
+    const choosing = h.dispatcher.selectModel(catalogModel("alpha/model-a"));
+    const read = await nextRequest(h, "session/model");
+    h.transport.respond(read.id, { type: "model", model: sessionModel("alpha/model-a") });
+    const set = await nextRequest(h, "session/setModel");
+    h.transport.respondError(set.id, { code: -32000, message: "selection conflict", data: { kind: "operation_failed" } });
+    const reread = await nextRequest(h, "session/snapshot");
+    h.transport.respond(reread.id, { type: "snapshot", snapshot: snapshot(), cursor: runtimeCursor(0) });
+    const subscribe = await nextRequest(h, "session/subscribe");
+    h.transport.respond(subscribe.id, { type: "subscribed", after_cursor: runtimeCursor(0) });
+    const outcome = await choosing;
+    assert.equal(outcome.kind, "transient");
+    if (outcome.kind === "transient") {
+      assert.equal(outcome.level, "error");
+      assert.match(outcome.text, /selection conflict/);
+    }
+    assert.equal(h.session.modelSelectionOutcomeUnknown, false);
+  });
 
   it("CFG238 rejects obsolete ambiguous profile syntax without a native operation", async () => {
     const h = await harness();

@@ -108,8 +108,9 @@ The Web now uses that contract. Explicit choice and browser preference are sent;
 a displayed projected default is not. Native creation validates without fallback,
 persists/readbacks the initial model and captures configuration authority before
 catalog visibility (and therefore before ACK). Attach reads it, and the first Attempt freezes it. A later intentional
-`setModel` still follows native busy/settlement rules and cannot rewrite an
-already-admitted Attempt.
+`setModel` commits immediately through the native selection fence, including while
+execution is active, and cannot rewrite an already-admitted Attempt. Only the
+next independent admission captures the new selection (Issue #468).
 
 A native creation ACK for explicit model intent also seeds the existing browser
 preference for future Sessions; omitted intent never seeds the displayed default.
