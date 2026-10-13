@@ -94,26 +94,31 @@ pub(super) fn revision(bytes: Option<&[u8]>) -> String {
 /// Entry names are native [`OsStr`] bytes, never text: a document is read,
 /// locked, replaced and removed under exactly the basename it is bound to.
 ///
-/// A directory is either observed or admitted for durable writes.
-/// Observation ([`SourceDirectory::open`], [`SourceDirectory::observe`]) only
-/// opens what exists: it creates nothing and syncs nothing, so reading a
-/// source, or finding it healthy, costs no durability I/O. Durable-write
-/// admission ([`SourceDirectory::admit`], [`SourceDirectory::admit_directory`],
-/// [`SourceDirectory::private_child`]) is what a transaction that publishes
-/// into the directory uses: it creates missing components and syncs the
-/// parent of every component on the path — created, created concurrently by
-/// another writer, or merely visible — before descending. Visibility is not
-/// durability: an entry another process just created may not be durable yet,
-/// and an entry left behind by a failed transaction never was, so the
-/// admitting transaction establishes the barrier itself and trusts no earlier
-/// creator, sync or cleanup. Once admitted, every name leading to the
-/// directory is durable, and a later sync of its own entries is reachable
-/// after a crash.
+/// Opening a directory, and creating its missing components, claims nothing
+/// about durability. Observation ([`SourceDirectory::open`],
+/// [`SourceDirectory::observe`]) only opens what exists: it creates nothing
+/// and syncs nothing, so reading a source, or finding it healthy, costs no
+/// durability I/O. Creation ([`SourceDirectory::create`],
+/// [`SourceDirectory::create_directory`], [`SourceDirectory::private_child`])
+/// also makes what is missing, and syncs nothing either.
+///
+/// Durability is established by one operation only:
+/// [`SourceDirectory::confirm`], which walks the admitted pathname from `/`
+/// again and syncs the parent of every component — created by this
+/// transaction, created concurrently by another writer, or merely visible —
+/// and requires the walk to end at this very physical directory. Visibility
+/// is not durability: an entry another process just created may not be
+/// durable yet, and an entry left behind by a failed transaction never was,
+/// so the publishing transaction establishes the barrier itself and trusts
+/// no earlier creator, sync or cleanup. Every publication into a directory —
+/// a source replacement or removal, a backup copy — is preceded by its
+/// confirmation; once confirmed, every name leading to the directory is
+/// durable, and a later sync of its own entries is reachable after a crash.
 ///
 /// What the handle cannot do is stop the directory itself from being renamed.
 /// [`SourceDirectory::holds`] therefore asks whether the admitted pathname
 /// still names this physical directory; publication requires it immediately
-/// before and after the atomic replacement.
+/// before (as part of the confirmation) and after the atomic replacement.
 pub(super) struct SourceDirectory {
     path: std::path::PathBuf,
     directory: std::os::fd::OwnedFd,
@@ -133,23 +138,24 @@ impl SourceDirectory {
         Self::walked(path, Walk::Observe)
     }
 
-    /// Admit the parent directory of `document` for durable writes.
-    pub(super) fn admit(document: &Path) -> std::io::Result<Self> {
-        Self::admit_directory(parent(document)?)
+    /// Open the parent directory of `document` for a write, creating missing
+    /// components. Nothing is synced: publication confirms it.
+    pub(super) fn create(document: &Path) -> std::io::Result<Self> {
+        Self::create_directory(parent(document)?)
     }
 
-    /// Admit the directory `path` itself for durable writes, creating missing
-    /// components and confirming every entry on the path.
-    pub(super) fn admit_directory(path: &Path) -> std::io::Result<Self> {
-        Self::walked(path, Walk::Durable)?
+    /// Open the directory `path` itself for a write, creating missing
+    /// components. Nothing is synced: publication confirms it.
+    pub(super) fn create_directory(path: &Path) -> std::io::Result<Self> {
+        Self::walked(path, Walk::Create)?
             .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))
     }
 
-    /// Admit the child directory `name` as this user's private (`0700`)
-    /// storage for durable writes: created relative to this handle when
-    /// missing, and its entry confirmed by syncing this directory either way.
+    /// Open the child directory `name` as this user's private (`0700`)
+    /// storage, created relative to this handle when missing. Nothing is
+    /// synced: publication confirms it.
     pub(super) fn private_child(&self, name: &str) -> std::io::Result<Self> {
-        let directory = child(&self.directory, &self.path, OsStr::new(name), Walk::Durable)?
+        let directory = child(&self.directory, &self.path, OsStr::new(name), Walk::Create)?
             .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
         let status = nix::sys::stat::fstat(&directory)?;
         if status.st_uid != nix::unistd::geteuid().as_raw() {
@@ -173,6 +179,26 @@ impl SourceDirectory {
             directory,
             identity,
         }))
+    }
+
+    /// Make every name leading to this directory durable, and prove the
+    /// admitted pathname still names it: walk the pathname from `/` again
+    /// without creating or following anything, syncing the parent of every
+    /// component before descending, and require the walk to end at this
+    /// handle's (device, inode). The handle is never replaced by what the
+    /// walk opened. Fails on any failed sync, on a missing or redirected
+    /// component, and on a walk that ends at another directory; a failure
+    /// says nothing about which, so callers ask [`SourceDirectory::holds`].
+    pub(super) fn confirm(&self) -> std::io::Result<()> {
+        let reached = walk(&self.path, Walk::Confirm)?
+            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
+        if identity(&reached)? == self.identity {
+            Ok(())
+        } else {
+            Err(std::io::Error::other(
+                "the pathname names another directory",
+            ))
+        }
     }
 
     /// Whether the admitted pathname still names this physical directory.
@@ -333,9 +359,11 @@ const DIRECTORY_FLAGS: OFlag = OFlag::O_RDONLY
 enum Walk {
     /// Open what exists; create and sync nothing.
     Observe,
-    /// Create what is missing, and confirm every component's entry by syncing
-    /// its parent before descending, however the component came to exist.
-    Durable,
+    /// Create what is missing; sync nothing.
+    Create,
+    /// Open what exists, and confirm every component's entry by syncing its
+    /// parent before descending, however the component came to exist.
+    Confirm,
 }
 
 fn parent(document: &Path) -> std::io::Result<&Path> {
@@ -368,15 +396,16 @@ fn walk(path: &Path, mode: Walk) -> std::io::Result<Option<std::os::fd::OwnedFd>
 }
 
 /// Open the directory `name` below `parent` (whose path is `path`) without
-/// following a symlink. A missing entry is `None` when observing.
+/// following a symlink. A missing entry is `None` unless creating.
 ///
-/// A durable walk creates a missing entry (`0777` before the umask; private
-/// storage narrows it afterwards) and then syncs `parent` — always, not only
-/// after creating it. The entry may have been created a moment ago by another
-/// writer that has not synced yet, or left behind by a transaction whose sync
-/// failed; neither is durable merely because it is visible, so this walk
-/// establishes the barrier itself and never relies on another writer's sync
-/// or cleanup. A failed sync fails the walk and removes nothing.
+/// A creating walk makes a missing entry (`0777` before the umask; private
+/// storage narrows it afterwards); an entry another writer creates first is
+/// simply opened. A confirming walk syncs `parent` — always, for an entry of
+/// any origin: one created a moment ago by another writer that has not synced
+/// yet, or left behind by a transaction whose sync failed, is not durable
+/// merely because it is visible, so the confirming walk establishes the
+/// barrier itself and never relies on another writer's sync or cleanup. A
+/// failed sync fails the walk and removes nothing.
 fn child(
     parent: &std::os::fd::OwnedFd,
     path: &Path,
@@ -385,7 +414,7 @@ fn child(
 ) -> std::io::Result<Option<std::os::fd::OwnedFd>> {
     let next = match nix::fcntl::openat(parent, name, DIRECTORY_FLAGS, Mode::empty()) {
         Ok(next) => next,
-        Err(nix::errno::Errno::ENOENT) if mode == Walk::Durable => {
+        Err(nix::errno::Errno::ENOENT) if mode == Walk::Create => {
             match nix::sys::stat::mkdirat(parent, name, Mode::from_bits_truncate(0o777)) {
                 Ok(()) => {
                     #[cfg(test)]
@@ -399,7 +428,7 @@ fn child(
         Err(nix::errno::Errno::ENOENT) => return Ok(None),
         Err(error) => return Err(error.into()),
     };
-    if mode == Walk::Durable {
+    if mode == Walk::Confirm {
         sync(parent, path)?;
     }
     Ok(Some(next))
@@ -414,6 +443,8 @@ fn child(
     )
 )]
 fn sync(directory: &std::os::fd::OwnedFd, path: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    durability::syncing(path);
     #[cfg(test)]
     if durability::sync_fails(path) {
         return Err(std::io::Error::other("injected directory sync failure"));
@@ -435,25 +466,33 @@ fn identity(directory: &std::os::fd::OwnedFd) -> std::io::Result<(u64, u64)> {
 }
 
 /// Test-only trace of this thread's durability-relevant directory steps, with
-/// one injectable directory sync failure, and a cross-thread hook between a
-/// directory's creation and its parent's sync.
+/// one injectable directory sync failure, a hook right before this thread's
+/// next sync of one directory, and a cross-thread hook right after a
+/// directory's creation.
 #[cfg(test)]
 pub(super) mod durability {
     use std::cell::RefCell;
     use std::path::{Path, PathBuf};
     use std::sync::Mutex;
 
-    type CreatedHook = Box<dyn FnOnce() + Send>;
+    type Hook = Box<dyn FnOnce() + Send>;
     /// Keyed by absolute path; tests use distinct temporary directories.
-    static CREATED_HOOKS: Mutex<Vec<(PathBuf, CreatedHook)>> = Mutex::new(Vec::new());
+    static CREATED_HOOKS: Mutex<Vec<(PathBuf, Hook)>> = Mutex::new(Vec::new());
 
     /// Run `hook` on whichever thread next creates the directory `path`,
-    /// after its `mkdirat` and before its parent is synced.
+    /// right after its `mkdirat`.
     pub(crate) fn after_creating(path: &Path, hook: impl FnOnce() + Send + 'static) {
         CREATED_HOOKS
             .lock()
             .unwrap()
             .push((path.to_path_buf(), Box::new(hook)));
+    }
+
+    /// Run `hook` right before this thread next syncs the directory `path`.
+    /// Thread-local, so a shared ancestor such as the temporary directory
+    /// never runs another test's hook.
+    pub(crate) fn before_syncing(path: &Path, hook: impl FnOnce() + Send + 'static) {
+        TRACE.with_borrow_mut(|trace| trace.syncing = Some((path.to_path_buf(), Box::new(hook))));
     }
 
     pub(super) fn created(path: &Path) {
@@ -465,6 +504,23 @@ pub(super) mod durability {
                 .position(|(target, _)| target == path)
                 .map(|index| hooks.remove(index).1)
         };
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
+    pub(super) fn syncing(path: &Path) {
+        let hook = TRACE.with_borrow_mut(|trace| {
+            if trace
+                .syncing
+                .as_ref()
+                .is_some_and(|(target, _)| target == path)
+            {
+                trace.syncing.take().map(|(_, hook)| hook)
+            } else {
+                None
+            }
+        });
         if let Some(hook) = hook {
             hook();
         }
@@ -485,6 +541,7 @@ pub(super) mod durability {
         recording: bool,
         steps: Vec<Step>,
         fail: Option<PathBuf>,
+        syncing: Option<(PathBuf, Hook)>,
     }
 
     thread_local! {
@@ -497,8 +554,8 @@ pub(super) mod durability {
         TRACE.with_borrow_mut(|trace| {
             *trace = Trace {
                 recording: true,
-                steps: Vec::new(),
                 fail: fail.map(Path::to_path_buf),
+                ..Trace::default()
             };
         });
     }

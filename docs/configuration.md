@@ -467,11 +467,20 @@ and keeps that directory handle and its device/inode identity. The read, the
 writer lock, the staged file, the atomic replacement (`renameat` inside the
 handle — the linearization point) and the directory sync all go through that
 one handle, so replacing or redirecting any component of the pathname cannot
-move the write into another directory. Immediately before the replacement the
-pathname must still name the admitted directory and the document must still
-have exactly the expected bytes; a redirected target is refused as
-`invalid_params`, as an invalid target is at entry, and changed bytes are a
-`source_conflict` — both leave every source unchanged. The writer lock is
+move the write into another directory. Opening the directory — and creating its
+missing components, for a new document — claims nothing about durability.
+Immediately before the replacement the transaction confirms the directory's
+path: it walks the pathname from `/` again without creating or following
+anything, syncs the parent of every component — whether this transaction
+created it, another writer created it a moment earlier without syncing yet, or
+it was merely visible — and requires the walk to end at the admitted directory
+(same device and inode); the handle is never replaced by what the walk opened.
+The document must then still have exactly the expected bytes. A redirected
+target is refused as `invalid_params`, as an invalid target is at entry; changed
+bytes are a `source_conflict`; a confirmation sync that fails while the pathname
+still names the directory is an I/O failure — all leave every source unchanged.
+A committed write therefore means the published entry and every name needed to
+reach it after a crash are durable, as this transaction itself confirmed them. The writer lock is
 advisory: it orders rustX writers, not an external rename of the directory
 itself. A directory renamed between that check and the replacement still
 receives the bytes, but only the physical directory the transaction admitted;
@@ -679,31 +688,38 @@ Python, creates a Session or calls a model.
 
 A changed source is committed through the same native writer primitive as
 `configuration/sourceWrite`, under the same physical authority: the directory
-admitted when the observation read the source, the source writer lock, an exact
-revision and identity check before the candidate is used and again immediately
-before publication, a staged and synced file, atomic replacement and a
+observed when the observation read the source, the source writer lock, an exact
+revision and identity check before the candidate is used, a staged and synced
+file, the confirmation of the source directory's path and the exact revision
+check immediately before publication, atomic replacement and a
 parent-directory sync. Before that, an
 exact copy of the original bytes is written to private storage under the bound
 runtime root (`<runtime_root>/configuration-backups/`, directory `0700`, file
 `0600`, never inside the Workspace), named by source identity and original
 revision; a backup failure leaves the source unchanged. The backup is confirmed
 only by the transaction that publishes the source, and only once every name
-leading to it is durable. Backup storage is admitted for durable writes: walking
-from `/`, a missing component — runtime-root ancestor, runtime root or backup
-directory — is created, and every component's entry is then confirmed by
-syncing its parent before the walk descends, whether this transaction created
-it, another writer created it a moment earlier without syncing yet, or it was
-merely visible. Visibility is not durability, so nothing relies on another
-writer's sync or cleanup: a failed sync fails the backup and removes nothing,
-and the next transaction confirms a leftover entry before using it. The copy is
-then linked and the backup directory synced; only then may the source be
-replaced, and only then does a receipt report a backup. Observation is separate
-and creates and syncs nothing: reading a source, finding it healthy and
-admitting a Session's scope cost no durability I/O. `configuration/sourceWrite`
-admits its source directory for durable writes the same way before publishing
-into it. The bound runtime root is
-the trust anchor (canonical when bound). Each backup admits it the way a source
-directory is admitted: walked from `/` one component at a time without following
+leading to it is durable: a missing component of the backup path — runtime-root
+ancestor, runtime root or backup directory — is created, and the path is then
+confirmed exactly as a source directory's is, before anything is copied.
+Visibility is not durability, so nothing relies on another writer's sync or
+cleanup: a failed sync fails the backup and removes nothing, and the next
+transaction confirms a leftover entry before using it. The copy is then linked
+and the backup directory synced; only then may the source be replaced, and only
+then does a receipt report a backup.
+
+`repaired` therefore guarantees that the exact original bytes are durably
+backed up outside the Workspace, that the candidate replaced the source
+atomically, and that the replacement and every name needed to reach the source
+— each confirmed by this transaction, whoever created it — are durable. A
+failure to confirm the source directory's path before the replacement is
+`unresolved` with the backup reported and the source unchanged; nothing is
+retried.
+
+Observation is separate from durable writes and creates and syncs nothing:
+reading a source, finding it healthy and admitting a Session's scope cost no
+durability I/O, and a healthy source gets no lock file, staged file or backup. The bound runtime root is
+the trust anchor (canonical when bound). Each backup opens it the way a source
+directory is opened: walked from `/` one component at a time without following
 any symlink, missing components created relative to their verified parent, and,
 whenever the boundary has selected a Workspace — for the User source as much as
 for the Workspace source — checked to be physically disjoint from that admitted

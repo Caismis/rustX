@@ -1168,10 +1168,15 @@ impl UserConfigManager {
                     RepairOutcome::Committed,
                 )
             }
+            // Staging failed, or the source directory's path could not be
+            // confirmed durable: nothing was published.
             Err(SettingsError::Io) => (
                 ConfigRepairStatus::Unresolved,
                 None,
-                Some("the staged candidate could not be written; the source is unchanged".into()),
+                Some(
+                    "the repaired candidate could not be durably published; the source is unchanged"
+                        .into(),
+                ),
                 RepairOutcome::Unchanged,
             ),
         };
@@ -1207,9 +1212,9 @@ impl UserConfigManager {
     /// Workspace, named by source identity and original revision so repeated
     /// repairs of the same bytes keep exactly one copy.
     ///
-    /// The bound runtime root is admitted for durable writes: walked from `/`
-    /// one component at a time without following any symlink, missing
-    /// components created relative to their verified parent. With a selected
+    /// The bound runtime root is opened for a write: walked from `/` one
+    /// component at a time without following any symlink, missing components
+    /// created relative to their verified parent. With a selected
     /// Workspace — `workspace`, the handle its scope admitted, whichever
     /// source is being repaired — the runtime root must be physically
     /// disjoint from it. The backup directory is then
@@ -1221,11 +1226,13 @@ impl UserConfigManager {
     /// admission, can never redirect the bytes.
     ///
     /// The backup is durable only once every name leading to it is, as this
-    /// transaction itself confirmed them: every directory on the way has its
-    /// entry confirmed by syncing its parent before use, whether this
-    /// transaction created it, another writer just did, or it was merely
-    /// visible (see [`SourceDirectory`]); the backup directory is synced after
-    /// the link. Any failed sync is a backup failure.
+    /// transaction itself confirmed them: before anything is copied, the
+    /// backup directory's path is confirmed — every directory on the way has
+    /// its entry synced in its parent, whether this transaction created it,
+    /// another writer just did, or it was merely visible, and the path must
+    /// still name the opened directory (see [`SourceDirectory::confirm`]);
+    /// the backup directory is synced after the link. Any failed sync is a
+    /// backup failure.
     ///
     /// Physical safety does not depend on the pathname afterwards; whether
     /// the backup is confirmed does. The copy counts only if, once durable,
@@ -1253,12 +1260,13 @@ impl UserConfigManager {
         }
         #[cfg(test)]
         self.test_hooks.reach("before_backup");
-        let root = SourceDirectory::admit_directory(self.runtime_root()).map_err(failed)?;
+        let root = SourceDirectory::create_directory(self.runtime_root()).map_err(failed)?;
         if workspace.is_some_and(|workspace| !isolated(&root, workspace)) {
             return Err(outside());
         }
         let directory = root.private_child(BACKUP_DIRECTORY).map_err(failed)?;
         drop(root);
+        directory.confirm().map_err(failed)?;
         #[cfg(test)]
         self.test_hooks.reach("backup_directory_opened");
         let name = self.backup_name(target, before);

@@ -1112,9 +1112,10 @@ impl UserConfigManager {
                 .join("agents")
                 .join(format!("{name}.toml")),
         };
-        // The physical source of this transaction; see `publish_locked`. A
-        // target redirected since entry is invalid, as at entry.
-        let source = SourceDirectory::admit(&path)
+        // The physical source of this transaction, created when missing and
+        // confirmed durable by `publish_locked`. A target redirected since
+        // entry is invalid, as at entry.
+        let source = SourceDirectory::create(&path)
             .map_err(|_| target.validate().err().unwrap_or(SettingsError::Io))?;
         let name = path.file_name().ok_or(SettingsError::Invalid)?;
         #[cfg(test)]
@@ -1214,22 +1215,29 @@ impl UserConfigManager {
     /// the same physical authority, revision fence, staging, durability and
     /// uncertainty rules.
     ///
-    /// The caller admitted `source` (the document's physical directory) when
-    /// its transaction began, holds the writer lock of `name` in it and has
+    /// The caller opened `source` (the document's physical directory) when
+    /// its transaction began — observed, or created for a write; neither
+    /// claims durability — holds the writer lock of `name` in it and has
     /// verified `expected`. `candidate` replaces the document; `None` removes
     /// a present document. A candidate larger than the authored file bound
     /// its readers enforce is `Invalid` before anything is staged: nothing is
     /// ever published that its own reader would refuse. Everything goes
     /// through the admitted directory handle: the candidate is staged in it
-    /// and synced; immediately before the atomic replacement the pathname
-    /// must still name that directory and the document must still have
-    /// exactly `expected` bytes; the replacement is a `renameat` inside it —
-    /// the linearization point — and the directory is synced afterwards.
+    /// and synced; immediately before the atomic replacement the directory's
+    /// path is confirmed ([`SourceDirectory::confirm`]: every name leading to
+    /// it synced in its parent by this transaction, whoever created it, and
+    /// the pathname proven to still name that directory) and the document
+    /// must still have exactly `expected` bytes; the replacement is a
+    /// `renameat` inside it — the linearization point — and the directory is
+    /// synced afterwards. A success therefore means the published entry and
+    /// every name needed to reach it are durable.
     ///
     /// A pathname that no longer names the admitted directory before the
     /// replacement is `Invalid`, exactly as [`SourceTarget::validate`] rejects
-    /// a redirected target; changed bytes are a `Conflict`. Both leave every
-    /// source unchanged, as does any other failure before replacement (`Io`).
+    /// a redirected target; changed bytes are a `Conflict`; a confirmation
+    /// sync that fails while the pathname still names the directory is `Io`.
+    /// All leave every source unchanged, as does any other failure before
+    /// replacement (`Io`).
     /// A failed replacement is classified by rereading the admitted document.
     /// After replacement the bytes are in the admitted physical directory —
     /// never in a directory the pathname was redirected to — but the outcome
@@ -1253,9 +1261,15 @@ impl UserConfigManager {
         present: bool,
     ) -> Result<(), SettingsError> {
         let verify = || {
-            if !source.holds() {
-                return Err(SettingsError::Invalid);
-            }
+            // Durable reachability of the admitted directory, confirmed by
+            // this transaction, and proof that the pathname still names it.
+            source.confirm().map_err(|_| {
+                if source.holds() {
+                    SettingsError::Io
+                } else {
+                    SettingsError::Invalid
+                }
+            })?;
             let actual = revision(source.read(name).map_err(|_| SettingsError::Io)?.as_deref());
             if actual == expected {
                 Ok(())
