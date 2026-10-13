@@ -287,10 +287,11 @@ impl core::fmt::Display for SchemaError {
                 "canonical tool schema claims the reserved runtime property {property:?}; \
                  the {RUNTIME_PROPERTY_PREFIX:?} namespace is runtime-owned"
             ),
-            Self::ReservedInvocationProperty(property) => write!(
+            Self::ReservedInvocationProperty(_) => write!(
                 f,
-                "invocation arguments claim the reserved runtime property {property:?}; \
-                 reserved invocation metadata is never forwarded to executors"
+                "$ contains a property in the reserved {RUNTIME_PROPERTY_PREFIX:?} namespace. \
+                 Remove all top-level {RUNTIME_PROPERTY_PREFIX}* fields; \
+                 reserved invocation metadata is never forwarded to executors."
             ),
             Self::ExecutionModeCollision(claim) => write!(
                 f,
@@ -1740,6 +1741,27 @@ mod tests {
             resolve_invocation_metadata(ToolExecutionPolicy::ModelSelectable, &json!(null)),
             Err(super::SchemaError::MissingExecutionMode)
         ));
+    }
+
+    #[test]
+    fn reserved_invocation_diagnostic_never_echoes_an_authored_key() {
+        let expected = "$ contains a property in the reserved \"__rustx_\" namespace. Remove all top-level __rustx_* fields; reserved invocation metadata is never forwarded to executors.";
+        for suffix in ["private-field".repeat(1024), "秘密字段".repeat(1024)] {
+            let arguments = json!({format!("__rustx_{suffix}"): "private-value"});
+            for policy in [
+                ToolExecutionPolicy::ForegroundOnly,
+                ToolExecutionPolicy::BackgroundOnly,
+                ToolExecutionPolicy::ModelSelectable,
+            ] {
+                let error = resolve_invocation_metadata(policy, &arguments).unwrap_err();
+                assert!(matches!(
+                    error,
+                    super::SchemaError::ReservedInvocationProperty(_)
+                ));
+                assert_eq!(error.to_string(), expected);
+                assert!(error.to_string().len() < 256);
+            }
+        }
     }
 
     #[test]

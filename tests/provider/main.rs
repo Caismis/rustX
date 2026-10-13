@@ -16,6 +16,7 @@
 mod common;
 
 mod anthropic;
+mod ask_user_feedback;
 mod capability_boundary;
 mod context_boundary;
 mod live;

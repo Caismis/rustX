@@ -1,0 +1,77 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "questions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "description": "Meaningful, non-whitespace question text, unique within this questionnaire.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "header": {
+            "description": "A meaningful, non-whitespace tab label of at most 16 characters.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16
+          },
+          "options": {
+            "description": "Two to four authored options with distinct labels and meaningful descriptions. The runtime supplies the custom-answer choice; do not author Other or an equivalent reserved choice.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "description": "A meaningful, non-whitespace label, unique within this question. Do not use Other, Type something., or Next: the runtime reserves these for custom-answer controls.",
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 60
+                },
+                "description": {
+                  "description": "A meaningful, non-whitespace description of the option's meaning and trade-offs.",
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024
+                },
+                "preview": {
+                  "description": "Optional non-whitespace Markdown preview for single-select questions only. Omit when unused; null is not accepted.",
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 8192
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "label",
+                "description"
+              ]
+            },
+            "minItems": 2,
+            "maxItems": 4
+          },
+          "multi_select": {
+            "description": "Defaults to false (single-select). Multi-select questions cannot include option previews.",
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "question",
+          "header",
+          "options"
+        ]
+      },
+      "description": "One to four related blocking questions with unique question text.",
+      "minItems": 1,
+      "maxItems": 4
+    }
+  },
+  "required": [
+    "questions"
+  ]
+}

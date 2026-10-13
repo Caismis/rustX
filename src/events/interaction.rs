@@ -67,7 +67,7 @@
 //!          which reaches a provider as a real empty value.
 //! ```
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -1073,10 +1073,14 @@ fn is_canonical_digest(value: &str) -> bool {
 
 fn validate_text(value: &str, name: &str, max: usize) -> Result<(), String> {
     if value.trim().is_empty() {
-        return Err(format!("{name} must be non-empty"));
+        return Err(format!(
+            "{name} must contain non-whitespace text. Supply meaningful text."
+        ));
     }
     if value.chars().count() > max {
-        return Err(format!("{name} exceeds {max} characters"));
+        return Err(format!(
+            "{name} exceeds {max} characters. Shorten this field."
+        ));
     }
     Ok(())
 }
@@ -1094,14 +1098,14 @@ fn validate_choice_options(
     let count = options.len();
     if !(MIN_CHOICE_OPTIONS..=MAX_CHOICE_OPTIONS).contains(&count) {
         return Err(format!(
-            "{context} options must contain {MIN_CHOICE_OPTIONS}–{MAX_CHOICE_OPTIONS} options"
+            "{context}.options must contain {MIN_CHOICE_OPTIONS}–{MAX_CHOICE_OPTIONS} options. Adjust the option count."
         ));
     }
-    let mut labels = BTreeSet::new();
+    let mut labels = BTreeMap::new();
     for (option_index, option) in options.iter().enumerate() {
         validate_text(
             &option.label,
-            &format!("{context} option {option_index} label"),
+            &format!("{context}.options[{option_index}].label"),
             MAX_OPTION_LABEL_CHARS,
         )?;
         // A client-reserved row only exists when the question offers a custom
@@ -1109,30 +1113,31 @@ fn validate_choice_options(
         // `enum` may legitimately contain the value `Other`.
         if allow_custom && is_reserved_option_label(&option.label) {
             return Err(format!(
-                "{context} option label {:?} is reserved for the client",
-                option.label
+                "{context}.options[{option_index}].label is reserved for the runtime's custom-answer controls. Replace it with a distinct authored choice; the runtime supplies the custom-answer choice."
             ));
         }
         // Labels are presentation, and a response addresses an option by
         // index — but two rows a human cannot tell apart are still ambiguous
         // *to the human*, so they are refused deterministically.
-        if !labels.insert(&option.label) {
-            return Err(format!("{context} option labels must be unique"));
+        if let Some(previous_index) = labels.insert(&option.label, option_index) {
+            return Err(format!(
+                "{context}.options[{option_index}].label duplicates {context}.options[{previous_index}].label. Option labels must be unique within each question. Change one of the conflicting labels."
+            ));
         }
         validate_text(
             &option.description,
-            &format!("{context} option {option_index} description"),
+            &format!("{context}.options[{option_index}].description"),
             MAX_OPTION_DESCRIPTION_CHARS,
         )?;
         if let Some(preview) = &option.preview {
             validate_text(
                 preview,
-                &format!("{context} option {option_index} preview"),
+                &format!("{context}.options[{option_index}].preview"),
                 MAX_OPTION_PREVIEW_CHARS,
             )?;
             if multi_select {
                 return Err(format!(
-                    "{context} multi-select options cannot include previews"
+                    "{context}.options[{option_index}].preview is not allowed for multi-select questions. Remove the preview or use a single-select question."
                 ));
             }
         }
@@ -1217,25 +1222,27 @@ pub fn validate_questionnaire(questionnaire: &QuestionnaireSpecification) -> Res
     let count = questionnaire.questions.len();
     if count == 0 || count > MAX_QUESTIONNAIRE_QUESTIONS {
         return Err(format!(
-            "questions must contain 1–{MAX_QUESTIONNAIRE_QUESTIONS} questions"
+            "questions must contain 1–{MAX_QUESTIONNAIRE_QUESTIONS} questions. Adjust the question count."
         ));
     }
-    let mut question_texts = BTreeSet::new();
+    let mut question_texts = BTreeMap::new();
     for (question_index, question) in questionnaire.questions.iter().enumerate() {
         validate_text(
             &question.question,
-            &format!("question {question_index} text"),
+            &format!("questions[{question_index}].question"),
             MAX_QUESTION_TEXT_CHARS,
         )?;
-        if !question_texts.insert(&question.question) {
-            return Err("question text must be unique within one questionnaire".to_owned());
+        if let Some(previous_index) = question_texts.insert(&question.question, question_index) {
+            return Err(format!(
+                "questions[{question_index}].question duplicates questions[{previous_index}].question. Question text must be unique within one questionnaire. Rewrite one of the conflicting questions."
+            ));
         }
         validate_text(
             &question.header,
-            &format!("question {question_index} header"),
+            &format!("questions[{question_index}].header"),
             MAX_QUESTION_HEADER_CHARS,
         )?;
-        validate_answer_specification(&question.answer, &format!("question {question_index}"))?;
+        validate_answer_specification(&question.answer, &format!("questions[{question_index}]"))?;
     }
     Ok(())
 }
@@ -1688,6 +1695,63 @@ mod tests {
             }],
         };
         assert!(validate_questionnaire(&bounded).is_ok());
+    }
+
+    #[test]
+    fn questionnaire_duplicates_report_both_nonadjacent_paths_without_values() {
+        let mut repeated_questions = questionnaire();
+        repeated_questions.questions[0].question = "private-question-秘密内容".to_owned();
+        let mut distinct = repeated_questions.questions[0].clone();
+        distinct.question = "A distinct question?".to_owned();
+        repeated_questions.questions.push(distinct);
+        repeated_questions
+            .questions
+            .push(repeated_questions.questions[0].clone());
+        let question_error = validate_questionnaire(&repeated_questions).unwrap_err();
+        assert_eq!(
+            question_error,
+            "questions[2].question duplicates questions[0].question. Question text must be unique within one questionnaire. Rewrite one of the conflicting questions."
+        );
+        assert_eq!(
+            validate_questionnaire(&repeated_questions).unwrap_err(),
+            question_error
+        );
+        assert!(!question_error.contains("private-question"));
+        assert!(!question_error.contains("秘密内容"));
+
+        let mut repeated_options = questionnaire();
+        let options = options_mut(&mut repeated_options);
+        options[0].label = "private-label-秘密选项".to_owned();
+        options.push(options[0].clone());
+        let option_error = validate_questionnaire(&repeated_options).unwrap_err();
+        assert_eq!(
+            option_error,
+            "questions[0].options[2].label duplicates questions[0].options[0].label. Option labels must be unique within each question. Change one of the conflicting labels."
+        );
+        assert_eq!(
+            validate_questionnaire(&repeated_options).unwrap_err(),
+            option_error
+        );
+        assert!(!option_error.contains("private-label"));
+        assert!(!option_error.contains("秘密选项"));
+    }
+
+    #[test]
+    fn shared_choice_cardinality_remains_wider_than_native_authoring() {
+        for count in [
+            MIN_CHOICE_OPTIONS,
+            MAX_QUESTIONNAIRE_OPTIONS + 1,
+            MAX_CHOICE_OPTIONS,
+        ] {
+            let mut spec = questionnaire();
+            *options_mut(&mut spec) = (0..count)
+                .map(|index| option(&format!("Choice {index}"), "An authored choice."))
+                .collect();
+            assert!(
+                validate_questionnaire(&spec).is_ok(),
+                "shared option count {count}"
+            );
+        }
     }
 
     #[test]

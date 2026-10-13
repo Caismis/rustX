@@ -10,6 +10,15 @@ permissions:
   contents: read
 
 jobs:
+  notifications:
+    name: Notification metadata and signing
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test notification filters, signing, and secret isolation
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
+
   # Static checks get their own job so formatting/lint failures report in
   # about two minutes instead of after a full test build.
   quality:
