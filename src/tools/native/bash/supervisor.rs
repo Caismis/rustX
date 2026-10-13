@@ -266,6 +266,8 @@
 /// Opt-in bounded native regression evidence; not lifecycle authority.
 #[doc(hidden)]
 pub mod diagnostics;
+#[cfg(all(test, target_os = "macos"))]
+mod macos_absence_tests;
 use diagnostics::{Event as TraceEvent, record as trace};
 
 use std::process::{Command, Stdio};
@@ -594,7 +596,8 @@ fn run_outer() -> i32 {
                         // independently (after the anchor was reaped) before
                         // the terminal frame is emitted.
                         #[cfg(target_os = "macos")]
-                        if let Err(error) = prove_group_absent(inner_pid) {
+                        if let Err(error) = observe_group_absence(inner_pid) {
+                            trace(TraceEvent::GroupAbsenceUnproven);
                             let _ = stream.write_failure(&error);
                             anchor = InnerAnchor::ContainmentFailed;
                             continue;
@@ -642,6 +645,17 @@ fn run_outer() -> i32 {
             wait_for_supervisor_event(false);
         }
     }
+}
+
+/// The fixture can conservatively withhold one absence observation at the
+/// existing deadline. Every subsequent observation uses the real kernel.
+#[cfg(target_os = "macos")]
+fn observe_group_absence(pgid: i32) -> Result<(), String> {
+    if diagnostics::expired_group_presence() {
+        return crate::runtime::supervised_unit::group_absence_probe(Err(Errno::EPERM), true)
+            .map(|_| ());
+    }
+    prove_group_absent(pgid)
 }
 
 /// Keeps the outer alive until rustX acknowledges parsing the authoritative
