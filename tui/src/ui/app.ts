@@ -133,7 +133,7 @@ import { ConfirmationView } from "./components/confirmation.ts";
 import { PopupFrame, type PopupContent } from "./components/popup-frame.ts";
 import { TransientFeedbackSurface } from "./components/transient-feedback.ts";
 import { SourceRepairStatus } from "./components/source-repair-status.ts";
-import { SourceRepairNotices, sourceKey, type SourceRepairObservation } from "../presentation/source-repairs.ts";
+import type { SourceRepairObservation } from "../presentation/source-repairs.ts";
 import {
   FooterView,
   renderStartup,
@@ -226,10 +226,9 @@ export class RustxTuiApp {
    */
   readonly #todos = new Container();
   readonly #transient = new TransientFeedbackSurface();
-  /** Newly observed configuration repairs; presentation only (Issue #464). */
+  /** Newly observed configuration repairs of the current App Server
+   * authority; presentation only (Issue #464). */
   readonly #repairStatus = new SourceRepairStatus();
-  /** Receipt identities already announced, across reconnects. */
-  readonly #repairNotices = new SourceRepairNotices();
   #removeRepairListener: () => void = () => {};
   readonly #footer = new FooterView(() => ({
     state: this.#connecting ? undefined : this.#session?.state,
@@ -337,22 +336,24 @@ export class RustxTuiApp {
   }
 
   /**
-   * Presents source repair receipts this connection observed: those already
-   * held by the host, then each new one. A receipt of one App Server authority
-   * is announced once per client, so reconnects to it and rereads never repeat
-   * a status line; a replacement authority's receipts are its own.
+   * Presents source repair receipts of the current connection's App Server
+   * authority: those already held by the host, then each new one. A receipt
+   * of one authority is announced once per client, so reconnects to it and
+   * rereads never repeat a status line; a replacement authority retires the
+   * previous one's line, and its receipts are its own. Only the current host
+   * is observed: a replaced connection's late notice changes nothing.
    */
   #watchSourceRepairs(): void {
     this.#removeRepairListener();
-    const authority = this.#host.authorityId;
-    const observe = ({ target, receipt }: SourceRepairObservation) => {
-      if (receipt === undefined) this.#repairStatus.withdraw(sourceKey(target));
-      else if (this.#repairNotices.fresh(authority, receipt)) this.#repairStatus.observe(receipt);
-      else return;
+    const host = this.#host;
+    this.#repairStatus.adopt(host.authorityId);
+    const observe = (observation: SourceRepairObservation) => {
+      if (this.#host !== host || !this.#repairStatus.observe(host.authorityId, observation)) return;
       if (this.#started) this.#tui.requestRender();
     };
-    for (const observation of this.#host.sourceRepairs()) observe(observation);
-    this.#removeRepairListener = this.#host.onSourceRepair(observe);
+    for (const observation of host.sourceRepairs()) observe(observation);
+    this.#removeRepairListener = host.onSourceRepair(observe);
+    if (this.#started) this.#tui.requestRender();
   }
 
   #watchConnection(): void {

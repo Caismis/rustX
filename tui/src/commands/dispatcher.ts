@@ -1,4 +1,3 @@
-import { realpathSync } from "node:fs";
 import { isAttemptActive } from "../presentation/state.ts";
 import { archiveDestination } from "../app-server/archive.ts";
 import { renderRepairInspection, type SourceRepairObservation } from "../presentation/source-repairs.ts";
@@ -179,6 +178,8 @@ export interface DebugDiagnostics {
   pendingRequests: number;
   resyncCount: number;
 }
+
+const NO_CURRENT_WORKSPACE = 'No Session is focused, so there is no current Workspace. Name one with /settings workspace "<path>" repairs.';
 
 export class CommandDispatcher {
   #context: DispatcherContext;
@@ -509,17 +510,12 @@ export class CommandDispatcher {
   async #settings(argument: string): Promise<CommandOutcome> {
     const words = argument.match(/"(?:[^"\\]|\\.)*"|\S+/g)?.map(word => word.startsWith('"') ? JSON.parse(word) as string : word) ?? [];
     const usage = transient("error", 'usage: /settings [repairs] | [user | workspace ["<canonical absolute path>"]] [repairs | rescan | approval policy|full_access|inherit]');
-    if (words.length === 1 && words[0] === "repairs") return this.#repairs(undefined);
+    if (words.length === 1 && words[0] === "repairs") return this.#repairs("current");
     const owner = words.shift() ?? "user";
     let target: import("../../../protocol/app-server/v46.ts").SourceTarget;
     if (owner === "user") target = { kind: "user" };
-    else if (owner === "workspace" && words[0] === "repairs" && words.length === 1) {
-      // The current Workspace is this client's own Session directory; any
-      // other Workspace is still named explicitly.
-      const current = this.#currentWorkspace();
-      if (current === undefined) return transient("error", "The current Workspace directory is unavailable; name it explicitly.");
-      target = current;
-    } else if (owner === "workspace" && words[0]) target = { kind: "workspace", directory: words.shift()! };
+    else if (owner === "workspace" && words[0] === "repairs" && words.length === 1) return this.#repairs("current workspace");
+    else if (owner === "workspace" && words[0]) target = { kind: "workspace", directory: words.shift()! };
     else return usage;
     if (words[0] === "repairs") return words.length === 1 ? this.#repairs(target) : usage;
     const action = words.shift();
@@ -538,28 +534,44 @@ export class CommandDispatcher {
 
   /**
    * The redacted native repair receipts of the User source, a Workspace
-   * source, or both (`undefined`), read authoritatively. Read-only: this never
-   * triggers a repair, and nothing in it reaches the conversation.
+   * source, or both, read authoritatively. Read-only: this never triggers a
+   * repair, and nothing in it reaches the conversation.
+   *
+   * `"current"` is the User and the current Workspace; `"current workspace"`
+   * the current Workspace alone. The current Workspace is the one the focused
+   * Session is natively bound to — its canonical durable cwd, read from the
+   * App Server (`session/summary`, which loads no runtime) — never this
+   * client's Session-creation defaults, and never a path resolved on this
+   * machine, which may not be the App Server's. The App Server and Session
+   * are captured when the command starts: a later focus change does not
+   * retarget it, and a result from a replaced App Server is never shown.
    */
-  async #repairs(target: import("../../../protocol/app-server/v46.ts").SourceTarget | undefined): Promise<CommandOutcome> {
-    const workspace = target === undefined ? this.#currentWorkspace() : target.kind === "workspace" ? target : undefined;
-    const projection = await this.#context.host.readSourceRepairs(workspace ?? { kind: "user" });
+  async #repairs(
+    target: import("../../../protocol/app-server/v46.ts").SourceTarget | "current" | "current workspace",
+  ): Promise<CommandOutcome> {
+    const { host, session } = this.#context;
+    let workspace: import("../../../protocol/app-server/v46.ts").SourceTarget | undefined;
+    if (typeof target === "string") {
+      if (session !== undefined) {
+        const { summary } = await host.client.call("session/summary", { session_id: session.sessionId }, "session_summary");
+        workspace = { kind: "workspace", directory: summary.cwd };
+      } else if (target === "current workspace") {
+        return transient("error", NO_CURRENT_WORKSPACE);
+      }
+    } else if (target.kind === "workspace") {
+      workspace = target;
+    }
+    const projection = await host.readSourceRepairs(workspace ?? { kind: "user" });
+    if (this.#context.host !== host) return transient("error", "The App Server connection changed during the inspection; nothing was shown. Run it again.");
     const observations: SourceRepairObservation[] = [];
-    if (target === undefined || target.kind === "user") {
+    if (target === "current" || (typeof target !== "string" && target.kind === "user")) {
       observations.push({ target: { kind: "user" }, receipt: projection.user_repair ?? undefined });
     }
     if (workspace !== undefined) {
       observations.push({ target: projection.target, receipt: projection.workspace_repair ?? undefined });
     }
-    return inspect("Configuration repairs", renderRepairInspection(observations));
-  }
-
-  #currentWorkspace(): import("../../../protocol/app-server/v46.ts").SourceTarget | undefined {
-    try {
-      return { kind: "workspace", directory: realpathSync(this.#context.sessionSettings.cwd) };
-    } catch {
-      return undefined;
-    }
+    const body = renderRepairInspection(observations);
+    return inspect("Configuration repairs", target === "current" && workspace === undefined ? `${body}\n\n${NO_CURRENT_WORKSPACE}` : body);
   }
 
   async #configuration(session: AppServerSession, argument: string): Promise<CommandOutcome> {

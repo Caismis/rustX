@@ -77,6 +77,11 @@ export const APP_SERVER_PROTOCOL_VERSION = 46;
  * owners re-announce or reread anything beyond this. */
 const UNROUTED_NOTIFICATIONS = 64;
 
+/** Source repair observations retained before the first subscription, one
+ * per source: the User and as many Workspaces as the native repair ledger
+ * itself retains (`MAX_LEDGER_WORKSPACES`). */
+const UNROUTED_SOURCE_REPAIRS = 1 + 64;
+
 /** How this client identifies itself in `initialize`. */
 export const CLIENT_IDENTITY: ClientIdentity = {
   name: "rustx-tui",
@@ -286,8 +291,19 @@ export class AppServerClient {
    * before the composition root has built the host that routes notifications;
    * that gap must not lose a level-triggered notice. Finite, and retired by
    * the first subscription.
+   *
+   * Source repair observations are kept apart, coalesced to the latest one
+   * per source — a withdrawal included — so no amount of unrelated traffic
+   * crowds them out. The server advances its per-source delivery cursor as
+   * it sends one and never sends it again, so a dropped observation would be
+   * lost for good; the latest per source is all a subscriber needs. The
+   * least recently observed Workspace goes beyond the bound, as the native
+   * ledger forgets it; the User never does.
    */
-  #unrouted: Notification[] | undefined = [];
+  #unrouted: { notifications: Notification[]; sourceRepairs: Map<string, Notification> } | undefined = {
+    notifications: [],
+    sourceRepairs: new Map(),
+  };
   readonly #closeListeners = new Set<CloseListener>();
   #nextRequestId = 1;
   #capabilities: ServerCapabilities | undefined;
@@ -410,9 +426,20 @@ export class AppServerClient {
   /** Subscribes to server notifications. Returns an unsubscribe function. */
   onNotification(listener: NotificationListener): () => void {
     this.#notificationListeners.add(listener);
+    // The first subscriber drains the buffer before anything is dispatched
+    // to it directly: a notification arriving during the replay — a newer
+    // observation of a source already buffered included — joins the buffer
+    // and is replayed after everything older, so the handoff never delivers
+    // an older observation after a newer one, and never drops or repeats one.
     const unrouted = this.#unrouted;
-    this.#unrouted = undefined;
-    for (const notification of unrouted ?? []) listener(notification);
+    if (unrouted !== undefined) {
+      for (;;) {
+        const next = unrouted.notifications.shift() ?? first(unrouted.sourceRepairs);
+        if (next === undefined) break;
+        listener(next);
+      }
+      this.#unrouted = undefined;
+    }
     return () => this.#notificationListeners.delete(listener);
   }
 
@@ -514,7 +541,19 @@ export class AppServerClient {
 
     if (isNotification(record)) {
       if (this.#unrouted !== undefined) {
-        if (this.#unrouted.length < UNROUTED_NOTIFICATIONS) this.#unrouted.push(record);
+        if (record.method === "configuration/sourceRepairChanged") {
+          const target = record.params.target;
+          const key = target.kind === "user" ? "user" : `workspace:${target.directory}`;
+          const repairs = this.#unrouted.sourceRepairs;
+          repairs.delete(key);
+          repairs.set(key, record);
+          if (repairs.size > UNROUTED_SOURCE_REPAIRS) {
+            const oldest = [...repairs.keys()].find(source => source !== "user");
+            if (oldest !== undefined) repairs.delete(oldest);
+          }
+        } else if (this.#unrouted.notifications.length < UNROUTED_NOTIFICATIONS) {
+          this.#unrouted.notifications.push(record);
+        }
         return;
       }
       for (const listener of [...this.#notificationListeners]) {
@@ -608,6 +647,15 @@ export function isDeliveryCancelled(error: unknown): boolean {
 /** Whether a side-effecting request's outcome is genuinely unknown. */
 export function isUncertainOutcome(error: unknown): boolean {
   return error instanceof UncertainOutcomeError;
+}
+
+/** Removes and returns the oldest entry of `entries`, if any. */
+function first<V>(entries: Map<string, V>): V | undefined {
+  for (const [key, value] of entries) {
+    entries.delete(key);
+    return value;
+  }
+  return undefined;
 }
 
 /** Whether the server asked for an authoritative projection repair. */

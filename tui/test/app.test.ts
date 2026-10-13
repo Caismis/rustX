@@ -132,6 +132,10 @@ interface FakeHostOptions {
   authorityId?: string;
   /** Source repair observations the host already holds. */
   sourceRepairs?: SourceRepairObservation[];
+  /** Installed so a test can publish source repair observations. The
+   * returned unsubscribe keeps the listener: a late notice already in
+   * flight from this connection can still arrive. */
+  onSourceRepair?: (listener: (observation: SourceRepairObservation) => void) => void;
 }
 
 function fakeHost(options: FakeHostOptions = {}): AppServerHost {
@@ -165,7 +169,10 @@ function fakeHost(options: FakeHostOptions = {}): AppServerHost {
     attachment: () => undefined,
     detach: async () => {},
     sourceRepairs: () => options.sourceRepairs ?? [],
-    onSourceRepair: () => () => {},
+    onSourceRepair: (listener: (observation: SourceRepairObservation) => void) => {
+      options.onSourceRepair?.(listener);
+      return () => {};
+    },
     readSession:
       options.readSession ?? (async () => sessionView()),
     listSessions: async () => ({ sessions: [] as SessionSummaryView[] }),
@@ -2288,40 +2295,73 @@ it("remote recovery installs a fresh attachment and fences old callbacks without
   await running;
 });
 
-it("repair notices are announced once per App Server authority across reconnects", async () => {
+it("repair status is scoped to the App Server authority across reconnects and replacement", async () => {
   let close!: (error: TransportClosedError) => void;
-  const repaired: SourceRepairObservation = { target: { kind: "user" }, receipt: {
-    id: "receipt-user-1", target: { kind: "user" }, status: "repaired", before_revision: "sha256:before",
-    after_revision: "sha256:after", changed_count: 1, changes: [{ kind: "updated_schema_version", from: 8, to: 10 }],
-    truncated: false, backup_available: true, diagnostic: null,
-  } };
-  const connection = (authorityId: string) => fakeHost({ ownership: "external", authorityId, sourceRepairs: [repaired], onClose: listener => { close = listener; } });
-  const hosts = [connection("authority-a"), connection("authority-b")];
+  const receipt = (id: string, target: SourceRepairObservation["target"], status: "repaired" | "unresolved" = "repaired"): SourceRepairObservation => ({ target, receipt: {
+    id, target, status, before_revision: "sha256:before", after_revision: status === "repaired" ? "sha256:after" : null, changed_count: 1,
+    changes: [{ kind: "updated_schema_version", from: 8, to: 10 }], truncated: false, backup_available: status === "repaired",
+    diagnostic: status === "repaired" ? null : "invalid value",
+  } });
+  const workspace = { kind: "workspace", directory: "/srv/project" } as const;
+  const userRepair = receipt("receipt-user-1", { kind: "user" });
+  const workspaceRepair = receipt("receipt-workspace-1", workspace, "unresolved");
+  const publish = new Map<string, (observation: SourceRepairObservation) => void>();
+  const connection = (name: string, authorityId: string, sourceRepairs: SourceRepairObservation[]) => fakeHost({
+    ownership: "external", authorityId, sourceRepairs,
+    onClose: listener => { close = listener; },
+    onSourceRepair: listener => { publish.set(name, listener); },
+  });
+  // a1 and a2 reach the same server process; b replaced it at the endpoint.
+  const hosts = [connection("a2", "authority-a", [userRepair]), connection("b", "authority-b", [])];
   const announced: string[] = [];
-  const original = SourceRepairStatus.prototype.observe;
-  SourceRepairStatus.prototype.observe = function(receipt) { announced.push(receipt.id); return original.call(this, receipt); };
-  const app = new RustxTuiApp({ host: connection("authority-a"), session: fakeSession(), sessionSettings: SESSION_SETTINGS,
+  let status: SourceRepairStatus | undefined;
+  const original = { adopt: SourceRepairStatus.prototype.adopt, observe: SourceRepairStatus.prototype.observe };
+  SourceRepairStatus.prototype.adopt = function(authorityId) { status = this; return original.adopt.call(this, authorityId); };
+  SourceRepairStatus.prototype.observe = function(authorityId, observation) {
+    const changed = original.observe.call(this, authorityId, observation);
+    if (changed && observation.receipt) announced.push(`${authorityId}:${observation.receipt.id}`);
+    return changed;
+  };
+  const line = () => plainText(status!.render(400).join(" "));
+  const app = new RustxTuiApp({ host: connection("a1", "authority-a", [userRepair, workspaceRepair]), session: fakeSession(), sessionSettings: SESSION_SETTINGS,
     reconnect: async () => hosts.shift()! });
   const running = app.run();
   const reconnect = async () => {
-    const error = new TransportClosedError("input_eof", "lost connection");
-    close(error);
+    close(new TransportClosedError("input_eof", "lost connection"));
     await waitForApplicationContinuation();
     await waitForApplicationContinuation();
   };
   try {
     await waitForApplicationContinuation();
-    assert.deepEqual(announced, ["receipt-user-1"]);
-    // The same authority announces the same receipt again: no new notice.
+    assert.deepEqual(announced, ["authority-a:receipt-user-1", "authority-a:receipt-workspace-1"]);
+    assert.match(line(), /Workspace rustx\.toml could not be auto-repaired/);
+    // The same authority again: nothing is announced twice, and the pending
+    // Workspace warning it has not withdrawn stays.
     await reconnect();
     assert.equal(hosts.length, 1);
-    assert.deepEqual(announced, ["receipt-user-1"]);
-    // A replacement process at the same endpoint is another authority.
+    assert.deepEqual(announced, ["authority-a:receipt-user-1", "authority-a:receipt-workspace-1"]);
+    assert.match(line(), /Workspace rustx\.toml could not be auto-repaired/);
+    // A late notice of the previous connection changes nothing; the current
+    // connection's withdrawal does.
+    publish.get("a1")!({ target: workspace, receipt: undefined });
+    assert.match(line(), /Workspace rustx\.toml could not be auto-repaired/);
+    publish.get("a2")!({ target: workspace, receipt: undefined });
+    assert.doesNotMatch(line(), /Workspace/);
+    assert.equal(status!.visible, true, "the User receipt is still unacknowledged");
+    // A replacement process holding no receipt retires the old line.
     await reconnect();
     assert.equal(hosts.length, 0);
-    assert.deepEqual(announced, ["receipt-user-1", "receipt-user-1"]);
+    assert.equal(status!.visible, false);
+    assert.deepEqual(status!.render(120), []);
+    publish.get("a2")!(receipt("late", { kind: "user" }));
+    assert.equal(status!.visible, false, "a replaced connection never reaches the new line");
+    // Its own receipt with the same content-derived id is a new announcement.
+    publish.get("b")!(userRepair);
+    assert.deepEqual(announced.at(-1), "authority-b:receipt-user-1");
+    assert.match(line(), /Auto-repaired 1 entry in User/);
   } finally {
-    SourceRepairStatus.prototype.observe = original;
+    SourceRepairStatus.prototype.adopt = original.adopt;
+    SourceRepairStatus.prototype.observe = original.observe;
     await app.quit(); await running;
   }
 });

@@ -10,14 +10,41 @@ policy|full_access|inherit` operate on that explicit target with source CAS.
 `/settings repairs`, `/settings user repairs` and `/settings workspace repairs`
 inspect native automatic repair receipts (#464) read-only — changes are listed
 as applied, eligible but not applied, or possibly published with durability not
-confirmed, never an uncertain publication as applied; the host routes
-`configuration/sourceRepairChanged` without a Session and retains notices that
-arrive before any presentation subscribes. A notice is announced once per
-`(authority_id, receipt id)`, the authority being the one this connection's
+confirmed, never an uncertain publication as applied. The current Workspace of
+`/settings repairs` and `/settings workspace repairs` is the one the focused
+Session is natively bound to: its canonical durable cwd, read with
+`session/summary`, which loads no runtime. It is never the TUI's Session-creation
+defaults and never a path resolved on the TUI machine, which may not be the App
+Server's. With no focused Session, `/settings repairs` shows the User source and
+says there is no current Workspace, and `/settings workspace repairs` reports
+that instead of guessing; `/settings workspace "<path>" repairs` always inspects
+exactly the named Workspace. A command captures the App Server and the Session
+when it starts: a later focus change does not retarget it, and a result from a
+replaced App Server is refused, never shown. Inspection sends only
+`session/summary` and `configuration/sourcesRead` — no source write,
+reconciliation, Turn or model request.
+
+The host routes `configuration/sourceRepairChanged` without a Session. Before
+anything subscribes, the client keeps source repair notices apart from other
+early notifications, coalesced to the latest observation per source — a
+withdrawal included — so no amount of unrelated traffic crowds them out (the
+server advances its per-source cursor as it sends one, so a dropped notice would
+be lost for good). They are bounded to the User and as many Workspaces as the
+native repair ledger retains, the least recently observed Workspace going first.
+The first subscriber drains that buffer before anything is dispatched to it
+directly, so the handoff never delivers an older observation after a newer one,
+and never drops or repeats one.
+
+The repair status line belongs to the App Server authority this connection's
 `initialize` negotiated (`AppServerClient.authorityId`, exposed read-only by the
-host): a reconnect to the same App Server repeats nothing, while a replacement
-process, or another server, announcing an equal receipt id is announced again.
-Deduplication is bounded and in memory only.
+host) and holds only that authority's unacknowledged receipts. A receipt is
+announced once per `(authority_id, receipt id)`: a reconnect to the same App
+Server keeps the line, repeats nothing, and keeps acknowledged receipts
+acknowledged. A replacement process, or another server, retires the previous
+line — a warning never carries into a process that does not hold it — and its
+receipts are announced on their own, even with equal ids. A native withdrawal
+removes its source from the line; a late notice of a replaced connection changes
+nothing. Deduplication is bounded and in memory only.
 `/session settings` inspects Session selections, binding, pending candidate and
 the runtime's published adoption eligibility (Runtime Client state, never part of
 the application). `/session adopt` sends only the last inspected candidate and

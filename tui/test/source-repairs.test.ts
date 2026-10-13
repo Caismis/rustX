@@ -16,8 +16,10 @@ import {
   SourceRepairNotices,
   renderRepairInspection,
   repairNotice,
+  type SourceRepairObservation,
 } from "../src/presentation/source-repairs.ts";
 import type { ConfigRepairReceipt, SourceTarget } from "../src/protocol/app-server.ts";
+import type { AppServerSession } from "../src/app-server/session.ts";
 import { SourceRepairStatus } from "../src/ui/components/source-repair-status.ts";
 import { NO_DIAGNOSTICS, SERVER_CAPABILITIES, harness, nextRequest } from "./support/app-server-harness.ts";
 import { FakeTransport, notification, paramsOf } from "./support/app-server-peer.ts";
@@ -44,6 +46,21 @@ function receipt(overrides: Partial<ConfigRepairReceipt> = {}): ConfigRepairRece
     diagnostic: null,
     ...overrides,
   };
+}
+
+/** The User source's observation of `value`. */
+function user(value: ConfigRepairReceipt | undefined): SourceRepairObservation {
+  return { target: { kind: "user" }, receipt: value };
+}
+
+/** A Workspace source's observation of `value`. */
+function workspace(value: ConfigRepairReceipt | undefined, target: SourceTarget = WORKSPACE): SourceRepairObservation {
+  return { target, receipt: value && { ...value, target } };
+}
+
+/** The receipt ids a status line currently presents, in source order. */
+function presented(status: SourceRepairStatus): string {
+  return plain(status.render(400).join(" "));
 }
 
 function projection(target: SourceTarget, user?: ConfigRepairReceipt, workspace?: ConfigRepairReceipt) {
@@ -118,9 +135,11 @@ it("announces each receipt identity once and acknowledges on input", () => {
   assert.equal(notices.fresh(AUTHORITY, receipt()), false);
   assert.equal(notices.fresh(AUTHORITY, receipt({ id: "receipt-user-2" })), true);
   const status = new SourceRepairStatus();
+  status.adopt(AUTHORITY);
   assert.deepEqual(status.render(120), []);
-  status.observe(receipt());
-  status.observe(receipt({ id: "w", target: WORKSPACE, changed_count: 1 }));
+  assert.equal(status.observe(AUTHORITY, user(receipt())), true);
+  assert.equal(status.observe(AUTHORITY, user(receipt())), false, "announced once");
+  status.observe(AUTHORITY, { target: WORKSPACE, receipt: receipt({ id: "w", target: WORKSPACE, changed_count: 1 }) });
   assert.match(plain(status.render(200).join("\n")), /3 entries in User and 1 entry in Workspace/);
   // Bounded to two rows whatever the width.
   assert.ok(status.render(24).length <= 2);
@@ -223,42 +242,352 @@ it("source notices never reach an attached Session's conversation", async () => 
   for (const method of ["turn/start", "turn/steer"]) assert.equal(h.transport.transportCount(method), 0);
 });
 
-it("/settings repairs commands read sources authoritatively without a Session", async () => {
-  const h = await harness();
-  const workspace = realpathSync(mkdtempSync(join(tmpdir(), "rustx-tui-repairs-")));
-  const dispatcher = new CommandDispatcher({
-    host: h.host, session: undefined, sessionSettings: { cwd: workspace }, diagnostics: NO_DIAGNOSTICS,
-  });
-  const current: SourceTarget = { kind: "workspace", directory: workspace };
-  for (const [command, target, sections] of [
-    ["/settings repairs", current, ["## User rustx.toml", "## Workspace rustx.toml"]],
-    ["/settings user repairs", { kind: "user" }, ["## User rustx.toml"]],
-    ["/settings workspace repairs", current, ["## Workspace rustx.toml"]],
-    [`/settings workspace "${workspace}" repairs`, current, ["## Workspace rustx.toml"]],
-  ] as const) {
-    const operation = dispatcher.submit(command);
-    const read = await nextRequest(h, "configuration/sourcesRead");
-    assert.deepEqual(paramsOf(read, "configuration/sourcesRead").target, target, command);
-    h.transport.respond(read.id, { type: "source_settings", projection: projection(target, receipt(), receipt({ id: "w", target: current, status: "unresolved", after_revision: null, diagnostic: "malformed TOML at line 1, column 2" })) });
-    const outcome = await operation;
-    assert.equal(outcome.kind, "inspect", command);
-    if (outcome.kind !== "inspect") continue;
-    assert.equal(outcome.title, "Configuration repairs");
-    for (const section of sections) assert.ok(outcome.body.includes(section), `${command}: ${section}`);
-    if (!(sections as readonly string[]).includes("## User rustx.toml")) assert.ok(!outcome.body.includes("## User rustx.toml"), command);
-  }
-  // Reading is never a mutation and never a reconciliation.
-  assert.equal(h.transport.transportCount("configuration/sourceWrite"), 0);
-  assert.equal(h.transport.transportCount("configuration/reconcile"), 0);
-  for (const invalid of ["/settings repairs extra", "/settings user repairs now", "/settings nowhere repairs"]) {
-    const outcome = await dispatcher.submit(invalid);
-    assert.equal(outcome.kind, "transient", invalid);
-  }
+// The repair status line belongs to one App Server authority.
+
+it("a reconnect to the same authority keeps the line and announces nothing twice", () => {
+  const status = new SourceRepairStatus();
+  status.adopt("authority-a");
+  status.observe("authority-a", user(receipt()));
+  status.observe("authority-a", workspace(receipt({ id: "w", changed_count: 1 })));
+  // Reconnected: the same authority reports the same receipts again.
+  status.adopt("authority-a");
+  assert.equal(status.observe("authority-a", user(receipt())), false);
+  assert.equal(status.observe("authority-a", workspace(receipt({ id: "w", changed_count: 1 }))), false);
+  assert.match(presented(status), /3 entries in User and 1 entry in Workspace/);
+  // A receipt the user already acknowledged stays acknowledged.
+  status.acknowledge();
+  status.adopt("authority-a");
+  assert.equal(status.observe("authority-a", user(receipt())), false);
+  assert.equal(status.visible, false);
+  // A new receipt of that authority is still announced.
+  assert.equal(status.observe("authority-a", user(receipt({ id: "receipt-user-2" }))), true);
 });
 
-it("/settings workspace repairs needs a resolvable current Workspace", async () => {
+it("a replacement authority retires the previous authority's line", () => {
+  const status = new SourceRepairStatus();
+  status.adopt("authority-a");
+  status.observe("authority-a", user(receipt({ status: "unresolved", after_revision: null, diagnostic: "invalid value" })));
+  status.observe("authority-a", workspace(receipt({ id: "w" })));
+  assert.equal(status.visible, true);
+  // The replacement process holds no receipt at all: no warning survives.
+  status.adopt("authority-b");
+  assert.equal(status.visible, false);
+  assert.deepEqual(status.render(120), []);
+  // Its receipts are its own, even with an equal content-derived id.
+  assert.equal(status.observe("authority-b", user(receipt({ status: "unresolved", after_revision: null, diagnostic: "invalid value" }))), true);
+  assert.match(presented(status), /User rustx\.toml could not be auto-repaired: invalid value/);
+  assert.doesNotMatch(presented(status), /Workspace/);
+});
+
+it("multiple sources move across authority transitions independently", () => {
+  const status = new SourceRepairStatus();
+  const other: SourceTarget = { kind: "workspace", directory: "/work/other" };
+  status.adopt("authority-a");
+  status.observe("authority-a", user(receipt()));
+  status.observe("authority-a", workspace(receipt({ id: "w1", changed_count: 1 })));
+  status.adopt("authority-b");
+  status.observe("authority-b", workspace(receipt({ id: "w1", changed_count: 1 })));
+  status.observe("authority-b", workspace(receipt({ id: "w2", changed_count: 2 }), other));
+  assert.match(presented(status), /1 entry in Workspace and 2 entries in Workspace/);
+  assert.doesNotMatch(presented(status), /User/);
+  // Back to the first authority (another reconnect): b's line is retired,
+  // and a's receipts were already announced.
+  status.adopt("authority-a");
+  assert.equal(status.observe("authority-a", user(receipt())), false);
+  assert.equal(status.visible, false);
+});
+
+it("a native withdrawal removes its source before and after a reconnect", () => {
+  const status = new SourceRepairStatus();
+  status.adopt("authority-a");
+  status.observe("authority-a", user(receipt()));
+  status.observe("authority-a", workspace(receipt({ id: "w", changed_count: 1 })));
+  assert.equal(status.observe("authority-a", workspace(undefined)), true);
+  assert.doesNotMatch(presented(status), /Workspace/);
+  status.adopt("authority-a");
+  assert.equal(status.observe("authority-a", user(undefined)), true);
+  assert.equal(status.visible, false);
+  // Withdrawing nothing changes nothing.
+  assert.equal(status.observe("authority-a", user(undefined)), false);
+});
+
+it("an observation of any other authority never reaches the current line", () => {
+  const status = new SourceRepairStatus();
+  status.adopt("authority-a");
+  status.observe("authority-a", user(receipt()));
+  status.adopt("authority-b");
+  // A late notice of the replaced authority: neither a receipt nor a
+  // withdrawal of it changes the replacement's line.
+  assert.equal(status.observe("authority-a", workspace(receipt({ id: "late" }))), false);
+  status.observe("authority-b", user(receipt({ id: "b" })));
+  assert.equal(status.observe("authority-a", user(undefined)), false);
+  assert.match(presented(status), /3 entries in User/);
+  // Nothing was announced on a's behalf after its retirement.
+  status.adopt("authority-a");
+  assert.equal(status.observe("authority-a", workspace(receipt({ id: "late" }))), true);
+});
+
+// Repair notifications before the first subscriber (Issue #464).
+
+/** A connection whose server sends `early` right after `initialize`
+ * answers, in the same delivery turn, before anything subscribes. */
+async function connectWith(early: (transport: FakeTransport) => void) {
+  const transport = new FakeTransport();
+  const connecting = AppServerClient.initialize({ transport });
+  const initialize = (await transport.log.awaitMethod("initialize")).at(-1)!;
+  transport.respond(initialize.id, {
+    type: "initialized", authority_id: AUTHORITY,
+    protocol_version: APP_SERVER_PROTOCOL_VERSION, capabilities: SERVER_CAPABILITIES,
+  });
+  early(transport);
+  return { transport, client: await connecting };
+}
+
+function repairChanged(target: SourceTarget, value: ConfigRepairReceipt | null) {
+  return notification("configuration/sourceRepairChanged", { target, receipt: value && { ...value, target } });
+}
+
+/** One unrelated Session notification. */
+function unrelated(index: number) {
+  return notification("session/summaryInvalidated", { session_id: `ses_00000000-0000-7000-8000-${String(index).padStart(12, "0")}`, catalog_changed: false });
+}
+
+it("a repair notice after more than 64 unrelated early notices is never lost", async () => {
+  const { transport, client } = await connectWith((transport) => {
+    for (let index = 0; index < 80; index++) transport.notify(unrelated(index));
+    transport.notify(repairChanged({ kind: "user" }, receipt()));
+  });
+  const host = new AppServerHost({ client, ownership: "external" });
+  assert.deepEqual(host.sourceRepairs(), [user(receipt())]);
+  // Presented exactly once by receipt identity after the handoff.
+  const status = new SourceRepairStatus();
+  status.adopt(host.authorityId);
+  const announced = host.sourceRepairs().filter(observation => status.observe(host.authorityId, observation));
+  assert.equal(announced.length, 1);
+  transport.notify(repairChanged({ kind: "user" }, receipt()));
+  assert.equal(status.observe(host.authorityId, host.sourceRepairs()[0]!), false);
+  // Recovered from the buffer, never from a read.
+  assert.equal(transport.log.requests.length, 1);
+});
+
+it("early notices keep the latest observation of each source, withdrawals included", async () => {
+  const other: SourceTarget = { kind: "workspace", directory: "/work/other" };
+  const { transport, client } = await connectWith((transport) => {
+    transport.notify(repairChanged({ kind: "user" }, receipt({ id: "u1" })));
+    transport.notify(repairChanged(WORKSPACE, receipt({ id: "w1" })));
+    transport.notify(repairChanged(other, receipt({ id: "o1" })));
+    for (let index = 0; index < 70; index++) transport.notify(unrelated(index));
+    transport.notify(repairChanged({ kind: "user" }, receipt({ id: "u2" })));
+    transport.notify(repairChanged(WORKSPACE, null));
+  });
+  const replayed: string[] = [];
+  client.onNotification((message) => {
+    if (message.method === "configuration/sourceRepairChanged") {
+      replayed.push(`${message.params.target.kind === "user" ? "user" : message.params.target.directory}=${message.params.receipt?.id ?? "withdrawn"}`);
+    }
+  });
+  // One per source, the latest, in the order each source last changed.
+  assert.deepEqual(replayed, ["/work/other=o1", "user=u2", "/work/project=withdrawn"]);
+  assert.equal(transport.log.requests.length, 1);
+});
+
+it("a notification racing the first subscription is replayed after everything older", async () => {
+  const { transport, client } = await connectWith((transport) => {
+    transport.notify(unrelated(1));
+    transport.notify(repairChanged({ kind: "user" }, receipt({ id: "u1" })));
+  });
+  const seen: string[] = [];
+  let raced = false;
+  client.onNotification((message) => {
+    if (message.method === "configuration/sourceRepairChanged") seen.push(message.params.receipt?.id ?? "withdrawn");
+    else seen.push("unrelated");
+    // While the buffer is replayed, the server delivers a newer observation
+    // of the source still waiting in it.
+    if (!raced) {
+      raced = true;
+      transport.notify(repairChanged({ kind: "user" }, receipt({ id: "u2" })));
+    }
+  });
+  assert.deepEqual(seen, ["unrelated", "u2"], "the older observation is never delivered after the newer");
+  // After the handoff, delivery is direct.
+  transport.notify(repairChanged({ kind: "user" }, receipt({ id: "u3" })));
+  assert.deepEqual(seen, ["unrelated", "u2", "u3"]);
+});
+
+it("early repair notices stay bounded to the identities the native ledger retains", async () => {
+  const workspaces = Array.from({ length: 70 }, (_, index): SourceTarget => ({ kind: "workspace", directory: `/work/w${index}` }));
+  const { client } = await connectWith((transport) => {
+    transport.notify(repairChanged({ kind: "user" }, receipt({ id: "u" })));
+    for (const [index, target] of workspaces.entries()) transport.notify(repairChanged(target, receipt({ id: `w${index}` })));
+  });
+  const host = new AppServerHost({ client, ownership: "external" });
+  const ids = host.sourceRepairs().map(({ receipt: value }) => value!.id);
+  assert.equal(ids.length, 65);
+  // The User is never crowded out; the least recently observed Workspaces go.
+  assert.ok(ids.includes("u"));
+  assert.ok(!ids.includes("w0") && !ids.includes("w5") && ids.includes("w6") && ids.includes("w69"));
+});
+
+it("early repair notices never reach a Session or start a Turn", async () => {
+  const { transport, client } = await connectWith((transport) => {
+    for (let index = 0; index < 80; index++) transport.notify(unrelated(index));
+    transport.notify(repairChanged({ kind: "user" }, receipt()));
+  });
+  const host = new AppServerHost({ client, ownership: "external" });
+  assert.equal(host.sourceRepairs().length, 1);
+  assert.equal(host.attached.length, 0);
+  assert.deepEqual(transport.log.requests.map(request => request.method), ["initialize"]);
+});
+
+// `/settings … repairs`: the current Workspace is the focused Session's own.
+
+const SESSION_A = "ses_84097828-fc31-78c8-9292-10df48901a85";
+const SESSION_B = "ses_0198a0b1-0000-7000-8000-00000000000b";
+
+/** A focused Session as far as the dispatcher is concerned. */
+function focused(sessionId: string): AppServerSession {
+  return { sessionId } as AppServerSession;
+}
+
+/** Answers the next `session/summary` of `harnessed` with `cwd`, and returns
+ * the Session it asked about. */
+async function answerSummary(harnessed: Awaited<ReturnType<typeof harness>>, cwd: string): Promise<string> {
+  const read = await nextRequest(harnessed, "session/summary");
+  const { session_id } = paramsOf(read, "session/summary");
+  harnessed.transport.respond(read.id, { type: "session_summary", summary: {
+    id: session_id, cwd, ownership_generation: "1", updated_at: "2026-01-01T00:00:00Z",
+    active_node: "node_35971be6-e9bb-724a-8955-82fe0e42e048",
+  } });
+  return session_id;
+}
+
+/** Answers the next `configuration/sourcesRead` and returns its target. */
+async function answerRead(harnessed: Awaited<ReturnType<typeof harness>>): Promise<SourceTarget> {
+  const read = await nextRequest(harnessed, "configuration/sourcesRead");
+  const { target } = paramsOf(read, "configuration/sourcesRead");
+  harnessed.transport.respond(read.id, { type: "source_settings", projection: projection(target, receipt(), target.kind === "workspace" ? receipt({ id: "w", target, status: "unresolved", after_revision: null, diagnostic: "invalid value" }) : undefined) });
+  return target;
+}
+
+/** Inspection only: the connection carried reads and nothing else. */
+function assertReadOnly(harnessed: Awaited<ReturnType<typeof harness>>) {
+  const methods = new Set(harnessed.transport.log.requests.map(request => request.method));
+  for (const method of methods) assert.ok(["initialize", "session/attach", "session/summary", "configuration/sourcesRead"].includes(method), method);
+}
+
+function body(outcome: Awaited<ReturnType<CommandDispatcher["submit"]>>): string {
+  assert.equal(outcome.kind, "inspect");
+  return outcome.kind === "inspect" ? outcome.body : "";
+}
+
+it("the current Workspace is the focused Session's native cwd, never the launch directory", async () => {
   const h = await harness();
-  const outcome = await h.dispatcher.submit("/settings workspace repairs");
-  assert.deepEqual(outcome, { kind: "transient", level: "error", text: "The current Workspace directory is unavailable; name it explicitly." });
-  assert.equal(h.transport.transportCount("configuration/sourcesRead"), 0);
+  // Launched in Workspace A; the focused (resumed) Session belongs to B, a
+  // path the App Server has and this machine does not.
+  const launch = realpathSync(mkdtempSync(join(tmpdir(), "rustx-tui-launch-")));
+  const dispatcher = new CommandDispatcher({ host: h.host, session: focused(SESSION_A), sessionSettings: { cwd: launch }, diagnostics: NO_DIAGNOSTICS });
+  const remote = "/srv/app-server-only/workspace-b";
+  for (const [command, sections] of [
+    ["/settings repairs", ["## User rustx.toml", `## Workspace rustx.toml (${remote})`]],
+    ["/settings workspace repairs", [`## Workspace rustx.toml (${remote})`]],
+  ] as const) {
+    const operation = dispatcher.submit(command);
+    assert.equal(await answerSummary(h, remote), SESSION_A, command);
+    assert.deepEqual(await answerRead(h), { kind: "workspace", directory: remote }, command);
+    const text = body(await operation);
+    for (const section of sections) assert.ok(text.includes(section), `${command}: ${section}`);
+    assert.ok(!text.includes(launch), command);
+    assert.equal(text.includes("## User rustx.toml"), sections.length === 2, command);
+  }
+  assertReadOnly(h);
+});
+
+it("switching Sessions switches the current Workspace", async () => {
+  const h = await harness();
+  const dispatcher = new CommandDispatcher({ host: h.host, session: focused(SESSION_A), sessionSettings: { cwd: "/launch" }, diagnostics: NO_DIAGNOSTICS });
+  for (const [session, cwd] of [[SESSION_A, "/srv/a"], [SESSION_B, "/srv/b"], [SESSION_A, "/srv/a"]] as const) {
+    dispatcher.setSession(focused(session));
+    const operation = dispatcher.submit("/settings workspace repairs");
+    assert.equal(await answerSummary(h, cwd), session);
+    assert.deepEqual(await answerRead(h), { kind: "workspace", directory: cwd });
+    assert.ok(body(await operation).includes(`## Workspace rustx.toml (${cwd})`));
+  }
+  assertReadOnly(h);
+});
+
+it("without a focused Session only an authoritative or named Workspace is inspected", async () => {
+  const h = await harness();
+  const dispatcher = new CommandDispatcher({ host: h.host, session: undefined, sessionSettings: { cwd: "/launch" }, diagnostics: NO_DIAGNOSTICS });
+  // The User alone, saying why no Workspace is shown.
+  const operation = dispatcher.submit("/settings repairs");
+  assert.deepEqual(await answerRead(h), { kind: "user" });
+  const text = body(await operation);
+  assert.ok(text.includes("## User rustx.toml"));
+  assert.ok(!text.includes("## Workspace rustx.toml"));
+  assert.ok(text.includes("No Session is focused, so there is no current Workspace."));
+  // The implicit Workspace form reports it instead of guessing.
+  assert.deepEqual(await dispatcher.submit("/settings workspace repairs"), {
+    kind: "transient", level: "error",
+    text: 'No Session is focused, so there is no current Workspace. Name one with /settings workspace "<path>" repairs.',
+  });
+  // The User form and an explicitly named Workspace need no Session.
+  const userOnly = dispatcher.submit("/settings user repairs");
+  assert.deepEqual(await answerRead(h), { kind: "user" });
+  assert.ok(!body(await userOnly).includes("No Session is focused"));
+  const named = dispatcher.submit('/settings workspace "/srv/named" repairs');
+  assert.deepEqual(await answerRead(h), { kind: "workspace", directory: "/srv/named" });
+  assert.ok(body(await named).includes("## Workspace rustx.toml (/srv/named)"));
+  assert.equal(h.transport.transportCount("session/summary"), 0);
+  assertReadOnly(h);
+});
+
+it("an explicitly named Workspace is inspected exactly, whatever is focused", async () => {
+  const h = await harness();
+  const dispatcher = new CommandDispatcher({ host: h.host, session: focused(SESSION_A), sessionSettings: { cwd: "/launch" }, diagnostics: NO_DIAGNOSTICS });
+  const operation = dispatcher.submit('/settings workspace "/srv/explicit path" repairs');
+  assert.deepEqual(await answerRead(h), { kind: "workspace", directory: "/srv/explicit path" });
+  assert.ok(body(await operation).includes("## Workspace rustx.toml (/srv/explicit path)"));
+  assert.equal(h.transport.transportCount("session/summary"), 0);
+  for (const invalid of ["/settings repairs extra", "/settings user repairs now", "/settings nowhere repairs"]) {
+    assert.equal((await dispatcher.submit(invalid)).kind, "transient", invalid);
+  }
+  assertReadOnly(h);
+});
+
+it("an in-flight inspection keeps its Session and never presents a replaced App Server", async () => {
+  const h = await harness();
+  const dispatcher = new CommandDispatcher({ host: h.host, session: focused(SESSION_A), sessionSettings: { cwd: "/launch" }, diagnostics: NO_DIAGNOSTICS });
+  // Focus moves to B while A's Workspace is being resolved: A's command
+  // still inspects A's Workspace.
+  const operation = dispatcher.submit("/settings workspace repairs");
+  const summary = await nextRequest(h, "session/summary");
+  dispatcher.setSession(focused(SESSION_B));
+  assert.equal(paramsOf(summary, "session/summary").session_id, SESSION_A);
+  h.transport.respond(summary.id, { type: "session_summary", summary: {
+    id: SESSION_A, cwd: "/srv/a", ownership_generation: "1", updated_at: "2026-01-01T00:00:00Z",
+    active_node: "node_35971be6-e9bb-724a-8955-82fe0e42e048",
+  } });
+  assert.deepEqual(await answerRead(h), { kind: "workspace", directory: "/srv/a" });
+  assert.ok(body(await operation).includes("## Workspace rustx.toml (/srv/a)"));
+  assert.equal(h.transport.transportCount("session/summary"), 1);
+  // The App Server is replaced while a command resolves: its result is
+  // fenced, and the replacement is never asked on its behalf.
+  dispatcher.setSession(focused(SESSION_A));
+  const replaced = dispatcher.submit("/settings repairs");
+  const pending = await nextRequest(h, "session/summary");
+  const replacement = await harness();
+  dispatcher.setHost(replacement.host);
+  h.transport.respond(pending.id, { type: "session_summary", summary: {
+    id: SESSION_A, cwd: "/srv/a", ownership_generation: "1", updated_at: "2026-01-01T00:00:00Z",
+    active_node: "node_35971be6-e9bb-724a-8955-82fe0e42e048",
+  } });
+  await answerRead(h);
+  assert.deepEqual(await replaced, {
+    kind: "transient", level: "error",
+    text: "The App Server connection changed during the inspection; nothing was shown. Run it again.",
+  });
+  assert.equal(replacement.transport.transportCount("session/summary"), 0);
+  assert.equal(replacement.transport.transportCount("configuration/sourcesRead"), 0);
+  assertReadOnly(h);
+  assertReadOnly(replacement);
 });

@@ -7,28 +7,49 @@
  * acknowledges it, exactly like transient feedback. It is never a permanent
  * indicator and never part of the conversation: `/settings repairs` reads the
  * authoritative receipts again whenever the details are wanted.
+ *
+ * The line belongs to one App Server authority: it holds only unacknowledged
+ * receipts that authority announced. Reconnecting to the same authority keeps
+ * them and announces none of its receipts twice; a replacement authority
+ * retires them all — its own receipts, even with equal content-derived ids,
+ * are new announcements — and an observation of any other authority, such
+ * as a late notice from a replaced connection, changes nothing.
  */
 
 import { truncateToWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 
 import type { ConfigRepairReceipt } from "../../protocol/app-server.ts";
-import { repairNotice, sourceKey } from "../../presentation/source-repairs.ts";
+import { SourceRepairNotices, repairNotice, sourceKey, type SourceRepairObservation } from "../../presentation/source-repairs.ts";
 import { role } from "../theme.ts";
 
 const MAX_ROWS = 2;
 
 export class SourceRepairStatus implements Component {
-  /** Unacknowledged receipts, at most one per source. */
+  /** The App Server authority whose receipts this line presents. */
+  #authorityId: string | undefined;
+  /** Unacknowledged receipts of that authority, at most one per source. */
   #receipts = new Map<string, ConfigRepairReceipt>();
+  /** Receipts already announced, by authority and receipt id. */
+  readonly #notices = new SourceRepairNotices();
 
-  /** Adds one newly observed receipt; a later receipt of a source replaces it. */
-  observe(receipt: ConfigRepairReceipt): void {
-    this.#receipts.set(sourceKey(receipt.target), receipt);
+  /** Presents `authorityId` from now on. A different authority retires every
+   * receipt of the previous one; the same authority keeps them. */
+  adopt(authorityId: string): void {
+    if (authorityId !== this.#authorityId) this.#receipts.clear();
+    this.#authorityId = authorityId;
   }
 
-  /** Withdraws a source whose repair observation was cleared natively. */
-  withdraw(key: string): void {
-    this.#receipts.delete(key);
+  /**
+   * Folds one native observation of `authorityId` in: a receipt not yet
+   * announced replaces its source's line entry, and an observation without a
+   * receipt withdraws that source. Returns whether the line changed.
+   */
+  observe(authorityId: string, { target, receipt }: SourceRepairObservation): boolean {
+    if (authorityId !== this.#authorityId) return false;
+    if (receipt === undefined) return this.#receipts.delete(sourceKey(target));
+    if (!this.#notices.fresh(authorityId, receipt)) return false;
+    this.#receipts.set(sourceKey(target), receipt);
+    return true;
   }
 
   get visible(): boolean {
