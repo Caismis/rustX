@@ -491,13 +491,27 @@ fn competing_native_writers_have_exactly_one_commit_winner() {
             .into_iter()
             .map(|worker| worker.join().unwrap())
             .collect();
-        assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
+        // Both outcomes, and whether a fresh capture succeeds, so a failure
+        // says which writer step failed rather than only a count.
+        let outcomes = results
+            .iter()
+            .map(|result| result.as_ref().map(|_| ()))
+            .collect::<Vec<_>>();
+        let reread = owner
+            .read_source_settings(&rustx_target(&input.cwd))
+            .map(|_| ());
+        assert_eq!(
+            results.iter().filter(|r| r.is_ok()).count(),
+            1,
+            "{outcomes:?}; a fresh read: {reread:?}"
+        );
         assert_eq!(
             results
                 .iter()
                 .filter(|r| matches!(r, Err(SettingsError::Conflict { .. })))
                 .count(),
-            1
+            1,
+            "{outcomes:?}; a fresh read: {reread:?}"
         );
     });
 }
