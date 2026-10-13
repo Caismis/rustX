@@ -4502,7 +4502,6 @@ impl ConversationRuntime {
         }
         Ok(
             crate::local_runtime::configuration::application::PreparedConfiguration {
-                selection_only: false,
                 owner: self.inner.configuration_owner.clone(),
                 baseline,
                 preview,
@@ -4568,7 +4567,6 @@ impl ConversationRuntime {
         &self,
         capture: &crate::local_runtime::configuration::ProspectiveSessionConfig,
         models: crate::model::invocation::ModelBindingRegistry,
-        selection: Option<crate::model::session::SessionModelConfig>,
     ) -> Result<crate::local_runtime::configuration::application::PreparedConfiguration, String>
     {
         let (baseline, old, old_model) = {
@@ -4579,13 +4577,10 @@ impl ConversationRuntime {
                 state.model.clone(),
             )
         };
-        // An explicit selection must resolve; the Session's own carried
-        // selection may be one the new catalog no longer admits.
-        let model = match selection {
-            Some(selection) => SessionModelState::new(models.clone(), selection),
-            None => old_model.carry(models.clone(), old_model.config().clone()),
-        }
-        .map_err(|error| error.to_string())?;
+        // Context adoption carries Session intent; it cannot choose a model.
+        let model = old_model
+            .carry(models.clone(), old_model.config().clone())
+            .map_err(|error| error.to_string())?;
         validate_model_context(&capture.config.context_policy(), &model)
             .map_err(|error| error.message)?;
         let preview = Arc::new(old.with_context_binding(capture, models)?);
@@ -4606,7 +4601,6 @@ impl ConversationRuntime {
         }
         Ok(
             crate::local_runtime::configuration::application::PreparedConfiguration {
-                selection_only: false,
                 owner: self.inner.configuration_owner.clone(),
                 baseline,
                 preview,
@@ -4692,11 +4686,7 @@ impl ConversationRuntime {
             return Err(AdoptionError::Conflict);
         }
         let candidate = prepared.take().expect("checked candidate");
-        let revision = if candidate.selection_only {
-            state.resources.revision()
-        } else {
-            state.resources.revision().next()
-        };
+        let revision = state.resources.revision().next();
         let (resources, availability) = if let Some(capability) = candidate.capability {
             let committed = self
                 .inner
@@ -4733,20 +4723,12 @@ impl ConversationRuntime {
             .binding_revision
             .checked_add(1)
             .expect("Session binding revision exhausted");
-        if candidate.selection_only {
-            state.explicit_model = true;
-            self.inner
-                .observe(ConversationObservation::SessionModelChanged {
-                    model: Box::new(state.model.view()),
-                });
-        } else {
-            self.inner.observe(ConversationObservation::Resources {
-                model: Box::new(state.model.view()),
-                approval_mode: state.effective_approval_mode,
-                snapshot: resources,
-                availability,
-            });
-        }
+        self.inner.observe(ConversationObservation::Resources {
+            model: Box::new(state.model.view()),
+            approval_mode: state.effective_approval_mode,
+            snapshot: resources,
+            availability,
+        });
         if reopens {
             // Work accepted before the selection became unavailable was held,
             // not dropped; this commit is what admits it.
@@ -5648,9 +5630,10 @@ impl ConversationRuntime {
     ///
     /// # Linearization
     ///
-    /// The whole operation — resolution, validation, and state replacement
-    /// — happens under the one coordinator lock that also owns attempt
-    /// admission. An update therefore either linearizes before an admission
+    /// Resolution and validation use an immutable published capture off the
+    /// coordinator lock. Revision/resource validation and replacement happen
+    /// under the coordinator lock that also owns attempt admission. An update
+    /// therefore either linearizes before an admission
     /// (and that attempt observes it) or after it (and only later attempts
     /// observe it). There is no third possibility and no timing assumption.
     ///
@@ -5671,46 +5654,110 @@ impl ConversationRuntime {
         &self,
         config: SessionModelConfig,
     ) -> Result<SessionModelView, ModelUpdateError> {
-        use crate::local_runtime::configuration::application::PreparedConfiguration;
-        let (baseline, resources, mut candidate) = {
-            let state = self.inner.lock_state();
-            if !self.inner.lifecycle.is_running() {
-                return Err(ModelUpdateError::Inactive);
-            }
-            if let Some(failure) = self.inner.durability_gate.failure() {
-                return Err(ModelUpdateError::DurabilityFailed {
-                    message: failure.diagnostic,
-                });
-            }
-            (
-                state.binding_revision,
-                state.resources.clone(),
-                state.model.clone(),
-            )
-        };
+        let candidate = self.prepare_model_selection(config)?;
+        self.commit_model_selection(candidate, |_| Ok(()))
+    }
+
+    /// Resolve against the exact published authority, off the admission lock.
+    /// Resources are retained, never prepared or replaced by model selection.
+    pub(crate) fn prepare_model_selection(
+        &self,
+        config: SessionModelConfig,
+    ) -> Result<PreparedModelSelection, ModelUpdateError> {
+        self.resolve_model_selection(self.capture_model_selection()?, config)
+    }
+
+    /// Cheap immutable capture; the Session owner calls this under its source fence.
+    pub(crate) fn capture_model_selection(
+        &self,
+    ) -> Result<PreparedModelSelection, ModelUpdateError> {
+        let state = self.inner.lock_state();
+        self.check_model_selection_lifecycle()?;
+        Ok(PreparedModelSelection {
+            owner: self.inner.configuration_owner.clone(),
+            baseline: state.binding_revision,
+            resources: state.resources.clone(),
+            model: state.model.clone(),
+        })
+    }
+
+    pub(crate) fn resolve_model_selection(
+        &self,
+        mut candidate: PreparedModelSelection,
+        config: SessionModelConfig,
+    ) -> Result<PreparedModelSelection, ModelUpdateError> {
         candidate
+            .model
             .apply(config)
             .map_err(|error| invalid_model(&error))?;
-        let policy = resources
+        let policy = candidate
+            .resources
             .configuration()
             .map_or(self.inner.context.policy, |generation| {
                 generation.config.context_policy()
             });
-        validate_model_context(&policy, &candidate)
+        validate_model_context(&policy, &candidate.model)
             .map_err(|error| ModelUpdateError::InvalidConfiguration(error.message))?;
-        let view = candidate.view();
-        let mut prepared = Some(PreparedConfiguration {
-            selection_only: true,
-            owner: self.inner.configuration_owner.clone(),
-            baseline,
-            preview: resources,
-            model: candidate,
-            capability: None,
-            resources: None,
-            impact: crate::model::request_shape::CacheImpact::Unproven,
-        });
-        self.adopt_configuration(&mut prepared, baseline, true, || Ok(()))
-            .map_err(|rejection| ModelUpdateError::ConfigurationAdoption { rejection })?;
+        Ok(candidate)
+    }
+
+    fn check_model_selection_lifecycle(&self) -> Result<(), ModelUpdateError> {
+        if !self.inner.lifecycle.is_running() {
+            return Err(ModelUpdateError::Inactive);
+        }
+        if let Some(failure) = self.inner.durability_gate.failure() {
+            return Err(ModelUpdateError::DurabilityFailed {
+                message: failure.diagnostic,
+            });
+        }
+        Ok(())
+    }
+
+    /// Selection's sole publication boundary, shared with independent Attempt
+    /// admission and retirement. The native Session owner holds its source and
+    /// settings fences and persists/retains in `commit` before this infallible
+    /// publication. An already-admitted Attempt owns its old snapshot and leases.
+    /// No idle or physical-resource replacement is involved.
+    pub(crate) fn commit_model_selection(
+        &self,
+        candidate: PreparedModelSelection,
+        commit: impl FnOnce(u64) -> Result<(), ModelUpdateError>,
+    ) -> Result<SessionModelView, ModelUpdateError> {
+        let mut state = self.inner.lock_state();
+        self.check_model_selection_lifecycle()?;
+        if state.binding_revision != candidate.baseline
+            || !Arc::ptr_eq(&candidate.owner, &self.inner.configuration_owner)
+            || !Arc::ptr_eq(&candidate.resources, &state.resources)
+        {
+            return Err(ModelUpdateError::Conflict);
+        }
+        let unchanged = state.explicit_model && state.model.view() == candidate.model.view();
+        let revision = if unchanged {
+            state.binding_revision
+        } else {
+            state
+                .binding_revision
+                .checked_add(1)
+                .expect("Session binding revision exhausted")
+        };
+        // Even an unchanged live invocation must visit its durable owner:
+        // a loaded default may not yet be an explicit persisted selection.
+        commit(revision)?;
+        if unchanged {
+            return Ok(state.model.view());
+        }
+        let reopens = state.model.unavailable().is_some();
+        state.model = candidate.model;
+        state.explicit_model = true;
+        state.binding_revision = revision;
+        let view = state.model.view();
+        self.inner
+            .observe(ConversationObservation::SessionModelChanged {
+                model: Box::new(view.clone()),
+            });
+        if reopens {
+            self.inner.mailbox.wake().notify_one();
+        }
         Ok(view)
     }
 
@@ -6533,13 +6580,20 @@ impl core::fmt::Display for ManualCompactionError {
 
 impl std::error::Error for ManualCompactionError {}
 
+/// Complete selection resolved from one published authority, with the identities
+/// needed to reject any intervening binding or policy/resource publication.
+pub(crate) struct PreparedModelSelection {
+    owner: Arc<()>,
+    pub(crate) baseline: u64,
+    resources: Arc<RuntimeResourceSnapshot>,
+    model: SessionModelState,
+}
+
 /// A session model update failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModelUpdateError {
-    /// Explicit model selection uses the same idle and baseline fences as adoption.
-    ConfigurationAdoption {
-        rejection: crate::local_runtime::configuration::application::AdoptionError,
-    },
+    /// The published binding or resource snapshot changed during preparation.
+    Conflict,
     /// The runtime has not been activated: a live semantic mutation of an
     /// inert conversation is refused and consumes nothing.
     Inactive,
@@ -11952,11 +12006,10 @@ mod tests {
         runtime.activate();
 
         // A pending, ready candidate owned by this runtime at the current
-        // binding baseline (the same shape model_set commits).
+        // binding baseline. General context adoption still requires idle ownership.
         let mut prepared = {
             let state = runtime.inner.lock_state();
             Some(PreparedConfiguration {
-                selection_only: true,
                 owner: runtime.inner.configuration_owner.clone(),
                 baseline: state.binding_revision,
                 preview: state.resources.clone(),

@@ -1,6 +1,7 @@
 import { message } from '../../locale/translation';
 import { useTranslation, useNotice } from '../../locale/react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Popover } from '@base-ui/react/popover';
 import type { ModelCatalogView, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v46';
 import { AppServerClient, isOutcomeUncertain, sameTarget, type SessionView } from '../../client/app-server';
 import type { ModelPickerState } from '../composer/ModelPicker';
@@ -62,6 +63,8 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
    finally { if (epoch.current === at) { guard.current = false; setBusy(false); } }
  };
  const model = view?.snapshot?.model;
+ const frozen = activeAttempt(view?.snapshot) ? view?.snapshot?.attempt?.model : undefined;
+ const sessionProfile = model?.configured.profile ?? (model?.unavailable == null ? model?.effective?.profile : undefined);
  const configured = (queued?.phase !== 'failed' ? queued?.config : undefined) ?? (attached ? model?.configured : view?.settings ? view.settings.model ?? (coldSource?.session_models?.kind === 'available' ? coldSource.session_models.default_model : undefined) : model?.configured);
  const choices = draft?.source?.session_models?.kind === 'available' ? draft.source.session_models.catalog : coldCatalog?.catalog ?? catalog;
  const draftError = draft?.source?.session_models?.kind === 'unavailable' ? draft.source.session_models.diagnostic : undefined;
@@ -91,7 +94,15 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
  const toolbar = <div ref={root} className="agent-control"><ModelSelect binding={JSON.stringify([generation, target?.attachment_id, draft?.source?.target, view?.snapshot?.resources?.revision])} choices={picker.choices}
    current={picker.current} profile={picker.profile} effectiveProfile={picker.effectiveProfile} disabled={draft ? draft.disabled || !choices : disabled} loading={draft ? !draft.source : connecting ? !coldSource : blocked} error={picker.error} load={load}
    choose={intent => { void choose(intent); }}/>
-   {activeAttempt(view?.snapshot) && view?.snapshot?.attempt?.model && view?.snapshot.attempt.model.primary.model !== model?.effective?.model && <small>{tx('agent:agent-controls.running')}{' '}{view?.snapshot?.attempt?.model?.primary.model}</small>}
+   {frozen && <Popover.Root key={view?.snapshot?.attempt?.attempt_id}>
+     <Popover.Trigger className="running-model-trigger" data-running-model>{tx('agent:agent-controls.running')}{' '}{frozen.primary.model}{frozen.primary.profile ? ` / ${frozen.primary.profile}` : ''}</Popover.Trigger>
+     <Popover.Portal><Popover.Positioner side="top" align="end" sideOffset={36} collisionPadding={12} className="running-model-positioner">
+       <Popover.Popup className="running-model-details" data-running-model-details aria-label={tx('agent:agent-controls.running')}>
+         {model && <p data-session-model>{tx('agent:agent-controls.session-selection')}{' '}{model.configured.model}{sessionProfile ? ` / ${sessionProfile}` : ''}</p>}
+         <Popover.Description>{tx('agent:agent-controls.frozen-invocation')}</Popover.Description><pre>{JSON.stringify(frozen, null, 2)}</pre>
+       </Popover.Popup>
+     </Popover.Positioner></Popover.Portal>
+   </Popover.Root>}
    {!draft && !busy && (blocked && error || queued?.phase === 'failed') && <Button size="sm" disabled={!attached} onClick={() => load(true)}>{tx('agent:agent-controls.reread-models')}</Button>}
  </div>;
  return <>{children ? children(toolbar, picker) : toolbar}{draftError && <p role="alert">{draftError}</p>}{selectionError && <Toast key={toastSequence} text={selectionError} icon={<IconWarningOutline16 />} anchor={root.current?.closest<HTMLElement>('[data-composer-card]') ?? null} onDone={() => setSelectionError('')}/>}</>;

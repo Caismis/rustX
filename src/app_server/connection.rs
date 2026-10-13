@@ -1440,7 +1440,7 @@ async fn dispatch_runtime(
                 manager
                     .set_model(&target.session_id, *config)
                     .await
-                    .map_err(|rejection| domain(ErrorData::ConfigurationAdoption { rejection }))?,
+                    .map_err(model_selection_error)?,
             ),
         }),
         Method::Capability { target: _ } => native_result(authority.capability()),
@@ -1832,6 +1832,29 @@ pub(super) fn manager_error(error: RuntimeManagerError) -> RpcError {
         RuntimeManagerError::SessionAlreadyResident { .. } => domain(ErrorData::OperationFailed),
     }
 }
+fn model_selection_error(
+    error: crate::local_runtime::session_runtime_manager::ModelSelectionError,
+) -> RpcError {
+    use crate::local_runtime::session_runtime_manager::ModelSelectionError;
+    use crate::runtime::conversation_runtime::ModelUpdateError;
+    match error {
+        ModelSelectionError::Model(ModelUpdateError::Conflict)
+        | ModelSelectionError::Persistence(
+            crate::local_runtime::session::SessionError::StaleSettings { .. },
+        ) => domain(ErrorData::ConfigurationAdoption {
+            rejection: crate::local_runtime::configuration::application::AdoptionError::Conflict,
+        }),
+        ModelSelectionError::Model(ModelUpdateError::Inactive) => domain(ErrorData::StaleRuntime),
+        ModelSelectionError::Model(ModelUpdateError::InvalidConfiguration(diagnostic)) => {
+            domain(ErrorData::ModelUnavailable { diagnostic })
+        }
+        ModelSelectionError::Model(ModelUpdateError::DurabilityFailed { message }) => {
+            rpc_error(-32000, &message, Some(ErrorData::OperationFailed))
+        }
+        ModelSelectionError::Persistence(error) => session_error(error),
+    }
+}
+
 fn session_error(error: crate::local_runtime::session::SessionError) -> RpcError {
     use crate::local_runtime::session::SessionError;
     domain(match error {

@@ -290,18 +290,16 @@ export class ModelSelector implements PopupContent, Focusable {
   /**
    * Which session/attempt roles one catalog row currently holds.
    *
-   * `current` is used only when there is exactly one thing it can mean —
-   * configured, effective, and any attempt all point at this row. The moment
-   * they diverge every role is named, so a row is never ambiguous about
-   * whether it is what was asked for or what is actually in use.
+   * `current` is used only when there is no Attempt and Session identities
+   * agree. An Attempt always gets its own role, including on the same Model:
+   * its frozen Profile, parameters and limits can differ independently.
    */
   #rolesOf(model: ModelRef): string[] {
     const configured = this.#sessionModel.configured.model;
     // An unavailable selection has no effective model for new work.
     const effective = this.#sessionModel.unavailable == null ? this.#sessionModel.effective?.model : undefined;
     const attempt = this.#attempt?.model?.primary.model;
-    const unified =
-      configured === effective && (attempt === undefined || attempt === effective);
+    const unified = configured === effective && attempt === undefined;
     if (unified) {
       return model === configured ? ["current"] : [];
     }
@@ -346,7 +344,7 @@ export class ModelSelector implements PopupContent, Focusable {
 
     const attempt = this.#attempt;
     if (attempt !== undefined) {
-      const frozen = attempt.model?.primary.model ?? "unavailable";
+      const frozen = attempt.model ? `${attempt.model.primary.model} · profile ${describeProfile(attempt.model.primary)} · ${attempt.model.primary.maxOutputTokens} out` : "unavailable";
       lines.push(
         attempt.phase.type === "settled"
           ? role.meta(`attempt     ${frozen} · frozen at admission (settled)`)

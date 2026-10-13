@@ -1133,6 +1133,16 @@ Tool batch, child and Workflow retain their captured immutable configuration.
 Session bindings survive runtime unload/load within the process. See
 [configuration application](configuration.md#save-automatic-application-and-session-adoption).
 
+Session Model/Profile selection has a separate commit responsibility. It resolves
+a complete selection against the Session's published catalog off the commit lock,
+then revalidates source, settings, binding, resource and runtime identities before
+durable publication under the existing Attempt admission gate. The committed
+selection becomes authoritative immediately even during execution. An independent
+Attempt admitted before the commit retains its complete old model/resource
+snapshot; one admitted afterward captures the new selection. Derived child work
+inherits its parent's snapshot. This path neither adopts pending context nor
+changes the physical resource retirement rules of existing snapshot/lease owners.
+
 The Runtime Client protocol carries the same semantic plane through
 `interaction_respond`, typed acceptance/errors, `interaction_pending` and
 `interaction_settled` events, and `snapshot.pending_interactions`. Snapshot
@@ -5651,7 +5661,11 @@ inspected candidate, and `/model` changes Session intent. Web Settings separates
 source authoring from Session adoption. Save automatically transfers work to the
 native coordinator; the focused Session header owns explicit adoption. Preparation
 failure and process restart can appear together. Conflicts preserve target-scoped
-drafts; uncertain outcomes trigger reads, never blind replay.
+drafts; uncertain outcomes trigger reads, never blind replay. Web and TUI allow a
+valid model/Profile selection while execution is active and label the selected
+Session invocation separately from the frozen active Attempt, including same-Model
+Profile or parameter differences. Only native confirmation changes the displayed
+selection; reconnect reconstructs both facts from their native owners.
 
 
 ## Native YAML WorkflowRuntime (M9.5 / Issue #83)

@@ -6638,7 +6638,46 @@ contracts and provider protocols. These invariants are frozen by M2:
 - **Update linearization.** A session model update that linearizes before
   attempt admission is observed by that attempt; one that linearizes after
   admission affects only future attempts. Both share the one coordinator
-  lock, so there is no third possibility and no timing assumption.
+  lock, so there is no third possibility and no timing assumption. Selection
+  commits immediately while execution is active; it has no idle requirement,
+  pending-model queue or deferred application worker. General context/capability
+  adoption retains its existing readiness and idle-safety requirements.
+
+- **Selection preparation preserves published authority.** A complete proposed
+  selection resolves against the Session's published catalog and retained
+  binding, outside the final commit fence. Source/application identity, durable
+  settings revision, retained binding, runtime allocation and resource snapshot
+  are revalidated before publication. A stale candidate cannot overwrite a newer
+  selection, catalog or independent execution-policy publication. Selection
+  imports no unrelated pending configuration.
+
+- **Durability and publication agree.** Atomic catalog replacement is a changed selection's
+  commit point; retained binding and runtime model publication complete before
+  releasing the admission fence. A write
+  failure before publication leaves all three unchanged. A committed replacement
+  with uncertain durability publishes coherent native authority but returns a
+  typed uncertain outcome, never a successful acknowledgement. Clients recover
+  through an authoritative read and never replay the selection automatically.
+
+- **No-op detection includes durable intent.** An already-explicit identical
+  selection still validates lifecycle, revisions and resources, then the durable
+  owner confirms the stored selection and retained revision before skipping its
+  write. An inherited default resolving to the same invocation must still become
+  durable explicit intent. An unchanged acknowledgement creates no event or
+  binding revision and never bypasses runtime retirement.
+
+- **Profile choices preserve whole-state intent.** A same-Model Profile change
+  preserves explicit request/output overrides and the Summary Model policy;
+  invalid combinations fail without fallback. A different-Model choice resets
+  primary request/output overrides, uses its default Profile unless explicitly
+  chosen, and retains the independent Summary Model policy. Every accepted
+  mutation remains one complete `SessionModelConfig`.
+
+- **Derived work keeps its parent's authority.** Child execution created after a
+  Session model mutation still uses its parent Attempt's captured model registry,
+  selection, resources and policy. Primary and explicit summary adapters, output
+  limits and parameters remain immutable, and physical resources remain owned by
+  the existing snapshots and leases through settlement.
 
 - **`attempt_started` is self-contained.** The event carries the frozen
   `AttemptModelView` of the attempt it announces, byte-identical to
@@ -6651,7 +6690,8 @@ contracts and provider protocols. These invariants are frozen by M2:
   `session_model_changed` and never re-announces the running attempt.
 
 - **Transactional updates.** A rejected `model_set` changes nothing,
-  allocates no cursor, and publishes no event.
+  allocates no cursor, and publishes no event. An explicitly reported committed
+  durability uncertainty is distinct from a rejected pre-commit mutation.
 
 - **Attempt-scoped context window.** The context window belongs to the
   selected model; the current runtime/project configuration supplies the

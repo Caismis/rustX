@@ -1209,23 +1209,15 @@ async fn a_running_attempt_keeps_its_frozen_model_while_the_session_moves_on() {
                 .expect("the second model reference parses"),
         )
     };
-    assert!(matches!(
-        driver.host().model_set(next_model.clone()),
-        Err(
-            rustx::runtime_client::RuntimeClientError::ConfigurationAdoption {
-                rejection: rustx::local_runtime::configuration::application::AdoptionError::Busy
-            }
-        )
-    ));
+    driver
+        .host()
+        .model_set(next_model)
+        .expect("live selection commits");
 
     emulator.release_gate("session-model-updated").await;
     let (_, outcome) = driver.settle().await;
     assert!(matches!(outcome, RuntimeClientOutcome::Completed { .. }));
 
-    driver
-        .host()
-        .model_set(next_model)
-        .expect("idle model adoption");
     let (snapshot, _) = driver.host().snapshot().expect("snapshot");
     let attempt = snapshot.attempt.as_ref().expect("the settled attempt");
     assert!(matches!(
@@ -1548,8 +1540,8 @@ async fn image_tool_round_trip_and_text_model_switch() {
     let text_model =
         SessionModelConfig::of(ModelRef::parse(&format!("emulator/{CHAT_MODEL}")).unwrap());
     assert!(
-        driver.host().model_set(text_model.clone()).is_err(),
-        "active admission cannot be replaced"
+        driver.host().model_set(text_model.clone()).is_ok(),
+        "Session selection changes while admitted image capabilities remain frozen"
     );
     emulator.release_gate("image-admitted").await;
     let (_, outcome) = driver.settle().await;
@@ -1571,12 +1563,6 @@ async fn image_tool_round_trip_and_text_model_switch() {
             .unwrap()
             .contains("\"type\":\"image\"")
     );
-    driver
-        .host()
-        .model_set(SessionModelConfig::of(
-            rustx::model::catalog::ModelRef::parse(&format!("emulator/{CHAT_MODEL}")).unwrap(),
-        ))
-        .unwrap();
     driver.submit("continue as text");
     emulator.await_gate("text-admitted").await;
     let (snapshot, _) = driver.host().snapshot().unwrap();
@@ -1602,8 +1588,8 @@ async fn image_tool_round_trip_and_text_model_switch() {
         ModelRef::parse(&format!("emulator-anthropic/{ANTHROPIC_MODEL}")).unwrap(),
     );
     assert!(
-        driver.host().model_set(image_model.clone()).is_err(),
-        "text Attempt stays frozen"
+        driver.host().model_set(image_model.clone()).is_ok(),
+        "Session selection changes while the text Attempt stays frozen"
     );
     emulator.release_gate("text-admitted").await;
     let (_, outcome) = driver.settle().await;
@@ -1827,8 +1813,8 @@ async fn image_budget_continuation(scenario: &str, image_model: &str, text_model
             driver
                 .host()
                 .model_set(SessionModelConfig::of(ModelRef::parse(text_model).unwrap()))
-                .is_err(),
-            "active Attempt catalog is frozen"
+                .is_ok(),
+            "live selection commits while the active Attempt catalog remains frozen"
         );
     }
     emulator.release_gate("image-budget-admitted").await;

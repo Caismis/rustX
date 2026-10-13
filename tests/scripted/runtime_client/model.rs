@@ -703,12 +703,20 @@ async fn attempt_started_freezes_the_model_across_a_mid_attempt_switch() {
         id: RequestId::new(2),
         config: Box::new(SessionModelConfig::of(model_ref("beta/model-b"))),
     });
-    assert!(matches!(
-        response.error,
-        Some(RuntimeClientError::ConfigurationAdoption {
-            rejection: rustx::local_runtime::configuration::application::AdoptionError::Busy
-        })
-    ));
+    assert!(
+        response.error.is_none(),
+        "live selection commits: {response:?}"
+    );
+    let changed = receive_until(&subscription, |event| {
+        matches!(event.event, RuntimeClientEvent::SessionModelChanged { .. })
+    })
+    .await;
+    assert!(
+        !changed
+            .iter()
+            .any(|event| matches!(event.event, RuntimeClientEvent::AttemptStarted { .. })),
+        "selection does not readmit or rewrite the running Attempt"
+    );
 
     // The running attempt is still, truthfully, on A.
     let (during, _) = host.snapshot().expect("snapshot");
@@ -721,7 +729,7 @@ async fn attempt_started_freezes_the_model_across_a_mid_attempt_switch() {
     );
     assert_eq!(
         during.model.as_ref().unwrap().configured.model,
-        model_ref("alpha/model-a")
+        model_ref("beta/model-b")
     );
 
     release.send_replace(true);
@@ -734,18 +742,6 @@ async fn attempt_started_freezes_the_model_across_a_mid_attempt_switch() {
         RuntimeClientEvent::AttemptSettled { .. }
     ));
 
-    let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
-        id: RequestId::new(4),
-        config: Box::new(SessionModelConfig::of(model_ref("beta/model-b"))),
-    });
-    assert!(
-        response.error.is_none(),
-        "idle selection succeeds: {response:?}"
-    );
-    receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::SessionModelChanged { .. })
-    })
-    .await;
     // The next admission uses B, announced on the same self-contained event.
     assert!(
         attachment

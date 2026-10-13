@@ -59,6 +59,50 @@ async function openModels() {
  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Model and profile' })));
  await waitFor(() => expect(screen.queryByText('Reading native models…')).toBeNull());
 }
+it('selects a profile during execution without changing its frozen profile, parameters, output limit or summary', async () => {
+ modelFixture();
+ const initial = server.snapshots.get('A')!;
+ initial.model!.configured = { model: 'exact/model', profile: 'deliberate', requestParams: { temperature: 0.2 }, maxOutputTokens: 777, summaryModel: { mode: 'explicit', model: 'summary/original' } };
+ initial.model!.effective!.requestParams = { effort: 'high', temperature: 0.2 };
+ initial.model!.effective!.maxOutputTokens = 777;
+ const frozen = { primary: structuredClone(initial.model!.effective!), summary: { ...structuredClone(initial.model!.effective!), mode: 'explicit' as const, model: 'summary/original' } };
+ initial.attempt = { ...running().attempt!, model: frozen };
+ await server.attached('A'); const ui = render(<Control/>); await openModels();
+ expect((screen.getByRole('button', { name: 'Model and profile' }) as HTMLButtonElement).disabled).toBe(false);
+ expect(ui.container.querySelector('[data-running-model]')?.textContent).toBe('Running: exact/model / deliberate');
+ fireEvent.click(screen.getByRole('menuitem', { name: 'Profile' }));
+ server.held.add('session/setModel'); server.held.add('session/snapshot');
+ await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'brief' })));
+ const set = await server.waitFor('session/setModel', 1);
+ expect(set.params).toMatchObject({ config: { ...initial.model!.configured, profile: 'brief' } });
+ await act(async () => server.reply(set));
+ expect(screen.getByRole('button', { name: 'Model and profile' }).textContent).toContain('deliberate');
+ const reread = await server.waitFor('session/snapshot', 1);
+ await act(async () => server.reply(reread));
+ expect(screen.getByRole('button', { name: 'Model and profile' }).textContent).toContain('brief');
+ expect(ui.container.querySelector('[data-running-model]')?.textContent).toBe('Running: exact/model / deliberate');
+ await act(async () => fireEvent.click(ui.container.querySelector('[data-running-model]')!));
+ expect(document.querySelector('[data-session-model]')?.textContent).toBe('Session selection: exact/model / brief');
+ expect(JSON.parse(document.querySelector('[data-running-model-details] pre')!.textContent!)).toEqual(frozen);
+ expect(server.client.getSnapshot().views.A.snapshot?.attempt?.model).toEqual(frozen);
+ expect(count('session/setModel')).toBe(1);
+ server.held.delete('session/snapshot');
+ await act(async () => { await server.client.release('A'); await server.client.attach('A'); });
+ expect(screen.getByRole('button', { name: 'Model and profile' }).textContent).toContain('brief');
+ expect(JSON.parse(document.querySelector('[data-running-model-details] pre')!.textContent!)).toEqual(frozen);
+});
+it('shows frozen effective settings even when the selected model and profile names are unchanged', async () => {
+ modelFixture();
+ const initial = server.snapshots.get('A')!;
+ const frozen = { primary: { ...structuredClone(initial.model!.effective!), requestParams: { effort: 'original' }, maxOutputTokens: 777 }, summary: { mode: 'session' as const } };
+ initial.attempt = { ...running().attempt!, model: frozen };
+ initial.model!.effective!.requestParams = { effort: 'new' };
+ await server.attached('A'); const ui = render(<Control/>);
+ expect(ui.container.querySelector('[data-running-model]')?.textContent).toBe('Running: exact/model / deliberate');
+ await act(async () => fireEvent.click(ui.container.querySelector('[data-running-model]')!));
+ expect(JSON.parse(document.querySelector('[data-running-model-details] pre')!.textContent!)).toEqual(frozen);
+ expect(document.querySelector('[data-running-model-details]')?.textContent).toContain('future independent attempts');
+});
 it('does not dim the model trigger during a held catalog read', async () => {
  modelFixture(); await server.attached('A'); server.held.add('session/models'); render(<Control/>);
  const trigger = screen.getByRole('button', { name: 'Model and profile' }) as HTMLButtonElement;

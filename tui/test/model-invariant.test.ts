@@ -49,6 +49,9 @@ import {
   nextCursor,
 } from "./support/fixtures.ts";
 import { FakeTransport, paramsOf, tick } from "./support/app-server-peer.ts";
+import { harness } from "./support/app-server-harness.ts";
+import { renderModel } from "../src/commands/dispatcher.ts";
+import { UncertainOutcomeError } from "../src/app-server/client.ts";
 
 const MODEL_A = "alpha/model-a";
 const MODEL_B = "beta/model-b";
@@ -68,6 +71,72 @@ function fold(
 }
 
 describe("session model A -> B invariant", () => {
+  it("same-model profile changes retain the complete frozen invocation across events and reconnect", () => {
+    const frozen = attemptModel(MODEL_A, { profile: "high", reasoningEnabled: true, requestParams: { effort: "high", temperature: 0.2 }, maxOutputTokens: 777 });
+    frozen.summary = { mode: "explicit", ...frozen.primary, model: "summary/original" };
+    const initial = snapshot({ model: sessionModel(MODEL_A, frozen.primary), attempt: { attempt_id: "profile-attempt", phase: { type: "running" }, turn: 1, model: frozen, execution_settings: null } });
+    const low = sessionModel(MODEL_A, { profile: "low", reasoningEnabled: false, requestParams: { effort: "low", temperature: 0.2 }, maxOutputTokens: 777 });
+    low.configured.profile = "low";
+    const changed = fold(replaceFromSnapshot(initial, runtimeCursor(0)), [{ type: "session_model_changed", model: low }]);
+    assert.deepEqual(changed.attempt?.model, frozen);
+    assert.equal(changed.sessionModel?.effective?.profile, "low");
+    const rendered = renderModel(changed);
+    assert.match(rendered, /effective profile: low/);
+    assert.match(rendered, /profile: high/);
+    assert.match(rendered, /"effort": "high"/);
+    assert.match(rendered, /summary\/original/);
+    const recovered = replaceFromSnapshot({ ...initial, model: low }, runtimeCursor(1));
+    assert.deepEqual(recovered.attempt?.model, frozen);
+    assert.equal(recovered.sessionModel?.configured.profile, "low");
+  });
+
+  it("rejected selection rereads authority and prevents another mutation until the reread settles", async () => {
+    const h = await harness(snapshot({ model: sessionModel(MODEL_A) }));
+    const rejected = assert.rejects(h.session.modelSet({ model: MODEL_B }), /selection conflict/);
+    const set = (await h.transport.log.awaitMethod("session/setModel")).at(-1)!;
+    h.transport.respondError(set.id, { code: -32000, message: "selection conflict" });
+    const read = (await h.transport.log.awaitMethod("session/snapshot")).at(-1)!;
+    await assert.rejects(h.session.modelSet({ model: MODEL_B }), /Reread native model state/);
+    h.transport.respond(read.id, { type: "snapshot", snapshot: snapshot({ model: sessionModel(MODEL_A) }), cursor: runtimeCursor(1) });
+    const subscribe = (await h.transport.log.awaitMethod("session/subscribe")).at(-1)!;
+    h.transport.respond(subscribe.id, { type: "subscribed", after_cursor: runtimeCursor(1) });
+    await rejected;
+    assert.equal(h.session.state.sessionModel?.configured.model, MODEL_A);
+    assert.equal(h.transport.log.count("session/setModel"), 1);
+    h.client.close();
+  });
+
+  it("lost acknowledgement never commits locally or replays, and a fresh attachment recovers the committed selection", async () => {
+    const frozen = attemptModel(MODEL_A, { profile: "high" });
+    const initial = snapshot({ model: sessionModel(MODEL_A), attempt: { attempt_id: "still-running", phase: { type: "running" }, turn: 1, model: frozen, execution_settings: null } });
+    const h = await harness(initial);
+    const uncertain = assert.rejects(h.session.modelSet({ model: MODEL_B }), UncertainOutcomeError);
+    await h.transport.log.awaitMethod("session/setModel");
+    h.transport.fail("input_eof");
+    await uncertain;
+    assert.equal(h.session.state.sessionModel?.configured.model, MODEL_A);
+    assert.equal(h.transport.log.count("session/setModel"), 1);
+    const reconnected = await harness({ ...initial, model: sessionModel(MODEL_B) });
+    assert.equal(reconnected.session.state.sessionModel?.configured.model, MODEL_B);
+    assert.deepEqual(reconnected.session.state.attempt?.model, frozen);
+    assert.equal(reconnected.transport.log.count("session/setModel"), 0);
+    reconnected.client.close();
+  });
+
+  it("an acknowledgement from a retired attachment cannot report selection success", async () => {
+    const h = await harness(snapshot({ model: sessionModel(MODEL_A) }));
+    const rejected = assert.rejects(h.session.modelSet({ model: MODEL_B }), /retired observation/);
+    const set = (await h.transport.log.awaitMethod("session/setModel")).at(-1)!;
+    const detaching = h.session.detach();
+    const detach = (await h.transport.log.awaitMethod("session/detach")).at(-1)!;
+    h.transport.respond(set.id, { type: "model", model: sessionModel(MODEL_B) });
+    h.transport.respond(detach.id, { type: "detached" });
+    await Promise.all([rejected, detaching]);
+    assert.equal(h.session.state.sessionModel?.configured.model, MODEL_A);
+    assert.equal(h.transport.log.count("session/setModel"), 1);
+    h.client.close();
+  });
+
   it("keeps the running attempt on A while the session moves to B", () => {
     let state = replaceFromSnapshot(
       snapshot({ model: sessionModel(MODEL_A) }),

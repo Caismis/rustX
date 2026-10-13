@@ -40,8 +40,10 @@ export async function startDogfood(scenario = 'web_console_dogfood') {
     const providerUrl = await readiness(provider, 'stdout', line => {
       const message = JSON.parse(line); return message.ready ? `http://${message.host}:${message.port}` : undefined;
     });
+    const primaryModel = scenario === 'tui_multi_session' ? 'integration-model' : 'console-model';
+    const profiles = scenario === 'tui_multi_session' ? '\ndefault_profile = "high"\n[models."fixture/integration-model".profiles.high]\nreasoning_enabled = true\nrequest_params = \'{"reasoning_effort":"high"}\'\n[models."fixture/integration-model".profiles.low]\nreasoning_enabled = false\nmax_output_tokens = 1024\n' : '';
     const catalog = `[providers.fixture]\nbase_url = "${providerUrl}/v1"\napi_key = "$RUSTX_CONSOLE_FIXTURE_KEY"\n` +
-      ['console-model', 'second-model'].map(id => `\n[models."fixture/${id}"]\nprovider = "fixture"\nid = "${id}"\nprotocol = "openai_chat_completions"\ncontext_window = 128000\nmax_output_tokens = 4096\ncapabilities = { input_modalities = ["text"], output_modalities = ["text"], tool_calls = true, reasoning = false }\ncompat = { chat_reasoning_replay = "omit" }\n`).join('');
+      [primaryModel, 'second-model'].map(id => `\n[models."fixture/${id}"]\nprovider = "fixture"\nid = "${id}"\nprotocol = "openai_chat_completions"\ncontext_window = 128000\nmax_output_tokens = 4096\ncapabilities = { input_modalities = ["text"], output_modalities = ["text"], tool_calls = true, reasoning = ${scenario === 'tui_multi_session'} }\ncompat = { chat_reasoning_replay = "omit" }\n${id === primaryModel ? profiles : ''}`).join('');
     if (['web_chat_history', 'web_child_capabilities'].includes(scenario)) {
       const agents = join(fixtureHome, 'rustx/.agents');
       mkdirSync(agents, { recursive: true });
@@ -63,7 +65,7 @@ enabled = true
 enabled = true
 timezone = "UTC"
 ` : '';
-    const writeSettings = (model = 'console-model') => writeFileSync(settings, (scenario === 'web_compaction' ? '[context]\nreserve_tokens = 0\nkeep_recent_tokens = 0\n' : '') + catalog + `[model_timeout_policy]\nresponse_start_timeout_ms = 600000\nstream_idle_timeout_ms = 600000\n[native_tools.bash]\napproval = "always"\n[agent.tools]\nbuiltin = ["read", "write", "edit", "glob", "grep", "bash", "present", "ask_user", "job_list", "job_status", "job_wait", "job_cancel"]\n[agent.model]\nmodel = "fixture/${model}"\n` + imageSource);
+    const writeSettings = (model = primaryModel) => writeFileSync(settings, (scenario === 'web_compaction' ? '[context]\nreserve_tokens = 0\nkeep_recent_tokens = 0\n' : '') + catalog + `[model_timeout_policy]\nresponse_start_timeout_ms = 600000\nstream_idle_timeout_ms = 600000\n[native_tools.bash]\napproval = "always"\n[agent.tools]\nbuiltin = ["read", "write", "edit", "glob", "grep", "bash", "present", "ask_user", "job_list", "job_status", "job_wait", "job_cancel"]\n[agent.model]\nmodel = "fixture/${model}"\n` + imageSource);
     writeSettings();
     if (scenario === 'web_child_capabilities') writeFileSync(settings, readFileSync(settings, 'utf8') + '\n[native_tools.write]\napproval = "never"\n');
     if (['web_agent_continuation', 'web_child_capabilities'].includes(scenario)) {

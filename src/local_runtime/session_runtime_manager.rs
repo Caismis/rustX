@@ -999,102 +999,110 @@ impl SessionRuntimeManager {
         self.applications.lock().views()
     }
 
+    /// Native ownership starts before capture and survives loss of the RPC.
+    /// Capture and commit share the source fence; model resolution holds neither
+    /// that fence nor Attempt admission. No source files are ingested here.
     pub(crate) async fn set_model(
         &self,
         session: &SessionId,
         selection: crate::model::session::SessionModelConfig,
-    ) -> Result<
-        crate::model::session::SessionModelView,
-        super::configuration::application::AdoptionError,
-    > {
-        use super::configuration::application::AdoptionError;
-        let expected_settings = self
-            .sessions
-            .catalog
-            .lock()
-            .await
-            .settings_revision(session)
-            .map_err(|_| AdoptionError::Conflict)?;
+    ) -> Result<crate::model::session::SessionModelView, ModelSelectionError> {
+        use crate::runtime::conversation_runtime::ModelUpdateError;
         let owner = self.clone();
         let session = session.clone();
         tokio::task::spawn_blocking(move || {
+            let (runtime, candidate, adopted, expected_settings, source_identity) = {
+                let application = owner.applications.lock();
+                let catalog = owner.sessions.catalog.blocking_lock();
+                let expected_settings = catalog.settings_revision(&session)?;
+                let adopted = owner
+                    .sessions
+                    .configuration_bindings
+                    .lock()
+                    .expect("Session configuration bindings")
+                    .get(&session)
+                    .cloned()
+                    .ok_or(ModelUpdateError::Inactive)?;
+                let runtime = owner
+                    .configuration_runtime(&session)
+                    .ok_or(ModelUpdateError::Inactive)?;
+                let candidate = runtime.capture_model_selection()?;
+                if candidate.baseline != adopted.binding_revision {
+                    return Err(ModelUpdateError::Conflict.into());
+                }
+                let identity = application.view(session.as_ref()).map(|view| view.desired);
+                (runtime, candidate, adopted, expected_settings, identity)
+            };
+            let candidate = runtime.resolve_model_selection(candidate, selection.clone())?;
+            #[cfg(test)]
+            owner
+                .configuration
+                .test_hooks
+                .reach("model_selection_prepared");
+
             let mut application = owner.applications.lock();
-            let adopted = owner
-                .sessions
-                .configuration_bindings
-                .lock()
-                .expect("Session configuration bindings")
-                .get(&session)
-                .cloned()
-                .ok_or(AdoptionError::NotReady)?;
-            // Selection admission resolves against the catalog this Session
-            // advertises: catalog publication commits the retained binding and
-            // the runtime authority together under this same fence.
-            let capture = adopted.with_session_model(selection.clone());
-            let models = crate::model::invocation::ModelBindingRegistry::new(
-                capture
-                    .models
-                    .resolve(&owner.credentials)
-                    .map_err(|error| AdoptionError::Failed {
-                        diagnostic: error.to_string(),
-                    })?,
-            )
-            .map_err(|error| AdoptionError::Failed {
-                diagnostic: error.to_string(),
-            })?;
-            let runtime = owner
-                .configuration_runtime(&session)
-                .ok_or(AdoptionError::NotReady)?;
-            if runtime.model_view().configured == selection && capture.same_provider(&adopted) {
-                return Ok(runtime.model_view());
+            if application.view(session.as_ref()).map(|view| view.desired) != source_identity {
+                return Err(ModelUpdateError::Conflict.into());
             }
-            let mut candidate = runtime
-                .prepare_context_configuration(&capture, models, Some(selection.clone()))
-                .map_err(|diagnostic| AdoptionError::Failed { diagnostic })?;
-            candidate.selection_only = true;
-            let baseline = candidate.baseline;
-            let view = candidate.model.view();
-            let mut retained = capture
-                .admit(|| owner.credentials.clone())
-                .map_err(|diagnostic| AdoptionError::Failed { diagnostic })?;
-            retained.binding_revision = baseline + 1;
-            let mut catalog = owner
-                .sessions
-                .catalog
-                .try_lock()
-                .map_err(|_| AdoptionError::Busy)?;
-            let (_, mut settings) = catalog
-                .lineage(&session, None)
-                .map_err(|_| AdoptionError::Conflict)?;
-            settings.model = Some(selection);
-            runtime.adopt_configuration(&mut Some(candidate), baseline, true, || {
-                catalog
-                    .replace_settings(&session, expected_settings, settings)
-                    .map_err(|error| AdoptionError::Failed {
-                        diagnostic: error.to_string(),
-                    })?;
+            let mut catalog = owner.sessions.catalog.blocking_lock();
+            if catalog.settings_revision(&session)? != expected_settings {
+                return Err(ModelUpdateError::Conflict.into());
+            }
+            let (_, mut settings) = catalog.lineage(&session, None)?;
+            let selection_is_persisted = settings.model.as_ref() == Some(&selection);
+            settings.model = Some(selection.clone());
+            let mut persistence_error = None;
+            let mut committed = false;
+            let result = runtime.commit_model_selection(candidate, |revision| {
+                if selection_is_persisted && revision == adopted.binding_revision {
+                    return Ok(());
+                }
+                // Linearization: catalog visibility under the runtime admission
+                // gate. Before visibility, failure publishes nothing. Once visible,
+                // even an uncertain directory fsync must publish the same authority;
+                // the caller receives that typed failure, never success or rollback.
+                if let Err(error) = catalog.replace_settings(&session, expected_settings, settings)
+                {
+                    let committed = error.committed();
+                    let diagnostic = error.to_string();
+                    persistence_error = Some(error);
+                    if !committed {
+                        return Err(ModelUpdateError::DurabilityFailed {
+                            message: diagnostic,
+                        });
+                    }
+                }
+                committed = true;
                 owner
                     .sessions
                     .configuration_bindings
                     .lock()
                     .expect("Session configuration bindings")
-                    .insert(session.clone(), retained.clone());
+                    .insert(
+                        session.clone(),
+                        adopted.with_model_selection(selection.clone(), revision),
+                    );
                 Ok(())
-            })?;
+            });
+            if committed {
+                application.selection_changed(session.as_ref(), selection);
+                owner.applications.notify(&application);
+            }
             drop(catalog);
-            let input = owner
-                .configuration
-                .capture_session_application(&retained.input);
-            application.record_source(&retained.input.cwd, &input);
-            application.capture_binding(session.to_string(), input);
-            owner.applications.notify(&application);
             drop(application);
-            owner.applications.run(owner.clone());
-            Ok(view)
+            if committed {
+                owner.applications.run(owner.clone());
+            }
+            if let Some(error) = persistence_error {
+                return Err(ModelSelectionError::Persistence(error));
+            }
+            result.map_err(ModelSelectionError::Model)
         })
         .await
-        .map_err(|_| AdoptionError::Failed {
-            diagnostic: "Session model operation interrupted".into(),
+        .map_err(|_| {
+            ModelSelectionError::Model(ModelUpdateError::DurabilityFailed {
+                message: "Session model operation interrupted; reread Session authority".into(),
+            })
         })?
     }
 
@@ -2047,6 +2055,23 @@ impl SessionRuntimeManager {
 #[cfg(test)]
 #[path = "../../tests/scripted/app_server/mod.rs"]
 pub(crate) mod tests;
+
+/// Internal selection failures map to the existing App Server error contract.
+#[derive(Debug)]
+pub(crate) enum ModelSelectionError {
+    Model(crate::runtime::conversation_runtime::ModelUpdateError),
+    Persistence(super::session::SessionError),
+}
+impl From<crate::runtime::conversation_runtime::ModelUpdateError> for ModelSelectionError {
+    fn from(error: crate::runtime::conversation_runtime::ModelUpdateError) -> Self {
+        Self::Model(error)
+    }
+}
+impl From<super::session::SessionError> for ModelSelectionError {
+    fn from(error: super::session::SessionError) -> Self {
+        Self::Persistence(error)
+    }
+}
 
 #[derive(Debug)]
 pub enum SourceSettingsError {

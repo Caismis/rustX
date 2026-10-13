@@ -1626,8 +1626,8 @@ impl ClientInner {
     ///
     /// # Linearization
     ///
-    /// The runtime performs resolution, validation, and state replacement
-    /// under the one coordinator lock that also owns attempt admission. An
+    /// The runtime resolves from an immutable capture off the coordinator
+    /// lock, then fences and commits under the lock that also owns admission. An
     /// update therefore either linearizes before an admission (and that
     /// attempt observes it) or after it (and only later attempts observe
     /// it). There is no third possibility and no timing assumption.
@@ -1659,9 +1659,10 @@ impl ClientInner {
             .expect("a writable Runtime Client host has a runtime")
             .model_set(config)
             .map_err(|error| match error {
-                ModelUpdateError::ConfigurationAdoption { rejection } => {
-                    RuntimeClientError::ConfigurationAdoption { rejection }
-                }
+                ModelUpdateError::Conflict => RuntimeClientError::ConfigurationAdoption {
+                    rejection:
+                        crate::local_runtime::configuration::application::AdoptionError::Conflict,
+                },
                 ModelUpdateError::Inactive => RuntimeClientError::InvalidState {
                     message: "the conversation runtime is not activated".to_owned(),
                 },
@@ -7682,15 +7683,10 @@ mod tests {
             "frozen_probe".to_owned(),
             serde_json::json!("updated-after-admission"),
         );
-        assert!(matches!(
-            fixture_b.host.model_set(updated.clone()),
-            Err(
-                crate::runtime_client::RuntimeClientError::ConfigurationAdoption {
-                    rejection:
-                        crate::local_runtime::configuration::application::AdoptionError::Busy
-                }
-            )
-        ));
+        fixture_b
+            .host
+            .model_set(updated)
+            .expect("active selection commits");
 
         release_b_tx.send(true).expect("release");
         receive_until(&subscription_b, |event| {
@@ -7703,11 +7699,7 @@ mod tests {
             "the admitted attempt never observes the post-admission update"
         );
 
-        fixture_b
-            .host
-            .model_set(updated)
-            .expect("idle model commit");
-        // A later attempt observes it.
+        // A later attempt observes the selection already committed while active.
         attachment_b.handle_request(RuntimeClientRequest::SubmitInbound {
             id: crate::runtime_client::RequestId::new(2),
             content: submit_content("second"),

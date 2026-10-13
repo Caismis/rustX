@@ -34,7 +34,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   {
     name: "/model",
     description:
-      "Open the searchable model selector, or select one directly; selection resets primary overrides and preserves summary policy.",
+      "Select a model while work runs; changing models resets primary overrides and preserves summary policy. Existing attempts stay frozen.",
     argumentHint: "[show|provider/model|profile set <id>|profile clear]",
   },
   { name: "/new", description: "Create a new independent local session." },

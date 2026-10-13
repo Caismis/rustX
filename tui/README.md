@@ -385,6 +385,13 @@ Each either renders projection state, changes a client display preference, or
 invokes exactly one canonical App Server operation. `/model` opens the
 searchable selector over `model_catalog_get` and applies a choice through
 `session/setModel`, while `/model show` renders the projection's own model view;
+selection remains available during active execution. Native confirmation changes
+the Session's selection for future independent Attempts; the running Attempt's
+frozen model/Profile remains separately labelled, even for same-Model changes.
+Profile changes preserve independent request/output overrides and Summary Model
+policy; choosing another Model resets only primary overrides. Uncertain outcomes
+are reconciled by reading authority, never by replaying the mutation.
+
 `/tools`, `/skills`, and `/todos` read the projection the client already
 holds; `/status` prints the
 runtime's own Agent Status rendering; `/compact` invokes one

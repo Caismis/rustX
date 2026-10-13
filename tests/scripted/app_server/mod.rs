@@ -5,6 +5,7 @@
 mod app_server_conformance;
 mod configuration;
 mod inbound_model;
+mod model_selection;
 pub(crate) mod protocol;
 mod residency_policy;
 mod startup_measurements;

@@ -1813,6 +1813,7 @@ describe("RustxTuiApp lifecycle", () => {
     );
     const api = session as unknown as {
       modelCatalog: () => Promise<{ models: ReturnType<typeof catalogModel>[] }>;
+      modelGet: () => Promise<ReturnType<typeof sessionModel>>;
       modelSet: (config: { model: string }) => Promise<ReturnType<typeof sessionModel>>;
     };
     api.modelCatalog = async () => {
@@ -1826,6 +1827,7 @@ describe("RustxTuiApp lifecycle", () => {
       selectedModel = config.model;
       return sessionModel(config.model);
     };
+    api.modelGet = async () => sessionModel("alpha/model-a");
 
     const app = appOver(session as unknown as AppServerSession);
     const running = app.run();

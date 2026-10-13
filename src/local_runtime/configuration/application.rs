@@ -36,7 +36,6 @@ pub enum AdoptionEligibility {
 }
 
 pub(crate) struct PreparedConfiguration {
-    pub(crate) selection_only: bool,
     pub(crate) owner: Arc<()>,
     pub(crate) baseline: u64,
     pub(crate) preview: Arc<crate::runtime::RuntimeResourceSnapshot>,
@@ -532,6 +531,27 @@ impl ApplicationState {
         let identity = self.desire(scope.clone(), revision);
         self.inputs.insert(scope, input);
         identity
+    }
+
+    /// Reconsider an existing captured source after explicit Session intent
+    /// changes. Selection never ingests source files or adopts pending context.
+    pub(crate) fn selection_changed(
+        &mut self,
+        scope: &str,
+        selection: crate::model::session::SessionModelConfig,
+    ) {
+        // A Session with no source application has nothing to reconsider.
+        // Selection must not manufacture a failed application or ingest files
+        // merely to populate one.
+        let Some(mut input) = self.inputs.get(scope).cloned() else {
+            return;
+        };
+        if let Ok(captured) = &mut input
+            && let Ok(context) = &mut captured.context
+        {
+            context.input.model = Some(selection);
+        }
+        self.capture_binding(scope.to_owned(), input);
     }
 
     pub(crate) fn capture_source(

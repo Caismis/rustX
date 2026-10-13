@@ -2839,6 +2839,16 @@ async fn issue459_published_profile_reaches_attached_session_without_adoption() 
             model.effective.as_ref().unwrap().request_params["temperature"],
             json!(0.5)
         );
+        // The fixture loads after source authoring; explicitly register its
+        // source application. Model selection alone never ingests source files.
+        f.manager
+            .reconcile_configuration(
+                &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                    directory: f.workspaces[0].clone(),
+                },
+            )
+            .await
+            .unwrap();
         super::configuration::settled(&f, 0).await;
         let models = |id| {
             let connection = &connection;
@@ -2864,7 +2874,6 @@ async fn issue459_published_profile_reaches_attached_session_without_adoption() 
             .manager
             .configuration_application(&target.session_id)
             .unwrap();
-        let mut eligibility = super::configuration::EligibilityStream::open(&f, &target.session_id);
         let settlement = runtime.settlement_signal();
         call(
             &connection,
@@ -2946,26 +2955,8 @@ async fn issue459_published_profile_reaches_attached_session_without_adoption() 
             admitted
         );
 
-        // The admitted Attempt's Tool continuation still sends its frozen
-        // invocation.
-        f.gates[0].release();
-        settlement.notified().await;
-        let bodies = f.provider.request_bodies();
-        assert_eq!(bodies.len(), 2, "Tool proposal and its continuation");
-        for body in &bodies {
-            let body: serde_json::Value = serde_json::from_str(body).unwrap();
-            assert_eq!(body["temperature"], json!(0.5));
-            assert!(body.get("seed").is_none());
-        }
-
-        // Native selection admission resolves the published Profile, and the
-        // next Attempt sends exactly its parameters. Settlement precedes the
-        // Attempt task's release; selection waits for the idle runtime.
-        {
-            use crate::local_runtime::configuration::application::AdoptionEligibility;
-            eligibility.until(AdoptionEligibility::Busy).await;
-            eligibility.until(AdoptionEligibility::Eligible).await;
-        }
+        // Select the newly published Profile while the admitted Attempt is still
+        // physically parked. Only future independent Attempts may use it.
         let MethodResult::Model { model } = call(
             &connection,
             108,
@@ -2982,6 +2973,30 @@ async fn issue459_published_profile_reaches_attached_session_without_adoption() 
             model.effective.as_ref().unwrap().profile,
             Some(ModelProfileId::new("deep"))
         );
+        assert_eq!(
+            managed
+                .client()
+                .snapshot()
+                .unwrap()
+                .0
+                .attempt
+                .unwrap()
+                .model,
+            admitted
+        );
+
+        // The admitted Attempt's Tool continuation still sends its frozen
+        // invocation.
+        f.gates[0].release();
+        settlement.notified().await;
+        let bodies = f.provider.request_bodies();
+        assert_eq!(bodies.len(), 2, "Tool proposal and its continuation");
+        for body in &bodies {
+            let body: serde_json::Value = serde_json::from_str(body).unwrap();
+            assert_eq!(body["temperature"], json!(0.5));
+            assert!(body.get("seed").is_none());
+        }
+
         let settlement = runtime.settlement_signal();
         call(
             &connection,
@@ -3039,7 +3054,7 @@ async fn refusal(connection: &AppServerConnection, id: i64, call: Method) -> Err
 /// reconnect.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn issue459_removed_selected_profile_is_reported_until_explicit_recovery() {
-    use crate::local_runtime::configuration::application::{AdoptionError, UnitApplication};
+    use crate::local_runtime::configuration::application::UnitApplication;
     use crate::model::catalog::{ModelProfileId, ModelRef};
     use crate::model::session::SessionModelConfig;
     use serde_json::json;
@@ -3068,6 +3083,14 @@ async fn issue459_removed_selected_profile_is_reported_until_explicit_recovery()
             config: Box::new(pinned(profile)),
         };
         call(&connection, 102, set("fast")).await;
+        f.manager
+            .reconcile_configuration(
+                &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                    directory: f.workspaces[0].clone(),
+                },
+            )
+            .await
+            .unwrap();
         super::configuration::settled(&f, 0).await;
         let managed = f.manager.load(&target.session_id, None).await.unwrap();
         let runtime = f.manager.configuration_runtime(&target.session_id).unwrap();
@@ -3076,8 +3099,6 @@ async fn issue459_removed_selected_profile_is_reported_until_explicit_recovery()
         let preparations = probe.configuration_preparations.load(Ordering::SeqCst);
         let selected = runtime.model_view();
         assert!(selected.unavailable.is_none());
-        let mut eligibility =
-            super::configuration::EligibilityStream::open(&f, &target.session_id);
 
         let settlement = runtime.settlement_signal();
         call(
@@ -3206,19 +3227,11 @@ async fn issue459_removed_selected_profile_is_reported_until_explicit_recovery()
         // Re-selecting the removed Profile is refused by the published catalog.
         assert!(matches!(
             refusal(&connection, 110, set("fast")).await,
-            ErrorData::ConfigurationAdoption {
-                rejection: AdoptionError::Failed { .. }
-            }
+            ErrorData::ModelUnavailable { .. }
         ));
         assert_eq!(runtime.model_view(), *model);
 
-        // Explicit recovery through the native mutation path, once the
-        // settled Attempt's task has released the runtime.
-        {
-            use crate::local_runtime::configuration::application::AdoptionEligibility;
-            eligibility.until(AdoptionEligibility::Busy).await;
-            eligibility.until(AdoptionEligibility::Eligible).await;
-        }
+        // Explicit recovery uses the published catalog without an idle gate.
         let MethodResult::Model { model } = call(&connection, 111, set("deep")).await else {
             panic!("model")
         };
@@ -3271,7 +3284,7 @@ async fn issue459_removed_selected_profile_is_reported_until_explicit_recovery()
 /// same runtime incarnation and attachment.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn issue459_removed_selected_model_is_replaced_explicitly_in_place() {
-    use crate::local_runtime::configuration::application::{AdoptionError, UnitApplication};
+    use crate::local_runtime::configuration::application::UnitApplication;
     use crate::local_runtime::configuration::settings::SourceTarget;
     use crate::model::catalog::ModelRef;
     use crate::model::session::SessionModelConfig;
@@ -3287,7 +3300,7 @@ async fn issue459_removed_selected_model_is_replaced_explicitly_in_place() {
             target: target.clone(),
             config: Box::new(model(id)),
         };
-        // The Session already resolves `local/a`; selecting it is a no-op.
+        // Persist the Session's currently resolved `local/a` as explicit intent.
         call(&connection, 100, set("local/a")).await;
         let managed = f.manager.load(&target.session_id, None).await.unwrap();
         let incarnation = managed.incarnation_id();
@@ -3398,9 +3411,7 @@ async fn issue459_removed_selected_model_is_replaced_explicitly_in_place() {
         // turn runs on it.
         assert!(matches!(
             refusal(&connection, 104, set("local/a")).await,
-            ErrorData::ConfigurationAdoption {
-                rejection: AdoptionError::Failed { .. }
-            }
+            ErrorData::ModelUnavailable { .. }
         ));
         assert!(matches!(
             refusal(
@@ -7785,3 +7796,7 @@ async fn exact_node_read_retains_origin_and_never_selects_or_composes() {
         f.close().await;
     }).await;
 }
+
+#[path = "live_model.rs"]
+mod live_model;
+pub(crate) use live_model::live_model_child_inheritance_boundary_scenario;

@@ -27,13 +27,13 @@
 
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, renameSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 
-import { CommandDispatcher } from "../src/commands/dispatcher.ts";
+import { CommandDispatcher, renderModel } from "../src/commands/dispatcher.ts";
 import { parseArguments } from "../src/cli.ts";
 import { prepareStartup } from "../src/startup.ts";
 
@@ -202,6 +202,60 @@ async function openSession(
   const created = await host.createSession(settings);
   return host.attach(created.session.id, created.session.active_node);
 }
+
+it("live profile selection crosses the real TUI/App Server boundary while the original request is gated", { skip: SKIP, timeout: 120_000 }, async () => {
+  const provider = await ProviderEmulator.start("tui_multi_session");
+  const fixture = ServerFixture.create("rustx-tui-live-profile-", provider.url());
+  const configPath = join(fixture.home, "rustx/rustx.toml");
+  const config = readFileSync(configPath, "utf8").replace('[models."fixture/integration-model"]', '[models."fixture/integration-model"]\ndefault_profile = "high"').replace('reasoning = false', 'reasoning = true');
+  writeFileSync(configPath, config + '\n[models."fixture/integration-model".profiles.high]\nreasoning_enabled = true\nrequest_params = \'{"reasoning_effort":"high"}\'\n[models."fixture/integration-model".profiles.low]\nreasoning_enabled = false\nmax_output_tokens = 1024\n');
+  const host = await AppServerHost.spawnLocal({ binary: BINARY, launch: { runtimeRoot: fixture.runtimeRoot }, env: fixture.env });
+  let passed = false;
+  try {
+    const settings = fixture.settings("live-profile");
+    settings.model = { model: "fixture/integration-model", profile: "high", requestParams: { temperature: 0.2 }, maxOutputTokens: 777, summaryModel: { mode: "explicit", model: "fixture/integration-model", profile: "low", request_params: {}, max_output_tokens: 333 } };
+    const session = await openSession(host, settings);
+    const stop = host.client.onNotification(message => session.applyNotification(message));
+    await session.submitInbound([{ type: "text", text: "tui multi-session: session A long task" }]);
+    await provider.awaitGate("session-a-holding");
+    await until(() => session.state.attempt?.phase.type === "running", "original attempt is observed");
+    const frozen = structuredClone(session.state.attempt!.model);
+    const dispatcher = new CommandDispatcher({ host, session, sessionSettings: settings, diagnostics: () => { throw new Error("not requested"); } });
+    const selected = await dispatcher.submit("/model profile set low");
+    assert.equal(selected.kind, "transient");
+    if (selected.kind === "transient") assert.equal(selected.level, "info", selected.text);
+    const committed = await session.modelGet();
+    assert.deepEqual(committed.configured, { ...settings.model, profile: "low" });
+    assert.equal(committed.effective?.reasoningEnabled, false);
+    assert.equal(session.state.attempt?.phase.type, "running");
+    assert.deepEqual(session.state.attempt?.model, frozen);
+    assert.match(renderModel(session.state), /profile: high/);
+    assert.equal((await host.readSettings(session.sessionId)).settings.model?.profile, "low");
+    await provider.releaseGate("session-a-holding");
+    await until(() => session.state.attempt?.phase.type === "settled", "original attempt settles");
+    assert.deepEqual(session.state.attempt?.model, frozen);
+    await session.submitInbound([{ type: "text", text: "tui multi-session: session B quick task" }]);
+    await until(() => session.state.attempt?.model?.primary.profile === "low" && session.state.attempt.phase.type === "settled", "new independent attempt captures low");
+    const requests = (await provider.requests()).map(request => request.body as Record<string, unknown>);
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0]!.reasoning_effort, "high");
+    assert.equal(requests[1]!.reasoning_effort, undefined);
+    for (const request of requests) {
+      assert.equal(request.temperature, 0.2);
+      assert.equal(request.max_tokens ?? request.max_completion_tokens, 777);
+    }
+    stop();
+    await host.detach(session.sessionId);
+    const reattached = await host.attach(session.sessionId);
+    assert.equal(reattached.state.sessionModel?.configured.profile, "low");
+    assert.equal(reattached.state.attempt?.model?.primary.profile, "low");
+    passed = true;
+  } finally {
+    await host.shutdown();
+    fixture.cleanup();
+    if (passed) await provider.finish(); else await provider.stop();
+  }
+});
 
 describe("local self-hosted mode: one owned App Server child over stdio", { skip: SKIP }, () => {
   let provider: ProviderEmulator;

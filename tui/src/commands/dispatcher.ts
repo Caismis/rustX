@@ -631,7 +631,7 @@ export class CommandDispatcher {
       if (clear) delete configured.profile;
       else if (profile !== undefined) configured.profile = profile;
       const updated = await session.modelSet(configured);
-      return transient("info", `Session model profile -> ${updated.configured.profile ?? "model default"}; next eligible admission. Defaults unchanged.`);
+      return transient("info", `Session model profile -> ${updated.configured.profile ?? "model default"}; future independent attempts. Running attempts stay frozen.`);
     }
     if (argument === "show") {
       return inspect("Model", renderModel(state));
@@ -671,10 +671,8 @@ export class CommandDispatcher {
     model: CatalogModelView,
   ): Promise<CommandOutcome> {
     try {
-      const current = session.state?.sessionModel?.configured;
-      if (current === undefined) {
-        return transient("error", "not attached yet");
-      }
+      const current = (await session.modelGet()).configured;
+      if (current.model === model.model) return transient("info", `session model remains ${model.model}; profile and overrides preserved`);
 
       // `/model X` is a deliberate whole-state replacement: the selected
       // primary model gets its own runtime defaults — the runtime resolves
@@ -693,12 +691,12 @@ export class CommandDispatcher {
       const attempt = session.state?.attempt;
       const attemptNote =
         attempt !== undefined && attempt.phase.type === "running"
-          ? `current attempt remains ${attempt.model?.primary.model ?? "unavailable"}`
+          ? `current attempt remains ${attempt.model?.primary.model ?? "unavailable"}${attempt.model ? ` (profile ${describeProfile(attempt.model.primary)})` : ""}`
           : "";
       const modelFeedback = attemptNote.length > 0
         ? [
             `session model -> ${updated.configured.model}; ${attemptNote}`,
-            "change applies to next attempt; primary overrides reset; summary policy preserved",
+            "change applies to next attempt (independent admission); primary overrides reset; summary policy preserved",
             `capabilities: ${updated.effective == null ? "unavailable" : capabilitySummary(updated.effective)}`,
           ].join("\n")
         : [
@@ -944,7 +942,7 @@ export function renderModel(state: PresentationState): string {
   // model for new work; the last resolved one is not offered as one.
   const effective = session.unavailable == null ? session.effective : undefined;
   const lines = [
-    `### ${state.settingsEvidence === "frozen_child" ? "Parent-provided child" : "Session"} model (next eligible admission)`,
+    `### ${state.settingsEvidence === "frozen_child" ? "Parent-provided child" : "Session"} model (next independent admission)`,
     `- configured: \`${session.configured.model}\``,
   ];
   if (effective == null) {
@@ -1005,12 +1003,17 @@ export function renderModel(state: PresentationState): string {
       `- model: \`${attempt.model?.primary.model ?? "unavailable"}\``,
       `- profile: ${(attempt.model ? describeProfile(attempt.model.primary) : "unavailable")}`,
       `- reasoning: ${(attempt.model ? describeReasoning(attempt.model.primary) : "unavailable")}`,
+      `- max output tokens: ${attempt.model?.primary.maxOutputTokens ?? "unavailable"}`,
       `- effective capabilities: ${attempt.model ? capabilitySummary(attempt.model.primary) : "unavailable"}`,
       `- read_image active: ${attempt.executionSettings?.read_image_active ?? "unavailable"}`,
     );
-    if (attempt.model && effective != null && attempt.model.primary.model !== effective.model) {
+    if (attempt.model) {
+      lines.push("- frozen request parameters (provider-owned, opaque):", "```json", JSON.stringify(attempt.model.primary.requestParams ?? {}, null, 2), "```",
+        "- frozen summary model:", "```json", JSON.stringify(attempt.model.summary, null, 2), "```");
+    }
+    if (attempt.model && effective != null) {
       lines.push(
-        `- the session's effective model is \`${effective.model}\`; this attempt keeps the model it froze.`,
+        `- Session selection applies to future independent attempts; this attempt keeps its frozen model, profile, parameters and summary policy.`,
       );
     }
     if (effective != null && session.configured.model !== effective.model) {

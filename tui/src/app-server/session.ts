@@ -128,6 +128,7 @@ export class AppServerSession {
   #epoch = 0;
   #released = false;
   #serverClosed = false;
+  #modelMutation: "in-flight" | "unresolved" | undefined;
   /** Serializes repairs so two resyncs cannot interleave their installs. */
   #repair: Promise<void> | undefined;
   #acquiring = false;
@@ -560,11 +561,16 @@ export class AppServerSession {
   }
 
   async modelGet(): Promise<SessionModelView> {
+    if (this.#modelMutation === "unresolved") await this.resync();
+    const epoch = this.#epoch;
     const model = await this.#client.call(
       "session/model",
       { target: this.#target },
       "model",
     );
+    if (this.#released || this.#serverClosed || epoch !== this.#epoch) {
+      throw new Error("Model read belongs to a retired attachment; reread native authority.");
+    }
     return model.model;
   }
 
@@ -576,12 +582,30 @@ export class AppServerSession {
    * already-admitted attempt keeps the model it froze.
    */
   async modelSet(config: SessionModelConfig): Promise<SessionModelView> {
-    const model = await this.#client.call(
-      "session/setModel",
-      { target: this.#target, config },
-      "model",
-    );
-    return model.model;
+    if (this.#released || this.#serverClosed) throw new Error("Session attachment is unavailable.");
+    if (this.#modelMutation) throw new Error("Reread native model state before another selection.");
+    const epoch = this.#epoch;
+    this.#modelMutation = "in-flight";
+    try {
+      const model = await this.#client.call(
+        "session/setModel",
+        { target: this.#target, config },
+        "model",
+      );
+      if (this.#released || this.#serverClosed || epoch !== this.#epoch) {
+        throw new Error("Model acknowledgement belongs to a retired observation; reread native authority. Not replayed.");
+      }
+      this.#modelMutation = undefined;
+      // A response confirms this operation, but is not an ordered observation.
+      // Only native events and snapshots update the Session or Attempt view.
+      return model.model;
+    } catch (error) {
+      this.#modelMutation = "unresolved";
+      // Conflict and uncertain responses both require a fresh observation.
+      // A lost transport leaves the guard in place until reconnect/reattach.
+      if (!this.#released && !this.#serverClosed) await this.resync().catch(() => {});
+      throw error;
+    }
   }
 
   /** One native read of the published immutable configuration. */
@@ -662,6 +686,7 @@ export class AppServerSession {
         this.#acquiring = false;
         try {
           await this.#client.call("session/subscribe", { target, after_cursor: snapshot.cursor }, "subscribed");
+          if (this.#modelMutation === "unresolved") this.#modelMutation = undefined;
           return;
         } catch (error) {
           if (!isResyncRequired(error) || attempt === 2) throw error;

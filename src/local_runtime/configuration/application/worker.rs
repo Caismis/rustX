@@ -105,6 +105,11 @@ impl ConfigurationApplications {
                 return;
             }
         };
+        #[cfg(test)]
+        manager
+            .configuration
+            .test_hooks
+            .reach("configuration_policy_prepared");
         let runtime = manager.configuration_runtime(&session);
         {
             let mut state = self.lock();
@@ -367,9 +372,7 @@ impl ConfigurationApplications {
                 self.lock()
                     .make_available(scope, identity, &capture, &manager.credentials)
                     .and_then(|()| bindings(&capture))
-                    .and_then(|models| {
-                        runtime.prepare_context_configuration(&capture, models, None)
-                    })
+                    .and_then(|models| runtime.prepare_context_configuration(&capture, models))
             }
         } else {
             let capability_capture = adopted.as_ref().map_or_else(
@@ -465,9 +468,8 @@ impl ConfigurationApplications {
                 self.notify(&state);
                 drop(state);
                 capture = (**old).clone().retaining_context_from(&capture);
-                bindings(&capture).and_then(|models| {
-                    runtime.prepare_context_configuration(&capture, models, None)
-                })
+                bindings(&capture)
+                    .and_then(|models| runtime.prepare_context_configuration(&capture, models))
             } else {
                 let mut candidate = candidate.expect("successful capability candidate");
                 if candidate.impact == CacheImpact::Preserved {
@@ -550,9 +552,8 @@ impl ConfigurationApplications {
                     self.notify(&state);
                     drop(state);
                     context_only = true;
-                    bindings(&capture).and_then(|models| {
-                        runtime.prepare_context_configuration(&capture, models, None)
-                    })
+                    bindings(&capture)
+                        .and_then(|models| runtime.prepare_context_configuration(&capture, models))
                 } else {
                     match bindings(&capture).and_then(|models| {
                         runtime.complete_candidate_context(&mut candidate, &capture, models)
