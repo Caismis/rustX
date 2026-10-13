@@ -26,3 +26,89 @@ mod identity_fixture;
 
 #[path = "../common/agent_authority.rs"]
 mod agent_authority;
+
+/// Write a typed checkpoint through the actual durable grant/CAS/receipt contract.
+fn checkpoint(
+    store: &dyn rustx::durable::ConversationStore,
+    id: &str,
+    retired: usize,
+    text: &str,
+) -> rustx::durable::projection::ProjectionCommitReceipt {
+    use rustx::context::checkpoint::{CheckpointCandidate, CheckpointItem, CheckpointMessage};
+    use rustx::model::projected::{
+        CanonicalMessageRef, DerivedModelMessage, ProjectedMessage, SemanticTransformation,
+    };
+    let history = store.projected_history().unwrap();
+    let mut items = vec![CheckpointItem {
+        message: CheckpointMessage::Derived(Box::new(DerivedModelMessage {
+            message: ProjectedMessage::User {
+                content: vec![rustx::message::types::UserContentBlock::Text(
+                    rustx::message::TextBlock { text: text.into() },
+                )],
+                source: rustx::message::types::UserSource::Runtime,
+                kind: rustx::model::projected::ProjectedUserKind::Message,
+                timestamp: None,
+            },
+            sources: history.messages[..retired]
+                .iter()
+                .filter_map(|m| m.as_canonical())
+                .map(|m| CanonicalMessageRef::of(store.conversation_id(), m))
+                .collect(),
+            checkpoint_sources: vec![],
+            transformations: vec![SemanticTransformation::Summary],
+        })),
+        call_sources: vec![],
+        result_call: None,
+    }];
+    items.extend(history.items.into_iter().skip(retired));
+    let operation_id =
+        rustx::runtime::identity::CompactionOperationId::new(format!("operation:{id}"));
+    store
+        .commit_projection(rustx::durable::projection::ProjectionCommitInput {
+            grant: rustx::runtime::CancellationSignal::new()
+                .authorize_compaction_commit(operation_id.clone())
+                .unwrap(),
+            operation_id,
+            candidate: CheckpointCandidate {
+                checkpoint_id: rustx::runtime::identity::CheckpointId::new(id),
+                expected_head: history.cut.checkpoint_id,
+                read_cut: store.compaction_resource_cut().unwrap(),
+                base_frontier: history.cut.ledger,
+                items,
+                summary_metadata: None,
+            },
+            owner: store.projection_owner(None).unwrap(),
+            tokens_before: rustx::runtime::TokenMeasurement {
+                input_tokens: 20,
+                source: rustx::runtime::TokenMeasurementSource::Estimated,
+            },
+            estimated_tokens_after: 4,
+            occupancy: None,
+            turn_id: None,
+            timestamp: chrono::Utc::now(),
+        })
+        .unwrap()
+}
+
+// Fixtures freeze the same typed input that the actual-start boundary validates.
+fn freeze_request(
+    store: &dyn rustx::durable::ConversationStore,
+    snapshot: &mut rustx::model::RequestSnapshot,
+) {
+    let history = store.projected_history().unwrap();
+    snapshot.history_cut = history.cut;
+    snapshot
+        .freeze_input(
+            store.conversation_id(),
+            &rustx::model::ModelRequest {
+                messages: history.messages,
+                images: rustx::model::images::ResolvedImages::new(),
+                invocation: snapshot.invocation.clone(),
+                tools: snapshot.tool_definitions.clone(),
+                effective_system_prompt: snapshot.effective_system_prompt.clone(),
+                continuation: snapshot.continuation.clone(),
+                continuation_source: snapshot.continuation_source.clone(),
+            },
+        )
+        .unwrap();
+}

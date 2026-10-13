@@ -793,15 +793,14 @@ impl crate::model::uploads::UploadProjectionResolver for SessionUploadResolver {
         &self,
         messages: &[crate::model::input::ModelInputMessage],
     ) -> Result<crate::model::uploads::UploadProjection, String> {
-        use crate::message::types::{MessageBlock, UserContentBlock};
+        use crate::message::types::UserContentBlock;
         let references = messages
             .iter()
-            .filter_map(|m| m.as_canonical())
-            .filter_map(|m| match m {
-                MessageBlock::User(u) => Some(u),
+            .filter_map(|m| match m.view() {
+                crate::model::projected::ModelMessageView::User(content) => Some(content),
                 _ => None,
             })
-            .flat_map(|u| u.content.iter())
+            .flat_map(|content| content.iter())
             .filter_map(|b| match b {
                 UserContentBlock::UploadedFile(f) => Some(f),
                 _ => None,

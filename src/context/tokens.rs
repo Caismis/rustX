@@ -209,7 +209,9 @@ fn input_identity(message: &ModelInputMessage) -> ObservedInputIdentity {
         ModelInputMessage::Canonical(message) => {
             ObservedInputIdentity::Canonical(message.id().clone(), hash)
         }
-        ModelInputMessage::RequestOnly(_) => ObservedInputIdentity::RequestOnly(hash),
+        ModelInputMessage::RequestOnly(_) | ModelInputMessage::Derived(_) => {
+            ObservedInputIdentity::RequestOnly(hash)
+        }
     }
 }
 
@@ -334,6 +336,15 @@ pub trait TokenEstimator: Send + Sync {
         tool_definitions: &[ModelToolDefinition],
     ) -> u64;
 
+    /// Price final materialized input without selecting runtime resources again.
+    fn estimate_frozen_request(&self, request: &crate::model::ModelRequest) -> u64 {
+        self.estimate_input(
+            &request.messages,
+            &request.effective_system_prompt,
+            &request.tools,
+        )
+    }
+
     /// The deterministic estimated input tokens of the conversation content
     /// only, excluding non-conversation contributors such as tool definitions
     /// and the Effective System Prompt.
@@ -386,12 +397,13 @@ impl DefaultTokenEstimator {
         effective_system_prompt: &str,
         tool_definitions: &[ModelToolDefinition],
     ) -> u64 {
-        let items = serde_json::to_vec(messages)
-            .expect("provider-neutral model input serializes")
-            .len();
-        let tools = serde_json::to_vec(tool_definitions)
-            .expect("canonical tool definitions serialize")
-            .len();
+        let items = encoded_bytes(
+            &messages
+                .iter()
+                .map(ModelInputMessage::view)
+                .collect::<Vec<_>>(),
+        );
+        let tools = encoded_bytes(tool_definitions);
         // An empty prompt means that no request-time prompt section exists;
         // do not charge the JSON representation's two quote bytes as model
         // input. Non-empty prompts remain part of the frozen deterministic
@@ -399,11 +411,9 @@ impl DefaultTokenEstimator {
         let system_prompt = if effective_system_prompt.is_empty() {
             0
         } else {
-            serde_json::to_vec(effective_system_prompt)
-                .expect("effective system prompt serializes")
-                .len()
+            encoded_bytes(effective_system_prompt)
         };
-        (items + tools + system_prompt) as u64
+        items + tools + system_prompt
     }
 
     /// The deterministic serialized bytes of the canonical messages only,
@@ -415,10 +425,31 @@ impl DefaultTokenEstimator {
     /// unreachable for the canonical runtime-owned types.
     #[must_use]
     pub fn conversation_bytes(messages: &[MessageBlock]) -> u64 {
-        serde_json::to_vec(messages)
-            .expect("canonical messages serialize")
-            .len() as u64
+        encoded_bytes(
+            &messages
+                .iter()
+                .map(crate::model::projected::ModelMessageView::from)
+                .collect::<Vec<_>>(),
+        )
     }
+}
+
+/// Price semantic role/content directly into a counting sink. Message IDs,
+/// source digests and projection provenance never enter model token accounting.
+fn encoded_bytes(value: &(impl serde::Serialize + ?Sized)) -> u64 {
+    struct Count(u64);
+    impl std::io::Write for Count {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self.0.saturating_add(bytes.len() as u64);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut count = Count(0);
+    serde_json::to_writer(&mut count, value).expect("semantic model content serializes");
+    count.0
 }
 
 impl TokenEstimator for DefaultTokenEstimator {
@@ -498,6 +529,7 @@ mod tests {
     use crate::message::types::{
         InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
     };
+    use crate::model::ModelInputMessage;
     use crate::model::input::canonical_input;
     use crate::runtime::identity::{MessageId, ToolId};
     use crate::tools::types::ModelToolDefinition;
@@ -521,6 +553,28 @@ mod tests {
             description: "Run a shell command".to_owned(),
             input_schema: serde_json::json!({"type": "object"}),
         }
+    }
+
+    #[test]
+    fn original_and_derived_equivalent_content_have_equal_token_cost_without_provenance() {
+        let original = user_message("physical", "same semantic body");
+        let input = ModelInputMessage::Canonical(original.clone());
+        let derived = ModelInputMessage::Derived(crate::model::projected::DerivedModelMessage {
+            message: crate::model::projected::ProjectedMessage::from(&original),
+            sources: vec![
+                crate::model::projected::CanonicalMessageRef::of(
+                    &crate::runtime::identity::ConversationId::generate(),
+                    &original
+                );
+                1024
+            ],
+            checkpoint_sources: Vec::new(),
+            transformations: vec![crate::model::projected::SemanticTransformation::Summary],
+        });
+        assert_eq!(
+            DefaultTokenEstimator::serialized_bytes(&[input], "", &[]),
+            DefaultTokenEstimator::serialized_bytes(&[derived], "", &[])
+        );
     }
 
     /// The frozen estimator formula: `ceil(bytes / 4)`.

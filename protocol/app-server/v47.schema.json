@@ -372,6 +372,85 @@
           "properties": {
             "method": {
               "type": "string",
+              "const": "session/projections"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "after": {
+                  "$ref": "#/$defs/ProjectionActivationId"
+                },
+                "limit": {
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "after",
+                "limit"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "session/projectionDetail"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "checkpoint_id": {
+                  "$ref": "#/$defs/CheckpointId"
+                },
+                "offset": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "maximum": 4294967295
+                },
+                "limit": {
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "checkpoint_id",
+                "offset",
+                "limit"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
               "const": "session/trace"
             },
             "params": {
@@ -1788,6 +1867,49 @@
           "properties": {
             "method": {
               "type": "string",
+              "const": "session/forkProjection"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                },
+                "node_id": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionNodeId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "ledger": {
+                  "$ref": "#/$defs/LedgerFrontier"
+                },
+                "activation": {
+                  "$ref": "#/$defs/ProjectionActivationId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "session_id",
+                "ledger",
+                "activation"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
               "const": "session/fork"
             },
             "params": {
@@ -2617,6 +2739,15 @@
       "type": "string",
       "pattern": "^node_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     },
+    "ProjectionActivationId": {
+      "description": "Checkpoint activation order, independent of the Ledger and Journal domains.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+    },
+    "CheckpointId": {
+      "description": "Immutable historical context content, independent of canonical message identity.",
+      "type": "string"
+    },
     "TraceCursor": {
       "description": "Opaque Trace-only exclusive boundary, valid only in its conversation.\n\nIt is not a live cursor, a transcript cursor, an Event Journal sequence,\na Request ID, or an artifact ID. Clients order by it and page with it;\nthey never parse it.",
       "type": "string"
@@ -3286,6 +3417,11 @@
       "required": [
         "cwd"
       ]
+    },
+    "LedgerFrontier": {
+      "description": "Inclusive canonical commit position, independent of Journal and activation order.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
     },
     "SurfaceRevision": {
       "description": "The identity of one exact historical Conversation Surface state.\n\nA revision is a monotonic counter in its own identity domain. The empty\nSurface of a new conversation is [`SurfaceRevision::INITIAL`] (`0`), and\nevery accepted [`SurfaceOp`] advances it by exactly one, so revision `n`\nis precisely \"the Surface after the first `n` accepted operations\".\n\nA revision is deliberately **not** a `MessageId`, an `AttemptId`, a\n`RuntimeClientCursor`, an `InboundSequence`, an Event Journal sequence,\nor a `CapabilityRevision`: none of those identify a Surface state, and\nnone of them may be substituted for one.",
@@ -6269,6 +6405,40 @@
           "type": "object",
           "properties": {
             "page": {
+              "$ref": "#/$defs/ProjectionPage"
+            },
+            "type": {
+              "type": "string",
+              "const": "projections"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "page"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "detail": {
+              "$ref": "#/$defs/ProjectionDetail"
+            },
+            "type": {
+              "type": "string",
+              "const": "projection_detail"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "detail"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "page": {
               "$ref": "#/$defs/TracePage"
             },
             "type": {
@@ -8528,6 +8698,17 @@
       "description": "The context diagnostics carried by the Runtime Client snapshot.",
       "type": "object",
       "properties": {
+        "projection_head": {
+          "description": "Independent current historical projection, including inherited activations.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeClientProjectionHeadView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "manual_compaction": {
           "description": "Latest manual operation admitted in this runtime incarnation. Never inferred\nfrom a newer canonical checkpoint. Absence is insufficient evidence.",
           "anyOf": [
@@ -8584,6 +8765,115 @@
       "required": [
         "compaction_in_progress",
         "compaction_count"
+      ]
+    },
+    "RuntimeClientProjectionHeadView": {
+      "description": "Projection ownership is independent of the local execution trajectory.",
+      "type": "object",
+      "properties": {
+        "checkpoint_id": {
+          "$ref": "#/$defs/CheckpointId"
+        },
+        "activation_id": {
+          "$ref": "#/$defs/ProjectionActivationId"
+        },
+        "base_frontier": {
+          "$ref": "#/$defs/LedgerFrontier"
+        },
+        "activation_ledger": {
+          "$ref": "#/$defs/LedgerFrontier"
+        },
+        "origin": {
+          "$ref": "#/$defs/OriginActivation"
+        },
+        "destination_installation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LineageInstallationId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "original_items": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "derived_items": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "summary_preview": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceText"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "checkpoint_id",
+        "activation_id",
+        "base_frontier",
+        "activation_ledger",
+        "origin",
+        "original_items",
+        "derived_items"
+      ]
+    },
+    "OriginActivation": {
+      "description": "Immutable source activation. Destination installation is a different coordinate.",
+      "type": "object",
+      "properties": {
+        "conversation_id": {
+          "$ref": "#/$defs/ConversationId"
+        },
+        "activation": {
+          "$ref": "#/$defs/ProjectionActivationId"
+        },
+        "completed_journal": {
+          "$ref": "#/$defs/JournalFrontier"
+        }
+      },
+      "required": [
+        "conversation_id",
+        "activation",
+        "completed_journal"
+      ]
+    },
+    "JournalFrontier": {
+      "description": "Inclusive source Journal position, never an activation or Ledger position.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+    },
+    "LineageInstallationId": {
+      "description": "Immutable destination bootstrap installation, distinct from source activations.",
+      "type": "string"
+    },
+    "TraceText": {
+      "description": "Bounded text with an explicit completeness statement.",
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "text",
+        "truncated"
       ]
     },
     "RuntimeClientManualCompaction": {
@@ -8689,21 +8979,21 @@
       ]
     },
     "RuntimeClientCompactionView": {
-      "description": "Public metadata for one committed compaction.\n\nEvery field is derived from already-committed conversation state. The\nview names the canonical summary message by identity; its content is an\nordinary Ledger fact in [`RuntimeClientSnapshot::messages`].",
+      "description": "Public metadata for one committed compaction.\n\nEvery field is derived from an actual local checkpoint commit. The\nindependent projection disclosure carries summary content; canonical\nexecution rows never acquire a fabricated summary identity.",
       "type": "object",
       "properties": {
         "generation": {
-          "description": "The compaction generation maintained in the current Conversation\nSurface head.",
+          "description": "The local committed projection generation.",
           "type": "string",
           "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
         },
-        "summary_message_id": {
-          "description": "The identity of the committed canonical compaction summary message.",
-          "$ref": "#/$defs/MessageId"
+        "checkpoint_id": {
+          "description": "The independently durable checkpoint identity.",
+          "$ref": "#/$defs/CheckpointId"
         },
-        "surface_revision": {
-          "description": "The Conversation Surface revision established by the rewrite.",
-          "$ref": "#/$defs/SurfaceRevision"
+        "activation_id": {
+          "description": "The activation coordinate, independent of canonical and Journal order.",
+          "$ref": "#/$defs/ProjectionActivationId"
         },
         "tokens_before": {
           "description": "The pre-compaction input measurement and its provenance.",
@@ -8720,8 +9010,8 @@
       "additionalProperties": false,
       "required": [
         "generation",
-        "summary_message_id",
-        "surface_revision",
+        "checkpoint_id",
+        "activation_id",
         "tokens_before",
         "estimated_tokens_after"
       ]
@@ -8765,6 +9055,565 @@
           "type": "string",
           "const": "estimated"
         }
+      ]
+    },
+    "ProjectionPage": {
+      "type": "object",
+      "properties": {
+        "records": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RuntimeClientProjectionHeadView"
+          }
+        },
+        "next_activation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProjectionActivationId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "records"
+      ]
+    },
+    "ProjectionDetail": {
+      "type": "object",
+      "properties": {
+        "checkpoint": {
+          "$ref": "#/$defs/RuntimeClientProjectionHeadView"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProjectionItemDetail"
+          }
+        },
+        "next_item": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "checkpoint",
+        "items"
+      ]
+    },
+    "ProjectionItemDetail": {
+      "type": "object",
+      "properties": {
+        "occurrence": {
+          "$ref": "#/$defs/CheckpointMessageOccurrence"
+        },
+        "content": {
+          "$ref": "#/$defs/TraceRequestMessage"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "occurrence",
+        "content"
+      ]
+    },
+    "CheckpointMessageOccurrence": {
+      "type": "object",
+      "properties": {
+        "checkpoint_id": {
+          "$ref": "#/$defs/CheckpointId"
+        },
+        "item_index": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      },
+      "required": [
+        "checkpoint_id",
+        "item_index"
+      ]
+    },
+    "TraceRequestMessage": {
+      "description": "One reconstructed provider-neutral request item.",
+      "type": "object",
+      "properties": {
+        "request_occurrence": {
+          "description": "Present only for one actual frozen request; projection detail has its own coordinate.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RequestMessageOccurrence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "provenance": {
+          "$ref": "#/$defs/TraceInputProvenance"
+        },
+        "role": {
+          "$ref": "#/$defs/TraceMessageRole"
+        },
+        "message_id": {
+          "description": "Canonical Ledger identity; absent for Derived and request-only input.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MessageId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "description": "User provenance or the request-local Derived transformation label.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "blocks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TraceContentBlock"
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "provenance",
+        "role",
+        "blocks",
+        "truncated"
+      ]
+    },
+    "RequestMessageOccurrence": {
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "$ref": "#/$defs/RequestId2"
+        },
+        "item_index": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      },
+      "required": [
+        "request_id",
+        "item_index"
+      ]
+    },
+    "RequestId2": {
+      "description": "Identifies one actual provider-neutral model request.\n\nA request identity is distinct from an attempt, turn, retry ordinal,\nand Event Journal sequence. It is derived once from the immutable\n[`RequestIdentity`](crate::model::snapshot::RequestIdentity) and is\nthe durable correlation key for the Request Snapshot and its\nrequest-start fact.",
+      "type": "string"
+    },
+    "TraceInputProvenance": {
+      "description": "Input provenance is not execution ownership. Derived bodies have no canonical identity.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "source": {
+              "$ref": "#/$defs/CanonicalMessageRef"
+            },
+            "type": {
+              "type": "string",
+              "const": "original"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "source"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "sources": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/CanonicalMessageRef"
+              }
+            },
+            "checkpoint_sources": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/CheckpointSourceRef"
+              }
+            },
+            "transformations": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/SemanticTransformation"
+              }
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "const": "derived"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "sources",
+            "checkpoint_sources",
+            "transformations",
+            "truncated"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "request_only"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "CanonicalMessageRef": {
+      "description": "Immutable source scope, distinct from a projected occurrence.",
+      "type": "object",
+      "properties": {
+        "conversation_id": {
+          "$ref": "#/$defs/ConversationId"
+        },
+        "message_id": {
+          "$ref": "#/$defs/MessageId"
+        },
+        "content_digest": {
+          "description": "Integrity of the complete immutable body, independent of semantic request hashing.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "conversation_id",
+        "message_id",
+        "content_digest"
+      ]
+    },
+    "CheckpointSourceRef": {
+      "description": "Scoped immutable projection provenance, used when a summary consumes an earlier summary.",
+      "type": "object",
+      "properties": {
+        "conversation_id": {
+          "$ref": "#/$defs/ConversationId"
+        },
+        "checkpoint_id": {
+          "$ref": "#/$defs/CheckpointId"
+        },
+        "content_digest": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "conversation_id",
+        "checkpoint_id",
+        "content_digest"
+      ]
+    },
+    "SemanticTransformation": {
+      "type": "string",
+      "enum": [
+        "summary",
+        "image_downgrade",
+        "upload_rendering"
+      ]
+    },
+    "TraceMessageRole": {
+      "description": "The role of one reconstructed request item.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "user",
+            "assistant",
+            "tool"
+          ]
+        },
+        {
+          "description": "A request-only runtime context item with no canonical identity.",
+          "type": "string",
+          "const": "request_only"
+        }
+      ]
+    },
+    "TraceContentBlock": {
+      "description": "The closed projected content vocabulary.\n\nEach variant is a semantic the browser can render with the matching\npresentation primitive: prose as Markdown, structure as a JSON reader,\nsource as code, artifacts through the existing durable carrier.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "text": {
+              "$ref": "#/$defs/TraceText"
+            },
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "text": {
+              "$ref": "#/$defs/TraceText"
+            },
+            "type": {
+              "type": "string",
+              "const": "reasoning"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "text": {
+              "$ref": "#/$defs/TraceText"
+            },
+            "type": {
+              "type": "string",
+              "const": "refusal"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "value": {
+              "$ref": "#/$defs/TraceJson"
+            },
+            "type": {
+              "type": "string",
+              "const": "json"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "call_id": {
+              "$ref": "#/$defs/ToolCallId"
+            },
+            "tool_id": {
+              "$ref": "#/$defs/ToolId"
+            },
+            "name": {
+              "type": "string"
+            },
+            "arguments": {
+              "$ref": "#/$defs/TraceJson"
+            },
+            "type": {
+              "type": "string",
+              "const": "tool_call"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "call_id",
+            "tool_id",
+            "name",
+            "arguments"
+          ]
+        },
+        {
+          "description": "A Tool result item inside a reconstructed request context.",
+          "type": "object",
+          "properties": {
+            "call_id": {
+              "$ref": "#/$defs/ToolCallId"
+            },
+            "tool_id": {
+              "$ref": "#/$defs/ToolId"
+            },
+            "outcome": {
+              "$ref": "#/$defs/TraceToolOutcome"
+            },
+            "blocks": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/TraceContentBlock"
+              }
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "const": "tool_result"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "call_id",
+            "tool_id",
+            "outcome",
+            "blocks",
+            "truncated"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "artifact": {
+              "$ref": "#/$defs/TraceArtifact"
+            },
+            "alt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "image"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "artifact"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "artifact": {
+              "$ref": "#/$defs/TraceArtifact"
+            },
+            "type": {
+              "type": "string",
+              "const": "file"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "artifact"
+          ]
+        },
+        {
+          "description": "A Session-owned workspace upload reference.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "upload"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "name"
+          ]
+        }
+      ]
+    },
+    "TraceJson": {
+      "description": "Bounded structured data with an explicit completeness statement.\n\nThe value stays real JSON rather than a rendered string, so the browser\ncan present it with a structured reader instead of a preformatted dump.",
+      "type": "object",
+      "properties": {
+        "value": true,
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "value",
+        "truncated"
+      ]
+    },
+    "TraceToolOutcome": {
+      "description": "The closed canonical Tool outcome vocabulary.",
+      "type": "string",
+      "enum": [
+        "success",
+        "failed",
+        "denied",
+        "cancelled",
+        "timed_out",
+        "outcome_unknown"
+      ]
+    },
+    "TraceArtifact": {
+      "description": "Safe reference to the existing native artifact carrier, never a path.",
+      "type": "object",
+      "properties": {
+        "artifact_id": {
+          "$ref": "#/$defs/ArtifactId"
+        },
+        "image": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mime_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
+        "image"
       ]
     },
     "TracePage": {
@@ -9233,18 +10082,6 @@
         "started"
       ]
     },
-    "TraceToolOutcome": {
-      "description": "The closed canonical Tool outcome vocabulary.",
-      "type": "string",
-      "enum": [
-        "success",
-        "failed",
-        "denied",
-        "cancelled",
-        "timed_out",
-        "outcome_unknown"
-      ]
-    },
     "TracePreview": {
       "description": "A one-line summary preview of longer content.\n\nWhitespace is collapsed so a multi-paragraph message occupies one ledger\nrow. This is presentation shaping of already-permitted content, not a\nsecond copy of it: the complete value is reached through detail.",
       "type": "object",
@@ -9260,35 +10097,6 @@
       "required": [
         "text",
         "truncated"
-      ]
-    },
-    "TraceArtifact": {
-      "description": "Safe reference to the existing native artifact carrier, never a path.",
-      "type": "object",
-      "properties": {
-        "artifact_id": {
-          "$ref": "#/$defs/ArtifactId"
-        },
-        "image": {
-          "type": "boolean"
-        },
-        "name": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "mime_type": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "artifact_id",
-        "image"
       ]
     },
     "TraceRecord": {
@@ -9567,10 +10375,6 @@
         "context_additions",
         "context_truncated"
       ]
-    },
-    "RequestId2": {
-      "description": "Identifies one actual provider-neutral model request.\n\nA request identity is distinct from an attempt, turn, retry ordinal,\nand Event Journal sequence. It is derived once from the immutable\n[`RequestIdentity`](crate::model::snapshot::RequestIdentity) and is\nthe durable correlation key for the Request Snapshot and its\nrequest-start fact.",
-      "type": "string"
     },
     "TraceSystemPromptPresentation": {
       "description": "Bounded System Prompt presentation for one actual request.\n\nThe complete prompt is deliberately absent: a page of 32 requests would\notherwise carry 32 complete system prompts. The exact historical value\nstays in [`TraceRequestDetail::effective_system_prompt`].",
@@ -9988,6 +10792,13 @@
       "description": "Heavy inspection detail for one exact record identity.",
       "type": "object",
       "properties": {
+        "projected_messages": {
+          "description": "Historical projection content, distinct from committed execution messages.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TraceRequestMessage"
+          }
+        },
         "id": {
           "description": "Echoes the requested identity so a late reply can be fenced.",
           "type": "string"
@@ -10028,6 +10839,7 @@
       },
       "additionalProperties": false,
       "required": [
+        "projected_messages",
         "id",
         "kind",
         "messages",
@@ -10038,6 +10850,16 @@
       "description": "The exact historical request, reconstructed from frozen native authority.\n\nEvery value comes from this request's own immutable Request Snapshot and\nthe historical Conversation Surface revision it froze. Current model\nconfiguration, the current tool catalog and the current system prompt are\nnever consulted, so a request reopened after the Session was reconfigured\nstill shows what was actually sent.",
       "type": "object",
       "properties": {
+        "tool_associations": {
+          "description": "Frozen physical/request coordinates and provider correlation labels.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ActualRequestToolAssociation"
+          }
+        },
+        "tool_associations_truncated": {
+          "type": "boolean"
+        },
         "contributions": {
           "description": "Typed historical context, never the current domain projection.",
           "type": "array",
@@ -10172,6 +10994,8 @@
       },
       "additionalProperties": false,
       "required": [
+        "tool_associations",
+        "tool_associations_truncated",
         "contributions",
         "request_id",
         "attempt_id",
@@ -10191,6 +11015,62 @@
         "messages_truncated",
         "tools",
         "tools_truncated"
+      ]
+    },
+    "ActualRequestToolAssociation": {
+      "type": "object",
+      "properties": {
+        "call": {
+          "$ref": "#/$defs/ActualRequestCallCoordinate"
+        },
+        "result": {
+          "$ref": "#/$defs/RequestMessageOccurrence"
+        },
+        "source": {
+          "$ref": "#/$defs/CanonicalCallSource"
+        },
+        "wire_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "call",
+        "result",
+        "source",
+        "wire_id"
+      ]
+    },
+    "ActualRequestCallCoordinate": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "$ref": "#/$defs/RequestMessageOccurrence"
+        },
+        "block": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      },
+      "required": [
+        "message",
+        "block"
+      ]
+    },
+    "CanonicalCallSource": {
+      "type": "object",
+      "properties": {
+        "assistant": {
+          "$ref": "#/$defs/CanonicalMessageRef"
+        },
+        "block": {
+          "$ref": "#/$defs/ContentBlockIndex"
+        }
+      },
+      "required": [
+        "assistant",
+        "block"
       ]
     },
     "TraceContributionMetadata": {
@@ -11401,295 +12281,6 @@
         "value"
       ]
     },
-    "TraceJson": {
-      "description": "Bounded structured data with an explicit completeness statement.\n\nThe value stays real JSON rather than a rendered string, so the browser\ncan present it with a structured reader instead of a preformatted dump.",
-      "type": "object",
-      "properties": {
-        "value": true,
-        "truncated": {
-          "type": "boolean"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "value",
-        "truncated"
-      ]
-    },
-    "TraceText": {
-      "description": "Bounded text with an explicit completeness statement.",
-      "type": "object",
-      "properties": {
-        "text": {
-          "type": "string"
-        },
-        "truncated": {
-          "type": "boolean"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "text",
-        "truncated"
-      ]
-    },
-    "TraceRequestMessage": {
-      "description": "One reconstructed provider-neutral request item.",
-      "type": "object",
-      "properties": {
-        "role": {
-          "$ref": "#/$defs/TraceMessageRole"
-        },
-        "message_id": {
-          "description": "Canonical Ledger identity; absent exactly for a request-only item.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/MessageId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "source": {
-          "description": "Provenance of a canonical User item.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "blocks": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/TraceContentBlock"
-          }
-        },
-        "truncated": {
-          "type": "boolean"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "role",
-        "blocks",
-        "truncated"
-      ]
-    },
-    "TraceMessageRole": {
-      "description": "The role of one reconstructed request item.",
-      "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "user",
-            "assistant",
-            "tool"
-          ]
-        },
-        {
-          "description": "A request-only runtime context item with no canonical identity.",
-          "type": "string",
-          "const": "request_only"
-        }
-      ]
-    },
-    "TraceContentBlock": {
-      "description": "The closed projected content vocabulary.\n\nEach variant is a semantic the browser can render with the matching\npresentation primitive: prose as Markdown, structure as a JSON reader,\nsource as code, artifacts through the existing durable carrier.",
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "text": {
-              "$ref": "#/$defs/TraceText"
-            },
-            "type": {
-              "type": "string",
-              "const": "text"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "text"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "text": {
-              "$ref": "#/$defs/TraceText"
-            },
-            "type": {
-              "type": "string",
-              "const": "reasoning"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "text"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "text": {
-              "$ref": "#/$defs/TraceText"
-            },
-            "type": {
-              "type": "string",
-              "const": "refusal"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "text"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "value": {
-              "$ref": "#/$defs/TraceJson"
-            },
-            "type": {
-              "type": "string",
-              "const": "json"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "value"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "call_id": {
-              "$ref": "#/$defs/ToolCallId"
-            },
-            "tool_id": {
-              "$ref": "#/$defs/ToolId"
-            },
-            "name": {
-              "type": "string"
-            },
-            "arguments": {
-              "$ref": "#/$defs/TraceJson"
-            },
-            "type": {
-              "type": "string",
-              "const": "tool_call"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "call_id",
-            "tool_id",
-            "name",
-            "arguments"
-          ]
-        },
-        {
-          "description": "A Tool result item inside a reconstructed request context.",
-          "type": "object",
-          "properties": {
-            "call_id": {
-              "$ref": "#/$defs/ToolCallId"
-            },
-            "tool_id": {
-              "$ref": "#/$defs/ToolId"
-            },
-            "outcome": {
-              "$ref": "#/$defs/TraceToolOutcome"
-            },
-            "blocks": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/TraceContentBlock"
-              }
-            },
-            "truncated": {
-              "type": "boolean"
-            },
-            "type": {
-              "type": "string",
-              "const": "tool_result"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "call_id",
-            "tool_id",
-            "outcome",
-            "blocks",
-            "truncated"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "artifact": {
-              "$ref": "#/$defs/TraceArtifact"
-            },
-            "alt": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "type": "string",
-              "const": "image"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "artifact"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "artifact": {
-              "$ref": "#/$defs/TraceArtifact"
-            },
-            "type": {
-              "type": "string",
-              "const": "file"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "artifact"
-          ]
-        },
-        {
-          "description": "A Session-owned workspace upload reference.",
-          "type": "object",
-          "properties": {
-            "name": {
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "upload"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "name"
-          ]
-        }
-      ]
-    },
     "TraceToolDefinition": {
       "description": "The historical model-facing Tool definition of one request.",
       "type": "object",
@@ -12268,17 +12859,6 @@
       "description": "One derived transcript item and its stable durable cursor.",
       "type": "object",
       "properties": {
-        "compaction": {
-          "description": "Native facts of a canonical compaction checkpoint, including copied lineage.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/CompactionMarker"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "turn_process": {
           "description": "Exact native Attempt process membership, derived by native owners.\nAbsence is not permission for a client to infer a process boundary.",
           "anyOf": [
@@ -12326,34 +12906,6 @@
       "required": [
         "cursor",
         "item"
-      ]
-    },
-    "CompactionMarker": {
-      "description": "Facts of one checkpoint, not cumulative totals over the compaction lineage.",
-      "type": "object",
-      "properties": {
-        "retired_messages": {
-          "description": "Exact number of canonical history messages replaced by this checkpoint.",
-          "type": "string",
-          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-        },
-        "retired_tokens": {
-          "description": "Native history-only estimate, excluding system prompt and tool schemas.",
-          "type": "string",
-          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-        },
-        "manual": {
-          "description": "Local Journal attribution; copied lineage has no local command owner.",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "retired_messages",
-        "retired_tokens"
       ]
     },
     "TurnProcessView": {
@@ -13408,19 +13960,6 @@
           "const": "message"
         },
         {
-          "description": "A runtime-provided compaction summary. It remains a `User` message so\nno fifth canonical message role is needed for runtime-derived context.\nThe typed metadata is the cumulative canonical record of the native\nfile operations of the retired lineage.",
-          "type": "object",
-          "properties": {
-            "compaction_summary": {
-              "$ref": "#/$defs/CompactionSummaryMetadata"
-            }
-          },
-          "required": [
-            "compaction_summary"
-          ],
-          "additionalProperties": false
-        },
-        {
           "description": "A model-visible context fact admitted through the rustX Context\nAssembly path.",
           "type": "object",
           "properties": {
@@ -13434,24 +13973,6 @@
           "additionalProperties": false
         }
       ]
-    },
-    "CompactionSummaryMetadata": {
-      "description": "The cumulative native file-operation facts of one compaction summary\n(Issue #140).\n\nThis is the typed canonical authority for *which files the retired history\nread and which files it modified*. It is derived deterministically from\nthe canonical tool calls of the selected retired span — native\n`read(path)` contributes a read, native `edit(path)` and `write(path)`\ncontribute a modification — merged with the metadata of every earlier\ncompaction summary inside that same span. It records conversation facts,\nnever current filesystem state: a path stays listed even when the file has\nsince been deleted, and the rendered `<read-files>`/`<modified-files>`\nsections of the summary text are a model-visible projection of this value,\nnever its source.\n\nThe fields are private so every value, including one decoded from durable\nJSON, satisfies the canonical invariants: both lists are unique and in\nascending byte order, and `read_files ∩ modified_files = ∅` (modification\nwins over read).\n\n```compile_fail\nuse rustx::message::types::CompactionSummaryMetadata;\n\nfn mutate(metadata: &mut CompactionSummaryMetadata) {\n    metadata.read_files = Vec::new();\n}\n```",
-      "type": "object",
-      "properties": {
-        "read_files": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "modified_files": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      }
     },
     "UserMessageBlock": {
       "description": "Inbound information supplied to the current agent.\n\nA `UserMessageBlock` does not necessarily mean a human spoke: it is the\ncanonical home for anything inbound, including messages from other agents\n(with [`UserSource::Agent`] provenance) and runtime compaction summaries\n(with [`InboundKind::CompactionSummary`] kind). It\nmust never become `AssistantMessageBlock` or `ToolMessageBlock`, which are\nreserved for output and actions of the current agent.",
@@ -15253,7 +15774,7 @@
           }
         },
         "transcript": {
-          "description": "The bounded newest page of the derived durable transcript. This is\ndistinct from `messages`: the latter is the current Surface working\nset, while this page remains readable after compaction retires Surface\nmessages. Older pages are fetched through `transcript_page_get`.",
+          "description": "The bounded newest page of the derived durable transcript. This is\ndistinct from `messages`: the latter is the current Surface working\nset, while this page remains readable after compaction excludes messages\nfrom the model projection. Older pages are fetched through `transcript_page_get`.",
           "$ref": "#/$defs/RuntimeClientTranscriptPage"
         },
         "trace": {
@@ -21123,6 +21644,16 @@
           "description": "Native derived read domains at a committed journal cut. Published only\nwhen durable facts change, never for publication text/argument suffixes.",
           "type": "object",
           "properties": {
+            "projection_head": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RuntimeClientProjectionHeadView"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "transcript": {
               "$ref": "#/$defs/RuntimeClientTranscriptPage"
             },
@@ -21517,7 +22048,7 @@
           ]
         },
         {
-          "description": "A canonical runtime summary and Surface replacement were committed.\n\nThis is the semantic completion fact for clients: the semantic\ncompaction commit already happened, and the carried snapshot metadata\nis sufficient to observe Surface advancement and token-measurement\nprovenance without exposing summary text or provider credentials.",
+          "description": "A durable typed checkpoint and projection activation were committed.\n\nThis is the semantic completion fact for clients: the semantic\ncompaction commit already happened, and the carried snapshot metadata\nis sufficient to observe projection advancement and token-measurement\nprovenance without exposing summary text or provider credentials.",
           "type": "object",
           "properties": {
             "attempt_id": {

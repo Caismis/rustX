@@ -102,11 +102,11 @@ pub mod agent_conversation;
 pub mod agent_statistics;
 mod agent_trace;
 pub mod attachment;
-mod compaction;
 pub mod endpoint;
 pub mod event;
 pub mod host;
 pub mod projection;
+pub mod projection_history;
 pub mod response;
 pub mod settings;
 pub mod snapshot;
@@ -118,7 +118,6 @@ pub mod types;
 pub(crate) mod test_sync;
 
 pub use attachment::RuntimeAttachment;
-pub use compaction::CompactionMarker;
 pub use endpoint::RuntimeClientEndpoint;
 pub use event::{RuntimeClientAttemptFailure, RuntimeClientEvent, RuntimeClientOutcome};
 pub use host::{

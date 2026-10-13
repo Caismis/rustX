@@ -1391,8 +1391,8 @@ pub fn validate_content_modalities(
     messages: &[crate::model::input::ModelInputMessage],
     capabilities: &ModelCapabilities,
 ) -> Result<(), ModelError> {
-    use crate::message::types::{AssistantContentBlock, MessageBlock, UserContentBlock};
-    use crate::model::input::ModelInputMessage;
+    use crate::message::types::{AssistantContentBlock, UserContentBlock};
+    use crate::model::projected::ModelMessageView;
     use crate::tools::types::ToolResultContent;
 
     let mut required: Vec<Modality> = Vec::new();
@@ -1402,9 +1402,9 @@ pub fn validate_content_modalities(
         }
     };
     for message in messages {
-        match message {
-            ModelInputMessage::Canonical(MessageBlock::User(user)) => {
-                for content in &user.content {
+        match message.view() {
+            ModelMessageView::User(user) => {
+                for content in user {
                     match content {
                         UserContentBlock::Text(_) | UserContentBlock::UploadedFile(_) => {
                             require(Modality::Text);
@@ -1414,8 +1414,8 @@ pub fn validate_content_modalities(
                     }
                 }
             }
-            ModelInputMessage::Canonical(MessageBlock::Assistant(assistant)) => {
-                for content in &assistant.content {
+            ModelMessageView::Assistant(assistant) => {
+                for content in assistant {
                     match content {
                         AssistantContentBlock::Image(_) => require(Modality::Image),
                         AssistantContentBlock::Text(_)
@@ -1425,8 +1425,8 @@ pub fn validate_content_modalities(
                     }
                 }
             }
-            ModelInputMessage::Canonical(MessageBlock::Tool(tool)) => {
-                for content in &tool.result.content {
+            ModelMessageView::Tool(_, result) => {
+                for content in &result.content {
                     match content {
                         ToolResultContent::Image(_) => require(Modality::Image),
                         ToolResultContent::File(_) => require(Modality::File),
@@ -1439,7 +1439,7 @@ pub fn validate_content_modalities(
             // Every request-only context item is a runtime-authored textual
             // narration. It never carries image/file semantics or a
             // canonical identity.
-            ModelInputMessage::RequestOnly(_) => require(Modality::Text),
+            ModelMessageView::RequestOnly(_) => require(Modality::Text),
         }
     }
     for modality in required {

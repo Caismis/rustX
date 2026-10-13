@@ -703,10 +703,12 @@ enum AttemptProvenance {
 /// retains its cancellation trigger so runtime drain can supervise the
 /// provider-backed summary to terminal settlement.
 struct CurrentManualCompaction {
+    operation_id: crate::runtime::identity::CompactionOperationId,
     cancellation: AgentCancellation,
 }
 
 struct ManualCompactionTaskResult {
+    committed_failure: Option<ExecutedCompaction>,
     conversation: ConversationState,
     result: Result<ManualCompactionSuccess, ManualCompactionError>,
 }
@@ -2666,6 +2668,7 @@ impl RuntimeInner {
     /// settlement even if the requesting attachment disappears.
     async fn run_manual_compaction(
         self: &Arc<Self>,
+        operation_id: crate::runtime::identity::CompactionOperationId,
         mut conversation: ConversationState,
         context_runtime: ContextRuntime,
         tools: Vec<ModelToolDefinition>,
@@ -2684,21 +2687,26 @@ impl RuntimeInner {
             &effective_system_prompt,
             &CompactionConstraints::default(),
             &signal,
-            CompactionAttribution::default(),
+            CompactionAttribution {
+                operation_id: operation_id.clone(),
+                attempt_id: None,
+                turn_id: None,
+            },
         )
         .await;
         let result = match executed {
             Ok(completed) => {
                 let RuntimeEvent::CompactionCompleted {
                     generation,
-                    summary_message_id,
-                    surface_revision,
+                    checkpoint_id,
+                    activation_id,
                     tokens_before,
                     estimated_tokens_after,
                     ..
                 } = &completed.persisted_event.event
                 else {
                     return ManualCompactionTaskResult {
+                        committed_failure: Some(completed),
                         conversation,
                         result: Err(ManualCompactionError::Durable {
                             message: "the durable compaction returned a non-compaction event"
@@ -2708,8 +2716,8 @@ impl RuntimeInner {
                 };
                 let outcome = ManualCompactionOutcome {
                     generation: *generation,
-                    summary_message_id: summary_message_id.clone(),
-                    surface_revision: *surface_revision,
+                    checkpoint_id: checkpoint_id.clone(),
+                    activation_id: *activation_id,
                     tokens_before: *tokens_before,
                     estimated_tokens_after: *estimated_tokens_after,
                 };
@@ -2718,11 +2726,19 @@ impl RuntimeInner {
             Err(CompactionExecutionError::Context(error)) => {
                 Err(ManualCompactionError::Context(error))
             }
+            Err(CompactionExecutionError::Committed { completed, error }) => {
+                return ManualCompactionTaskResult {
+                    conversation,
+                    committed_failure: Some(*completed),
+                    result: Err(ManualCompactionError::Durable { message: error }),
+                };
+            }
             Err(CompactionExecutionError::Durable(message)) => {
                 Err(ManualCompactionError::Durable { message })
             }
         };
         ManualCompactionTaskResult {
+            committed_failure: None,
             conversation,
             result,
         }
@@ -2738,6 +2754,7 @@ impl RuntimeInner {
         request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
     ) {
         let ManualCompactionTaskResult {
+            committed_failure,
             conversation,
             result,
         } = task;
@@ -2745,7 +2762,7 @@ impl RuntimeInner {
         {
             let mut state = self.lock_state();
             state.conversation = Some(conversation);
-            state
+            let maintenance = state
                 .manual_compaction
                 .take()
                 .expect("manual compaction settlement owns the maintenance slot");
@@ -2758,17 +2775,22 @@ impl RuntimeInner {
                     ),
                 );
             }
+            let confirmed_commit = committed_failure.is_some();
+            if let Some(completed) = committed_failure {
+                self.observe(ConversationObservation::Published {
+                    journal_sequence: completed.persisted_event.sequence,
+                    observation: Box::new(ConversationObservation::ManualCompactionEvent {
+                        request_id: request_id.clone(),
+                        event: completed.persisted_event.event,
+                    }),
+                });
+            }
             completion_result = match result {
                 Ok(success) => {
                     // Durable commit already happened in the task, but the
                     // live completion is published only after coordinator
                     // ownership is restored and the maintenance slot is
                     // clear. Neither observation has an attempt identity.
-                    self.observe(ConversationObservation::Committed {
-                        attempt_id: None,
-                        block: success.completed.summary_block,
-                        transcript_cursor: Some(success.completed.transcript_cursor),
-                    });
                     self.observe(ConversationObservation::Published {
                         journal_sequence: success.completed.persisted_event.sequence,
                         observation: Box::new(ConversationObservation::ManualCompactionEvent {
@@ -2778,11 +2800,13 @@ impl RuntimeInner {
                     });
                     Ok(success.outcome)
                 }
+                Err(error) if confirmed_commit => Err(error),
                 Err(error) => self
                     .publish_manual_compaction_event(
                         &mut state,
                         request_id,
                         RuntimeEvent::CompactionFailed {
+                            operation_id: maintenance.operation_id,
                             error: error.to_string(),
                         },
                     )
@@ -2985,26 +3009,27 @@ impl RuntimeInner {
         // the active conversation is at a safe boundary (no incomplete tool
         // call without its committed ToolResult sibling). This closes the
         // window a failed tool-result batch would otherwise leave open.
-        {
-            let conversation = state
-                .conversation
-                .as_ref()
-                .expect("the coordinator owns the conversation state while idle");
-            if let Ok(active) = conversation.active_messages()
-                && let Some(tool_call_id) = crate::conversation::pending_tool_call(&active)
-            {
-                // A semantic contract failure, not a transient storage
-                // failure: the broken boundary cannot heal by retrying the
-                // identical admission, so it fails closed immediately.
+        match self.store.unsettled_canonical_tool_calls(1) {
+            Ok(calls) if !calls.is_empty() => {
                 self.record_durability_failure(
                     &mut state,
                     DurableOperation::IncompleteToolTurn,
                     format!(
-                        "the active conversation ends inside an incomplete tool turn: tool call {tool_call_id} has no committed ToolResult"
+                        "canonical Tool occurrence {:?} has no committed ToolResult",
+                        calls[0].0
                     ),
                 );
                 return;
             }
+            Err(error) => {
+                self.record_durability_failure(
+                    &mut state,
+                    DurableOperation::IncompleteToolTurn,
+                    error.to_string(),
+                );
+                return;
+            }
+            Ok(_) => {}
         }
         // Selection freezes the finite watermark (non-destructive): an
         // acceptance that linearizes after this point can never join the
@@ -4045,17 +4070,20 @@ impl ConversationRuntime {
     fn recovered_conversation(
         store: &dyn ConversationStore,
     ) -> Result<ConversationState, ConversationRuntimeError> {
-        let head = store
-            .load_head()
+        let history = store
+            .projected_history()
             .map_err(|error| ConversationRuntimeError::Storage(error.to_string()))?;
-        let active = store
-            .load_messages(&head.active_message_ids)
-            .map_err(|error| ConversationRuntimeError::Storage(error.to_string()))?;
+        let active: Vec<_> = history
+            .messages
+            .into_iter()
+            .filter_map(|m| m.as_canonical().cloned())
+            .collect();
+        let ids = active.iter().map(|m| m.id().clone()).collect();
         ConversationState::from_durable_head(
             active,
-            head.active_message_ids,
-            head.revision,
-            head.compaction_generation,
+            ids,
+            SurfaceRevision::new(history.cut.ledger.0),
+            history.cut.activation.0,
         )
         .map_err(|error| ConversationRuntimeError::InvalidInitialConversation(error.to_string()))
     }
@@ -5004,8 +5032,8 @@ impl ConversationRuntime {
     /// it allocates no attempt/turn identity and never invokes tools. The
     /// current session model and capability snapshot are frozen at admission,
     /// the provider-backed summary runs in a runtime-owned task, and success
-    /// is returned only after the canonical summary and Surface replacement
-    /// committed atomically. Inbound accepted while compaction runs remains
+    /// is returned only after typed checkpoint content, activation/head, receipt
+    /// and actual local completion committed atomically. Inbound accepted while compaction runs remains
     /// pending and is admitted after the conversation state is restored.
     ///
     /// # Errors
@@ -5084,10 +5112,15 @@ impl ConversationRuntime {
                         format!("the frozen capability system guidance is invalid: {error}"),
                     ))
                 })?;
+            let operation_id = crate::runtime::identity::CompactionOperationId::new(
+                uuid::Uuid::now_v7().to_string(),
+            );
             self.inner.publish_manual_compaction_event(
                 &mut state,
                 request_id.clone(),
-                RuntimeEvent::CompactionStarted,
+                RuntimeEvent::CompactionStarted {
+                    operation_id: operation_id.clone(),
+                },
             )?;
             let conversation = state
                 .conversation
@@ -5095,6 +5128,7 @@ impl ConversationRuntime {
                 .expect("the idle coordinator owns the conversation state");
             let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
             state.manual_compaction = Some(CurrentManualCompaction {
+                operation_id: operation_id.clone(),
                 cancellation: cancellation.clone(),
             });
             let admission = self
@@ -5116,6 +5150,7 @@ impl ConversationRuntime {
             self.inner.executor.spawn(async move {
                 let task = inner
                     .run_manual_compaction(
+                        operation_id,
                         conversation,
                         context_runtime,
                         tools,
@@ -6661,12 +6696,12 @@ pub enum CancelAttemptError {
 /// Metadata returned after one manual compaction committed successfully.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManualCompactionOutcome {
-    /// The compaction generation derived from Surface history.
+    /// The durable projection activation coordinate.
     pub generation: u64,
-    /// The committed canonical summary identity.
-    pub summary_message_id: MessageId,
-    /// The Surface revision established by the replacement.
-    pub surface_revision: SurfaceRevision,
+    /// The immutable committed checkpoint identity.
+    pub checkpoint_id: crate::runtime::identity::CheckpointId,
+    /// The independently durable historical activation.
+    pub activation_id: crate::context::checkpoint::ProjectionActivationId,
     /// The request-context measurement before compaction.
     pub tokens_before: crate::runtime::types::TokenMeasurement,
     /// The deterministic request-context estimate after compaction.
@@ -7317,13 +7352,10 @@ mod tests {
         AgentStatusEngine, ClosureTokenEstimator, ContextError, ContextErrorKind,
         DefaultTokenEstimator, TokenEstimator,
     };
-    use crate::conversation::SurfaceSpan;
-    use crate::durable::inbox::{CompactionCommitInput, ConversationStore};
+    use crate::durable::inbox::ConversationStore;
     use crate::events::types::RuntimeEvent;
     use crate::message::content::TextBlock;
-    use crate::message::types::{
-        CompactionSummaryMetadata, InboundKind, MessageBlock, UserContentBlock, UserSource,
-    };
+    use crate::message::types::{InboundKind, MessageBlock, UserContentBlock, UserSource};
     use crate::model::adapter::ModelAdapter;
     use crate::runtime::ApprovalMode;
     #[cfg(unix)]
@@ -7337,10 +7369,7 @@ mod tests {
     };
     use crate::runtime::observation::ConversationObservation;
     use crate::runtime::request_history::RequestHistory;
-    use crate::runtime::types::{
-        CancellationReason, ConversationLifecycleState, DurableOperation, TokenMeasurement,
-        TokenMeasurementSource,
-    };
+    use crate::runtime::types::{CancellationReason, ConversationLifecycleState, DurableOperation};
     use crate::runtime_client::event::RuntimeClientEvent;
     use crate::runtime_client::host::{EventDelivery, RuntimeClientHost, RuntimeClientHostConfig};
     use crate::runtime_client::types::{
@@ -8747,7 +8776,7 @@ mod tests {
     }
 
     /// Manual compaction is a first-class idle maintenance operation: it
-    /// uses the configured summary invocation, commits one canonical summary
+    /// uses the configured summary invocation, commits one Derived checkpoint summary
     /// without an attempt identity, and returns the conversation to the
     /// coordinator before reporting success.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -8822,7 +8851,7 @@ mod tests {
             .collect();
         assert!(
             matches!(before_release.as_slice(), [ConversationObservation::ManualCompactionEvent {
-            request_id: Some(id), event: RuntimeEvent::CompactionStarted,
+            request_id: Some(id), event: RuntimeEvent::CompactionStarted { .. },
         }] if id.as_str() == "manual-request-435")
         );
         release_gate.release();
@@ -8832,17 +8861,18 @@ mod tests {
         assert!(!runtime.has_current_attempt());
         let active = runtime
             .coordinator_active_ids()
-            .expect("conversation restored after success");
-        assert_eq!(active, vec![outcome.summary_message_id.clone()]);
-        let ledger = runtime.coordinator_ledger().expect("restored ledger");
-        assert!(ledger.iter().any(|message| {
-            matches!(
-                message,
-                MessageBlock::User(user)
-                    if user.id == outcome.summary_message_id
-                        && user.kind.is_compaction_summary()
-            )
-        }));
+            .expect("restored canonical working set");
+        assert!(
+            active.is_empty(),
+            "a Derived summary cannot acquire canonical identity"
+        );
+        let checkpoint = runtime.inner.store.projection_head().unwrap().unwrap();
+        assert_eq!(checkpoint.candidate.checkpoint_id, outcome.checkpoint_id);
+        assert_eq!(checkpoint.activation.activation, outcome.activation_id);
+        assert!(matches!(
+            runtime.inner.store.projected_history().unwrap().messages[0],
+            crate::model::ModelInputMessage::Derived(_)
+        ));
         assert_eq!(model.requests().len(), 2, "turn plus summary request");
 
         let trace =
@@ -8859,14 +8889,16 @@ mod tests {
             row.state,
             crate::runtime_client::trace::TraceState::Completed
         );
-        assert_eq!(row.message_id, Some(outcome.summary_message_id.clone()));
+        assert!(row.message_id.is_none());
+        assert_eq!(row.native_id, Some(outcome.checkpoint_id.to_string()));
         assert!(row.location.attempt_id.is_none());
         assert_eq!(
             row.preview.as_ref().unwrap().text,
             "compact factual summary"
         );
         let detail = trace.detail(&row.id).unwrap().unwrap();
-        assert_eq!(detail.messages.len(), 1);
+        assert!(detail.messages.is_empty());
+        assert_eq!(detail.projected_messages.len(), 1);
 
         // The released compaction admission restores eligibility on the
         // worker's schedule; the semantic completion is still the last fact.
@@ -8877,16 +8909,16 @@ mod tests {
                 !matches!(observation, ConversationObservation::AdoptionEligibility(_))
             })
             .collect();
-        assert!(observations.iter().any(|observation| {
-            matches!(
+        assert!(
+            observations.iter().all(|observation| !matches!(
                 observation,
                 ConversationObservation::Committed {
                     attempt_id: None,
-                    block: MessageBlock::User(user),
                     ..
-                } if user.id == outcome.summary_message_id
-            )
-        }));
+                }
+            )),
+            "manual compaction publishes projection facts without canonical messages"
+        );
         assert!(matches!(
             observations.last(),
             Some(ConversationObservation::ManualCompactionEvent {
@@ -8911,8 +8943,8 @@ mod tests {
                         .map(|message| {
                             if matches!(
                                 message,
-                                crate::model::ModelInputMessage::Canonical(MessageBlock::User(user))
-                                    if user.kind.is_compaction_summary()
+                                crate::model::ModelInputMessage::Derived(derived)
+                                    if derived.transformations.contains(&crate::model::projected::SemanticTransformation::Summary)
                             ) {
                                 10_000
                             } else {
@@ -8968,7 +9000,6 @@ mod tests {
                 .coordinator_active_ids()
                 .expect("restored without Skill guidance"),
             vec![
-                without_outcome.summary_message_id,
                 crate::runtime::identity::MessageId::new("middle"),
                 crate::runtime::identity::MessageId::new("recent"),
             ],
@@ -9016,10 +9047,7 @@ mod tests {
             runtime_with_skill
                 .coordinator_active_ids()
                 .expect("restored with Skill guidance"),
-            vec![
-                with_outcome.summary_message_id,
-                crate::runtime::identity::MessageId::new("recent"),
-            ],
+            vec![crate::runtime::identity::MessageId::new("recent"),],
             "the frozen catalog makes the one-message candidate fail, so planning retires two"
         );
     }
@@ -9281,7 +9309,6 @@ mod tests {
         let roles: Vec<&str> = ledger
             .iter()
             .map(|message| match message {
-                MessageBlock::User(user) if user.kind.is_compaction_summary() => "summary",
                 MessageBlock::User(_) => "user",
                 MessageBlock::Assistant(_) => "assistant",
                 MessageBlock::Tool(_) => "tool",
@@ -9623,18 +9650,11 @@ mod tests {
             .await
             .expect("compaction under resource generation A");
         let ledger_a = runtime_a.coordinator_ledger().expect("generation A ledger");
-        let summary_a = ledger_a
-            .iter()
-            .find(|message| {
-                matches!(
-                    message,
-                    MessageBlock::User(user)
-                        if user.id == outcome.summary_message_id
-                            && user.kind.is_compaction_summary()
-                )
-            })
-            .cloned()
-            .expect("summary A");
+        let summary_a = runtime_a
+            .inner
+            .store
+            .projection_checkpoint(&outcome.checkpoint_id)
+            .unwrap();
         let summary_a_bytes = serde_json::to_vec(&summary_a).expect("summary A bytes");
         assert!(
             ledger_a.iter().all(|message| {
@@ -9674,21 +9694,15 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_vec(
-                ledger_b
-                    .iter()
-                    .find(|message| {
-                        matches!(
-                            message,
-                            MessageBlock::User(user)
-                                if user.id == outcome.summary_message_id
-                                    && user.kind.is_compaction_summary()
-                        )
-                    })
-                    .expect("reopened summary A")
+                &runtime_b
+                    .inner
+                    .store
+                    .projection_checkpoint(&outcome.checkpoint_id)
+                    .unwrap()
             )
-            .expect("reopened summary bytes"),
+            .unwrap(),
             summary_a_bytes,
-            "cold reopen does not rewrite the old CompactionSummary"
+            "cold reopen preserves immutable checkpoint bodies and provenance"
         );
         assert!(
             model_b.requests()[0]
@@ -9795,7 +9809,7 @@ mod tests {
                     "old",
                     "old history that the overflow compaction retires: this seed carries enough \
                      retired content that replacing it with the compact summary is measurable \
-                     progress even with the typed metadata the canonical summary now carries",
+                     progress even with the validated metadata the immutable checkpoint carries",
                 )],
                 project_context_files: vec![project_file(
                     &project_path,
@@ -17352,10 +17366,9 @@ mod tests {
         );
     }
 
-    /// M8 regression: durable compaction history reopens as one exact Surface
-    /// state instead of using the obsolete Ledger-only recovery gate.
+    /// Durable compaction reopens the exact typed projection and canonical working set.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn durable_compaction_surface_reopens_as_one_state() {
+    async fn durable_compaction_projection_reopens_as_one_state() {
         let dir = tempfile::tempdir().expect("temp dir");
         let conversation_id = ConversationId::new("conv_b0652278-531a-725d-8621-2ecfe4f19ad7");
         let workspace = dir.path().join("workspace");
@@ -17370,35 +17383,21 @@ mod tests {
                     .expect("open");
             store.initialize(&seed).expect("seed");
             // A summary is durable only through the complete compaction
-            // transition: Ledger row, Surface Replace, checkpoint metadata,
+            // transition: immutable checkpoint content, activation/head, operation receipt,
             // and completion fact share one transaction.
-            let summary = crate::message::types::UserMessageBlock {
-                id: crate::runtime::identity::MessageId::new(
-                    "conv_b0652278-531a-725d-8621-2ecfe4f19ad7-summary-1",
-                ),
-                content: text_content("earlier context"),
-                source: UserSource::Runtime,
-                kind: InboundKind::CompactionSummary(CompactionSummaryMetadata::empty()),
-                timestamp: None,
-            };
             store
-                .commit_compaction(CompactionCommitInput {
-                    summary,
-                    span: SurfaceSpan::new(
-                        crate::runtime::identity::MessageId::new("msg-a"),
-                        crate::runtime::identity::MessageId::new("msg-a"),
+                .commit_projection(
+                    crate::scripted_suites::support::context::checkpoint_commit_fixture(
+                        &store,
+                        crate::scripted_suites::support::context::checkpoint_fixture(
+                            &store,
+                            "seed-checkpoint",
+                            1,
+                            "restored history",
+                        ),
+                        None,
                     ),
-                    expected_revision: store.load_head().expect("head").revision,
-                    tokens_before: TokenMeasurement {
-                        input_tokens: 20,
-                        source: TokenMeasurementSource::Estimated,
-                    },
-                    estimated_tokens_after: 10,
-                    attempt_id: None,
-                    turn_id: None,
-                    timestamp: fixed_time(),
-                    occupancy: None,
-                })
+                )
                 .expect("atomic compaction summary");
         }
 
@@ -17413,11 +17412,10 @@ mod tests {
         let store = crate::durable::SqliteConversationStore::open(conversation_id, &store_path)
             .expect("reopen store");
         let head = store.load_head().expect("head");
+        assert_eq!(store.projected_history().unwrap().messages.len(), 2);
         assert_eq!(
-            store
-                .reconstruct_surface(head.revision)
-                .expect("current Surface"),
-            head.active_message_ids
+            head.active_message_ids,
+            vec![crate::runtime::identity::MessageId::new("msg-b")]
         );
         assert_eq!(
             runtime.coordinator_active_ids().expect("coordinator head"),
@@ -18322,6 +18320,7 @@ mod tests {
     /// recovery-initiated attempt would have. Exactly one provider request
     /// exists at that point, so recovery issued none.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)] // One exact unknown-request crash prefix and restart proof.
     async fn class_c_restart_issues_no_provider_request_of_its_own() {
         let dir = tempfile::tempdir().expect("temp dir");
         let conversation = ConversationId::new("conv_e4c44f69-7140-7c07-8660-a8791da60c71");
@@ -18353,13 +18352,15 @@ mod tests {
                         },
                     ))
                     .expect("attempt started");
-                let snapshot = crate::model::RequestSnapshot::new(
+                let mut snapshot = crate::model::RequestSnapshot::new(
                     crate::model::RequestIdentity {
                         attempt_id: dead.clone(),
                         turn: crate::runtime::identity::TurnId::new("0"),
                         retry_number: 0,
                     },
-                    store.load_head().expect("head").revision,
+                    crate::context::resources::LedgerFrontier(
+                        (store.load_head().expect("head").revision).get(),
+                    ),
                     "frozen prompt".to_owned(),
                     Vec::new(),
                     crate::runtime::RuntimeResourceRevision::new(1),
@@ -18385,6 +18386,22 @@ mod tests {
                     None,
                     Vec::new(),
                 );
+                let history = store.projected_history().unwrap();
+                snapshot.history_cut = history.cut;
+                snapshot
+                    .freeze_input(
+                        store.conversation_id(),
+                        &crate::model::ModelRequest {
+                            messages: history.messages,
+                            images: crate::model::images::ResolvedImages::new(),
+                            invocation: snapshot.invocation.clone(),
+                            tools: snapshot.tool_definitions.clone(),
+                            effective_system_prompt: snapshot.effective_system_prompt.clone(),
+                            continuation: None,
+                            continuation_source: None,
+                        },
+                    )
+                    .unwrap();
                 store
                     .commit_model_turn_start(&[], &snapshot, fixed_time())
                     .expect("request start");
@@ -18439,6 +18456,7 @@ mod tests {
     /// point, so the recovered runtime itself initiated no replacement
     /// request — and it fabricated no Assistant body.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)] // One native restart observation and actual-request settlement scenario.
     async fn class_e_restart_issues_no_replacement_request() {
         let dir = tempfile::tempdir().expect("temp dir");
         let conversation = ConversationId::new("conv_0224cd71-1cda-74e4-8010-dad3ad2ce447");
@@ -18470,13 +18488,15 @@ mod tests {
                         },
                     ))
                     .expect("attempt started");
-                let snapshot = crate::model::RequestSnapshot::new(
+                let mut snapshot = crate::model::RequestSnapshot::new(
                     crate::model::RequestIdentity {
                         attempt_id: dead.clone(),
                         turn: crate::runtime::identity::TurnId::new("0"),
                         retry_number: 0,
                     },
-                    store.load_head().expect("head").revision,
+                    crate::context::resources::LedgerFrontier(
+                        (store.load_head().expect("head").revision).get(),
+                    ),
                     "frozen prompt".to_owned(),
                     Vec::new(),
                     crate::runtime::RuntimeResourceRevision::new(1),
@@ -18502,6 +18522,22 @@ mod tests {
                     None,
                     Vec::new(),
                 );
+                let history = store.projected_history().unwrap();
+                snapshot.history_cut = history.cut;
+                snapshot
+                    .freeze_input(
+                        store.conversation_id(),
+                        &crate::model::ModelRequest {
+                            messages: history.messages,
+                            images: crate::model::images::ResolvedImages::new(),
+                            invocation: snapshot.invocation.clone(),
+                            tools: snapshot.tool_definitions.clone(),
+                            effective_system_prompt: snapshot.effective_system_prompt.clone(),
+                            continuation: None,
+                            continuation_source: None,
+                        },
+                    )
+                    .unwrap();
                 store
                     .commit_model_turn_start(&[], &snapshot, fixed_time())
                     .expect("request start");

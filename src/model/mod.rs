@@ -97,3 +97,8 @@ pub mod uploads;
 pub mod request_shape;
 
 pub mod images;
+
+pub mod occurrence;
+pub mod projected;
+
+pub(crate) mod transformations;

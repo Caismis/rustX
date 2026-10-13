@@ -1408,6 +1408,41 @@ async fn continuation_contradiction_with_boundary_is_rejected() {
     assert_eq!(server.attempt_count(), 0);
 }
 
+#[tokio::test]
+async fn incomplete_or_changed_native_thinking_never_dispatches() {
+    use rustx::message::types::{
+        AssistantContentBlock, AssistantMessageBlock, MessageBlock, ReasoningBlock,
+    };
+    use rustx::runtime::identity::MessageId;
+    let server =
+        crate::common::FixtureServer::start(|_, _| sse_fixture("anthropic", "text.sse")).await;
+    for opaque in [
+        serde_json::json!({"signature":"unscoped"}),
+        serde_json::json!({"type":"thinking", "thinking":"original signed text", "signature":"original-signature"}),
+        serde_json::json!({"type":"redacted_thinking", "data":"encrypted-native"}),
+    ] {
+        let mut request =
+            simple_request(ModelProtocol::AnthropicMessages, "claude-test", "Continue");
+        request.messages.insert(
+            0,
+            rustx::model::ModelInputMessage::Canonical(MessageBlock::Assistant(
+                AssistantMessageBlock {
+                    id: MessageId::new("accepted-thinking"),
+                    content: vec![AssistantContentBlock::Reasoning(ReasoningBlock {
+                        text: Some("edited plaintext".into()),
+                        provider_state: Some(ProviderContinuationState::Anthropic(
+                            AnthropicContinuation { opaque },
+                        )),
+                    })],
+                },
+            )),
+        );
+        let events = collect_events(&adapter(&server), request).await;
+        assert_terminal_failed(&events, &ModelErrorKind::Unsupported);
+    }
+    assert_eq!(server.attempt_count(), 0);
+}
+
 /// The stream lifecycle has exactly one terminal event.
 #[tokio::test]
 async fn lifecycle_has_one_terminal_event() {

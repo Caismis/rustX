@@ -6,7 +6,7 @@ use crate::durable::response::{
     AttemptEvidence, CompletedResponseProvenance, ResponseOrigin, add_usage,
 };
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
-use crate::message::types::{InboundKind, MessageBlock};
+use crate::message::types::MessageBlock;
 use crate::model::finish::ModelFinishReason;
 use crate::runtime::identity::{AttemptId, ConversationId, MessageId};
 use std::collections::{BTreeMap, BTreeSet};
@@ -58,25 +58,41 @@ pub(super) fn read(
             .is_none_or(|id| referenced.contains(id))
     });
     let completed_responses = responses(connection, conversation, read_cut.journal, &canonical)?;
-    let mut checkpoints = BTreeMap::new();
-    for message in &canonical {
-        if let MessageBlock::User(user) = message
-            && user.kind.is_compaction_summary()
-        {
-            checkpoints.insert(
-                user.id.clone(),
-                super::load_compaction_checkpoint(connection, &user.id, read_cut.journal)?.0,
-            );
+    let mut projections = Vec::new();
+    let mut after = crate::context::checkpoint::ProjectionActivationId(0);
+    let mut remaining_projection_bytes = 16 * 1024 * 1024;
+    loop {
+        let page = super::projection::timeline(connection, after, 64)?;
+        if page.is_empty() {
+            break;
+        }
+        after = page.last().unwrap().activation.activation;
+        for checkpoint in &page {
+            remaining_projection_bytes -= crate::context::resources::bounded_encoded_len(
+                checkpoint,
+                remaining_projection_bytes,
+            )?;
+        }
+        projections.extend(page.into_iter().filter(|p| {
+            p.candidate.base_frontier.0 <= canonical.len() as u64
+                && p.activation.ledger.0 <= canonical.len() as u64
+                && (p.activation.destination_installation.is_some()
+                    || p.activation.origin.completed_journal.0 <= read_cut.journal)
+        }));
+        if projections.len() > 8192 {
+            return Err(ConversationStoreError::InvalidReference(
+                "lineage projection timeline exceeds bound".into(),
+            ));
         }
     }
     Ok(LineageReadCut {
+        projections,
         read_cut,
         conversation_id: conversation.clone(),
         surface_revision: revision,
         messages,
         canonical,
         surface_history,
-        checkpoints,
         completed_responses,
         turns,
     })
@@ -155,24 +171,8 @@ fn responses(
                     .take()
                     .filter(|closing| wanted.contains(closing))
                 {
-                    let retry_message_id = if let Some(request) = &evidence.last_request {
-                        let snapshot =
-                            super::load_request_snapshot(connection, conversation, request)?;
-                        super::reconstruct_surface(connection, snapshot.surface_revision)?
-                            .iter()
-                            .rev()
-                            .map(|id| super::load_message(connection, id))
-                            .collect::<Result<Vec<_>, _>>()?
-                            .into_iter()
-                            .find_map(|message| match message {
-                                MessageBlock::User(user) if user.kind == InboundKind::Message => {
-                                    Some(user.id)
-                                }
-                                _ => None,
-                            })
-                    } else {
-                        None
-                    };
+                    let retry_message_id =
+                        super::reading::attempt_prompt(connection, &id, through)?;
                     completed.insert(
                         closing.clone(),
                         CompletedResponseProvenance {

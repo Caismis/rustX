@@ -5,8 +5,8 @@ import { composerPreferences } from '../../src/app/composer/preferences';
 import { createRoot } from 'react-dom/client';
 import { RpcFailure } from '../../src/client/app-server';
 import { App } from '../../src/app/App';
-import { Server, interaction, snapshot, endpoint } from '../fixture';
-import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v46';
+import { Server, interaction, snapshot, projectionHead, endpoint } from '../fixture';
+import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v47';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -71,10 +71,7 @@ if (mode === 'questionnaire') {
 }
 if (mode === 'compaction') {
  s.attempt = null;
- const summary = { role: 'user' as const, id: 'summary-1', source: 'runtime' as const, kind: { compaction_summary: {} },
-   content: [{ type: 'text' as const, text: '## 已完成的工作\n\n保留 fork 前的历史预览，并整理上下文摘要的显示。\n\n- 历史仍由原生会话数据提供\n- Continue with the original conversation context.\n\n### 下一步\n\n检查窄屏布局与键盘操作。' }] };
- s.messages.push(summary);
- s.transcript.entries.push({ cursor: '3', compaction: { retired_messages: '26', retired_tokens: '9183', manual: false }, item: { type: 'message', message: summary } });
+ s.context = { compaction_count: 1, compaction_in_progress: false, projection_head: projectionHead('## 已完成的工作\n\n保留 fork 前的历史预览，并整理上下文摘要的显示。\n\n- 历史仍由原生会话数据提供\n- Continue with the original conversation context.') };
 }
 if (mode === 'fork') {
  s.attempt = null;
@@ -119,7 +116,7 @@ if (mode === 'composer') {
   };
 }
 declare global {
-  interface Window { composerFixture: { running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; busyEnter(value: 'queue' | 'steer'): void; cancellations(): import('../../../protocol/app-server/v46').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
+  interface Window { composerFixture: { running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; busyEnter(value: 'queue' | 'steer'): void; cancellations(): import('../../../protocol/app-server/v47').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
 }
 
 function RestoredComposerFixture() {

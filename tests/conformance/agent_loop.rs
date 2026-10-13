@@ -49,7 +49,7 @@ use rustx::local_runtime::session_runtime_manager::{
     ManagedRuntimeClient, RuntimeManagerError, RuntimeResidencyPolicy, SessionRuntimeManager,
 };
 use rustx::message::content::TextBlock;
-use rustx::message::types::{MessageBlock, UserContentBlock, UserSource};
+use rustx::message::types::{MessageBlock, UserContentBlock};
 use rustx::model::catalog::{MapCredentialEnvironment, ModelRef};
 use rustx::model::session::{SessionModelConfig, SummaryModelPolicy};
 use rustx::runtime::recovery::{AttemptRecoveryClass, ResumeDisposition};
@@ -1073,26 +1073,15 @@ async fn compaction_invokes_the_real_provider_on_both_summary_policies() {
             "{scenario}: one compaction generation"
         );
 
-        // The runtime compaction summary is a canonical Message Ledger fact,
-        // externally visible like any other committed message — not a
-        // private context value.
-        let summary_message = snapshot
-            .messages
-            .iter()
-            .find_map(|message| match message {
-                MessageBlock::User(user) if user.kind.is_compaction_summary() => Some(user),
-                _ => None,
-            })
-            .expect("the canonical compaction summary is committed to the ledger");
-        assert_eq!(
-            summary_message.id, latest.summary_message_id,
-            "{scenario}: the compaction metadata names the committed summary"
-        );
-        assert_eq!(
-            summary_message.source,
-            UserSource::Runtime,
-            "{scenario}: the summary carries runtime provenance"
-        );
+        let head = snapshot
+            .context
+            .projection_head
+            .as_ref()
+            .expect("durable current projection");
+        assert_eq!(head.checkpoint_id, latest.checkpoint_id);
+        assert_eq!(head.activation_id, latest.activation_id);
+        assert!(head.destination_installation.is_none());
+        assert!(head.summary_preview.is_some());
         // Compaction never rewrote the ledger: the retired original is still
         // there, byte for byte.
         assert!(
@@ -1228,29 +1217,28 @@ async fn repeated_compaction_invokes_the_real_provider_on_both_summary_policies(
             2
         );
 
-        // Both summaries are canonical ledger facts; both retired fillers
-        // remain committed ledger bytes.
-        let summaries: Vec<_> = snapshot
-            .messages
-            .iter()
-            .filter(|message| {
-                matches!(
-                    message,
-                    MessageBlock::User(user) if user.kind.is_compaction_summary()
-                )
-            })
-            .collect();
-        assert_eq!(
-            summaries.len(),
-            2,
-            "{scenario}: two canonical compaction summaries"
-        );
+        let head = snapshot
+            .context
+            .projection_head
+            .as_ref()
+            .expect("second projection");
+        assert_eq!(head.activation_id.0, 2);
+        assert_eq!(head.derived_items, 1, "one effective Derived Summary");
         let ledger = serde_json::to_string(&snapshot.messages).expect("serialize the ledger");
         assert!(
             ledger.contains(FILLER_ONE_MARKER) && ledger.contains(FILLER_TWO_MARKER),
             "{scenario}: the ledger retains both retired fillers verbatim"
         );
-        assert!(ledger.contains(SUMMARY_ONE_TEXT) && ledger.contains(SUMMARY_TWO_TEXT));
+        assert!(
+            !ledger.contains(SUMMARY_ONE_TEXT) && !ledger.contains(SUMMARY_TWO_TEXT),
+            "summary context is independently durable, never a canonical execution message"
+        );
+        let projections = driver
+            .store
+            .projection_timeline(rustx::context::checkpoint::ProjectionActivationId(0), 64)
+            .unwrap();
+        let projected = serde_json::to_string(&projections).unwrap();
+        assert!(projected.contains(SUMMARY_ONE_TEXT) && projected.contains(SUMMARY_TWO_TEXT));
 
         // The wire: five requests, each exactly what the scenario asserts.
         let requests = emulator.requests().await;
@@ -2096,23 +2084,26 @@ async fn image_budget_continuation(scenario: &str, image_model: &str, text_model
     .unwrap();
     let history = rustx::runtime::request_history::RequestHistory::new(Arc::new(reopened));
     let snapshots = crate::common::request_snapshots(&history);
-    let mut reconstructed = history
+    let reconstructed = history
         .reconstruct(&snapshots.last().unwrap().identity)
         .unwrap();
     let reconstructed_json = serde_json::to_string(&reconstructed.messages).unwrap();
     assert_eq!(reconstructed_json.matches("\"type\":\"image\"").count(), 16);
     assert!(reconstructed_json.contains("Image artifact"));
     assert!(
-        reconstructed.images.is_empty(),
-        "durable request evidence stores references only"
+        !reconstructed.images.is_empty(),
+        "exact frozen request retains the selected image bytes"
     );
-    reconstructed.images = rustx::model::images::resolve(&reconstructed.messages, |id| {
-        driver
-            .artifacts()
-            .read_bounded(id)
-            .map_err(|error| error.to_string())
-    })
-    .unwrap();
+    assert_eq!(reconstructed.images, snapshots.last().unwrap().images);
+    assert!(
+        snapshots
+            .last()
+            .unwrap()
+            .input
+            .iter()
+            .any(|item| matches!(item, rustx::model::projected::FrozenModelInput::Derived(_)))
+    );
+
     let protocol = reconstructed.protocol();
     let server = crate::common::FixtureServer::start(move |_, _| match protocol {
         rustx::model::ModelProtocol::OpenAiChatCompletions => {

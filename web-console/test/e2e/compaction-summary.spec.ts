@@ -15,7 +15,7 @@ for (const theme of ['light', 'dark']) for (const width of [1440, 390]) {
     await toggle.focus(); await page.keyboard.press('Enter');
     await expect(card.getByRole('heading', { name: '已完成的工作' })).toBeVisible();
     await expect(card.locator('[data-compaction-body]').getByText('Continue with the original conversation context.')).toBeVisible();
-    await expect(card.getByText('先前上下文的精简记录，用于继续当前对话。', { exact: true })).toBeVisible();
+    await expect(card.getByText('此投影提供模型上下文。规范会话事实保留其原始执行归属。', { exact: true })).toBeVisible();
     expect(await card.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
     await card.screenshot({ path: info.outputPath('expanded.png') });
     await page.keyboard.press('Space');

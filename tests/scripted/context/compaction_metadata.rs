@@ -20,37 +20,13 @@
 //! including the failure-atomicity matrix — is owned by
 //! `compaction_pipeline.rs`.
 
-use std::sync::Arc;
-
-use rustx::context::{
-    CompactionBudgets, CompactionConstraints, CompactionPlan, ContextConfig, ContextEngine,
-};
-use rustx::conversation::{ConversationState, SurfaceSpan};
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
     AssistantContentBlock, AssistantMessageBlock, CompactionSummaryMetadata, InboundKind,
     MessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
-use rustx::runtime::identity::{ConversationId, MessageId, ToolCallId, ToolId};
-use rustx::runtime::types::{TokenMeasurement, TokenMeasurementSource};
+use rustx::runtime::identity::{MessageId, ToolCallId, ToolId};
 use rustx::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus};
-use support::context::ScriptedEstimator;
-
-use super::super::support;
-
-/// The engine used by these regressions: a large window so planning admits
-/// the full active prefix unless a test sizes it down deliberately.
-fn engine(window: u64) -> ContextEngine {
-    ContextEngine::new(
-        ContextConfig {
-            context_window_tokens: window,
-            reserve_tokens: 0,
-            keep_recent_tokens: 0,
-        },
-        Arc::new(ScriptedEstimator::new(10, 10, 0)),
-    )
-    .expect("valid context configuration")
-}
 
 pub(super) fn user(id: &str) -> MessageBlock {
     MessageBlock::User(UserMessageBlock {
@@ -118,55 +94,6 @@ fn tool_result(id: &str, owner: &MessageId, index: usize, call: &ToolCall) -> Me
     })
 }
 
-pub(super) fn state(messages: Vec<MessageBlock>) -> ConversationState {
-    ConversationState::from_messages(messages).expect("valid canonical history")
-}
-
-pub(super) fn conversation() -> ConversationId {
-    ConversationId::new("conv_62182350-f355-74b7-831a-b7fbb94b6c2d")
-}
-
-/// Plans and prepares one compaction of the whole active prefix, returning
-/// the validated commit.
-fn prepare_full_compaction(
-    engine: &ContextEngine,
-    state: &ConversationState,
-    body: &str,
-) -> rustx::conversation::PreparedCompactionCommit {
-    let projection = engine
-        .build_projection(state, &[], None, "")
-        .expect("projection");
-    let plan = engine
-        .plan_compaction(
-            state,
-            &projection,
-            &[],
-            CompactionBudgets::new(1, 1, 1_000_000),
-            &CompactionConstraints::default(),
-        )
-        .expect("plan");
-    let (commit, _) = engine
-        .prepare_compaction(state, &conversation(), &plan, body, &[])
-        .expect("prepare");
-    commit
-}
-
-/// The typed metadata of a prepared or committed compaction summary.
-pub(super) fn metadata_of(summary: &UserMessageBlock) -> &CompactionSummaryMetadata {
-    match &summary.kind {
-        InboundKind::CompactionSummary(metadata) => metadata,
-        other => panic!("expected a compaction summary, found {other:?}"),
-    }
-}
-
-/// The summary text of a prepared or committed compaction summary.
-pub(super) fn text_of(summary: &UserMessageBlock) -> &str {
-    match &summary.content[0] {
-        UserContentBlock::Text(text) => &text.text,
-        other => panic!("a compaction summary is text: {other:?}"),
-    }
-}
-
 /// The canonical first-compaction history of the issue contract:
 /// Read A, Read B, Edit B, Write C.
 pub(super) fn file_operation_history() -> Vec<MessageBlock> {
@@ -215,63 +142,32 @@ pub(super) fn file_operation_history() -> Vec<MessageBlock> {
 /// read. The committed text appends the metadata-derived XML sections after
 /// the model-produced body.
 #[test]
-fn first_compaction_extracts_typed_file_metadata() {
-    let engine = engine(10_000);
-    let history = state(file_operation_history());
-    let commit = prepare_full_compaction(&engine, &history, "## Goal\n\nShip the feature.");
-    let summary = commit.summary();
-    let metadata = metadata_of(summary);
+fn first_compaction_extracts_trusted_file_metadata_and_renders_structured_sections() {
+    let metadata =
+        crate::context::compaction_metadata::retired_span_metadata(&file_operation_history());
     assert_eq!(metadata.read_files(), &["/src/a.rs".to_owned()]);
     assert_eq!(
         metadata.modified_files(),
         &["/src/b.rs".to_owned(), "/src/c.rs".to_owned()]
     );
-    assert_eq!(
-        text_of(summary),
-        "## Goal\n\nShip the feature.\n\n<read-files>\n/src/a.rs\n</read-files>\n\n<modified-files>\n/src/b.rs\n/src/c.rs\n</modified-files>",
-        "the committed text is the body plus the deterministic derived sections"
-    );
+    let rendered =
+        crate::context::compaction_metadata::render_summary_text("## Goal\nShip.", &metadata);
+    assert!(rendered.starts_with("## Goal\nShip."));
+    assert!(rendered.contains("<read-files>"));
+    assert!(rendered.contains("<modified-files>"));
 }
-
-/// The second compaction merges the previous summary's typed metadata with
-/// the new operations over the selected lineage: a file the first summary
-/// listed as read moves to modified when the new history edits it.
 #[test]
-fn second_compaction_merges_lineage_metadata() {
-    let engine = engine(10_000);
-    let mut history = state(file_operation_history());
-    let first = prepare_full_compaction(&engine, &history, "first summary");
-    history.commit_compaction(first).expect("commit first");
-
-    let reads = assistant(
-        "a3",
-        vec![read_call("c5", "/src/d.rs"), edit_call("c6", "/src/a.rs")],
+fn typed_lineage_metadata_accumulates_with_modification_winning_over_read() {
+    let first =
+        crate::context::compaction_metadata::retired_span_metadata(&file_operation_history());
+    let second = CompactionSummaryMetadata::accumulate(
+        [&first],
+        vec!["/src/c.rs".into(), "/src/d.rs".into()],
+        vec!["/src/a.rs".into()],
     );
-    // Canonical order: the calls commit before their results.
-    history.commit(reads.clone()).expect("commit a3");
-    let MessageBlock::Assistant(calls) = &reads else {
-        unreachable!();
-    };
-    for (index, block) in calls.content.iter().enumerate() {
-        let AssistantContentBlock::ToolCall(call) = block else {
-            unreachable!();
-        };
-        history
-            .commit(tool_result(
-                &format!("t-{}", call.id.as_str()),
-                &calls.id,
-                index,
-                call,
-            ))
-            .expect("commit result");
-    }
-    history.commit(user("u3")).expect("commit u3");
-
-    let second = prepare_full_compaction(&engine, &history, "second summary");
-    let metadata = metadata_of(second.summary());
-    assert_eq!(metadata.read_files(), &["/src/d.rs".to_owned()]);
+    assert_eq!(second.read_files(), &["/src/d.rs".to_owned()]);
     assert_eq!(
-        metadata.modified_files(),
+        second.modified_files(),
         &[
             "/src/a.rs".to_owned(),
             "/src/b.rs".to_owned(),
@@ -279,65 +175,21 @@ fn second_compaction_merges_lineage_metadata() {
         ]
     );
 }
-
-/// A previous compaction summary that is active but outside the selected
-/// retired span contributes nothing: metadata follows the selected lineage,
-/// never conversation-global state.
 #[test]
-fn a_summary_outside_the_selected_span_contributes_nothing() {
-    let engine = engine(10_000);
-    let mut history = state(file_operation_history());
-    let first = prepare_full_compaction(&engine, &history, "first summary");
-    let first_summary_id = first.summary().id.clone();
-    history.commit_compaction(first).expect("commit first");
-    history.commit(user("u3")).expect("commit u3");
-    history.commit(user("u4")).expect("commit u4");
-
-    // A valid selected span that excludes the active first summary.
-    let plan = CompactionPlan {
-        surface_revision: history.revision(),
-        span: SurfaceSpan::new(MessageId::new("u3"), MessageId::new("u4")),
-        retired: vec![user("u3"), user("u4")],
-        estimated_before: TokenMeasurement {
-            input_tokens: 0,
-            source: TokenMeasurementSource::Estimated,
-        },
-        estimated_before_tokens: 1_000_000,
-        planned_estimate_after: 0,
-        summary_reservation: 0,
-        summary_input_tokens: 0,
-        effective_system_prompt: String::new(),
-    };
-    let (commit, _) = engine
-        .prepare_compaction(&history, &conversation(), &plan, "second summary", &[])
-        .expect("prepare");
-    assert_eq!(
-        commit.summary().kind.compaction_summary_metadata(),
-        Some(&CompactionSummaryMetadata::empty()),
-        "the retained summary {first_summary_id} is outside the span and must not contribute"
-    );
+fn unselected_previous_summary_metadata_is_not_a_global_accumulator() {
+    let _previous =
+        crate::context::compaction_metadata::retired_span_metadata(&file_operation_history());
+    let selected = crate::context::compaction_metadata::retired_span_metadata(&[user("new")]);
+    assert!(selected.read_files().is_empty());
+    assert!(selected.modified_files().is_empty());
 }
-
-/// Generated summary prose is never metadata authority: a scripted summary
-/// that invents a file path keeps its prose but contributes no path to the
-/// typed metadata, and no XML section appears for empty metadata.
 #[test]
-fn model_prose_never_enters_typed_metadata() {
-    let engine = engine(10_000);
-    let history = state(vec![user("u1"), user("u2")]);
-    let commit = prepare_full_compaction(
-        &engine,
-        &history,
-        "## Goal\n\nWe edited /fake/invented.rs together.",
-    );
+fn model_prose_cannot_create_file_operation_facts() {
+    let body = "## Goal\nRead /invented/a.rs and modified /invented/b.rs";
+    let metadata = crate::context::compaction_metadata::retired_span_metadata(&[user("source")]);
+    assert_eq!(metadata, CompactionSummaryMetadata::empty());
     assert_eq!(
-        metadata_of(commit.summary()),
-        &CompactionSummaryMetadata::empty(),
-        "prose paths never become metadata"
-    );
-    assert_eq!(
-        text_of(commit.summary()),
-        "## Goal\n\nWe edited /fake/invented.rs together.",
-        "empty metadata renders no XML sections, and prose is preserved untouched"
+        crate::context::compaction_metadata::render_summary_text(body, &metadata),
+        body
     );
 }

@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { Trajectory } from '../../src/app/trajectory/Trajectory';
 import { completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace } from '../../src/client/trace';
 import { stepLessRecords, manyStepRecords, orderedStepRecords, semanticLedgerRecords, structuralSearchRecords, traceRecord, traceTool, requestDetail, toolDetail } from '../trace-fixture';
-import type { TraceRecord, TraceSystemPromptState, TraceToolCatalogState } from '../../../protocol/app-server/v46';
+import type { TraceRecord, TraceSystemPromptState, TraceToolCatalogState } from '../../../protocol/app-server/v47';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -90,7 +90,7 @@ function Fixture() {
           const n = Number(id.split(':')[1]); const record = current.page.records.find(record => record.id === id)!;
           const detail = record.kind === 'tool' ? toolDetail(n) : record.kind === 'request' ? requestDetail(n) : requestDetail(n, { kind: record.kind, request: null, messages: [] });
           if (detail.request) {
-            detail.request.messages.push(...(record.request?.context_additions ?? []).map(context => ({ role: 'user' as const, message_id: context.message_id, source: 'runtime', blocks: [{ type: 'text' as const, text: text(`Full content: ${context.preview?.text}`) }], truncated: false })));
+            detail.request.messages.push(...(record.request?.context_additions ?? []).map(context => ({ role: 'user' as const, message_id: context.message_id, provenance: {type:'original' as const,source:{conversation_id:'conv_36524fd8-f674-7fc2-8125-06d01fee0e18',message_id:context.message_id,content_digest:'fixture-digest'}}, source: 'runtime', blocks: [{ type: 'text' as const, text: text(`Full content: ${context.preview?.text}`) }], truncated: false })));
             if (record.request?.system_prompt.state === 'previous_unavailable') { detail.request.predecessor = { availability: 'unavailable', request_id: 'previous-request' }; detail.request.previous_system_prompt = null; }
             if (n === 3) { detail.request.predecessor = { availability: 'not_applicable' }; detail.request.previous_system_prompt = null; }
             if (n === 11) { detail.request.effective_system_prompt.truncated = true; detail.request.previous_system_prompt!.truncated = true; }

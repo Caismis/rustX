@@ -103,6 +103,7 @@ pub fn validate_request(
     }
 
     validate_continuation(request, protocol)?;
+    request.continuation_boundary().map_err(invalid_request)?;
     validate_tools(request)
 }
 
@@ -198,6 +199,7 @@ mod tests {
 
     fn request() -> ModelRequest {
         ModelRequest {
+            continuation_source: None,
             images: std::collections::BTreeMap::new(),
             invocation: crate::model::invocation::ModelInvocationConfig {
                 model: "m".to_owned(),

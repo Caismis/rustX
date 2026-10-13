@@ -32,14 +32,13 @@ use super::super::{common, support};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use rustx::agent::{
-    AgentCancellation, AgentExecution, AgentExecutionRequest, AgentExecutionResult,
-};
+use common::DurableExecutionAudit as AgentExecutionResult;
+use rustx::agent::{AgentCancellation, AgentExecution, AgentExecutionRequest};
 use rustx::context::{
     CompactionBudgets, ContextAssembly, ContextConfig, ContextEngine, ContextError,
     ContextErrorKind, ContextProposal, ContextRuntime, TokenEstimator, UserMessageProposal,
 };
-use rustx::conversation::{ConversationState, summary_message_id};
+use rustx::conversation::ConversationState;
 use rustx::events::types::{AttemptFailure, AttemptOutcome, RuntimeEvent};
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
@@ -238,36 +237,65 @@ impl rustx::agent::PreStepPolicy for CountingPreStepPolicy {
     }
 }
 
-/// Whether a canonical message is a runtime compaction summary.
-fn is_summary(message: &MessageBlock) -> bool {
-    matches!(message, MessageBlock::User(user) if user.kind.is_compaction_summary())
-}
-
-/// Asserts that the attempt committed no compaction at all: no canonical
-/// runtime summary joined the Message Ledger and the Conversation Surface
-/// performed no replacement.
+/// Absence of a durable projection activation proves no compaction committed.
 fn assert_no_compaction_committed(result: &AgentExecutionResult) {
-    assert_eq!(
-        result.conversation.surface().compaction_generation(),
-        0,
-        "no surface replacement may have been applied"
-    );
+    assert!(result.projections.is_empty());
     assert!(
-        !result.messages().iter().any(is_summary),
-        "no canonical compaction summary may have been committed"
+        !result
+            .event_history
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::CompactionCompleted { .. }))
     );
 }
 
-/// The committed canonical compaction summary of a settled attempt.
-fn committed_summary(result: &AgentExecutionResult) -> &UserMessageBlock {
-    result
-        .messages()
+/// Materialized summary body from the durable historical checkpoint domain.
+fn committed_summary(result: &AgentExecutionResult) -> &rustx::model::projected::ProjectedMessage {
+    let checkpoint = result
+        .projections
+        .last()
+        .expect("successful compaction has a durable checkpoint");
+    checkpoint
+        .candidate
+        .items
         .iter()
-        .find_map(|message| match message {
-            MessageBlock::User(user) if user.kind.is_compaction_summary() => Some(user),
+        .find_map(|item| match &item.message {
+            rustx::context::checkpoint::CheckpointMessage::Derived(message)
+                if message
+                    .transformations
+                    .contains(&rustx::model::projected::SemanticTransformation::Summary) =>
+            {
+                Some(&message.message)
+            }
             _ => None,
         })
-        .expect("a successful compaction commits one canonical summary")
+        .expect("summary checkpoint contains a Derived Summary")
+}
+fn summary_content(result: &AgentExecutionResult) -> &[UserContentBlock] {
+    let rustx::model::projected::ProjectedMessage::User { content, .. } = committed_summary(result)
+    else {
+        panic!("summary has User semantics without canonical identity")
+    };
+    content
+}
+fn compaction_event(result: &AgentExecutionResult, started: bool) -> RuntimeEvent {
+    result
+        .event_history
+        .iter()
+        .find(|event| {
+            if started {
+                matches!(event, RuntimeEvent::CompactionStarted { .. })
+            } else {
+                matches!(event, RuntimeEvent::CompactionCompleted { .. })
+            }
+        })
+        .unwrap()
+        .clone()
+}
+fn operation(result: &AgentExecutionResult) -> rustx::runtime::identity::CompactionOperationId {
+    let RuntimeEvent::CompactionStarted { operation_id } = compaction_event(result, true) else {
+        unreachable!()
+    };
+    operation_id
 }
 
 /// A fixed deterministic UTC clock for status composition in these
@@ -522,10 +550,6 @@ fn message_id_of(message: &MessageBlock) -> String {
 // Context assembly
 // ---------------------------------------------------------------------------
 
-fn summary_id(generation: u64) -> MessageId {
-    summary_message_id(&conversation(), generation)
-}
-
 // ---------------------------------------------------------------------------
 // Proactive compaction at the attempt boundary
 // ---------------------------------------------------------------------------
@@ -604,6 +628,7 @@ async fn proactive_compaction_accounts_for_frozen_extension_system_sections() {
         summary_requests[0]
             .retired
             .iter()
+            .filter_map(ModelInputMessage::as_canonical)
             .map(message_id_of)
             .collect::<Vec<_>>(),
         vec!["old", "middle"],
@@ -616,11 +641,7 @@ async fn proactive_compaction_accounts_for_frozen_extension_system_sections() {
             .iter()
             .map(MessageId::as_str)
             .collect::<Vec<_>>(),
-        vec![
-            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18-summary-1",
-            "recent",
-            "attempt-1-agent-1"
-        ]
+        vec!["recent", "attempt-1-agent-1"]
     );
     let requests = model.requests();
     assert_eq!(requests.len(), 1);
@@ -681,31 +702,6 @@ async fn proactive_compaction_before_the_next_turn() {
         tool_runtime.durable_store().as_ref(),
     );
 
-    let summary_id_committed = committed_summary(&result).id.clone();
-    let (
-        surface_revision,
-        compaction_tokens_before,
-        compaction_estimated_after,
-        compacted_occupancy,
-    ) = result
-        .event_history
-        .iter()
-        .find_map(|event| match event {
-            RuntimeEvent::CompactionCompleted {
-                surface_revision,
-                tokens_before,
-                estimated_tokens_after,
-                occupancy,
-                ..
-            } => Some((
-                *surface_revision,
-                *tokens_before,
-                *estimated_tokens_after,
-                occupancy.clone(),
-            )),
-            _ => None,
-        })
-        .expect("the attempt emitted one compaction completion");
     let expected = vec![
         RuntimeEvent::AttemptStarted {
             attempt_id: AttemptId::new("attempt-1"),
@@ -744,15 +740,8 @@ async fn proactive_compaction_before_the_next_turn() {
         },
         RuntimeEvent::TurnCompleted,
         RuntimeEvent::TurnStarted,
-        RuntimeEvent::CompactionStarted,
-        RuntimeEvent::CompactionCompleted {
-            generation: 1,
-            summary_message_id: summary_id_committed.clone(),
-            surface_revision,
-            tokens_before: compaction_tokens_before,
-            estimated_tokens_after: compaction_estimated_after,
-            occupancy: compacted_occupancy,
-        },
+        compaction_event(&result, true),
+        compaction_event(&result, false),
         RuntimeEvent::ModelRequestStarted {
             request_id: RequestId::new("request:9:attempt-1:1:2:0"),
             model: "fake-model".to_owned(),
@@ -791,12 +780,22 @@ async fn proactive_compaction_before_the_next_turn() {
         "first request carries the initial history"
     );
     assert_eq!(requests[1].messages.len(), 3);
-    let Some(MessageBlock::User(summary)) = requests[1].messages[0].as_canonical() else {
+    let ModelInputMessage::Derived(summary) = &requests[1].messages[0] else {
         panic!("first projected message must be the summary");
     };
-    assert_eq!(summary.id, summary_id(1));
-    assert_eq!(summary.source, UserSource::Runtime);
-    assert!(summary.kind.is_compaction_summary());
+    assert!(matches!(
+        &summary.message,
+        rustx::model::projected::ProjectedMessage::User {
+            source: UserSource::Runtime,
+            kind: rustx::model::projected::ProjectedUserKind::CompactionContext,
+            ..
+        }
+    ));
+    assert!(
+        summary
+            .transformations
+            .contains(&rustx::model::projected::SemanticTransformation::Summary)
+    );
     assert!(matches!(
         requests[1].messages[1].as_canonical(),
         Some(MessageBlock::Assistant(assistant)) if assistant.id.as_str() == "attempt-1-agent-1"
@@ -818,12 +817,11 @@ async fn proactive_compaction_before_the_next_turn() {
             "msg-user-1".to_owned(),
             "attempt-1-agent-1".to_owned(),
             "attempt-1-tool-1-call-1".to_owned(),
-            summary_id(1).as_str().to_owned(),
             "attempt-1-agent-2".to_owned(),
         ]
     );
     assert_eq!(result.messages()[0].clone(), user("msg-user-1", "hi"));
-    assert_eq!(committed_summary(&result).id, summary_id(1));
+
     // The Conversation Surface replaced exactly the compacted span.
     assert_eq!(
         result
@@ -832,7 +830,6 @@ async fn proactive_compaction_before_the_next_turn() {
             .map(|id| id.as_str().to_owned())
             .collect::<Vec<_>>(),
         vec![
-            summary_id(1).as_str().to_owned(),
             "attempt-1-agent-1".to_owned(),
             "attempt-1-tool-1-call-1".to_owned(),
             "attempt-1-agent-2".to_owned(),
@@ -886,7 +883,7 @@ async fn below_threshold_runs_without_compaction() {
         !result
             .event_history
             .iter()
-            .any(|event| matches!(event, RuntimeEvent::CompactionStarted)),
+            .any(|event| matches!(event, RuntimeEvent::CompactionStarted { .. })),
         "no compaction below the threshold"
     );
     assert_single_terminal(&result.event_history);
@@ -948,31 +945,6 @@ async fn overflow_compact_and_retry_succeeds() {
         tool_runtime.durable_store().as_ref(),
     );
 
-    let summary_id_committed = committed_summary(&result).id.clone();
-    let (
-        surface_revision,
-        compaction_tokens_before,
-        compaction_estimated_after,
-        compacted_occupancy,
-    ) = result
-        .event_history
-        .iter()
-        .find_map(|event| match event {
-            RuntimeEvent::CompactionCompleted {
-                surface_revision,
-                tokens_before,
-                estimated_tokens_after,
-                occupancy,
-                ..
-            } => Some((
-                *surface_revision,
-                *tokens_before,
-                *estimated_tokens_after,
-                occupancy.clone(),
-            )),
-            _ => None,
-        })
-        .expect("the attempt emitted one compaction completion");
     let expected = vec![
         RuntimeEvent::AttemptStarted {
             attempt_id: AttemptId::new("attempt-1"),
@@ -988,15 +960,8 @@ async fn overflow_compact_and_retry_succeeds() {
             usage: None,
             generation: None,
         },
-        RuntimeEvent::CompactionStarted,
-        RuntimeEvent::CompactionCompleted {
-            generation: 1,
-            summary_message_id: summary_id_committed.clone(),
-            surface_revision,
-            tokens_before: compaction_tokens_before,
-            estimated_tokens_after: compaction_estimated_after,
-            occupancy: compacted_occupancy,
-        },
+        compaction_event(&result, true),
+        compaction_event(&result, false),
         RuntimeEvent::ModelRetryScheduled {
             failed_request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             retry_number: 1,
@@ -1040,8 +1005,8 @@ async fn overflow_compact_and_retry_succeeds() {
     let requests = model.requests();
     assert_eq!(requests.len(), 2);
     assert!(matches!(
-        requests[1].messages[0].as_canonical(),
-        Some(MessageBlock::User(user)) if user.kind.is_compaction_summary()
+        requests[1].messages[0],
+        ModelInputMessage::Derived(ref message) if message.transformations.contains(&rustx::model::projected::SemanticTransformation::Summary)
     ));
     assert_eq!(requests[1].messages.len(), 1);
     assert_eq!(requests[1].continuation, None);
@@ -1055,7 +1020,6 @@ async fn overflow_compact_and_retry_succeeds() {
             .collect::<Vec<_>>(),
         vec![
             "msg-user-1".to_owned(),
-            summary_id(1).as_str().to_owned(),
             retry_message_id(1).as_str().to_owned(),
         ]
     );
@@ -1137,10 +1101,10 @@ async fn cancellation_before_overflow_retry_start_stops_the_retry() {
             .any(|event| matches!(event, RuntimeEvent::CompactionCompleted { .. })),
         "the compaction committed as its own independent durable fact"
     );
-    let summary = committed_summary(&result);
+    let summary = summary_content(&result);
     assert!(
         matches!(
-            summary.content.first(),
+            summary.first(),
             Some(rustx::message::types::UserContentBlock::Text(text)) if text.text == "summary-1"
         ),
         "the summary remains canonical even though the retry never started"
@@ -1257,7 +1221,7 @@ async fn cancellation_after_preparation_compaction_keeps_it_and_discards_staged_
     );
     assert!(
         matches!(
-            committed_summary(&result).content.first(),
+            summary_content(&result).first(),
             Some(rustx::message::types::UserContentBlock::Text(text)) if text.text == "summary-1"
         ),
         "the committed compaction summary remains canonical"
@@ -1270,7 +1234,7 @@ async fn cancellation_after_preparation_compaction_keeps_it_and_discards_staged_
             .iter()
             .map(message_id_of)
             .collect::<Vec<_>>(),
-        vec!["msg-user-1".to_owned(), summary_id(1).as_str().to_owned()],
+        vec!["msg-user-1".to_owned()],
         "only the original inbound and the compaction summary are canonical; the staged context was discarded"
     );
     assert!(
@@ -1373,9 +1337,9 @@ async fn overflow_retry_reuses_the_admitted_context_generation() {
         result.snapshot_history()[1].context_generation
     );
     assert_ne!(
-        result.snapshot_history()[0].surface_revision,
-        result.snapshot_history()[1].surface_revision,
-        "compaction changes the retry Surface revision"
+        result.snapshot_history()[0].history_cut.activation,
+        result.snapshot_history()[1].history_cut.activation,
+        "compaction advances projection activation while canonical frontier stays fixed"
     );
     let opened = publication.opened();
     assert_eq!(opened.len(), 2, "each provider request owns one stream");
@@ -1448,7 +1412,7 @@ async fn overflow_retry_reuses_the_admitted_context_generation() {
     for (request, snapshot) in requests.iter().zip(result.snapshot_history()) {
         assert_eq!(
             snapshot
-                .reconstruct(&result.conversation)
+                .reconstruct_from_canonical(result.messages())
                 .expect("reconstruct retry request"),
             *request
         );
@@ -1468,48 +1432,42 @@ async fn overflow_retry_preserves_pending_fresh_inbound_and_context_generation()
         user("accepted-context-1", "accepted dynamic context"),
         user("accepted-context-2", "another accepted fact"),
     ]);
-    let candidate_projection = planner
-        .build_projection(&candidate_history, &[], None, "")
-        .expect("candidate projection");
-    let unconstrained = planner
-        .plan_compaction(
-            &candidate_history,
-            &candidate_projection,
-            &[],
-            CompactionBudgets::new(1, 1, 1_000_000),
-            &rustx::context::CompactionConstraints::default(),
-        )
-        .expect("an unrestricted candidate crosses fresh inbound");
-    assert_eq!(unconstrained.span.end, MessageId::new("accepted-context-1"));
-    assert_ne!(
-        unconstrained.span.end,
-        MessageId::new("old"),
-        "the unrestricted candidate crosses the pending fresh inbound"
+    let candidate_messages = candidate_history
+        .ledger()
+        .audit_records()
+        .iter()
+        .cloned()
+        .map(Into::into)
+        .collect::<Vec<ModelInputMessage>>();
+    let unconstrained = rustx::context::planning::summary_prefix(
+        &planner,
+        &candidate_messages,
+        "",
+        &[],
+        CompactionBudgets::new(1, 1, 1_000_000),
+        &rustx::context::CompactionConstraints::default(),
+    )
+    .expect("unrestricted historical prefix");
+    assert_eq!(
+        unconstrained, 3,
+        "unrestricted retirement crosses fresh inbound"
     );
     let fresh =
         rustx::runtime::inbound::FreshInboundTurn::new(vec![MessageId::new("msg-inbound-1")])
-            .expect("fresh trigger");
-    let protected = planner
-        .plan_compaction(
-            &candidate_history,
-            &candidate_projection,
-            &[],
-            CompactionBudgets::new(1, 1, 1_000_000),
-            &rustx::context::CompactionConstraints {
-                must_cover_through: None,
-                fresh_inbound: Some(&fresh),
-                ..Default::default()
-            },
-        )
-        .expect("fresh inbound leaves an earlier candidate");
-    assert_eq!(protected.span.end, MessageId::new("old"));
-    assert!(
-        !protected
-            .retired
-            .iter()
-            .any(|message| message_id_of(message) == "msg-inbound-1"),
-        "the pending fresh identity is not in the overflow summary span"
-    );
+            .unwrap();
+    let protected = rustx::context::planning::summary_prefix(
+        &planner,
+        &candidate_messages,
+        "",
+        &[],
+        CompactionBudgets::new(1, 1, 1_000_000),
+        &rustx::context::CompactionConstraints {
+            fresh_inbound: Some(&fresh),
+            ..Default::default()
+        },
+    )
+    .expect("fresh input leaves earlier retirement");
+    assert_eq!(protected, 1);
 
     let model = fake_model(vec![
         vec![FakeStep::Emit(started()), FakeStep::Emit(overflow_event())],
@@ -1595,9 +1553,9 @@ async fn overflow_retry_preserves_pending_fresh_inbound_and_context_generation()
         "overflow retry reuses the admitted ContextGeneration"
     );
     assert_ne!(
-        result.snapshot_history()[0].surface_revision,
-        result.snapshot_history()[1].surface_revision,
-        "successful overflow compaction creates a new historical Surface revision"
+        result.snapshot_history()[0].history_cut.activation,
+        result.snapshot_history()[1].history_cut.activation,
+        "successful overflow compaction activates a new historical projection"
     );
     let retry = &model.requests()[1];
     assert!(
@@ -1655,7 +1613,7 @@ async fn overflow_retry_preserves_pending_fresh_inbound_and_context_generation()
     for (request, snapshot) in model.requests().iter().zip(result.snapshot_history()) {
         assert_eq!(
             snapshot
-                .reconstruct(&result.conversation)
+                .reconstruct_from_canonical(result.messages())
                 .expect("reconstruct overflow request"),
             *request
         );
@@ -1716,7 +1674,7 @@ async fn overflow_retry_exhausted_after_one_retry() {
     let compactions = result
         .event_history
         .iter()
-        .filter(|event| matches!(event, RuntimeEvent::CompactionStarted))
+        .filter(|event| matches!(event, RuntimeEvent::CompactionStarted { .. }))
         .count();
     assert_eq!(compactions, 1, "no second overflow compaction");
 
@@ -1787,10 +1745,10 @@ async fn overflow_retry_never_commits_provisional_failed_content() {
     );
     assert_eq!(
         result.messages().len(),
-        3,
-        "input + the canonical compaction summary + one committed Assistant message"
+        2,
+        "input and exactly one real committed Assistant message"
     );
-    let MessageBlock::Assistant(assistant) = &result.messages()[2] else {
+    let MessageBlock::Assistant(assistant) = &result.messages()[1] else {
         panic!("the committed message must be the retry Assistant message");
     };
     assert_eq!(
@@ -1881,7 +1839,7 @@ async fn overflow_retry_never_commits_or_executes_failed_tool_calls() {
             .all(|message| !matches!(message, MessageBlock::Tool(_))),
         "no tool message is committed for the failed request's call"
     );
-    let MessageBlock::Assistant(assistant) = &result.messages()[2] else {
+    let MessageBlock::Assistant(assistant) = &result.messages()[1] else {
         panic!("the committed message must be the retry Assistant message");
     };
     assert_eq!(assistant.id, retry_message_id(1));
@@ -1952,7 +1910,7 @@ async fn overflow_retry_budget_is_per_model_turn() {
     let compactions = result
         .event_history
         .iter()
-        .filter(|event| matches!(event, RuntimeEvent::CompactionStarted))
+        .filter(|event| matches!(event, RuntimeEvent::CompactionStarted { .. }))
         .count();
     assert_eq!(compactions, 2, "one compaction per overflow");
     assert_single_terminal(&result.event_history);
@@ -1972,10 +1930,8 @@ async fn overflow_retry_budget_is_per_model_turn() {
             .collect::<Vec<_>>(),
         vec![
             "msg-user-1".to_owned(),
-            summary_id(1).as_str().to_owned(),
             retry_message_id(1).as_str().to_owned(),
             "attempt-1-tool-1-call-1".to_owned(),
-            summary_id(2).as_str().to_owned(),
             retry_message_id(2).as_str().to_owned(),
         ],
         "one canonical summary per compaction, nothing rewritten"
@@ -2096,8 +2052,9 @@ async fn compaction_failure_after_overflow_preserves_the_overflow() {
             usage: None,
             generation: None,
         },
-        RuntimeEvent::CompactionStarted,
+        compaction_event(&result, true),
         RuntimeEvent::CompactionFailed {
+            operation_id: operation(&result),
             error: "summary generation refused".to_owned(),
         },
         RuntimeEvent::AttemptFailed {
@@ -2181,7 +2138,7 @@ async fn summary_model_cannot_fit_leaves_execution_uncommitted() {
     );
     assert!(result.event_history.iter().any(|event| matches!(
         event,
-        RuntimeEvent::CompactionFailed { error } if error.contains("no complete-message surface span")
+        RuntimeEvent::CompactionFailed { error, .. } if error.contains("no complete historical prefix")
     )));
     assert!(
         !result
@@ -2371,7 +2328,7 @@ async fn failing_status_module_is_quarantined_not_preparation_failure() {
         result
             .event_history
             .iter()
-            .all(|event| !matches!(event, RuntimeEvent::CompactionStarted)),
+            .all(|event| !matches!(event, RuntimeEvent::CompactionStarted { .. })),
         "module failure never starts a compaction pipeline"
     );
     assert!(matches!(
@@ -2382,7 +2339,7 @@ async fn failing_status_module_is_quarantined_not_preparation_failure() {
         result
             .event_history
             .iter()
-            .all(|event| !matches!(event, RuntimeEvent::CompactionStarted)),
+            .all(|event| !matches!(event, RuntimeEvent::CompactionStarted { .. })),
         "module failure never creates an alternate compaction"
     );
 }
@@ -2436,7 +2393,7 @@ async fn proactive_compaction_failure_is_context_compaction_failed() {
         result
             .event_history
             .iter()
-            .any(|event| matches!(event, RuntimeEvent::CompactionStarted)),
+            .any(|event| matches!(event, RuntimeEvent::CompactionStarted { .. })),
         "a proactive compaction pipeline must actually start"
     );
     assert!(
@@ -2605,7 +2562,7 @@ async fn cancel_before_proactive_compaction() {
         !result
             .event_history
             .iter()
-            .any(|event| matches!(event, RuntimeEvent::CompactionStarted)),
+            .any(|event| matches!(event, RuntimeEvent::CompactionStarted { .. })),
         "no compaction may begin after cancellation"
     );
     assert_no_compaction_committed(&result);
@@ -2708,7 +2665,7 @@ async fn continuation_is_preserved_without_compaction() {
             !result
                 .event_history
                 .iter()
-                .any(|event| matches!(event, RuntimeEvent::CompactionStarted)),
+                .any(|event| matches!(event, RuntimeEvent::CompactionStarted { .. })),
             "no compaction below the threshold"
         );
         assert_eq!(requests.len(), 2);
@@ -2737,8 +2694,8 @@ async fn continuation_is_invalidated_by_compaction() {
         // The continuation-owning turn was fully retired into the summary:
         // the projected request contains no literal part of it.
         assert!(requests[1].messages.iter().any(|message| matches!(
-            message.as_canonical(),
-            Some(MessageBlock::User(user)) if user.kind.is_compaction_summary()
+            message,
+            ModelInputMessage::Derived(derived) if derived.transformations.contains(&rustx::model::projected::SemanticTransformation::Summary)
         )));
         assert!(
             !requests[1].messages.iter().any(|message| matches!(
@@ -2845,8 +2802,8 @@ async fn model_backed_summarizer_does_not_contaminate_the_execution() {
     // The retry request carries the summary projection and no continuation.
     assert_eq!(requests[2].continuation, None);
     assert!(matches!(
-        requests[2].messages[0].as_canonical(),
-        Some(MessageBlock::User(user)) if user.kind.is_compaction_summary()
+        requests[2].messages[0],
+        ModelInputMessage::Derived(ref message) if message.transformations.contains(&rustx::model::projected::SemanticTransformation::Summary)
     ));
     assert_single_terminal(&result.event_history);
     assert_outcome(
@@ -2914,7 +2871,7 @@ async fn m4_projection_contains_drained_batch_before_request() {
         !result
             .event_history
             .iter()
-            .any(|event| matches!(event, RuntimeEvent::CompactionStarted)),
+            .any(|event| matches!(event, RuntimeEvent::CompactionStarted { .. })),
         "no compaction below the threshold"
     );
     // Canonical history contains the distinct inbound messages.
@@ -3003,7 +2960,7 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
         result
             .event_history
             .iter()
-            .filter(|event| matches!(event, RuntimeEvent::CompactionStarted))
+            .filter(|event| matches!(event, RuntimeEvent::CompactionStarted { .. }))
             .count(),
         1,
         "the drained batch must cross the compaction threshold exactly once"
@@ -3023,7 +2980,6 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
             assistant_message_id(1).to_string(),
             "msg-inbound-a".to_owned(),
             "msg-inbound-b".to_owned(),
-            summary_id(1).to_string(),
             "rustx-context-attempt-1-turn-2-4".to_owned(),
             assistant_message_id(2).to_string(),
         ],
@@ -3044,7 +3000,6 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
     assert_eq!(
         request_ids,
         vec![
-            summary_id(1).to_string(),
             "msg-inbound-a".to_owned(),
             "msg-inbound-b".to_owned(),
             "rustx-context-attempt-1-turn-2-4".to_owned(),
@@ -3092,9 +3047,9 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
     assert!(
         matches!(
             committed_summary(&result),
-            UserMessageBlock {
+            rustx::model::projected::ProjectedMessage::User {
                 source: UserSource::Runtime,
-                kind: InboundKind::CompactionSummary(_),
+                kind: rustx::model::projected::ProjectedUserKind::CompactionContext,
                 timestamp: None,
                 ..
             }
@@ -3179,7 +3134,7 @@ async fn m4_drain_retains_continuation_without_compaction() {
         !result
             .event_history
             .iter()
-            .any(|event| matches!(event, RuntimeEvent::CompactionStarted)),
+            .any(|event| matches!(event, RuntimeEvent::CompactionStarted { .. })),
         "no compaction below the threshold"
     );
     let requests = model.requests();
@@ -3196,4 +3151,107 @@ async fn m4_drain_retains_continuation_without_compaction() {
             .any(|block| matches!(block.as_canonical(), Some(MessageBlock::User(user)) if user.id == MessageId::new("msg-inbound-a"))),
         "the drained message is part of the projection"
     );
+}
+
+/// The SQLite hook arms only after COMMIT; the first hot read then fails.
+/// Reconciliation must either install the current projection or stop before start.
+#[tokio::test]
+async fn committed_checkpoint_hot_reconciliation_never_starts_from_stale_input() {
+    use rustx::durable::sqlite::CompactionFaultOperation;
+    for (stage, recovered) in [
+        (CompactionFaultOperation::AfterCommitOneHotReadFailure, true),
+        (
+            CompactionFaultOperation::AfterCommitTwoHotReadFailures,
+            false,
+        ),
+    ] {
+        let model = fake_model(vec![vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(text_delta(0, "answer")),
+            FakeStep::Emit(done(ModelFinishReason::Stop)),
+        ]]);
+        let summarizer = Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
+            "new projection".into(),
+        )]));
+        let context = ContextRuntime::with_scripted_summarizer(
+            engine(200, 0, 5, weighted(100, 10, 0)),
+            summarizer.clone(),
+            None,
+            CompactionBudgets::new(1, 1, 1_000_000),
+        );
+        let sqlite =
+            Arc::new(rustx::durable::SqliteConversationStore::in_memory(conversation()).unwrap());
+        let store = sqlite.clone() as Arc<dyn rustx::durable::ConversationStore>;
+        let tool_runtime = common::tool_runtime_with_store(
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            Some(store.clone()),
+        );
+        sqlite.arm_compaction_fault_script([stage]);
+        let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let result = common::durable_agent_result(
+            AgentExecution::new(
+                request(
+                    "attempt-1",
+                    vec![user("old-a", "A"), user("old-b", "B")],
+                    1,
+                    &model,
+                ),
+                capability.into_lease(),
+                &cancellation,
+                crate::scripted_suites::support::default_execution_policy(),
+                context,
+                &tool_runtime,
+                rustx::agent::AttemptLifecycle::inert(),
+            )
+            .unwrap()
+            .run()
+            .await,
+            store.as_ref(),
+        );
+        assert_eq!(
+            summarizer.requests().len(),
+            1,
+            "reconciliation never regenerates a summary"
+        );
+        assert_eq!(result.projections.len(), 1);
+        assert_eq!(
+            result
+                .event_history
+                .iter()
+                .filter(|event| matches!(event, RuntimeEvent::CompactionCompleted { .. }))
+                .count(),
+            1
+        );
+        assert!(
+            !result
+                .event_history
+                .iter()
+                .any(|event| matches!(event, RuntimeEvent::CompactionFailed { .. })),
+            "confirmed commit cannot produce contradictory failure"
+        );
+        assert_eq!(model.requests().len(), usize::from(recovered));
+        if recovered {
+            assert!(matches!(
+                model.requests()[0].messages[0],
+                ModelInputMessage::Derived(_)
+            ));
+            assert_eq!(
+                result.snapshot_history()[0].history_cut.checkpoint_id,
+                result
+                    .projections
+                    .last()
+                    .map(|p| p.candidate.checkpoint_id.clone())
+            );
+        } else {
+            assert!(result.durable_failure.is_some());
+            assert!(result.snapshot_history().is_empty());
+            assert!(
+                !result
+                    .event_history
+                    .iter()
+                    .any(|event| matches!(event, RuntimeEvent::ModelRequestStarted { .. }))
+            );
+        }
+    }
 }

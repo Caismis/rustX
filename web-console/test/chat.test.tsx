@@ -6,7 +6,8 @@ import { RuntimeFacts as OtherActivity } from '../src/app/agent/Activity';
 import { AgentCard } from '../src/app/components/ActivityCards';
 import type { ComponentProps } from 'react';
 function RuntimeFacts(props: ComponentProps<typeof OtherActivity>) { return <><OtherActivity {...props}/>{props.snapshot.agents?.map(agent => <AgentCard key={agent.agent_id} agent={agent} client={props.client} sessionId={props.sessionId}/>)}</>; }
-import { snapshot } from './fixture';
+import { snapshot, projectionHead } from './fixture';
+import { ProjectionSummary } from '../src/app/agent/ContextSeat';
 afterEach(cleanup);
 const rich = '## Answer\n\n| Key | Value |\n| --- | --- |\n| one | two |\n\n- **Strong**\n\n```rust\nfn main() {}\n```\n\n$x^2$';
 it('Chat uses the same rich Markdown through streaming and canonical settlement exactly once', () => {
@@ -143,28 +144,19 @@ it('a finite Job retains its expanded output across proactive terminal snapshot 
   expect(ui.getByLabelText('Tool status').textContent).toBe('success');
 });
 
-it('compaction summaries keep one native transcript position and disclose Markdown like Harness', () => {
-  const s = snapshot();
-  const summary = { role: 'user' as const, id: 'summary', source: 'runtime' as const,
-    kind: { compaction_summary: {} }, content: [{ type: 'text' as const, text: '## Preserved context\n\nNative summary facts.' }] };
-  s.messages = [summary];
-  s.transcript = { entries: [
-    { cursor: '1', item: { type: 'message', message: { role: 'user', id: 'before', source: 'human', content: [{ type: 'text', text: 'Earlier question' }] } } },
-    { cursor: '2', compaction: { retired_messages: '26', retired_tokens: '9183', manual: true }, item: { type: 'message', message: summary } },
-    { cursor: '3', item: { type: 'message', message: { role: 'user', id: 'after', source: 'human', content: [{ type: 'text', text: 'Next question' }] } } },
-  ] };
-  const ui = render(<AgentTranscript snapshot={s}/>);
-  expect([...ui.container.querySelectorAll('[data-chat-anchor-key]')].map(node => node.getAttribute('data-chat-anchor-key')))
-    .toEqual(['message:before', 'message:summary', 'message:after']);
-  const marker = ui.getByRole('button', { name: 'compact · Compacted 26 history items (~9183 tokens)' });
-  expect(marker.getAttribute('aria-expanded')).toBe('false');
-  expect(ui.queryByRole('heading', { name: 'Preserved context' })).toBeNull();
-  expect(ui.container.textContent).not.toContain('compaction_summary');
+it('projected summary disclosure cannot acquire a canonical transcript position or execution owner',()=>{
+  const s=snapshot();
+  s.transcript={entries:[
+    {cursor:'1',item:{type:'message',message:{role:'user',id:'before',source:'human',content:[{type:'text',text:'Earlier question'}]}}},
+    {cursor:'2',item:{type:'message',message:{role:'user',id:'after',source:'human',content:[{type:'text',text:'Next question'}]}}},
+  ]};
+  const ui=render(<><AgentTranscript snapshot={s}/><ProjectionSummary head={projectionHead()}/></>);
+  expect([...ui.container.querySelectorAll('[data-chat-anchor-key]')].map(node=>node.getAttribute('data-chat-anchor-key'))).toEqual(['message:before','message:after']);
+  const marker=ui.getByRole('button',{name:'Compacted model context · Projection 1 · canonical frontier 100'});
+  expect(ui.queryByRole('heading',{name:'Preserved context'})).toBeNull();
   fireEvent.click(marker);
-  expect(marker.getAttribute('aria-expanded')).toBe('true');
-  expect(ui.getAllByRole('heading', { name: 'Preserved context' })).toHaveLength(1);
-  fireEvent.click(marker);
-  expect(ui.queryByRole('heading', { name: 'Preserved context' })).toBeNull();
+  expect(ui.getAllByRole('heading',{name:'Preserved context'})).toHaveLength(1);
+  expect(ui.container.querySelector('[data-projection-checkpoint]')?.getAttribute('data-turn-process-owner')).toBeNull();
 });
 
 it.each(['cancelled', 'failed'] as const)('native %s keeps released partial prose without recovery JSON or completed-response actions', outcome => {

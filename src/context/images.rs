@@ -32,16 +32,16 @@ impl ImageEstimator {
         }
         let mut cost = 0_u64;
         for message in &rendered {
-            match message.as_canonical() {
-                Some(MessageBlock::User(user)) => {
-                    for block in &user.content {
+            match message.view() {
+                crate::model::projected::ModelMessageView::User(content) => {
+                    for block in content {
                         if let UserContentBlock::Image(image) = block {
                             cost = cost.saturating_add(costs[&image.artifact_id]);
                         }
                     }
                 }
-                Some(MessageBlock::Tool(tool)) => {
-                    for block in &tool.result.content {
+                crate::model::projected::ModelMessageView::Tool(_, result) => {
+                    for block in &result.content {
                         if let ToolResultContent::Image(image) = block {
                             cost = cost.saturating_add(costs[&image.artifact_id]);
                         }
@@ -65,13 +65,49 @@ impl TokenEstimator for ImageEstimator {
             .estimate_input(&rendered, prompt, tools)
             .saturating_add(cost)
     }
+    fn estimate_frozen_request(&self, request: &crate::model::ModelRequest) -> u64 {
+        use crate::model::projected::ModelMessageView;
+        let mut cost = 0u64;
+        for message in &request.messages {
+            let references: Vec<_> = match message.view() {
+                ModelMessageView::User(content) => content
+                    .iter()
+                    .filter_map(|block| match block {
+                        UserContentBlock::Image(image) => Some(image),
+                        _ => None,
+                    })
+                    .collect(),
+                ModelMessageView::Tool(_, result) => result
+                    .content
+                    .iter()
+                    .filter_map(|block| match block {
+                        ToolResultContent::Image(image) => Some(image),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => vec![],
+            };
+            for image in references {
+                let Some(bytes) = request.images.get(&image.artifact_id) else {
+                    return u64::MAX;
+                };
+                let Ok(measurement) = crate::model::images::measure_png(bytes) else {
+                    return u64::MAX;
+                };
+                cost = cost.saturating_add(measurement.input_tokens());
+            }
+        }
+        self.inner
+            .estimate_frozen_request(request)
+            .saturating_add(cost)
+    }
     fn estimate_conversation_input(&self, messages: &[MessageBlock]) -> u64 {
         let (rendered, cost) = self.projected(&canonical_input(messages));
         let canonical = rendered
             .into_iter()
             .filter_map(|m| match m {
                 ModelInputMessage::Canonical(m) => Some(m),
-                ModelInputMessage::RequestOnly(_) => None,
+                ModelInputMessage::RequestOnly(_) | ModelInputMessage::Derived(_) => None,
             })
             .collect::<Vec<_>>();
         self.inner
@@ -163,8 +199,13 @@ mod tests {
                 engine.estimate_model_input(&canonical_input(&canonical), "", &[]),
                 cost
             );
-            let state = crate::conversation::ConversationState::from_messages(canonical).unwrap();
-            let projection = engine.build_projection(&state, &[], None, "").unwrap();
+            let projection = engine.build_projection_input(
+                crate::conversation::SurfaceRevision::new(canonical.len() as u64),
+                canonical_input(&canonical),
+                &[],
+                None,
+                "",
+            );
             assert_eq!(projection.estimated_input.input_tokens, cost);
             assert_eq!(engine.should_compact(&projection, 1).unwrap(), size == 2048);
             assert_eq!(
@@ -250,5 +291,28 @@ mod tests {
             .unwrap()[&crate::runtime::ArtifactId::new("artifact_1")],
             bytes
         );
+    }
+    #[test]
+    fn frozen_image_price_requires_no_live_artifact_read() {
+        let root = tempfile::tempdir().unwrap();
+        let estimator = ImageEstimator {
+            inner: Arc::new(DefaultTokenEstimator),
+            artifacts: ArtifactStore::new(ConversationId::generate(), root.path()).unwrap(),
+            enabled: true,
+        };
+        let id = crate::runtime::identity::ArtifactId::new("missing-live-artifact");
+        let mut request = crate::scripted_suites::common::simple_request(
+            crate::model::ModelProtocol::OpenAiChatCompletions,
+            "test",
+            "",
+        );
+        request.messages = canonical_input(&[image(id.clone(), 0)]);
+        request.images.insert(id, png(1, 1));
+        assert_eq!(
+            estimator.estimate_input(&request.messages, "", &[]),
+            u64::MAX
+        );
+        let frozen = estimator.estimate_frozen_request(&request);
+        assert!(frozen > 1_000 && frozen < u64::MAX);
     }
 }

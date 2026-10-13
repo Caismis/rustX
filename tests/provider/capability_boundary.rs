@@ -603,7 +603,8 @@ async fn file_tool_results_are_unsupported() {
         .find_map(|message| match message {
             ModelInputMessage::Canonical(MessageBlock::Tool(tool_message)) => Some(tool_message),
             ModelInputMessage::Canonical(MessageBlock::User(_) | MessageBlock::Assistant(_))
-            | ModelInputMessage::RequestOnly(_) => None,
+            | ModelInputMessage::RequestOnly(_)
+            | ModelInputMessage::Derived(_) => None,
         })
         .expect("tool message expected");
     tool_message.result.content = vec![ToolResultContent::File(

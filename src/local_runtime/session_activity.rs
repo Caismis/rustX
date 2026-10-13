@@ -116,9 +116,7 @@ mod tests {
             assert_eq!(latest, Some(time));
         }
         message.source = UserSource::Human;
-        message.kind = InboundKind::CompactionSummary(
-            crate::message::types::CompactionSummaryMetadata::new(vec![], vec![]).unwrap(),
-        );
+        message.kind = InboundKind::Context(crate::message::types::ContextKind::NativeEnvironment);
         observe(message.clone(), &mut latest);
         assert_eq!(latest, Some(time));
         message.kind = InboundKind::Message;

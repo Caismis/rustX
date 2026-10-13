@@ -50,6 +50,7 @@ pub enum RuntimeClientEvent {
     /// Native derived read domains at a committed journal cut. Published only
     /// when durable facts change, never for publication text/argument suffixes.
     ReadDomainsUpdated {
+        projection_head: Option<super::snapshot::RuntimeClientProjectionHeadView>,
         transcript: super::snapshot::RuntimeClientTranscriptPage,
         occupancy: Option<crate::context::occupancy::ContextOccupancy>,
         todos: Option<crate::tools::todo::TodoSnapshot>,
@@ -173,11 +174,11 @@ pub enum RuntimeClientEvent {
         /// The runtime-owned failure diagnostic.
         error: String,
     },
-    /// A canonical runtime summary and Surface replacement were committed.
+    /// A durable typed checkpoint and projection activation were committed.
     ///
     /// This is the semantic completion fact for clients: the semantic
     /// compaction commit already happened, and the carried snapshot metadata
-    /// is sufficient to observe Surface advancement and token-measurement
+    /// is sufficient to observe projection advancement and token-measurement
     /// provenance without exposing summary text or provider credentials.
     ContextCompacted {
         /// The owning attempt for automatic compaction; absent for manual

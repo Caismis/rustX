@@ -539,17 +539,18 @@ verbatim). Protocols without reconstructable state simply carry `None` —
 nothing is fabricated, and a model that cannot continue without state
 fails explicitly.
 
-The context path is mandatory: every model request carries the finite
-projection of the current Surface (complete canonical messages in exact
-order), the rustX-rendered Effective System Prompt, and a frozen
-RequestSnapshot. Agent Status is a canonical User context fact admitted before
-the snapshot. Skill guidance is request-time native system capability guidance
-rendered from the attempt's immutable capability snapshot; it is not a
-canonical User fact or a hidden adapter attachment.
-A successful compaction appends one runtime User summary and applies one
-Surface Replace, establishing a new revision and invalidating the pending
-continuation; the continuation-owning turn is retired completely, so an old
-opaque provider continuation is never paired with a new projection.
+Every actual model request freezes the active typed historical checkpoint,
+eligible Tail strictly after its base through the pre-start cut, core-owned
+Fresh Inbound/Context/carryover, exact semantic media transformations, invocation
+and Effective System Prompt in a RequestSnapshot. Ordinary retries reuse the
+latest immutable semantic generation input. Authorized correction or compaction
+advances that version; later transient retries cannot revert it.
+
+Successful default Summary compaction clears the active primary continuation
+unconditionally and compiles the complete new history projection. Continuation
+otherwise refers only to actual accepted Assistant output of the previous
+request. Canonical execution facts and historical projection content remain
+independent authorities.
 Issue #61 extracted the enclosing `ConversationRuntime` coordinator from the
 Runtime Client boundary (see `docs/architecture.md`); the loop itself is
 unchanged by the extraction.

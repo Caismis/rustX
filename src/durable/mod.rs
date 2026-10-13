@@ -70,15 +70,16 @@
 
 pub mod inbox;
 pub mod presentation;
+pub mod projection;
 pub mod reading;
 pub mod sqlite;
 
 pub use inbox::{
-    AcceptedInbound, CanonicalMessagePage, CompactionCommitInput, ContributionEmissionLookup,
-    ContributionEmissionRecord, ConversationInboundCapability, ConversationInteractionAudit,
-    ConversationStore, ConversationStoreBinding, ConversationStoreError, DurableConversationHead,
-    EventPage, InboundDraft, LineageSeed, ModelTurnStartCommit, ModelTurnStartCommitDisposition,
-    PendingBatch, PendingInboundItem, RequestSnapshotPage, SurfaceUserMessageBoundary,
+    AcceptedInbound, CanonicalMessagePage, ContributionEmissionLookup, ContributionEmissionRecord,
+    ConversationInboundCapability, ConversationInteractionAudit, ConversationStore,
+    ConversationStoreBinding, ConversationStoreError, DurableConversationHead, EventPage,
+    InboundDraft, LineageSeed, ModelTurnStartCommit, ModelTurnStartCommitDisposition, PendingBatch,
+    PendingInboundItem, RequestSnapshotPage, SurfaceUserMessageBoundary,
     SurfaceUserMessageBoundaryPage, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT, TRANSCRIPT_PAGE_LIMIT_MAX,
     TranscriptCursor, TranscriptEntry, TranscriptItem, TranscriptPage,
     interaction_audit_capability,

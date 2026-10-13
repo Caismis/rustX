@@ -11,7 +11,7 @@ export function AssistantMessage({ label, children }: { label: string; children:
  return <article aria-label={label} data-assistant-message>{children}</article>;
 }
 
-/** Harness's in-transcript checkpoint disclosure; content comes from the native Ledger. */
+/** Checkpoint disclosure; content and provenance come from the native projection read domain. */
 export function CompactionMessage({ title, summary, preview, description, children }: { title: string; summary: string; preview: string; description: string; children: ReactNode }) {
  const [open, setOpen] = useState(false);
  return <div className={css.compactionRow} data-compaction-marker="">

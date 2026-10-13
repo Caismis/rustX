@@ -912,6 +912,41 @@ impl SessionController {
         .await
     }
     #[allow(clippy::too_many_lines)] // One prepare/copy/publication transaction.
+    /// Fork through a historical activation even when another activation has
+    /// the same canonical frontier. Reuses the one native lineage lifecycle.
+    /// # Errors
+    /// Rejects unavailable ownership or missing/ineligible historical dependencies.
+    pub async fn fork_projection(
+        &self,
+        id: &SessionId,
+        node: Option<&SessionNodeId>,
+        ledger: crate::context::resources::LedgerFrontier,
+        activation: crate::context::checkpoint::ProjectionActivationId,
+    ) -> Result<SessionTransitionResult, SessionError> {
+        let _preparation = self.preparation.lock().await;
+        let access = self.acquire_session(id, node).await?;
+        let snapshot = self.catalog.lock().await.clone();
+        let path = snapshot.database_path(id, &access.node.conversation_id);
+        let store = crate::durable::SqliteConversationStore::open_existing(
+            access.node.conversation_id.clone(),
+            &path,
+        )
+        .map_err(SessionError::Store)?;
+        let source = store
+            .read_projection_lineage_cut(ledger, activation)
+            .map_err(SessionError::Store)?;
+        self.copy_admitted_lineage(
+            id,
+            &access.node,
+            &access.settings,
+            &source,
+            None,
+            false,
+            super::session::LineageSide::Before,
+        )
+        .await
+    }
+
     pub(crate) async fn copy_lineage(
         &self,
         id: &SessionId,

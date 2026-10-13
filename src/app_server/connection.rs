@@ -567,6 +567,7 @@ impl AppServerConnection {
                 | Method::SessionName { .. }
                 | Method::SessionDelete { .. }
                 | Method::SessionFork { .. }
+                | Method::SessionForkProjection { .. }
                 | Method::SessionBranch { .. }
                 | Method::SessionRecoverDeletion { .. }
                 | Method::SourcesWrite { .. }
@@ -947,6 +948,17 @@ impl AppServerConnection {
                     next_offset: page.next_offset,
                 })
             }
+            Method::SessionForkProjection {
+                session_id,
+                node_id,
+                ledger,
+                activation,
+            } => self
+                .sessions
+                .fork_projection(&session_id, node_id.as_ref(), ledger, activation)
+                .await
+                .map(transition)
+                .map_err(session_error),
             Method::SessionFork {
                 session_id,
                 node_id,
@@ -1339,6 +1351,8 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
         | Method::SessionUploadPrepare { target, .. }
         | Method::SessionUploadStatus { target, .. }
         | Method::Trace { target, .. }
+        | Method::Projections { target, .. }
+        | Method::ProjectionDetail { target, .. }
         | Method::TraceDetail { target, .. }
         | Method::TraceLocateTool { target, .. }
         | Method::Transcript { target, .. }
@@ -1444,6 +1458,15 @@ async fn dispatch_runtime(
             ),
         }),
         Method::Capability { target: _ } => native_result(authority.capability()),
+        Method::Projections { after, limit, .. } => {
+            native_result(authority.projection_page(after, limit))
+        }
+        Method::ProjectionDetail {
+            checkpoint_id,
+            offset,
+            limit,
+            ..
+        } => native_result(authority.projection_detail(checkpoint_id, offset, limit)),
         Method::Trace {
             target: _,
             records,
@@ -1698,6 +1721,10 @@ fn native_result(
             MethodResult::Capabilities { capabilities }
         }
         RuntimeClientResult::ContextCompacted { context } => MethodResult::Context { context },
+        RuntimeClientResult::ProjectionPage { page } => MethodResult::Projections { page },
+        RuntimeClientResult::ProjectionDetail { detail } => {
+            MethodResult::ProjectionDetail { detail }
+        }
         RuntimeClientResult::TracePage { page } => MethodResult::Trace { page },
         RuntimeClientResult::TraceDetail { detail } => MethodResult::TraceDetail { detail },
         RuntimeClientResult::TraceToolLocation { location } => {

@@ -147,6 +147,14 @@ export function renderTranscript(
     statuses: agentStatusPlacement(state),
   };
   const blocks: TranscriptBlock[] = [];
+  const projection = state.context.projection_head;
+  if (projection) {
+    const source = projection.destination_installation == null ? 'Local model projection' : 'Inherited model projection';
+    blocks.push({ kind: 'text', key: `projection:${projection.checkpoint_id}:provenance`,
+      text: role.meta(`${source} ${projection.activation_id} · canonical frontier ${projection.base_frontier} · origin ${projection.origin.conversation_id}/${projection.origin.activation}`) });
+    if (projection.summary_preview?.text) blocks.push({ kind: 'text', key: `projection:${projection.checkpoint_id}:summary`, text: projection.summary_preview.text });
+    if (projection.summary_preview?.truncated) blocks.push({kind:'text',key:`projection:${projection.checkpoint_id}:bounded`,text:role.meta('Bounded projection summary preview')});
+  }
   for (const entry of state.transcript) {
     blocks.push(...renderEntryBlocks(entry, context));
     if (entry.kind === "committed" && entry.message.role === "assistant") {
@@ -454,9 +462,6 @@ function renderCommitted(
       const labels: string[] = [];
       if (message.source !== "human") {
         labels.push(sourceLabel(message.source));
-      }
-      if (typeof message.kind === "object" && "compaction_summary" in message.kind) {
-        labels.push("compaction summary");
       }
       const body = message.content
         .map((block) => {

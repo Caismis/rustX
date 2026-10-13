@@ -1,27 +1,7 @@
-//! The Conversation Surface: the sole authority for current active
-//! model-visible message identity, order, and visibility.
-//!
-//! The Surface holds only identities, never message bodies: bodies live in
-//! the [`MessageLedger`](crate::conversation::ledger::MessageLedger) and are
-//! resolved by keyed lookup after the Surface has answered *which* messages
-//! are active and in *what* order.
-//!
-//! The mutation vocabulary is deliberately minimal — there is no generic
-//! insert/move/delete/reorder/patch operation:
-//!
-//! ```text
-//! Append  { message_id }
-//! Replace { start, end, replacement }
-//! ```
-//!
-//! Every accepted mutation produces the deterministic next
-//! [`SurfaceRevision`]. Revisions form their own identity domain, distinct
-//! from `MessageId`, `AttemptId`, `RuntimeClientCursor`, `InboundSequence`,
-//! the Event Journal sequence, and `CapabilityRevision`. The ordered
-//! operation log is retained so any historical revision reconstructs its
-//! exact active ordered `MessageId` list **without touching the Ledger**.
+//! Bounded canonical-message working-set cache and ordinary append history.
+//! Historical model selection belongs to durable Projection Checkpoints and the
+//! Context compiler. This cache cannot replace, retire or synthesize messages.
 
-use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -91,8 +71,8 @@ impl core::fmt::Display for SurfaceRevision {
 /// The complete mutation vocabulary of the Conversation Surface.
 ///
 /// There is intentionally no insert, move, delete, reorder, or patch
-/// operation: an ordinary commit appends, and compaction replaces one
-/// structurally valid span with one canonical summary message.
+/// operation: this view records ordinary canonical append membership only.
+/// Compaction selection lives in typed checkpoints.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum SurfaceOp {
@@ -100,19 +80,6 @@ pub enum SurfaceOp {
     Append {
         /// The appended message identity.
         message_id: MessageId,
-    },
-    /// Replaces the **inclusive** active span `[start ..= end]` with one
-    /// canonical replacement message, at the position `start` occupied.
-    ///
-    /// Both endpoints are part of the replaced span; `start == end` replaces
-    /// exactly one message.
-    Replace {
-        /// The first replaced active message, inclusive.
-        start: MessageId,
-        /// The last replaced active message, inclusive.
-        end: MessageId,
-        /// The canonical replacement message.
-        replacement: MessageId,
     },
 }
 
@@ -127,36 +94,24 @@ pub struct ConversationSurfaceHead {
     pub revision: SurfaceRevision,
     /// The compaction generation represented by this head.
     pub compaction_generation: u64,
-    /// Active canonical message identities in model-visible order.
+    /// Canonical message identities in working-set cache order.
     pub active_message_ids: Vec<MessageId>,
 }
 
 impl SurfaceOp {
     /// Every canonical identity this operation names, in a stable order.
     ///
-    /// A lineage copy needs this: an operation history can only be replayed
-    /// against a Ledger that carries every message the history mentions, and
-    /// the identities a `Replace` names are exactly the provenance that
-    /// distinguishes "the summary was always there" from "the summary
-    /// replaced these facts".
+    /// Lineage replay resolves each append against its immutable Ledger dependency.
     #[must_use]
     pub fn message_ids(&self) -> Vec<&MessageId> {
         match self {
             Self::Append { message_id } => vec![message_id],
-            Self::Replace {
-                start,
-                end,
-                replacement,
-            } => vec![start, end, replacement],
         }
     }
 
     /// The one canonical identity this operation brings onto the Surface.
     ///
-    /// Every operation in the vocabulary introduces exactly one: an append
-    /// introduces the message it appends, and a compaction introduces its
-    /// summary. The other identities a `Replace` names are its span, which
-    /// earlier operations introduced and this one retires.
+    /// Each append introduces exactly the message it names.
     ///
     /// This is the pairing between the two durable orders. A canonical row
     /// and the operation that introduces it are committed in the same
@@ -166,7 +121,6 @@ impl SurfaceOp {
     pub const fn introduces(&self) -> &MessageId {
         match self {
             Self::Append { message_id } => message_id,
-            Self::Replace { replacement, .. } => replacement,
         }
     }
 }
@@ -192,99 +146,28 @@ pub fn apply_surface_op(active: &mut Vec<MessageId>, operation: &SurfaceOp) -> R
             }
             active.push(message_id.clone());
         }
-        SurfaceOp::Replace {
-            start,
-            end,
-            replacement,
-        } => {
-            let from = active
-                .iter()
-                .position(|id| id == start)
-                .ok_or_else(|| format!("Surface Replace start {start} is not active"))?;
-            let to = active
-                .iter()
-                .position(|id| id == end)
-                .ok_or_else(|| format!("Surface Replace end {end} is not active"))?;
-            if to < from || active.contains(replacement) {
-                return Err("Surface Replace has an invalid span or active replacement".to_owned());
-            }
-            active.splice(from..=to, [replacement.clone()]);
-        }
     }
     Ok(())
 }
 
-/// One inclusive active span of the Conversation Surface.
-///
-/// The convention is frozen and tested: `[start ..= end]`, both endpoints
-/// included, `start == end` selecting exactly one message.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SurfaceSpan {
-    /// The first message of the span, inclusive.
-    pub start: MessageId,
-    /// The last message of the span, inclusive.
-    pub end: MessageId,
-}
-
-impl SurfaceSpan {
-    /// Creates an inclusive span.
-    #[must_use]
-    pub const fn new(start: MessageId, end: MessageId) -> Self {
-        Self { start, end }
-    }
-}
-
-/// A Conversation Surface contract violation.
-///
-/// Every variant is a rejected mutation: the Surface is never left partly
-/// mutated, because validation completes before any state changes.
+/// An ordinary canonical-cache append or historical-read violation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SurfaceError {
-    /// The appended (or replacement) identity is already active.
     AlreadyActive(MessageId),
-    /// The span endpoint is not an active message of the current Surface.
-    NotActive(MessageId),
-    /// The span endpoints are reversed: `end` precedes `start`.
-    ReversedSpan {
-        /// The requested first endpoint.
-        start: MessageId,
-        /// The requested last endpoint, which precedes `start`.
-        end: MessageId,
-    },
-    /// The requested revision does not exist in this Surface's history.
     UnknownRevision(SurfaceRevision),
-    /// The operation was validated against a Surface revision that is no
-    /// longer current.
-    StaleRevision {
-        /// The revision the caller validated against.
-        expected: SurfaceRevision,
-        /// The Surface's actual current revision.
-        actual: SurfaceRevision,
-    },
 }
-
 impl core::fmt::Display for SurfaceError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::AlreadyActive(id) => {
-                write!(f, "message {id} is already active on the surface")
+                write!(f, "message {id} is already in the canonical working set")
             }
-            Self::NotActive(id) => write!(f, "message {id} is not active on the surface"),
-            Self::ReversedSpan { start, end } => write!(
-                f,
-                "surface span [{start} ..= {end}] is reversed: {end} precedes {start}"
-            ),
             Self::UnknownRevision(revision) => {
-                write!(f, "surface revision {revision} does not exist")
+                write!(f, "canonical cache revision {revision} is not retained")
             }
-            Self::StaleRevision { expected, actual } => write!(
-                f,
-                "surface revision {expected} is stale; the current revision is {actual}"
-            ),
         }
     }
 }
-
 impl std::error::Error for SurfaceError {}
 
 /// Deterministic instrumentation for Conversation Surface reads.
@@ -337,10 +220,10 @@ impl SurfaceAccess {
     }
 }
 
-/// The active model-visible order of one conversation.
+/// The bounded canonical-message working set of one conversation.
 ///
-/// The Surface owns identity/order/visibility. It carries no visibility
-/// flags on Ledger records (there are none) and no message bodies.
+/// This cache owns no model projection; typed checkpoint compilation controls
+/// historical inclusion, exclusion and occurrence order.
 #[derive(Debug, Default)]
 pub struct ConversationSurface {
     /// The current active ordered message identities.
@@ -352,7 +235,7 @@ pub struct ConversationSurface {
     history_base_revision: SurfaceRevision,
     /// The active identity order at `history_base_revision`.
     history_base_active: Vec<MessageId>,
-    /// The number of accepted replacements, maintained as head metadata.
+    /// The installed durable projection activation, cached as head metadata.
     compaction_generation: u64,
     /// The bounded operation suffix accepted after the hot bootstrap base.
     /// The durable `ConversationStore` owns the prefix before
@@ -464,10 +347,8 @@ impl ConversationSurface {
         self.position_of(message_id).is_some()
     }
 
-    /// The number of accepted [`SurfaceOp::Replace`] operations.
-    ///
-    /// This is current Surface head metadata. It is updated when a Replace
-    /// commits and never derived by scanning historical operations.
+    /// Projection activation metadata carried by the bounded working-set cache.
+    /// It is supplied by the durable compiler and is never incremented by canonical appends.
     #[must_use]
     pub fn compaction_generation(&self) -> u64 {
         self.mark_current_head_read();
@@ -495,89 +376,6 @@ impl ConversationSurface {
         self.active.push(message_id.clone());
         self.ops.push(SurfaceOp::Append { message_id });
         self.revision = self.revision.next();
-        self.revision
-    }
-
-    /// Validates one replacement against the **current** revision without
-    /// mutating anything, returning the inclusive active index range the
-    /// span resolves to.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SurfaceError::NotActive`] for an unknown or already retired
-    /// endpoint, [`SurfaceError::ReversedSpan`] for reversed endpoints, and
-    /// [`SurfaceError::AlreadyActive`] for a replacement identity that is
-    /// already active.
-    pub fn validate_replace(
-        &self,
-        span: &SurfaceSpan,
-        replacement: &MessageId,
-    ) -> Result<(usize, usize), SurfaceError> {
-        let start = self
-            .position_of(&span.start)
-            .ok_or_else(|| SurfaceError::NotActive(span.start.clone()))?;
-        let end = self
-            .position_of(&span.end)
-            .ok_or_else(|| SurfaceError::NotActive(span.end.clone()))?;
-        if end < start {
-            return Err(SurfaceError::ReversedSpan {
-                start: span.start.clone(),
-                end: span.end.clone(),
-            });
-        }
-        if self.is_active(replacement) {
-            return Err(SurfaceError::AlreadyActive(replacement.clone()));
-        }
-        Ok((start, end))
-    }
-
-    /// Replaces the inclusive active span `[span.start ..= span.end]` with
-    /// `replacement`, at the position `span.start` occupied.
-    ///
-    /// Validation completes before any mutation, so a rejected replacement
-    /// leaves the Surface exactly as it was.
-    ///
-    /// # Errors
-    ///
-    /// Returns the [`SurfaceError`] of the first violation.
-    pub fn replace(
-        &mut self,
-        span: &SurfaceSpan,
-        replacement: MessageId,
-    ) -> Result<SurfaceRevision, SurfaceError> {
-        let (start, end) = self.validate_replace(span, &replacement)?;
-        Ok(self.replace_after_validation(span, replacement, start, end))
-    }
-
-    /// Applies a replacement after all recoverable validation has completed.
-    ///
-    /// This is intentionally infallible: `ConversationState` uses it only
-    /// after validating the current revision, endpoints, identity, and
-    /// active structural index. Once that validation has run under exclusive
-    /// ownership, a normal recoverable Surface error cannot occur after a
-    /// Ledger append.
-    pub(crate) fn replace_after_validation(
-        &mut self,
-        span: &SurfaceSpan,
-        replacement: MessageId,
-        start: usize,
-        end: usize,
-    ) -> SurfaceRevision {
-        debug_assert_eq!(self.active.get(start), Some(&span.start));
-        debug_assert_eq!(self.active.get(end), Some(&span.end));
-        debug_assert!(start <= end);
-        debug_assert!(!self.is_active(&replacement));
-        self.active.splice(start..=end, [replacement.clone()]);
-        self.ops.push(SurfaceOp::Replace {
-            start: span.start.clone(),
-            end: span.end.clone(),
-            replacement,
-        });
-        self.revision = self.revision.next();
-        self.compaction_generation = self
-            .compaction_generation
-            .checked_add(1)
-            .expect("the surface compaction generation cannot overflow");
         self.revision
     }
 
@@ -610,51 +408,9 @@ impl ConversationSurface {
         for op in &self.ops[..upto] {
             match op {
                 SurfaceOp::Append { message_id } => active.push(message_id.clone()),
-                SurfaceOp::Replace {
-                    start,
-                    end,
-                    replacement,
-                } => {
-                    let (Some(from), Some(to)) = (
-                        active.iter().position(|id| id == start),
-                        active.iter().position(|id| id == end),
-                    ) else {
-                        unreachable!("an accepted replace always resolves during replay");
-                    };
-                    active.splice(from..=to, [replacement.clone()]);
-                }
             }
         }
         Ok(active)
-    }
-
-    /// Every identity retired in the bounded hot suffix that is no longer
-    /// active. Older retired identities remain a durable-store read.
-    ///
-    /// This is a diagnostic/audit accessor over Surface history; normal
-    /// projection and compaction never call it.
-    #[must_use]
-    pub fn retired(&self) -> Vec<MessageId> {
-        self.access.history_read(self.ops.len());
-        let active: BTreeSet<&MessageId> = self.active.iter().collect();
-        let mut seen = BTreeSet::new();
-        let mut retired = Vec::new();
-        for op in &self.ops {
-            let candidates = match op {
-                SurfaceOp::Append { message_id } => vec![message_id],
-                SurfaceOp::Replace {
-                    start,
-                    end,
-                    replacement,
-                } => vec![start, end, replacement],
-            };
-            for id in candidates {
-                if !active.contains(id) && seen.insert(id.clone()) {
-                    retired.push(id.clone());
-                }
-            }
-        }
-        retired
     }
 
     /// The bounded accepted operation suffix, in acceptance order.
@@ -667,219 +423,75 @@ impl ConversationSurface {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConversationSurface, SurfaceError, SurfaceOp, SurfaceRevision, SurfaceSpan};
-    use crate::runtime::identity::MessageId;
-
-    fn id(value: &str) -> MessageId {
-        MessageId::new(value)
+    use super::*;
+    fn id(s: &str) -> MessageId {
+        MessageId::new(s)
     }
-
-    fn surface(ids: &[&str]) -> ConversationSurface {
-        let mut surface = ConversationSurface::new();
-        for value in ids {
-            surface.append(id(value)).expect("append");
+    #[test]
+    fn append_order_and_contiguous_revision_are_exact() {
+        let mut cache = ConversationSurface::new();
+        assert_eq!(cache.revision(), SurfaceRevision::INITIAL);
+        for (i, s) in ["a", "b", "c"].into_iter().enumerate() {
+            assert_eq!(
+                cache.append(id(s)).unwrap(),
+                SurfaceRevision::new(i as u64 + 1)
+            );
         }
-        surface
+        assert_eq!(cache.active(), [id("a"), id("b"), id("c")]);
+        assert_eq!(
+            cache
+                .ops()
+                .iter()
+                .map(SurfaceOp::introduces)
+                .cloned()
+                .collect::<Vec<_>>(),
+            cache.active()
+        );
     }
-
-    /// The empty Surface starts at the initial revision and every accepted
-    /// operation advances it by exactly one.
     #[test]
-    fn revisions_start_at_initial_and_advance_by_one() {
-        let mut surface = ConversationSurface::new();
-        assert_eq!(surface.revision(), SurfaceRevision::INITIAL);
-        assert_eq!(surface.revision().get(), 0);
+    fn rejected_duplicate_never_advances_cache_or_history() {
+        let mut cache = ConversationSurface::new();
+        cache.append(id("a")).unwrap();
+        let head = cache.head();
         assert_eq!(
-            surface.append(id("a")).expect("append"),
-            SurfaceRevision::new(1)
+            cache.append(id("a")),
+            Err(SurfaceError::AlreadyActive(id("a")))
         );
-        assert_eq!(
-            surface.append(id("b")).expect("append"),
-            SurfaceRevision::new(2)
-        );
-        assert_eq!(surface.revision(), SurfaceRevision::new(2));
+        assert_eq!(cache.head(), head);
+        assert_eq!(cache.ops().len(), 1);
     }
-
-    /// The span convention is inclusive on both ends.
     #[test]
-    fn replace_span_is_inclusive_on_both_ends() {
-        let mut surface = surface(&["a", "b", "c", "d"]);
-        let revision = surface
-            .replace(&SurfaceSpan::new(id("a"), id("c")), id("s1"))
-            .expect("replace");
-        assert_eq!(revision, SurfaceRevision::new(5));
-        assert_eq!(surface.active(), &[id("s1"), id("d")]);
-        // start == end replaces exactly one message.
-        let mut single = surface_of(&["a", "b", "c"]);
-        single
-            .replace(&SurfaceSpan::new(id("b"), id("b")), id("s"))
-            .expect("replace one");
-        assert_eq!(single.active(), &[id("a"), id("s"), id("c")]);
-    }
-
-    fn surface_of(ids: &[&str]) -> ConversationSurface {
-        surface(ids)
-    }
-
-    /// The replacement takes the position the span's first message held.
-    #[test]
-    fn replacement_takes_the_span_start_position() {
-        let mut surface = surface(&["a", "b", "c", "d"]);
-        surface
-            .replace(&SurfaceSpan::new(id("b"), id("c")), id("s"))
-            .expect("replace");
-        assert_eq!(surface.active(), &[id("a"), id("s"), id("d")]);
-    }
-
-    /// Invalid replacements are rejected and never mutate the Surface.
-    #[test]
-    fn invalid_replacements_are_rejected_without_mutation() {
-        let mut surface = surface(&["a", "b", "c"]);
-        let before_active = surface.active().to_vec();
-        let before_revision = surface.revision();
-        let before_ops = surface.ops().to_vec();
-
+    fn append_reconstruction_preserves_earlier_canonical_prefix() {
+        let mut cache = ConversationSurface::new();
+        cache.append(id("a")).unwrap();
+        let before = cache.revision();
+        cache.append(id("b")).unwrap();
+        assert_eq!(cache.reconstruct(before).unwrap(), [id("a")]);
         assert_eq!(
-            surface
-                .replace(&SurfaceSpan::new(id("ghost"), id("c")), id("s"))
-                .expect_err("unknown start"),
-            SurfaceError::NotActive(id("ghost"))
-        );
-        assert_eq!(
-            surface
-                .replace(&SurfaceSpan::new(id("a"), id("ghost")), id("s"))
-                .expect_err("unknown end"),
-            SurfaceError::NotActive(id("ghost"))
-        );
-        assert_eq!(
-            surface
-                .replace(&SurfaceSpan::new(id("c"), id("a")), id("s"))
-                .expect_err("reversed"),
-            SurfaceError::ReversedSpan {
-                start: id("c"),
-                end: id("a"),
-            }
-        );
-        assert_eq!(
-            surface
-                .replace(&SurfaceSpan::new(id("a"), id("b")), id("c"))
-                .expect_err("replacement already active"),
-            SurfaceError::AlreadyActive(id("c"))
-        );
-        assert_eq!(surface.active(), before_active.as_slice());
-        assert_eq!(surface.revision(), before_revision);
-        assert_eq!(surface.ops(), before_ops.as_slice());
-    }
-
-    /// A retired span can never be replaced again.
-    #[test]
-    fn a_retired_span_is_no_longer_replaceable() {
-        let mut surface = surface(&["a", "b", "c", "d"]);
-        surface
-            .replace(&SurfaceSpan::new(id("a"), id("c")), id("s1"))
-            .expect("first replace");
-        assert_eq!(
-            surface
-                .replace(&SurfaceSpan::new(id("a"), id("b")), id("s2"))
-                .expect_err("retired span"),
-            SurfaceError::NotActive(id("a"))
-        );
-    }
-
-    /// An identity is never active twice.
-    #[test]
-    fn append_rejects_an_already_active_identity() {
-        let mut surface = surface(&["a"]);
-        assert_eq!(
-            surface.append(id("a")).expect_err("duplicate"),
-            SurfaceError::AlreadyActive(id("a"))
-        );
-    }
-
-    /// Historical reconstruction is exact and stable under later mutation.
-    #[test]
-    fn historical_reconstruction_is_exact_and_stable() {
-        let mut surface = surface(&["a", "b", "c", "d"]);
-        let before = surface.revision();
-        assert_eq!(
-            surface.reconstruct(before).expect("reconstruct"),
-            vec![id("a"), id("b"), id("c"), id("d")]
-        );
-        surface
-            .replace(&SurfaceSpan::new(id("a"), id("c")), id("s1"))
-            .expect("replace");
-        surface.append(id("e")).expect("append");
-        assert_eq!(
-            surface.reconstruct(before).expect("reconstruct historical"),
-            vec![id("a"), id("b"), id("c"), id("d")],
-            "later mutations never change an earlier reconstruction"
-        );
-        assert_eq!(
-            surface
-                .reconstruct(surface.revision())
-                .expect("reconstruct current"),
-            surface.active().to_vec()
-        );
-        assert_eq!(
-            surface
-                .reconstruct(SurfaceRevision::INITIAL)
-                .expect("empty"),
+            cache.reconstruct(SurfaceRevision::INITIAL).unwrap(),
             Vec::<MessageId>::new()
         );
-        let current_active = surface.active().to_vec();
-        let current_revision = surface.revision();
-        let current_ops = surface.ops().to_vec();
-        assert_eq!(
-            surface
-                .reconstruct(SurfaceRevision::new(99))
-                .expect_err("beyond history"),
-            SurfaceError::UnknownRevision(SurfaceRevision::new(99))
-        );
-        assert_eq!(surface.active(), current_active.as_slice());
-        assert_eq!(surface.revision(), current_revision);
-        assert_eq!(surface.ops(), current_ops.as_slice());
+        assert!(cache.reconstruct(SurfaceRevision::new(3)).is_err());
     }
-
-    /// The compaction generation is maintained as current-head metadata.
     #[test]
-    fn compaction_generation_counts_replacements() {
-        let mut surface = surface(&["a", "b", "c", "d"]);
-        assert_eq!(surface.compaction_generation(), 0);
-        surface
-            .replace(&SurfaceSpan::new(id("a"), id("c")), id("s1"))
-            .expect("replace");
-        assert_eq!(surface.compaction_generation(), 1);
-        surface.append(id("e")).expect("append");
-        assert_eq!(surface.compaction_generation(), 1);
-        surface
-            .replace(&SurfaceSpan::new(id("s1"), id("d")), id("s2"))
-            .expect("replace");
-        assert_eq!(surface.compaction_generation(), 2);
-    }
-
-    /// The operation log records exactly the accepted vocabulary.
-    #[test]
-    fn operation_log_records_the_minimal_vocabulary() {
-        let mut surface = surface(&["a", "b"]);
-        surface
-            .replace(&SurfaceSpan::new(id("a"), id("b")), id("s"))
-            .expect("replace");
-        assert_eq!(
-            surface.ops(),
-            &[
-                SurfaceOp::Append {
-                    message_id: id("a")
-                },
-                SurfaceOp::Append {
-                    message_id: id("b")
-                },
-                SurfaceOp::Replace {
-                    start: id("a"),
-                    end: id("b"),
-                    replacement: id("s"),
-                },
-            ]
+    fn hydrated_cache_reads_only_retained_hot_append_suffix() {
+        let mut cache = ConversationSurface::from_current_head(
+            vec![id("retained")],
+            SurfaceRevision::new(100),
+            7,
         );
-        assert_eq!(surface.retired(), vec![id("a"), id("b")]);
+        cache.append(id("new")).unwrap();
+        assert_eq!(
+            cache.reconstruct(SurfaceRevision::new(100)).unwrap(),
+            [id("retained")]
+        );
+        assert_eq!(
+            cache.reconstruct(SurfaceRevision::new(101)).unwrap(),
+            [id("retained"), id("new")]
+        );
+        assert!(cache.reconstruct(SurfaceRevision::new(99)).is_err());
+        cache.access().reset();
+        let _ = cache.head();
+        assert_eq!(cache.access().history_enumerations(), 0);
     }
 }

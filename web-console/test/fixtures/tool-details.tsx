@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Tool } from '../../src/app/agent/Tool';
-import type { ForegroundToolExecution } from '../../../protocol/app-server/v46';
+import type { ForegroundToolExecution } from '../../../protocol/app-server/v47';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';

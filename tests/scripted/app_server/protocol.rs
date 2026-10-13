@@ -1953,7 +1953,9 @@ async fn workspace_upload_receipt_admission_and_model_projection_use_one_owner()
         assert_eq!(user["content"][0]["text"], format!("<user_uploaded_files>\n  <file name=\"picture.png\" path=\"{}\" />\n</user_uploaded_files>\n\n{body}", files[0].path));
         assert!(!requests[0].contains("NOT_EAGERLY_INJECTED"));
         let snapshots = native.request_history().page(None, 4).unwrap().snapshots;
-        assert_eq!(snapshots[0].upload_projection.files[0].path, files[0].path);
+        let frozen_input = serde_json::to_string(&snapshots[0].input).unwrap();
+        assert!(frozen_input.contains(&files[0].path));
+        assert!(snapshots[0].input.iter().any(|m| matches!(m, rustx::model::projected::FrozenModelInput::Derived(_))));
         let history = native.tool_runtime().durable_store().load_canonical().unwrap();
         let canonical = serde_json::to_string(&history).unwrap();
         assert!(canonical.contains("uploaded_file"));
@@ -3884,7 +3886,7 @@ async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_r
         use crate::durable::{ConversationStore, SqliteConversationStore};
         use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
         use crate::local_runtime::session::LineageSide;
-        use crate::message::types::{AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource};
+        use crate::message::types::{AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, UserContentBlock, UserSource};
         use crate::message::TextBlock;
         use crate::model::finish::ModelFinishReason;
         use crate::runtime::identity::{AttemptId, EventId, MessageId};
@@ -3899,9 +3901,13 @@ async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_r
             timestamp: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(), event: kind,
         };
         for (input, output, attempt) in [("user-a", "assistant-a", "a"), ("user-b", "assistant-b", "b")] {
-            store.append_canonical(&MessageBlock::User(UserMessageBlock { id: MessageId::new(input), source: UserSource::Human,
-                kind: InboundKind::Message, timestamp: None, content: vec![UserContentBlock::Text(TextBlock { text: input.into() })] })).unwrap();
+            let accepted = store.accept_inbound(crate::durable::InboundDraft {
+                message_id: Some(MessageId::new(input)), source: UserSource::Human, kind: InboundKind::Message,
+                content: vec![UserContentBlock::Text(TextBlock { text: input.into() })],
+                timestamp: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(), correlation: None,
+            }).unwrap();
             store.append_event(event(attempt, RuntimeEvent::AttemptStarted { attempt_id: AttemptId::new(attempt) })).unwrap();
+            store.adopt_pending_batch(accepted.sequence, Some(AttemptId::new(attempt))).unwrap();
             crate::runtime_client::response::tests::request(&store, attempt, 0, Some(crate::model::ModelUsage { input_tokens: 100, output_tokens: 20, total_tokens: 120, details: None }));
             store.append_canonical_with_event(&MessageBlock::Assistant(AssistantMessageBlock { id: MessageId::new(output),
                 content: vec![AssistantContentBlock::Text(TextBlock { text: output.into() })] }),
@@ -7800,3 +7806,150 @@ async fn exact_node_read_retains_origin_and_never_selects_or_composes() {
 #[path = "live_model.rs"]
 mod live_model;
 pub(crate) use live_model::live_model_child_inheritance_boundary_scenario;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn projection_history_and_activation_fork_cross_native_app_server_boundary() {
+    bounded(async {
+        use crate::context::checkpoint::ProjectionActivationId;
+        use crate::context::resources::LedgerFrontier;
+        use crate::durable::{ConversationStore, SqliteConversationStore};
+        use crate::message::types::{InboundKind, MessageBlock, UserMessageBlock, UserSource};
+        use crate::runtime::identity::MessageId;
+        let f = Fixture::new().await;
+        let source = &f.sessions[0];
+        let controller = f.manager.session_controller();
+        let access = controller.acquire_session(&source.id, None).await.unwrap();
+        let store = SqliteConversationStore::open(
+            source.active_conversation_id.clone(),
+            &access.database_path,
+        )
+        .unwrap();
+        store
+            .append_canonical(&MessageBlock::User(UserMessageBlock {
+                id: MessageId::new("canonical-source"),
+                content: input("immutable execution content"),
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                timestamp: None,
+            }))
+            .unwrap();
+        for (id, body) in [
+            ("P1", "first projected summary"),
+            ("P2", "second projected summary"),
+        ] {
+            store
+                .commit_projection(
+                    crate::scripted_suites::support::context::checkpoint_commit_fixture(
+                        &store,
+                        crate::scripted_suites::support::context::checkpoint_fixture(
+                            &store, id, 1, body,
+                        ),
+                        None,
+                    ),
+                )
+                .unwrap();
+        }
+        drop(store);
+        drop(access);
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let MethodResult::Projections { page } = call(
+            &connection,
+            30,
+            Method::Projections {
+                target: target.clone(),
+                after: ProjectionActivationId(0),
+                limit: 16,
+            },
+        )
+        .await
+        else {
+            panic!("native timeline")
+        };
+        assert_eq!(page.records.len(), 2);
+        assert!(
+            page.next_activation.is_none(),
+            "the terminal historical page has no phantom continuation"
+        );
+        assert_eq!(
+            page.records[0].activation_ledger,
+            page.records[1].activation_ledger
+        );
+        assert!(
+            page.records
+                .iter()
+                .all(|p| p.destination_installation.is_none())
+        );
+        for (index, expected) in [
+            (0, "first projected summary"),
+            (1, "second projected summary"),
+        ] {
+            let MethodResult::ProjectionDetail { detail } = call(
+                &connection,
+                40,
+                Method::ProjectionDetail {
+                    target: target.clone(),
+                    checkpoint_id: page.records[index].checkpoint_id.clone(),
+                    offset: 0,
+                    limit: 16,
+                },
+            )
+            .await
+            else {
+                panic!("typed detail")
+            };
+            assert_eq!(detail.items.len(), 1);
+            assert_eq!(detail.items[0].occurrence.item_index, 0);
+            assert!(serde_json::to_string(&detail).unwrap().contains(expected));
+            let MethodResult::SessionTransition { session, .. } = call(
+                &connection,
+                50,
+                Method::SessionForkProjection {
+                    session_id: source.id.clone(),
+                    node_id: Some(source.active_node.clone()),
+                    ledger: LedgerFrontier(1),
+                    activation: page.records[index].activation_id,
+                },
+            )
+            .await
+            else {
+                panic!("activation fork")
+            };
+            let access = controller.acquire_session(&session.id, None).await.unwrap();
+            let child = SqliteConversationStore::open_existing(
+                session.active_conversation_id.clone(),
+                &access.database_path,
+            )
+            .unwrap();
+            let inherited = child.projection_head().unwrap().unwrap();
+            assert!(inherited.activation.destination_installation.is_some());
+            assert_eq!(
+                inherited.activation.origin.conversation_id,
+                source.active_conversation_id
+            );
+            assert!(
+                serde_json::to_string(&child.projected_history().unwrap().messages)
+                    .unwrap()
+                    .contains(expected)
+            );
+            assert!(
+                child
+                    .read_events(None, 64)
+                    .unwrap()
+                    .events
+                    .iter()
+                    .all(|e| !matches!(
+                        e.event,
+                        crate::events::RuntimeEvent::CompactionCompleted { .. }
+                    ))
+            );
+        }
+        assert!(
+            f.provider.request_bodies().is_empty(),
+            "historical reads and forks start no model request"
+        );
+        f.close().await;
+    })
+    .await;
+}

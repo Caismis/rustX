@@ -435,6 +435,7 @@ impl ClientInner {
                 Ok((
                     candidate.snapshot.transcript.clone(),
                     candidate.snapshot.context.occupancy.clone(),
+                    candidate.snapshot.context.projection_head.clone(),
                 )),
                 true,
             );
@@ -1207,6 +1208,45 @@ impl ClientInner {
     /// work and settles nothing. Its lifecycle-bearing summary counterpart
     /// stays the authority for current state, so no live repair applies here
     /// — detail carries immutable historical facts only.
+    #[allow(clippy::needless_pass_by_value)] // Attachment dispatch owns request parameters.
+    pub(crate) fn projection_page(
+        &self,
+        after: crate::context::checkpoint::ProjectionActivationId,
+        limit: usize,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        let (_, _, through) = self
+            .state
+            .lock()
+            .expect("runtime client host lock poisoned")
+            .projection
+            .snapshot_cut()?;
+        super::projection_history::page(self.store.as_ref(), through, after, limit)
+            .map(|page| RuntimeClientResult::ProjectionPage { page })
+            .map_err(|e| RuntimeClientError::RuntimeFailure {
+                message: e.to_string(),
+            })
+    }
+    #[allow(clippy::needless_pass_by_value)] // Attachment dispatch owns request parameters.
+    pub(crate) fn projection_detail(
+        &self,
+        id: crate::runtime::identity::CheckpointId,
+        offset: u32,
+        limit: usize,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        let (_, _, through) = self
+            .state
+            .lock()
+            .expect("runtime client host lock poisoned")
+            .projection
+            .snapshot_cut()?;
+        super::projection_history::detail(self.store.as_ref(), through, &id, offset, limit)
+            .map(|detail| RuntimeClientResult::ProjectionDetail {
+                detail: Box::new(detail),
+            })
+            .map_err(|e| RuntimeClientError::RuntimeFailure {
+                message: e.to_string(),
+            })
+    }
     #[allow(clippy::needless_pass_by_value)] // Attachment dispatch owns request parameters.
     pub(crate) fn trace_detail(
         &self,
@@ -2478,7 +2518,7 @@ impl RuntimeClientHost {
     /// # Errors
     ///
     /// Returns a typed lifecycle, busy, context, or durability error. A
-    /// successful response means the canonical compaction already committed.
+    /// successful response means the typed checkpoint already committed.
     pub async fn compact_context(
         &self,
         request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
@@ -4644,8 +4684,8 @@ mod tests {
             "overflow retry keeps the one admitted context generation"
         );
         assert_ne!(
-            snapshots[1].surface_revision, snapshots[2].surface_revision,
-            "compaction gives the retry its own historical Surface revision"
+            snapshots[1].history_cut.activation, snapshots[2].history_cut.activation,
+            "compaction gives the retry a distinct typed historical activation"
         );
 
         let provider_requests = adapter.requests();
@@ -6264,7 +6304,8 @@ mod tests {
                 old_cut,
                 Ok((
                     candidate.snapshot.transcript.clone(),
-                    candidate.snapshot.context.occupancy.clone()
+                    candidate.snapshot.context.occupancy.clone(),
+                    candidate.snapshot.context.projection_head.clone()
                 )),
                 true
             ),
@@ -6289,7 +6330,6 @@ mod tests {
             replayed.messages.push(message.clone());
             replayed.transcript.entries.push(
                 super::super::snapshot::RuntimeClientTranscriptEntry {
-                    compaction: None,
                     cursor,
                     item: super::super::snapshot::RuntimeClientTranscriptItem::Message { message },
                     tool_calls: Vec::new(),

@@ -1,22 +1,21 @@
 import { cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import { Message } from '../src/app/agent/Message';
+import { ProjectionSummary } from '../src/app/agent/ContextSeat';
+import { projectionHead } from './fixture';
 afterEach(cleanup);
-
-it('renders canonical compaction as an accessible collapsed card with intact Markdown', () => {
-  const ui = render(<Message compaction={{ retired_messages: '26', retired_tokens: '9183', manual: false }} message={{ role: 'user', id: 'summary', source: 'runtime', timestamp: '2026-10-07T00:00:00Z',
-    kind: { compaction_summary: {} }, content: [{ type: 'text', text: '## Earlier work\n\nKeep  the English words.\n\n- Continue here' }] }} />);
-  const trigger = ui.getByRole('button', { name: 'Context compacted · Compacted 26 history items (~9183 tokens)' });
+it.each([false,true])('renders a projection disclosure with original source provenance (inherited=%s)',inherited=>{
+  const ui=render(<ProjectionSummary head={projectionHead('## Earlier work\n\nKeep  the English words.\n\n- Continue here',inherited)}/>);
+  const trigger=ui.getByRole('button',{name:`${inherited?'Inherited model context':'Compacted model context'} · Projection 1 · canonical frontier 100`});
   expect(trigger.getAttribute('aria-expanded')).toBe('false');
-  expect(ui.queryByRole('heading', { name: 'Earlier work' })).toBeNull();
+  expect(ui.queryByRole('heading',{name:'Earlier work'})).toBeNull();
   expect(trigger.textContent).toContain('Keep the English words.');
   expect(trigger.textContent).not.toContain('##');
   fireEvent.click(trigger);
-  expect(trigger.getAttribute('aria-expanded')).toBe('true');
-  expect(ui.getByRole('heading', { name: 'Earlier work' })).toBeTruthy();
+  expect(ui.getByRole('heading',{name:'Earlier work'})).toBeTruthy();
   expect(ui.getByRole('listitem').textContent).toBe('Continue here');
-  expect(ui.getByText('A condensed record of earlier context used to continue this conversation.')).toBeTruthy();
-  expect(ui.container.textContent).not.toContain('compaction_summary');
+  expect(ui.container.textContent).toContain('conv_36524fd8-f674-7fc2-8125-06d01fee0e18');
+  expect(ui.container.querySelector('[data-chat-anchor-key]')).toBeNull();
+  expect(ui.container.querySelector('[data-projection-origin]')?.getAttribute('data-projection-origin')).toBe(inherited?'inherited':'local');
   fireEvent.click(trigger);
-  expect(trigger.getAttribute('aria-expanded')).toBe('false');
+  expect(ui.queryByRole('heading',{name:'Earlier work'})).toBeNull();
 });

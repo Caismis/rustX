@@ -43,8 +43,8 @@ use async_openai::types::chat::{
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
+use crate::message::types::AssistantContentBlock;
 use crate::message::types::ContentBlockIndex;
-use crate::message::types::{AssistantContentBlock, MessageBlock, ToolMessageBlock};
 use crate::model::adapter::block_index::BlockAllocator;
 use crate::model::adapter::openai::client::build_client;
 use crate::model::adapter::openai::config::OpenAiAdapterConfig;
@@ -62,8 +62,9 @@ use crate::model::error::{
     MalformedToolProposalSource, ModelError, ModelErrorKind, is_context_window_error,
 };
 use crate::model::event::ModelEvent;
-use crate::model::input::{ModelInputMessage, RequestOnlyModelContext};
+use crate::model::input::RequestOnlyModelContext;
 use crate::model::invocation::finalize_provider_request;
+use crate::model::projected::ModelMessageView;
 use crate::model::types::{ModelProtocol, ModelRequest, ModelUsage};
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::ToolCallId;
@@ -1508,6 +1509,7 @@ fn construct_request(
     value["stream"] = serde_json::Value::Bool(true);
     value[request.invocation.compat.chat_max_tokens_field.wire_name()] =
         request.max_output_tokens().into();
+    crate::model::adapter::correlation::encode(&mut value, ModelProtocol::OpenAiChatCompletions);
     finalize_provider_request(
         value,
         request.request_params(),
@@ -1566,12 +1568,12 @@ fn translate_messages(
         });
     }
     for block in &request.messages {
-        let (translated, reasoning) = match block {
-            ModelInputMessage::Canonical(MessageBlock::User(user)) => (
+        let (translated, reasoning) = match block.view() {
+            ModelMessageView::User(user) => (
                 ChatMessage::Standard(translate_user_message(user, &request.images)?),
                 None,
             ),
-            ModelInputMessage::Canonical(MessageBlock::Assistant(assistant)) => {
+            ModelMessageView::Assistant(assistant) => {
                 let (message, reasoning) =
                     translate_assistant_message(assistant, reasoning_replay)?;
                 (
@@ -1579,11 +1581,15 @@ fn translate_messages(
                     reasoning,
                 )
             }
-            ModelInputMessage::Canonical(MessageBlock::Tool(tool_message)) => (
-                ChatMessage::Tool(translate_tool_message(tool_message, &request.images)?),
+            ModelMessageView::Tool(tool_call_id, result) => (
+                ChatMessage::Tool(translate_tool_message(
+                    tool_call_id,
+                    result,
+                    &request.images,
+                )?),
                 None,
             ),
-            ModelInputMessage::RequestOnly(RequestOnlyModelContext::UnresolvedOutputCarryover(
+            ModelMessageView::RequestOnly(RequestOnlyModelContext::UnresolvedOutputCarryover(
                 carryover,
             )) => (
                 ChatMessage::Standard(translate_runtime_context(&carryover.render())),
@@ -1627,11 +1633,11 @@ fn translate_runtime_context(text: &str) -> ChatCompletionRequestMessage {
 }
 
 fn translate_user_message(
-    user: &crate::message::types::UserMessageBlock,
+    user: &[crate::message::types::UserContentBlock],
     images: &crate::model::images::ResolvedImages,
 ) -> Result<ChatCompletionRequestMessage, ModelError> {
     let mut parts = Vec::new();
-    for content in &user.content {
+    for content in user {
         match content {
             crate::message::types::UserContentBlock::Text(text) => {
                 parts.push(ChatCompletionRequestUserMessageContentPart::Text(
@@ -1668,7 +1674,7 @@ fn translate_user_message(
 /// Shapes that cannot be represented losslessly remain unsupported; the
 /// explicit omit policy skips canonical reasoning before this validation.
 fn translate_assistant_message(
-    assistant: &crate::message::types::AssistantMessageBlock,
+    assistant: &[crate::message::types::AssistantContentBlock],
     reasoning_replay: Option<ChatReasoningReplay>,
 ) -> Result<
     (
@@ -1680,7 +1686,7 @@ fn translate_assistant_message(
     let mut parts = Vec::new();
     let mut tool_calls = Vec::new();
     let mut reasoning = None;
-    for content in &assistant.content {
+    for content in assistant {
         match content {
             AssistantContentBlock::Text(text) => {
                 parts.push(ChatCompletionRequestAssistantMessageContentPart::Text(
@@ -1773,11 +1779,11 @@ fn chat_image_part(
 /// provider's tool-message shape. Projection policy, status rendering, and
 /// aggregate bounding are owned by the Tool Plane.
 fn translate_tool_message(
-    message: &ToolMessageBlock,
+    tool_call_id: &crate::runtime::identity::ToolCallId,
+    result: &crate::tools::types::ToolExecutionResult,
     images: &crate::model::images::ResolvedImages,
 ) -> Result<MultimodalToolMessage, ModelError> {
-    let parts = message
-        .result
+    let parts = result
         .image_projection()
         .map_err(unsupported)?
         .into_iter()
@@ -1795,7 +1801,7 @@ fn translate_tool_message(
     Ok(MultimodalToolMessage {
         role: ToolRole::Tool,
         content: parts,
-        tool_call_id: message.tool_call_id.as_str().to_owned(),
+        tool_call_id: tool_call_id.as_str().to_owned(),
     })
 }
 
@@ -1965,8 +1971,12 @@ mod tests {
             },
         };
         let encoded = serde_json::to_string(
-            &translate_tool_message(&message, &crate::model::images::ResolvedImages::new())
-                .expect("translate cancelled result"),
+            &translate_tool_message(
+                &message.tool_call_id,
+                &message.result,
+                &crate::model::images::ResolvedImages::new(),
+            )
+            .expect("translate cancelled result"),
         )
         .expect("serialize provider message");
         assert!(encoded.contains("runtime_shutdown"));
@@ -2012,8 +2022,12 @@ mod tests {
                 },
             };
             let encoded = serde_json::to_value(
-                translate_tool_message(&message, &crate::model::images::ResolvedImages::new())
-                    .expect("translate status result"),
+                translate_tool_message(
+                    &message.tool_call_id,
+                    &message.result,
+                    &crate::model::images::ResolvedImages::new(),
+                )
+                .expect("translate status result"),
             )
             .expect("serialize provider message");
             let projection = message.result.model_facing_projection();
@@ -2068,8 +2082,12 @@ mod tests {
             },
         };
         let encoded = serde_json::to_value(
-            translate_tool_message(&message, &crate::model::images::ResolvedImages::new())
-                .expect("translate rejected tool result"),
+            translate_tool_message(
+                &message.tool_call_id,
+                &message.result,
+                &crate::model::images::ResolvedImages::new(),
+            )
+            .expect("translate rejected tool result"),
         )
         .expect("serialize provider message");
         assert_eq!(encoded["tool_call_id"], "call-failed");

@@ -120,20 +120,15 @@ Implemented in PR #21 (see [`docs/context-engine.md`](context-engine.md)):
   conversation content only (tool definitions never satisfy the target)
 - Whole-message compaction only: no partial Assistant projection or split
   Assistant/tool structural unit
-- Message Ledger + Conversation Surface architecture from Issue #54:
-  immutable canonical facts, current active identities/order/visibility, and
-  exact `SurfaceRevision` reconstruction
-- One canonical runtime User compaction summary plus one Surface Replace;
-  `ContextCheckpoint` no longer owns summary or projection truth, and no
-  separate summary authority exists
+- Immutable canonical history and independently durable typed projections
+- Derived Summary checkpoint items with retained Original references; atomic
+  checkpoint activation/head/receipt/local completion and historical timeline
 - Actual summary-model request bounding through the shared deterministic
   `SummaryRequest::model_input()` assembly, using the summary invocation's
   own context window and output budget
 - Bounded compact-and-retry on `ContextWindowExceeded` (exactly one retry
   per model turn)
-- Continuation invalidation after successful incompatible Surface replacement;
-  explicit failure when the continuation-owning turn cannot be retired under
-  the bounded #54 System rule
+- Unconditional primary continuation retirement after default Summary compaction
 - Optional FreshInbound Agent Status input: explicit `FreshInboundTurn`
   identity with canonical-order validation and an explicit
   `InitialTurnTrigger` (fresh inbound vs pure continuation), closed
@@ -176,7 +171,7 @@ Exit criteria:
 - A long local session can compact multiple times and continue correctly.
 - Compaction never rewrites or deletes canonical history.
 - Deterministic fixtures cover normal and repeated whole-message compaction,
-  exact historical Surface reconstruction, and equal-content identity.
+  exact checkpoint activation/request reconstruction, and distinct occurrence identity.
 - Fresh inbound material is never compacted before a successful model
   invocation observes it; preserving it or failing explicitly with
   `CannotFit` are the only two outcomes.
@@ -815,16 +810,15 @@ hot-state installation/reload:
 - ordinary canonical append and the model-call-ordered ToolResult sibling
   batch commit Ledger bodies, Surface revisions, and committed-message events
   atomically;
-- compaction commits the summary Ledger row, immutable Surface Replace,
-  generation/checkpoint metadata, and `CompactionCompleted` atomically;
+- compaction commits immutable typed checkpoint content, activation/head,
+  operation receipt and actual local `CompactionCompleted` atomically;
 - model request start commits the immutable Request Snapshot and exact
   `ModelRequestStarted` fact before adapter invocation;
 - background terminal publication commits the terminal inbound delivery and
   its reference fact atomically.
 
 The live provider-neutral request is independently reconstructed from the
-just-committed snapshot, historical Surface revision, and keyed Ledger
-bodies before dispatch. Historical reconstruction never reruns contributors,
+just-committed exact snapshot and immutable dependency manifest before dispatch. Historical reconstruction never reruns contributors,
 Skills, extension/DSH logic, current status, workspace reads, or current
 configuration. Current runtime bootstrap hydrates only the current Surface
 working set; old requests, events, Ledger rows, and Surface revisions are

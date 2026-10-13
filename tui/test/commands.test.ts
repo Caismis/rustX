@@ -147,6 +147,7 @@ describe("command registry", () => {
         "/skills",
         "/todos",
         "/status",
+        "/context",
         "/compact",
         "/debug",
         "/show-reasoning",
@@ -1198,8 +1199,8 @@ describe("CommandDispatcher", () => {
         compaction_count: 1,
         latest_compaction: {
           generation: "1",
-          summary_message_id: "conv_8498648a-66ba-716f-8243-8cf147533e52",
-          surface_revision: "4",
+          checkpoint_id: "conv_8498648a-66ba-716f-8243-8cf147533e52",
+          activation_id: "4",
           tokens_before: { input_tokens: 8_400, source: "estimated" },
           estimated_tokens_after: 1_900,
         },

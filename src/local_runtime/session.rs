@@ -41,7 +41,7 @@ use std::sync::Mutex;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::conversation::{SurfaceOp, SurfaceRevision, apply_surface_op, message_id_of};
+use crate::conversation::{SurfaceOp, SurfaceRevision, message_id_of};
 use crate::durable::{
     ConversationStore, ConversationStoreError, LineageSeed, SqliteConversationStore,
 };
@@ -611,10 +611,9 @@ pub struct SessionUserMessageBoundary {
 ///
 /// `surface_history` is the third part for the reason one step further out.
 /// `messages` and `canonical` together fix what the copy *is*; neither
-/// records why the Surface looks the way it does, and that is what the
-/// copy's own later fork or tree reads. A compaction makes Surface order and
-/// Ledger order disagree, so a copy that kept only the final projection
-/// would present branch points the source never had — see [`lineage_cut`].
+/// records its append boundaries. `projections` independently preserves every
+/// eligible historical activation, including distinct activations at one Ledger
+/// frontier, so later fork/tree reads retain the source semantics — see [`lineage_cut`].
 ///
 /// Native `read_lineage_cut(R)` freezes authority (R, C): R selects structural
 /// history/canonical closure, C selects temporal execution-derived meaning.
@@ -2644,13 +2643,9 @@ fn next_ordinal(current: u64) -> Result<u64, SessionError> {
     })
 }
 
-/// The selected fork/tree boundary, resolved against what the source's
-/// Surface actually shows at the selected revision.
-///
-/// A boundary is a *model-visible* ordinary user message. A message the
-/// Surface no longer shows there — one a compaction already retired — is not
-/// a branch point the user could have chosen, and a message the Ledger
-/// carries but the selected revision predates is not one either.
+/// Resolve an ordinary User boundary in the selected canonical append prefix.
+/// A future Ledger message cannot supply a boundary. Projection inclusion is
+/// selected independently by the inherited activation timeline.
 fn active_user_boundary<'a>(
     source: &'a LineageReadCut,
     message_id: &MessageId,
@@ -2732,7 +2727,7 @@ fn restorable_editor_content(
 /// A boundary that excludes everything (a fork at the very first user
 /// message) retains no operation and cuts to the empty lineage, which is
 /// exactly the fresh conversation such a fork means.
-fn lineage_cut(
+pub(crate) fn lineage_cut(
     destination: &ConversationId,
     source: &LineageReadCut,
     boundary: Option<&MessageId>,
@@ -2756,57 +2751,16 @@ fn lineage_cut(
         None => source.canonical.len(),
     };
 
-    let mut active: Vec<MessageId> = Vec::new();
-    let mut excluded: BTreeSet<MessageId> = BTreeSet::new();
-    let mut retained: Vec<SurfaceOp> = Vec::new();
-    for operation in &source.surface_history {
-        let keep = match operation {
-            SurfaceOp::Append { message_id } => {
-                let below = position(message_id)? < cut_at;
-                if !below {
-                    excluded.insert(message_id.clone());
-                }
-                below
-            }
-            SurfaceOp::Replace {
-                start,
-                end,
-                replacement,
-            } => {
-                position(replacement)?;
-                let span = replaced_span(&active, start, end)?;
-                let below = !span.iter().any(|id| excluded.contains(id));
-                if !below {
-                    excluded.insert(replacement.clone());
-                }
-                below
-            }
-        };
-        if keep {
-            retained.push(operation.clone());
-        }
-        // The source's own order is tracked whole, retained or not: a later
-        // `Replace` names its span in the source's coordinates.
-        apply_surface_op(&mut active, operation).map_err(|detail| SessionError::Seed { detail })?;
-    }
-
-    // The destination Ledger is exactly what its Surface history names, in
-    // source commit order.
-    let referenced: BTreeSet<MessageId> = retained
+    let canonical = source.canonical[..cut_at].to_vec();
+    let retained = source.surface_history[..cut_at].to_vec();
+    let referenced: BTreeSet<MessageId> = canonical
         .iter()
-        .flat_map(|operation| operation.message_ids().into_iter().cloned())
+        .map(|message| message.id().clone())
         .collect();
-    let canonical: Vec<MessageBlock> = source
-        .canonical
-        .iter()
-        .filter(|message| referenced.contains(&message_id_of(message)))
-        .cloned()
-        .collect();
-    remap_seed(
+    let seed = remap_seed(
         destination,
         &canonical,
         &retained,
-        &source.checkpoints,
         &source.completed_responses,
         &source
             .turns
@@ -2821,36 +2775,134 @@ fn lineage_cut(
             })
             .cloned()
             .collect::<Vec<_>>(),
-    )
+    )?;
+    let projections = inherit_projections(
+        destination,
+        &canonical,
+        seed.canonical(),
+        &source.projections,
+    )?;
+    seed.with_projections(projections)
+        .map_err(|error| SessionError::Seed {
+            detail: error.to_string(),
+        })
+}
+
+/// Remap immutable projection closure into the destination's own canonical and checkpoint domains.
+#[allow(clippy::too_many_lines)] // One complete immutable dependency and occurrence remapping fold.
+fn inherit_projections(
+    destination: &ConversationId,
+    originals: &[MessageBlock],
+    mapped: &[MessageBlock],
+    projections: &[crate::durable::projection::ProjectionCheckpoint],
+) -> Result<Vec<crate::durable::projection::ProjectionCheckpoint>, SessionError> {
+    use crate::context::checkpoint::CheckpointMessage;
+    use crate::model::projected::CanonicalMessageRef;
+    let fail = |detail: &str| SessionError::Seed {
+        detail: detail.into(),
+    };
+    let messages: BTreeMap<_, _> = originals
+        .iter()
+        .zip(mapped)
+        .map(|(a, b)| (a.id().clone(), b))
+        .collect();
+    let ids: BTreeMap<_, _> = projections
+        .iter()
+        .filter(|p| p.candidate.base_frontier.0 <= mapped.len() as u64)
+        .map(|p| {
+            (
+                p.candidate.checkpoint_id.clone(),
+                crate::runtime::identity::CheckpointId::new(format!(
+                    "{destination}-checkpoint-{}",
+                    p.activation.activation.0
+                )),
+            )
+        })
+        .collect();
+    let installation =
+        crate::runtime::identity::LineageInstallationId::new(format!("installation:{destination}"));
+    let mut fingerprints = BTreeMap::new();
+    let mut copied = Vec::new();
+    let remap_ref = |reference: &mut CanonicalMessageRef| -> Result<(), SessionError> {
+        let original = originals
+            .iter()
+            .find(|m| m.id() == &reference.message_id)
+            .ok_or_else(|| fail("missing inherited Original"))?;
+        if !reference.matches(original) {
+            return Err(fail("changed inherited Original"));
+        }
+        let message = messages
+            .get(&reference.message_id)
+            .ok_or_else(|| fail("missing destination Original"))?;
+        *reference = CanonicalMessageRef::of(destination, message);
+        Ok(())
+    };
+    for source in projections
+        .iter()
+        .filter(|p| ids.contains_key(&p.candidate.checkpoint_id))
+    {
+        let mut checkpoint = source.clone();
+        checkpoint.candidate.checkpoint_id = ids[&source.candidate.checkpoint_id].clone();
+        checkpoint.candidate.expected_head = source
+            .candidate
+            .expected_head
+            .as_ref()
+            .map(|id| {
+                ids.get(id)
+                    .cloned()
+                    .ok_or_else(|| fail("missing inherited preceding checkpoint"))
+            })
+            .transpose()?;
+        checkpoint.candidate.read_cut.conversation_id = destination.clone();
+        checkpoint.candidate.read_cut.ledger =
+            crate::context::resources::LedgerFrontier(mapped.len() as u64);
+        checkpoint.candidate.read_cut.journal = crate::context::resources::JournalFrontier(0);
+        checkpoint.candidate.read_cut.transcript = crate::durable::TranscriptCursor::new(0);
+        checkpoint.candidate.read_cut.projection_activation =
+            source.candidate.read_cut.projection_activation;
+        for item in &mut checkpoint.candidate.items {
+            match &mut item.message {
+                CheckpointMessage::Original(reference) => remap_ref(reference)?,
+                CheckpointMessage::Derived(derived) => {
+                    for reference in &mut derived.sources {
+                        remap_ref(reference)?;
+                    }
+                    for reference in &mut derived.checkpoint_sources {
+                        let old = reference.checkpoint_id.clone();
+                        reference.checkpoint_id = ids
+                            .get(&old)
+                            .cloned()
+                            .ok_or_else(|| fail("missing inherited checkpoint dependency"))?;
+                        reference.content_digest = fingerprints
+                            .get(&old)
+                            .cloned()
+                            .ok_or_else(|| fail("out-of-order inherited checkpoint dependency"))?;
+                        reference.conversation_id = destination.clone();
+                    }
+                }
+            }
+            for source in &mut item.call_sources {
+                remap_ref(&mut source.assistant)?;
+            }
+            if let Some(call) = &mut item.result_call {
+                call.message.checkpoint_id = checkpoint.candidate.checkpoint_id.clone();
+            }
+        }
+        checkpoint.fingerprint = checkpoint.candidate.fingerprint();
+        fingerprints.insert(
+            source.candidate.checkpoint_id.clone(),
+            checkpoint.fingerprint.clone(),
+        );
+        checkpoint.activation.checkpoint_id = checkpoint.candidate.checkpoint_id.clone();
+        // Origin stays in the source coordinate domain across every copy.
+        checkpoint.activation.destination_installation = Some(installation.clone());
+        copied.push(checkpoint);
+    }
+    Ok(copied)
 }
 
 /// The identities a `Replace` retires, in the active order it retires them
 /// from.
-fn replaced_span(
-    active: &[MessageId],
-    start: &MessageId,
-    end: &MessageId,
-) -> Result<Vec<MessageId>, SessionError> {
-    let from = active
-        .iter()
-        .position(|id| id == start)
-        .ok_or_else(|| SessionError::Seed {
-            detail: format!("the source Surface Replace start {start} is not active"),
-        })?;
-    let to = active
-        .iter()
-        .position(|id| id == end)
-        .ok_or_else(|| SessionError::Seed {
-            detail: format!("the source Surface Replace end {end} is not active"),
-        })?;
-    if to < from {
-        return Err(SessionError::Seed {
-            detail: format!("the source Surface Replace span {start}..={end} is reversed"),
-        });
-    }
-    Ok(active[from..=to].to_vec())
-}
-
 /// Reconstructs a destination seed with destination-owned canonical message/occurrence
 /// identities. Provider correlation strings remain unchanged. Response origins
 /// retain their original execution owner as provenance, never destination execution state.
@@ -2863,7 +2915,6 @@ pub(crate) fn remap_seed(
     destination: &ConversationId,
     canonical: &[MessageBlock],
     surface_history: &[SurfaceOp],
-    source_checkpoints: &BTreeMap<MessageId, crate::durable::inbox::CompactionCheckpointStatistics>,
     completed_responses: &[crate::durable::response::CompletedResponseProvenance],
     turns: &[crate::durable::reading::TurnReadingProvenance],
 ) -> Result<LineageSeed, SessionError> {
@@ -2898,15 +2949,6 @@ pub(crate) fn remap_seed(
         .map(|operation| match operation {
             SurfaceOp::Append { message_id } => Ok(SurfaceOp::Append {
                 message_id: seeded(message_id)?,
-            }),
-            SurfaceOp::Replace {
-                start,
-                end,
-                replacement,
-            } => Ok(SurfaceOp::Replace {
-                start: seeded(start)?,
-                end: seeded(end)?,
-                replacement: seeded(replacement)?,
             }),
         })
         .collect::<Result<Vec<_>, SessionError>>()?;
@@ -2951,11 +2993,7 @@ pub(crate) fn remap_seed(
             Some(copied)
         })
         .collect();
-    let checkpoints = source_checkpoints
-        .iter()
-        .filter_map(|(id, stats)| message_ids.get(id).map(|mapped| (mapped.clone(), *stats)))
-        .collect();
-    LineageSeed::replayed(canonical, surface_history, checkpoints)
+    LineageSeed::replayed(canonical, surface_history)
         .and_then(|seed| seed.with_completed_responses(responses))
         .and_then(|seed| seed.with_turns(turns))
         .map_err(|error| SessionError::Seed {
@@ -3240,9 +3278,7 @@ fn seed_preview(seed: &LineageSeed) -> Option<String> {
         .map(|message| (message_id_of(message), message))
         .collect();
     for operation in seed.surface_history() {
-        let SurfaceOp::Append { message_id } = operation else {
-            continue;
-        };
+        let SurfaceOp::Append { message_id } = operation;
         if let Some(MessageBlock::User(user)) = ledger.get(message_id)
             && user.kind == InboundKind::Message
         {
@@ -3635,15 +3671,14 @@ pub(crate) mod tests {
         SessionId, SessionNodeOrigin, SessionPersistentState,
     };
     use crate::context::assembly::ContextGeneration;
-    use crate::conversation::{SurfaceRevision, SurfaceSpan};
-    use crate::durable::{CompactionCommitInput, ConversationStore, SqliteConversationStore};
+    use crate::conversation::SurfaceRevision;
+    use crate::durable::{ConversationStore, SqliteConversationStore};
     use crate::local_runtime::CurrentRuntimeConfig;
     use crate::message::content::TextBlock;
     use crate::message::types::{
         AgentStatusGenerationMetadata, AgentStatusModuleId, AssistantContentBlock,
-        AssistantMessageBlock, CompactionSummaryMetadata, ContextKind, ContributionEmission,
-        InboundKind, MessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock,
-        UserSource,
+        AssistantMessageBlock, ContextKind, ContributionEmission, InboundKind, MessageBlock,
+        ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
     };
     use crate::model::catalog::{ModelCapabilities, ModelCompat};
     use crate::model::invocation::{ModelInvocationConfig, RequestParams};
@@ -3652,7 +3687,7 @@ pub(crate) mod tests {
     use crate::runtime::identity::{
         AttemptId, CapabilityRevision, ConversationId, MessageId, ToolCallId, ToolId, TurnId,
     };
-    use crate::runtime::types::{TokenMeasurement, TokenMeasurementSource};
+
     use crate::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus};
     use chrono::{TimeZone, Utc};
     use tempfile::TempDir;
@@ -3668,6 +3703,111 @@ keep_recent_tokens = 4096
 [agent.model]
 model = "provider/model"
 "#;
+
+    /// Each same-ledger activation is a distinct historical fork boundary.
+    /// Persistence and the product's lineage remapper are exercised at every copy.
+    #[test]
+    fn projection_activation_closure_survives_clone_fork_clone_again_and_source_deletion() {
+        use crate::context::checkpoint::{CheckpointMessage, ProjectionActivationId};
+        use crate::context::resources::LedgerFrontier;
+        use crate::model::projected::ProjectedMessage;
+        use crate::scripted_suites::support::context::{
+            checkpoint_commit_fixture, checkpoint_fixture,
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let source_path = directory.path().join("source.sqlite");
+        let source_id = ConversationId::generate();
+        let source = SqliteConversationStore::open(source_id.clone(), &source_path).unwrap();
+        source
+            .initialize(
+                &(1..=100)
+                    .map(|n| user(&format!("M{n}"), &format!("message {n}")))
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        let first = source
+            .commit_projection(checkpoint_commit_fixture(
+                &source,
+                checkpoint_fixture(&source, "P1", 95, "P1 semantics"),
+                None,
+            ))
+            .unwrap();
+        let second = source
+            .commit_projection(checkpoint_commit_fixture(
+                &source,
+                checkpoint_fixture(&source, "P2", 1, "P2 semantics"),
+                None,
+            ))
+            .unwrap();
+        assert_eq!(first.checkpoint.activation.ledger, LedgerFrontier(100));
+        assert_eq!(second.checkpoint.activation.ledger, LedgerFrontier(100));
+        let source_cut = source
+            .read_projection_lineage_cut(LedgerFrontier(100), ProjectionActivationId(2))
+            .unwrap();
+        let mut copied_id = ConversationId::generate();
+        let first_seed =
+            super::lineage_cut(&copied_id, &source_cut, None, super::LineageSide::After).unwrap();
+        let mut copied = SqliteConversationStore::in_memory(copied_id.clone()).unwrap();
+        copied.initialize_lineage(&first_seed).unwrap();
+        drop(source);
+        std::fs::remove_file(&source_path).unwrap();
+        for generation in 0..3 {
+            assert!(
+                copied.read_events(None, 64).unwrap().events.is_empty(),
+                "inherited checkpoints fabricate no destination CompactionCompleted"
+            );
+            let timeline = copied
+                .projection_timeline(ProjectionActivationId(0), 64)
+                .unwrap();
+            assert_eq!(timeline.len(), 2);
+            for (activation, label) in [(1, "P1 semantics"), (2, "P2 semantics")] {
+                assert_eq!(
+                    timeline[usize::try_from(activation - 1).unwrap()]
+                        .activation
+                        .origin
+                        .conversation_id,
+                    source_id
+                );
+                let cut = copied
+                    .read_projection_lineage_cut(
+                        LedgerFrontier(100),
+                        ProjectionActivationId(activation),
+                    )
+                    .unwrap();
+                assert_eq!(cut.projections.len(), usize::try_from(activation).unwrap());
+                let child_id = ConversationId::generate();
+                let seed =
+                    super::lineage_cut(&child_id, &cut, None, super::LineageSide::After).unwrap();
+                let fork = SqliteConversationStore::in_memory(child_id).unwrap();
+                fork.initialize_lineage(&seed).unwrap();
+                let head = fork.projection_head().unwrap().unwrap();
+                let CheckpointMessage::Derived(summary) = &head.candidate.items[0].message else {
+                    panic!("inherited Derived Summary")
+                };
+                let ProjectedMessage::User { content, .. } = &summary.message else {
+                    panic!("summary role")
+                };
+                assert!(
+                    matches!(&content[0],UserContentBlock::Text(text) if text.text.contains(label)),
+                    "copy {generation} activation {activation}"
+                );
+                assert_eq!(head.activation.origin.conversation_id, source_id);
+                assert!(head.activation.destination_installation.is_some());
+                assert_eq!(fork.load_canonical().unwrap().len(), 100);
+                assert!(fork.read_events(None, 64).unwrap().events.is_empty());
+                fork.projected_history().unwrap();
+            }
+            let cut = copied
+                .read_projection_lineage_cut(LedgerFrontier(100), ProjectionActivationId(2))
+                .unwrap();
+            copied_id = ConversationId::generate();
+            let seed =
+                super::lineage_cut(&copied_id, &cut, None, super::LineageSide::After).unwrap();
+            let next = SqliteConversationStore::in_memory(copied_id.clone()).unwrap();
+            next.initialize_lineage(&seed).unwrap();
+            copied = next;
+        }
+    }
 
     fn config() -> CurrentRuntimeConfig {
         CurrentRuntimeConfig::from_toml_slice(CONFIG.as_bytes()).expect("valid test config")
@@ -3730,6 +3870,31 @@ model = "provider/model"
         })
     }
 
+    fn freeze_session_test_input(
+        store: &dyn ConversationStore,
+        snapshot: &mut RequestSnapshot,
+        contexts: &[MessageBlock],
+    ) {
+        let history = store.projected_history().unwrap();
+        snapshot.history_cut = history.cut;
+        let mut messages = history.messages;
+        messages.extend(crate::model::input::canonical_input(contexts));
+        snapshot
+            .freeze_input(
+                store.conversation_id(),
+                &crate::model::ModelRequest {
+                    images: crate::model::images::ResolvedImages::new(),
+                    invocation: snapshot.invocation.clone(),
+                    messages,
+                    tools: snapshot.tool_definitions.clone(),
+                    effective_system_prompt: snapshot.effective_system_prompt.clone(),
+                    continuation: snapshot.continuation.clone(),
+                    continuation_source: snapshot.continuation_source.clone(),
+                },
+            )
+            .unwrap();
+    }
+
     fn todo_status_start_snapshot(
         revision: SurfaceRevision,
         message_id: MessageId,
@@ -3742,7 +3907,7 @@ model = "provider/model"
         };
         let mut snapshot = RequestSnapshot::new(
             identity,
-            revision,
+            crate::context::resources::LedgerFrontier((revision).get()),
             "frozen".to_owned(),
             Vec::new(),
             crate::runtime::RuntimeResourceRevision::new(1),
@@ -6914,7 +7079,7 @@ model = "provider/model"
                 .iter()
                 .all(|op| matches!(op, crate::conversation::SurfaceOp::Append { .. }))
         );
-        crate::conversation::StructuralIndex::build(&source.messages).unwrap();
+        source_store.projected_history().unwrap();
         let clone = catalog.prepare_clone_session(&state(), &source).unwrap();
         let (early, _) = catalog
             .prepare_fork_session(
@@ -6949,7 +7114,7 @@ model = "provider/model"
                 &destination.conversation_id,
             );
             let copied = store.load_canonical().unwrap();
-            crate::conversation::StructuralIndex::build(&copied).unwrap();
+            store.projected_history().unwrap();
             let results: Vec<_> = copied
                 .iter()
                 .filter_map(|m| match m {
@@ -7169,7 +7334,7 @@ model = "provider/model"
             key: "active_actionable".to_owned(),
             fingerprint: "source-todo-fingerprint".to_owned(),
         };
-        let snapshot = todo_status_start_snapshot(
+        let mut snapshot = todo_status_start_snapshot(
             source_store
                 .load_head()
                 .expect("source head")
@@ -7178,6 +7343,7 @@ model = "provider/model"
             status_id.clone(),
             emission,
         );
+        freeze_session_test_input(&source_store, &mut snapshot, std::slice::from_ref(&status));
         source_store
             .commit_model_turn_start(
                 &[status],
@@ -7324,29 +7490,18 @@ model = "provider/model"
         let source_store = store_for(&catalog, &source_session, &source_conversation);
         let retained_revision = source_store.load_head().expect("source head").revision;
         source_store
-            .commit_compaction(CompactionCommitInput {
-                summary: UserMessageBlock {
-                    id: MessageId::new("compaction-summary"),
-                    content: vec![text("compacted A")],
-                    source: UserSource::Runtime,
-                    kind: InboundKind::CompactionSummary(CompactionSummaryMetadata::empty()),
-                    timestamp: None,
-                },
-                span: SurfaceSpan::new(
-                    MessageId::new("source-user-a"),
-                    MessageId::new("source-user-a"),
+            .commit_projection(
+                crate::scripted_suites::support::context::checkpoint_commit_fixture(
+                    &source_store,
+                    crate::scripted_suites::support::context::checkpoint_fixture(
+                        &source_store,
+                        "compaction-summary",
+                        1,
+                        "compacted A",
+                    ),
+                    None,
                 ),
-                expected_revision: retained_revision,
-                tokens_before: TokenMeasurement {
-                    input_tokens: 64,
-                    source: TokenMeasurementSource::Estimated,
-                },
-                estimated_tokens_after: 32,
-                attempt_id: None,
-                turn_id: None,
-                timestamp: Utc.with_ymd_and_hms(2026, 8, 21, 12, 0, 0).unwrap(),
-                occupancy: None,
-            })
+            )
             .expect("real compaction commit");
         let retained = lineage_at(&source_store, &source_conversation, retained_revision);
         assert_eq!(retained.messages.len(), history.len());
@@ -7402,7 +7557,7 @@ model = "provider/model"
             "fork stops immediately before the selected retained user boundary"
         );
 
-        // Compaction projects the Surface but never rewrites its operation
+        // Compaction changes typed model input but never rewrites the canonical append
         // log: a seed taken from after the compaction still opens with the
         // lineage's first ordinary user append, so the projection subject is
         // stable across compaction.
@@ -7485,9 +7640,9 @@ model = "provider/model"
     ///
     /// This is the lineage invariant, stated on the first piece of
     /// conversation state that is *derived from canonical history* rather
-    /// than read off the Surface: the task list. Compaction retires the
-    /// `todo` result from the Surface and leaves it canonical, so the source
-    /// still has its list — and a copy seeded from the Surface alone would
+    /// than read off the model projection: the task list. Compaction excludes the
+    /// `todo` result from model input and leaves it canonical, so the source
+    /// still has its list — and a copy seeded from the projection alone would
     /// not. The two clones below bracket exactly that transition, and the
     /// assertion is that they agree with each other and with the source.
     ///
@@ -7522,31 +7677,20 @@ model = "provider/model"
             .expect("clone before compaction");
 
         // The compaction retires the whole span the result lives in.
-        let head = source_store.load_head().expect("source head");
+        let _head = source_store.load_head().expect("source head");
         source_store
-            .commit_compaction(CompactionCommitInput {
-                summary: UserMessageBlock {
-                    id: MessageId::new("source-compaction-summary"),
-                    content: vec![text("earlier work, summarized")],
-                    source: UserSource::Runtime,
-                    kind: InboundKind::CompactionSummary(CompactionSummaryMetadata::empty()),
-                    timestamp: None,
-                },
-                span: SurfaceSpan::new(
-                    MessageId::new("source-user-a"),
-                    MessageId::new("source-todo-result"),
+            .commit_projection(
+                crate::scripted_suites::support::context::checkpoint_commit_fixture(
+                    &source_store,
+                    crate::scripted_suites::support::context::checkpoint_fixture(
+                        &source_store,
+                        "source-compaction-summary",
+                        3,
+                        "earlier work, summarized",
+                    ),
+                    None,
                 ),
-                expected_revision: head.revision,
-                tokens_before: TokenMeasurement {
-                    input_tokens: 64,
-                    source: TokenMeasurementSource::Estimated,
-                },
-                estimated_tokens_after: 32,
-                attempt_id: None,
-                turn_id: None,
-                timestamp: Utc.with_ymd_and_hms(2026, 8, 26, 12, 0, 0).unwrap(),
-                occupancy: None,
-            })
+            )
             .expect("real compaction commit");
         let compacted = source_store.load_head().expect("compacted head");
         assert!(
@@ -7596,8 +7740,14 @@ model = "provider/model"
         let after_head = after_store.load_head().expect("clone head");
         assert_eq!(
             after_head.active_message_ids.len(),
-            after.messages.len(),
-            "the clone shows exactly the Surface it was cloned from"
+            after_store
+                .projected_history()
+                .unwrap()
+                .messages
+                .iter()
+                .filter(|m| m.as_canonical().is_some())
+                .count(),
+            "the hot cache contains exactly retained Original facts"
         );
         assert!(
             after_store.load_canonical().expect("clone canonical").len()
@@ -7623,31 +7773,20 @@ model = "provider/model"
         let source_store = store_for(&catalog, &source_session, &source_conversation);
         let expected = todo_list_of(&source_store);
 
-        let head = source_store.load_head().expect("source head");
+        let _head = source_store.load_head().expect("source head");
         source_store
-            .commit_compaction(CompactionCommitInput {
-                summary: UserMessageBlock {
-                    id: MessageId::new("source-compaction-summary"),
-                    content: vec![text("earlier work, summarized")],
-                    source: UserSource::Runtime,
-                    kind: InboundKind::CompactionSummary(CompactionSummaryMetadata::empty()),
-                    timestamp: None,
-                },
-                span: SurfaceSpan::new(
-                    MessageId::new("source-user-a"),
-                    MessageId::new("source-todo-result"),
+            .commit_projection(
+                crate::scripted_suites::support::context::checkpoint_commit_fixture(
+                    &source_store,
+                    crate::scripted_suites::support::context::checkpoint_fixture(
+                        &source_store,
+                        "source-compaction-summary",
+                        3,
+                        "earlier work, summarized",
+                    ),
+                    None,
                 ),
-                expected_revision: head.revision,
-                tokens_before: TokenMeasurement {
-                    input_tokens: 64,
-                    source: TokenMeasurementSource::Estimated,
-                },
-                estimated_tokens_after: 32,
-                attempt_id: None,
-                turn_id: None,
-                timestamp: Utc.with_ymd_and_hms(2026, 8, 26, 12, 0, 0).unwrap(),
-                occupancy: None,
-            })
+            )
             .expect("real compaction commit");
 
         let compacted = source_store.load_head().expect("compacted head");
@@ -7674,39 +7813,28 @@ model = "provider/model"
                 .expect("fork head")
                 .active_message_ids
                 .len(),
-            1,
-            "and shows only the summary the source's Surface shows before that boundary"
+            3,
+            "the earlier canonical cut precedes checkpoint activation and retains the eligible original prefix"
         );
     }
 
     /// A compaction of the span `[A ..= todo_result]`, committed exactly as
     /// the runtime commits one.
     fn compact_the_retired_span(store: &SqliteConversationStore) -> SurfaceRevision {
-        let head = store.load_head().expect("source head");
+        let _head = store.load_head().expect("source head");
         store
-            .commit_compaction(CompactionCommitInput {
-                summary: UserMessageBlock {
-                    id: MessageId::new("source-compaction-summary"),
-                    content: vec![text("earlier work, summarized")],
-                    source: UserSource::Runtime,
-                    kind: InboundKind::CompactionSummary(CompactionSummaryMetadata::empty()),
-                    timestamp: None,
-                },
-                span: SurfaceSpan::new(
-                    MessageId::new("source-user-a"),
-                    MessageId::new("source-todo-result"),
+            .commit_projection(
+                crate::scripted_suites::support::context::checkpoint_commit_fixture(
+                    store,
+                    crate::scripted_suites::support::context::checkpoint_fixture(
+                        store,
+                        "source-compaction-summary",
+                        3,
+                        "earlier work, summarized",
+                    ),
+                    None,
                 ),
-                expected_revision: head.revision,
-                tokens_before: TokenMeasurement {
-                    input_tokens: 64,
-                    source: TokenMeasurementSource::Estimated,
-                },
-                estimated_tokens_after: 32,
-                attempt_id: None,
-                turn_id: None,
-                timestamp: Utc.with_ymd_and_hms(2026, 8, 26, 12, 0, 0).unwrap(),
-                occupancy: None,
-            })
+            )
             .expect("real compaction commit");
         store.load_head().expect("compacted head").revision
     }
@@ -7806,21 +7934,31 @@ model = "provider/model"
         let source_facts = source_store
             .read_lineage_cut(compacted)
             .unwrap()
-            .checkpoints;
+            .projections;
         let copied_facts = clone_store
             .read_lineage_cut(clone_store.load_head().unwrap().revision)
             .unwrap()
-            .checkpoints;
-        assert_eq!(
-            copied_facts.values().collect::<Vec<_>>(),
-            source_facts.values().collect::<Vec<_>>()
-        );
-        for id in copied_facts.keys() {
+            .projections;
+        assert_eq!(copied_facts.len(), source_facts.len());
+        for (source, copied) in source_facts.iter().zip(&copied_facts) {
+            assert_eq!(copied.activation.origin, source.activation.origin);
+            assert!(copied.activation.destination_installation.is_some());
             assert_eq!(
-                clone_store.compaction_checkpoint(id, u64::MAX).unwrap().1,
-                None
+                copied.candidate.summary_metadata,
+                source.candidate.summary_metadata
             );
+            assert_ne!(
+                copied.candidate.checkpoint_id,
+                source.candidate.checkpoint_id
+            );
+            clone_store
+                .projection_checkpoint(&copied.candidate.checkpoint_id)
+                .unwrap();
         }
+        assert!(
+            clone_store.read_events(None, 64).unwrap().events.is_empty(),
+            "inherited checkpoint installation owns no destination execution fact"
+        );
         (
             source_store,
             source_conversation,
@@ -7839,14 +7977,9 @@ model = "provider/model"
     /// the copy afterwards, and those operations read the copy's *history*,
     /// not its current state.
     ///
-    /// Compaction is where that bites. It makes Surface order and Ledger
-    /// order disagree — the summary is the newest canonical row and the
-    /// oldest active one — so a copy rebuilt from the final projection alone
-    /// would record a history in which the summary predates a user message it
-    /// actually postdates. The copy looks identical and branches differently:
-    /// forking it at that user message would carry the message itself into
-    /// the canonical prefix the fork exists to cut before, and hand the same
-    /// message back to the editor as an uncommitted prompt.
+    /// A copy must retain canonical boundaries and independent projection
+    /// activations. Rebuilding only the current projection would lose historical
+    /// choices needed by subsequent forks, including two activations at one frontier.
     ///
     /// So the invariant is stated on the composition, not on the copy: a
     /// fork taken on a copy, at a boundary the copy itself reports, means

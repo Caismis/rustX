@@ -133,7 +133,7 @@ invariant is a real process boundary.
   invariance, false-positive controls — is owned by the unit tests in
   `src/model/generation.rs`.
 - `context/` — layered context ownership: `engine` (provider-independent
-  projection, token accounting, compaction planning/span selection, driven
+  projection, token accounting, typed historical compaction prefix selection, driven
   through `ContextEngine` directly), `compaction_pipeline` (the shared
   committed transition — plan → summarize → validate exact post-summary fit
   → durable commit → hot-state installation — driven through

@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v46 envelope and method vocabulary.
+//! Rust authority for the App Server v47 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 46;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 47;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -155,6 +155,19 @@ pub enum Method {
     SessionSwitchNode {
         target: AttachmentTarget,
         node_id: SessionNodeId,
+    },
+    #[serde(rename = "session/projections")]
+    Projections {
+        target: AttachmentTarget,
+        after: crate::context::checkpoint::ProjectionActivationId,
+        limit: usize,
+    },
+    #[serde(rename = "session/projectionDetail")]
+    ProjectionDetail {
+        target: AttachmentTarget,
+        checkpoint_id: crate::runtime::identity::CheckpointId,
+        offset: u32,
+        limit: usize,
     },
     #[serde(rename = "session/trace")]
     Trace {
@@ -379,6 +392,13 @@ pub enum Method {
         target: AttachmentTarget,
         offset: usize,
         limit: usize,
+    },
+    #[serde(rename = "session/forkProjection")]
+    SessionForkProjection {
+        session_id: SessionId,
+        node_id: Option<SessionNodeId>,
+        ledger: crate::context::resources::LedgerFrontier,
+        activation: crate::context::checkpoint::ProjectionActivationId,
     },
     #[serde(rename = "session/fork")]
     SessionFork {
@@ -669,6 +689,12 @@ pub enum MethodResult {
     },
     Context {
         context: crate::runtime_client::snapshot::RuntimeClientContextView,
+    },
+    Projections {
+        page: crate::runtime_client::projection_history::ProjectionPage,
+    },
+    ProjectionDetail {
+        detail: Box<crate::runtime_client::projection_history::ProjectionDetail>,
     },
     Trace {
         page: crate::runtime_client::trace::TracePage,

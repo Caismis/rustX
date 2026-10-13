@@ -1673,13 +1673,20 @@ fn background_status_accounting() {
             },
         ],
     });
-    let empty = rustx::conversation::ConversationState::new();
-    let with_status = engine
-        .build_projection(&empty, &[], None, &rendered)
-        .expect("projection with status");
-    let without_status = engine
-        .build_projection(&empty, &[], None, "")
-        .expect("projection without status");
+    let with_status = engine.build_projection_input(
+        rustx::conversation::SurfaceRevision::INITIAL,
+        vec![],
+        &[],
+        None,
+        &rendered,
+    );
+    let without_status = engine.build_projection_input(
+        rustx::conversation::SurfaceRevision::INITIAL,
+        vec![],
+        &[],
+        None,
+        "",
+    );
     assert_ne!(
         with_status.fingerprint(),
         without_status.fingerprint(),
@@ -1689,19 +1696,19 @@ fn background_status_accounting() {
     let estimator = DefaultTokenEstimator;
     assert!(
         estimator.estimate_input(
-            &rustx::model::input::canonical_input(&with_status.messages),
+            &with_status.messages,
             &with_status.effective_system_prompt,
             &tools
         ) > estimator.estimate_input(
-            &rustx::model::input::canonical_input(&without_status.messages),
+            &without_status.messages,
             &without_status.effective_system_prompt,
             &tools
         ),
         "the background section participates in the full request estimate"
     );
     assert_eq!(
-        estimator.estimate_conversation_input(&with_status.messages),
-        estimator.estimate_conversation_input(&without_status.messages),
+        estimator.estimate_input(&with_status.messages, "", &[]),
+        estimator.estimate_input(&without_status.messages, "", &[]),
         "keep_recent_tokens is unaffected by the status size"
     );
     // keep_recent_tokens is measured over conversation content only, and
@@ -1710,7 +1717,7 @@ fn background_status_accounting() {
     // regardless of the request-time prompt.
     assert_eq!(
         estimator.estimate_conversation_input(&[]),
-        estimator.estimate_conversation_input(&without_status.messages),
+        estimator.estimate_input(&without_status.messages, "", &[]),
     );
 }
 

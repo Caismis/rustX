@@ -31,6 +31,7 @@ use crate::runtime::types::CancellationReason;
 #[derive(Clone, Debug, Default)]
 pub struct CancellationSignal {
     token: CancellationToken,
+    commit_gate: Arc<std::sync::Mutex<()>>,
 }
 
 impl CancellationSignal {
@@ -39,12 +40,22 @@ impl CancellationSignal {
     pub fn new() -> Self {
         Self {
             token: CancellationToken::new(),
+            commit_gate: Arc::default(),
         }
     }
 
     /// Requests cancellation of the associated operation.
     pub fn cancel(&self) {
+        self.cancel_with(|| ());
+    }
+
+    /// Publish the owner's cause and signal under the same checkpoint-grant gate.
+    /// No observer can accept cancellation before a concurrently granted commit.
+    pub(crate) fn cancel_with<T>(&self, publish_cause: impl FnOnce() -> T) -> T {
+        let _gate = self.commit_gate.lock().expect("cancellation commit gate");
+        let result = publish_cause();
         self.token.cancel();
+        result
     }
 
     /// Creates a child signal: cancelling this signal cancels the child, so
@@ -54,7 +65,21 @@ impl CancellationSignal {
     pub fn child(&self) -> Self {
         Self {
             token: self.token.child_token(),
+            commit_gate: self.commit_gate.clone(),
         }
+    }
+
+    /// Linearizes cancellation against checkpoint authorization. Once granted,
+    /// cancellation may stop later requests but cannot undo the authorized commit.
+    #[must_use]
+    /// # Panics
+    /// A poisoned runtime arbitration mutex indicates an internal invariant violation.
+    pub fn authorize_compaction_commit(
+        &self,
+        operation_id: crate::runtime::identity::CompactionOperationId,
+    ) -> Option<CompactionCommitGrant> {
+        let _gate = self.commit_gate.lock().expect("cancellation commit gate");
+        (!self.token.is_cancelled()).then_some(CompactionCommitGrant { operation_id })
     }
 
     /// Whether cancellation has been requested.
@@ -66,6 +91,17 @@ impl CancellationSignal {
     /// A future that resolves when cancellation is requested.
     pub async fn cancelled(&self) {
         self.token.cancelled().await;
+    }
+}
+
+/// A one-operation authorization from the cancellation owner; store code cannot manufacture it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompactionCommitGrant {
+    operation_id: crate::runtime::identity::CompactionOperationId,
+}
+impl CompactionCommitGrant {
+    pub(crate) fn operation_id(&self) -> &crate::runtime::identity::CompactionOperationId {
+        &self.operation_id
     }
 }
 

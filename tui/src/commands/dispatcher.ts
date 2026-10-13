@@ -183,7 +183,7 @@ export class CommandDispatcher {
   // A retained command is one submission until its response is classified.
   // Other controls and commands (including on a replacement attachment) remain usable.
   readonly #agentMessageSubmissions = new WeakSet<AppServerSession>();
-  #inspected = new Map<string, import('../../../protocol/app-server/v46.ts').AvailableConfiguration>();
+  #inspected = new Map<string, import('../../../protocol/app-server/v47.ts').AvailableConfiguration>();
 
   constructor(context: DispatcherContext) {
     this.#context = context;
@@ -284,6 +284,18 @@ export class CommandDispatcher {
           return await this.#goal(session, argument);
         case "/status":
           return inspect("Agent Status", renderStatus(state));
+        case "/context": {
+          const [action = "history", value, offset] = argument.trim().split(/\s+/);
+          if (action === "history") {
+            const page = await session.projections(value ?? "0");
+            return inspect("Historical model projections", page.records.map(head => `${head.activation_id} · ${head.checkpoint_id} · base ${head.base_frontier} · activation Ledger ${head.activation_ledger} · ${head.destination_installation == null ? "local" : "inherited"} from ${head.origin.conversation_id}/${head.origin.activation}\n${head.summary_preview?.text ?? ""}`).join("\n\n") + (page.next_activation ? `\n\n/context history ${page.next_activation}` : ""));
+          }
+          if (action === "projection" && value) {
+            const detail = await session.projectionDetail(value, Number(offset ?? 0));
+            return inspect("Projected messages", detail.items.map(item => `${item.occurrence.item_index + 1} · ${item.content.role} · ${item.content.provenance.type}\n${JSON.stringify(item.content.blocks, null, 2)}`).join("\n\n") + (detail.next_item == null ? "" : `\n\n/context projection ${value} ${detail.next_item}`));
+          }
+          return usage("/context history [activation] | projection <checkpoint> [offset]");
+        }
         case "/compact":
           return await this.#compact(session, argument);
         case "/debug":
@@ -507,7 +519,7 @@ export class CommandDispatcher {
   async #settings(argument: string): Promise<CommandOutcome> {
     const words = argument.match(/"(?:[^"\\]|\\.)*"|\S+/g)?.map(word => word.startsWith('"') ? JSON.parse(word) as string : word) ?? [];
     const owner = words.shift() ?? "user";
-    let target: import("../../../protocol/app-server/v46.ts").SourceTarget;
+    let target: import("../../../protocol/app-server/v47.ts").SourceTarget;
     if (owner === "user") target = { kind: "user" };
     else if (owner === "workspace" && words[0]) target = { kind: "workspace", directory: words.shift()! };
     else return transient("error", 'usage: /settings [user | workspace "<canonical absolute path>"] [rescan | approval policy|full_access|inherit]');
@@ -1212,7 +1224,7 @@ function contextDiagnosticsLines(state: PresentationState): string[] {
     return [`- context compactions: ${context.compaction_count}`];
   }
   return [
-    `- context compactions: ${context.compaction_count} (latest generation ${latest.generation}, surface revision ${latest.surface_revision})`,
+    `- context compactions: ${context.compaction_count} (latest generation ${latest.generation}, projection activation ${latest.activation_id})`,
     `- latest context measurement: ${latest.tokens_before.input_tokens} tokens before (${latest.tokens_before.source}), ${latest.estimated_tokens_after} estimated after`,
   ];
 }

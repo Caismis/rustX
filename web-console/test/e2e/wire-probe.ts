@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test';
-import type { AttachmentTarget, MethodResult } from '../../../protocol/app-server/v46';
+import type { AttachmentTarget, MethodResult } from '../../../protocol/app-server/v47';
 
 type NativeRead = 'session/snapshot' | 'session/effectiveConfiguration';
 type NativeReadResult<M extends NativeRead> = Extract<MethodResult, { type: M extends 'session/snapshot' ? 'snapshot' : 'effective_configuration' }>;

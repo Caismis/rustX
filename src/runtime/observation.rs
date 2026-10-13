@@ -919,7 +919,7 @@ fn trace_fact_requires_publication(event: &RuntimeEvent) -> bool {
         | RuntimeEvent::ToolExecutionCompleted { .. }
         | RuntimeEvent::ToolExecutionFailed { .. }
         | RuntimeEvent::ToolMessageCommitted { .. }
-        | RuntimeEvent::CompactionStarted
+        | RuntimeEvent::CompactionStarted { .. }
         | RuntimeEvent::CompactionCompleted { .. }
         | RuntimeEvent::CompactionFailed { .. }
         | RuntimeEvent::BackgroundExecutionCommitted { .. }

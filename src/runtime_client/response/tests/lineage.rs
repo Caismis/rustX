@@ -13,14 +13,8 @@ fn deep_lineage_reopen_preserves_response_facts_without_execution_ownership() {
     )
     .unwrap();
     for attempt in ["a", "b"] {
-        user(&store, &format!("input-{attempt}"));
-        append(
-            &store,
-            attempt,
-            RuntimeEvent::AttemptStarted {
-                attempt_id: AttemptId::new(attempt),
-            },
-        );
+        admitted_user(&store, &format!("input-{attempt}"), attempt);
+
         request(&store, attempt, 0, Some(usage(Some(80))));
         assistant(&store, attempt, &format!("response-{attempt}"));
         finish(&store, attempt);
@@ -52,10 +46,6 @@ fn deep_lineage_reopen_preserves_response_facts_without_execution_ownership() {
             &id,
             &canonical,
             &history,
-            &store
-                .read_lineage_cut(store.load_head().unwrap().revision)
-                .unwrap()
-                .checkpoints,
             &provenance,
             &store
                 .read_lineage_cut(store.load_head().unwrap().revision)
@@ -138,14 +128,11 @@ fn deep_lineage_reopen_preserves_response_facts_without_execution_ownership() {
         assert_eq!(page(&store, None, 64), projected);
         let mut changed = seed.completed_responses().to_vec();
         changed[1].usage = None;
-        let changed = LineageSeed::replayed(
-            seed.canonical().to_vec(),
-            seed.surface_history().to_vec(),
-            seed.checkpoints().clone(),
-        )
-        .unwrap()
-        .with_completed_responses(changed)
-        .unwrap();
+        let changed =
+            LineageSeed::replayed(seed.canonical().to_vec(), seed.surface_history().to_vec())
+                .unwrap()
+                .with_completed_responses(changed)
+                .unwrap();
         assert!(matches!(
             store.initialize_lineage(&changed),
             Err(ConversationStoreError::InitialHistoryMismatch)
@@ -220,10 +207,6 @@ fn remapping_drops_missing_retry_input_and_bootstrap_rejects_invalid_response_ad
         &[SurfaceOp::Append {
             message_id: MessageId::new("response"),
         }],
-        &source
-            .read_lineage_cut(source.load_head().unwrap().revision)
-            .unwrap()
-            .checkpoints,
         &provenance,
         &source
             .read_lineage_cut(source.load_head().unwrap().revision)
@@ -293,10 +276,6 @@ fn interrupted_process_content_retains_native_origin_outcome_and_destination_loc
         &child_id,
         &canonical,
         &history,
-        &source
-            .read_lineage_cut(source.load_head().unwrap().revision)
-            .unwrap()
-            .checkpoints,
         &provenance,
         &source
             .read_lineage_cut(source.load_head().unwrap().revision)
@@ -410,10 +389,6 @@ fn lineage_preserves_success_failed_and_terminal_only_turns_in_native_order() {
             &ConversationId::generate(),
             &canonical,
             &history,
-            &store
-                .read_lineage_cut(store.load_head().unwrap().revision)
-                .unwrap()
-                .checkpoints,
             &store
                 .read_lineage_cut(store.load_head().unwrap().revision)
                 .map(|cut| cut.completed_responses)

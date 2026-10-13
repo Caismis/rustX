@@ -579,7 +579,7 @@ mod tests {
             "the complete nested public surface was audited"
         );
         let types = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server/v46.ts"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server/v47.ts"),
         )
         .unwrap();
         for domain in [
@@ -758,8 +758,8 @@ mod tests {
         native_round_trip(
             &crate::runtime_client::snapshot::RuntimeClientCompactionView {
                 generation: EXACT,
-                summary_message_id: crate::runtime::identity::MessageId::new("summary"),
-                surface_revision: crate::conversation::surface::SurfaceRevision::new(EXACT),
+                checkpoint_id: crate::runtime::identity::CheckpointId::new("summary"),
+                activation_id: crate::context::checkpoint::ProjectionActivationId(EXACT),
                 tokens_before: crate::runtime::types::TokenMeasurement {
                     input_tokens: 100,
                     source: crate::runtime::types::TokenMeasurementSource::ProviderReported,

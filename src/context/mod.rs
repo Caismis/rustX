@@ -1,45 +1,20 @@
-//! The context plane: deterministic finite context assembly, token
-//! accounting, compaction planning, Agent Status generation, and the
-//! provider-neutral model-context boundary.
+//! The context plane: bounded read-only resources, typed historical projections,
+//! deterministic compilation, token accounting and compaction planning.
 //!
-//! M7.5 (Issue #54) supersedes the M4 projection-only compaction model. The
-//! canonical conversation model lives in [`crate::conversation`]; the
-//! context plane is a consumer of it:
+//! Immutable Canonical History supplies committed facts. Durable checkpoint
+//! activations select Original and Derived context. Compilation includes only
+//! eligible Tail strictly after the checkpoint base. The Agent Loop adds current
+//! core-owned input and freezes exact semantic model requests before dispatch.
+//! Default Summary writes a Derived checkpoint item and never a canonical User.
 //!
-//! ```text
-//! Message Ledger        immutable committed facts
-//!         ↓
-//! Conversation Surface  active identity/order @ SurfaceRevision
-//!         ↓
-//! Context Assembly      bounded proposals + admission-ready context
-//!         ↓
-//! Context Engine        finite projection + token pressure + compaction
-//!                       planning
-//!         ↓
-//! canonical User(Runtime / CompactionSummary) commit
-//! + one complete-message Surface Replace
-//! ```
-//!
-//! Compaction is no longer "a projection that hides history": it commits a
-//! genuine canonical conversational fact and rewrites the Surface. Ledger
-//! facts are never edited, deleted, or overwritten.
-//!
-//! No provider SDK or wire type exists in this module: Context Assembly settles
-//! trusted semantic context, the engine projects the Surface, and adapters
-//! receive the final Effective System Prompt.
-//! [`ContextRuntime`] bundles the engine, the summary service, and — when the
-//! launch's frozen native Agent Extension composition contains the Agent
-//! Status extension (Issue #256) — the attempt-owned Agent Status engine for
-//! `AgentExecution`. Composition ownership moved to
-//! [`crate::extensions`]; request-time admission ownership did not: Context
-//! Assembly remains the only path that admits an Agent Status contribution. The conversation
-//! runtime supplies the admitted model timeout policy and shared monotonic
-//! clock when it constructs this bundle; the context plane does not own or
-//! recreate either execution primitive.
+//! Context Assembly remains the sole admission path for dynamic contributors.
+//! `ContextRuntime` bundles the engine, summary service and admitted Agent Status
+//! contributor; execution owns timeout policy, cancellation and monotonic clocks.
 
 pub mod assembly;
 pub mod contribution;
 
+pub mod checkpoint;
 pub(crate) mod compaction;
 pub(crate) mod compaction_metadata;
 pub mod engine;
@@ -47,6 +22,7 @@ pub mod error;
 mod images;
 pub mod occupancy;
 pub mod projection;
+pub mod resources;
 pub mod status;
 pub mod summarizer;
 pub mod tokens;
@@ -70,8 +46,8 @@ pub use assembly::{
     validate_user_message_proposal,
 };
 pub use engine::{
-    CompactionBudgets, CompactionConstraints, CompactionPlan, ContextConfig, ContextEngine,
-    EstimateCorrection, SessionContextPolicy,
+    CompactionBudgets, CompactionConstraints, ContextConfig, ContextEngine, EstimateCorrection,
+    SessionContextPolicy,
 };
 pub use error::{ContextError, ContextErrorKind};
 pub use projection::ContextProjection;
@@ -99,9 +75,8 @@ pub use tokens::{
 /// The bundle owns the deterministic engine, the summary service, and the
 /// frozen native capability binding; `AgentExecution` owns the integration point and
 /// the attempt's [`ConversationState`](crate::conversation::ConversationState).
-/// There is deliberately no separate summary store: compaction lineage is
-/// derived from Conversation Surface history, so no second authority can
-/// drift from it.
+/// Independently durable typed checkpoint content and activations supply
+/// historical projection authority; this bundle never owns canonical insertion.
 pub struct ContextRuntime {
     /// Provider-facing primary model frozen with the context capacity.
     pub(crate) primary_model: String,
@@ -291,3 +266,5 @@ impl ContextRuntime {
         }
     }
 }
+
+pub(crate) mod planning;

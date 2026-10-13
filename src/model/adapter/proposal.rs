@@ -166,6 +166,7 @@ mod tests {
 
     fn tools() -> ValidatedTools {
         let request = ModelRequest {
+            continuation_source: None,
             images: std::collections::BTreeMap::new(),
             invocation: crate::model::invocation::ModelInvocationConfig {
                 model: "m".to_owned(),

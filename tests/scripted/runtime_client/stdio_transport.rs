@@ -946,13 +946,19 @@ async fn an_oversized_outbound_record_terminates_without_truncating() {
     // The seeded canonical history alone exceeds the record limit, so the
     // `initialize` response (which carries the linearized snapshot) cannot
     // be framed.
-    let huge = "y".repeat(STDIO_JSONL_MAX_RECORD_BYTES + 1024);
+    let record_bytes = 512 * 1024;
+    let huge = "y".repeat(record_bytes);
+    let history = (0..=(STDIO_JSONL_MAX_RECORD_BYTES / record_bytes))
+        .map(|i| {
+            MessageBlock::User(support::fake::inbound_message(
+                &format!("seed-{i}"),
+                &huge,
+                UserSource::Human,
+            ))
+        })
+        .collect();
     let fixture = RuntimeClientFixture::builder("conv_aee41511-3bd5-7248-b7db-5be6c3a1c36f")
-        .initial_messages(vec![MessageBlock::User(support::fake::inbound_message(
-            "seed",
-            &huge,
-            UserSource::Human,
-        ))])
+        .initial_messages(history)
         .build()
         .await;
     let outcome = run_session(
