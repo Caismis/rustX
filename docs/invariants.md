@@ -1299,6 +1299,23 @@ Each option has a non-empty `label` (at most 60 scalar values) and
 single-select questions. Related blocking questions are grouped into one
 invocation.
 
+The model-facing schema contains no generation-facing regex for `question`,
+`header`, `label`, `description` or `preview`. Removing those patterns does not
+relax the native normalizer or shared Questionnaire validator: whitespace-only
+text, duplicate question text, duplicate labels, reserved custom-answer labels
+and invalid preview modes remain rejected before executor entry. Conflict
+diagnostics identify both zero-based paths and a correction without echoing
+authored values. Native argument diagnostics have an explicit UTF-8-safe byte
+bound; the ordinary model-facing result projection also enforces its existing
+output budget.
+
+Every rejected committed call still owns exactly one failed canonical result
+slot in original call order. It creates no pending questionnaire or requested
+fact. The next model request carries that result and renders the failure from
+`status.error`, without copying it into tool-owned content or inserting user
+messages. Only a subsequent model proposal can supply corrected arguments;
+validation rejection schedules no automatic re-execution.
+
 Those are the **tool's** authoring bounds. The runtime-owned contract is the
 typed question vocabulary: `ask_user` maps `multi_select: false` onto
 `SingleChoice { options, allow_custom: true }` and `multi_select: true` onto
