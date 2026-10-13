@@ -805,6 +805,23 @@ impl PendingObservations {
         self.notify.notify_one();
     }
 
+    /// Test-only: whether nothing is left to fold now or once the journal
+    /// commits — no queued observation in any lane, none awaiting its
+    /// journal commit, and no committed cut not yet released as a batch.
+    #[cfg(test)]
+    pub(crate) fn settled(&self) -> bool {
+        let state = self
+            .state
+            .lock()
+            .expect("pending observation queue lock poisoned");
+        state.reliable.is_empty()
+            && state.latest_activity.is_empty()
+            && state.latest_progress.is_empty()
+            && state.unpublished.is_empty()
+            && state.committed_through.is_none()
+            && !state.journal_failed
+    }
+
     /// Test-only: the number of observations waiting to be folded, across
     /// all delivery lanes.
     #[cfg(test)]
