@@ -33,11 +33,12 @@
 | Summary/children | Summary input remains a text transcript with artifact IDs; child Attempts apply their own frozen invocation gate |
 | Clients | Native capability/Attempt facts, canonical Tool arguments/results, background Bash metadata, and bounded Trace source/arguments feed both clients |
 
-Session-model mutation remains subject to the repository's existing Busy
-adoption gate. Tests hold real provider gates in both directions, prove a running
-Attempt cannot be replaced, then prove the next eligible admission uses the new
-model/catalog. Existing deterministic configuration/resource/catalog admission
-and lease-race suites run with the new registry derivation.
+Issue #468 removes the Busy requirement from Session-model selection while
+retaining it for unsafe context/capability adoption. A valid selection commits
+during execution; the running Attempt retains its captured invocation and image
+capability, and the next independent admission uses the new selection. Existing
+deterministic configuration/resource/catalog admission and lease-race suites
+continue to govern the registry derivation.
 
 Inventory and configured intent remain inspectable separately from the selected
 model's gated catalog. The admitted `read_image_active` fact comes from native

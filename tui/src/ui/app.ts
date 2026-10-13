@@ -430,6 +430,7 @@ export class RustxTuiApp {
     try {
       await oldHost.shutdown();
       replacement = await this.#reconnect();
+      replacement.inheritModelSelectionUncertainty(oldHost);
       let focus = focused;
       let observedDeletion: SessionDeleteResult | undefined;
       // A historical deletion target is independent of the currently focused Session.
@@ -462,7 +463,7 @@ export class RustxTuiApp {
         this.#deletion.observeCommitted(observedDeletion,
           this.#resumePresentation?.reconciliationContext() ?? { query: "", ids: [], index: 0, loaded: 0 });
       }
-      this.#showTransient("info", "reconnected from server state; no unanswered mutations were resent");
+      this.#showTransient("info", "reconnected from server state; no unanswered mutations were resent\nUnanswered mutation outcomes remain unknown.");
     } catch (error) {
       await replacement?.shutdown();
       this.#showTransient("error", `reconnect failed: ${compactDiagnostic(error)}. Ctrl+R retries; Ctrl+C exits. Unanswered mutations remain unknown.`);

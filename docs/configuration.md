@@ -593,7 +593,7 @@ Session admits no model work: `turn/start`, `turn/steer` and `context/compact`
 are refused with `model_unavailable`, and inbound accepted before the publication
 is held, never run on the removed selection and never dropped. Held work does not
 make the Session busy for the correction. The correction is an ordinary
-`session/setModel` (or Runtime Client `model_set`) with a complete selection the
+`session/setModel` with a complete selection the
 catalog admits, primary and explicit Summary alike; it commits through the usual
 fence and admits held work with exactly the new selection.
 
@@ -613,8 +613,62 @@ An independent Attempt captures complete execution configuration once. Requests,
 Steps, retries, recovery, Tool batches, Subagents and Workflow children inherit
 that capture even after new policy publishes. Session creation resolves its model
 once; changing global defaults does not replace it. `session/setModel` is the
-single deliberate Session model mutation and uses the same preparation/commit
-primitive, with Session and model baseline fences.
+single deliberate Session model mutation. A validated complete selection commits
+immediately, including while an Attempt, child or background Tool owns execution.
+It is durable Session authority for future independent Attempts; it never replaces
+an admitted invocation or waits in a pending-model queue.
+
+Selection preparation uses the exact catalog and retained binding published to
+that Session, outside the commit fence. The final commit revalidates the captured
+source/application, settings, binding, resource and runtime identities. The native
+coordinator gate serializes that commit with independent Attempt admission: a
+selection committed first is captured by the new Attempt; an Attempt admitted
+first retains its complete previous snapshot. Concurrent or superseded candidates
+fail instead of overwriting newer authority. Model selection never imports pending
+instructions, capabilities or other source changes. Explicit context adoption
+retains its separate readiness, cache-impact and idle-safety rules.
+
+The whole `SessionModelConfig` is replaced together. A same-Model Profile choice
+preserves request overrides, output override and Summary Model policy; native
+validation rejects any newly incompatible combination. Choosing a different Model
+resets primary request/output overrides and uses that Model's default Profile
+unless a Profile is explicitly chosen, while retaining the independently selected
+Summary Model policy. There
+is no fallback to another Model or Profile after validation failure.
+
+The selected Session Model/Profile and an active Attempt's Model/Profile are
+separate authoritative facts, including when only effective parameters differ.
+Every later Turn, Tool continuation, retry and compaction summary of that Attempt
+uses its captured invocations, limits and adapter bindings. A child created by the
+Attempt after a Session selection change inherits the parent's captured model
+authority and resources. Snapshot and capability leases retain physical resources
+until their existing owners settle; selection does not retire resources early.
+
+For a changed selection, the atomic catalog replacement that publishes the Session
+settings is the commit point. Retained-binding and resident-runtime publication follow
+while the admission fence remains held, before any later Attempt can capture.
+A failure before that replacement leaves all model authority unchanged. If replacement
+committed but its durability acknowledgement is uncertain, native authority stays
+coherent with the published settings and the operation reports uncertainty rather
+than success. Clients reread native authority after conflict, disconnect or an
+uncertain response; they never automatically replay the mutation. Unload/reload
+and reconnect preserve the selected Session state and do not rewrite frozen
+execution facts.
+
+An already-persisted identical selection is a no-op only after the same lifecycle,
+revision and resource checks. It writes nothing and advances no binding or event.
+It also preserves Application Identity, Version, Unit states, and any Ready
+Candidate, and starts no configuration preparation. Selecting the inherited
+current model explicitly is a durable intent change, even if its invocation is
+identical. Clients submit the complete selection and let the native owner decide.
+
+Durable local Session runtimes reject runtime-only `model_set` calls, including
+Runtime Client host, attachment and request-dispatch controls. Only the native
+Session owner may commit their settings, retained binding and runtime authority.
+Standalone Conversation runtimes retain their in-memory control operation.
+An invocation that happens to resolve alike still visits the durable owner: making
+an inherited default explicit must persist that intent. Selection does not create
+a source-application scope when the Session has no source application to reconsider.
 
 `configuration/reconcile` rescans external files or retries failed preparation.
 Stable changed inputs create a new desired revision; retrying unchanged inputs

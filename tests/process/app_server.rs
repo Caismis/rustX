@@ -1208,13 +1208,25 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
             let Response::Failure(failure) = rpc(&clients[1 - index], 12, Method::SessionRead { session_id: id.clone() }).await else { panic!("foreign Session readable") };
             assert_eq!(failure.error.data, Some(ErrorData::UnknownSession { session_id: id }));
         }
+        let mut selections = Vec::new();
         for (index, client) in clients.iter().enumerate() {
-            let mut model: rustx::model::session::SessionModelConfig = serde_json::from_value(snapshot(client, &targets[index]).await["model"]["configured"].clone()).unwrap();
+            let before = snapshot(client, &targets[index]).await;
+            assert_eq!(before["attempt"]["phase"]["type"], "running");
+            let mut model: rustx::model::session::SessionModelConfig = serde_json::from_value(before["model"]["configured"].clone()).unwrap();
             model.request_params.insert("temperature".into(), serde_json::json!(0.42));
-            let Response::Failure(failure) = rpc(client, 100, Method::ModelSet { target: targets[index].clone(), config: Box::new(model) }).await else { panic!("busy model change accepted") };
-            assert_eq!(failure.error.data, Some(ErrorData::ConfigurationAdoption {
-                rejection: rustx::local_runtime::configuration::application::AdoptionError::Busy
-            }));
+            let MethodResult::Model { model: selected } = result(client, Method::ModelSet { target: targets[index].clone(), config: Box::new(model.clone()) }).await else { panic!("live model selection") };
+            assert_eq!(selected.configured, model);
+            assert_eq!(selected.effective.as_ref().unwrap().request_params["temperature"], serde_json::json!(0.42));
+            let during = snapshot(client, &targets[index]).await;
+            assert_eq!(during["model"]["configured"], serde_json::to_value(&model).unwrap());
+            assert_eq!(during["attempt"]["model"], before["attempt"]["model"]);
+            let MethodResult::Settings { settings, .. } = result(client, Method::SettingsRead { session_id: targets[index].session_id.clone() }).await else { panic!("persisted selection") };
+            assert_eq!(settings.model.as_ref(), Some(&model));
+            for request in users[index].2.requests().await {
+                assert_eq!(request["body"]["temperature"], before["attempt"]["model"]["primary"]["requestParams"]["temperature"]);
+                assert_eq!(request["body"]["max_completion_tokens"], before["attempt"]["model"]["primary"]["maxOutputTokens"]);
+            }
+            selections.push(model);
         }
         let a_pid = processes[0].id();
         let a_before = snapshot(&clients[0], &targets[0]).await;
@@ -1235,6 +1247,7 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         assert_eq!(diagnostics(&recovered).await.loaded, 0, "listing never starts Sessions");
         let cold = attach(&recovered, targets[1].session_id.clone(), 3).await;
         let after = snapshot(&recovered, &cold).await;
+        assert_eq!(after["model"]["configured"], serde_json::to_value(&selections[1]).unwrap(), "the active selection was durable before the process crash");
         assert!(after["messages"].to_string().contains("b:unset"));
         assert!(!after["messages"].to_string().contains("result-b"));
         assert_eq!(std::fs::read(users[1].1.root.path().join("a/host-effect")).unwrap(), b"x");
@@ -1250,6 +1263,8 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         assert_eq!(pb.requests().await.len(), 2, "source edits in A cannot trigger B replay");
         pa.release_gate("host-result").await;
         let completed = settled(&clients[0], &targets[0]).await;
+        assert_eq!(completed["model"]["configured"], serde_json::to_value(&selections[0]).unwrap());
+        assert_eq!(completed["attempt"]["model"], a_before["attempt"]["model"]);
         assert!(completed["messages"].to_string().contains("result-a"));
         assert!(!completed["messages"].to_string().contains("result-b"));
         assert_eq!(pa.requests().await.len(), 2);

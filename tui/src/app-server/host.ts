@@ -178,6 +178,7 @@ export class AppServerHost {
   readonly #recoveries = new Map<string, SourceTarget>();
   #recovering = false;
   readonly #sourceRepairListeners = new Set<SourceRepairListener>();
+  readonly #unknownModelSelections = new Set<string>();
   #shutdown: Promise<ChildExit | undefined> | undefined;
   readonly #exports = new Set<AbortController>();
 
@@ -427,7 +428,7 @@ export class AppServerHost {
       if (nodeId === undefined || nodeId === existing.nodeId) return existing;
       throw new Error("use branch switching to open a different Session node");
     }
-    const session = await AppServerSession.attach(this.client, sessionId, nodeId);
+    const session = await AppServerSession.attach(this.client, sessionId, nodeId, this.#unknownModelSelections);
     this.#sessions.set(sessionId, session);
     session.onClosed(() => {
       // Residency ended for this attachment. Drop the route so a later attach
@@ -437,6 +438,13 @@ export class AppServerHost {
       }
     });
     return session;
+  }
+
+  /** Carry local unanswered-request evidence across reconnection, not model authority. */
+  inheritModelSelectionUncertainty(previous: AppServerHost): void {
+    for (const sessionId of previous.#unknownModelSelections) {
+      this.#unknownModelSelections.add(sessionId);
+    }
   }
 
   /** User-confirmed branch switch; the manager owns native retirement. */

@@ -1,6 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { modelDefaultLabel, offersModelDefault, profileUnavailable, type ModelChoice, type ModelSelectionIntent } from '../../presentation/agent/ModelSelect';
-import { selectionChanges } from '../../bindings/model-catalog';
 import { useTranslation } from '../../locale/react';
 import menuCss from '../commands/Commands.module.css';
 import css from './ModelPicker.module.css';
@@ -36,7 +35,6 @@ export function ModelPicker({ state, close, chosen }: { state: ModelPickerState;
   const index = Math.max(0, rows.findIndex(row => row.key === active));
   const select = async (row: typeof rows[number]) => {
     if (state.disabled || pending) return;
-    if (!selectionChanges(state.current, state.profile, row.intent)) { chosen(); return; }
     setPending(true);
     try { if (await state.choose(row.intent)) chosen(); } finally { setPending(false); }
   };

@@ -14,6 +14,31 @@ pub const ANCHOR_STOP_GATE_ENV: &str = "RUSTX_TEST_AFTER_ANCHOR_STOP_SOCKET";
 /// before any TERM syscall. The fixture owns the peer and releases it explicitly.
 pub const TERM_GATE_ENV: &str = "RUSTX_TEST_BEFORE_TERM_SOCKET";
 
+/// Trusted macOS fixture: withhold one absence proof at the observation
+/// deadline, then leave all later observations to the real kernel.
+#[cfg(target_os = "macos")]
+pub(crate) const GROUP_ABSENCE_GATE_ENV: &str = "RUSTX_TEST_GROUP_ABSENCE_SOCKET";
+
+#[cfg(target_os = "macos")]
+pub(crate) fn expired_group_presence() -> bool {
+    use std::io::Read;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static CONSUMED: AtomicBool = AtomicBool::new(false);
+    let Some(path) = std::env::var_os(GROUP_ABSENCE_GATE_ENV) else {
+        return false;
+    };
+    if CONSUMED.swap(true, Ordering::Relaxed) {
+        return false;
+    }
+    let mut gate = std::os::unix::net::UnixStream::connect(path)
+        .expect("group-absence fixture connect failed");
+    gate.write_all(b"P")
+        .expect("group-absence fixture notification failed");
+    gate.read_exact(&mut [0])
+        .expect("group-absence fixture release failed");
+    true
+}
+
 pub(crate) fn before_term() {
     use std::io::Read;
     if let Some(path) = std::env::var_os(TERM_GATE_ENV)
@@ -39,6 +64,8 @@ pub enum Event {
     GroupChildrenReaped,
     /// Darwin's positive group-absence proof completed.
     GroupAbsenceProven,
+    /// A bounded absence observation ended without proof; this is not terminal.
+    GroupAbsenceUnproven,
     /// The runner attempted the cancellation control frame; `sent` is write success.
     TerminateSent { sent: bool },
     /// The inner parsed the authoritative cancellation frame.

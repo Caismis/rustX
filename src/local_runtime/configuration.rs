@@ -828,16 +828,17 @@ impl ProspectiveSessionConfig {
 }
 
 impl AdmittedSessionConfig {
-    /// The capture a Session model change resolves: this binding with
-    /// `selection`, against the Session's own published catalog — the one
-    /// its `session/models` advertises — never against unpublished sources.
-    pub(crate) fn with_session_model(
+    /// Change only Session intent, retaining the exact published resources,
+    /// catalog and credential capture. No source or physical resource is reopened.
+    pub(crate) fn with_model_selection(
         &self,
         selection: crate::model::session::SessionModelConfig,
-    ) -> ProspectiveSessionConfig {
-        let mut capture = self.prospective.as_ref().clone();
-        capture.input.model = Some(selection);
-        capture
+        revision: u64,
+    ) -> Self {
+        let mut retained = self.clone();
+        retained.prospective.input.model = Some(selection);
+        retained.binding_revision = revision;
+        retained
     }
 
     /// This binding at `binding_revision` with `published`'s catalog and its

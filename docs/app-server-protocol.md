@@ -480,7 +480,7 @@ explicitly rejected as an invalid request before any action occurs.
 | `turn/start`, `turn/steer`, `turn/cancel` | Native inbound and attempt-cancellation owners; acceptance is not terminal execution |
 | `interaction/respond`, `interaction/cancel` | Originating runtime/coordinator, including routed child interactions |
 | `session/settings` | Durable resolved Session selection; model mutation uses `session/setModel` |
-| `session/model`, `session/models`, `session/setModel` | Live attached Session model read/catalog/mutation; native validation and persistence, exact model and advertised profile references |
+| `session/model`, `session/models`, `session/setModel` | Live attached Session model read/catalog/mutation; complete selection validation and durable immediate commit, including during active execution; exact model and advertised profile references |
 | `configuration/sourcesRead`, `configuration/sourceWrite` | Native structured User/Workspace documents and exact revisions; bounded semantic-unit CAS writes |
 | `session/effectiveConfiguration`, `configuration/reconcile`, `session/adoptConfiguration` | Authoritative application state, native rescan/retry, and fenced explicit Session adoption |
 | `context/compact`, `goal/control` | Existing maintenance and Goal owners |
@@ -493,6 +493,24 @@ explicitly rejected as an invalid request before any action occurs.
 decides whether it starts a fresh attempt or joins the inbound queue of the
 current attempt. Neither method creates a separate execution state machine.
 Callers learn accepted message identity and inbound sequence from the result.
+
+`session/setModel` remains the sole Session selection mutation. Its successful
+response contains the authoritative committed Session model state. It does not
+replace the active Attempt's frozen `AttemptModelView`, including when only a
+Profile, output budget or request parameter differs. Subsequent independent
+Attempts capture the new selection; child work from an older Attempt inherits its
+parent's captured authority. General `session/adoptConfiguration` retains its
+separate Busy/readiness rules.
+
+Selection errors distinguish invalid complete selections, stale candidates,
+unavailable/retired runtimes, persistence failures and committed durability
+uncertainty through the existing typed error vocabulary. No error or lost response
+authorizes automatic mutation replay. Clients reread Session authority to reconcile
+an uncertain result and retain the separately projected running Attempt.
+Readback is a current-state observation, not a terminal receipt for an unanswered
+request: a native-owned selection may still commit after that observation. A new
+deliberate selection uses the existing native revision fences; a true no-op does
+not advance them or establish settlement of an earlier request.
 
 The connection admits at most 32 active **plus reserved** attachments. A short
 routing-lock transaction reserves capacity before `load` can compose a cold

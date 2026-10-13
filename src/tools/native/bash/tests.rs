@@ -2,7 +2,7 @@ use super::{BashTestControl, BashTool, NAME};
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::{ConversationId, ToolCallId, ToolId};
 use crate::runtime::process_runner::{
-    MSG_ALL_CHILDREN_REAPED, SupervisorEvent, read_supervisor_event,
+    MSG_ALL_CHILDREN_REAPED, SupervisorEvent, SupervisorEventReader,
 };
 use crate::runtime::types::CancellationReason;
 use crate::tools::artifacts::ArtifactStore;
@@ -136,6 +136,18 @@ fn process_alive(pid: i32) -> bool {
     match nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None) {
         Err(nix::errno::Errno::ESRCH) => false,
         Ok(()) | Err(_) => true,
+    }
+}
+
+/// The fixture owns this child even if a containment assertion panics.
+#[cfg(unix)]
+struct UnrelatedProcess(std::process::Child);
+
+#[cfg(unix)]
+impl Drop for UnrelatedProcess {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
     }
 }
 
@@ -1268,65 +1280,212 @@ async fn control_channel_abandonment_contains_the_owned_tree() {
 /// in the test's own process group survives.
 #[cfg(unix)]
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // One native failure/containment/output settlement proof.
 async fn fallback_containment_does_not_kill_unrelated_processes() {
+    use super::supervisor::diagnostics::{Entry, Event, FixtureControl};
+    use futures_util::FutureExt;
+    use tokio::io::AsyncReadExt;
+
     let (dir, artifacts, tool_output, workspace) = fixture();
     let root = workspace.root().to_path_buf();
     let shell_pid_file = root.join("shell.pid");
     let anchor_pid_file = root.join("anchor.pid");
-    // An unrelated process in the test's own process group.
-    let unrelated = std::process::Command::new("sleep")
-        .arg("30")
-        .spawn()
-        .expect("unrelated sleep");
-    let unrelated_pid = unrelated.id();
-    let command = format!("echo $$ > {}; sleep 30", shell_pid_file.display());
+    // Darwin's Unix socket path bound requires this independent short root.
+    let sockets = tempfile::Builder::new()
+        .prefix("rx-fallback-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let term_socket = sockets.path().join("term");
+    let listener = tokio::net::UnixListener::bind(&term_socket).unwrap();
+    let trace = sockets.path().join("trace");
+    // An unrelated process in the test's own process group. Its retained
+    // stdin keeps it alive independently of fixture setup and settlement.
+    let mut unrelated = UnrelatedProcess(
+        std::process::Command::new("/bin/sh")
+            .args(["-c", "read hold"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .expect("unrelated process"),
+    );
+    let unrelated_pid = unrelated.0.id();
+    let command = format!(
+        "printf fallback-output; echo $$ > {}; sleep 30",
+        shell_pid_file.display()
+    );
     let cancellation = CancellationSignal::new();
     let cancelling = cancellation.clone();
+    let control = BashTestControl::new()
+        .fail_signal()
+        .anchor_pid_file(anchor_pid_file.clone())
+        .with_diagnostics(FixtureControl {
+            trace: Some(trace.clone()),
+            before_term_socket: Some(term_socket),
+        });
+    let lifecycle = control.runner_control().lifecycle;
     let task = tokio::spawn(run_with_control(
         command,
-        BashTestControl::new()
-            .fail_signal()
-            .anchor_pid_file(anchor_pid_file.clone()),
+        control.clone(),
         cancellation,
         artifacts.clone(),
         tool_output.clone(),
         workspace.clone(),
         None,
     ));
-    // The owned shell provably started before cancellation.
-    for _ in 0..1000 {
-        if shell_pid_file.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert!(shell_pid_file.exists(), "the shell pid file never appeared");
-    cancelling.cancel();
-    let result = tokio::time::timeout(Duration::from_secs(20), task)
-        .await
-        .expect("the invocation settles")
-        .expect("executor task");
-    assert!(
-        matches!(result.status, ToolExecutionStatus::Failed { .. }),
-        "an injected signaling failure must be an explicit failed result, got {:?}",
-        result.status
-    );
-    // The unrelated process in the test's own process group survived
-    // the fallback containment of the invocation's session-isolated
-    // group.
-    let mut unrelated = unrelated;
-    assert!(
-        unrelated.try_wait().expect("try_wait").is_none(),
-        "the unrelated process (pid {unrelated_pid}) must survive fallback containment"
-    );
-    let _ = unrelated.kill();
-    let _ = unrelated.wait();
-    // The owned group is terminal.
+    // Shell execution and runner receipt are separate facts. A file created
+    // by bash does not prove the runner consumed its ownership frame.
+    let shell_pid = written_pid(&shell_pid_file).await;
+    tokio::time::timeout(
+        Duration::from_secs(20),
+        lifecycle.await_ownership_established(),
+    )
+    .await
+    .expect("runner consumed ownership readiness before cancellation");
     let anchor_pid: i32 = std::fs::read_to_string(&anchor_pid_file)
         .expect("anchor pid file")
         .trim()
         .parse()
         .expect("anchor pid");
+    assert_ne!(
+        nix::unistd::getpgid(Some(nix::unistd::Pid::from_raw(
+            i32::try_from(unrelated_pid).unwrap(),
+        )))
+        .unwrap()
+        .as_raw(),
+        anchor_pid,
+        "the unrelated child must be outside the invocation group"
+    );
+    cancelling.cancel();
+    let (mut term, _) = tokio::time::timeout(Duration::from_secs(20), listener.accept())
+        .await
+        .expect("inner parsed cancellation")
+        .unwrap();
+    let mut label = [0];
+    term.read_exact(&mut label).await.unwrap();
+    assert_eq!(&label, b"T");
+    assert!(
+        !task.is_finished(),
+        "cancellation receipt is not settlement"
+    );
+    assert!(process_alive(shell_pid));
+    assert!(control.recorded_signals().is_empty());
+    assert!(
+        !std::fs::read_to_string(&trace)
+            .unwrap()
+            .contains("TerminalPublished")
+    );
+    term.write_all(&[1]).await.unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(20), task)
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "the invocation settles; native evidence: {}",
+                std::fs::read_to_string(&trace).unwrap_or_default()
+            )
+        })
+        .expect("executor task");
+    assert!(
+        matches!(
+            &result.status,
+            ToolExecutionStatus::Failed { error }
+                if error.starts_with("bash process control failed: ")
+        ),
+        "process-control failure must survive cancellation and physical settlement: {:?}",
+        result.status
+    );
+    let crate::tools::types::ToolResultContent::Json { value } = &result.content[0] else {
+        panic!("Bash must return its captured output");
+    };
+    assert_eq!(value["stdout"], "fallback-output");
+    assert_eq!(value["combined"], "fallback-output");
+    assert_eq!(value["stderr"], "");
+    assert!(
+        result.truncation.is_none(),
+        "output capture must fully settle"
+    );
+    assert!(result.managed_output.is_none());
+    assert!(lifecycle.await_terminal().now_or_never().is_some());
+    assert!(
+        lifecycle
+            .await_direct_child_reaped()
+            .now_or_never()
+            .is_some()
+    );
+    // The unrelated process in the test's own process group survived
+    // the fallback containment of the invocation's session-isolated
+    // group.
+    assert!(
+        unrelated.0.try_wait().expect("try_wait").is_none(),
+        "the unrelated process (pid {unrelated_pid}) must survive fallback containment"
+    );
+    assert_eq!(
+        control.recorded_signals(),
+        vec![
+            super::executor::RecordedSignal {
+                pgid: anchor_pid,
+                signal: "SIGTERM",
+                emitted: false
+            },
+            super::executor::RecordedSignal {
+                pgid: anchor_pid,
+                signal: "SIGKILL",
+                emitted: true
+            },
+        ],
+        "only the retained owned group can receive fallback containment"
+    );
+    let evidence = std::fs::read_to_string(&trace).unwrap();
+    let events: Vec<Entry> = evidence
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let mut ordered = events.iter();
+    for boundary in [
+        |event: &Event| matches!(event, Event::TerminateReceived),
+        |event: &Event| matches!(event, Event::AnchorTerminalObserved),
+        |event: &Event| matches!(event, Event::FallbackContainment),
+        |event: &Event| matches!(event, Event::GroupChildrenReaped),
+        #[cfg(target_os = "macos")]
+        |event: &Event| matches!(event, Event::GroupAbsenceProven),
+        |event: &Event| matches!(event, Event::TerminalPublished),
+        |event: &Event| matches!(event, Event::DirectChildReaped),
+    ] {
+        assert!(ordered.any(|entry| boundary(&entry.event)), "{evidence}");
+    }
+    for unique in [
+        |event: &Event| matches!(event, Event::FallbackContainment),
+        |event: &Event| matches!(event, Event::TerminalPublished),
+        |event: &Event| matches!(event, Event::TerminalObserved),
+        |event: &Event| matches!(event, Event::DirectChildReaped),
+    ] {
+        assert_eq!(
+            events.iter().filter(|entry| unique(&entry.event)).count(),
+            1,
+            "{evidence}"
+        );
+    }
+    // Sender logging follows its write; receiver logging can win that race.
+    // Each owner still has one terminal fact, and observation precedes reap.
+    let observed = events
+        .iter()
+        .position(|entry| matches!(entry.event, Event::TerminalObserved))
+        .unwrap();
+    let reaped = events
+        .iter()
+        .position(|entry| matches!(entry.event, Event::DirectChildReaped))
+        .unwrap();
+    assert!(observed < reaped, "{evidence}");
+    let released = events
+        .iter()
+        .position(|entry| matches!(entry.event, Event::GroupChildrenReaped))
+        .unwrap();
+    assert!(
+        !events[released..].iter().any(|entry| matches!(
+            entry.event,
+            Event::Signal { .. } | Event::FallbackContainment
+        )),
+        "signal after anchor release: {evidence}"
+    );
+    wait_for_process_death(shell_pid).await;
     wait_for_group_death(anchor_pid).await;
     let _ = dir;
 }
@@ -2501,16 +2660,17 @@ async fn bash_catastrophic_containment_does_not_touch_foreign_adopted_child() {
 #[tokio::test]
 async fn terminal_frame_is_parsed_before_buffered_eof() {
     let (mut writer, mut reader) = tokio::net::UnixStream::pair().expect("socket pair");
+    let mut decoder = SupervisorEventReader::default();
     writer
         .write_all(&[1, 0, 0, 0, MSG_ALL_CHILDREN_REAPED])
         .await
         .expect("terminal frame");
     drop(writer);
     assert!(matches!(
-        read_supervisor_event(&mut reader).await,
+        decoder.read(&mut reader).await,
         Ok(Some(SupervisorEvent::AllChildrenReaped))
     ));
-    assert!(matches!(read_supervisor_event(&mut reader).await, Ok(None)));
+    assert!(matches!(decoder.read(&mut reader).await, Ok(None)));
 }
 
 /// macOS-specific regressions for the Bash EXIT-trap and containment

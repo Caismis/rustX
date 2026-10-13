@@ -486,7 +486,9 @@ pub enum RuntimeClientRequest {
         /// Attachment-scoped request id.
         id: RequestId,
     },
-    /// Replace the authoritative session model configuration.
+    /// Replace a standalone conversation's in-memory model configuration.
+    /// Durable Session runtimes reject this request with `InvalidState`; select
+    /// through the native Session owner (`session/setModel`) instead.
     ///
     /// This is a whole-state replacement, never a patch. Validation is
     /// transactional: an invalid update changes nothing and publishes
@@ -825,10 +827,11 @@ pub enum RuntimeClientResult {
         /// The redacted session model view.
         model: Box<SessionModelView>,
     },
-    /// `model_set` succeeded: the update was applied and published.
+    /// `model_set` succeeded for a standalone conversation.
     ///
-    /// The result carries the *session* state after the update. It never
-    /// implies that a running attempt changed model.
+    /// The result carries its current model selection after the update. It never
+    /// implies that a running attempt changed model. Durable Session selection
+    /// acknowledgements belong to the native Session owner.
     ModelSet {
         /// The redacted session model view after the update.
         model: Box<SessionModelView>,

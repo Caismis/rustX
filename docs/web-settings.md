@@ -4,6 +4,18 @@ Web owns forms, drafts and presentation. Rust owns parsing, semantic validation,
 serialization, overlays, provenance, shadowing, CAS and runtime publication.
 The [CFG3 reference](configuration.md) is the configuration contract.
 
+The Session Model/Profile picker changes only that Session through
+`session/setModel` and remains available during active execution when its
+attachment, catalog and mutation state are valid. Its selected value describes
+future independent Attempts. The running Attempt keeps its separately published
+Model/Profile and effective invocation, including when the Model ID is unchanged.
+Native confirmation establishes success; rejected or uncertain mutations do not
+optimistically rewrite either authority. Recovery rereads native state without
+replaying the mutation. Profile changes preserve independent Session overrides
+and Summary Model policy; choosing another Model resets only primary selection
+overrides. The focused Session's context-adoption control retains its separate
+native eligibility rules.
+
 Global Settings edits User definitions with no Session required. Workspace Settings
 opens the exact registered Workspace through Product Host authorization without
 changing Session focus or creating a runtime. The entry owns the target for the
