@@ -34,8 +34,10 @@ function receipt(overrides: Partial<ConfigRepairReceipt> = {}): ConfigRepairRece
     truncated: false, backup_available: true, diagnostic: null, ...overrides,
   };
 }
+/** Native ledger sequences of announced observations, in announcement order. */
+let announcedSequence = 0;
 async function announce(s: Server, target: SourceTarget, value: ConfigRepairReceipt | null) {
-  await act(async () => { s.socket.deliver({ jsonrpc: '2.0', method: 'configuration/sourceRepairChanged', params: { target, receipt: value } }); });
+  await act(async () => { s.socket.deliver({ jsonrpc: '2.0', method: 'configuration/sourceRepairChanged', params: { target, receipt: value, sequence: String(++announcedSequence) } }); });
 }
 const sent = (s: Server, method: Request['method']) => s.requests.filter(item => item.request.method === method).map(item => item.request);
 

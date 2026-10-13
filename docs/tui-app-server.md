@@ -37,14 +37,42 @@ and never drops or repeats one.
 
 The repair status line belongs to the App Server authority this connection's
 `initialize` negotiated (`AppServerClient.authorityId`, exposed read-only by the
-host) and holds only that authority's unacknowledged receipts. A receipt is
-announced once per `(authority_id, receipt id)`: a reconnect to the same App
-Server keeps the line, repeats nothing, and keeps acknowledged receipts
-acknowledged. A replacement process, or another server, retires the previous
-line — a warning never carries into a process that does not hold it — and its
-receipts are announced on their own, even with equal ids. A native withdrawal
-removes its source from the line; a late notice of a replaced connection changes
-nothing. Deduplication is bounded and in memory only.
+host). Three facts stay apart. A source's current native observation is ordered
+by the native ledger sequence a notice (`sequence`) or read (`repair_sequence`)
+carries — never by receipt id, status or arrival — so an older read answered
+after a newer notice, or a late notice after a fresher read, changes nothing,
+and an observation at an equal sequence is the same observation. Announcements
+are kept once per `(authority_id, receipt id)`. What the line presents is a
+source's current receipt from its first announcement until the user
+acknowledges it or a newer observation replaces or withdraws it. A newer
+observation therefore always updates its source even when its receipt was
+announced before: it becomes current without a second announcement and retires
+whatever the source presented (R1 → R2 → R1 ends with R1 current and nothing
+presented). An acknowledgement never changes what a source holds.
+
+Notices are not history: a source whose receipt was withdrawn while the client
+was away is never announced to its next connection. A reconnect to the same App
+Server therefore keeps the line and then rereads, through `configuration/sourcesRead`
+on that exact connection, each source the line still presents — the Workspaces,
+each of which also rereads the User, or the User alone — one read at a time,
+bounded by the line's sources. A read that fails proves no withdrawal: the
+entry stays until a later read or notice (`/settings repairs` reads again), and
+the connection is unaffected. Results of a replaced connection — checked by host
+instance, not authority — and anything after quitting change nothing. A
+replacement process, or another server, retires the previous line — a warning
+never carries into a process that does not hold it — and its sequences start a
+new ordering domain; its receipts are its own, even with equal ids.
+
+One retention policy bounds every per-source repair map
+(`retainSource`: the User plus the ledger's 64 Workspaces, the least recently
+observed Workspace forgotten first, never the User). Each owner applies it to
+its own state: the host to its connection's observations, the status line to
+what it presents, retiring a forgotten source's warning with it.
+Announcements are bounded separately (256), and the client's pre-subscription
+buffer as described above; all of it is in memory only. A source forgotten on
+the client loses its sequence frontier: an observation of it older than the
+forgotten one, arriving after 64 newer Workspaces were observed, is taken as
+current.
 `/session settings` inspects Session selections, binding, pending candidate and
 the runtime's published adoption eligibility (Runtime Client state, never part of
 the application). `/session adopt` sends only the last inspected candidate and

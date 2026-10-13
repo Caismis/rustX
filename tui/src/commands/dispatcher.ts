@@ -565,10 +565,10 @@ export class CommandDispatcher {
     if (this.#context.host !== host) return transient("error", "The App Server connection changed during the inspection; nothing was shown. Run it again.");
     const observations: SourceRepairObservation[] = [];
     if (target === "current" || (typeof target !== "string" && target.kind === "user")) {
-      observations.push({ target: { kind: "user" }, receipt: projection.user_repair ?? undefined });
+      observations.push({ target: { kind: "user" }, receipt: projection.user_repair ?? undefined, sequence: projection.repair_sequence });
     }
     if (workspace !== undefined) {
-      observations.push({ target: projection.target, receipt: projection.workspace_repair ?? undefined });
+      observations.push({ target: projection.target, receipt: projection.workspace_repair ?? undefined, sequence: projection.repair_sequence });
     }
     const body = renderRepairInspection(observations);
     return inspect("Configuration repairs", target === "current" && workspace === undefined ? `${body}\n\n${NO_CURRENT_WORKSPACE}` : body);

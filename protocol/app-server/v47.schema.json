@@ -19991,6 +19991,11 @@
             }
           ]
         },
+        "repair_sequence": {
+          "description": "The native repair-ledger sequence `user_repair` and `workspace_repair`\nare current at, read with them under one lock. It orders this read\nagainst the `sequence` of each `configuration/sourceRepairChanged`\nfor the same source: the higher one is the newer observation.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
         "user_resource_root": {
           "type": "string"
         },
@@ -20030,6 +20035,7 @@
         "resource_revisions",
         "provenance",
         "user",
+        "repair_sequence",
         "user_resource_root",
         "runtime_root",
         "user_mcp",
@@ -21199,7 +21205,7 @@
           ]
         },
         {
-          "description": "The latest automatic `rustx.toml` repair observation of one source\nchanged (Issue #464).\n\nSource-scoped: it names a `SourceTarget`, never a Session, attachment\nor application scope, and it says nothing about runtime application,\nwhich `configuration/changed` reports separately. A connection observes\nthe User source and each Workspace source it addressed; a newly\nobserved source announces its latest receipt once. `receipt: null`\nmeans the source no longer reports an unresolved repair. Delivery is\nlevel-triggered from a finite process-local ledger: after a gap, the\nauthoritative `configuration/sourcesRead` carries the same receipts.",
+          "description": "The latest automatic `rustx.toml` repair observation of one source\nchanged (Issue #464).\n\nSource-scoped: it names a `SourceTarget`, never a Session, attachment\nor application scope, and it says nothing about runtime application,\nwhich `configuration/changed` reports separately. A connection observes\nthe User source and each Workspace source it addressed; a newly\nobserved source announces its latest receipt once. `receipt: null`\nmeans the source no longer reports an unresolved repair. Delivery is\nlevel-triggered from a finite process-local ledger: after a gap, the\nauthoritative `configuration/sourcesRead` carries the same receipts.\nA notice is not history: a connection's first observation of a source\nwithout a receipt is never announced, so a client that kept an\nobservation across a reconnect rereads it.",
           "type": "object",
           "properties": {
             "method": {
@@ -21221,11 +21227,17 @@
                       "type": "null"
                     }
                   ]
+                },
+                "sequence": {
+                  "description": "The native repair-ledger sequence of this change. Within one App\nServer authority it orders this observation against every other\nobservation of the same source, including the `repair_sequence`\nof a `configuration/sourcesRead`: the higher one is the newer.",
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
                 }
               },
               "additionalProperties": false,
               "required": [
-                "target"
+                "target",
+                "sequence"
               ]
             }
           },

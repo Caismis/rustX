@@ -3,11 +3,13 @@
  *
  * The App Server owns repair: classification, candidate validation, backup,
  * publication and the receipt itself. This module only words those bounded,
- * redacted receipts for the terminal, and deduplicates notices by the App
- * Server authority and native receipt identity, so a reconnect, a repeated
- * read, or the same receipt from both a notification and a read never
- * announces one repair twice, while an equal content-derived receipt id from
- * another App Server — or a replacement process — is announced on its own.
+ * redacted receipts for the terminal, orders native observations of one
+ * source by their native repair-ledger sequence, and remembers which receipts
+ * were announced by the App Server authority and native receipt identity, so
+ * a reconnect, a repeated read, or the same receipt from both a notification
+ * and a read never announces one repair twice, while an equal content-derived
+ * receipt id from another App Server — or a replacement process — is a
+ * repair of its own.
  *
  * Nothing here reads a configuration file, applies a rule, or reaches a model:
  * a repair notice is presentation only and never becomes a conversation Turn.
@@ -20,10 +22,48 @@ import type {
 } from "../protocol/app-server.ts";
 import { sanitizeField } from "../sanitize.ts";
 
-/** One source's latest native repair observation, or none. */
+/**
+ * One native observation of a source's latest repair receipt, or of none, at
+ * the native repair-ledger `sequence` it is current at: the `sequence` of a
+ * `configuration/sourceRepairChanged`, or the `repair_sequence` of a
+ * `configuration/sourcesRead`. Within one App Server authority the higher
+ * sequence is the newer observation of a source, whichever carried it.
+ * Receipt ids identify content, never time, and never order observations.
+ */
 export interface SourceRepairObservation {
   target: SourceTarget;
   receipt: ConfigRepairReceipt | undefined;
+  sequence: string;
+}
+
+/** Sources whose repair observations a client keeps: the User and as many
+ * Workspaces as the native repair ledger retains (`MAX_LEDGER_WORKSPACES`). */
+export const SOURCE_REPAIR_SOURCES = 1 + 64;
+
+/**
+ * The one client retention policy for per-source repair state, applied by
+ * each owner to its own map — the host to its connection's observations, the
+ * status line to what it presents: `value` becomes `key`'s entry and its most
+ * recently observed one; beyond `SOURCE_REPAIR_SOURCES` the least recently
+ * observed Workspace is forgotten, the User never. Returns the forgotten
+ * entry, whose owner retires whatever it presented for that source.
+ */
+export function retainSource<V>(sources: Map<string, V>, key: string, value: V): V | undefined {
+  sources.delete(key);
+  sources.set(key, value);
+  if (sources.size <= SOURCE_REPAIR_SOURCES) return undefined;
+  for (const [source, entry] of sources) {
+    if (source === "user") continue;
+    sources.delete(source);
+    return entry;
+  }
+  return undefined;
+}
+
+/** Whether observation sequence `a` is older than `b`. Both are exact
+ * decimal ledger sequences of one App Server authority. */
+export function olderSequence(a: string, b: string): boolean {
+  return BigInt(a) < BigInt(b);
 }
 
 /** The stable presentation key of one source target. */
@@ -35,19 +75,20 @@ function sourceLabel(target: SourceTarget): string {
   return target.kind === "user" ? "User" : "Workspace";
 }
 
-/** Which receipts this client already announced, by the negotiated App Server
- * authority and native receipt identity. In memory only. */
-export class SourceRepairNotices {
+/** Which receipts this client already announced, by the negotiated App
+ * Server authority and native receipt identity. In memory only, and never
+ * native authority: it decides what is announced, not what a source holds. */
+export class SourceRepairAnnouncements {
   static readonly LIMIT = 256;
   readonly #announced = new Set<string>();
 
-  /** True exactly once per `(authorityId, receipt.id)`. */
-  fresh(authorityId: string, receipt: ConfigRepairReceipt): boolean {
+  /** True exactly once per `(authorityId, receipt.id)` within the bound. */
+  announce(authorityId: string, receipt: ConfigRepairReceipt): boolean {
     const identity = JSON.stringify([authorityId, receipt.id]);
     if (this.#announced.has(identity)) return false;
     this.#announced.add(identity);
     // Finite: receipts are per source, so a small window suffices.
-    if (this.#announced.size > SourceRepairNotices.LIMIT) {
+    if (this.#announced.size > SourceRepairAnnouncements.LIMIT) {
       const oldest = this.#announced.values().next().value;
       if (oldest !== undefined) this.#announced.delete(oldest);
     }
@@ -108,7 +149,7 @@ const CHANGES_HEADING: Record<ConfigRepairReceipt["status"], string> = {
 };
 
 /** The scrollable `/settings … repairs` inspection body. */
-export function renderRepairInspection(observations: readonly SourceRepairObservation[]): string {
+export function renderRepairInspection(observations: readonly Pick<SourceRepairObservation, "target" | "receipt">[]): string {
   const sections = observations.map(({ target, receipt }) => {
     const heading = target.kind === "user"
       ? "## User rustx.toml"

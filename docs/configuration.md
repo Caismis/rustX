@@ -791,6 +791,19 @@ open-map identity is `*` (a path the schema cannot explain is dropped). It never
 holds a removed value, an invalid value or identity, a domain error message, a
 source excerpt, a credential, a `request_params` payload or backup content. Re-observing the same bytes is the same receipt.
 
+Every change the ledger publishes — a new receipt, a replaced one, a withdrawal
+— advances one process-wide sequence, under the ledger lock that applies the
+change; the least recently observed Workspace is forgotten beyond the bound.
+That sequence is the only order of observations: a notification carries the
+sequence of its change, and a source read takes the receipts and the current
+sequence together under the same lock, so the read's sequence is never lower
+than any change it reflects — including for a Workspace the ledger has
+forgotten, which reads as having no receipt. Receipt ids identify content, not
+time. A receipt is withdrawn only when its source is found intrinsically healthy;
+a client deciding what to present reconciles against that order, never against
+which receipts it already showed (see [TUI and App Server](tui-app-server.md)
+and the [protocol](app-server-protocol.md#automatic-source-repair-receipts-v47)).
+
 A source is healthy under one source-intrinsic contract: the production strict
 parser and source restrictions accept it, every source-intrinsic constraint
 above holds, and no repair is eligible. Nothing being eligible proves nothing on

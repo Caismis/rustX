@@ -1284,7 +1284,11 @@ impl AppServerConnection {
                     directory: directory.clone(),
                 },
             };
-            return Some(NotificationMethod::SourceRepairChanged { target, receipt });
+            return Some(NotificationMethod::SourceRepairChanged {
+                target,
+                receipt,
+                sequence,
+            });
         }
         None
     }

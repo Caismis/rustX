@@ -60,7 +60,9 @@ async fn repair_notice(
 ) -> (SourceTarget, Option<ConfigRepairReceipt>) {
     loop {
         match connection.next_notification().await.notification {
-            NotificationMethod::SourceRepairChanged { target, receipt } => {
+            NotificationMethod::SourceRepairChanged {
+                target, receipt, ..
+            } => {
                 return (target, receipt);
             }
             NotificationMethod::ConfigurationChanged { application } => {
@@ -418,6 +420,7 @@ async fn a_late_workspace_interest_wakes_a_parked_reader_once() {
         let NotificationMethod::SourceRepairChanged {
             target: announced,
             receipt: Some(announced_receipt),
+            ..
         } = notification.notification
         else {
             panic!("a source repair notice")
@@ -892,6 +895,109 @@ async fn a_repair_refused_by_the_size_bound_reaches_no_application() {
         );
         drop(runtime);
         f.close().await;
+    })
+    .await;
+}
+
+/// The next source repair notice with its native ledger sequence.
+async fn sequenced_repair_notice(
+    connection: &AppServerConnection,
+) -> (SourceTarget, Option<ConfigRepairReceipt>, u64) {
+    loop {
+        if let NotificationMethod::SourceRepairChanged {
+            target,
+            receipt,
+            sequence,
+        } = connection.next_notification().await.notification
+        {
+            return (target, receipt, sequence);
+        }
+    }
+}
+
+/// REC-INT: a withdrawal while a client is away is never announced to its
+/// next connection — a connection's first observation of a source without a
+/// receipt is suppressed — so only the authoritative read can retire the
+/// warning that client kept, and its `repair_sequence` orders that read
+/// after every notice the client saw before.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_withdrawal_while_away_reaches_a_fresh_connection_only_through_its_read() {
+    bounded(async {
+        let f = Fixture::with_session_count(None, 0).await;
+        let target = workspace(&f, 1);
+        std::fs::write(f.workspaces[1].join("rustx.toml"), "[agent\nlegacy = 1\n").unwrap();
+        // The first connection sees the unresolved receipt, then goes away.
+        let away = AppServerConnection::new(f.host.clone());
+        initialize(&away).await;
+        let Response::Failure(_) = away
+            .handle_request(Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(1),
+                call: Method::SessionCreate {
+                    settings: SessionPersistentState::from_input(&SessionConfigInput::new(
+                        f.workspaces[1].clone(),
+                    )),
+                },
+            })
+            .await
+        else {
+            panic!("an unrepairable Workspace still fails Session creation")
+        };
+        let (announced, receipt, kept) = sequenced_repair_notice(&away).await;
+        assert_eq!(announced, target);
+        assert_eq!(receipt.unwrap().status, ConfigRepairStatus::Unresolved);
+        drop(away);
+        // Another client repairs the Workspace while the first is away.
+        let other = AppServerConnection::new(f.host.clone());
+        initialize(&other).await;
+        let read = sources(&other, 1, &target).await;
+        assert_eq!(read.repair_sequence, kept);
+        // Addressing the Workspace announces its receipt at the same sequence.
+        let (_, receipt, sequence) = sequenced_repair_notice(&other).await;
+        assert!(receipt.is_some());
+        assert_eq!(sequence, kept);
+        let MethodResult::SourceSettings { projection } = call(
+            &other,
+            2,
+            Method::SourcesWrite {
+                target: target.clone(),
+                expected_revision: read.workspace.unwrap().revision,
+                mutation: SourceMutation::RepairConfig {
+                    document: "[environment]\nRESIDENCY_SESSION = \"B\"\n".into(),
+                },
+            },
+        )
+        .await
+        else {
+            panic!("manual repair")
+        };
+        assert!(projection.workspace_repair.is_none());
+        let withdrawn = projection.repair_sequence;
+        assert!(withdrawn > kept);
+        // The connection that saw the receipt hears the withdrawal, at the
+        // sequence its write reported.
+        let (_, receipt, sequence) = sequenced_repair_notice(&other).await;
+        assert!(receipt.is_none());
+        assert_eq!(sequence, withdrawn);
+        // The returning client's fresh connection is told nothing about the
+        // Workspace, even once it addresses it ...
+        let returning = AppServerConnection::new(f.host.clone());
+        initialize(&returning).await;
+        let reread = sources(&returning, 1, &target).await;
+        while let Some(notice) = returning.next_source_repair() {
+            let NotificationMethod::SourceRepairChanged {
+                target: noticed, ..
+            } = notice
+            else {
+                panic!("a source repair notice")
+            };
+            assert_ne!(noticed, target, "a first withdrawal is never announced");
+        }
+        // ... and only its read says the receipt is gone, at a sequence
+        // later than the notice it kept.
+        assert!(reread.workspace_repair.is_none());
+        assert!(reread.repair_sequence >= withdrawn);
+        assert!(reread.repair_sequence > kept);
     })
     .await;
 }

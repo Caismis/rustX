@@ -3194,6 +3194,13 @@ export type Notification1 =
       params: {
         target: SourceTarget;
         receipt?: ConfigRepairReceipt | null;
+        /**
+         * The native repair-ledger sequence of this change. Within one App
+         * Server authority it orders this observation against every other
+         * observation of the same source, including the `repair_sequence`
+         * of a `configuration/sourcesRead`: the higher one is the newer.
+         */
+        sequence: string;
       };
     }
   | {
@@ -9910,6 +9917,13 @@ export interface SourceSettings {
    * The latest automatic repair observation of the target Workspace source.
    */
   workspace_repair?: ConfigRepairReceipt | null;
+  /**
+   * The native repair-ledger sequence `user_repair` and `workspace_repair`
+   * are current at, read with them under one lock. It orders this read
+   * against the `sequence` of each `configuration/sourceRepairChanged`
+   * for the same source: the higher one is the newer observation.
+   */
+  repair_sequence: string;
   user_resource_root: string;
   workspace_resource_root?: string | null;
   runtime_root: string;

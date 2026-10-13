@@ -42,11 +42,10 @@ import {
   type MessageId,
   type UserInputBlock,
   type Notification,
-  type ConfigRepairReceipt,
   type SourceSettings,
   type SourceTarget,
 } from "../protocol/app-server.ts";
-import { sourceKey, type SourceRepairObservation } from "../presentation/source-repairs.ts";
+import { olderSequence, retainSource, sourceKey, type SourceRepairObservation } from "../presentation/source-repairs.ts";
 import { AppServerClient } from "./client.ts";
 import {
   AppServerChild,
@@ -145,10 +144,14 @@ export class AppServerHost {
   readonly #child: AppServerChild | undefined;
   readonly #sessions = new Map<string, AppServerSession>();
   /**
-   * The latest native repair receipt of each configuration source this
+   * The newest native repair observation of each configuration source this
    * connection observed, by source. Source-scoped and Session-independent:
    * kept here so a notice that arrives before any presentation subscribes is
-   * still there to present, and replaced only by a different receipt.
+   * still there to present. Notices and authoritative reads are ordered by
+   * their native ledger sequence, never by arrival: an older one — a read
+   * answered after a newer notice, or a notice produced before a fresher read
+   * — changes nothing. Finite: the User and as many Workspaces as the native
+   * repair ledger retains, the least recently observed Workspace going first.
    */
   readonly #sourceRepairs = new Map<string, SourceRepairObservation>();
   readonly #sourceRepairListeners = new Set<SourceRepairListener>();
@@ -174,7 +177,8 @@ export class AppServerHost {
     // Source-scoped notices go to the host's source observations instead.
     client.onNotification((notification) => {
       if (notification.method === "configuration/sourceRepairChanged") {
-        this.#observeSourceRepair(notification.params.target, notification.params.receipt ?? undefined);
+        const { target, receipt, sequence } = notification.params;
+        this.#observeSourceRepair({ target, receipt: receipt ?? undefined, sequence });
         return;
       }
       const sessionId = sessionIdOf(notification);
@@ -287,16 +291,18 @@ export class AppServerHost {
    */
   async readSourceRepairs(target: SourceTarget = { kind: "user" }): Promise<SourceSettings> {
     const { projection } = await this.client.call("configuration/sourcesRead", { target }, "source_settings");
-    this.#observeSourceRepair({ kind: "user" }, projection.user_repair ?? undefined);
-    if (target.kind === "workspace") this.#observeSourceRepair(projection.target, projection.workspace_repair ?? undefined);
+    const sequence = projection.repair_sequence;
+    this.#observeSourceRepair({ target: { kind: "user" }, receipt: projection.user_repair ?? undefined, sequence });
+    if (target.kind === "workspace") this.#observeSourceRepair({ target: projection.target, receipt: projection.workspace_repair ?? undefined, sequence });
     return projection;
   }
 
-  #observeSourceRepair(target: SourceTarget, receipt: ConfigRepairReceipt | undefined): void {
-    const key = sourceKey(target);
-    if (this.#sourceRepairs.get(key)?.receipt?.id === receipt?.id && this.#sourceRepairs.has(key)) return;
-    const observation = { target, receipt };
-    this.#sourceRepairs.set(key, observation);
+  #observeSourceRepair(observation: SourceRepairObservation): void {
+    const key = sourceKey(observation.target);
+    const known = this.#sourceRepairs.get(key);
+    if (known !== undefined && (olderSequence(observation.sequence, known.sequence)
+      || (observation.sequence === known.sequence && observation.receipt?.id === known.receipt?.id))) return;
+    retainSource(this.#sourceRepairs, key, observation);
     for (const listener of [...this.#sourceRepairListeners]) listener(observation);
   }
 

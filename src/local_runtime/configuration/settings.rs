@@ -170,6 +170,11 @@ pub struct SourceSettings {
     pub user_repair: Option<super::repair::ConfigRepairReceipt>,
     /// The latest automatic repair observation of the target Workspace source.
     pub workspace_repair: Option<super::repair::ConfigRepairReceipt>,
+    /// The native repair-ledger sequence `user_repair` and `workspace_repair`
+    /// are current at, read with them under one lock. It orders this read
+    /// against the `sequence` of each `configuration/sourceRepairChanged`
+    /// for the same source: the higher one is the newer observation.
+    pub repair_sequence: u64,
     pub user_resource_root: PathBuf,
     pub workspace_resource_root: Option<PathBuf>,
     pub runtime_root: PathBuf,
@@ -1007,6 +1012,7 @@ impl UserConfigManager {
             Ok(document) => source_resolution_diagnostic(document),
         };
         let prospective_resources = Some(self.authoring_inventory(target));
+        let (repair_sequence, user_repair, workspace_repair) = self.repairs().snapshot(target);
         let result = SourceSettings {
             target: target.clone(),
             process_policy_impacts: [
@@ -1050,10 +1056,9 @@ impl UserConfigManager {
             workspace: workspace
                 .as_ref()
                 .map(|path| view(path.clone(), workspace_bytes.as_deref(), true)),
-            user_repair: self.repairs().latest(&SourceTarget::User),
-            workspace_repair: target
-                .workspace()
-                .and_then(|_| self.repairs().latest(target)),
+            user_repair,
+            workspace_repair,
+            repair_sequence,
             user_resource_root: self.resource_root(&SourceTarget::User),
             workspace_resource_root: target
                 .workspace()

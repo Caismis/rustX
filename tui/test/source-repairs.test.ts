@@ -13,7 +13,7 @@ import { APP_SERVER_PROTOCOL_VERSION, AppServerClient } from "../src/app-server/
 import { AppServerHost } from "../src/app-server/host.ts";
 import { CommandDispatcher } from "../src/commands/dispatcher.ts";
 import {
-  SourceRepairNotices,
+  SourceRepairAnnouncements,
   renderRepairInspection,
   repairNotice,
   type SourceRepairObservation,
@@ -48,14 +48,14 @@ function receipt(overrides: Partial<ConfigRepairReceipt> = {}): ConfigRepairRece
   };
 }
 
-/** The User source's observation of `value`. */
-function user(value: ConfigRepairReceipt | undefined): SourceRepairObservation {
-  return { target: { kind: "user" }, receipt: value };
+/** The User source's observation of `value` at ledger `sequence`. */
+function user(value: ConfigRepairReceipt | undefined, sequence = "1"): SourceRepairObservation {
+  return { target: { kind: "user" }, receipt: value, sequence };
 }
 
-/** A Workspace source's observation of `value`. */
-function workspace(value: ConfigRepairReceipt | undefined, target: SourceTarget = WORKSPACE): SourceRepairObservation {
-  return { target, receipt: value && { ...value, target } };
+/** A Workspace source's observation of `value` at ledger `sequence`. */
+function workspace(value: ConfigRepairReceipt | undefined, target: SourceTarget = WORKSPACE, sequence = "1"): SourceRepairObservation {
+  return { target, receipt: value && { ...value, target }, sequence };
 }
 
 /** The receipt ids a status line currently presents, in source order. */
@@ -63,13 +63,14 @@ function presented(status: SourceRepairStatus): string {
   return plain(status.render(400).join(" "));
 }
 
-function projection(target: SourceTarget, user?: ConfigRepairReceipt, workspace?: ConfigRepairReceipt) {
+function projection(target: SourceTarget, user?: ConfigRepairReceipt, workspace?: ConfigRepairReceipt, sequence = "1") {
   return {
     target, provenance: {}, process_policy_impacts: {}, absent_resource_revision: "absent", resource_revisions: {},
     user: { path: "/user", revision: "u" }, user_resource_root: "/ur", runtime_root: "/r", user_mcp: { path: "/um", revision: "um" }, agents: [],
     ...(target.kind === "workspace" ? { workspace: { path: "/w", revision: "w" }, workspace_resource_root: "/wr", workspace_mcp: { path: "/wm", revision: "wm" } } : {}),
     user_repair: user ?? null,
     workspace_repair: workspace ?? null,
+    repair_sequence: sequence,
   };
 }
 
@@ -129,17 +130,13 @@ it("never presents an uncertain publication as a confirmed application", () => {
   assert.match(uncertain, /Possibly published; durability not confirmed:\n~ schema_version 8 → 10/);
 });
 
-it("announces each receipt identity once and acknowledges on input", () => {
-  const notices = new SourceRepairNotices();
-  assert.equal(notices.fresh(AUTHORITY, receipt()), true);
-  assert.equal(notices.fresh(AUTHORITY, receipt()), false);
-  assert.equal(notices.fresh(AUTHORITY, receipt({ id: "receipt-user-2" })), true);
+it("presents each pending receipt once and acknowledges on input", () => {
   const status = new SourceRepairStatus();
   status.adopt(AUTHORITY);
   assert.deepEqual(status.render(120), []);
   assert.equal(status.observe(AUTHORITY, user(receipt())), true);
   assert.equal(status.observe(AUTHORITY, user(receipt())), false, "announced once");
-  status.observe(AUTHORITY, { target: WORKSPACE, receipt: receipt({ id: "w", target: WORKSPACE, changed_count: 1 }) });
+  status.observe(AUTHORITY, workspace(receipt({ id: "w", changed_count: 1 })));
   assert.match(plain(status.render(200).join("\n")), /3 entries in User and 1 entry in Workspace/);
   // Bounded to two rows whatever the width.
   assert.ok(status.render(24).length <= 2);
@@ -157,33 +154,32 @@ it("routes a source notice sent before the host existed, with no Session", async
     protocol_version: APP_SERVER_PROTOCOL_VERSION, capabilities: SERVER_CAPABILITIES,
   });
   // The server announces before the composition root builds the host.
-  transport.notify(notification("configuration/sourceRepairChanged", { target: { kind: "user" }, receipt: receipt() }));
+  transport.notify(notification("configuration/sourceRepairChanged", { target: { kind: "user" }, receipt: receipt(), sequence: "1" }));
   const client = await connecting;
   const host = new AppServerHost({ client, ownership: "external" });
-  assert.deepEqual(host.sourceRepairs(), [{ target: { kind: "user" }, receipt: receipt() }]);
+  assert.deepEqual(host.sourceRepairs(), [user(receipt())]);
   const observed: string[] = [];
   host.onSourceRepair(({ receipt: value }) => observed.push(value?.id ?? "cleared"));
-  // The same receipt again is no change; a cleared observation is.
-  transport.notify(notification("configuration/sourceRepairChanged", { target: { kind: "user" }, receipt: receipt() }));
-  transport.notify(notification("configuration/sourceRepairChanged", { target: WORKSPACE, receipt: receipt({ id: "w", target: WORKSPACE }) }));
-  transport.notify(notification("configuration/sourceRepairChanged", { target: WORKSPACE, receipt: null }));
+  // The same receipt at the same sequence is no change; a cleared
+  // observation is.
+  transport.notify(notification("configuration/sourceRepairChanged", { target: { kind: "user" }, receipt: receipt(), sequence: "1" }));
+  transport.notify(notification("configuration/sourceRepairChanged", { target: WORKSPACE, receipt: receipt({ id: "w", target: WORKSPACE }), sequence: "2" }));
+  transport.notify(notification("configuration/sourceRepairChanged", { target: WORKSPACE, receipt: null, sequence: "3" }));
   assert.deepEqual(observed, ["w", "cleared"]);
   assert.equal(host.attached.length, 0);
   assert.equal(transport.log.requests.length, 1, "observing notices issues no request");
 });
 
-it("deduplicates notices by negotiated App Server authority and receipt id", () => {
-  const notices = new SourceRepairNotices();
-  // The same authority repeating, or announcing again after a reconnect.
-  assert.equal(notices.fresh("authority-a", receipt()), true);
-  assert.equal(notices.fresh("authority-a", receipt()), false);
+it("announcements are kept once per negotiated App Server authority and receipt id", () => {
+  const announced = new SourceRepairAnnouncements();
+  assert.equal(announced.announce("authority-a", receipt()), true);
+  assert.equal(announced.announce("authority-a", receipt()), false);
   // An equal content-derived id from another authority is its own repair.
-  assert.equal(notices.fresh("authority-b", receipt()), true);
-  assert.equal(notices.fresh("authority-b", receipt()), false);
+  assert.equal(announced.announce("authority-b", receipt()), true);
   // Bounded: the oldest identity is forgotten beyond the window.
-  for (let index = 0; index < SourceRepairNotices.LIMIT; index++) notices.fresh("authority-c", receipt({ id: `r${index}` }));
-  assert.equal(notices.fresh("authority-a", receipt()), true, "forgotten beyond the bound");
-  assert.equal(notices.fresh("authority-c", receipt({ id: `r${SourceRepairNotices.LIMIT - 1}` })), false);
+  for (let index = 0; index < SourceRepairAnnouncements.LIMIT; index++) announced.announce("authority-c", receipt({ id: `r${index}` }));
+  assert.equal(announced.announce("authority-a", receipt()), true, "forgotten beyond the bound");
+  assert.equal(announced.announce("authority-c", receipt({ id: `r${SourceRepairAnnouncements.LIMIT - 1}` })), false);
 });
 
 /** One initialized connection negotiating `authority`, with its host. */
@@ -195,16 +191,21 @@ async function connect(authority: string, early?: ConfigRepairReceipt) {
     type: "initialized", authority_id: authority,
     protocol_version: APP_SERVER_PROTOCOL_VERSION, capabilities: SERVER_CAPABILITIES,
   });
-  if (early) transport.notify(notification("configuration/sourceRepairChanged", { target: early.target, receipt: early }));
+  if (early) transport.notify(notification("configuration/sourceRepairChanged", { target: early.target, receipt: early, sequence: "1" }));
   const client = await connecting;
   return { transport, host: new AppServerHost({ client, ownership: "external" }) };
 }
 
 it("each connection carries the authority its initialize negotiated", async () => {
-  const notices = new SourceRepairNotices();
-  const announced = (host: AppServerHost) => host.sourceRepairs()
-    .filter(({ receipt: value }) => value !== undefined && notices.fresh(host.authorityId, value))
-    .map(({ receipt: value }) => value!.id);
+  const status = new SourceRepairStatus();
+  const announced = (host: AppServerHost) => {
+    status.adopt(host.authorityId);
+    const ids = host.sourceRepairs()
+      .filter(observation => status.observe(host.authorityId, observation) && observation.receipt !== undefined)
+      .map(({ receipt: value }) => value!.id);
+    status.acknowledge();
+    return ids;
+  };
   // A startup notice before the host exists is attributed to its connection.
   const first = await connect("authority-a", receipt());
   assert.equal(first.host.authorityId, "authority-a");
@@ -217,8 +218,8 @@ it("each connection carries the authority its initialize negotiated", async () =
   const replaced = await connect("authority-b", receipt());
   assert.deepEqual(announced(replaced.host), ["receipt-user-1"]);
   // A withdrawn receipt is an observation without a receipt, never a notice.
-  replaced.transport.notify(notification("configuration/sourceRepairChanged", { target: { kind: "user" }, receipt: null }));
-  assert.deepEqual(replaced.host.sourceRepairs(), [{ target: { kind: "user" }, receipt: undefined }]);
+  replaced.transport.notify(notification("configuration/sourceRepairChanged", { target: { kind: "user" }, receipt: null, sequence: "2" }));
+  assert.deepEqual(replaced.host.sourceRepairs(), [user(undefined, "2")]);
   assert.deepEqual(announced(replaced.host), []);
 });
 
@@ -236,7 +237,7 @@ it("refuses a connection that negotiates no authority", async () => {
 it("source notices never reach an attached Session's conversation", async () => {
   const h = await harness();
   const before = structuredClone(h.session.state);
-  h.transport.notify(notification("configuration/sourceRepairChanged", { target: { kind: "user" }, receipt: receipt() }));
+  h.transport.notify(notification("configuration/sourceRepairChanged", { target: { kind: "user" }, receipt: receipt(), sequence: "1" }));
   assert.deepEqual(h.session.state, before);
   assert.equal(h.host.sourceRepairs()[0]?.receipt?.id, "receipt-user-1");
   for (const method of ["turn/start", "turn/steer"]) assert.equal(h.transport.transportCount(method), 0);
@@ -290,9 +291,9 @@ it("multiple sources move across authority transitions independently", () => {
   status.observe("authority-b", workspace(receipt({ id: "w2", changed_count: 2 }), other));
   assert.match(presented(status), /1 entry in Workspace and 2 entries in Workspace/);
   assert.doesNotMatch(presented(status), /User/);
-  // Back to the first authority (another reconnect): b's line is retired,
-  // and a's receipts were already announced.
-  status.adopt("authority-a");
+  // Back to the first authority after b: b's line is retired, and a's
+  // receipts were already announced.
+  assert.equal(status.adopt("authority-a"), false, "not kept: b came between");
   assert.equal(status.observe("authority-a", user(receipt())), false);
   assert.equal(status.visible, false);
 });
@@ -327,6 +328,184 @@ it("an observation of any other authority never reaches the current line", () =>
   assert.equal(status.observe("authority-a", workspace(receipt({ id: "late" }))), true);
 });
 
+// Same-authority reconciliation: native observations are ordered by their
+// ledger sequence, and acknowledgement never fences native authority.
+
+it("an announced receipt identity never fences a newer observation", () => {
+  const status = new SourceRepairStatus();
+  status.adopt(AUTHORITY);
+  // R0 was announced and acknowledged; R1 replaced it and is pending.
+  status.observe(AUTHORITY, workspace(receipt({ id: "r0", status: "unresolved", diagnostic: "invalid value" }), WORKSPACE, "2"));
+  status.acknowledge();
+  status.observe(AUTHORITY, workspace(receipt({ id: "r1", status: "unresolved", diagnostic: "other value" }), WORKSPACE, "4"));
+  assert.match(presented(status), /other value/);
+  // Native returns to R0's content: the obsolete R1 entry goes, and the
+  // already announced R0 is current without being announced again.
+  assert.equal(status.observe(AUTHORITY, workspace(receipt({ id: "r0", status: "unresolved", diagnostic: "invalid value" }), WORKSPACE, "6")), true);
+  assert.equal(status.visible, false);
+  assert.deepEqual(status.pendingSources(), []);
+});
+
+it("an older observation of a source changes nothing, a newer one always applies", () => {
+  const status = new SourceRepairStatus();
+  status.adopt(AUTHORITY);
+  status.observe(AUTHORITY, workspace(receipt({ id: "r2" }), WORKSPACE, "6"));
+  // Older: a read answered after the newer notice, or a late notice.
+  assert.equal(status.observe(AUTHORITY, workspace(receipt({ id: "r1" }), WORKSPACE, "5")), false);
+  assert.equal(status.observe(AUTHORITY, workspace(undefined, WORKSPACE, "5")), false);
+  assert.equal(status.pendingSources().length, 1);
+  assert.match(presented(status), /3 entries in Workspace/);
+  // Equal or newer applies; sequences of other sources are independent.
+  assert.equal(status.observe(AUTHORITY, user(receipt({ id: "u" }), "1")), true);
+  assert.equal(status.observe(AUTHORITY, workspace(undefined, WORKSPACE, "7")), true);
+  assert.deepEqual(status.pendingSources(), [{ kind: "user" }]);
+  // Exact decimal sequences beyond the safe integer range still order.
+  status.observe(AUTHORITY, user(receipt({ id: "u2" }), "9007199254740993"));
+  assert.equal(status.observe(AUTHORITY, user(undefined, "9007199254740992")), false);
+});
+
+it("BOUND-02/BOUND-03 the line keeps finitely many sources and never evicts the User", () => {
+  const status = new SourceRepairStatus();
+  status.adopt(AUTHORITY);
+  status.observe(AUTHORITY, user(receipt({ id: "u", status: "unresolved", diagnostic: "user value" }), "1"));
+  for (let index = 0; index < 70; index++) {
+    status.observe(AUTHORITY, workspace(receipt({ id: `w${index}` }), { kind: "workspace", directory: `/work/w${index}` }, String(index + 2)));
+  }
+  const pending = status.pendingSources();
+  assert.equal(pending.length, 65);
+  assert.deepEqual(pending[0], { kind: "user" });
+  // The least recently observed Workspaces are gone, with their entries.
+  assert.ok(!pending.some(target => target.kind === "workspace" && ["/work/w0", "/work/w5"].includes(target.directory)));
+  assert.ok(pending.some(target => target.kind === "workspace" && target.directory === "/work/w69"));
+});
+
+/** A host whose next `configuration/sourcesRead` is answered by the test. */
+async function heldRead(target: SourceTarget) {
+  const { transport, host } = await connect(AUTHORITY);
+  const status = new SourceRepairStatus();
+  status.adopt(host.authorityId);
+  host.onSourceRepair(observation => status.observe(host.authorityId, observation));
+  const reading = host.readSourceRepairs(target);
+  const read = (await transport.log.awaitMethod("configuration/sourcesRead")).at(-1)!;
+  return { transport, host, status, reading, read };
+}
+
+it("RACE-01 a newer notice wins over an older read answered after it", async () => {
+  const { transport, host, status, reading, read } = await heldRead(WORKSPACE);
+  // The read observed R1 at sequence 5; before its answer arrives, native
+  // moved to R2 at 6 and its notice arrived first.
+  transport.notify(repairChanged(WORKSPACE, receipt({ id: "r2", changed_count: 2 }), "6"));
+  transport.respond(read.id, { type: "source_settings", projection: projection(WORKSPACE, undefined, receipt({ id: "r1", target: WORKSPACE }), "5") });
+  await reading;
+  assert.deepEqual(host.sourceRepairs().find(observation => observation.target.kind === "workspace")?.receipt?.id, "r2");
+  assert.match(presented(status), /2 entries in Workspace/);
+});
+
+it("RACE-02 a late notice never resurrects a source a fresher read withdrew", async () => {
+  const { transport, host, status, reading, read } = await heldRead(WORKSPACE);
+  // The read observed the withdrawal at sequence 7; a notice of R1 produced
+  // at 5 arrives only afterwards.
+  transport.respond(read.id, { type: "source_settings", projection: projection(WORKSPACE, undefined, undefined, "7") });
+  await reading;
+  transport.notify(repairChanged(WORKSPACE, receipt({ id: "r1", status: "unresolved", diagnostic: "invalid value" }), "5"));
+  assert.equal(host.sourceRepairs().find(observation => observation.target.kind === "workspace")?.receipt, undefined);
+  assert.equal(status.visible, false);
+});
+
+it("REC-09 a reconcile read is one read-only request and reaches no Session", async () => {
+  const { transport, reading, read } = await heldRead(WORKSPACE);
+  transport.respond(read.id, { type: "source_settings", projection: projection(WORKSPACE, undefined, undefined, "3") });
+  await reading;
+  assert.deepEqual(transport.log.requests.map(request => request.method), ["initialize", "configuration/sourcesRead"]);
+});
+
+it("RACE-03 a read and a notice at one native sequence are one observation", async () => {
+  const { transport, host, status, reading, read } = await heldRead(WORKSPACE);
+  const observed: string[] = [];
+  host.onSourceRepair(({ receipt: value }) => observed.push(value?.id ?? "withdrawn"));
+  const announced: boolean[] = [];
+  const announce = status.observe.bind(status);
+  // The notice and the read both carry R2 at sequence 6, in either order.
+  transport.notify(repairChanged(WORKSPACE, receipt({ id: "r2" }), "6"));
+  transport.respond(read.id, { type: "source_settings", projection: projection(WORKSPACE, undefined, receipt({ id: "r2", target: WORKSPACE }), "6") });
+  await reading;
+  announced.push(announce(host.authorityId, workspace(receipt({ id: "r2" }), WORKSPACE, "6")));
+  assert.deepEqual(observed.filter(id => id === "r2"), ["r2"], "the host applies it once");
+  assert.deepEqual(announced, [false], "and the line announced it once");
+  assert.equal(status.pendingSources().length, 1);
+});
+
+it("RACE-04 an identity cycle follows native order, not receipt identity", async () => {
+  const { transport, host, status, reading, read } = await heldRead({ kind: "user" });
+  transport.respond(read.id, { type: "source_settings", projection: projection({ kind: "user" }, receipt({ id: "r1" }), undefined, "1") });
+  await reading;
+  assert.match(presented(status), /3 entries in User/);
+  transport.notify(repairChanged({ kind: "user" }, receipt({ id: "r2", changed_count: 2 }), "2"));
+  assert.match(presented(status), /2 entries in User/);
+  transport.notify(repairChanged({ kind: "user" }, receipt({ id: "r1" }), "3"));
+  // R1 is current again: R2 is retired, and R1, announced before, is not
+  // announced a second time.
+  assert.equal(host.sourceRepairs()[0]?.receipt?.id, "r1");
+  assert.equal(host.sourceRepairs()[0]?.sequence, "3");
+  assert.equal(status.visible, false);
+  // A stale R2 notice afterwards changes nothing.
+  transport.notify(repairChanged({ kind: "user" }, receipt({ id: "r2", changed_count: 2 }), "2"));
+  assert.equal(host.sourceRepairs()[0]?.receipt?.id, "r1");
+  assert.equal(status.visible, false);
+});
+
+it("RACE-05 an empty read of a Workspace the ledger forgot outranks its earlier notice", async () => {
+  const { transport, host, status, reading, read } = await heldRead(WORKSPACE);
+  // The ledger forgot W after 64 newer Workspaces: the read finds no entry,
+  // at the ledger frontier, which is later than any change W ever had.
+  transport.respond(read.id, { type: "source_settings", projection: projection(WORKSPACE, undefined, undefined, "70") });
+  await reading;
+  transport.notify(repairChanged(WORKSPACE, receipt({ id: "w", status: "unresolved", diagnostic: "invalid value" }), "5"));
+  assert.equal(host.sourceRepairs().find(observation => observation.target.kind === "workspace")?.receipt, undefined);
+  assert.equal(status.visible, false);
+  // A genuinely newer observation of W after the read still applies.
+  transport.notify(repairChanged(WORKSPACE, receipt({ id: "w2", status: "unresolved", diagnostic: "invalid value" }), "71"));
+  assert.equal(status.visible, true);
+});
+
+it("BOUND-01 a connection keeps finitely many source observations, empty ones included", async () => {
+  const { transport, host } = await connect(AUTHORITY);
+  transport.notify(repairChanged({ kind: "user" }, receipt({ id: "u" }), "1"));
+  // 70 distinct Workspace reads, most of them without any receipt.
+  for (let index = 0; index < 70; index++) {
+    const target: SourceTarget = { kind: "workspace", directory: `/work/w${index}` };
+    const reading = host.readSourceRepairs(target);
+    const read = (await transport.log.awaitMethod("configuration/sourcesRead", index + 1)).at(-1)!;
+    transport.respond(read.id, { type: "source_settings", projection: projection(target, receipt({ id: "u" }), index % 7 === 0 ? receipt({ id: `w${index}`, target }) : undefined, String(index + 2)) });
+    await reading;
+  }
+  const kept = host.sourceRepairs();
+  assert.equal(kept.length, 65);
+  assert.ok(kept.some(({ target }) => target.kind === "user"), "the User is never evicted by Workspace churn");
+  assert.ok(!kept.some(({ target }) => target.kind === "workspace" && ["/work/w0", "/work/w4"].includes(target.directory)));
+  assert.ok(kept.some(({ target }) => target.kind === "workspace" && target.directory === "/work/w69"));
+});
+
+it("BOUND-04 evicting a Workspace retires its warning, and its newer observation returns", () => {
+  const status = new SourceRepairStatus();
+  status.adopt(AUTHORITY);
+  const first: SourceTarget = { kind: "workspace", directory: "/work/first" };
+  status.observe(AUTHORITY, workspace(receipt({ id: "first", status: "unresolved", diagnostic: "first value" }), first, "1"));
+  assert.match(presented(status), /first value/);
+  // 65 newer Workspaces without receipts push it out of the line's 65
+  // sources.
+  let changed = false;
+  for (let index = 0; index < 65; index++) {
+    changed = status.observe(AUTHORITY, workspace(undefined, { kind: "workspace", directory: `/work/w${index}` }, String(index + 2))) || changed;
+  }
+  assert.equal(changed, true, "the eviction changed the line");
+  assert.equal(status.visible, false);
+  assert.deepEqual(status.pendingSources(), []);
+  // Re-observed later with a newer receipt, it is a source again.
+  assert.equal(status.observe(AUTHORITY, workspace(receipt({ id: "first-2", status: "unresolved", diagnostic: "newer value" }), first, "90")), true);
+  assert.match(presented(status), /newer value/);
+});
+
 // Repair notifications before the first subscriber (Issue #464).
 
 /** A connection whose server sends `early` right after `initialize`
@@ -343,8 +522,8 @@ async function connectWith(early: (transport: FakeTransport) => void) {
   return { transport, client: await connecting };
 }
 
-function repairChanged(target: SourceTarget, value: ConfigRepairReceipt | null) {
-  return notification("configuration/sourceRepairChanged", { target, receipt: value && { ...value, target } });
+function repairChanged(target: SourceTarget, value: ConfigRepairReceipt | null, sequence = "1") {
+  return notification("configuration/sourceRepairChanged", { target, receipt: value && { ...value, target }, sequence });
 }
 
 /** One unrelated Session notification. */

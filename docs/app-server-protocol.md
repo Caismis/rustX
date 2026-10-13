@@ -1292,15 +1292,17 @@ category, line and column, and a schema location whose open-map identities
 nor an identity nor a domain error message can reach it.
 
 `configuration/sourcesRead` returns `user_repair` for the User source and, for a
-Workspace target, `workspace_repair` for that Workspace. Receipts live in a
-finite process-local ledger (one per source, a bounded number of Workspaces), so a
-repair committed before any client connected — the startup repair — is on the
-first read.
+Workspace target, `workspace_repair` for that Workspace, with `repair_sequence`:
+the native ledger sequence both are current at, read with them under one lock.
+Receipts live in a finite process-local ledger (one per source, a bounded number
+of Workspaces), so a repair committed before any client connected — the startup
+repair — is on the first read.
 
 ```ts
 // notification
 { method: "configuration/sourceRepairChanged",
-  params: { target: SourceTarget; receipt: ConfigRepairReceipt | null } }
+  params: { target: SourceTarget; receipt: ConfigRepairReceipt | null;
+            sequence: string /* exact u64 */ } }
 ```
 
 The notification is source-scoped: it names a `SourceTarget`, never a Session,
@@ -1317,9 +1319,18 @@ announces its latest receipt once — admitting a source wakes the connection's
 notification reader, so a receipt the ledger already holds is delivered without
 any further ledger change — the same receipt is never announced twice on a
 connection, and a reconnecting client receives each latest receipt once more and
-deduplicates by `id`. After any gap the authoritative recovery is
-`configuration/sourcesRead`. Receipts are not persisted, not Event Journal facts
-and never canonical history.
+deduplicates by `id`. Notices are not history: a connection's first observation
+of a source without a receipt is never announced, so a receipt withdrawn while a
+client was away is invisible to its next connection, and a client that kept an
+observation across a reconnect rereads it with `configuration/sourcesRead`.
+
+Every change of any source advances the ledger sequence. A notice carries the
+`sequence` of its change and a read its `repair_sequence`; within one App Server
+authority the higher one is the newer observation of a source, whatever arrives
+first — a read answered after a newer notice, or a notice produced before a
+fresher read and delivered after it. Receipt ids identify content and never
+order observations; sequences of different authorities are not comparable.
+Receipts are not persisted, not Event Journal facts and never canonical history.
 
 ## Session configuration adoption eligibility (v47)
 

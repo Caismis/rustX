@@ -3116,3 +3116,53 @@ fn ordinary_writes_never_publish_beyond_the_bound() {
         document_entries()
     );
 }
+
+// Observation ordering (RACE-05): the ledger frontier a read reports is never
+// lower than any change it has published, even for a source it forgot.
+
+fn ledger_receipt(target: &SourceTarget, before: &str) -> ConfigRepairReceipt {
+    receipt(
+        target,
+        before,
+        Observation {
+            status: ConfigRepairStatus::Unresolved,
+            after_revision: None,
+            changes: Vec::new(),
+            backup_available: false,
+            diagnostic: Some("invalid value".into()),
+        },
+    )
+}
+
+#[test]
+fn an_evicted_workspace_reads_as_withdrawn_at_a_frontier_after_its_last_change() {
+    let ledger = RepairLedger::default();
+    let workspace = |index: usize| SourceTarget::Workspace {
+        directory: PathBuf::from(format!("/work/w{index}")),
+    };
+    ledger.record(ledger_receipt(&workspace(0), "sha256:w0"));
+    let (published, _, current) = ledger.snapshot(&workspace(0));
+    assert!(current.is_some());
+    // A notice of W0's receipt carries `published`; then 64 newer Workspaces
+    // make the ledger forget W0.
+    for index in 1..=MAX_LEDGER_WORKSPACES {
+        ledger.record(ledger_receipt(
+            &workspace(index),
+            &format!("sha256:w{index}"),
+        ));
+    }
+    let (frontier, _, forgotten) = ledger.snapshot(&workspace(0));
+    assert!(forgotten.is_none());
+    // The empty read is newer than the notice: a client holding the notice
+    // replaces it, and the notice arriving late cannot override the read.
+    assert!(frontier > published);
+    assert_eq!(
+        frontier,
+        u64::try_from(MAX_LEDGER_WORKSPACES).unwrap() + published
+    );
+    // A later observation of W0 is newer than that frontier again.
+    ledger.record(ledger_receipt(&workspace(0), "sha256:w0-again"));
+    let (again, _, current) = ledger.snapshot(&workspace(0));
+    assert!(again > frontier);
+    assert!(current.is_some());
+}

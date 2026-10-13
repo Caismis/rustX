@@ -760,11 +760,38 @@ impl RepairLedger {
     }
 
     /// The latest receipt of one source, if it has one.
+    #[cfg(test)]
     pub(crate) fn latest(&self, target: &SourceTarget) -> Option<ConfigRepairReceipt> {
         self.lock()
             .entries
             .get(&SourceKey::from(target))
             .and_then(|entry| entry.receipt.clone())
+    }
+
+    /// The User's and, given a Workspace target, that Workspace's latest
+    /// receipts, read under one lock with the ledger sequence they are
+    /// current at. Every change of any source advances that sequence, so a
+    /// notification of one source carrying a lower sequence is older than
+    /// this read, and one carrying a higher sequence is newer.
+    pub(crate) fn snapshot(
+        &self,
+        target: &SourceTarget,
+    ) -> (
+        u64,
+        Option<ConfigRepairReceipt>,
+        Option<ConfigRepairReceipt>,
+    ) {
+        let state = self.lock();
+        let latest = |key: &SourceKey| {
+            state
+                .entries
+                .get(key)
+                .and_then(|entry| entry.receipt.clone())
+        };
+        let workspace = target
+            .workspace()
+            .and_then(|_| latest(&SourceKey::from(target)));
+        (state.sequence, latest(&SourceKey::User), workspace)
     }
 
     /// The source's observation if it changed after `cursor`, with its

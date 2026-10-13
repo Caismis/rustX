@@ -1,6 +1,6 @@
 import type { SourceSettings, EffectiveConfiguration, ConfigurationApplication, SourceTarget } from '../../protocol/app-server/v47';
 export function cfg3Source(): SourceSettings {
-  return { absent_resource_revision: 'missing', resource_revisions: {}, target: { kind: 'user' }, provenance: {}, process_policy_impacts: {},
+  return { absent_resource_revision: 'missing', resource_revisions: {}, target: { kind: 'user' }, provenance: {}, process_policy_impacts: {}, repair_sequence: '0',
     user: { path: '/bound/rustx.toml', revision: 'user-1', authored: { providers: { transport: { base_url: 'https://user.invalid', credential: { type: 'environment', variable: 'USER_KEY' } } }, models: {} } },
     workspace: { path: '/workspace/rustx.toml', revision: 'workspace-1', authored: {} },
     user_resource_root: '/home/user/rustx/.agents', workspace_resource_root: '/workspace/.agents', runtime_root: '/home/user/rustx/runtime',

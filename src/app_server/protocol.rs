@@ -898,10 +898,18 @@ pub enum NotificationMethod {
     /// means the source no longer reports an unresolved repair. Delivery is
     /// level-triggered from a finite process-local ledger: after a gap, the
     /// authoritative `configuration/sourcesRead` carries the same receipts.
+    /// A notice is not history: a connection's first observation of a source
+    /// without a receipt is never announced, so a client that kept an
+    /// observation across a reconnect rereads it.
     #[serde(rename = "configuration/sourceRepairChanged")]
     SourceRepairChanged {
         target: crate::local_runtime::configuration::settings::SourceTarget,
         receipt: Option<crate::local_runtime::configuration::repair::ConfigRepairReceipt>,
+        /// The native repair-ledger sequence of this change. Within one App
+        /// Server authority it orders this observation against every other
+        /// observation of the same source, including the `repair_sequence`
+        /// of a `configuration/sourcesRead`: the higher one is the newer.
+        sequence: u64,
     },
     #[serde(rename = "session/event")]
     Event {

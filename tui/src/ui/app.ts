@@ -336,24 +336,53 @@ export class RustxTuiApp {
   }
 
   /**
-   * Presents source repair receipts of the current connection's App Server
-   * authority: those already held by the host, then each new one. A receipt
-   * of one authority is announced once per client, so reconnects to it and
-   * rereads never repeat a status line; a replacement authority retires the
-   * previous one's line, and its receipts are its own. Only the current host
-   * is observed: a replaced connection's late notice changes nothing.
+   * Presents source repair observations of the current connection's App
+   * Server authority: those already held by the host, then each new one. A
+   * replacement authority retires the previous one's line, and its receipts
+   * are its own. Only the current host is observed: a replaced connection's
+   * late notice or read changes nothing.
+   *
+   * A reconnect to the same authority keeps the line, and then rereads each
+   * source it still presents: notices are not history, and a source whose
+   * receipt was withdrawn while this client was away is never announced to
+   * the new connection, so only an authoritative read can retire its entry.
    */
   #watchSourceRepairs(): void {
     this.#removeRepairListener();
     const host = this.#host;
-    this.#repairStatus.adopt(host.authorityId);
+    const kept = this.#repairStatus.adopt(host.authorityId);
     const observe = (observation: SourceRepairObservation) => {
-      if (this.#host !== host || !this.#repairStatus.observe(host.authorityId, observation)) return;
+      if (this.#host !== host || this.#quitting || this.#finished || !this.#repairStatus.observe(host.authorityId, observation)) return;
       if (this.#started) this.#tui.requestRender();
     };
     for (const observation of host.sourceRepairs()) observe(observation);
     this.#removeRepairListener = host.onSourceRepair(observe);
     if (this.#started) this.#tui.requestRender();
+    if (kept) void this.#reconcileSourceRepairs(host);
+  }
+
+  /**
+   * Rereads, through `host`, every source the repair line still presents:
+   * the Workspaces, each of which also rereads the User, or the User alone.
+   * Bounded by the line's finite sources, one read at a time, and read-only
+   * (`configuration/sourcesRead` never repairs, reconciles, loads a Session
+   * or reaches a model). Each result reaches the line through the host's
+   * sequence-ordered observations, so it never overwrites a newer notice.
+   * It stops once `host` is replaced, closed or the client quits. A failed
+   * read proves nothing — the entry stays until a later read or notice —
+   * and it never fails the connection.
+   */
+  async #reconcileSourceRepairs(host: AppServerHost): Promise<void> {
+    const pending = this.#repairStatus.pendingSources();
+    const workspaces = pending.filter(target => target.kind === "workspace");
+    for (const target of workspaces.length > 0 ? workspaces : pending) {
+      if (this.#host !== host || host.client.closed !== undefined || this.#quitting || this.#finished) return;
+      try {
+        await host.readSourceRepairs(target);
+      } catch {
+        // Not a withdrawal; `/settings repairs` reads again explicitly.
+      }
+    }
   }
 
   #watchConnection(): void {
