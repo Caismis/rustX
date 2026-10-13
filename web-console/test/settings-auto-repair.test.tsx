@@ -47,7 +47,7 @@ it('keeps source repair observations source-scoped, deduplicated and per connect
   const listener = vi.fn(); s.client.subscribe(listener);
   await announce(s, { kind: 'user' }, receipt());
   const observed = s.client.getSnapshot().sourceRepairs;
-  expect(observed).toEqual({ user: { authorityId: s.authorityId, target: { kind: 'user' }, receipt: receipt() } });
+  expect(observed).toEqual({ user: { authorityId: s.authorityId, target: { kind: 'user' }, receipt: receipt(), sequence: String(announcedSequence) } });
   const publications = listener.mock.calls.length;
   // The same receipt again is no change.
   await announce(s, { kind: 'user' }, receipt());
@@ -55,7 +55,7 @@ it('keeps source repair observations source-scoped, deduplicated and per connect
   expect(s.client.getSnapshot().sourceRepairs).toBe(observed);
   await announce(s, workspace, receipt({ id: 'w', target: workspace, status: 'unresolved', after_revision: null }));
   await announce(s, workspace, null);
-  expect(s.client.getSnapshot().sourceRepairs?.['workspace:/workspace/A']).toEqual({ authorityId: s.authorityId, target: workspace, receipt: undefined });
+  expect(s.client.getSnapshot().sourceRepairs?.['workspace:/workspace/A']).toEqual({ authorityId: s.authorityId, target: workspace, receipt: undefined, sequence: String(announcedSequence) });
   // Never Session, application or conversation state.
   expect(s.client.getSnapshot().configuration).toEqual({});
   expect(Object.keys(s.client.getSnapshot().views)).toEqual([]);
@@ -336,6 +336,36 @@ describe('View details acknowledges a receipt only once its exact details are pr
     shell.s.client.disconnect();
   });
 
+  it('P2-03 a combined notice is about its most severe receipt, whatever the source order', async () => {
+    const statuses = { repaired: {}, unresolved, commit_uncertain: { status: 'commit_uncertain', diagnostic: 'durability not confirmed' } } as const;
+    const rank = { repaired: 0, unresolved: 1, commit_uncertain: 2 } as const;
+    const wording = { unresolved: 'could not be repaired automatically', commit_uncertain: 'repair was not durably confirmed' } as const;
+    type Status = keyof typeof statuses;
+    const pairs: [Status, Status][] = [['repaired', 'unresolved'], ['repaired', 'commit_uncertain'], ['unresolved', 'commit_uncertain'], ['commit_uncertain', 'unresolved'], ['repaired', 'repaired']];
+    for (const [a, b] of pairs) for (const [userStatus, workspaceStatus] of [[a, b], [b, a]]) for (const userFirst of [true, false]) {
+      const label = `User ${userStatus}, Workspace ${workspaceStatus}, ${userFirst ? 'User' : 'Workspace'} announced first`;
+      const s = new Server(); await s.connect();
+      const viewDetailsOf = vi.fn();
+      const { unmount } = render(<RepairNotice client={s.client} acknowledgements={new RepairAcknowledgements(undefined, undefined)} viewDetails={viewDetailsOf} />);
+      const user = receipt(statuses[userStatus]);
+      const other = workspaceReceipt(statuses[workspaceStatus]);
+      const announced: [SourceTarget, ConfigRepairReceipt][] = [[{ kind: 'user' }, user], [workspace, other]];
+      for (const [target, value] of userFirst ? announced : announced.reverse()) await announce(s, target, value);
+      const subject = rank[workspaceStatus] > rank[userStatus] ? other : user;
+      const presented = notice()!;
+      if (subject.status === 'repaired') {
+        expect(presented.getAttribute('role'), label).toBe('status');
+        expect(presented.textContent, label).toMatch(/3 changes in User configuration and 1 change in Workspace configuration/);
+      } else {
+        expect(presented.getAttribute('role'), label).toBe('alert');
+        expect(presented.textContent, label).toContain(`${subject.target.kind === 'user' ? 'User' : 'Workspace'} configuration ${wording[subject.status]}`);
+      }
+      viewDetails();
+      expect(viewDetailsOf, label).toHaveBeenCalledWith({ authorityId: s.authorityId, receiptId: subject.id, source: subject.target });
+      unmount(); s.client.disconnect();
+    }
+  });
+
   it('Dismiss acknowledges the complete presented group for its authority, immediately', async () => {
     const shell = await inspectionShell({ user: receipt(), workspace: workspaceReceipt(unresolved) });
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
@@ -522,7 +552,7 @@ it('attributes a receipt delivered during initialization to the authority that c
     expect(notice()).toBeNull();
     s.held.delete('initialize');
     await act(async () => { s.reply(request); await connecting; });
-    expect(s.client.getSnapshot().sourceRepairs?.user).toEqual({ authorityId, target: { kind: 'user' }, receipt: receipt() });
+    expect(s.client.getSnapshot().sourceRepairs?.user).toEqual({ authorityId, target: { kind: 'user' }, receipt: receipt(), sequence: String(announcedSequence) });
   };
   // The same authority: the early receipt is the acknowledged one.
   await duringInitialize('fixture-app-server-authority');
@@ -632,5 +662,225 @@ it('shows an unresolved repair as a failure next to the manual repair', async ()
   expect(within(section).getByText('No backup copy was made.')).toBeTruthy();
   expect(within(section).getByText('Use Repair malformed source below to correct the document by hand.')).toBeTruthy();
   expect(screen.getByRole('button', { name: /Save Repair malformed source/ })).toBeTruthy();
+  s.client.disconnect();
+});
+
+// P1-02: the client retains a finite set of source observations — the User
+// and SOURCE_REPAIR_WORKSPACES Workspaces — ordered by native sequence, and
+// recovers what it forgot from native authority.
+
+const workspaceAt = (index: number): SourceTarget => ({ kind: 'workspace', directory: `/workspace/w${index}` });
+const receiptOf = (target: SourceTarget, id: string, overrides: Partial<ConfigRepairReceipt> = {}) => receipt({ id, target, changed_count: 1, ...overrides });
+/** Announces a receipt for each of Workspaces `from` up to `to` (exclusive). */
+async function announceWorkspaces(s: Server, from: number, to: number) {
+  for (let index = from; index < to; index++) await announce(s, workspaceAt(index), receiptOf(workspaceAt(index), `w${index}`));
+}
+const observedKeys = (s: Server) => Object.keys(s.client.getSnapshot().sourceRepairs ?? {});
+/** A native read of `target`: its repair at `sequence`, and the User's. */
+function nativeRead(target: SourceTarget, sequence: string, workspaceRepair: ConfigRepairReceipt | null, userRepair: ConfigRepairReceipt | null = null): SourceSettings {
+  const projection = cfg3Source();
+  projection.target = target;
+  projection.repair_sequence = sequence;
+  projection.user_repair = userRepair;
+  projection.workspace_repair = workspaceRepair;
+  return projection;
+}
+
+it('WEB-BOUND-01/02 retains the User and at most 64 Workspaces, forgetting the least recently observed Workspace', async () => {
+  const s = new Server(); await s.connect();
+  await announce(s, { kind: 'user' }, receipt());
+  await announceWorkspaces(s, 0, 70);
+  const retained = s.client.getSnapshot().sourceRepairs!;
+  // The User, never evicted although observed first, and the 64 newest.
+  expect(observedKeys(s)).toEqual(['user', ...Array.from({ length: 64 }, (_, index) => `workspace:/workspace/w${index + 6}`)]);
+  // A Workspace observed again becomes the most recent; the next one forgets
+  // the least recent remaining, never the User.
+  await announce(s, workspaceAt(10), receiptOf(workspaceAt(10), 'w10-again'));
+  await announce(s, workspaceAt(70), receiptOf(workspaceAt(70), 'w70'));
+  const keys = observedKeys(s);
+  expect(keys).toHaveLength(65);
+  expect(keys[0]).toBe('user');
+  expect(keys).not.toContain('workspace:/workspace/w6');
+  expect(keys.slice(-2)).toEqual(['workspace:/workspace/w10', 'workspace:/workspace/w70']);
+  // Published immutably: an earlier snapshot is never changed.
+  expect(Object.keys(retained)).toHaveLength(65);
+  expect(retained['workspace:/workspace/w6']).toBeDefined();
+  // A forgotten source is retired from what the notice presents.
+  render(<RepairNotice client={s.client} acknowledgements={new RepairAcknowledgements(undefined, undefined)} viewDetails={vi.fn()} />);
+  expect(notice()!.textContent).not.toMatch(/w6\b/);
+  s.client.disconnect();
+});
+
+it('WEB-BOUND-03 one Dismiss acknowledges a presented User and 64 Workspaces without recreating the notice', async () => {
+  const s = new Server(); await s.connect();
+  const acknowledgements = new RepairAcknowledgements(localStorage);
+  render(<RepairNotice client={s.client} acknowledgements={acknowledgements} viewDetails={vi.fn()} />);
+  await announce(s, { kind: 'user' }, receipt());
+  await announceWorkspaces(s, 0, 64);
+  expect(observedKeys(s)).toHaveLength(65);
+  fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+  expect(notice()).toBeNull();
+  for (const [, observation] of Object.entries(s.client.getSnapshot().sourceRepairs!)) {
+    expect(acknowledgements.has({ authorityId: observation.authorityId, receiptId: observation.receipt!.id })).toBe(true);
+  }
+  // Delivered again by the same authority: still acknowledged, so nothing.
+  await announce(s, { kind: 'user' }, receipt());
+  await announceWorkspaces(s, 0, 64);
+  expect(notice()).toBeNull();
+  s.client.disconnect();
+});
+
+describe('WEB-BOUND-04 a revisited Workspace the client forgot is recovered from native authority', () => {
+  for (const [name, current] of [['a newer receipt', 'w-current'], ['a withdrawal', null]] as const) {
+    it(name, async () => {
+      const s = new Server();
+      const directory = '/workspace/A';
+      const target: SourceTarget = { kind: 'workspace', directory };
+      // Both fixture Sessions belong to Workspace A.
+      s.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: directory } }));
+      // Native's current answer for the Workspace, once it is read.
+      s.handlers.set('configuration/sourcesRead', request => {
+        const asked = (request.params as { target: SourceTarget }).target;
+        return { type: 'source_settings', projection: nativeRead(asked, '1000', current === null ? null : receiptOf(asked, current)) };
+      });
+      await s.connect();
+      render(<RepairNotice client={s.client} acknowledgements={new RepairAcknowledgements(undefined, undefined)} viewDetails={vi.fn()} />);
+      await announce(s, target, receiptOf(target, 'w-stale'));
+      // 64 newer Workspaces: the client forgets Workspace A.
+      await announceWorkspaces(s, 0, 64);
+      expect(observedKeys(s)).not.toContain(`workspace:${directory}`);
+      expect(sent(s, 'configuration/sourcesRead')).toHaveLength(0);
+      // Attaching a Session of Workspace A reads it again, read-only.
+      await s.client.attach('A');
+      await waitFor(() => expect(sent(s, 'configuration/sourcesRead')).toHaveLength(1));
+      expect(sent(s, 'configuration/sourcesRead')[0].params).toEqual({ target });
+      await waitFor(() => expect(observedKeys(s)).toContain(`workspace:${directory}`));
+      const recovered = s.client.getSnapshot().sourceRepairs![`workspace:${directory}`];
+      expect(recovered.sequence).toBe('1000');
+      expect(recovered.receipt?.id).toBe(current ?? undefined);
+      // The forgotten receipt is never resurrected, even delivered late.
+      await act(async () => { s.socket.deliver({ jsonrpc: '2.0', method: 'configuration/sourceRepairChanged', params: { target, receipt: receiptOf(target, 'w-stale'), sequence: '1' } }); });
+      expect(s.client.getSnapshot().sourceRepairs![`workspace:${directory}`].receipt?.id).toBe(current ?? undefined);
+      expect(Object.values(s.client.getSnapshot().sourceRepairs!).some(observation => observation.receipt?.id === 'w-stale')).toBe(false);
+      // Read-only: nothing was written or reconciled.
+      expect(sent(s, 'configuration/sourceWrite')).toHaveLength(0);
+      expect(sent(s, 'configuration/reconcile')).toHaveLength(0);
+      // Another Session of the same Workspace, while the client holds it,
+      // reads nothing more.
+      await s.client.attach('B');
+      expect(s.client.getSnapshot().views.B?.settings?.cwd).toBe(directory);
+      expect(sent(s, 'configuration/sourcesRead')).toHaveLength(1);
+      s.client.disconnect();
+    });
+  }
+});
+
+describe('WEB-BOUND-05 a delayed read never overwrites a newer native notification', () => {
+  const deliverAt = (s: Server, target: SourceTarget, value: ConfigRepairReceipt | null, sequence: number) =>
+    act(async () => { s.socket.deliver({ jsonrpc: '2.0', method: 'configuration/sourceRepairChanged', params: { target, receipt: value, sequence: String(sequence) } }); });
+  for (const [name, evict] of [['held source', false], ['source forgotten while the read was in flight', true]] as const) {
+    it(name, async () => {
+      const s = new Server();
+      const target: SourceTarget = { kind: 'workspace', directory: '/workspace/A' };
+      s.handlers.set('configuration/sourcesRead', request => ({ type: 'source_settings', projection: nativeRead((request.params as { target: SourceTarget }).target, '90', receiptOf(target, 'older')) }));
+      await s.connect();
+      // 65 Workspaces: this connection has forgotten one, so an absent
+      // Workspace is read when one of its Sessions is attached.
+      for (let index = 0; index < 65; index++) await deliverAt(s, workspaceAt(index), receiptOf(workspaceAt(index), `w${index}`), 1 + index);
+      s.held.add('configuration/sourcesRead');
+      const reading = s.waitFor('configuration/sourcesRead');
+      await s.client.attach('A');
+      const read = await reading;
+      // Native announces a newer receipt while the read (answering at 90) is
+      // in flight.
+      await deliverAt(s, target, receiptOf(target, 'newer'), 100);
+      if (evict) {
+        for (let index = 100; index < 164; index++) await deliverAt(s, workspaceAt(index), receiptOf(workspaceAt(index), `w${index}`), 1 + index);
+        expect(observedKeys(s)).not.toContain('workspace:/workspace/A');
+      }
+      s.held.delete('configuration/sourcesRead');
+      await act(async () => { s.reply(read); await Promise.resolve(); });
+      expect(sent(s, 'configuration/sourcesRead')).toHaveLength(1);
+      const held = s.client.getSnapshot().sourceRepairs!['workspace:/workspace/A'];
+      if (evict) expect(held).toBeUndefined();
+      else expect(held).toMatchObject({ sequence: '100', receipt: { id: 'newer' } });
+      expect(Object.values(s.client.getSnapshot().sourceRepairs!).some(observation => observation.receipt?.id === 'older')).toBe(false);
+      s.client.disconnect();
+    });
+  }
+});
+
+it('WEB-BOUND-06 reconnecting to the same authority keeps acknowledgements and a bounded cache', async () => {
+  const s = new Server(); await s.connect();
+  const acknowledgements = new RepairAcknowledgements(localStorage);
+  render(<RepairNotice client={s.client} acknowledgements={acknowledgements} viewDetails={vi.fn()} />);
+  await announce(s, { kind: 'user' }, receipt());
+  await announceWorkspaces(s, 0, 64);
+  fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+  for (let reconnect = 0; reconnect < 3; reconnect++) {
+    s.client.disconnect(); await s.connect();
+    expect(s.client.getSnapshot().sourceRepairs).toEqual({});
+    // The same authority announces every latest receipt again, and more.
+    await announce(s, { kind: 'user' }, receipt());
+    await announceWorkspaces(s, 0, 64);
+    expect(notice()).toBeNull();
+    // Six new occurrences beyond the bound.
+    for (let index = 64; index < 70; index++) await announce(s, workspaceAt(index), receiptOf(workspaceAt(index), `w${index}-${reconnect}`));
+    expect(observedKeys(s)).toHaveLength(65);
+    expect(notice()!.textContent).toMatch(/6 Workspace|Workspace configuration/);
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+  }
+  expect(JSON.parse(localStorage.getItem(RepairAcknowledgements.KEY)!).length).toBeLessThanOrEqual(RepairAcknowledgements.LIMIT);
+  s.client.disconnect();
+});
+
+it('WEB-BOUND-07 a replacement authority presents a distinct receipt with an equal occurrence id', async () => {
+  const s = new Server(); await s.connect();
+  const acknowledgements = new RepairAcknowledgements(localStorage);
+  render(<RepairNotice client={s.client} acknowledgements={acknowledgements} viewDetails={vi.fn()} />);
+  await announce(s, { kind: 'user' }, receipt());
+  await announceWorkspaces(s, 0, 64);
+  fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+  await replaceProcess(s, 'replacement-authority');
+  expect(s.client.getSnapshot().sourceRepairs).toEqual({});
+  await announce(s, workspaceAt(3), receiptOf(workspaceAt(3), 'w3'));
+  expect(notice()!.textContent).toMatch(/1 change in Workspace configuration/);
+  expect(s.client.getSnapshot().sourceRepairs!['workspace:/workspace/w3'].authorityId).toBe('replacement-authority');
+  s.client.disconnect();
+});
+
+it('WEB-BOUND-08 repair observations never touch a Settings draft, its CAS base, an in-flight Save or Session state', async () => {
+  const native = new Native();
+  const s = new Server();
+  s.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: native.projection() }));
+  s.handlers.set('configuration/sourceWrite', () => ({ type: 'source_settings', projection: native.projection() }));
+  await s.attached('B');
+  render(<SettingsSurface client={s.client} target={userSettingsTarget} />);
+  await settingsReady();
+  await openSettingsPage('Agent');
+  fireEvent.change(screen.getByRole('textbox', { name: 'Root description' }), { target: { value: 'unsaved draft' } });
+  // An in-flight Save of another unit, held at native.
+  await openSettingsPage('Advanced');
+  s.held.add('configuration/sourceWrite');
+  fireEvent.change(screen.getByLabelText('max_connections'), { target: { value: '19' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save App Server policy' }));
+  const [write] = sent(s, 'configuration/sourceWrite');
+  expect(write.params).toMatchObject({ expected_revision: 'user-1' });
+  const before = s.client.getSnapshot();
+  const reads = sent(s, 'configuration/sourcesRead').length;
+  // Observations of every source, past the retention bound.
+  await announce(s, { kind: 'user' }, receipt());
+  await announceWorkspaces(s, 0, 70);
+  await announce(s, { kind: 'user' }, null);
+  const after = s.client.getSnapshot();
+  expect(after.views).toBe(before.views);
+  expect(after.configuration).toBe(before.configuration);
+  expect(after.sessions).toBe(before.sessions);
+  expect(sent(s, 'configuration/sourceWrite')).toEqual([write]);
+  expect(sent(s, 'configuration/sourcesRead')).toHaveLength(reads);
+  expect(sent(s, 'configuration/reconcile')).toHaveLength(0);
+  expect((screen.getByLabelText('max_connections') as HTMLInputElement).value).toBe('19');
+  await openSettingsPage('Agent');
+  expect((screen.getByRole('textbox', { name: 'Root description' }) as HTMLInputElement).value).toBe('unsaved draft');
   s.client.disconnect();
 });

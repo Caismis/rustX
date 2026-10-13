@@ -1,5 +1,5 @@
 import type { ConfigRepairReceipt } from '../../../protocol/app-server/v47';
-import type { AppServerClient, SourceRepairObservation } from '../client/app-server';
+import { type AppServerClient, SOURCE_REPAIR_WORKSPACES, type SourceRepairObservation } from '../client/app-server';
 
 /** The identity of one repair: a receipt id names one repair occurrence
  * within the App Server authority that produced it, so the authority and the
@@ -14,6 +14,18 @@ export interface RepairIdentity {
 export interface PresentedRepair {
   authorityId: string;
   receipt: ConfigRepairReceipt;
+}
+
+/** How much a receipt matters to a combined notice: a publication whose
+ * durability was not confirmed — reread before editing or retrying — outranks
+ * a repair that published nothing, which outranks a committed one. */
+const SEVERITY: Record<ConfigRepairReceipt['status'], number> = { repaired: 0, unresolved: 1, commit_uncertain: 2 };
+
+/** What a combined notice is about: the item whose receipt is most severe,
+ * the first of equals in the order given. */
+export function mostSevere<T>(items: readonly T[], receipt: (item: T) => ConfigRepairReceipt): T | undefined {
+  return items.reduce<T | undefined>((subject, item) =>
+    subject === undefined || SEVERITY[receipt(item).status] > SEVERITY[receipt(subject).status] ? item : subject, undefined);
 }
 
 /** The identity of one presented repair. */
@@ -54,7 +66,11 @@ type StorageEvents = Pick<EventTarget, 'addEventListener' | 'removeEventListener
  * Where storage is denied, acknowledgements live in this page's memory. */
 export class RepairAcknowledgements {
   static readonly KEY = 'rustx.configuration-repairs.acknowledged';
-  static readonly LIMIT = 64;
+  /** At least every receipt one notice can present at once — the User and
+   * `SOURCE_REPAIR_WORKSPACES` Workspaces — so one Dismiss can never leave a
+   * presented receipt unacknowledged, with room to keep earlier dismissals
+   * across reconnects and reloads. */
+  static readonly LIMIT = 4 * (SOURCE_REPAIR_WORKSPACES + 1);
   readonly #storage: Pick<Storage, 'getItem' | 'setItem'> | undefined;
   readonly #events: StorageEvents | undefined;
   readonly #listeners = new Set<() => void>();

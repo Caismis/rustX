@@ -917,6 +917,11 @@ never order them. A receipt is withdrawn only when its source is found intrinsic
 a client deciding what to present reconciles against that order, never against
 which receipts it already showed (see [TUI and App Server](tui-app-server.md)
 and the [protocol](app-server-protocol.md#automatic-source-repair-receipts-v47)).
+The TUI and the Web console retain the same finite set of observations as a
+connection's native interest — the User and 64 Workspaces, the least recently
+observed Workspace forgotten first — recover a forgotten source by a read-only
+source read rather than assuming it, and word a combined notice by its most
+severe receipt: `commit_uncertain`, then `unresolved`, then `repaired`.
 
 A source is healthy under one source-intrinsic contract: the production strict
 parser and source restrictions accept it, every source-intrinsic constraint

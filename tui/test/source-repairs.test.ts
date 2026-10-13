@@ -86,7 +86,7 @@ it("words repaired, combined, unresolved and uncertain receipts without values",
   );
   const unresolved = repairNotice([receipt({ status: "unresolved", target: WORKSPACE, after_revision: null, backup_available: false, diagnostic: "malformed TOML at line 3, column 1" })]);
   assert.equal(unresolved?.level, "warning");
-  assert.match(unresolved!.text, /Workspace rustx\.toml could not be auto-repaired: malformed TOML at line 3, column 1\. Run \/settings workspace repairs/);
+  assert.match(unresolved!.text, /Workspace rustx\.toml could not be auto-repaired: malformed TOML at line 3, column 1\. Run \/settings workspace "\/work\/project" repairs/);
   const uncertain = repairNotice([receipt({ status: "commit_uncertain" })]);
   assert.equal(uncertain?.level, "error");
   assert.match(uncertain!.text, /not durably confirmed/);
@@ -1089,4 +1089,52 @@ it("an in-flight inspection keeps its Session and never presents a replaced App 
   assert.equal(replacement.transport.transportCount("configuration/sourcesRead"), 0);
   assertReadOnly(h);
   assertReadOnly(replacement);
+});
+
+it("P2-03 a combined notice names its most severe receipt and the command inspecting exactly its source", async () => {
+  const statuses = {
+    repaired: {},
+    unresolved: { status: "unresolved", after_revision: null, backup_available: false, diagnostic: "invalid value" },
+    commit_uncertain: { status: "commit_uncertain", diagnostic: "durability not confirmed" },
+  } as const;
+  type Status = keyof typeof statuses;
+  const rank: Record<Status, number> = { repaired: 0, unresolved: 1, commit_uncertain: 2 };
+  const level: Record<Status, string> = { repaired: "info", unresolved: "warning", commit_uncertain: "error" };
+  const wording: Record<Status, RegExp> = {
+    repaired: /^Config: Auto-repaired (3 entries in User and 1 entry in Workspace|1 entry in Workspace and 3 entries in User) rustx\.toml\. Run \/settings repairs for details\.$/,
+    unresolved: /could not be auto-repaired/,
+    commit_uncertain: /repair was not durably confirmed/,
+  };
+  const pairs: [Status, Status][] = [["repaired", "unresolved"], ["repaired", "commit_uncertain"], ["unresolved", "commit_uncertain"], ["commit_uncertain", "unresolved"], ["repaired", "repaired"]];
+  for (const [a, b] of pairs) for (const [userStatus, workspaceStatus] of [[a, b], [b, a]] as const) {
+    const label = `User ${userStatus}, Workspace ${workspaceStatus}`;
+    const userReceipt = receipt(statuses[userStatus]);
+    const workspaceReceipt = receipt({ id: "w", target: WORKSPACE, changed_count: 1, ...statuses[workspaceStatus] });
+    const subject = rank[workspaceStatus] > rank[userStatus] ? workspaceReceipt : userReceipt;
+    for (const userFirst of [true, false]) {
+      const receipts = userFirst ? [userReceipt, workspaceReceipt] : [workspaceReceipt, userReceipt];
+      const notice = repairNotice(receipts)!;
+      assert.equal(notice.level, level[subject.status], label);
+      assert.match(notice.text, wording[subject.status], label);
+      // The status line composes the same notice from its observed sources.
+      const status = new SourceRepairStatus();
+      status.adopt(AUTHORITY);
+      for (const observed of userFirst ? [user(userReceipt), workspace(workspaceReceipt)] : [workspace(workspaceReceipt), user(userReceipt)]) status.observe(AUTHORITY, observed);
+      assert.equal(presented(status), plain(notice.text), label);
+    }
+    if (subject.status === "repaired") continue;
+    const owner = subject.target.kind === "user" ? "User" : "Workspace";
+    const notice = repairNotice([userReceipt, workspaceReceipt])!;
+    assert.ok(notice.text.startsWith(`Config: ${owner} rustx.toml`), `${label}: ${notice.text}`);
+    // The named command inspects exactly the subject's source, Session or not.
+    const command = /Run (\/settings .+ repairs) for details\.$/.exec(notice.text)?.[1];
+    assert.equal(command, subject.target.kind === "user" ? "/settings user repairs" : `/settings workspace ${JSON.stringify(WORKSPACE.directory)} repairs`, label);
+    const h = await harness();
+    const dispatcher = new CommandDispatcher({ host: h.host, session: undefined, sessionSettings: { cwd: "/launch" }, diagnostics: NO_DIAGNOSTICS });
+    const operation = dispatcher.submit(command);
+    assert.deepEqual(await answerRead(h), subject.target, label);
+    const sections = body(await operation);
+    assert.ok(sections.includes(subject.target.kind === "user" ? "## User rustx.toml" : `## Workspace rustx.toml (${WORKSPACE.directory})`), label);
+    assertReadOnly(h);
+  }
 });

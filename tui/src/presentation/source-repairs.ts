@@ -102,14 +102,39 @@ export class SourceRepairAnnouncements {
 
 export type RepairNoticeLevel = "info" | "warning" | "error";
 
-/** One concise status line for newly observed receipts of distinct sources. */
+/** How much a receipt matters to a combined notice: a publication whose
+ * durability was not confirmed — reread before editing or retrying — outranks
+ * a repair that published nothing, which outranks a committed one. */
+const SEVERITY: Record<ConfigRepairReceipt["status"], number> = {
+  repaired: 0,
+  unresolved: 1,
+  commit_uncertain: 2,
+};
+
+/** The receipt a combined notice is about: the most severe, the first of
+ * equals in the order given. */
+export function mostSevere(receipts: readonly ConfigRepairReceipt[]): ConfigRepairReceipt | undefined {
+  return receipts.reduce<ConfigRepairReceipt | undefined>(
+    (subject, receipt) => subject === undefined || SEVERITY[receipt.status] > SEVERITY[subject.status] ? receipt : subject,
+    undefined,
+  );
+}
+
+/** The `/settings … repairs` command that inspects exactly `target`, a
+ * Workspace by its native directory, quoted as the command parses it. */
+function inspectionCommand(target: SourceTarget): string {
+  return target.kind === "user" ? "/settings user repairs" : `/settings workspace ${JSON.stringify(target.directory)} repairs`;
+}
+
+/** One concise status line for newly observed receipts of distinct sources:
+ * a failure is named by its most severe receipt, otherwise every committed
+ * repair is counted. */
 export function repairNotice(receipts: readonly ConfigRepairReceipt[]): { level: RepairNoticeLevel; text: string } | undefined {
-  if (receipts.length === 0) return undefined;
-  const failed = receipts.filter(receipt => receipt.status !== "repaired");
-  if (failed.length > 0) {
-    const receipt = failed[0]!;
+  const receipt = mostSevere(receipts);
+  if (receipt === undefined) return undefined;
+  if (receipt.status !== "repaired") {
     const owner = sourceLabel(receipt.target);
-    const command = receipt.target.kind === "user" ? "/settings user repairs" : "/settings workspace repairs";
+    const command = inspectionCommand(receipt.target);
     const detail = receipt.diagnostic ? `: ${sanitizeField(receipt.diagnostic, false)}` : "";
     return receipt.status === "commit_uncertain"
       ? { level: "error", text: `Config: ${owner} rustx.toml repair was not durably confirmed${detail}. Run ${command} for details.` }

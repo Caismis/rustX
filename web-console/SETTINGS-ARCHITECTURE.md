@@ -592,7 +592,22 @@ configuration/sourcesRead ──▶ SourceSettings.user_repair / workspace_repai
 - The client keeps the latest receipt of each source this connection observed,
   keyed by source and never by Session or application scope, replaced on every
   connection (whose server announces each latest receipt again). It is a
-  separate fact from `configuration`, the application publication. Each
+  separate fact from `configuration`, the application publication. It is
+  finite, exactly as native repair interest and the TUI are: the User and
+  `SOURCE_REPAIR_WORKSPACES` (64) Workspaces, the least recently observed
+  Workspace forgotten first and the User never (`retainSourceRepair`), retired
+  from the published state itself, which is replaced, never mutated. Two
+  observations of a source are ordered by their native repair-ledger
+  sequence — a notice's `sequence`, a read's `repair_sequence` — never by
+  arrival or receipt id. One frontier records the highest sequence at which
+  the connection forgot a source: a notice of an absent source ordered before
+  it is ambiguous and never applied; that source is read again instead, as is
+  an absent Workspace whose Session is attached once the connection has
+  forgotten anything. Those reads are `configuration/sourcesRead` — read-only
+  — one at a time with one queued entry per source, and an answer older than
+  what the connection meanwhile observed (and possibly forgot) of the source,
+  or from a connection that has since ended, changes nothing. There is no
+  polling and no watcher. Each
   observation carries the `authorityId` its connection negotiated: a receipt
   id names one repair occurrence within its authority — a second commit of
   identical bytes has another id — so equal ids from two App Server
@@ -603,8 +618,10 @@ configuration/sourcesRead ──▶ SourceSettings.user_repair / workspace_repai
   client knew from an earlier connection.
 - `RepairNotice` (`app/RepairNotice.tsx`) presents each unacknowledged receipt
   once: a combined sentence for simultaneous User and Workspace repairs, an
-  alert for `unresolved` / `commit_uncertain` naming the first failing source,
-  and nothing at all for a source without a receipt. Dismiss acknowledges every
+  alert for `unresolved` / `commit_uncertain` naming the most severe source —
+  `commit_uncertain`, which may have published and must be reread before an
+  edit or retry, before `unresolved`, which published nothing — and nothing at
+  all for a source without a receipt. View details opens that same source. Dismiss acknowledges every
   receipt presented, immediately. View details acknowledges nothing itself: it
   sends `OPEN.REPAIRS` with the inspection `(authorityId, receipt id)` of the
   one source it names, and that receipt is acknowledged only once the exact
@@ -613,7 +630,9 @@ configuration/sourcesRead ──▶ SourceSettings.user_repair / workspace_repai
   is abandoned acknowledges nothing. Acknowledgements are opaque
   `(authorityId, receipt id)` pairs in one bounded `RepairAcknowledgements`
   ledger that `App` shares between the notice and Settings, so reconnects,
-  rereads and reloads of the same authority never repeat a notice. There is no
+  rereads and reloads of the same authority never repeat a notice. Its bound
+  (`4 × 65`) holds at least every receipt one notice can present — the User
+  and 64 Workspaces — so one Dismiss never leaves a presented receipt behind. There is no
   dialog and no automatic navigation.
 - Tabs converge without being linearizable. The ledger persists to
   `localStorage`; every write first merges the identities currently persisted,
