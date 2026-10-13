@@ -495,10 +495,27 @@ writer of that document — source authoring, automatic repair and create-only
 initialization — locks the same inode exclusively, and distinct documents never
 share one. Writers create it; nothing unlinks it.
 
-Source capture (`configuration/sourcesRead`, `rustx config show --sources`, the
-read after a write and coordinator capture) is read-only: it creates no
-directory, lock, staged file or backup and changes no source. It has the same
-physical authority as a write. Each round admits every document's directory
+Every reader of a `rustx.toml` has the same physical authority as a write.
+Session resolution — Session creation and loading, configuration application
+capture and preparation, the App Server process policy, `rustx config check`
+and `rustx config show` — reads both documents through the same admission as
+source capture and repair: admitted once, never followed, a missing directory
+an absent document, and reread at the end of the capture through the admitted
+directory, which the pathname must still name. A symlinked source, or a
+directory replaced or redirected during the capture, is refused as an
+unavailable source rather than answered from the replacement, even with
+identical bytes. Session resolution holds no writer lock: rustX writers
+publish only by atomic replacement after every check, so its revision fence —
+every document and resource reread after the capture — makes a concurrent
+write an explicit "changed during capture" failure, never a mixed capture, and
+never blocks a writer. The User source pathname is bound once, when the
+process binds `--config` (or the default) to its canonical path; a symlink
+named there is resolved at binding, and a symlink appearing at the bound
+pathname afterwards is refused like any other.
+
+Source capture (`configuration/sourcesRead`, the read after a write and
+coordinator capture) is read-only: it creates no directory, lock, staged file
+or backup and changes no source. Each round admits every document's directory
 once, from `/` without following any symlink and without creating anything (a
 missing directory is an absent document); the shared writer lock, the bytes and
 their reread are all relative to that one handle, each opened

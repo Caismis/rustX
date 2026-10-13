@@ -1991,10 +1991,11 @@ fn no_model_or_protocol_is_guessed_and_host_paths_are_validated() {
 fn dangling_workspace_source_is_a_read_error() {
     let f = Fixture::new();
     std::os::unix::fs::symlink("missing.toml", f.host.launch_directory.join("rustx.toml")).unwrap();
+    // Refused as a symlink, never followed: neither absent nor its target.
     assert!(
         resolve(&f.request, &f.host)
             .unwrap_err()
-            .contains("cannot read")
+            .contains("not a symlink")
     );
 }
 
@@ -2922,5 +2923,60 @@ mod session_resolution {
                 assert!(!text.contains("secret-model-parameter"));
             }
         }
+    }
+}
+
+/// Every entry below `root`, with the bytes of every regular file.
+fn tree(root: &Path) -> std::collections::BTreeMap<std::path::PathBuf, Option<Vec<u8>>> {
+    let mut entries = std::collections::BTreeMap::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(&directory).unwrap() {
+            let path = entry.unwrap().path();
+            let content = if std::fs::symlink_metadata(&path).unwrap().is_dir() {
+                pending.push(path.clone());
+                None
+            } else {
+                Some(std::fs::read(&path).unwrap())
+            };
+            entries.insert(path, content);
+        }
+    }
+    entries
+}
+
+/// FS-AUTH-06: offline inspection — `rustx config check` and `rustx config
+/// show` — is read-only for missing sources, even a missing User source
+/// directory, and for valid ones: no directory, writer lock, staged file or
+/// backup appears, nothing changes, and no effect is performed.
+#[test]
+fn offline_inspection_of_missing_and_valid_sources_is_read_only() {
+    let f = Fixture::new();
+    std::fs::remove_dir_all(&f.host.config_directory).unwrap();
+    for valid in [false, true] {
+        if valid {
+            std::fs::create_dir_all(&f.host.config_directory).unwrap();
+            f.user(json!({"agent": {"model": {"model":"host/one"}}}));
+            std::fs::write(
+                f.host.launch_directory.join("rustx.toml"),
+                "[subagents]\nmax_concurrent = 2\n",
+            )
+            .unwrap();
+        }
+        let before = tree(f.root.path());
+        for operation in ["config_check", "config_show"] {
+            let ((report, _), effects) = super::static_effects::measure(|| {
+                super::diagnostics::inspect(operation, &f.request, &f.host)
+            });
+            assert_eq!(effects, [0; 11], "{operation} valid={valid}");
+            assert_eq!(
+                report.validity == super::diagnostics::Validity::Valid,
+                valid,
+                "{operation}: {:?}",
+                report.diagnostics
+            );
+        }
+        assert_eq!(tree(f.root.path()), before, "valid={valid}");
+        assert_eq!(f.host.config_directory.exists(), valid);
     }
 }

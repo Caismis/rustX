@@ -6,6 +6,7 @@ pub mod application;
 pub mod repair;
 pub mod settings;
 
+use super::settings::{AdmittedSource, SourceReread};
 use crate::bounded_file::read_bounded;
 use crate::runtime::capability_inspection::{ResourceDefinition, ResourceFamily};
 use settings::SourceScope;
@@ -192,7 +193,9 @@ impl UserConfigManager {
     /// # Errors
     /// Invalid user authoring or policy is rejected before traffic admission.
     pub fn app_server_policy(&self) -> Result<super::app_server_policy::AppServerPolicy, String> {
-        let policy = read_layer(&self.sources.config_path, false, false)
+        let path = &self.sources.config_path;
+        let bytes = reread(&admit_source(path)?).map_err(|error| error.to_string())?;
+        let policy = layer_of(path, bytes.as_deref(), false)
             .map_err(|error| error.to_string())?
             .app_server
             .unwrap_or_default();
@@ -923,8 +926,8 @@ impl UserConfigManager {
         request: &SessionConfigInput,
         after_layers: impl FnOnce(),
     ) -> Result<application::CapturedApplication, String> {
-        let layers = self
-            .capture_layers(request, None)
+        let (layers, documents) = self
+            .capture_layers(request)
             .map_err(|error| error.to_string())?;
         after_layers();
         let policy = layers
@@ -947,14 +950,8 @@ impl UserConfigManager {
             .and_then(Self::resolve_runtime_configuration)
             .and_then(|capture| self.resolve_resources(request, capture))
             .map_err(|error| error.diagnostic.reason);
-        for (path, expected) in &revisions {
-            let actual = read_layer_revision(path, false, path != &self.sources.config_path)
-                .map_err(|error| error.to_string())?
-                .1;
-            if &actual != expected {
-                return Err("configuration changed during capture; rescan to retry".into());
-            }
-        }
+        self.verify_documents(&documents, &revisions)
+            .map_err(|error| error.to_string())?;
         let manifest = context
             .as_ref()
             .map_or(&revisions, |capture| &capture.source_revisions);
@@ -982,17 +979,20 @@ impl UserConfigManager {
         &self,
         request: &SessionConfigInput,
     ) -> Result<ProspectiveSessionConfig, LaunchFailure> {
-        let resolved = self.resolve_model_candidate(request, None)?;
+        let (layers, documents) = self.capture_layers(request)?;
+        let resolved = self.resolve_model_candidate(request, layers)?;
         let resolved = Self::resolve_runtime_configuration(resolved)?;
-        self.resolve_resources(request, resolved)
+        let prospective = self.resolve_resources(request, resolved)?;
+        self.verify_documents(&documents, &prospective.source_revisions)?;
+        Ok(prospective)
     }
 
     fn resolve_model_candidate(
         &self,
         request: &SessionConfigInput,
-        candidate: Option<(&Path, &[u8])>,
+        layers: LayerCapture,
     ) -> Result<SourceCapture, LaunchFailure> {
-        let capture = self.capture_sources(request, candidate)?;
+        let capture = self.resolve_captured_layers(layers)?;
         let config = &capture.config;
         config.context.validate().map_err(|e| e.to_string())?;
         let (primary, summary) = crate::model::session::analyze_session_model_config(
@@ -1031,30 +1031,30 @@ impl UserConfigManager {
     }
 
     // One strict source parse, authority, overlay and provenance owner. Lowering
-    // is structural; semantic validation belongs to the consuming domain.
+    // is structural; semantic validation belongs to the consuming domain. Both
+    // documents are read through their admitted directories, which stay
+    // admitted for the capture's revision fence ([`Self::verify_documents`]).
     fn capture_layers(
         &self,
         request: &SessionConfigInput,
-        candidate: Option<(&Path, &[u8])>,
-    ) -> Result<LayerCapture, LaunchFailure> {
-        let read = |path: &Path, required, project| match candidate {
-            Some((target, bytes))
-                if normalize_missing(path).is_ok_and(|canonical| canonical == target) =>
-            {
-                parse_layer(path, bytes, project)
-                    .map(|layer| (layer, super::settings::revision(Some(bytes))))
-            }
-            _ => read_layer_revision(path, required, project),
-        };
+    ) -> Result<(LayerCapture, [AdmittedSource; 2]), LaunchFailure> {
         let host = &self.sources;
         let (locations, identity) = self.resolve_locations(request)?;
         let user_path = host.config_path.clone();
         let project_path = locations.workspace.join("rustx.toml");
-        let (user, user_revision) = read(&user_path, false, false)?;
+        let documents = [admit_source(&user_path)?, admit_source(&project_path)?];
+        let read = |source: &AdmittedSource, workspace| {
+            let bytes = source
+                .read()
+                .map_err(|error| unavailable(source.path(), client_detail(error)))?;
+            let layer = layer_of(source.path(), bytes.as_deref(), workspace)?;
+            Ok::<_, LaunchFailure>((layer, super::settings::revision(bytes.as_deref())))
+        };
+        let (user, user_revision) = read(&documents[0], false)?;
 
         // Both ordinary documents may be absent. Typed resolution determines
         // whether their composed configuration is complete.
-        let (project, workspace_revision) = read(&project_path, false, true)?;
+        let (project, workspace_revision) = read(&documents[1], true)?;
         let revisions = BTreeMap::from([
             (user_path.clone(), user_revision),
             (project_path.clone(), workspace_revision),
@@ -1093,22 +1093,46 @@ impl UserConfigManager {
             )?);
             merged.overlay(layer, &origin, &mut provenance);
         }
-        Ok(LayerCapture {
-            revisions,
-            locations,
-            identity,
-            merged,
-            provenance,
-            project_resources,
-        })
+        Ok((
+            LayerCapture {
+                revisions,
+                locations,
+                identity,
+                merged,
+                provenance,
+                project_resources,
+            },
+            documents,
+        ))
     }
 
-    fn capture_sources(
+    /// The revision fence of a capture's two documents, after every other
+    /// input was read: each is reread through its admitted directory, which
+    /// the pathname must still name ([`AdmittedSource::reread`]), and must
+    /// still have its captured revision. A directory replaced or redirected
+    /// since admission is refused, never answered from the replacement, even
+    /// with identical bytes.
+    #[cfg_attr(
+        not(test),
+        allow(
+            clippy::unused_self,
+            reason = "the manager reaches its test hook at the verification boundary"
+        )
+    )]
+    fn verify_documents(
         &self,
-        request: &SessionConfigInput,
-        candidate: Option<(&Path, &[u8])>,
-    ) -> Result<SourceCapture, LaunchFailure> {
-        self.resolve_captured_layers(self.capture_layers(request, candidate)?)
+        documents: &[AdmittedSource; 2],
+        revisions: &BTreeMap<PathBuf, String>,
+    ) -> Result<(), LaunchFailure> {
+        #[cfg(test)]
+        self.test_hooks.reach("before_capture_verification");
+        for source in documents {
+            let actual = super::settings::revision(reread(source)?.as_deref());
+            if revisions.get(source.path()) != Some(&actual) {
+                return Err("configuration changed during capture; rescan to retry".into());
+            }
+        }
+        Ok(())
     }
 
     fn resolve_captured_layers(
@@ -1557,8 +1581,12 @@ impl UserConfigManager {
             revisions.insert(file.path.clone(), super::settings::revision(Some(&bytes)));
         }
         for (path, expected) in &revisions {
+            // Resource roots were compared above; the two documents are
+            // fenced through their admitted directories by the capture.
             if path == &host.home_directory.join("rustx/.agents")
                 || path == &locations.workspace.join(".agents")
+                || path == &host.config_path
+                || path == &locations.workspace.join("rustx.toml")
             {
                 continue;
             }
@@ -1674,28 +1702,59 @@ pub(super) fn normalize_missing(path: &Path) -> Result<PathBuf, String> {
     Ok(normalize_missing(parent)?.join(name))
 }
 
-fn read_layer(path: &Path, required: bool, project: bool) -> Result<RuntimeLayer, LaunchFailure> {
-    read_layer_revision(path, required, project).map(|(layer, _)| layer)
+fn unavailable(path: &Path, detail: String) -> LaunchFailure {
+    LaunchFailure::at(
+        Some(path.into()),
+        "$",
+        "selected configuration file is unavailable",
+        "correct the selected path or create the file",
+        detail,
+    )
 }
-fn read_layer_revision(
-    path: &Path,
-    required: bool,
-    project: bool,
-) -> Result<(RuntimeLayer, String), LaunchFailure> {
-    if !required && !present_on_disk(path)? {
-        return Ok((RuntimeLayer::default(), super::settings::revision(None)));
+
+fn client_detail(error: crate::runtime_client::types::RuntimeClientError) -> String {
+    match error {
+        crate::runtime_client::types::RuntimeClientError::InvalidRequest { message } => message,
+        other => format!("{other:?}"),
     }
-    let bytes = read_bounded(path).map_err(|detail| {
-        LaunchFailure::at(
-            Some(path.into()),
-            "$",
-            "selected configuration file is unavailable",
-            "correct the selected path or create the file",
-            detail,
+}
+
+/// Admit a `rustx.toml` ([`AdmittedSource::admit`]): a pathname reached only
+/// by following a symlink, or through a non-directory, is unavailable.
+fn admit_source(path: &Path) -> Result<AdmittedSource, LaunchFailure> {
+    AdmittedSource::admit(path).map_err(|error| {
+        unavailable(
+            path,
+            format!("its directory cannot be reached without following a symlink: {error}"),
         )
-    })?;
-    let revision = super::settings::revision(Some(&bytes));
-    Ok((parse_layer(path, &bytes, project)?, revision))
+    })
+}
+
+/// A checked read of an admitted `rustx.toml` ([`AdmittedSource::reread`]).
+fn reread(source: &AdmittedSource) -> Result<Option<Vec<u8>>, LaunchFailure> {
+    source.reread().map_err(|failure| match failure {
+        SourceReread::Redirected => unavailable(
+            source.path(),
+            "its directory was replaced or redirected; rustX never follows it".into(),
+        ),
+        SourceReread::Unadmitted(error) => unavailable(
+            source.path(),
+            format!("its directory cannot be reached without following a symlink: {error}"),
+        ),
+        SourceReread::Unreadable(error) => unavailable(source.path(), client_detail(error)),
+    })
+}
+
+/// The layer authored by a document's bytes; an absent document authors none.
+fn layer_of(
+    path: &Path,
+    bytes: Option<&[u8]>,
+    workspace: bool,
+) -> Result<RuntimeLayer, LaunchFailure> {
+    bytes.map_or_else(
+        || Ok(RuntimeLayer::default()),
+        |bytes| parse_layer(path, bytes, workspace),
+    )
 }
 
 pub(super) fn parse_layer(

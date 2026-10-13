@@ -81,17 +81,129 @@ pub(super) fn read_document(path: &Path) -> Result<Option<Vec<u8>>, RuntimeClien
     )
 }
 
-/// Read the source `document` through its physically admitted directory
-/// ([`SourceDirectory::open`]): no component of its pathname, ancestor or
-/// leaf, is followed, and a missing directory is an absent source, never
-/// created.
+/// Read the source `document` once through its physically admitted directory
+/// ([`AdmittedSource`]): no component of its pathname, ancestor or leaf, is
+/// followed, a missing directory is an absent source, never created, and a
+/// pathname that no longer names the admitted directory answers nothing.
 pub(super) fn read_source(document: &Path) -> Result<Option<Vec<u8>>, RuntimeClientError> {
-    let name = document
-        .file_name()
-        .ok_or_else(|| failure("invalid authored source"))?;
-    match SourceDirectory::open(document).map_err(io_failure)? {
-        Some(directory) => directory.read(name),
-        None => Ok(None),
+    AdmittedSource::admit(document)
+        .map_err(io_failure)?
+        .reread()
+        .map_err(|failure| match failure {
+            SourceReread::Unreadable(error) => error,
+            SourceReread::Redirected | SourceReread::Unadmitted(_) => redirected(),
+        })
+}
+
+fn redirected() -> RuntimeClientError {
+    failure("authored source directory was replaced or redirected; rustX never follows it")
+}
+
+/// One `rustx.toml` bound to the physical directory it was admitted in
+/// ([`SourceDirectory::open`]: no component followed, nothing created). Every
+/// consumer of a source — Session resolution and its policy, source capture,
+/// automatic repair's observations — reads it through this one admission:
+/// its shared writer lock, its bytes and their reread are all relative to
+/// that one handle, so the pathname is never resolved again to reach the
+/// document, and before a read answers, the pathname must still name that
+/// directory ([`AdmittedSource::reread`]).
+pub(super) struct AdmittedSource {
+    path: std::path::PathBuf,
+    /// `None` while the directory is missing: the document is absent.
+    directory: Option<SourceDirectory>,
+}
+
+/// Why an [`AdmittedSource::reread`] answers nothing.
+#[derive(Debug)]
+pub(super) enum SourceReread {
+    /// The pathname no longer names the admitted directory.
+    Redirected,
+    /// A directory that was missing cannot be admitted now.
+    Unadmitted(std::io::Error),
+    /// The document cannot be read through its directory.
+    Unreadable(RuntimeClientError),
+}
+
+impl AdmittedSource {
+    /// Admit the directory of `document` as it is now; a pathname that
+    /// cannot be reached without following a symlink fails.
+    pub(super) fn admit(document: &Path) -> std::io::Result<Self> {
+        document
+            .file_name()
+            .ok_or_else(|| std::io::Error::other("invalid document"))?;
+        Ok(Self {
+            path: document.into(),
+            directory: SourceDirectory::open(document)?,
+        })
+    }
+
+    pub(super) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn name(&self) -> &OsStr {
+        self.path
+            .file_name()
+            .expect("an admitted source is named in its directory")
+    }
+
+    /// The document's bytes through the admitted directory, unconfirmed:
+    /// absent is `None`; a symlink, FIFO or other non-regular entry is
+    /// refused without its target being opened.
+    pub(super) fn read(&self) -> Result<Option<Vec<u8>>, RuntimeClientError> {
+        self.directory
+            .as_ref()
+            .map_or(Ok(None), |directory| directory.read(self.name()))
+    }
+
+    /// See [`SourceDirectory::share_lock`]; a missing directory has no lock.
+    pub(super) fn share_lock(&self) -> std::io::Result<Option<File>> {
+        self.directory
+            .as_ref()
+            .map_or(Ok(None), |directory| directory.share_lock(self.name()))
+    }
+
+    /// Whether this document's writer lock exists now. A directory that was
+    /// missing is observed again — a rustX writer creates the directory and
+    /// then the lock in it — and still created by nothing.
+    pub(super) fn lock_exists(&self) -> std::io::Result<bool> {
+        match &self.directory {
+            Some(directory) => directory.lock_exists(self.name()),
+            None => match SourceDirectory::open(&self.path)? {
+                Some(directory) => directory.lock_exists(self.name()),
+                None => Ok(false),
+            },
+        }
+    }
+
+    /// Whether the pathname no longer names the admitted directory.
+    pub(super) fn redirected(&self) -> bool {
+        self.directory
+            .as_ref()
+            .is_some_and(|directory| !directory.holds())
+    }
+
+    /// The document's bytes now, read through the admitted directory, which
+    /// the pathname must still name: one it no longer names is
+    /// [`SourceReread::Redirected`], whatever the read returned, exactly as
+    /// publication refuses it, since the reader would otherwise answer for a
+    /// directory that is no longer the source. A directory that was missing
+    /// is admitted again, under the same rule: if it appeared, its document
+    /// is compared like any other change.
+    pub(super) fn reread(&self) -> Result<Option<Vec<u8>>, SourceReread> {
+        let readmitted;
+        let source = if self.directory.is_some() {
+            self
+        } else {
+            readmitted = Self::admit(&self.path).map_err(SourceReread::Unadmitted)?;
+            &readmitted
+        };
+        let bytes = source.read();
+        if source.redirected() {
+            Err(SourceReread::Redirected)
+        } else {
+            bytes.map_err(SourceReread::Unreadable)
+        }
     }
 }
 
@@ -110,9 +222,16 @@ fn read_opened(opened: std::io::Result<File>) -> Result<Option<Vec<u8>>, Runtime
     if !file.metadata().map_err(io_failure)?.is_file() {
         return Err(not_regular());
     }
-    crate::bounded_file::read_bounded_file(file)
-        .map(Some)
-        .map_err(io_failure)
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(
+        &mut std::io::Read::take(file, crate::bounded_file::MAX_RESOURCE_BYTES + 1),
+        &mut bytes,
+    )
+    .map_err(io_failure)?;
+    if !crate::bounded_file::within_bound(&bytes) {
+        return Err(failure("authored source exceeds 1 MiB"));
+    }
+    Ok(Some(bytes))
 }
 pub(super) fn revision(bytes: Option<&[u8]>) -> String {
     bytes.map_or_else(

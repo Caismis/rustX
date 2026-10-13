@@ -4,7 +4,7 @@ use super::super::authoring::{
     ContextLayer, McpAuthoring, ModelLayer, RuntimeLayer, SubagentsLayer, TimeoutLayer,
     ToolDeadlineLayer,
 };
-use super::super::settings::SourceDirectory;
+use super::super::settings::{AdmittedSource, SourceDirectory, SourceReread};
 use super::UserConfigManager;
 use crate::model::authoring::{Model, Provider};
 use crate::model::catalog::{CredentialSource, CredentialSourceView};
@@ -367,93 +367,28 @@ fn read(path: &Path) -> Result<Option<Vec<u8>>, SettingsError> {
     super::super::settings::read_document(path).map_err(|_| SettingsError::Io)
 }
 
-/// One `rustx.toml` of a capture round, bound to the physical directory it
-/// was admitted in ([`SourceDirectory::open`]: no component followed,
-/// nothing created). Its shared writer lock, its bytes and their reread are
-/// all relative to that one handle, so the pathname is never resolved again
-/// to reach the document; before the round answers, the pathname must still
-/// name that directory.
-struct AdmittedDocument {
-    path: PathBuf,
-    /// `None` while the directory is missing: the document is absent.
-    directory: Option<SourceDirectory>,
+/// A source pathname that cannot be admitted is `Invalid` when the target is
+/// redirected, exactly as at entry; otherwise `Io`.
+fn refused(target: &SourceTarget) -> SettingsError {
+    target.validate().err().unwrap_or(SettingsError::Io)
 }
 
-impl AdmittedDocument {
-    /// A pathname that cannot be admitted is `Invalid` when the target is
-    /// redirected, exactly as at entry; otherwise `Io`.
-    fn admit(path: &Path, target: &SourceTarget) -> Result<Self, SettingsError> {
-        let directory = SourceDirectory::open(path)
-            .map_err(|_| target.validate().err().unwrap_or(SettingsError::Io))?;
-        Ok(Self {
-            path: path.into(),
-            directory,
-        })
-    }
+/// Admit one `rustx.toml` of a capture round ([`AdmittedSource`]).
+fn admit(path: &Path, target: &SourceTarget) -> Result<AdmittedSource, SettingsError> {
+    AdmittedSource::admit(path).map_err(|_| refused(target))
+}
 
-    fn name(&self) -> &std::ffi::OsStr {
-        self.path
-            .file_name()
-            .expect("a source document is named in its directory")
-    }
-
-    fn read(&self) -> Result<Option<Vec<u8>>, SettingsError> {
-        self.directory.as_ref().map_or(Ok(None), |directory| {
-            directory.read(self.name()).map_err(|_| SettingsError::Io)
-        })
-    }
-
-    fn share_lock(&self) -> Result<Option<std::fs::File>, SettingsError> {
-        self.directory.as_ref().map_or(Ok(None), |directory| {
-            directory
-                .share_lock(self.name())
-                .map_err(|_| SettingsError::Io)
-        })
-    }
-
-    /// Whether this document's writer lock exists now. A directory that was
-    /// missing is observed again — a rustX writer creates the directory and
-    /// then the lock in it — and still created by nothing.
-    fn lock_exists(&self, target: &SourceTarget) -> Result<bool, SettingsError> {
-        match &self.directory {
-            Some(directory) => directory.lock_exists(self.name()),
-            None => match Self::admit(&self.path, target)?.directory {
-                Some(directory) => directory.lock_exists(self.name()),
-                None => Ok(false),
-            },
-        }
-        .map_err(|_| SettingsError::Io)
-    }
-
-    /// Whether the pathname no longer names the admitted directory.
-    fn redirected(&self) -> bool {
-        self.directory
-            .as_ref()
-            .is_some_and(|directory| !directory.holds())
-    }
-
-    /// The document's bytes now, read through the admitted directory, which
-    /// the pathname must still name: one it no longer names is `Invalid`,
-    /// whatever the read returned, exactly as publication refuses it, since
-    /// the capture would otherwise answer for a directory that is no longer
-    /// the source. A directory that was missing is admitted again, under the
-    /// same rule: if it appeared, its document is compared like any other
-    /// change.
-    fn reread(&self, target: &SourceTarget) -> Result<Option<Vec<u8>>, SettingsError> {
-        let readmitted;
-        let document = if self.directory.is_some() {
-            self
-        } else {
-            readmitted = Self::admit(&self.path, target)?;
-            &readmitted
-        };
-        let bytes = document.read();
-        if document.redirected() {
-            Err(SettingsError::Invalid)
-        } else {
-            bytes
-        }
-    }
+/// A capture round's reread of `document` ([`AdmittedSource::reread`]): a
+/// pathname that no longer names the admitted directory is `Invalid`.
+fn reread(
+    document: &AdmittedSource,
+    target: &SourceTarget,
+) -> Result<Option<Vec<u8>>, SettingsError> {
+    document.reread().map_err(|failure| match failure {
+        SourceReread::Redirected => SettingsError::Invalid,
+        SourceReread::Unadmitted(_) => refused(target),
+        SourceReread::Unreadable(_) => SettingsError::Io,
+    })
 }
 fn revision(bytes: Option<&[u8]>) -> String {
     super::super::settings::revision(bytes)
@@ -1033,22 +968,22 @@ impl UserConfigManager {
             self.test_hooks.reach("before_documents");
             // Each round admits every document's physical directory once;
             // its lock, bytes and lock appearance are all relative to it.
-            let user = AdmittedDocument::admit(&user, target)?;
+            let user = admit(&user, target)?;
             let workspace = workspace
                 .as_ref()
-                .map(|path| AdmittedDocument::admit(path, target))
+                .map(|path| admit(path, target))
                 .transpose()?;
             let documents: Vec<_> = std::iter::once(&user)
                 .chain(
                     workspace
                         .as_ref()
-                        .filter(|document| document.path != user.path),
+                        .filter(|document| document.path() != user.path()),
                 )
                 .collect();
             let mut locks = Vec::new();
             let mut unlocked = Vec::new();
             for document in documents {
-                match document.share_lock()? {
+                match document.share_lock().map_err(|_| SettingsError::Io)? {
                     Some(lock) => locks.push(lock),
                     None => unlocked.push(document),
                 }
@@ -1059,7 +994,7 @@ impl UserConfigManager {
                     // Whatever failed, a round whose pathname no longer names
                     // an admitted directory is refused as redirected.
                     if user.redirected()
-                        || workspace.as_ref().is_some_and(AdmittedDocument::redirected)
+                        || workspace.as_ref().is_some_and(AdmittedSource::redirected)
                     {
                         SettingsError::Invalid
                     } else {
@@ -1068,7 +1003,7 @@ impl UserConfigManager {
                 });
             let mut appeared = false;
             for document in unlocked {
-                match document.lock_exists(target) {
+                match document.lock_exists().map_err(|_| refused(target)) {
                     Ok(exists) => appeared |= exists,
                     // A round that failed reports its own failure.
                     Err(error) => return captured.and(Err(error)),
@@ -1087,16 +1022,14 @@ impl UserConfigManager {
     fn capture_round(
         &self,
         target: &SourceTarget,
-        user_document: &AdmittedDocument,
-        workspace_document: Option<&AdmittedDocument>,
+        user_document: &AdmittedSource,
+        workspace_document: Option<&AdmittedSource>,
     ) -> Result<(SourceSettings, String), SettingsError> {
-        let user = user_document.path.clone();
-        let workspace = workspace_document.map(|document| document.path.clone());
-        let user_bytes = user_document.read()?;
-        let workspace_bytes = workspace_document
-            .map(AdmittedDocument::read)
-            .transpose()?
-            .flatten();
+        let user = user_document.path().to_path_buf();
+        let workspace = workspace_document.map(|document| document.path().to_path_buf());
+        let read = |document: &AdmittedSource| document.read().map_err(|_| SettingsError::Io);
+        let user_bytes = read(user_document)?;
+        let workspace_bytes = workspace_document.map(read).transpose()?.flatten();
         let roots: Vec<_> =
             std::iter::once((SourceScope::User, self.resource_root(&SourceTarget::User)))
                 .chain(
@@ -1225,7 +1158,7 @@ impl UserConfigManager {
             )
         {
             let expected = revision(captured.as_deref());
-            let actual = revision(document.reread(target)?.as_deref());
+            let actual = revision(reread(document, target)?.as_deref());
             if actual != expected {
                 return Err(SettingsError::Conflict {
                     scope,

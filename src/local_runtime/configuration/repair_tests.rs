@@ -4363,6 +4363,354 @@ fn a_missing_directory_created_during_a_read_is_compared_like_any_change() {
     }
 }
 
+fn session_input(fixture: &Fixture) -> super::super::SessionConfigInput {
+    super::super::SessionConfigInput::new(fixture.workspace.workspace().unwrap().to_path_buf())
+}
+
+/// Session resolution's source revisions, or its failure detail.
+fn resolved(fixture: &Fixture) -> Result<BTreeMap<PathBuf, String>, String> {
+    fixture
+        .manager
+        .resolve_session(&session_input(fixture))
+        .map(|prospective| prospective.source_revisions)
+        .map_err(|failure| failure.to_string())
+}
+
+/// Configuration application's capture, or its failure.
+fn captured(fixture: &Fixture) -> Result<(), String> {
+    fixture
+        .manager
+        .capture_application(&session_input(fixture))
+        .map(drop)
+}
+
+/// FS-AUTH-01: a symlinked Workspace `rustx.toml` is refused by every
+/// consumer alike — Session resolution, configuration application capture,
+/// source capture and automatic repair — never followed by one while
+/// refused by another; its target is never opened and nothing changes.
+#[test]
+fn a_symlinked_workspace_source_is_refused_by_every_consumer() {
+    let fixture = Fixture::new();
+    fixture.write(&SourceTarget::User, USER);
+    let external = fixture.root.path().join("external.toml");
+    std::fs::write(&external, WORKSPACE_A).unwrap();
+    std::os::unix::fs::symlink(&external, fixture.path(&fixture.workspace)).unwrap();
+    let before = namespace(fixture.root.path());
+    let watch = OpenWatch::new(&external);
+    let failure = resolved(&fixture).unwrap_err();
+    assert!(failure.contains("not a symlink"), "{failure}");
+    let failure = captured(&fixture).unwrap_err();
+    assert!(failure.contains("not a symlink"), "{failure}");
+    assert!(matches!(
+        fixture.manager.read_source_settings(&fixture.workspace),
+        Err(super::super::settings::SettingsError::Io)
+    ));
+    assert_eq!(
+        fixture.repair(&fixture.workspace, &fixture.workspace),
+        RepairOutcome::Unchanged
+    );
+    // The User source alone is unaffected.
+    fixture.manager.app_server_policy().unwrap();
+    assert!(!watch.opened());
+    assert_eq!(namespace(fixture.root.path()), before);
+    assert!(fixture.receipt(&fixture.workspace).is_none());
+    assert_eq!(fixture.sequence(), 0);
+}
+
+/// FS-AUTH-02: the User source is bound once, to the canonical pathname of
+/// its binding — a symlink named by `--config` is resolved then, as the
+/// process binding. Afterwards no consumer follows a symlink at the bound
+/// pathname, at the document or at its directory: Session resolution,
+/// application capture, the process policy and source capture all refuse
+/// it, and the redirect's target is never opened.
+#[test]
+fn a_symlinked_user_source_cannot_bypass_its_bound_authority() {
+    let fixture = Fixture::with_config_path(|home| {
+        std::fs::write(home.join("bound.toml"), USER).unwrap();
+        std::os::unix::fs::symlink(home.join("bound.toml"), home.join("link.toml")).unwrap();
+        home.join("link.toml")
+    });
+    let home = fixture.root.path().canonicalize().unwrap().join("home");
+    let bound = fixture.path(&SourceTarget::User);
+    assert_eq!(bound, home.join("bound.toml"));
+    // The binding is the pathname, not the symlink it was named through.
+    std::fs::remove_file(home.join("link.toml")).unwrap();
+    std::os::unix::fs::symlink(fixture.root.path().join("nothing"), home.join("link.toml"))
+        .unwrap();
+    assert_eq!(resolved(&fixture).unwrap()[&bound], revision_of(USER));
+
+    for redirected in ["document", "directory"] {
+        let fixture = Fixture::new();
+        fixture.write(&SourceTarget::User, USER);
+        let document = fixture.path(&SourceTarget::User);
+        let root = fixture.root.path().canonicalize().unwrap();
+        let external = if redirected == "document" {
+            let external = root.join("external.toml");
+            std::fs::write(&external, USER).unwrap();
+            std::fs::remove_file(&document).unwrap();
+            std::os::unix::fs::symlink(&external, &document).unwrap();
+            external
+        } else {
+            let directory = document.parent().unwrap();
+            std::fs::rename(directory, root.join("moved")).unwrap();
+            std::fs::create_dir(root.join("elsewhere")).unwrap();
+            std::fs::write(root.join("elsewhere/rustx.toml"), USER).unwrap();
+            std::os::unix::fs::symlink(root.join("elsewhere"), directory).unwrap();
+            root.join("elsewhere/rustx.toml")
+        };
+        let expected = if redirected == "document" {
+            "not a symlink"
+        } else {
+            "without following a symlink"
+        };
+        let before = namespace(fixture.root.path());
+        let watch = OpenWatch::new(&external);
+        for failure in [
+            resolved(&fixture).unwrap_err(),
+            captured(&fixture).unwrap_err(),
+            fixture.manager.app_server_policy().unwrap_err(),
+        ] {
+            assert!(failure.contains(expected), "{redirected}: {failure}");
+        }
+        assert!(
+            fixture
+                .manager
+                .read_source_settings(&SourceTarget::User)
+                .is_err(),
+            "{redirected}"
+        );
+        assert!(!watch.opened(), "{redirected}");
+        assert_eq!(namespace(fixture.root.path()), before, "{redirected}");
+    }
+}
+
+/// FS-AUTH-03: a regular source replaced by a symlink right before Session
+/// resolution opens it — its first read or the capture's reread — is
+/// refused, never followed: the external file it names is never opened, and
+/// resolution changes nothing.
+#[test]
+fn a_source_replaced_by_a_symlink_at_its_opening_is_never_followed_by_resolution() {
+    for user in [false, true] {
+        for reread in [false, true] {
+            let case = format!("user={user} reread={reread}");
+            let fixture = Fixture::new();
+            fixture.write(&SourceTarget::User, USER);
+            fixture.write(&fixture.workspace, WORKSPACE_A);
+            let external = fixture.root.path().join("external.toml");
+            std::fs::write(&external, EXTERNAL).unwrap();
+            let target = if user {
+                SourceTarget::User
+            } else {
+                fixture.workspace.clone()
+            };
+            let document = fixture.path(&target);
+            let replaced = document.clone();
+            let reached = at_opening(&fixture, &document, reread, move || {
+                std::fs::remove_file(&replaced).unwrap();
+                std::os::unix::fs::symlink(&external, &replaced).unwrap();
+                external
+            });
+            let failure = resolved(&fixture).unwrap_err();
+            let reached = reached
+                .lock()
+                .unwrap()
+                .take()
+                .expect("the opening boundary was reached");
+            assert!(!reached.redirect.opened(), "{case}");
+            assert!(failure.contains("not a symlink"), "{case}: {failure}");
+            assert_eq!(namespace(fixture.root.path()), reached.namespace, "{case}");
+        }
+    }
+}
+
+/// FS-AUTH-04: a source directory, or an ancestor of it, moved away and
+/// replaced — by another directory or a symlink to one, holding identical
+/// bytes — after Session resolution admitted it, cannot rebind the capture:
+/// resolution keeps reading the admitted physical directory and, since the
+/// pathname no longer names it, answers nothing, never the replacement,
+/// whose document is never opened.
+#[test]
+fn a_source_directory_replaced_during_resolution_never_rebinds_it() {
+    for (source, swapped) in [
+        ("workspace", "workspace"),
+        ("user", "home/rustx"),
+        ("user", "home"),
+    ] {
+        for symlink in [false, true] {
+            for reread in [false, true] {
+                let case = format!("{swapped} symlink={symlink} reread={reread}");
+                let fixture = Fixture::new();
+                fixture.write(&SourceTarget::User, USER);
+                fixture.write(&fixture.workspace, WORKSPACE_A);
+                let (target, text) = if source == "user" {
+                    (SourceTarget::User, USER)
+                } else {
+                    (fixture.workspace.clone(), WORKSPACE_A)
+                };
+                let document = fixture.path(&target);
+                let root = fixture.root.path().canonicalize().unwrap();
+                let relative = document
+                    .strip_prefix(root.join(swapped))
+                    .unwrap()
+                    .to_owned();
+                let reached = at_opening(&fixture, &document, reread, move || {
+                    let original = root.join(swapped);
+                    std::fs::rename(&original, root.join("moved")).unwrap();
+                    let replacement = if symlink {
+                        root.join("elsewhere")
+                    } else {
+                        original.clone()
+                    };
+                    let planted = replacement.join(&relative);
+                    std::fs::create_dir_all(planted.parent().unwrap()).unwrap();
+                    std::fs::write(&planted, text).unwrap();
+                    if symlink {
+                        std::os::unix::fs::symlink(&replacement, &original).unwrap();
+                    }
+                    planted
+                });
+                let failure = resolved(&fixture).unwrap_err();
+                let reached = reached
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("the opening boundary was reached");
+                assert!(!reached.redirect.opened(), "{case}");
+                assert!(
+                    failure.contains("replaced or redirected"),
+                    "{case}: {failure}"
+                );
+                assert_eq!(namespace(fixture.root.path()), reached.namespace, "{case}");
+            }
+        }
+    }
+}
+
+/// FS-AUTH-05: Session capture holds no writer lock and needs none — rustX
+/// writers publish only by atomic replacement — so a native write during
+/// the capture, after both documents were read and before their reread,
+/// runs unblocked; the capture is then an explicit "changed during capture"
+/// failure, never a mix of both revisions. The next capture answers exactly
+/// the revision the writer committed, as source capture reports it.
+#[test]
+fn a_native_writer_during_a_session_capture_is_never_mixed_into_it() {
+    for application in [false, true] {
+        let case = format!("application={application}");
+        let fixture = Fixture::new();
+        fixture.write(&SourceTarget::User, USER);
+        let workspace = fixture.workspace.clone();
+        let document = fixture.path(&workspace);
+        let initial = fixture
+            .manager
+            .read_source_settings(&workspace)
+            .unwrap()
+            .workspace
+            .unwrap()
+            .revision;
+        // A first native write creates the lock a reader could share.
+        let base = fixture
+            .manager
+            .write_source_settings(&workspace, &initial, capacity(2))
+            .unwrap()
+            .workspace
+            .unwrap()
+            .revision;
+        assert_eq!(resolved(&fixture).unwrap()[&document], base, "{case}");
+        let lock = lock_of(&document);
+        let writer = fixture.manager.clone();
+        let committed = Arc::new(Mutex::new(None));
+        let slot = committed.clone();
+        let target = workspace.clone();
+        let write = move || {
+            assert!(!writer_excluded(&lock), "the capture holds no lock");
+            let written = writer
+                .write_source_settings(&target, &base, capacity(3))
+                .unwrap()
+                .workspace
+                .unwrap()
+                .revision;
+            *slot.lock().unwrap() = Some(written);
+        };
+        let failure = if application {
+            fixture
+                .manager
+                .capture_application_at_boundary(&session_input(&fixture), write)
+                .map(drop)
+                .unwrap_err()
+        } else {
+            fixture
+                .manager
+                .test_hooks
+                .insert("before_capture_verification", write);
+            resolved(&fixture).unwrap_err()
+        };
+        assert!(
+            failure.contains("configuration changed during capture"),
+            "{case}: {failure}"
+        );
+        let written = committed
+            .lock()
+            .unwrap()
+            .take()
+            .expect("the writer committed");
+        assert_eq!(written, revision_of(&fixture.read(&workspace)), "{case}");
+        assert_eq!(resolved(&fixture).unwrap()[&document], written, "{case}");
+        captured(&fixture).unwrap();
+        let read = fixture.manager.read_source_settings(&workspace).unwrap();
+        assert_eq!(read.workspace.unwrap().revision, written, "{case}");
+    }
+}
+
+/// FS-AUTH-07: Session resolution, source capture and automatic repair agree
+/// on the identity of one valid source — the same bound pathname and the
+/// revision of the same bytes — both for a source that is healthy as it is
+/// and for one automatic repair has just committed.
+#[test]
+fn resolution_inspection_and_repair_agree_on_one_source_identity() {
+    for repaired in [false, true] {
+        let case = format!("repaired={repaired}");
+        let fixture = Fixture::new();
+        fixture.write(&SourceTarget::User, USER);
+        let workspace = fixture.workspace.clone();
+        let text = if repaired {
+            format!("{WORKSPACE_A}legacy_field = true\n")
+        } else {
+            WORKSPACE_A.to_owned()
+        };
+        fixture.write(&workspace, &text);
+        let outcome = fixture.repair(&workspace, &workspace);
+        let current = fixture.read(&workspace);
+        let receipt = fixture.receipt(&workspace);
+        if repaired {
+            assert_eq!(outcome, RepairOutcome::Committed, "{case}");
+            let receipt = receipt.expect("a committed receipt");
+            assert_eq!(receipt.target, workspace, "{case}");
+            assert_eq!(receipt.before_revision, revision_of(&text), "{case}");
+            assert_eq!(
+                receipt.after_revision,
+                Some(revision_of(&current)),
+                "{case}"
+            );
+        } else {
+            assert_eq!(outcome, RepairOutcome::Unchanged, "{case}");
+            assert!(receipt.is_none(), "{case}");
+            assert_eq!(current, text, "{case}");
+        }
+        let read = fixture.manager.read_source_settings(&workspace).unwrap();
+        let view = read.workspace.unwrap();
+        let resolution = resolved(&fixture).unwrap();
+        for (path, revision) in [
+            (&read.user.path, &read.user.revision),
+            (&view.path, &view.revision),
+        ] {
+            assert_eq!(resolution.get(path), Some(revision), "{case}: {path:?}");
+        }
+        assert_eq!(view.path, fixture.path(&workspace), "{case}");
+        assert_eq!(view.revision, revision_of(&current), "{case}");
+        assert_eq!(read.user.revision, revision_of(USER), "{case}");
+    }
+}
+
 /// Plants an entry at a path, given a redirect target and the exact-bound text.
 type Plant = fn(&Path, &Path, &str);
 

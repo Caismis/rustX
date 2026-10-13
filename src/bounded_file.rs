@@ -30,7 +30,7 @@ pub(crate) fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
 }
 
 /// The bounded contents of an already opened file, which must be regular.
-pub(crate) fn read_bounded_file(file: std::fs::File) -> Result<Vec<u8>, String> {
+fn read_bounded_file(file: std::fs::File) -> Result<Vec<u8>, String> {
     if !file.metadata().map_err(|e| e.to_string())?.is_file() {
         return Err("must be a regular file".into());
     }
