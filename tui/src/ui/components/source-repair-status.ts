@@ -19,6 +19,14 @@
  * whatever the source presented. An acknowledgement never changes what a
  * source holds.
  *
+ * The line orders what the host admitted. The host never admits an
+ * observation of a source older than one it already delivered, even after
+ * forgetting that source, and a later connection to the same authority
+ * observes each source no older than its predecessor delivered it; so when
+ * the line forgets a source of its own (64 Workspaces and the User, the
+ * least recently observed Workspace first), nothing it later admits for
+ * that source is stale.
+ *
  * Reconnecting to the same authority keeps the entries and the sequences they
  * are current at; the caller rereads the sources still presented, because a
  * missing notice proves nothing (a connection's first observation of a source

@@ -1330,7 +1330,12 @@ authority the higher one is the newer observation of a source, whatever arrives
 first — a read answered after a newer notice, or a notice produced before a
 fresher read and delivered after it. Receipt ids identify content and never
 order observations; sequences of different authorities are not comparable.
-Receipts are not persisted, not Event Journal facts and never canonical history.
+Sequences order observations of one source, not deliveries across sources: a
+newly observed source's latest receipt carries the sequence of the change that
+recorded it, which may be lower than sequences already delivered for other
+sources. A client that forgets sources therefore cannot order a notice of a
+source it no longer holds by arrival; the TUI rereads it (see
+[TUI and App Server](tui-app-server.md)). Receipts are not persisted, not Event Journal facts and never canonical history.
 
 ## Session configuration adoption eligibility (v47)
 

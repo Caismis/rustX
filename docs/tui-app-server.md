@@ -29,8 +29,9 @@ anything subscribes, the client keeps source repair notices apart from other
 early notifications, coalesced to the latest observation per source — a
 withdrawal included — so no amount of unrelated traffic crowds them out (the
 server advances its per-source cursor as it sends one, so a dropped notice would
-be lost for good). They are bounded to the User and as many Workspaces as the
-native repair ledger retains, the least recently observed Workspace going first.
+be lost for good). They are bounded to the User and 64 Workspaces, the least
+recently observed Workspace going first; a notice dropped there never reached a
+subscriber, so nothing it would have ordered can go stale.
 The first subscriber drains that buffer before anything is dispatched to it
 directly, so the handoff never delivers an older observation after a newer one,
 and never drops or repeats one.
@@ -53,26 +54,53 @@ presented). An acknowledgement never changes what a source holds.
 Notices are not history: a source whose receipt was withdrawn while the client
 was away is never announced to its next connection. A reconnect to the same App
 Server therefore keeps the line and then rereads, through `configuration/sourcesRead`
-on that exact connection, each source the line still presents — the Workspaces,
-each of which also rereads the User, or the User alone — one read at a time,
-bounded by the line's sources. A read that fails proves no withdrawal: the
-entry stays until a later read or notice (`/settings repairs` reads again), and
-the connection is unaffected. Results of a replaced connection — checked by host
+on that exact connection, each source the line still presents — each Workspace,
+whose read also rereads the User — one read at a time, bounded by the line's
+sources. When the User is presented and no Workspace read succeeded (a
+Workspace deleted or no longer a valid source refuses its read), one User-only
+read follows, so an unreadable Workspace never keeps the independent User
+source from reconciling; after a successful Workspace read the User is not read
+again. A read that fails proves no withdrawal — not of its Workspace, not of the
+User: the entry stays until a later read or notice (`/settings repairs` reads
+again), nothing is retried or polled, and the connection is unaffected. Results of a replaced connection — checked by host
 instance, not authority — and anything after quitting change nothing. A
 replacement process, or another server, retires the previous line — a warning
 never carries into a process that does not hold it — and its sequences start a
 new ordering domain; its receipts are its own, even with equal ids.
 
-One retention policy bounds every per-source repair map
-(`retainSource`: the User plus the ledger's 64 Workspaces, the least recently
-observed Workspace forgotten first, never the User). Each owner applies it to
-its own state: the host to its connection's observations, the status line to
-what it presents, retiring a forgotten source's warning with it.
-Announcements are bounded separately (256), and the client's pre-subscription
-buffer as described above; all of it is in memory only. A source forgotten on
-the client loses its sequence frontier: an observation of it older than the
-forgotten one, arriving after 64 newer Workspaces were observed, is taken as
-current.
+One retention policy bounds every per-source repair map (`retainSource`: at
+most 64 Workspaces, the ledger's own bound, whether or not the User has an
+entry, plus the User in its own slot; the least recently observed Workspace is
+forgotten first, the User never, and re-observing a Workspace makes it the most
+recent). Each owner applies it to its own state: the client to its
+pre-subscription buffer, the host to its connection's observations, the status
+line to what it presents, retiring a forgotten source's warning with it.
+Announcements are bounded separately (256). All of it is in memory only.
+
+Forgetting a source never resets its order. The host keeps one frontier — the
+highest sequence at which it forgot any source — so whatever an absent source
+held was current at or before it. Its source is admitted when it is observed
+again at or after the frontier: a newer native change, or a fresh read, whose
+sequence native takes after receiving the request and so is never lower than
+anything the host observed before sending it. A notice of an absent source
+ordered before the frontier is ambiguous — the late history of a forgotten
+source, or the old receipt of a source this connection only now addresses,
+which native delivers at the sequence it was recorded — so it is never applied;
+the host recovers that source with one authoritative `configuration/sourcesRead`
+instead, one read at a time, one queued entry per source (at most 64), read
+once more if noticed again while its read is in flight, and never after the
+connection closed. A read is never ambiguous: each Workspace read in flight
+remembers the highest sequence at which its own source was forgotten while it
+was in flight, and its answer is applied to an absent source only when it is at
+least that new, so a held read can never resurrect a source a newer
+observation withdrew and then forgot. The caller still receives that read as
+the snapshot it is. Beyond the current sources, the host keeps that one
+sequence, its in-flight reads (each removed when it settles), and the bounded
+recovery queue — nothing per source ever seen. The status line orders only what
+the host admitted, which is never older for a source than what it already
+delivered — and a later connection to the same authority observes each source
+no older than its predecessor delivered it — so the line forgetting a source of
+its own lets nothing stale back in.
 `/session settings` inspects Session selections, binding, pending candidate and
 the runtime's published adoption eligibility (Runtime Client state, never part of
 the application). `/session adopt` sends only the last inspected candidate and

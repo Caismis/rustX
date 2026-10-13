@@ -15,6 +15,7 @@ import { CommandDispatcher } from "../src/commands/dispatcher.ts";
 import {
   SourceRepairAnnouncements,
   renderRepairInspection,
+  retainSource,
   repairNotice,
   type SourceRepairObservation,
 } from "../src/presentation/source-repairs.ts";
@@ -504,6 +505,289 @@ it("BOUND-04 evicting a Workspace retires its warning, and its newer observation
   // Re-observed later with a newer receipt, it is a source again.
   assert.equal(status.observe(AUTHORITY, workspace(receipt({ id: "first-2", status: "unresolved", diagnostic: "newer value" }), first, "90")), true);
   assert.match(presented(status), /newer value/);
+});
+
+// Eviction keeps native order (Issue #464): a source a connection forgot is
+// never resurrected by older history, and is recovered by an authoritative
+// read when a notice of it cannot be ordered.
+
+/** Notices withdrawing `count` other Workspaces from `first` on: enough
+ * distinct sources to push the least recently observed ones out. */
+function churn(transport: FakeTransport, first: number, count = 64) {
+  for (let index = 0; index < count; index++) {
+    transport.notify(repairChanged({ kind: "workspace", directory: `/work/churn${first + index}` }, null, String(first + index)));
+  }
+}
+
+/** What `host` holds of `target`, if it holds the source at all. */
+function held(host: AppServerHost, target: SourceTarget) {
+  return host.sourceRepairs().find(observation => observation.target.kind === target.kind
+    && (target.kind === "user" || (observation.target.kind === "workspace" && observation.target.directory === target.directory)));
+}
+
+/** A connection whose observations reach a status line. */
+async function watched() {
+  const { transport, host } = await connect(AUTHORITY);
+  const status = new SourceRepairStatus();
+  status.adopt(host.authorityId);
+  host.onSourceRepair(observation => status.observe(host.authorityId, observation));
+  return { transport, host, status };
+}
+
+/** Lets settled responses and the host's recovery continue. */
+async function settle() {
+  for (let turn = 0; turn < 4; turn++) await new Promise(resolve => setImmediate(resolve));
+}
+
+/** Answers `request` as `configuration/sourcesRead` of `target` at `sequence`. */
+function answer(transport: FakeTransport, request: { id: string | number }, target: SourceTarget, value: ConfigRepairReceipt | undefined, sequence: string) {
+  transport.respond(request.id, { type: "source_settings", projection: projection(target, undefined, value && { ...value, target }, sequence) });
+}
+
+const UNRESOLVED_R1 = receipt({ id: "r1", status: "unresolved", diagnostic: "obsolete value" });
+
+it("EVICT-01 a read held across a newer withdrawal and the source's eviction never resurrects it", async () => {
+  const { transport, host, status } = await watched();
+  const observed: string[] = [];
+  host.onSourceRepair(({ target, receipt: value }) => { if (target.kind === "workspace" && target.directory === WORKSPACE.directory) observed.push(value?.id ?? "withdrawn"); });
+  // Read A of W captures R1 at 5; its answer is held.
+  const readingA = host.readSourceRepairs(WORKSPACE);
+  const [readA] = await transport.log.awaitMethod("configuration/sourcesRead");
+  // Native withdraws R1 at 6, and read B delivers that withdrawal.
+  const readingB = host.readSourceRepairs(WORKSPACE);
+  const readB = (await transport.log.awaitMethod("configuration/sourcesRead", 2)).at(-1)!;
+  answer(transport, readB, WORKSPACE, undefined, "6");
+  await readingB;
+  assert.equal(held(host, WORKSPACE)?.sequence, "6");
+  // 64 other Workspaces evict W.
+  churn(transport, 7);
+  assert.equal(held(host, WORKSPACE), undefined, "W was forgotten");
+  answer(transport, readA!, WORKSPACE, UNRESOLVED_R1, "5");
+  const snapshot = await readingA;
+  assert.equal(snapshot.workspace_repair?.id, "r1", "the caller still gets the snapshot it read");
+  assert.equal(held(host, WORKSPACE), undefined);
+  assert.deepEqual(observed, ["withdrawn"]);
+  assert.equal(status.visible, false);
+  assert.doesNotMatch(presented(status), /obsolete value/);
+});
+
+it("EVICT-02 a delayed notice of an evicted source is ambiguous: never applied, recovered by a read", async () => {
+  const { transport, host } = await connect(AUTHORITY);
+  const status = new SourceRepairStatus();
+  status.adopt(host.authorityId);
+  const observed: string[] = [];
+  host.onSourceRepair(observation => {
+    status.observe(host.authorityId, observation);
+    if (observation.target.kind === "workspace" && observation.target.directory === WORKSPACE.directory) observed.push(observation.receipt?.id ?? "withdrawn");
+  });
+  transport.notify(repairChanged(WORKSPACE, UNRESOLVED_R1, "5"));
+  transport.notify(repairChanged(WORKSPACE, null, "6"));
+  churn(transport, 7);
+  assert.equal(held(host, WORKSPACE), undefined);
+  // R1's notice, produced at 5, arrives late.
+  transport.notify(repairChanged(WORKSPACE, UNRESOLVED_R1, "5"));
+  assert.equal(held(host, WORKSPACE), undefined, "not applied");
+  assert.equal(status.visible, false);
+  const [recovery] = await transport.log.awaitMethod("configuration/sourcesRead");
+  assert.deepEqual(paramsOf(recovery!, "configuration/sourcesRead"), { target: WORKSPACE });
+  answer(transport, recovery!, WORKSPACE, undefined, "70");
+  await settle();
+  assert.deepEqual(held(host, WORKSPACE), { target: WORKSPACE, receipt: undefined, sequence: "70" });
+  assert.deepEqual(observed, ["r1", "withdrawn", "withdrawn"]);
+  assert.equal(status.visible, false);
+  assert.equal(transport.log.count("configuration/sourcesRead"), 1, "one recovery read");
+});
+
+it("EVICT-03 a fresh read re-observes an evicted source: its current receipt or its current absence", async () => {
+  const { transport, host, status } = await watched();
+  transport.notify(repairChanged(WORKSPACE, UNRESOLVED_R1, "5"));
+  transport.notify(repairChanged(WORKSPACE, null, "6"));
+  churn(transport, 7);
+  // Current absence: the read is newer than everything forgotten.
+  let reading = host.readSourceRepairs(WORKSPACE);
+  let read = (await transport.log.awaitMethod("configuration/sourcesRead", 1)).at(-1)!;
+  answer(transport, read, WORKSPACE, undefined, "71");
+  await reading;
+  assert.deepEqual(held(host, WORKSPACE), { target: WORKSPACE, receipt: undefined, sequence: "71" });
+  // Evicted again; then a current receipt R3.
+  churn(transport, 72);
+  assert.equal(held(host, WORKSPACE), undefined);
+  reading = host.readSourceRepairs(WORKSPACE);
+  read = (await transport.log.awaitMethod("configuration/sourcesRead", 2)).at(-1)!;
+  answer(transport, read, WORKSPACE, receipt({ id: "r3", status: "unresolved", diagnostic: "current value" }), "140");
+  await reading;
+  assert.equal(held(host, WORKSPACE)?.receipt?.id, "r3");
+  assert.match(presented(status), /current value/);
+  assert.doesNotMatch(presented(status), /obsolete value/);
+});
+
+it("EVICT-04 a newer native receipt after eviction applies at once, announced once, with no recovery", async () => {
+  const { transport, host } = await connect(AUTHORITY);
+  const status = new SourceRepairStatus();
+  status.adopt(host.authorityId);
+  const announced: string[] = [];
+  host.onSourceRepair(observation => { if (status.observe(host.authorityId, observation) && observation.receipt) announced.push(observation.receipt.id); });
+  transport.notify(repairChanged(WORKSPACE, UNRESOLVED_R1, "5"));
+  transport.notify(repairChanged(WORKSPACE, null, "6"));
+  churn(transport, 7);
+  const r2 = receipt({ id: "r2", status: "unresolved", diagnostic: "newer value" });
+  transport.notify(repairChanged(WORKSPACE, r2, "71"));
+  transport.notify(repairChanged(WORKSPACE, r2, "71"));
+  assert.equal(held(host, WORKSPACE)?.receipt?.id, "r2");
+  assert.deepEqual(announced, ["r1", "r2"]);
+  assert.match(presented(status), /newer value/);
+  await settle();
+  assert.equal(transport.log.count("configuration/sourcesRead"), 0);
+});
+
+it("EVICT-05 an unfamiliar source older than the frontier is recovered, never discarded", async () => {
+  const { transport, host } = await connect(AUTHORITY);
+  const status = new SourceRepairStatus();
+  status.adopt(host.authorityId);
+  host.onSourceRepair(observation => status.observe(host.authorityId, observation));
+  churn(transport, 10, 65);
+  const fresh: SourceTarget = { kind: "workspace", directory: "/work/never-seen" };
+  const legitimate = receipt({ id: "legit", status: "unresolved", diagnostic: "legitimate value" });
+  // A connection newly interested in a source is told its latest receipt at
+  // the sequence it was recorded at, long before the frontier.
+  transport.notify(repairChanged(fresh, legitimate, "3"));
+  assert.equal(held(host, fresh), undefined);
+  const [recovery] = await transport.log.awaitMethod("configuration/sourcesRead");
+  // Noticed again while its recovery read is in flight: read once more after.
+  transport.notify(repairChanged(fresh, legitimate, "3"));
+  transport.notify(repairChanged(fresh, legitimate, "3"));
+  answer(transport, recovery!, fresh, legitimate, "80");
+  await settle();
+  assert.equal(held(host, fresh)?.receipt?.id, "legit");
+  assert.match(presented(status), /legitimate value/);
+  const [, again] = await transport.log.awaitMethod("configuration/sourcesRead", 2);
+  answer(transport, again!, fresh, legitimate, "80");
+  await settle();
+  assert.equal(transport.log.count("configuration/sourcesRead"), 2, "one queued reread, however many repeats");
+  assert.equal(held(host, fresh)?.sequence, "80");
+});
+
+it("EVICT-06 hundreds of sources keep observations, ordering state and recovery finite", async () => {
+  const { transport, host } = await connect(AUTHORITY);
+  churn(transport, 1000, 400);
+  assert.equal(host.sourceRepairs().length, 64);
+  // 300 ambiguous notices of distinct unfamiliar Workspaces.
+  for (let index = 0; index < 300; index++) {
+    transport.notify(repairChanged({ kind: "workspace", directory: `/work/late${index}` }, receipt({ id: `late${index}` }), "2"));
+  }
+  // One read in flight; at most 64 queued behind it.
+  for (let reads = 1; ; reads++) {
+    const request = (await transport.log.awaitMethod("configuration/sourcesRead", reads)).at(-1)!;
+    assert.equal(transport.log.count("configuration/sourcesRead"), reads, "one at a time");
+    const target = paramsOf(request, "configuration/sourcesRead").target;
+    answer(transport, request, target, undefined, String(2000 + reads));
+    await settle();
+    if (transport.log.count("configuration/sourcesRead") === reads) break;
+  }
+  assert.ok(transport.log.count("configuration/sourcesRead") <= 1 + 64);
+  // Each recovery read observes the User too, in its own slot.
+  assert.equal(host.sourceRepairs().filter(({ target }) => target.kind === "workspace").length, 64);
+  assert.equal(host.sourceRepairs().length, 65);
+});
+
+it("EVICT-07 overlapping reads resolved in reverse order after eviction never overwrite the final state", async () => {
+  const { transport, host, status } = await watched();
+  // Read A snapshots R1 at 5.
+  const readingA = host.readSourceRepairs(WORKSPACE);
+  const readA = (await transport.log.awaitMethod("configuration/sourcesRead", 1)).at(-1)!;
+  // Native moves to R2 at 6; its notice arrives, then read B snapshots it.
+  const r2 = receipt({ id: "r2", status: "unresolved", diagnostic: "final value" });
+  transport.notify(repairChanged(WORKSPACE, r2, "6"));
+  const readingB = host.readSourceRepairs(WORKSPACE);
+  const readB = (await transport.log.awaitMethod("configuration/sourcesRead", 2)).at(-1)!;
+  churn(transport, 7);
+  assert.equal(held(host, WORKSPACE), undefined);
+  // Reverse order: B (current at 6, as new as what was forgotten), then A.
+  answer(transport, readB, WORKSPACE, r2, "6");
+  await readingB;
+  answer(transport, readA, WORKSPACE, UNRESOLVED_R1, "5");
+  await readingA;
+  assert.deepEqual(held(host, WORKSPACE), { target: WORKSPACE, receipt: { ...r2, target: WORKSPACE }, sequence: "6" });
+  // R2 was announced before the eviction and is current again, unannounced.
+  assert.deepEqual(status.pendingSources(), []);
+  assert.doesNotMatch(presented(status), /obsolete value/);
+  // And with neither B nor any notice in between: forgotten at 6, A is stale.
+  churn(transport, 71);
+  const readingC = host.readSourceRepairs(WORKSPACE);
+  const readC = (await transport.log.awaitMethod("configuration/sourcesRead", 3)).at(-1)!;
+  transport.notify(repairChanged(WORKSPACE, null, "135"));
+  churn(transport, 136);
+  answer(transport, readC, WORKSPACE, r2, "134");
+  await readingC;
+  assert.equal(held(host, WORKSPACE), undefined, "C was older than the withdrawal forgotten during its flight");
+});
+
+it("BOUND-05 65 Workspaces without the User keep exactly 64, the oldest forgotten", async () => {
+  const sources = new Map<string, number>();
+  for (let index = 0; index < 65; index++) retainSource(sources, `workspace:/work/w${index}`, index);
+  assert.equal(sources.size, 64);
+  assert.ok(!sources.has("workspace:/work/w0"));
+  const { transport, host } = await connect(AUTHORITY);
+  churn(transport, 1, 65);
+  assert.equal(host.sourceRepairs().length, 64);
+  assert.equal(held(host, { kind: "workspace", directory: "/work/churn1" }), undefined);
+  const status = new SourceRepairStatus();
+  status.adopt(AUTHORITY);
+  for (let index = 0; index < 65; index++) {
+    status.observe(AUTHORITY, workspace(receipt({ id: `w${index}` }), { kind: "workspace", directory: `/work/w${index}` }, String(index + 1)));
+  }
+  assert.equal(status.pendingSources().length, 64);
+  assert.ok(!status.pendingSources().some(target => target.kind === "workspace" && target.directory === "/work/w0"));
+  // So does the client's buffer of notices before its first subscriber.
+  const early = await connectWith((transport) => churn(transport, 1, 65));
+  const buffered = new AppServerHost({ client: early.client, ownership: "external" });
+  assert.equal(buffered.sourceRepairs().length, 64);
+  assert.equal(held(buffered, { kind: "workspace", directory: "/work/churn1" }), undefined);
+});
+
+it("BOUND-06 64 Workspaces and the User coexist", async () => {
+  const { transport, host } = await connect(AUTHORITY);
+  transport.notify(repairChanged({ kind: "user" }, receipt({ id: "u" }), "1"));
+  churn(transport, 2, 64);
+  assert.equal(host.sourceRepairs().length, 65);
+  assert.equal(held(host, { kind: "workspace", directory: "/work/churn2" })?.sequence, "2");
+});
+
+it("BOUND-07 the User observed after Workspace churn is kept beside at most 64 Workspaces", async () => {
+  const { transport, host } = await connect(AUTHORITY);
+  churn(transport, 1, 100);
+  transport.notify(repairChanged({ kind: "user" }, receipt({ id: "u" }), "101"));
+  churn(transport, 102, 30);
+  const kept = host.sourceRepairs();
+  assert.equal(held(host, { kind: "user" })?.receipt?.id, "u");
+  assert.equal(kept.filter(({ target }) => target.kind === "workspace").length, 64);
+});
+
+it("BOUND-08 re-observing a Workspace refreshes its recency, so the least recently observed goes", async () => {
+  const { transport, host } = await connect(AUTHORITY);
+  churn(transport, 1, 64);
+  transport.notify(repairChanged({ kind: "workspace", directory: "/work/churn1" }, receipt({ id: "again" }), "65"));
+  transport.notify(repairChanged({ kind: "workspace", directory: "/work/new" }, null, "66"));
+  assert.equal(held(host, { kind: "workspace", directory: "/work/churn1" })?.receipt?.id, "again");
+  assert.equal(held(host, { kind: "workspace", directory: "/work/churn2" }), undefined);
+  assert.equal(host.sourceRepairs().length, 64);
+});
+
+it("BOUND-09 a source evicted at the exact limit without the User stays fenced against its held read", async () => {
+  const { transport, host } = await connect(AUTHORITY);
+  transport.notify(repairChanged(WORKSPACE, UNRESOLVED_R1, "5"));
+  const reading = host.readSourceRepairs(WORKSPACE);
+  const read = (await transport.log.awaitMethod("configuration/sourcesRead")).at(-1)!;
+  transport.notify(repairChanged(WORKSPACE, null, "6"));
+  // W and 63 others are 64: W stays. The 65th Workspace evicts it.
+  churn(transport, 7, 63);
+  assert.equal(held(host, WORKSPACE)?.sequence, "6");
+  churn(transport, 70, 1);
+  assert.equal(held(host, WORKSPACE), undefined);
+  assert.equal(host.sourceRepairs().length, 64);
+  answer(transport, read, WORKSPACE, UNRESOLVED_R1, "5");
+  await reading;
+  assert.equal(held(host, WORKSPACE), undefined);
 });
 
 // Repair notifications before the first subscriber (Issue #464).

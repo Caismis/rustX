@@ -36,22 +36,25 @@ export interface SourceRepairObservation {
   sequence: string;
 }
 
-/** Sources whose repair observations a client keeps: the User and as many
- * Workspaces as the native repair ledger retains (`MAX_LEDGER_WORKSPACES`). */
-export const SOURCE_REPAIR_SOURCES = 1 + 64;
+/** Workspaces whose repair observations a client keeps: as many as the
+ * native repair ledger retains (`MAX_LEDGER_WORKSPACES`). The User source has
+ * its own slot beside them. */
+export const SOURCE_REPAIR_WORKSPACES = 64;
 
 /**
  * The one client retention policy for per-source repair state, applied by
- * each owner to its own map — the host to its connection's observations, the
- * status line to what it presents: `value` becomes `key`'s entry and its most
- * recently observed one; beyond `SOURCE_REPAIR_SOURCES` the least recently
- * observed Workspace is forgotten, the User never. Returns the forgotten
- * entry, whose owner retires whatever it presented for that source.
+ * each owner to its own map — the client to notices buffered before its first
+ * subscriber, the host to its connection's observations, the status line to
+ * what it presents: `value` becomes `key`'s entry and its most recently
+ * observed one; beyond `SOURCE_REPAIR_WORKSPACES` Workspaces the least
+ * recently observed Workspace is forgotten, whether or not the User has an
+ * entry, and the User never is. Returns the forgotten entry, whose owner
+ * retires whatever it held for that source.
  */
 export function retainSource<V>(sources: Map<string, V>, key: string, value: V): V | undefined {
   sources.delete(key);
   sources.set(key, value);
-  if (sources.size <= SOURCE_REPAIR_SOURCES) return undefined;
+  if (sources.size - (sources.has("user") ? 1 : 0) <= SOURCE_REPAIR_WORKSPACES) return undefined;
   for (const [source, entry] of sources) {
     if (source === "user") continue;
     sources.delete(source);

@@ -43,6 +43,7 @@ import { transferUpload } from '../../../protocol/app-server/upload.ts';
  * never to resend.
  */
 
+import { retainSource, sourceKey } from "../presentation/source-repairs.ts";
 import { decodeProtocolMessage } from "../protocol/decoder.ts";
 
 import {
@@ -76,11 +77,6 @@ export const APP_SERVER_PROTOCOL_VERSION = 47;
 /** Notifications retained before the first subscription; level-triggered
  * owners re-announce or reread anything beyond this. */
 const UNROUTED_NOTIFICATIONS = 64;
-
-/** Source repair observations retained before the first subscription, one
- * per source: the User and as many Workspaces as the native repair ledger
- * itself retains (`MAX_LEDGER_WORKSPACES`). */
-const UNROUTED_SOURCE_REPAIRS = 1 + 64;
 
 /** How this client identifies itself in `initialize`. */
 export const CLIENT_IDENTITY: ClientIdentity = {
@@ -297,9 +293,10 @@ export class AppServerClient {
    * per source — a withdrawal included — so no amount of unrelated traffic
    * crowds them out. The server advances its per-source delivery cursor as
    * it sends one and never sends it again, so a dropped observation would be
-   * lost for good; the latest per source is all a subscriber needs. The
-   * least recently observed Workspace goes beyond the bound, as the native
-   * ledger forgets it; the User never does.
+   * lost for good; the latest per source is all a subscriber needs. Bounded
+   * by `retainSource`: the least recently observed Workspace goes beyond 64,
+   * as the native ledger forgets it; the User never does. A source dropped
+   * here was never observed by a subscriber, so nothing it held can go stale.
    */
   #unrouted: { notifications: Notification[]; sourceRepairs: Map<string, Notification> } | undefined = {
     notifications: [],
@@ -543,15 +540,7 @@ export class AppServerClient {
     if (isNotification(record)) {
       if (this.#unrouted !== undefined) {
         if (record.method === "configuration/sourceRepairChanged") {
-          const target = record.params.target;
-          const key = target.kind === "user" ? "user" : `workspace:${target.directory}`;
-          const repairs = this.#unrouted.sourceRepairs;
-          repairs.delete(key);
-          repairs.set(key, record);
-          if (repairs.size > UNROUTED_SOURCE_REPAIRS) {
-            const oldest = [...repairs.keys()].find(source => source !== "user");
-            if (oldest !== undefined) repairs.delete(oldest);
-          }
+          retainSource(this.#unrouted.sourceRepairs, sourceKey(record.params.target), record);
         } else if (this.#unrouted.notifications.length < UNROUTED_NOTIFICATIONS) {
           this.#unrouted.notifications.push(record);
         }

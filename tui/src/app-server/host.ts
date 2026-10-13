@@ -150,10 +150,33 @@ export class AppServerHost {
    * still there to present. Notices and authoritative reads are ordered by
    * their native ledger sequence, never by arrival: an older one — a read
    * answered after a newer notice, or a notice produced before a fresher read
-   * — changes nothing. Finite: the User and as many Workspaces as the native
-   * repair ledger retains, the least recently observed Workspace going first.
+   * — changes nothing. Finite (`retainSource`): the User and 64 Workspaces,
+   * the least recently observed Workspace going first.
    */
   readonly #sourceRepairs = new Map<string, SourceRepairObservation>();
+  /**
+   * The highest native sequence at which this connection forgot a source.
+   * Whatever a source absent from `#sourceRepairs` held was current at or
+   * before it, so a notice of an absent source ordered at or after it is
+   * never older than what was forgotten. One ordered before it may be the
+   * forgotten history of an evicted source, or the first notice of a source
+   * never seen: it is ambiguous, never applied, and the source is recovered
+   * by an authoritative read instead. One value, however many sources ever
+   * came and went.
+   */
+  #forgottenThrough = "0";
+  /**
+   * This connection's Workspace reads in flight, each with the highest
+   * sequence at which its own source was forgotten while it was in flight.
+   * Anything forgotten before a read was sent is older than its answer, since
+   * native snapshots after receiving it; anything forgotten meanwhile is
+   * compared exactly. Each leaves when its read settles.
+   */
+  readonly #reads = new Set<{ key: string; forgotten: string }>();
+  /** Workspaces whose ambiguous notice awaits its recovery read; one entry
+   * per source, finite (`retainSource`), read one at a time. */
+  readonly #recoveries = new Map<string, SourceTarget>();
+  #recovering = false;
   readonly #sourceRepairListeners = new Set<SourceRepairListener>();
   #shutdown: Promise<ChildExit | undefined> | undefined;
   readonly #exports = new Set<AbortController>();
@@ -287,23 +310,78 @@ export class AppServerHost {
    * Reads sources authoritatively and folds their repair receipts in.
    *
    * The recovery path after a notification gap or a reconnect: a read, never
-   * a guess. `configuration/sourcesRead` is read-only on the server.
+   * a guess. `configuration/sourcesRead` is read-only on the server, and
+   * answers for exactly the canonical target it was asked about. An answer
+   * older than what this connection meanwhile observed of the source — and
+   * then forgot — changes nothing; it is still returned to the caller as the
+   * snapshot it is.
    */
   async readSourceRepairs(target: SourceTarget = { kind: "user" }): Promise<SourceSettings> {
-    const { projection } = await this.client.call("configuration/sourcesRead", { target }, "source_settings");
-    const sequence = projection.repair_sequence;
-    this.#observeSourceRepair({ target: { kind: "user" }, receipt: projection.user_repair ?? undefined, sequence });
-    if (target.kind === "workspace") this.#observeSourceRepair({ target: projection.target, receipt: projection.workspace_repair ?? undefined, sequence });
-    return projection;
+    const read = target.kind === "workspace" ? { key: sourceKey(target), forgotten: "0" } : undefined;
+    if (read !== undefined) this.#reads.add(read);
+    try {
+      const { projection } = await this.client.call("configuration/sourcesRead", { target }, "source_settings");
+      const sequence = projection.repair_sequence;
+      // The User is never forgotten, so nothing it held can be newer.
+      this.#observeSourceRepair({ target: { kind: "user" }, receipt: projection.user_repair ?? undefined, sequence }, "0");
+      if (read !== undefined) this.#observeSourceRepair({ target, receipt: projection.workspace_repair ?? undefined, sequence }, read.forgotten);
+      return projection;
+    } finally {
+      if (read !== undefined) this.#reads.delete(read);
+    }
   }
 
-  #observeSourceRepair(observation: SourceRepairObservation): void {
+  /**
+   * Applies one native observation unless it is not newer than what this
+   * connection holds, or may have held, of its source. A held source orders
+   * it by sequence. An absent one may have been forgotten through `forgotten`
+   * — for a read, its own bound; for a notice, the connection's frontier —
+   * and an observation older than that is never applied; an ambiguous notice
+   * is recovered by reading its source again.
+   */
+  #observeSourceRepair(observation: SourceRepairObservation, forgotten?: string): void {
     const key = sourceKey(observation.target);
     const known = this.#sourceRepairs.get(key);
-    if (known !== undefined && (olderSequence(observation.sequence, known.sequence)
-      || (observation.sequence === known.sequence && observation.receipt?.id === known.receipt?.id))) return;
-    retainSource(this.#sourceRepairs, key, observation);
+    if (known !== undefined) {
+      if (olderSequence(observation.sequence, known.sequence)
+        || (observation.sequence === known.sequence && observation.receipt?.id === known.receipt?.id)) return;
+    } else if (key !== "user" && olderSequence(observation.sequence, forgotten ?? this.#forgottenThrough)) {
+      if (forgotten === undefined) this.#recover(observation.target);
+      return;
+    }
+    const evicted = retainSource(this.#sourceRepairs, key, observation);
+    if (evicted !== undefined) this.#forget(evicted);
     for (const listener of [...this.#sourceRepairListeners]) listener(observation);
+  }
+
+  /** Records that this connection no longer holds `evicted`'s source. */
+  #forget({ target, sequence }: SourceRepairObservation): void {
+    if (olderSequence(this.#forgottenThrough, sequence)) this.#forgottenThrough = sequence;
+    const key = sourceKey(target);
+    for (const read of this.#reads) {
+      if (read.key === key && olderSequence(read.forgotten, sequence)) read.forgotten = sequence;
+    }
+  }
+
+  /**
+   * Reads `target` again because a notice of it was ambiguous. Sequential
+   * and bounded: one read in flight, one queued entry per source; a source
+   * noticed again while its read is in flight is read once more after it,
+   * since that read may predate the notice. A failed read proves nothing,
+   * and nothing is read once the connection closed.
+   */
+  #recover(target: SourceTarget): void {
+    retainSource(this.#recoveries, sourceKey(target), target);
+    if (this.#recovering) return;
+    this.#recovering = true;
+    void (async () => {
+      for (let next = this.#recoveries.entries().next().value; next !== undefined && this.client.closed === undefined;
+        next = this.#recoveries.entries().next().value) {
+        this.#recoveries.delete(next[0]);
+        await this.readSourceRepairs(next[1]).catch(() => undefined);
+      }
+      this.#recovering = false;
+    })();
   }
 
   /** Every Session currently attached through this connection. */

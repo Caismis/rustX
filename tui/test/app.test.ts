@@ -2572,6 +2572,116 @@ it("REC-08 quitting during a reconnect read leaves the retired line untouched", 
   } finally { process.off("unhandledRejection", onRejection); if (!finished) await t.finish(); }
 });
 
+const REPAIR_USER = { kind: "user" } as const;
+
+/** A pending User warning and pending Workspace warnings, reconnected to
+ * the same authority, which announces nothing of them again. */
+async function pendingUserAndWorkspaces(directories: string[], later = [{ name: "a2", authorityId: "authority-a", sourceRepairs: [] as SourceRepairObservation[] }]) {
+  const t = repairConnections({ authorityId: "authority-a", sourceRepairs: [
+    repairObservation("u1", REPAIR_USER, "1", "unresolved"),
+    ...directories.map((directory, index) => repairObservation(`w${index}`, { kind: "workspace", directory }, String(index + 2), "unresolved")),
+  ] }, later);
+  await waitForApplicationContinuation();
+  assert.equal(t.status.pendingSources().length, directories.length + 1);
+  await t.reconnect();
+  return t;
+}
+
+it("ISOLATE-01 a Workspace that cannot be read never keeps the User from its own reconcile read", async () => {
+  const t = await pendingUserAndWorkspaces([REPAIR_WORKSPACE.directory]);
+  try {
+    assert.deepEqual(t.reads.map(read => read.target), [REPAIR_WORKSPACE]);
+    t.reads[0]!.fail(new Error("the Workspace is no longer a valid source"));
+    await waitForApplicationContinuation();
+    assert.deepEqual(t.reads.map(read => read.target), [REPAIR_WORKSPACE, REPAIR_USER]);
+    t.reads[1]!.settle([repairObservation(undefined, REPAIR_USER, "9")]);
+    await waitForApplicationContinuation();
+    // The User warning is gone; the Workspace's state is unproven and stays.
+    assert.deepEqual(t.status.pendingSources(), [REPAIR_WORKSPACE]);
+    assert.doesNotMatch(t.line(), /User/);
+    assert.match(t.line(), /Workspace rustx\.toml could not be auto-repaired/);
+  } finally { await t.finish(); }
+});
+
+it("ISOLATE-02 a successful Workspace read reconciles the User with no second read", async () => {
+  const t = await pendingUserAndWorkspaces([REPAIR_WORKSPACE.directory]);
+  try {
+    t.reads[0]!.settle([repairObservation("u1", REPAIR_USER, "9", "unresolved"), repairObservation(undefined, REPAIR_WORKSPACE, "9")]);
+    await waitForApplicationContinuation();
+    await waitForApplicationContinuation();
+    assert.equal(t.reads.length, 1);
+    assert.deepEqual(t.status.pendingSources(), [REPAIR_USER]);
+  } finally { await t.finish(); }
+});
+
+it("ISOLATE-03 several failed Workspace reads lead to exactly one User read, one at a time", async () => {
+  const directories = ["/srv/a", "/srv/b", "/srv/c"];
+  const t = await pendingUserAndWorkspaces(directories);
+  try {
+    for (const index of directories.keys()) {
+      assert.equal(t.reads.length, index + 1);
+      t.reads[index]!.fail(new Error("refused"));
+      await waitForApplicationContinuation();
+    }
+    assert.deepEqual(t.reads.map(read => read.target), [...directories.map(directory => ({ kind: "workspace", directory })), REPAIR_USER]);
+    t.reads[3]!.settle([repairObservation(undefined, REPAIR_USER, "9")]);
+    await waitForApplicationContinuation();
+    await waitForApplicationContinuation();
+    assert.equal(t.reads.length, 4);
+    assert.equal(t.maxInFlight, 1);
+    assert.equal(t.status.pendingSources().length, 3);
+    process.stdin.emit("data", "x");
+    await waitForApplicationContinuation();
+    assert.equal(t.status.visible, false, "other controls stay usable");
+  } finally { await t.finish(); }
+});
+
+it("ISOLATE-04 a failed User read after failed Workspace reads clears nothing and fails nothing", async () => {
+  const rejections: unknown[] = [];
+  const onRejection = (reason: unknown) => rejections.push(reason);
+  process.on("unhandledRejection", onRejection);
+  const t = await pendingUserAndWorkspaces([REPAIR_WORKSPACE.directory]);
+  try {
+    t.reads[0]!.fail(new Error("refused"));
+    await waitForApplicationContinuation();
+    t.reads[1]!.fail(new Error("refused too"));
+    await waitForApplicationContinuation();
+    assert.equal(t.reads.length, 2);
+    assert.deepEqual(t.status.pendingSources(), [REPAIR_USER, REPAIR_WORKSPACE]);
+    process.stdin.emit("data", "x");
+    await waitForApplicationContinuation();
+    assert.equal(t.status.visible, false, "the connection still takes input");
+    assert.deepEqual(rejections, []);
+  } finally { process.off("unhandledRejection", onRejection); await t.finish(); }
+});
+
+it("ISOLATE-05 a User fallback read retired by a replaced connection or a quit reaches nothing", async () => {
+  const t = await pendingUserAndWorkspaces([REPAIR_WORKSPACE.directory],
+    [{ name: "a2", authorityId: "authority-a", sourceRepairs: [] }, { name: "a3", authorityId: "authority-a", sourceRepairs: [] }]);
+  let finished = false;
+  try {
+    t.reads[0]!.fail(new Error("refused"));
+    await waitForApplicationContinuation();
+    const fallback = t.reads[1]!;
+    assert.deepEqual([fallback.host, fallback.target], ["a2", REPAIR_USER]);
+    // Replaced by a3 of the same authority while the fallback is held.
+    await t.reconnect();
+    assert.deepEqual(t.reads.map(read => read.host), ["a2", "a2", "a3"]);
+    fallback.settle([repairObservation(undefined, REPAIR_USER, "99")]);
+    await waitForApplicationContinuation();
+    assert.deepEqual(t.status.pendingSources(), [REPAIR_USER, REPAIR_WORKSPACE]);
+    // a3's own fallback is held, then the client quits.
+    t.reads[2]!.fail(new Error("refused"));
+    await waitForApplicationContinuation();
+    const quitFallback = t.reads[3]!;
+    assert.deepEqual([quitFallback.host, quitFallback.target], ["a3", REPAIR_USER]);
+    await t.finish(); finished = true;
+    quitFallback.settle([repairObservation(undefined, REPAIR_USER, "100")]);
+    await waitForApplicationContinuation();
+    assert.deepEqual(t.status.pendingSources(), [REPAIR_USER, REPAIR_WORKSPACE]);
+  } finally { if (!finished) await t.finish(); }
+});
+
 it("quitting while remote recovery is pending closes the late connection", async () => {
   let close!: (error: TransportClosedError) => void;
   const connection = deferred<AppServerHost>();

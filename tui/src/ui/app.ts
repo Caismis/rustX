@@ -162,7 +162,7 @@ import { banded } from "./components/transcript-block.ts";
 import { SubagentTranscript } from "../app-server/subagent-transcript.ts";
 import { SubagentTranscriptView } from "./components/subagent-transcript-view.ts";
 import { HumanInteractionOverlay } from "./components/hitl.ts";
-import type { InteractionResponse } from "../protocol/app-server.ts";
+import type { InteractionResponse, SourceTarget } from "../protocol/app-server.ts";
 
 export interface RustxTuiAppOptions {
   /** The App Server connection, its Session catalog, and who owns its process. */
@@ -363,7 +363,9 @@ export class RustxTuiApp {
 
   /**
    * Rereads, through `host`, every source the repair line still presents:
-   * the Workspaces, each of which also rereads the User, or the User alone.
+   * each Workspace, whose read also rereads the User, and the User alone
+   * only when no Workspace read succeeded — a Workspace that can no longer
+   * be read never keeps the independent User source from its own read.
    * Bounded by the line's finite sources, one read at a time, and read-only
    * (`configuration/sourcesRead` never repairs, reconciles, loads a Session
    * or reaches a model). Each result reaches the line through the host's
@@ -374,15 +376,21 @@ export class RustxTuiApp {
    */
   async #reconcileSourceRepairs(host: AppServerHost): Promise<void> {
     const pending = this.#repairStatus.pendingSources();
-    const workspaces = pending.filter(target => target.kind === "workspace");
-    for (const target of workspaces.length > 0 ? workspaces : pending) {
-      if (this.#host !== host || host.client.closed !== undefined || this.#quitting || this.#finished) return;
+    let userRead = false;
+    const read = async (target: SourceTarget) => {
+      if (this.#host !== host || host.client.closed !== undefined || this.#quitting || this.#finished) return false;
       try {
         await host.readSourceRepairs(target);
+        userRead = true;
       } catch {
         // Not a withdrawal; `/settings repairs` reads again explicitly.
       }
+      return true;
+    };
+    for (const target of pending.filter(source => source.kind === "workspace")) {
+      if (!await read(target)) return;
     }
+    if (!userRead && pending.some(source => source.kind === "user")) await read({ kind: "user" });
   }
 
   #watchConnection(): void {
