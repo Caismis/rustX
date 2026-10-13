@@ -158,8 +158,8 @@ No sleeps or probabilistic timing were added as concurrency proof.
 
 ## Validation evidence and environment
 
-Logs live at `/tmp/rustx-466-*.log`. Final matrix is still being completed and will
-be recorded here before delivery. Earlier failed runs exposed obsolete canonical
+Logs live at `/tmp/rustx-466-*.log`. The completed local validation matrix is
+recorded below; current remote CI status is available on PR #477. Earlier failed runs exposed obsolete canonical
 summary/Surface assertions, unfrozen request fixtures and a missing management-open
 integrity function registration; those were corrected without weakening the new
 architectural validation. A request association inspection regression also caught
@@ -192,7 +192,7 @@ apply to native fixture runs):
 | `cargo clippy --workspace --all-targets -- -D warnings` | Pass after final progress fix |
 | Same Clippy command with `--all-features` | Pass after final progress fix |
 | `cargo build --bins` and bins plus `document_artifact_fixture --locked` | Pass |
-| `cargo test --workspace -- --test-threads=4` | Final full run with two libtest workers: all 4,003 enabled tests pass, including library 3,386; cfg 31; conformance 26; contracts 29; durable 129; process 57; provider 179; subagent 47; tools 110; doctests 9. Eight existing ignored tests retain their documented purpose. |
+| `cargo test --workspace -- --test-threads=2` | Final full run with two libtest workers: all 4,003 enabled tests pass, including library 3,386; cfg 31; conformance 26; contracts 29; durable 129; process 57; provider 179; subagent 47; tools 110; doctests 9. Eight existing ignored tests retain their documented purpose. |
 | `cargo test --lib scripted_suites::context:: -- --test-threads=4` | 68 pass, including the new red/green progress counterexample |
 | All-features contract selector, `--skip boundary_suites::` | 3,293 passed; generated-description drift and two 30-second protocol liveness failures repaired/rechecked below |
 | All-features App Server schema owner | Pass after regeneration |
