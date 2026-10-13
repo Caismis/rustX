@@ -55,6 +55,8 @@ test('automatic configuration repair is announced once and inspected at its exac
     const workspace = settings.getByRole('region', { name: 'Auto Repair', exact: true });
     await expect(workspace.getByText('Removed unknown field agent.future_trust', { exact: true })).toBeVisible();
     await closeSettings(page);
+    // Presenting the details acknowledged the Workspace receipt in this page.
+    await expect(notice).toHaveCount(0);
 
     // A reload is a new connection: its server announces the User receipt after
     // initialize and the Workspace receipt once the Workspace is addressed. On
